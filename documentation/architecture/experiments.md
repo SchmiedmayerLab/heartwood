@@ -157,6 +157,9 @@ The default Python environment digest covers interpreter identity, operating-sys
 It excludes installation paths, package source URLs, credentials, and environment-variable values.
 It does not capture external executables, native libraries, a GPU driver, or the complete contents of an installed package.
 For research stages, it describes the gateway's Python environment, not a remote model server or an independently attested execution environment.
+Independent Result Verification separately captures an isolated Python process through a reviewed probe and rechecks its versions immediately before the reviewed analysis command.
+That execution witness supplements the stage record; it does not turn package metadata into binary or platform attestation.
+The gateway, `heartwood experiments environment`, browser export, and `NotebookSession.verification_environment()` expose the same isolated capture for preparing a required environment record.
 An explicit `ExperimentEnvironment` can instead identify a declared container or environment description.
 
 ## Persistence and Recovery

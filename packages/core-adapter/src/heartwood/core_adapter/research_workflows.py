@@ -84,7 +84,8 @@ def workflow_reproduction_spec(
         raise ValueError("Workflow definition changed; prepare a new binding")
     stage = definition.stage(stage_id)
     if not any(
-        check.evaluator_id in {"execution.reproduction", "execution.comparison"}
+        check.evaluator_id
+        in {"execution.reproduction", "execution.comparison", "execution.environment"}
         for check in stage.checks
     ):
         return None
@@ -101,14 +102,29 @@ def workflow_reproduction_spec(
         if previous.stage_id == stage_id:
             break
         protected.update(paths[name] for name in previous.writes)
+    environment = any(check.evaluator_id == "execution.environment" for check in stage.checks)
+    if binding.workflow_id == "result-verification" and binding.python_executable is None:
+        raise ValueError("Result verification requires its bound Python interpreter")
     outputs = tuple(
-        PurePosixPath(paths[name]) for name in ("reproduced-metrics", "reproduced-predictions")
+        PurePosixPath(paths[name])
+        for name in (
+            ("environment-check",)
+            if environment
+            else ("reproduced-metrics", "reproduced-predictions")
+        )
     )
-    if outputs[0].parent != outputs[1].parent:
+    if any(path.parent != outputs[0].parent for path in outputs):
         raise ValueError("Reproduction outputs require one dedicated directory")
     return ReproductionSpec(
         program=paths["program"],
-        data=paths["data"],
+        data=paths["environment"] if environment else paths["data"],
+        purpose="python-environment" if environment else "analysis",
+        python_executable=binding.python_executable,
+        required_environment=(
+            paths["environment-check"]
+            if binding.workflow_id == "result-verification" and not environment
+            else None
+        ),
         directory=str(outputs[0].parent),
         protected_paths=tuple(sorted(protected)),
         output_names=tuple(path.name for path in outputs),
@@ -359,7 +375,7 @@ def _verification() -> WorkflowDefinition:
                 input_id="environment",
                 label="Environment Record",
                 kind="file",
-                description="Recorded runtime, dependencies, parameters, and seeds.",
+                description="Required Python interpreter and package versions.",
             ),
         ),
         budget=_BUDGET,
@@ -367,7 +383,7 @@ def _verification() -> WorkflowDefinition:
             WorkflowArtifact(
                 artifact_id="environment-check",
                 label="Environment Comparison",
-                relative_path="environment-check.json",
+                relative_path="environment/environment.json",
                 media_type="application/json",
             ),
             *_REPRODUCTION_ARTIFACTS,
@@ -384,9 +400,12 @@ def _verification() -> WorkflowDefinition:
                 label="Check Environment",
                 reads=("environment", "program"),
                 writes=("environment-check",),
-                instruction="Compare the available runtime and dependencies to the supplied "
-                "environment record. Propose any required setup through normal action review. "
-                "Report missing dependencies instead of silently changing the analysis.",
+                instruction=(
+                    "Propose the supplied environment probe as one separate terminal action. "
+                    "It captures the bound Python in isolated mode without changing packages. "
+                    "Do not write its output yourself. Compare required and observed versions "
+                    "and report differences. Any setup still requires normal action review."
+                ),
                 checks=(
                     WorkflowCheck(
                         check_id="verification-environment",

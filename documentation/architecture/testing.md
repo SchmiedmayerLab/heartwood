@@ -180,6 +180,11 @@ Workflow journal tests reject missing, repeated, reordered, cross-session, denie
 Interruption tests cover persisted tool completion without a reproduction observation and ensure duplicate callbacks, reconciliation, and restart cannot capture replacement evidence or repeat work.
 The baseline conformance test uses real OpenHands tools with deterministic `TestLLM` for plan review, analysis execution, separately approved reproduction, independent checks, reporting, restart, and content-minimized audit export.
 It establishes orchestration behavior, not capable-model research performance.
+Independent Result Verification reuses this execution witness for a fixed Python metadata probe and the subsequent analysis invocation.
+The gateway binds one absolute interpreter; both commands use isolated mode, and the analysis invocation first rechecks the protected environment record.
+The environment check compares required package identities and versions using the standard Python packaging rules.
+Matching model-written metadata without an approved probe remains unverified.
+Conformance tests cover real tool execution, incompatible versions, fresh-output confinement, preserved experiment fingerprints, interface capture, restart, and content-minimized audit export.
 These bounded observations are not a sandbox or proof against an adversarial process changing and restoring files between observations.
 Fresh-process checks compare the gateway's persisted projection, event-chain identity, and verified audit identity without creating a model client.
 

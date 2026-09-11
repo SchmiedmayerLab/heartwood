@@ -29,6 +29,7 @@ from heartwood.schemas.execution import ExecutionBudget, ExecutionUsage
 from heartwood.schemas.identifiers import WorkflowIdentifier as WorkflowIdentifier
 from heartwood.schemas.parallel_reviews import ReviewExecutionPlan
 from heartwood.schemas.project_paths import project_relative_path
+from heartwood.schemas.python_environment import PythonExecutable
 from heartwood.schemas.review import ResearchCorrectionRun, ResearchReviewRun
 
 type WorkflowText = Annotated[
@@ -255,6 +256,7 @@ class WorkflowProjectBinding(WorkflowRecord):
     workflow_id: WorkflowIdentifier
     workflow_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
     output_directory: str = Field(min_length=1, max_length=512)
+    python_executable: PythonExecutable | None = None
     inputs: tuple[WorkflowBoundInput, ...] = Field(min_length=1, max_length=32)
     artifacts: tuple[ResearchArtifactPath, ...] = Field(min_length=1, max_length=64)
 

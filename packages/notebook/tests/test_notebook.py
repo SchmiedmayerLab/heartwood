@@ -70,6 +70,7 @@ def test_notebook_workflow_catalog_does_not_start_a_session(tmp_path: Path) -> N
         assert notebook.research_workflows() == gateway.research_workflows()
         assert notebook.experiment_records() == gateway.experiment_records()
         assert notebook.export_experiments() == gateway.export_experiments()
+        assert notebook.verification_environment() == gateway.verification_environment()
         assert not gateway._services
         assert list(tmp_path.iterdir()) == []
     finally:

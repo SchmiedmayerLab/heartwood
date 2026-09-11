@@ -11,10 +11,10 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from contextvars import ContextVar
 from pathlib import Path
-from typing import Any, TypedDict, override
+from typing import Any, TypedDict, cast, override
 
 from openhands.sdk import Agent, ImageContent, LocalConversation, TextContent, Tool
 from openhands.sdk.context import AgentContext
@@ -101,7 +101,11 @@ class _InterruptibleSpecialistConversation(LocalConversation):
             if self._parent_cancel_token is not None and self._parent_cancel_token.is_cancelled:
                 self.pause()
                 return
-            await super().arun()
+            # Upstream tracing erases this public method's callable signature.
+            native_run = cast(
+                Callable[[LocalConversation], Awaitable[None]], LocalConversation.arun
+            )
+            await native_run(self)
         except asyncio.CancelledError:
             # Native arun's cancellation handler starts after lazy initialization.
             self.pause()

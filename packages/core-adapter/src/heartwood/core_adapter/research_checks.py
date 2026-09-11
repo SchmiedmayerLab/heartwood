@@ -17,6 +17,7 @@ from collections.abc import Callable, Mapping, Sequence
 from statistics import linear_regression, mean
 from typing import Literal
 
+from heartwood.schemas.python_environment import PythonEnvironmentSnapshot
 from heartwood.schemas.research import (
     AnalysisPlan,
     BaselineResult,
@@ -28,6 +29,18 @@ from heartwood.schemas.research import (
 MAX_RESEARCH_TEXT_BYTES = 512 * 1024
 MAX_RESEARCH_ROWS = 10_000
 MAX_SENSITIVITY_GROUPS = 128
+
+
+def compare_python_environment(artifacts: Mapping[str, str]) -> bool:
+    """Compare required metadata; callers separately establish reviewed probe execution."""
+    try:
+        if any(len(text.encode()) > MAX_RESEARCH_TEXT_BYTES for text in artifacts.values()):
+            return False
+        expected = PythonEnvironmentSnapshot.model_validate_json(artifacts["environment"])
+        observed = PythonEnvironmentSnapshot.model_validate_json(artifacts["environment-check"])
+        return not expected.differences(observed)
+    except (ValueError, KeyError):
+        return False
 
 
 def compare_reproduction_artifacts(artifacts: Mapping[str, str], *, require_match: bool) -> bool:

@@ -40,6 +40,7 @@ import type {
   ModelTransferPlan,
   ModelValidation,
   ProjectReadiness,
+  PythonEnvironmentSnapshot,
   SessionCreateRequest,
   StartupPlan,
   SessionCommand,
@@ -152,6 +153,7 @@ export interface HeartwoodClient {
   getSkillSettings(): Promise<SkillSettings>;
   getSpecialistSettings(): Promise<SpecialistSettings>;
   getResearchWorkflows(): Promise<WorkflowCatalog>;
+  getVerificationEnvironment(): Promise<PythonEnvironmentSnapshot>;
   getExperimentRecords(): Promise<ExperimentCollection>;
   getExperimentExport(): Promise<ExperimentExport>;
   refreshSkills(sourceId?: string): Promise<SkillSettings>;
@@ -585,6 +587,12 @@ export class GatewayClient implements HeartwoodClient {
   async getResearchWorkflows(): Promise<WorkflowCatalog> {
     return parseJsonResponse<WorkflowCatalog>(
       await fetch(this.url("/research/workflows")),
+    );
+  }
+
+  async getVerificationEnvironment(): Promise<PythonEnvironmentSnapshot> {
+    return parseJsonResponse<PythonEnvironmentSnapshot>(
+      await fetch(this.url("/research/environment")),
     );
   }
 

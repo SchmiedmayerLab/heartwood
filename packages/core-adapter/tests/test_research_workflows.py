@@ -39,6 +39,9 @@ def _binding(workflow_id: str) -> WorkflowProjectBinding:
         workflow_id=workflow_id,
         workflow_fingerprint=definition.fingerprint,
         output_directory="research results",
+        python_executable="/opt/heartwood/bin/python"
+        if workflow_id == "result-verification"
+        else None,
         artifacts=definition.bind_artifacts("research results"),
         inputs=tuple(
             WorkflowBoundInput(
@@ -82,7 +85,8 @@ def test_reproduction_uses_bound_inputs_and_the_same_exact_prompt_command(
         assert "research results/plan.json" in spec.protected_paths
         assert "research results/metrics.json" in spec.protected_paths
     else:
-        assert "research results/environment-check.json" in spec.protected_paths
+        assert "research results/environment/environment.json" in spec.protected_paths
+        assert spec.command.startswith("/opt/heartwood/bin/python -I ")
     run = WorkflowRun(
         run_id="research-run",
         revision=0,
@@ -103,7 +107,6 @@ def test_reproduction_uses_bound_inputs_and_the_same_exact_prompt_command(
         ("dataset-readiness", "inspect"),
         ("baseline-analysis", "plan"),
         ("baseline-analysis", "execute"),
-        ("result-verification", "environment"),
     ],
 )
 def test_non_reproduction_stages_do_not_acquire_an_execution_recipe(

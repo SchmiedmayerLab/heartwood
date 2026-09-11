@@ -783,6 +783,12 @@ export const sessionProjectionJsonSchema = {
       ],
       type: "object",
     },
+    PythonExecutable: {
+      maxLength: 4096,
+      minLength: 1,
+      pattern: "^[^\\x00-\\x1f\\x7f]+$",
+      type: "string",
+    },
     Reference: {
       pattern: "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
       type: "string",
@@ -1327,6 +1333,9 @@ export const sessionProjectionJsonSchema = {
           type: "array",
         },
         output_directory: { maxLength: 512, minLength: 1, type: "string" },
+        python_executable: {
+          anyOf: [{ $ref: "#/$defs/PythonExecutable" }, { type: "null" }],
+        },
         workflow_fingerprint: { pattern: "^[0-9a-f]{64}$", type: "string" },
         workflow_id: { $ref: "#/$defs/WorkflowIdentifier" },
       },
@@ -1334,6 +1343,7 @@ export const sessionProjectionJsonSchema = {
         "workflow_id",
         "workflow_fingerprint",
         "output_directory",
+        "python_executable",
         "inputs",
         "artifacts",
       ],

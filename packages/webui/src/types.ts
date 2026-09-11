@@ -16,6 +16,7 @@ export type JsonValue =
 export type CommandKind = Projection.CommandKind;
 export type EventKind = Projection.EventKind;
 export type WorkflowCatalog = Api.WorkflowCatalog;
+export type PythonEnvironmentSnapshot = Api.PythonEnvironmentSnapshot;
 export type ExperimentCollection = Api.ExperimentCollection;
 export type ExperimentExport = Api.ExperimentExport;
 export type ExperimentRun = Api.ExperimentRun;

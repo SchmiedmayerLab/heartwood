@@ -50,6 +50,7 @@ from heartwood.schemas import JsonValue
 from heartwood.schemas.execution import ExecutionUsage
 from heartwood.schemas.experiments import ExperimentEvent
 from heartwood.schemas.parallel_reviews import ReviewDispatchAction
+from heartwood.schemas.python_environment import PythonEnvironmentSnapshot
 from heartwood.schemas.research import (
     AnalysisPlan,
     BaselineResult,
@@ -1209,6 +1210,7 @@ def workflow_stage_prompt(run: WorkflowRun) -> str:
         if artifact.artifact_id in (*stage.reads, *stage.writes)
     }
     schemas: dict[str, type[BaseModel]] = {
+        "environment-check": PythonEnvironmentSnapshot,
         "readiness": ReadinessResult,
         "plan": AnalysisPlan,
         "metrics": BaselineResult,
@@ -1232,11 +1234,13 @@ def workflow_stage_prompt(run: WorkflowRun) -> str:
     if reproduction := workflow_reproduction_spec(run.binding, run.stage_id):
         specification["reproduction"] = {
             "command": reproduction.command,
+            "parent_directory": str(PurePosixPath(reproduction.directory).parent),
             "protected_paths": reproduction.protected_paths,
             "output_paths": reproduction.output_paths,
             "instruction": (
                 "Propose this exact terminal command as a separate action group from the "
-                "project root. The output directory must not already exist. Do not create "
+                "project root. Create only missing parent directories through normal review. "
+                "The output directory must not already exist. Do not create "
                 "it or copy outputs before execution. Keep the program, inputs, and original "
                 "outputs unchanged. This instruction is not permission to execute."
             ),

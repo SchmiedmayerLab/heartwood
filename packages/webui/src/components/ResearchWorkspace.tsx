@@ -36,6 +36,7 @@ import {
   ProjectExperimentRecords,
 } from "./ExperimentRecords";
 import { displaySafeText, SafeMarkdown } from "./SafeMarkdown";
+import { VerificationEnvironment } from "./VerificationEnvironment";
 
 interface ResearchWorkspaceProps {
   client: Pick<
@@ -44,6 +45,7 @@ interface ResearchWorkspaceProps {
     | "getWorkspaceFile"
     | "getExperimentRecords"
     | "getExperimentExport"
+    | "getVerificationEnvironment"
   >;
   sessionId: string;
   projection: SessionProjection;
@@ -282,6 +284,9 @@ const WorkflowWorkspace = ({
               <small id={`research-description-${input.input_id}`}>
                 {input.description}
               </small>
+              {input.input_id === "environment" && (
+                <VerificationEnvironment client={client} />
+              )}
             </div>
           ))}
           <label htmlFor="research-output">

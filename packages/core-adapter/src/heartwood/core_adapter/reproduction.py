@@ -17,6 +17,7 @@ from typing import Literal, Self
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from heartwood.schemas.project_paths import project_relative_path
+from heartwood.schemas.python_environment import PythonExecutable
 
 
 class _Record(BaseModel):
@@ -41,6 +42,9 @@ class ReproductionSpec(_Record):
 
     program: str
     data: str
+    purpose: Literal["analysis", "python-environment"] = "analysis"
+    python_executable: PythonExecutable | None = None
+    required_environment: str | None = None
     directory: str
     protected_paths: tuple[str, ...] = Field(min_length=2, max_length=128)
     output_names: tuple[str, ...] = Field(min_length=1, max_length=32)
@@ -48,6 +52,16 @@ class ReproductionSpec(_Record):
     @model_validator(mode="after")
     def validate_paths(self) -> Self:
         """Keep outputs distinct from inputs and disallow overlapping file identities."""
+        if self.purpose == "python-environment" and (
+            self.python_executable is None or self.output_names != ("environment.json",)
+        ):
+            raise ValueError("Environment capture requires a bound Python and its fixed output")
+        if self.required_environment is not None and (
+            self.purpose != "analysis"
+            or self.python_executable is None
+            or self.required_environment not in self.protected_paths
+        ):
+            raise ValueError("An environment guard requires bound Python and a protected record")
         for path in (self.program, self.data, self.directory, *self.output_names):
             project_relative_path(path, allow_root=False)
         if any(path.startswith("-") for path in (self.program, self.data, self.directory)):
@@ -81,9 +95,34 @@ class ReproductionSpec(_Record):
     @property
     def command(self) -> str:
         """Return a shell-quoted invocation without allowing model-supplied shell syntax."""
-        return shlex.join(
-            ("python", self.program, "--data", self.data, "--output-dir", self.directory)
+        if self.purpose == "python-environment":
+            assert self.python_executable is not None
+            return shlex.join(
+                (
+                    self.python_executable,
+                    "-I",
+                    "-m",
+                    "heartwood.gateway._environment_probe",
+                    "--output-dir",
+                    self.directory,
+                )
+            )
+        interpreter = (self.python_executable, "-I") if self.python_executable else ("python",)
+        command = shlex.join(
+            (*interpreter, self.program, "--data", self.data, "--output-dir", self.directory)
         )
+        if self.required_environment is not None:
+            guard = shlex.join(
+                (
+                    *interpreter,
+                    "-m",
+                    "heartwood.gateway._environment_probe",
+                    "--require",
+                    self.required_environment,
+                )
+            )
+            return f"{guard} && {command}"
+        return command
 
     @property
     def output_paths(self) -> tuple[str, ...]:

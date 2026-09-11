@@ -77,6 +77,7 @@ export type ReviewCategory = "coding" | "statistical" | "reproducibility";
 export type ReviewSeverity = "low" | "medium" | "high" | "critical";
 export type ResearchText = string;
 export type WorkflowInputValue = string;
+export type PythonExecutable = string;
 export type ReviewVerification =
   "verified" | "rejected" | "unsupported" | "stale" | "unavailable";
 export type Sha256 = string;
@@ -510,6 +511,7 @@ export interface WorkflowProjectBinding {
    */
   inputs: WorkflowBoundInput[];
   output_directory: string;
+  python_executable: PythonExecutable | null;
   workflow_fingerprint: string;
   workflow_id: WorkflowIdentifier;
 }

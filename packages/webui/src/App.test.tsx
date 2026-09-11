@@ -1071,6 +1071,12 @@ class FakeClient implements HeartwoodClient {
     return Promise.resolve({ workflows: [] });
   }
 
+  getVerificationEnvironment(): ReturnType<
+    HeartwoodClient["getVerificationEnvironment"]
+  > {
+    return Promise.reject(new Error("No environment fixture requested"));
+  }
+
   getExperimentRecords(): ReturnType<HeartwoodClient["getExperimentRecords"]> {
     return Promise.resolve({
       schema_version: "heartwood.experiment-collection.v1",

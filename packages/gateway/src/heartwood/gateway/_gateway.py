@@ -203,6 +203,7 @@ from heartwood.schemas.experiments import (
     ExperimentExport,
     ExperimentExportBinding,
 )
+from heartwood.schemas.python_environment import PythonEnvironmentSnapshot
 from heartwood.schemas.review import (
     ResearchReviewRun,
     ReviewAssessment,
@@ -1044,6 +1045,12 @@ class SessionGateway:
         from heartwood.gateway._research_evaluation import ResearchStageEvaluator
 
         return ResearchStageEvaluator.catalog()
+
+    def verification_environment(self) -> PythonEnvironmentSnapshot:
+        """Inspect the isolated verification Python without model work or project writes."""
+        from heartwood.gateway.python_environment import inspect_verification_environment
+
+        return inspect_verification_environment()
 
     @_serialized_state
     def prepare_research_review(self, artifacts: Mapping[str, str]) -> ReviewSnapshot:

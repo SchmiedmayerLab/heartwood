@@ -225,7 +225,9 @@ def test_environment_digest_does_not_capture_paths_urls_or_credentials(
         metadata: ClassVar = {"Name": "synthetic-package", "Home-page": "https://private.example"}
         version = "1.2.3"
 
-    monkeypatch.setattr(recording, "distributions", lambda: iter([Distribution()]))
+    monkeypatch.setattr(
+        "heartwood.gateway.python_environment.distributions", lambda: iter([Distribution()])
+    )
     monkeypatch.setenv("OPENAI_API_KEY", "synthetic-secret-do-not-export")
     environment = recording.observed_python_environment()
     assert environment.source == "observed"

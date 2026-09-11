@@ -192,6 +192,16 @@ class RestGateway:
             except SkillSettingsError as error:
                 return _error(422, error)
             return RestResponse(status_code=200, body=_json_object(skill_settings))
+        if parts == ("research", "environment") and request.method == "GET":
+            try:
+                return RestResponse(
+                    status_code=200,
+                    body=_json_object(
+                        self.gateway.verification_environment().model_dump(mode="json")
+                    ),
+                )
+            except ValueError:
+                return _error(503, "The verification Python environment could not be inspected")
         if parts == ("research", "workflows") and request.method == "GET":
             return RestResponse(
                 status_code=200,

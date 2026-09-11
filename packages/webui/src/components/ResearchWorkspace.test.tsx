@@ -91,6 +91,7 @@ const run = (): NonNullable<SessionProjection["workflow"]> => ({
   run_id: "run",
   revision: 3,
   binding: {
+    python_executable: null,
     workflow_id: "synthetic-analysis",
     workflow_fingerprint: "a".repeat(64),
     output_directory: "results",
@@ -145,6 +146,7 @@ const setup = (
         runs: [],
       }),
       getExperimentExport: vi.fn(),
+      getVerificationEnvironment: vi.fn(),
     },
     sessionId: "session-test",
     projection,

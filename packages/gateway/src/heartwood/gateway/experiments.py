@@ -10,19 +10,18 @@ from __future__ import annotations
 
 import hashlib
 import json
-import platform
 import shutil
 import subprocess
 import sys
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from datetime import UTC, datetime
-from importlib.metadata import distributions
 from uuid import UUID, uuid4
 
 from heartwood.gateway._experiment_store import ExperimentStore
 from heartwood.gateway._project import ProjectContext
 from heartwood.gateway._workspace import WorkspaceInspector
+from heartwood.gateway.python_environment import observe_python_environment
 from heartwood.persistence import native_file_lock
 from heartwood.schemas.experiments import (
     ExperimentDefinition,
@@ -329,17 +328,8 @@ def experiment_digest(value: object) -> str:
 
 def observed_python_environment() -> ExperimentEnvironment:
     """Hash interpreter and package versions without paths, URLs, or environment values."""
-    packages = sorted((item.metadata["Name"], item.version) for item in distributions())
     return ExperimentEnvironment(
         kind="python",
         source="observed",
-        sha256=experiment_digest(
-            {
-                "implementation": platform.python_implementation(),
-                "python": platform.python_version(),
-                "system": platform.system(),
-                "machine": platform.machine(),
-                "packages": packages,
-            }
-        ),
+        sha256=observe_python_environment().fingerprint,
     )

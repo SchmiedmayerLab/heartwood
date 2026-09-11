@@ -15,6 +15,7 @@
 export type HeartwoodApiContract =
   | ApiResponse
   | ExperimentCollection
+  | PythonEnvironmentSnapshot
   | ExperimentExport
   | WorkflowCatalog
   | WorkflowRequest
@@ -95,6 +96,7 @@ export type ExperimentPath = string;
 export type Digest = string;
 export type ExperimentStatus =
   "started" | "interrupted" | "resumed" | "succeeded" | "failed" | "cancelled";
+export type MetadataText = string;
 export type WorkflowIdentifier = string;
 export type WorkflowText = string;
 export type WorkflowRequest =
@@ -875,6 +877,20 @@ export interface ExperimentEvidence {
   event_id: string;
   event_sha256: Digest;
   kind: Reference;
+}
+/**
+ * Interpreter identity and declared installed versions without paths or secrets.
+ */
+export interface PythonEnvironmentSnapshot {
+  implementation: MetadataText;
+  machine: MetadataText;
+  /**
+   * @maxItems 10000
+   */
+  packages: any[][];
+  python: MetadataText;
+  schema_version?: "heartwood.python-environment.v1";
+  system: MetadataText;
 }
 /**
  * Canonical record bytes and their digest, not a signed checkpoint.

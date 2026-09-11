@@ -9,11 +9,13 @@
 from __future__ import annotations
 
 import hashlib
+import sys
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 
 from heartwood.core_adapter.reproduction import ReproductionWitness
 from heartwood.core_adapter.research_checks import (
+    compare_python_environment,
     compare_reproduction_artifacts,
     evaluate_research_check,
     supported_research_checks,
@@ -56,7 +58,9 @@ from heartwood.schemas.workflows import (
 )
 from heartwood.session import EventKind, SessionEvent
 
-_REPRODUCTION_CHECKS = frozenset({"execution.reproduction", "execution.comparison"})
+_REPRODUCTION_CHECKS = frozenset(
+    {"execution.reproduction", "execution.comparison", "execution.environment"}
+)
 
 type ParallelReviewPreparer = Callable[
     [WorkflowRun, ReviewSnapshot, str, datetime], ReviewExecutionPlan
@@ -320,6 +324,7 @@ class ResearchStageEvaluator:
             workflow_id=definition.workflow_id,
             workflow_fingerprint=definition.fingerprint,
             output_directory=output_directory,
+            python_executable=sys.executable if workflow_id == "result-verification" else None,
             inputs=tuple(bound),
             artifacts=definition.bind_artifacts(output_directory),
         )
@@ -394,13 +399,14 @@ class ResearchStageEvaluator:
                     )
                     for witness in eligible
                 ):
-                    status = (
-                        "passed"
-                        if compare_reproduction_artifacts(
+                    passed = (
+                        compare_python_environment(selected)
+                        if check.evaluator_id == "execution.environment"
+                        else compare_reproduction_artifacts(
                             selected, require_match=check.evaluator_id == "execution.reproduction"
                         )
-                        else "failed"
                     )
+                    status = "passed" if passed else "failed"
                 elif eligible:
                     status = (
                         "failed" if any(w.status != "prepared" for w in eligible) else "not_run"

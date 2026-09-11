@@ -1280,6 +1280,165 @@ def _tool_message(name: str, **arguments: object) -> Message:
     )
 
 
+@pytest.mark.parametrize("incompatible", [False, True])
+def test_native_independent_verification_records_environment_execution_and_replay(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    incompatible: bool,
+) -> None:
+    from heartwood.core_adapter.research_workflows import workflow_reproduction_spec
+    from heartwood.gateway.python_environment import inspect_verification_environment
+
+    expected = inspect_verification_environment()
+    if incompatible:
+        expected = expected.model_copy(update={"python": "0.0.1"})
+    (tmp_path / "environment.json").write_text(expected.model_dump_json())
+    (tmp_path / "data.csv").write_text("1\n3\n5\n")
+    (tmp_path / "metrics.json").write_text('{"mean": 3.0}')
+    (tmp_path / "predictions.csv").write_text("centered\n-2.0\n0.0\n2.0\n")
+    (tmp_path / "analysis.py").write_text(
+        "import argparse, json, statistics\nfrom pathlib import Path\n"
+        "p=argparse.ArgumentParser()\np.add_argument('--data')\n"
+        "p.add_argument('--output-dir')\na=p.parse_args()\n"
+        "values=[float(x) for x in Path(a.data).read_text().splitlines()]\n"
+        "mean=statistics.mean(values)\nout=Path(a.output_dir)\nout.mkdir()\n"
+        "(out/'metrics.json').write_text(json.dumps({'mean':mean}))\n"
+        "centered=''.join(f'{x-mean}\\n' for x in values)\n"
+        "(out/'predictions.csv').write_text('centered\\n'+centered)\n"
+    )
+    (tmp_path / "results").mkdir()
+    inputs = {
+        name: f"{name}.{suffix}"
+        for name, suffix in (
+            ("environment", "json"),
+            ("data", "csv"),
+            ("metrics", "json"),
+            ("predictions", "csv"),
+            ("program", "py"),
+        )
+    }
+    inputs["program"] = "analysis.py"
+    gateway = _sdk_gateway(tmp_path, TestLLM.from_messages([]), monkeypatch)
+    try:
+        binding = gateway.prepare_research_workflow(
+            "result-verification", inputs=inputs, output_directory="results"
+        )
+        probe = workflow_reproduction_spec(binding, "environment")
+        rerun = workflow_reproduction_spec(binding, "reproduce")
+        assert probe is not None
+        assert rerun is not None
+    finally:
+        gateway.stop()
+
+    def finish() -> Message:
+        return _tool_message(
+            "finish", message="Stage complete", status="success", outcome_summary="Check evidence."
+        )
+
+    def create(path: str, text: str) -> Message:
+        return _tool_message(
+            "file_editor", command="create", path=str(tmp_path / path), file_text=text
+        )
+
+    llm = TestLLM.from_messages(
+        [
+            _tool_message("terminal", command=probe.command),
+            finish(),
+            _tool_message("terminal", command=rerun.command),
+            create(
+                "results/verification.json",
+                json.dumps(
+                    {
+                        "status": "reproduced",
+                        "matching_artifacts": ["metrics.json", "predictions.csv"],
+                        "mismatched_artifacts": [],
+                    }
+                ),
+            ),
+            finish(),
+            create(
+                "results/verification.md",
+                "# Reproduction\nSynthetic mean and centered values match.\n",
+            ),
+            finish(),
+        ]
+    )
+    gateway = _sdk_gateway(tmp_path, llm, monkeypatch)
+    try:
+        gateway.handle(
+            _command(
+                action="start",
+                workflow_id="result-verification",
+                inputs=inputs,
+                output_directory="results",
+            )
+        )
+        for stage_id in ("environment", "reproduce", "report"):
+            assert _state(gateway).stage_id == stage_id
+            gateway.handle(_projected_command(gateway, "run"))
+            for _ in range(4):
+                assert gateway.wait_for_session_idle(session_id="research", timeout=30)
+                group = gateway.session_projection(session_id="research").pending_approval
+                if group is None:
+                    break
+                if stage_id == "environment":
+                    assert not (tmp_path / "results/environment").exists()
+                approval = SessionCommand(
+                    command_id=uuid4().hex,
+                    session_id="research",
+                    kind=CommandKind.APPROVE,
+                    created_at="2026-09-11T00:00:00Z",
+                    payload={"target_id": group.group_id},
+                )
+                gateway.handle(approval)
+                assert gateway.handle(approval).replayed
+            else:
+                pytest.fail("Verification did not settle")
+            gateway.handle(_projected_command(gateway, "evaluate"))
+            current = _state(gateway)
+            if incompatible:
+                assert current.evaluation is not None
+                assert current.evaluation.checks[0].status == "failed"
+                assert current.stage_id == "environment"
+                assert not (tmp_path / "results/reproduced").exists()
+                return
+            if current.phase == "review":
+                gateway.handle(_projected_command(gateway, "accept"))
+        before = _state(gateway)
+        assert before.phase == "completed"
+        assert (tmp_path / "results/reproduced/metrics.json").read_bytes() == (
+            tmp_path / "metrics.json"
+        ).read_bytes()
+        events = gateway._services["research"].replay_events()
+        proofs = [event for event in events if event.kind == EventKind.WORKFLOW_EXECUTION_RECORDED]
+        assert [event.payload["status"] for event in proofs] == [
+            "prepared",
+            "succeeded",
+            "prepared",
+            "succeeded",
+        ]
+    finally:
+        gateway.stop()
+    unused = TestLLM.from_messages([])
+    restored = _sdk_gateway(tmp_path, unused, monkeypatch)
+    try:
+        assert _state(restored) == before
+        restored.handle(
+            SessionCommand(
+                command_id=uuid4().hex,
+                session_id="research",
+                kind=CommandKind.AUDIT_EXPORT,
+                created_at="2026-09-11T00:00:00Z",
+            )
+        )
+        audit = (restored.sessions_root / "research/audit-export.jsonl").read_text()
+        assert "workflow.execution.recorded" in audit
+        assert "centered" not in audit
+        assert unused.call_count == 0
+    finally:
+        restored.stop()
+
+
 def _sdk_gateway(
     root: Path,
     llm: TestLLM,

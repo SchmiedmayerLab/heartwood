@@ -16,6 +16,7 @@ Start in a new session with a configured model and project-local input files.
 |---|---|---|
 | Dataset Readiness Review | Inspect data quality and review a report before modeling | CSV dataset and JSON data dictionary |
 | Reproducible Baseline Analysis | Plan a baseline, run it, reproduce its outputs, and review the report | CSV dataset, JSON data dictionary, and research question |
+| Independent Result Verification | Check Python compatibility, re-run an existing analysis, and compare outputs | Dataset, Python script, original metrics and predictions, and Python environment record |
 
 !!! note "Scope of the maintained checks"
     The baseline checks cover a single-predictor linear model with a numeric outcome, held-out metrics, a mean-only comparator, and group-omission sensitivity checks.
@@ -83,6 +84,39 @@ The dictionary describes your intended analysis; it does not establish that the 
 
     The [notebook bridge](notebooks.md#research-workflows) exposes the same definitions, run state, and available requests.
     It does not run a second agent or maintain separate workflow state.
+
+## Verify an Existing Analysis
+
+Independent Result Verification preserves the original analysis and writes fresh reproduction outputs.
+The script must accept `--data FILE --output-dir NEW_FOLDER` and create `metrics.json` and `predictions.csv` in that folder.
+Heartwood compares the generated files byte for byte; matching outputs do not establish scientific validity.
+
+Capture the required Python versions in the environment where the analysis is intended to run:
+
+```sh
+heartwood experiments environment > python-environment.json
+```
+
+In the browser, choose **Independent Result Verification**, then **Export Verification Environment** to download the same record from the Heartwood server.
+Place that downloaded file in the project and enter its project-relative path as **Environment Record**.
+For a notebook, `session.verification_environment()` returns the same typed record.
+Capturing today's environment does not recover an unknown historical environment; retain the record alongside the original analysis.
+
+The first stage proposes a separately approved Python environment probe.
+Review its result before continuing to reproduction.
+Both stages use Heartwood's Python in isolated mode, which excludes `PYTHONPATH`, user-site packages, and implicit project-module imports.
+Use explicitly installed dependencies and a self-contained entry-point script for this workflow.
+
+If required interpreter or package versions differ, the environment check fails.
+Heartwood also rechecks captured versions immediately before reproduction and stops if they changed.
+It never installs or changes packages automatically.
+Resolve dependencies deliberately, retain the original evidence, and start a new verification with a fresh output folder.
+An interrupted probe may leave an incomplete folder; inspect it rather than overwriting it.
+
+The record includes Python implementation and version, operating-system family, architecture, and installed distribution names and versions.
+It does not attest binaries, native libraries, GPU drivers, or package contents.
+Additional packages beyond a declared requirement set are not verified.
+See [Experiment Records](../architecture/experiments.md) for provenance and evidence boundaries.
 
 ## Understand the Checks
 

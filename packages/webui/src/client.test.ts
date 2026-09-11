@@ -496,6 +496,7 @@ describe("GatewayClient", () => {
         corrections: [],
         created_at: "2026-09-11T00:00:00Z",
         binding: {
+          python_executable: null,
           workflow_id: "dataset-readiness",
           workflow_fingerprint: "a".repeat(64),
           output_directory: "results",
@@ -1209,6 +1210,25 @@ describe("GatewayClient", () => {
       new GatewayClient("/proxy/8767").getResearchWorkflows(),
     ).resolves.toEqual(catalog);
     expect(fetch).toHaveBeenCalledWith("/proxy/8767/research/workflows");
+  });
+
+  it("captures verification Python through the deployment URL prefix", async () => {
+    const snapshot = {
+      schema_version: "heartwood.python-environment.v1",
+      implementation: "CPython",
+      python: "3.12.13",
+      system: "Linux",
+      machine: "x86_64",
+      packages: [],
+    };
+    const fetch = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify(snapshot)));
+    vi.stubGlobal("fetch", fetch);
+    await expect(
+      new GatewayClient("/proxy/8767").getVerificationEnvironment(),
+    ).resolves.toEqual(snapshot);
+    expect(fetch).toHaveBeenCalledWith("/proxy/8767/research/environment");
   });
 
   it("reports gateway errors", async () => {
