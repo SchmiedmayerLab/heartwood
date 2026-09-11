@@ -1,0 +1,36 @@
+# This source file is part of the Heartwood open-source project
+#
+# SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+#
+# SPDX-License-Identifier: MIT
+
+name: Reclaim Runner Disk
+description: Remove preinstalled toolchains that image assembly and capable-model acceptance do not use, then report free space.
+
+runs:
+  using: composite
+  steps:
+    - name: Remove unused preinstalled toolchains
+      shell: bash
+      run: |
+        set -euo pipefail
+        echo "Free space before reclamation:"
+        df --human-readable --output=target,size,avail / /mnt 2>/dev/null || df --human-readable /
+        sudo rm -rf \
+          /usr/share/dotnet \
+          /usr/local/lib/android \
+          /opt/ghc \
+          /usr/local/.ghcup \
+          /usr/share/swift \
+          /usr/local/share/boost \
+          /usr/local/share/powershell \
+          /usr/share/miniconda \
+          /usr/local/julia* \
+          /opt/hostedtoolcache/CodeQL \
+          /opt/az \
+          /usr/lib/google-cloud-sdk \
+          /usr/lib/jvm
+        sudo docker image prune --all --force >/dev/null
+        sudo apt-get clean
+        echo "Free space after reclamation:"
+        df --human-readable --output=target,size,avail / /mnt 2>/dev/null || df --human-readable /
