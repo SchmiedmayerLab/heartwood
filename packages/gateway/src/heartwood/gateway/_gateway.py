@@ -999,11 +999,15 @@ class SessionGateway:
 
         if not self.project.state_exists():
             return None
+        self.project.initialize()
         store = ExperimentStore(self.project.state_root / "experiments.jsonl")
-        for summary in sorted(self.session_catalog.list(), key=lambda item: item.session_id):
-            events = FileSessionStore(self.sessions_root, summary.session_id).replay_events()
-            for record in workflow_experiment_events(events):
-                store.append(record)
+        store.synchronize(
+            record
+            for summary in sorted(self.session_catalog.list(), key=lambda item: item.session_id)
+            for record in workflow_experiment_events(
+                FileSessionStore(self.sessions_root, summary.session_id).replay_events()
+            )
+        )
         return store
 
     @_serialized_state

@@ -144,6 +144,8 @@ An explicit `ExperimentEnvironment` can instead identify a declared container or
 ## Persistence and Recovery
 
 Records live in `.heartwood/experiments.jsonl` and use the existing private JSON Lines append journal and native file locks.
+Project initialization registers the experiment formats in `.heartwood/state.json` without rewriting existing session, audit, or experiment records.
+Supported older project manifests are upgraded atomically; unknown or altered format declarations are rejected rather than relabeled.
 A hash chain detects modification or reordering within the available record history.
 Exact event retries do not append a second record; changed retries and invalid transitions are rejected.
 One shared reducer supplies summaries and exact output-path/digest producer queries.

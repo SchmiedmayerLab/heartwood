@@ -19,6 +19,7 @@ from pydantic import ValidationError
 
 import heartwood.persistence._files as files
 from heartwood.gateway._experiment_store import ExperimentStore
+from heartwood.persistence import EXPERIMENT_ENTRY_VERSION, EXPERIMENT_EVENT_VERSION
 from heartwood.schemas.experiments import (
     ExperimentDefinition,
     ExperimentEnvironment,
@@ -83,6 +84,9 @@ def test_append_query_export_and_fresh_replay(tmp_path: Path) -> None:
     store.append(first)
     store.append(final)
     content = store.export()
+    entry = json.loads(content.splitlines()[0])
+    assert entry["schema_version"] == EXPERIMENT_ENTRY_VERSION
+    assert entry["event"]["schema_version"] == EXPERIMENT_EVENT_VERSION
     store.append(final)
     store.append(first)
     assert store.export() == content
@@ -110,6 +114,66 @@ def test_terminal_identity_cannot_be_replaced(tmp_path: Path, terminal: str) -> 
     with pytest.raises(ValueError, match="retry changed"):
         store.append(after(first, event_id=final.event_id, at=NOW + timedelta(seconds=3)))
     assert store.events() == (first, final)
+
+
+def test_synchronization_skips_verified_retries_without_caching_between_calls(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "experiments.jsonl"
+    store = ExperimentStore(path)
+    first = start()
+    final = after(first)
+    store.append(first)
+    append = store.append
+    appended: list[ExperimentEvent] = []
+
+    def observe(event: ExperimentEvent) -> None:
+        appended.append(event)
+        append(event)
+
+    monkeypatch.setattr(store, "append", observe)
+    store.synchronize((first, final, final))
+    assert appended == [final]
+    before = path.read_bytes()
+    store.synchronize((first, final))
+    assert appended == [final]
+    assert path.read_bytes() == before
+    with pytest.raises(ValueError, match="retry changed"):
+        store.synchronize((first, after(first, event_id=final.event_id, exit_code=None)))
+    assert path.read_bytes() == before
+    path.write_bytes(b"corrupted after last synchronization\n")
+    with pytest.raises(ValueError, match="integrity recovery"):
+        store.synchronize((first, final))
+
+
+@pytest.mark.parametrize("changed_retry", [False, True])
+def test_synchronization_keeps_append_authoritative_after_concurrent_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, changed_retry: bool
+) -> None:
+    path = tmp_path / "experiments.jsonl"
+    store = ExperimentStore(path)
+    first = start()
+    final = after(first)
+    store.append(first)
+    concurrent = (
+        after(first, event_id=final.event_id, at=final.at + timedelta(seconds=1))
+        if changed_retry
+        else final
+    )
+    snapshot = store.events
+
+    def insert_after_snapshot() -> tuple[ExperimentEvent, ...]:
+        events = snapshot()
+        ExperimentStore(path).append(concurrent)
+        return events
+
+    monkeypatch.setattr(store, "events", insert_after_snapshot)
+    if changed_retry:
+        with pytest.raises(ValueError, match="retry changed"):
+            store.synchronize((first, final))
+    else:
+        store.synchronize((first, final))
+    assert ExperimentStore(path).events() == (first, concurrent)
 
 
 def test_interruption_resume_and_cancellation_are_explicit(tmp_path: Path) -> None:

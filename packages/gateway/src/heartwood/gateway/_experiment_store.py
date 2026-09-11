@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
@@ -86,6 +87,20 @@ class ExperimentStore:
             return
         except DurableFileError:
             raise ValueError("Experiment journal requires integrity recovery") from None
+
+    def synchronize(self, events: Iterable[ExperimentEvent]) -> None:
+        """Materialize source records without re-appending each already verified event."""
+        recorded = {event.event_id: event for event in self.events()}
+        for event in events:
+            event = ExperimentEvent.model_validate(event)
+            existing = recorded.get(event.event_id)
+            if existing is not None:
+                if existing != event:
+                    raise ValueError("Experiment retry changed its original content")
+                continue
+            # The append lock still checks retries and transitions against concurrent writers.
+            self.append(event)
+            recorded[event.event_id] = event
 
     def events(self) -> tuple[ExperimentEvent, ...]:
         """Recover interrupted appends and verify the full available chain."""
