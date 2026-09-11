@@ -35,4 +35,4 @@ __all__ = [
     "assert_platform_adapter_conforms",
 ]
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"

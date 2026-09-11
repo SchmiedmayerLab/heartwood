@@ -8,7 +8,8 @@ SPDX-License-Identifier: MIT
 
 The browser interface presents conversations, action review, read-only project files and changes, model setup, Skills, activity, and audit export without introducing a separate backend or project state.
 It is available on workstations and in the generic container.
-Terra and Stanford Carina do not expose a supported Heartwood browser route; use their terminal or notebook interfaces instead.
+Terra and Stanford Carina do not expose a supported Heartwood browser route.
+Use the terminal or notebook interface on Terra and the terminal interface on Stanford Carina.
 
 ## Open the Interface
 
@@ -63,7 +64,7 @@ These suggestions come from the gateway and are the same ones shown by the termi
 - Use **Changes** to inspect Git changes or session-attributed non-Git changes with read-only per-file diffs.
 - Open **Research** to set up a [research workflow](research-workflows.md), inspect stage evidence, and review its artifacts.
 - Expand **Project Experiment Records** in Research to inspect recorded workflow stages and scripts across the project, refresh their status, or export their provenance.
-- Inspect task progress, model-call totals, and sequential specialist status below the conversation.
+- Inspect task progress, model-call totals, and specialist status below the conversation.
 - Open **Activity & audit** to inspect route decisions, tool results, and errors.
 - Open **Skills** to inspect repository-verified and installed Skills.
 - Open **Specialists** to inspect the bounded research specialists available to the parent agent.
@@ -80,7 +81,8 @@ Task and specialist labels are shown in researcher-facing language; OpenHands id
 ![Heartwood Specialists panel showing bounded research-review roles](../assets/screenshots/browser-specialists-dark.png#gh-dark-mode-only){ .theme-screenshot-dark }
 
 When the parent delegates work, the OpenHands Task action appears in the normal grouped review flow.
-Heartwood runs one specialist at a time and shows its lifecycle and final result in the shared session projection.
+Heartwood runs one specialist at a time by default and shows its lifecycle and final result in the shared session projection.
+Supported workflow stages can offer explicitly authorized [parallel review](research-workflows.md#parallel-reviews) when the deployment has qualified it.
 See [Research Specialists](specialists.md) for the available roles and their boundaries.
 
 Agent responses support headings, lists, tables, quotations, links, inline code, and code blocks.

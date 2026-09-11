@@ -100,7 +100,7 @@ The gateway binds explicitly selected project files to their exact content hashe
 A submission references that snapshot; changed or unavailable context cannot support an actionable finding.
 Review identities reject conflicting retries, and equivalent conditions on the same evidence produce one finding with the original reviewer claims retained separately.
 
-The read-only verification service supports three bounded observations: empty or syntactically invalid Python source, baseline results inconsistent with independent recomputation, and byte differences between declared original and reproduced artifacts.
+The read-only verification service supports four bounded observations: analysis plans incompatible with the supported predictor, outcome, grouping, or split requirements; empty or syntactically invalid Python source; baseline results inconsistent with independent recomputation; and byte differences between declared original and reproduced artifacts.
 Unsupported conditions, invalid analysis prerequisites, and exhausted check limits remain unverified.
 Verified claims and their severity come from the maintained check, not from the model's explanation.
 A syntax check does not execute code, a byte comparison does not prove reproduction, and a matching numerical result does not establish scientific appropriateness.

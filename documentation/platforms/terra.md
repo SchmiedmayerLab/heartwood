@@ -43,8 +43,8 @@ Use one of these combinations:
 
 | Model Route | Image | Practical Starting Point |
 |---|---|---|
-| Stanford AI API Gateway or hosted service | `ghcr.io/schmiedmayerlab/heartwood:0.3.0-terra` | 8 CPUs, 30 GB RAM, 50 GB persistent disk |
-| Run with Heartwood: Qwen3 Coder 30B AWQ | `ghcr.io/schmiedmayerlab/heartwood:0.3.0-terra-gpu-nvidia` | 32 CPUs, 120 GB RAM, two T4 GPUs with 16 GB each, 200 GB persistent disk |
+| Stanford AI API Gateway or hosted service | `ghcr.io/schmiedmayerlab/heartwood:0.4.0-terra` | 8 CPUs, 30 GB RAM, 50 GB persistent disk |
+| Run with Heartwood: Qwen3 Coder 30B AWQ | `ghcr.io/schmiedmayerlab/heartwood:0.4.0-terra-gpu-nvidia` | 32 CPUs, 120 GB RAM, two T4 GPUs with 16 GB each, 200 GB persistent disk |
 
 A hosted model is the shortest first run.
 Use the GPU image for a capable model managed inside the Terra environment.
