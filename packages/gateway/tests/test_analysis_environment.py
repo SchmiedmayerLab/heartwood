@@ -8,10 +8,13 @@
 
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import tomllib
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 from zipfile import ZipFile
 
 import pytest
@@ -21,6 +24,7 @@ from heartwood.gateway import ProjectContext
 from heartwood.gateway import _environment_probe as probe
 from heartwood.gateway._analysis_environment import (
     environment_directory,
+    environment_python,
     reconstruct_environment,
 )
 from heartwood.gateway._environment_probe import capture_environment, require_environment
@@ -136,6 +140,81 @@ def test_probe_reconstructs_and_runs_guarded_analysis_with_minimal_environment(
     with pytest.raises(ValueError, match="project"):
         probe.main()
     assert not (tmp_path / "completed").exists()
+
+
+def _wheel(lock: dict[str, Any]) -> dict[str, Any]:
+    wheel: dict[str, Any] = lock["packages"][0]["wheels"][0]
+    return wheel
+
+
+def _url_wheel(lock: dict[str, Any], url: object) -> None:
+    wheel = _wheel(lock)
+    del wheel["path"]
+    wheel["url"] = url
+
+
+_LOCK_MUTATIONS: dict[str, tuple[Callable[[dict[str, Any]], object], str]] = {
+    "lock-version": (lambda lock: lock.update({"lock-version": "2.0"}), "PEP 751"),
+    "package-type": (
+        lambda lock: lock.update({"packages": ["synthetic"]}),
+        "Invalid dependency lock package",
+    ),
+    "no-wheels": (lambda lock: lock["packages"][0].update({"wheels": []}), "hash-pinned wheel"),
+    "wheel-type": (lambda lock: lock["packages"][0].update({"wheels": ["synthetic"]}), "SHA-256"),
+    "hash-format": (lambda lock: _wheel(lock)["hashes"].update({"sha256": "short"}), "SHA-256"),
+    "url-type": (lambda lock: _url_wheel(lock, 1), "Invalid analysis wheel URL"),
+    "http-url": (
+        lambda lock: _url_wheel(lock, "http://example.invalid/synthetic.whl"),
+        "HTTPS without credentials",
+    ),
+    "credential-url": (
+        lambda lock: _url_wheel(lock, "https://token@example.invalid/synthetic.whl"),
+        "HTTPS without credentials",
+    ),
+    "path-type": (lambda lock: _wheel(lock).update({"path": 1}), "Invalid analysis wheel path"),
+    "url-and-path": (
+        lambda lock: _wheel(lock).update({"url": "https://example.invalid/synthetic.whl"}),
+        "exactly one URL or project path",
+    ),
+    "no-source": (lambda lock: _wheel(lock).pop("path"), "exactly one URL or project path"),
+    "fifo": (lambda lock: _wheel(lock).update({"path": "wheels"}), "regular files"),
+}
+
+
+@pytest.mark.parametrize("mutation", sorted(_LOCK_MUTATIONS))
+def test_invalid_locks_are_rejected_before_any_installation(
+    tmp_path: Path, analysis_lock: Path, mutation: str
+) -> None:
+    _expected(tmp_path)
+    os.mkfifo(tmp_path / "wheels")
+    mutate, message = _LOCK_MUTATIONS[mutation]
+    lock = tomllib.loads(analysis_lock.read_text())
+    mutate(lock)
+    analysis_lock.write_text(tomli_w.dumps(lock))
+    project = ProjectContext(tmp_path)
+    with pytest.raises(ValueError, match=message):
+        reconstruct_environment(
+            project,
+            environment_id="c" * 64,
+            lockfile=analysis_lock.name,
+            expected="expected.json",
+        )
+    assert not environment_python(environment_directory(project, "c" * 64)).exists()
+
+
+def test_environment_directory_rejects_symbolic_links_and_invalid_identifiers(
+    tmp_path: Path,
+) -> None:
+    project = ProjectContext(tmp_path)
+    project.initialize()
+    (tmp_path / "elsewhere").mkdir()
+    if project.runtime_dir.exists():
+        project.runtime_dir.rmdir()
+    project.runtime_dir.symlink_to(tmp_path / "elsewhere", target_is_directory=True)
+    with pytest.raises(ValueError, match="symbolic links"):
+        environment_directory(project, "d" * 64)
+    with pytest.raises(ValueError, match="identifier"):
+        environment_directory(project, "not-an-identifier")
 
 
 def test_offline_reconstruction_installs_only_locked_analysis_dependencies(

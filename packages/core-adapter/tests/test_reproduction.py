@@ -267,3 +267,40 @@ def test_malformed_serialized_evidence_is_rejected(change: str) -> None:
         value["status"] = "prepared"
     with pytest.raises(ValidationError):
         ReproductionWitness.model_validate(value)
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"analysis_environment": "a" * 64},
+        {"lockfile": "dictionary.json"},
+        {"analysis_environment": "a" * 64, "python_executable": "/opt/runtime/bin/python"},
+        {
+            "purpose": "python-environment",
+            "python_executable": "/opt/runtime/bin/python",
+            "analysis_environment": "a" * 64,
+            "lockfile": "dictionary.json",
+        },
+        {
+            "purpose": "python-environment",
+            "python_executable": "/opt/runtime/bin/python",
+            "output_names": ("environment.json",),
+            "required_environment": "data.csv",
+        },
+    ],
+)
+def test_environment_reconstruction_requires_a_complete_binding(changes: dict[str, object]) -> None:
+    with pytest.raises(ValidationError):
+        _spec(**changes)
+
+
+def test_environment_capture_without_reconstruction_binds_the_control_python() -> None:
+    spec = _spec(
+        purpose="python-environment",
+        python_executable="/opt/runtime/bin/python",
+        output_names=("environment.json",),
+    )
+    assert spec.command == (
+        "/opt/runtime/bin/python -I -m heartwood.gateway._environment_probe "
+        "--output-dir results/reproduced"
+    )

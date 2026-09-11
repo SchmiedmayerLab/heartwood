@@ -18,6 +18,7 @@ from pydantic import ValidationError
 
 from heartwood.compliance.research import research_tasks
 from heartwood.core_adapter.research_corrections import assess_research_correction
+from heartwood.core_adapter.workflow_corrections import correction_output_files
 from heartwood.gateway import ProjectContext, SessionGateway
 from heartwood.gateway._research_review import ResearchReviewEvaluator
 from heartwood.gateway._workspace import WorkspaceInspector
@@ -26,6 +27,7 @@ from heartwood.schemas.review import (
     ResearchCorrectionRun,
     ResearchReviewRun,
     ReviewCandidate,
+    ReviewCorrectionAssessment,
     ReviewCorrectionPlan,
     ReviewProposals,
     ReviewSubmission,
@@ -191,6 +193,228 @@ def test_review_journal_rejects_substituted_evidence(tmp_path: Path, mutation: s
         ]["path"]
     with pytest.raises(ValidationError):
         ResearchReviewRun.model_validate(record)
+
+
+def _attempt(
+    root: Path,
+    evaluator: ResearchReviewEvaluator,
+    review: ResearchReviewRun,
+    corrected: dict[str, str],
+    *,
+    directory: str,
+    sequence: int,
+    attempt_id: str,
+    correct: bool = True,
+    plan: ReviewCorrectionPlan | None = None,
+) -> ResearchCorrectionAttempt:
+    if plan is None:
+        plan = evaluator.prepare_correction(review, output_directory=directory)
+        if not correct:
+            corrected = {
+                item.artifact_id: (root / item.file.path).read_text()
+                for item in review.snapshot.artifacts
+            }
+        _write_correction(root, plan, corrected)
+    return ResearchCorrectionAttempt(
+        attempt_id=attempt_id,
+        plan=plan,
+        started_sequence=sequence,
+        status="assessed",
+        assessment=evaluator.assess_correction(review, plan),
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation", ["duplicate-findings", "duplicate-roles", "outside", "nested", "case-overlap"]
+)
+def test_correction_plan_rejects_ambiguous_outputs(tmp_path: Path, mutation: str) -> None:
+    evaluator, review, _ = _review(tmp_path)
+    plan = evaluator.prepare_correction(review, output_directory="correction-one")
+    data = plan.model_dump(mode="json")
+    output = data["outputs"][0]
+    if mutation == "duplicate-findings":
+        data["finding_ids"] = data["finding_ids"] * 2
+    elif mutation == "duplicate-roles":
+        data["outputs"] = [output, output]
+    elif mutation == "outside":
+        data["outputs"] = [{**output, "path": "elsewhere/analysis.py"}]
+    elif mutation == "nested":
+        data["outputs"] = [output, {"artifact_id": "notes", "path": output["path"] + "/nested"}]
+    else:
+        data["outputs"] = [output, {"artifact_id": "notes", "path": output["path"].upper()}]
+        data["output_directory"] = data["output_directory"].upper()
+        data["outputs"][0]["path"] = data["outputs"][0]["path"].upper()
+        data["outputs"][1]["path"] = data["outputs"][1]["path"].swapcase()
+    with pytest.raises(ValidationError):
+        ReviewCorrectionPlan.model_validate(data)
+
+
+@pytest.mark.parametrize("mutation", ["duplicate-checks", "missing-snapshot"])
+def test_correction_assessment_requires_complete_observations(
+    tmp_path: Path, mutation: str
+) -> None:
+    evaluator, review, corrected = _review(tmp_path)
+    attempt = _attempt(
+        tmp_path,
+        evaluator,
+        review,
+        corrected,
+        directory="correction-one",
+        sequence=10,
+        attempt_id="attempt-one",
+    )
+    assert attempt.assessment is not None
+    data = attempt.assessment.model_dump(mode="json")
+    if mutation == "duplicate-checks":
+        data["checks"] = data["checks"] * 2
+    else:
+        data["snapshot"] = None
+    with pytest.raises(ValidationError):
+        ReviewCorrectionAssessment.model_validate(data)
+
+
+@pytest.mark.parametrize(
+    ("status", "reason", "keep_assessment"),
+    [("assessed", None, False), ("unavailable", None, True), ("pending", "changed-context", False)],
+)
+def test_correction_attempt_state_matches_its_result(
+    tmp_path: Path, status: str, reason: str | None, keep_assessment: bool
+) -> None:
+    evaluator, review, corrected = _review(tmp_path)
+    attempt = _attempt(
+        tmp_path,
+        evaluator,
+        review,
+        corrected,
+        directory="correction-one",
+        sequence=10,
+        attempt_id="attempt-one",
+    )
+    data = attempt.model_dump(mode="json")
+    data.update(status=status, unavailable_reason=reason)
+    if not keep_assessment:
+        data["assessment"] = None
+    with pytest.raises(ValidationError):
+        ResearchCorrectionAttempt.model_validate(data)
+
+
+@pytest.mark.parametrize(
+    "scenario",
+    [
+        "unassessed-review",
+        "limit",
+        "corrected-without-evidence",
+        "stopped-pending",
+        "shared-directory",
+        "retry-after-success",
+        "retry-after-pending",
+    ],
+)
+def test_correction_series_rejects_incoherent_progress(tmp_path: Path, scenario: str) -> None:
+    evaluator, review, corrected = _review(tmp_path)
+    first = _attempt(
+        tmp_path,
+        evaluator,
+        review,
+        corrected,
+        directory="correction-one",
+        sequence=10,
+        attempt_id="attempt-one",
+        correct=scenario == "retry-after-success",
+    )
+    pending = ResearchCorrectionAttempt(attempt_id="pending", plan=first.plan, started_sequence=10)
+    second = _attempt(
+        tmp_path,
+        evaluator,
+        review,
+        corrected,
+        directory="correction-two",
+        sequence=11,
+        attempt_id="attempt-two",
+        plan=first.plan if scenario == "shared-directory" else None,
+    )
+    series: dict[str, object] = {
+        "correction_id": "correction-one",
+        "stage_id": "execute",
+        "review": review,
+        "maximum_attempts": 2,
+        "attempts": (first, second),
+        "stop_reason": "corrected",
+    }
+    if scenario == "unassessed-review":
+        series["review"] = review.model_copy(update={"status": "pending", "assessment": None})
+    elif scenario == "limit":
+        series["maximum_attempts"] = 1
+    elif scenario == "corrected-without-evidence":
+        series["attempts"] = (first,)
+    elif scenario == "stopped-pending":
+        series.update(attempts=(pending,), stop_reason="attempt-limit")
+    elif scenario == "retry-after-pending":
+        series["attempts"] = (pending, second)
+    with pytest.raises(ValidationError):
+        ResearchCorrectionRun.model_validate(series)
+
+
+def test_second_attempt_after_observed_defect_retains_only_checked_outputs(tmp_path: Path) -> None:
+    evaluator, review, corrected = _review(tmp_path)
+    first = _attempt(
+        tmp_path,
+        evaluator,
+        review,
+        corrected,
+        directory="correction-one",
+        sequence=10,
+        attempt_id="attempt-one",
+        correct=False,
+    )
+    second = _attempt(
+        tmp_path,
+        evaluator,
+        review,
+        corrected,
+        directory="correction-two",
+        sequence=11,
+        attempt_id="attempt-two",
+    )
+    series = ResearchCorrectionRun(
+        correction_id="correction-one",
+        stage_id="execute",
+        review=review,
+        maximum_attempts=2,
+        attempts=(first, second),
+        stop_reason="corrected",
+    )
+    assert ResearchCorrectionRun.model_validate_json(series.model_dump_json()) == series
+    assert not first.defect_not_observed
+    assert correction_output_files(first) == ()
+    outputs = correction_output_files(second)
+    assert {item.path for item in outputs} == {item.path for item in second.plan.outputs}
+    assert second.assessment is not None
+    assert second.assessment.snapshot is not None
+    snapshot = second.assessment.snapshot
+    moved = snapshot.model_copy(
+        update={
+            "artifacts": tuple(
+                item.model_copy(update={"file": item.file.model_copy(update={"path": "moved.py"})})
+                if item.artifact_id == "program"
+                else item
+                for item in snapshot.artifacts
+            )
+        }
+    )
+    dropped = snapshot.model_copy(
+        update={"artifacts": tuple(i for i in snapshot.artifacts if i.artifact_id != "program")}
+    )
+    for observed, message in (
+        (moved, "evidence roles"),
+        (dropped, "output paths"),
+        (None, "observed"),
+    ):
+        forged = second.model_copy(
+            update={"assessment": second.assessment.model_copy(update={"snapshot": observed})}
+        )
+        with pytest.raises(ValueError, match=message):
+            correction_output_files(forged)
 
 
 @pytest.mark.parametrize(
