@@ -17,6 +17,7 @@ Heartwood does not fork the OpenHands agent loop or maintain a parallel coding-t
 - platform-aware model discovery and Heartwood-managed model planning;
 - OpenHands SDK conversations and tool execution;
 - OpenHands task tracking and bounded sequential research specialists;
+- [reviewed research stages](../use/research-workflows.md) with independent artifact checks and [experiment records](experiments.md);
 - grouped action review and deployment-constrained auto-approval;
 - repository-verified and explicitly installed Skills;
 - persistent sessions, replay, and tamper-evident audit export;

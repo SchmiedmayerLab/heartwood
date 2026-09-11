@@ -64,6 +64,7 @@ print(run.outputs)
 ```
 
 The recorder observes the declared files before entering the block and checks that inputs and code remain unchanged afterward.
+If the Python environment was observed, its fingerprint must also remain unchanged.
 Successful completion requires every declared output to exist and be readable.
 Missing outputs, changed inputs, and exceptions produce a failed record; a keyboard interruption produces a cancelled record.
 The original exception is propagated without putting its text in the journal.
@@ -105,10 +106,40 @@ Exact event retries do not append a second record; changed retries and invalid t
 One shared reducer supplies summaries and exact output-path/digest producer queries.
 
 The Python recorder reserves a run before entering user code and holds its ownership lock until it exits.
-Reusing a run identifier never enters the code block again, even after process loss.
+Reusing a run identifier with `record()` never enters the code block again, even after process loss.
 An unfinished `started` record means that execution may or may not have occurred; reading it does not repeat the work or infer success from files left behind.
-The event contract represents explicit interruption and resumed attempts, but the Python context manager only starts new runs.
+An unfinished `resumed` record has the same uncertainty for its later attempt.
 Terminal outcomes cannot be replaced.
+
+### Recover an Interrupted Script
+
+First check whether the original process or any subprocess it launched is still running, and inspect partial outputs and external effects.
+`recorder.recover(run_id)` requires the recorder's ownership lock to be free and marks the attempt `interrupted` without executing anything.
+It does not stop detached processes, remove files, or establish that retrying is safe.
+Calling it again leaves the same interrupted record unchanged.
+
+Choose one of these actions after inspection:
+
+- `recorder.cancel(run_id)` closes the abandoned record without undoing or deleting anything.
+- `recorder.resume(run_id)` explicitly starts another attempt under the same run identity and original declaration.
+
+A resumed attempt requires unchanged code, inputs, and any observed Python environment.
+Declared outputs must be absent; Heartwood never deletes partial results to make a retry possible.
+The caller must establish that repeating any undeclared or external effects is safe and handle partial outputs deliberately.
+Changed parameters or dependencies belong in a new experiment, not a resumed one.
+
+After recovering and verifying that a retry is safe:
+
+```python
+with recorder.resume(run_id):
+    from analysis import main
+
+    main(seed=42)
+```
+
+The resumed intent is persisted before the block runs, and its attempt number increases while the original input declaration and start time remain unchanged.
+An interrupted resume is not automatically retried.
+These script APIs cannot recover, cancel, or replace gateway-owned workflow stage records; use the workflow's normal session controls for those.
 
 `recorder.export()` returns a deterministic, verified JSON Lines snapshot.
 An export is not a signed checkpoint or deployment-owned immutable record.

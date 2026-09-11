@@ -82,14 +82,15 @@ class ExperimentRecorder:
         Exceptions are propagated without copying their text into the journal.
         """
         definition = ExperimentDefinition.model_validate(definition)
+        self._require_script(definition)
         identity = UUID(str(run_id)) if run_id is not None else uuid4()
         self.project.initialize()
-        with native_file_lock(self.project.state_root / f".experiment-{identity}.lock", timeout=0):
+        with native_file_lock(
+            self.project.state_root / f".experiment-{identity}.lock", timeout=0, reentrant=False
+        ):
             if any(run.run_id == identity for run in self._store.runs()):
                 raise ValueError("Experiment identity already exists; inspect its recorded outcome")
-            self._verify_inputs(definition)
-            if any(not self._workspace.is_absent(path) for path in definition.output_paths):
-                raise ValueError("Experiment outputs require unused paths in existing directories")
+            self._verify_preconditions(definition)
             self._store.append(
                 ExperimentEvent(
                     event_id=uuid4(),
@@ -100,34 +101,134 @@ class ExperimentRecorder:
                     definition=definition,
                 )
             )
-            try:
+            with self._observe_outcome(definition, identity=identity, attempt=1):
                 yield identity
-                self._verify_inputs(definition)
-                outputs = tuple(self._file(path) for path in definition.output_paths)
-                self._verify_inputs(definition)
-            except BaseException as error:
-                self._store.append(
-                    ExperimentEvent(
-                        event_id=uuid4(),
-                        run_id=identity,
-                        at=datetime.now(UTC),
-                        attempt=1,
-                        status="cancelled" if isinstance(error, KeyboardInterrupt) else "failed",
-                    )
+
+    def recover(self, run_id: UUID) -> ExperimentRun:
+        """Mark an abandoned script attempt interrupted without inferring its effects.
+
+        The run's native lease must be free. This does not stop detached children,
+        undo outputs, certify safe retry, or reenter caller code.
+        """
+        with self._existing_run(run_id) as run:
+            if run.status == "interrupted":
+                return run
+            if run.status not in {"started", "resumed"}:
+                raise ValueError("The experiment already has a terminal outcome")
+            self._store.append(
+                ExperimentEvent(
+                    event_id=uuid4(),
+                    run_id=run.run_id,
+                    at=datetime.now(UTC),
+                    attempt=run.attempt,
+                    status="interrupted",
                 )
-                raise
-            else:
-                self._store.append(
-                    ExperimentEvent(
-                        event_id=uuid4(),
-                        run_id=identity,
-                        status="succeeded",
-                        at=datetime.now(UTC),
-                        attempt=1,
-                        outputs=outputs,
-                        exit_code=0,
-                    )
+            )
+            return self._find_run(run.run_id)
+
+    def cancel(self, run_id: UUID) -> ExperimentRun:
+        """Close an abandoned attempt without deleting files or claiming rollback."""
+        with self._existing_run(run_id) as run:
+            if run.status == "cancelled":
+                return run
+            if run.status not in {"started", "resumed", "interrupted"}:
+                raise ValueError("The experiment already has a terminal outcome")
+            self._store.append(
+                ExperimentEvent(
+                    event_id=uuid4(),
+                    run_id=run.run_id,
+                    at=datetime.now(UTC),
+                    attempt=run.attempt,
+                    status="cancelled",
                 )
+            )
+            return self._find_run(run.run_id)
+
+    @contextmanager
+    def resume(self, run_id: UUID) -> Iterator[UUID]:
+        """Explicitly retry an interrupted script with its unchanged declaration.
+
+        The caller must verify that repeating external effects is safe. Declared
+        outputs must be absent; this method never removes partial results.
+        A resumed intent is durable before caller code is entered.
+        """
+        with self._existing_run(run_id) as run:
+            if run.status != "interrupted":
+                raise ValueError("Resume requires explicit recovery of an interrupted experiment")
+            self._verify_preconditions(run.definition)
+            attempt = run.attempt + 1
+            self._store.append(
+                ExperimentEvent(
+                    event_id=uuid4(),
+                    run_id=run.run_id,
+                    at=datetime.now(UTC),
+                    attempt=attempt,
+                    status="resumed",
+                )
+            )
+            with self._observe_outcome(run.definition, identity=run.run_id, attempt=attempt):
+                yield run.run_id
+
+    @contextmanager
+    def _existing_run(self, run_id: UUID) -> Iterator[ExperimentRun]:
+        identity = UUID(str(run_id))
+        if not self.project.state_exists():
+            raise ValueError("No experiment exists in this project")
+        with native_file_lock(
+            self.project.state_root / f".experiment-{identity}.lock", timeout=0, reentrant=False
+        ):
+            run = self._find_run(identity)
+            self._require_script(run.definition)
+            yield run
+
+    def _find_run(self, identity: UUID) -> ExperimentRun:
+        run = next((item for item in self._store.runs() if item.run_id == identity), None)
+        if run is None:
+            raise ValueError("No experiment has this identity")
+        return run
+
+    @staticmethod
+    def _require_script(definition: ExperimentDefinition) -> None:
+        if definition.source == "heartwood":
+            raise ValueError("Workflow experiment records are owned by the session gateway")
+
+    def _verify_preconditions(self, definition: ExperimentDefinition) -> None:
+        self._verify_inputs(definition)
+        if any(not self._workspace.is_absent(path) for path in definition.output_paths):
+            raise ValueError("Experiment outputs require unused paths in existing directories")
+
+    @contextmanager
+    def _observe_outcome(
+        self, definition: ExperimentDefinition, *, identity: UUID, attempt: int
+    ) -> Iterator[None]:
+        try:
+            yield
+            self._verify_inputs(definition)
+            outputs = tuple(self._file(path) for path in definition.output_paths)
+            self._verify_inputs(definition)
+        except BaseException as error:
+            self._store.append(
+                ExperimentEvent(
+                    event_id=uuid4(),
+                    run_id=identity,
+                    at=datetime.now(UTC),
+                    attempt=attempt,
+                    status="cancelled" if isinstance(error, KeyboardInterrupt) else "failed",
+                )
+            )
+            raise
+        else:
+            self._store.append(
+                ExperimentEvent(
+                    event_id=uuid4(),
+                    run_id=identity,
+                    status="succeeded",
+                    at=datetime.now(UTC),
+                    attempt=attempt,
+                    outputs=outputs,
+                    exit_code=0,
+                )
+            )
 
     def runs(self) -> tuple[ExperimentRun, ...]:
         """Read the shared projection without creating an uninitialized project."""
@@ -142,6 +243,12 @@ class ExperimentRecorder:
         return self._store.export()
 
     def _verify_inputs(self, definition: ExperimentDefinition) -> None:
+        if (
+            definition.environment.kind == "python"
+            and definition.environment.source == "observed"
+            and observed_python_environment() != definition.environment
+        ):
+            raise ValueError("The observed experiment environment changed")
         for expected in (*definition.code, *definition.inputs):
             if self._file(expected.path) != expected:
                 raise ValueError("Declared experiment code or inputs changed")

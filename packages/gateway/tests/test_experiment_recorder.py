@@ -11,6 +11,7 @@ import json
 import runpy
 import subprocess
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import ClassVar
 from uuid import uuid4
@@ -21,7 +22,13 @@ import heartwood.gateway.experiments as recording
 import heartwood.persistence._files as files
 from heartwood.gateway import ProjectContext, WorkspaceInspectionError
 from heartwood.gateway.experiments import ExperimentRecorder, experiment_digest
-from heartwood.schemas.experiments import ExperimentDefinition, ExperimentEnvironment
+from heartwood.persistence import NativeLockUnavailableError
+from heartwood.schemas.experiments import (
+    ExperimentDefinition,
+    ExperimentEnvironment,
+    ExperimentEvent,
+    ExperimentStage,
+)
 
 
 def prepare(tmp_path: Path) -> tuple[ExperimentRecorder, ExperimentDefinition]:
@@ -234,3 +241,173 @@ with recorder.record(definition, run_id=UUID(sys.argv[3])):
         recorder.record(definition, run_id=identity),
     ):
         pytest.fail("Process loss must not repeat possibly completed work")
+    recovered = recorder.recover(identity)
+    assert recovered.status == "interrupted"
+    assert recovered.outputs == ()
+    assert (tmp_path / "result.json").read_text() == "{}"
+    with pytest.raises(ValueError, match="unused paths"), recorder.resume(identity):
+        pytest.fail("Partial outputs must not be replaced automatically")
+    cancelled = recorder.cancel(identity)
+    assert cancelled.status == "cancelled"
+    assert cancelled.outputs == ()
+    before = recorder.export()
+    assert recorder.cancel(identity) == cancelled
+    assert recorder.export() == before
+
+
+def abandoned(recorder: ExperimentRecorder, definition: ExperimentDefinition) -> ExperimentEvent:
+    recorder.project.initialize()
+    event = ExperimentEvent(
+        event_id=uuid4(),
+        run_id=uuid4(),
+        status="started",
+        attempt=1,
+        at=datetime.now(UTC),
+        definition=definition,
+    )
+    recorder._store.append(event)
+    return event
+
+
+def test_explicit_resume_preserves_identity_and_original_declaration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recorder, definition = prepare(tmp_path)
+    event = abandoned(recorder, definition)
+    with pytest.raises(ValueError, match="explicit recovery"), recorder.resume(event.run_id):
+        pytest.fail("An uncertain attempt requires an explicit recovery decision")
+    recovered = recorder.recover(event.run_id)
+    before = recorder.export()
+    assert recorder.recover(event.run_id) == recovered
+    assert recorder.export() == before
+    monkeypatch.chdir(tmp_path)
+    with recorder.resume(event.run_id) as identity:
+        assert identity == event.run_id
+        (active,) = recorder.runs()
+        assert active.status == "resumed"
+        assert active.attempt == 2
+        runpy.run_path("analysis.py", run_name="__main__")
+    (final,) = recorder.runs()
+    assert final.status == "succeeded"
+    assert final.definition == definition
+    assert final.started_at == event.at
+    assert final.attempt == 2
+    assert final.outputs[0].path == "result.json"
+    assert json.loads((tmp_path / "result.json").read_text()) == {"mean": 2}
+    for method in (recorder.recover, recorder.cancel):
+        with pytest.raises(ValueError, match="terminal outcome"):
+            method(event.run_id)
+
+
+@pytest.mark.parametrize("operation", ["recover", "cancel", "resume"])
+def test_recovery_cannot_take_over_an_active_attempt(tmp_path: Path, operation: str) -> None:
+    recorder, definition = prepare(tmp_path)
+    with recorder.record(definition) as identity:
+
+        def attempt_recovery() -> None:
+            if operation == "resume":
+                with recorder.resume(identity):
+                    pytest.fail("A second owner cannot enter the active attempt")
+            else:
+                getattr(recorder, operation)(identity)
+
+        with pytest.raises(NativeLockUnavailableError):
+            attempt_recovery()
+        assert recorder.runs()[0].status == "started"
+        (tmp_path / "result.json").write_text("{}")
+    assert recorder.runs()[0].status == "succeeded"
+
+
+@pytest.mark.parametrize("changed", ["input", "code", "output", "environment"])
+def test_resume_rechecks_all_declared_preconditions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, changed: str
+) -> None:
+    recorder, definition = prepare(tmp_path)
+    if changed == "environment":
+        definition = definition.model_copy(
+            update={"environment": recording.observed_python_environment()}
+        )
+    event = abandoned(recorder, definition)
+    recorder.recover(event.run_id)
+    if changed == "environment":
+        monkeypatch.setattr(
+            recording,
+            "observed_python_environment",
+            lambda: ExperimentEnvironment(kind="python", source="observed", sha256="f" * 64),
+        )
+    else:
+        path = {"input": "data.csv", "code": "analysis.py", "output": "result.json"}[changed]
+        (tmp_path / path).write_text("changed")
+    before = recorder.export()
+    with pytest.raises(ValueError, match=r"changed|unused paths"), recorder.resume(event.run_id):
+        pytest.fail("Changed preconditions cannot enter caller code")
+    assert recorder.export() == before
+
+
+@pytest.mark.parametrize("operation", ["record", "recover", "cancel", "resume"])
+def test_script_recorder_cannot_mutate_gateway_owned_stages(tmp_path: Path, operation: str) -> None:
+    recorder, definition = prepare(tmp_path)
+    definition = definition.model_copy(
+        update={
+            "source": "heartwood",
+            "stage": ExperimentStage(
+                session_id="research",
+                workflow_run_id="workflow",
+                stage_id="plan",
+                workflow_sha256="a" * 64,
+            ),
+        }
+    )
+    event = abandoned(recorder, definition)
+    before = recorder.export()
+
+    def mutate() -> None:
+        if operation == "record":
+            with recorder.record(definition):
+                pytest.fail("Script recording cannot claim workflow ownership")
+        elif operation == "resume":
+            with recorder.resume(event.run_id):
+                pytest.fail("Script recording cannot resume workflow work")
+        else:
+            getattr(recorder, operation)(event.run_id)
+
+    with pytest.raises(ValueError, match="owned by the session gateway"):
+        mutate()
+    assert recorder.export() == before
+
+
+@pytest.mark.parametrize("phase", ["resume", "finish"])
+def test_interrupted_resume_never_automatically_reenters_user_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, phase: str
+) -> None:
+    recorder, definition = prepare(tmp_path)
+    event = abandoned(recorder, definition)
+    recorder.recover(event.run_id)
+    calls = 0
+    executed = 0
+    original = files.append_private_bytes
+
+    def interrupt(path: Path, content: bytes) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == (1 if phase == "resume" else 2):
+            raise OSError("synthetic resumed append interruption")
+        original(path, content)
+
+    def execute() -> None:
+        nonlocal executed
+        with recorder.resume(event.run_id):
+            executed += 1
+            (tmp_path / "result.json").write_text("{}")
+
+    with monkeypatch.context() as patched:
+        patched.setattr(files, "append_private_bytes", interrupt)
+        with pytest.raises(OSError, match="synthetic resumed append interruption"):
+            execute()
+    fresh = ExperimentRecorder(ProjectContext(tmp_path))
+    (final,) = fresh.runs()
+    assert final.attempt == 2
+    assert final.status == ("resumed" if phase == "resume" else "succeeded")
+    assert executed == (0 if phase == "resume" else 1)
+    with pytest.raises(ValueError, match="explicit recovery"), fresh.resume(event.run_id):
+        pytest.fail("Recovering an append must never repeat caller work")
