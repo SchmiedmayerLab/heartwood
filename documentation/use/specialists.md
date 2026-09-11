@@ -8,7 +8,7 @@ SPDX-License-Identifier: MIT
 
 Research specialists give the parent agent a focused second pass for one part of a research task.
 They run through OpenHands, use the active model connection, and return their result to the parent conversation.
-Heartwood runs one specialist at a time and keeps the lifecycle, lineage, usage, and final result in the same session used by every interface.
+Heartwood runs one specialist at a time by default and keeps the lifecycle, lineage, usage, and final result in the same session used by every interface.
 Each delegation is a fresh bounded review; ask the parent agent to start another review when the evidence changes.
 
 ## Available Reviews
@@ -49,6 +49,9 @@ No proposals is also not proof that the analysis is correct.
 If a specialist cannot supply its required structured result, Heartwood reports the task as failed rather than accepting a success claim from its summary.
 
 ## Inspect the Catalog
+
+For workflow stages with multiple reviewers, a deployment may offer a qualified [parallel review](research-workflows.md#parallel-reviews).
+This does not give specialists additional tools or permission to change files.
 
 In the terminal, run `heartwood specialists` before opening a session or enter `/specialists` inside one.
 

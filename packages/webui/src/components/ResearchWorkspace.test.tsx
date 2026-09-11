@@ -86,6 +86,7 @@ const catalog: WorkflowCatalog = {
 
 const run = (): NonNullable<SessionProjection["workflow"]> => ({
   research_review: null,
+  parallel_review_plan: null,
   corrections: [],
   run_id: "run",
   revision: 3,
@@ -181,6 +182,8 @@ describe("research workflow workspace", () => {
         stop_reason: "unavailable",
         review: {
           review_id: "review-one",
+          parallel_plan: null,
+          parallel_dispatch: [],
           reviewer_ids: ["statistical-reviewer"],
           started_sequence: 8,
           status: "assessed",
@@ -374,6 +377,8 @@ describe("research workflow workspace", () => {
       const state = run();
       state.research_review = {
         review_id: "review-one",
+        parallel_plan: null,
+        parallel_dispatch: [],
         reviewer_ids: ["statistical-reviewer"],
         started_sequence: 8,
         status,
@@ -484,6 +489,49 @@ describe("research workflow workspace", () => {
     expect(
       screen.queryByRole("button", { name: "Accept Stage" }),
     ).not.toBeInTheDocument();
+  });
+
+  it("shows gateway review limits and submits the exact parallel consent", async () => {
+    const request = {
+      action: "request-review" as const,
+      run_id: "run",
+      revision: 3,
+      parallel_review_fingerprint: "b".repeat(64),
+    };
+    const summary =
+      "Parallel review (preview): 2 workers; up to 300s. Action confirmation still applies.";
+    const view = setup(
+      syntheticProjection({
+        workflow: run(),
+        reviewExecution: {
+          status: "preview",
+          workers: 2,
+          reviewers: ["research-planner", "statistical-reviewer"],
+          budget: {
+            maximum_seconds: 300,
+            maximum_model_calls: 20,
+            maximum_tokens: 100000,
+            maximum_actions: 30,
+            maximum_reported_cost_usd: 1,
+          },
+          summary,
+        },
+        workflowControls: [
+          {
+            control_id: "request-parallel-review",
+            label: "Review with 2 Parallel Specialists",
+            request,
+          },
+        ],
+      }),
+    );
+    expect(await screen.findByText(summary)).toBeVisible();
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Review with 2 Parallel Specialists",
+      }),
+    );
+    expect(view.onSubmit).toHaveBeenCalledWith(request);
   });
 
   it("reports catalog failure and permits an explicit retry", async () => {

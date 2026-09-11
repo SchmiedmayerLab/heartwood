@@ -100,6 +100,7 @@ export type WorkflowText = string;
 export type WorkflowRequest =
   | WorkflowStart
   | WorkflowTransition
+  | WorkflowReviewRequest
   | WorkflowReview
   | WorkflowCorrectionRequest;
 export type WorkflowInputValue = string;
@@ -1006,7 +1007,16 @@ export interface WorkflowStart {
  * Apply a transition only to the exact run and revision the researcher saw.
  */
 export interface WorkflowTransition {
-  action: "run" | "evaluate" | "cancel" | "request-review";
+  action: "run" | "evaluate" | "cancel" | "prepare-parallel-review";
+  revision: number;
+  run_id: string;
+}
+/**
+ * Request advisory review; parallel work requires the exact journaled preview.
+ */
+export interface WorkflowReviewRequest {
+  action: "request-review";
+  parallel_review_fingerprint: string | null;
   revision: number;
   run_id: string;
 }

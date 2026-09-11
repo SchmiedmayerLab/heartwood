@@ -8,10 +8,12 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import cast
 from uuid import NAMESPACE_URL, uuid4, uuid5
@@ -36,11 +38,18 @@ from heartwood.core_adapter import (
     SessionService,
 )
 from heartwood.core_adapter._state import SessionRecoveryError
+from heartwood.core_adapter.research_workflows import research_workflow
 from heartwood.gateway import ModelProfile, OpenHandsSdkBackend, ProjectContext, SessionGateway
 from heartwood.gateway import _openhands_sdk as sdk_module
-from heartwood.gateway._research_evaluation import ResearchStageEvaluator
+from heartwood.gateway._research_evaluation import ParallelReviewPreparer, ResearchStageEvaluator
 from heartwood.schemas import JsonValue
-from heartwood.schemas.review import ResearchReviewRun, ReviewProposals, ReviewSubmission
+from heartwood.schemas.parallel_reviews import ParallelReviewPlan, ReviewDispatchAction
+from heartwood.schemas.review import (
+    ResearchReviewRun,
+    ReviewProposals,
+    ReviewSnapshot,
+    ReviewSubmission,
+)
 from heartwood.schemas.workflows import WorkflowOutcomeStatus, WorkflowRun
 from heartwood.session import CommandKind, EventKind, SessionCommand
 
@@ -146,16 +155,25 @@ def _readiness(root: Path) -> None:
     )
 
 
-def _gateway(root: Path, backend: FinishedBackend) -> SessionGateway:
+def _gateway(
+    root: Path,
+    backend: FinishedBackend,
+    *,
+    parallel_review_preparer: ParallelReviewPreparer | None = None,
+) -> SessionGateway:
     gateway = SessionGateway(
         project=ProjectContext(root),
         env={},
+        parallel_review_preparer=parallel_review_preparer,
         service_factory=lambda sessions, session_id: SessionService.local_default(
             sessions,
             session_id=session_id,
             backend=backend,
             env={},
-            workflow_evaluator=ResearchStageEvaluator(gateway.workspace_inspector),
+            workflow_evaluator=ResearchStageEvaluator(
+                gateway.workspace_inspector,
+                parallel_review_preparer=parallel_review_preparer,
+            ),
         ),
     )
     return gateway
@@ -701,7 +719,7 @@ def _begin_seeded_code_review(
     return source
 
 
-def _begin_baseline_execution(gateway: SessionGateway, root: Path) -> None:
+def _begin_baseline_plan(gateway: SessionGateway, root: Path) -> None:
     task = next(item for item in research_tasks() if item.case.case_id == "baseline-analysis")
     for name, content in task.inputs.items():
         (root / name).write_text(content)
@@ -733,6 +751,10 @@ def _begin_baseline_execution(gateway: SessionGateway, root: Path) -> None:
             }
         )
     )
+
+
+def _begin_baseline_execution(gateway: SessionGateway, root: Path) -> None:
+    _begin_baseline_plan(gateway, root)
     gateway.handle(_projected_command(gateway, "evaluate"))
     gateway.handle(_projected_command(gateway, "accept"))
     assert _state(gateway).stage_id == "execute"
@@ -1250,6 +1272,7 @@ def _sdk_gateway(
     monkeypatch: pytest.MonkeyPatch,
     *,
     specialists: bool = False,
+    parallel_review_preparer: ParallelReviewPreparer | None = None,
 ) -> SessionGateway:
     from heartwood.gateway._specialists import load_specialist_catalog
 
@@ -1263,8 +1286,8 @@ def _sdk_gateway(
         else None
     )
 
-    def service_factory(sessions: Path, session_id: str) -> SessionService:
-        backend = OpenHandsSdkBackend(
+    def backend_factory(*, session_id: str, **_configuration: object) -> OpenHandsSdkBackend:
+        return OpenHandsSdkBackend(
             profile=ModelProfile(
                 profile_id="heartwood",
                 model="openai/local-model",
@@ -1274,21 +1297,19 @@ def _sdk_gateway(
             ),
             workspace=root,
             skills_dir=root / ".heartwood/skills",
-            persistence_dir=sessions / session_id / "openhands",
+            persistence_dir=gateway.sessions_root / session_id / "openhands",
             conversation_key=f"{root}#{session_id}",
             structured_task_outcomes=True,
             specialist_catalog=catalog,
             env={},
         )
-        return SessionService.local_default(
-            sessions,
-            session_id=session_id,
-            backend=backend,
-            env={},
-            workflow_evaluator=ResearchStageEvaluator(gateway.workspace_inspector),
-        )
 
-    gateway = SessionGateway(project=ProjectContext(root), service_factory=service_factory, env={})
+    gateway = SessionGateway(
+        project=ProjectContext(root),
+        env={},
+        parallel_review_preparer=parallel_review_preparer,
+    )
+    monkeypatch.setattr(gateway, "_backend", backend_factory)
     return gateway
 
 
@@ -2477,3 +2498,434 @@ def test_review_does_not_coerce_ambiguous_permission_values(
         assert _state(gateway) == state
     finally:
         gateway.stop()
+
+
+def _parallel_preparer(root: Path, seed: ParallelReviewPlan) -> ParallelReviewPreparer:
+    """Synthetic qualified evidence exercises admission, not real-provider qualification."""
+
+    def prepare(
+        run: WorkflowRun, snapshot: ReviewSnapshot, session_id: str, now: datetime
+    ) -> ParallelReviewPlan:
+        assert now.tzinfo is not None
+        stage = research_workflow(run.binding.workflow_id).stage(run.stage_id)
+        return ParallelReviewPlan.model_validate(
+            {
+                **seed.model_dump(),
+                "scope": {
+                    **seed.scope.model_dump(),
+                    "project_fingerprint": hashlib.sha256(str(root).encode()).hexdigest(),
+                    "session_id": session_id,
+                    "workflow_run_id": run.run_id,
+                    "workflow_id": run.binding.workflow_id,
+                    "stage_id": run.stage_id,
+                    "revision": run.revision,
+                    "snapshot_fingerprint": snapshot.fingerprint,
+                    "reviewer_ids": stage.specialist_ids,
+                    "budget": stage.budget,
+                },
+            }
+        )
+
+    return prepare
+
+
+def _review_actions(plan: ParallelReviewPlan) -> tuple[ReviewDispatchAction, ...]:
+    return tuple(
+        ReviewDispatchAction(
+            event_id=f"native-{index}",
+            tool_call_id=f"call-{index}",
+            reviewer_id=role,
+            action_fingerprint=str(index + 1) * 64,
+        )
+        for index, role in enumerate(plan.scope.reviewer_ids)
+    )
+
+
+def test_parallel_preview_is_read_only_and_exact_consent_is_journaled(
+    tmp_path: Path,
+    parallel_review_plan: ParallelReviewPlan,
+) -> None:
+    backend = ReviewBackend()
+    preparer = _parallel_preparer(tmp_path, parallel_review_plan)
+    gateway = _gateway(tmp_path, backend, parallel_review_preparer=preparer)
+    try:
+        _begin_baseline_plan(gateway, tmp_path)
+        preview_command = _projected_command(gateway, "prepare-parallel-review")
+        preview_result = gateway.handle(preview_command)
+        preview = _state(gateway).parallel_review_plan
+        assert preview is not None
+        from heartwood.cli._interactive import format_workflow_lines
+        from heartwood.notebook import build_view_model, build_widget_spec
+
+        projection = gateway.session_projection(session_id="research")
+        assert projection.review_execution is not None
+        assert projection.review_execution.status == "preview"
+        summary = projection.review_execution.summary
+        assert summary in format_workflow_lines(projection)
+        assert any(
+            summary in widget.items for widget in build_widget_spec(build_view_model(projection))
+        )
+        assert len(backend.prompts) == 1
+        assert _state(gateway).research_review is None
+        assert gateway.handle(preview_command).replayed
+        assert gateway.handle(preview_command).events == preview_result.events
+        request = _projected_command(gateway, "request-parallel-review")
+        assert request.payload["parallel_review_fingerprint"] == preview.fingerprint
+        gateway.handle(request)
+        current = _state(gateway)
+        assert current.parallel_review_plan is None
+        assert current.research_review is not None
+        assert current.research_review.parallel_plan == preview
+        assert current.research_review.parallel_dispatch == ()
+        projected = gateway.session_projection(session_id="research").review_execution
+        assert projected is not None
+        assert projected.status == "authorized"
+        assert len(backend.prompts) == 2
+        service = gateway._services["research"]
+        assert (
+            service.admit_parallel_review(_review_actions(preview), cancelled=lambda: False)
+            == preview
+        )
+        admitted = _state(gateway).research_review
+        assert admitted is not None
+        assert len(admitted.parallel_dispatch) == 2
+        projected = gateway.session_projection(session_id="research").review_execution
+        assert projected is not None
+        assert projected.status == "admitted"
+        with pytest.raises(ValueError, match="already admitted"):
+            service.admit_parallel_review(_review_actions(preview), cancelled=lambda: False)
+        assert gateway.handle(request).replayed
+        assert len(backend.prompts) == 2
+    finally:
+        gateway.stop()
+    fresh = ReviewBackend()
+    restored = _gateway(tmp_path, fresh, parallel_review_preparer=preparer)
+    try:
+        assert restored.handle(preview_command).replayed
+        assert restored.handle(request).replayed
+        assert _state(restored).research_review == admitted
+        assert not fresh.prompts
+    finally:
+        restored.stop()
+
+
+@pytest.mark.parametrize("change", ["fingerprint", "files", "revision", "evidence", "expiry"])
+def test_parallel_consent_changes_never_start_model_work(
+    tmp_path: Path,
+    parallel_review_plan: ParallelReviewPlan,
+    change: str,
+) -> None:
+    backend = ReviewBackend()
+    preparer = _parallel_preparer(tmp_path, parallel_review_plan)
+    gateway = _gateway(tmp_path, backend, parallel_review_preparer=preparer)
+    try:
+        _begin_baseline_plan(gateway, tmp_path)
+        gateway.handle(_projected_command(gateway, "prepare-parallel-review"))
+        request = _projected_command(gateway, "request-parallel-review")
+        if change == "fingerprint":
+            request = request.model_copy(
+                update={
+                    "payload": {
+                        **request.payload,
+                        "parallel_review_fingerprint": "f" * 64,
+                    }
+                }
+            )
+        elif change == "files":
+            (tmp_path / "results/plan.json").write_text("{}")
+        elif change == "revision":
+            gateway.handle(_projected_command(gateway, "evaluate"))
+        else:
+            altered = parallel_review_plan.model_copy(
+                update=(
+                    {"case_id": "changed-evidence"}
+                    if change == "evidence"
+                    else {"valid_until": datetime.fromisoformat("2020-01-01T00:00:00+00:00")}
+                )
+            )
+            gateway._services["research"]._workflow_evaluator = ResearchStageEvaluator(
+                gateway.workspace_inspector,
+                parallel_review_preparer=_parallel_preparer(tmp_path, altered),
+            )
+        response = gateway.handle(request)
+        assert any(event.kind == EventKind.ERROR_RECORDED for event in response.events)
+        assert _state(gateway).research_review is None
+        assert len(backend.prompts) == 1
+    finally:
+        gateway.stop()
+
+
+@pytest.mark.parametrize("change", ["cancel", "close", "files", "scope", "duplicate"])
+def test_parallel_admission_rechecks_after_slow_preparation(
+    tmp_path: Path,
+    parallel_review_plan: ParallelReviewPlan,
+    change: str,
+) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    entered, release, cancelled = Event(), Event(), Event()
+    backend = ReviewBackend()
+    preparer = _parallel_preparer(tmp_path, parallel_review_plan)
+    gateway = _gateway(tmp_path, backend, parallel_review_preparer=preparer)
+    try:
+        _begin_baseline_plan(gateway, tmp_path)
+        gateway.handle(_projected_command(gateway, "prepare-parallel-review"))
+        preview = _state(gateway).parallel_review_plan
+        assert preview is not None
+        gateway.handle(_projected_command(gateway, "request-parallel-review"))
+        service = gateway._services["research"]
+
+        def wait_prepare(
+            run: WorkflowRun, snapshot: ReviewSnapshot, session_id: str, now: datetime
+        ) -> ParallelReviewPlan:
+            entered.set()
+            assert release.wait(5)
+            return preparer(run, snapshot, session_id, now)
+
+        service._workflow_evaluator = ResearchStageEvaluator(
+            gateway.workspace_inspector,
+            parallel_review_preparer=wait_prepare,
+        )
+        actions = _review_actions(preview)
+        if change in {"scope", "duplicate"}:
+            actions = (
+                actions[0],
+                actions[1].model_copy(
+                    update={
+                        "reviewer_id": "unapproved"
+                        if change == "scope"
+                        else actions[0].reviewer_id,
+                    }
+                ),
+            )
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(service.admit_parallel_review, actions, cancelled=cancelled.is_set)
+            try:
+                assert entered.wait(5)
+                if change == "cancel":
+                    cancelled.set()
+                elif change == "close":
+                    service.close()
+                elif change == "files":
+                    (tmp_path / "results/plan.json").write_text("{}")
+            finally:
+                release.set()
+            with pytest.raises(ValueError, match=r"Parallel (review|dispatch)"):
+                future.result(timeout=5)
+        review = _state(gateway).research_review
+        assert review is not None
+        assert review.parallel_dispatch == ()
+        if change == "close":
+            assert not service.store.owns_writer
+    finally:
+        gateway.stop()
+
+
+@pytest.mark.parametrize("approve", [False, True])
+def test_native_parallel_workflow_journals_before_children_and_replays_without_calls(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    parallel_review_plan: ParallelReviewPlan,
+    approve: bool,
+) -> None:
+    from threading import Barrier, Lock
+
+    from openhands.sdk import LocalConversation
+    from openhands.tools.task.manager import TaskManager
+
+    from heartwood.core_adapter.workflow_runtime import workflow_run
+
+    roles = ("research-planner", "statistical-reviewer")
+    task_messages = [
+        _tool_message(
+            "task",
+            description="Review synthetic analysis plan",
+            prompt="Review only the supplied synthetic plan. Return no findings.",
+            subagent_type=role,
+        )
+        for role in roles
+    ]
+    llm = TestLLM.from_messages(
+        [
+            _tool_message(
+                "finish", message="Plan prepared.", status="success", outcome_summary="Done."
+            ),
+            Message(
+                role="assistant",
+                content=[],
+                tool_calls=[
+                    call for message in task_messages for call in (message.tool_calls or [])
+                ],
+            ),
+            _tool_message("finish", message="First review.", candidates=[]),
+            _tool_message("finish", message="Second review.", candidates=[]),
+            _tool_message(
+                "finish", message="Reviews settled.", status="success", outcome_summary="Done."
+            ),
+        ]
+    )
+    preparer = _parallel_preparer(tmp_path, parallel_review_plan)
+    gateway = _sdk_gateway(
+        tmp_path,
+        llm,
+        monkeypatch,
+        specialists=True,
+        parallel_review_preparer=preparer,
+    )
+    barrier, lock = Barrier(2), Lock()
+    children = 0
+    child_calls: list[int] = []
+    native_run = TaskManager._run_until_finished
+
+    def run_child(manager: TaskManager, task_id: str, conversation: LocalConversation) -> None:
+        nonlocal children
+        current = workflow_run(gateway._services["research"].replay_events())
+        assert current is not None
+        assert current.research_review is not None
+        assert len(current.research_review.parallel_dispatch) == 2
+        with lock:
+            children += 1
+        barrier.wait(timeout=5)
+        assert isinstance(conversation.agent.llm, TestLLM)
+        before = conversation.agent.llm.call_count
+        native_run(manager, task_id, conversation)
+        with lock:
+            child_calls.append(conversation.agent.llm.call_count - before)
+
+    monkeypatch.setattr(TaskManager, "_run_until_finished", run_child)
+    try:
+        _begin_baseline_plan(gateway, tmp_path)
+        assert gateway.wait_for_session_idle(session_id="research", timeout=30)
+        gateway.handle(_projected_command(gateway, "prepare-parallel-review"))
+        request = _projected_command(gateway, "request-parallel-review")
+        gateway.handle(request)
+        assert gateway.wait_for_session_idle(session_id="research", timeout=30)
+        projection = gateway.session_projection(session_id="research")
+        assert projection.pending_approval is not None
+        assert len(projection.pending_approval.actions) == 2
+        assert children == 0
+        decision = SessionCommand(
+            command_id=uuid4().hex,
+            session_id="research",
+            kind=CommandKind.APPROVE if approve else CommandKind.DENY,
+            created_at="2026-09-11T00:00:00Z",
+            payload={"target_id": projection.pending_approval.group_id},
+        )
+        gateway.handle(decision)
+        assert gateway.wait_for_session_idle(session_id="research", timeout=30)
+        review = _state(gateway).research_review
+        assert review is not None
+        assert children == (2 if approve else 0)
+        assert len(review.parallel_dispatch) == (2 if approve else 0)
+        if approve:
+            assert review.status == "assessed"
+            assert {item.reviewer_id for item in review.submissions} == set(roles)
+            projected = gateway.session_projection(session_id="research").review_execution
+            assert projected is not None
+            assert projected.status == "assessed"
+        assert llm.call_count == (3 if approve else 2)
+        assert child_calls == ([1, 1] if approve else [])
+        assert llm.remaining_responses == (0 if approve else 3)
+        gateway.handle(
+            SessionCommand(
+                command_id="parallel-export",
+                session_id="research",
+                kind=CommandKind.AUDIT_EXPORT,
+                created_at="2026-09-11T00:00:00Z",
+            )
+        )
+        audit = (gateway.sessions_root / "research/audit-export.jsonl").read_text()
+        assert "research_review_fingerprint" in audit
+        assert "action_fingerprint" not in audit
+        assert "results/plan.json" not in audit
+    finally:
+        gateway.stop()
+    unused = TestLLM.from_messages([])
+    restored = _sdk_gateway(
+        tmp_path,
+        unused,
+        monkeypatch,
+        specialists=True,
+        parallel_review_preparer=preparer,
+    )
+    try:
+        assert restored.handle(request).replayed
+        assert restored.handle(decision).replayed
+        assert _state(restored).research_review == review
+        assert unused.call_count == 0
+    finally:
+        restored.stop()
+
+
+@pytest.mark.parametrize(
+    "boundary", ["intent", "audit-before", "audit-after", "events-before", "events-after"]
+)
+def test_parallel_admission_recovers_append_boundaries_without_dispatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    parallel_review_plan: ParallelReviewPlan,
+    boundary: str,
+) -> None:
+    from heartwood.core_adapter import _state as state_module
+
+    backend = ReviewBackend()
+    preparer = _parallel_preparer(tmp_path, parallel_review_plan)
+    gateway = _gateway(tmp_path, backend, parallel_review_preparer=preparer)
+    try:
+        _begin_baseline_plan(gateway, tmp_path)
+        gateway.handle(_projected_command(gateway, "prepare-parallel-review"))
+        preview = _state(gateway).parallel_review_plan
+        assert preview is not None
+        gateway.handle(_projected_command(gateway, "request-parallel-review"))
+        service = gateway._services["research"]
+        store = service.store
+        append = state_module._append_private_json_line
+        write = state_module._write_private_json_atomic
+
+        def interrupt_append(path: Path, text: str) -> None:
+            payload = json.loads(text)
+            target = store.audit_path if boundary.startswith("audit") else store.events_path
+            if (
+                path != target
+                or payload.get("payload", {}).get("transition") != "admit-parallel-review"
+            ):
+                append(path, text)
+                return
+            if boundary.endswith("after"):
+                append(path, text)
+            raise OSError("Synthetic admission interruption")
+
+        def interrupt_intent(path: Path, value: dict[str, object]) -> None:
+            event = value.get("session_event")
+            if (
+                isinstance(event, dict)
+                and event.get("payload", {}).get("transition") == "admit-parallel-review"
+            ):
+                raise OSError("Synthetic admission interruption")
+            write(path, value)
+
+        monkeypatch.setattr(state_module, "_append_private_json_line", interrupt_append)
+        if boundary == "intent":
+            monkeypatch.setattr(state_module, "_write_private_json_atomic", interrupt_intent)
+        with pytest.raises(OSError, match="Synthetic admission"):
+            service.admit_parallel_review(_review_actions(preview), cancelled=lambda: False)
+        monkeypatch.undo()
+        assert len(backend.prompts) == 2
+    finally:
+        gateway.stop()
+    unused = ReviewBackend()
+    restored = _gateway(tmp_path, unused, parallel_review_preparer=preparer)
+    try:
+        service = restored._service("research")
+        service.reconcile()
+        events = service.replay_events()
+        assert sum(
+            event.payload.get("transition") == "admit-parallel-review" for event in events
+        ) == (0 if boundary == "intent" else 1)
+        if boundary != "intent":
+            with pytest.raises(ValueError, match="already admitted"):
+                service.admit_parallel_review(_review_actions(preview), cancelled=lambda: False)
+        assert unused.prompts == []
+    finally:
+        restored.stop()

@@ -114,6 +114,10 @@ The preview remains stable while that evidence is unchanged and fresh; a changed
 Supplying its fingerprint checks an exact consent match but does not itself record consent or approve a tool action.
 Evidence must come from the deployment's trusted evaluation process, not model output or a researcher-supplied success flag.
 
+Native SDK tests exercise this plan through the workflow journal, grouped approval and rejection, concurrent child startup, assessment, replay, and reopening without new model calls.
+Failure-path tests cover changed evidence, expired consent, cancellation during qualification, lost ownership, duplicate admission, and interruption at each paired-append boundary.
+These deterministic tests establish protocol behavior, not capable-model quality, speed, or platform qualification.
+
 ### Synthetic Research Cases
 
 The maintained research fixtures cover dataset readiness, a held-out linear baseline, and independent result verification.

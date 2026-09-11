@@ -6,7 +6,7 @@
 
 """Synthetic authorization supplied by tests, never deployment qualification evidence."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import NAMESPACE_URL, uuid5
 
 import pytest
@@ -47,5 +47,5 @@ def parallel_review_plan() -> ParallelReviewPlan:
             )
             for index in range(6)
         ),
-        valid_until=datetime(2026, 10, 1, tzinfo=UTC),
+        valid_until=datetime.now(UTC) + timedelta(days=1),
     )

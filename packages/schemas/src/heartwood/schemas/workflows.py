@@ -27,6 +27,7 @@ from pydantic import (
 from heartwood.schemas.artifacts import ResearchArtifactPath
 from heartwood.schemas.execution import ExecutionBudget, ExecutionUsage
 from heartwood.schemas.identifiers import WorkflowIdentifier as WorkflowIdentifier
+from heartwood.schemas.parallel_reviews import ParallelReviewPlan
 from heartwood.schemas.project_paths import project_relative_path
 from heartwood.schemas.review import ResearchCorrectionRun, ResearchReviewRun
 
@@ -305,9 +306,18 @@ class WorkflowStart(WorkflowRecord):
 class WorkflowTransition(WorkflowRecord):
     """Apply a transition only to the exact run and revision the researcher saw."""
 
-    action: Literal["run", "evaluate", "cancel", "request-review"]
+    action: Literal["run", "evaluate", "cancel", "prepare-parallel-review"]
     run_id: str = Field(min_length=1)
     revision: int = Field(ge=0, strict=True)
+
+
+class WorkflowReviewRequest(WorkflowRecord):
+    """Request advisory review; parallel work requires the exact journaled preview."""
+
+    action: Literal["request-review"]
+    run_id: str = Field(min_length=1)
+    revision: int = Field(ge=0, strict=True)
+    parallel_review_fingerprint: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
 class WorkflowReview(WorkflowRecord):
@@ -330,7 +340,11 @@ class WorkflowCorrectionRequest(WorkflowRecord):
 
 
 type WorkflowRequest = Annotated[
-    WorkflowStart | WorkflowTransition | WorkflowReview | WorkflowCorrectionRequest,
+    WorkflowStart
+    | WorkflowTransition
+    | WorkflowReviewRequest
+    | WorkflowReview
+    | WorkflowCorrectionRequest,
     Field(discriminator="action"),
 ]
 
@@ -339,10 +353,18 @@ class WorkflowControl(WorkflowRecord):
     """A presentation affordance carrying the exact revision-bound command to submit."""
 
     control_id: Literal[
-        "run", "evaluate", "accept", "decline", "cancel", "request-review", "correct"
+        "run",
+        "evaluate",
+        "accept",
+        "decline",
+        "cancel",
+        "request-review",
+        "correct",
+        "prepare-parallel-review",
+        "request-parallel-review",
     ]
     label: WorkflowText
-    request: WorkflowTransition | WorkflowReview | WorkflowCorrectionRequest
+    request: WorkflowTransition | WorkflowReviewRequest | WorkflowReview | WorkflowCorrectionRequest
 
 
 class WorkflowRun(WorkflowRecord):
@@ -360,6 +382,7 @@ class WorkflowRun(WorkflowRecord):
     stage_started_at: AwareDatetime | None = None
     stage_usage_baseline: ExecutionUsage | None = None
     research_review: ResearchReviewRun | None = None
+    parallel_review_plan: ParallelReviewPlan | None = None
     corrections: tuple[ResearchCorrectionRun, ...] = Field(default=(), max_length=32)
 
     @model_validator(mode="after")
@@ -369,4 +392,21 @@ class WorkflowRun(WorkflowRecord):
             {item.correction_id for item in self.corrections}
         ) != len(self.corrections):
             raise ValueError("Workflow correction identities and stages must be distinct")
+        plans = (
+            self.parallel_review_plan,
+            self.research_review.parallel_plan if self.research_review is not None else None,
+        )
+        for plan in plans:
+            if plan is not None and (
+                plan.scope.workflow_run_id != self.run_id
+                or plan.scope.workflow_id != self.binding.workflow_id
+                or plan.scope.stage_id != self.stage_id
+            ):
+                raise ValueError("Parallel review plan belongs to different workflow work")
+        if self.parallel_review_plan is not None and (
+            self.parallel_review_plan.scope.revision != self.revision
+            or self.research_review is not None
+            or self.phase not in {"running", "review", "blocked"}
+        ):
+            raise ValueError("Parallel preview must match the current unsubmitted stage revision")
         return self

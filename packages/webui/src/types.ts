@@ -22,6 +22,7 @@ export type ExperimentRun = Api.ExperimentRun;
 export type WorkflowRequest =
   | Api.WorkflowStart
   | Api.WorkflowTransition
+  | Api.WorkflowReviewRequest
   | Api.WorkflowReview
   | Api.WorkflowCorrectionRequest;
 

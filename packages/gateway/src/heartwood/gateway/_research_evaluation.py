@@ -9,7 +9,8 @@
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from datetime import datetime
 
 from heartwood.core_adapter.reproduction import ReproductionWitness
 from heartwood.core_adapter.research_checks import (
@@ -30,6 +31,7 @@ from heartwood.gateway._workspace import WorkspaceInspectionError, WorkspaceInsp
 from heartwood.gateway.experiments import experiment_digest, observed_python_environment
 from heartwood.schemas.execution import ExecutionUsage
 from heartwood.schemas.experiments import ExperimentDefinition, ExperimentFile, ExperimentStage
+from heartwood.schemas.parallel_reviews import ParallelReviewPlan
 from heartwood.schemas.project_paths import project_relative_path
 from heartwood.schemas.review import (
     ResearchCorrectionRun,
@@ -56,12 +58,35 @@ from heartwood.session import EventKind, SessionEvent
 
 _REPRODUCTION_CHECKS = frozenset({"execution.reproduction", "execution.comparison"})
 
+type ParallelReviewPreparer = Callable[
+    [WorkflowRun, ReviewSnapshot, str, datetime], ParallelReviewPlan
+]
+
 
 class ResearchStageEvaluator:
     """Reuse workspace confinement and core checks without executing an agent or tool."""
 
-    def __init__(self, workspace: WorkspaceInspector) -> None:
+    def __init__(
+        self,
+        workspace: WorkspaceInspector,
+        *,
+        parallel_review_preparer: ParallelReviewPreparer | None = None,
+    ) -> None:
         self.workspace = workspace
+        self._parallel_review_preparer = parallel_review_preparer
+
+    def prepare_parallel_review(
+        self, run: WorkflowRun, *, session_id: str, now: datetime
+    ) -> ParallelReviewPlan:
+        """Use an explicitly configured deployment preparer; no project-supplied claims."""
+        if self._parallel_review_preparer is None:
+            raise ValueError("Parallel review qualification is not configured")
+        snapshot = self.prepare_review(run.binding, run.stage_id)
+        plan = self._parallel_review_preparer(run, snapshot, session_id, now)
+        project_fingerprint = hashlib.sha256(str(self.workspace.project.root).encode()).hexdigest()
+        if plan.scope.project_fingerprint != project_fingerprint:
+            raise ValueError("Parallel review preparation belongs to another project")
+        return plan
 
     def prepare_review(self, binding: WorkflowProjectBinding, stage_id: str) -> ReviewSnapshot:
         """Bind declared files, not paths or evidence roles selected by a model."""

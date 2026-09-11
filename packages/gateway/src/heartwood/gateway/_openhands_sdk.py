@@ -316,6 +316,15 @@ class OpenHandsSdkBackend:
         """Return true because OpenHands may call the model after continuing."""
         return True
 
+    def bind_review_authorizer(self, authorize: ReviewBatchAuthorizer) -> None:
+        """Bind deployment admission before creating or restoring the native conversation."""
+        with self._conversation_lock:
+            if self._conversation is not None or self._conversation_closing:
+                raise OpenHandsSdkError(
+                    "Review admission must be bound before conversation startup"
+                )
+            self._review_batch_authorizer = authorize
+
     def evaluation_observation(
         self, *, platform: str, policy_fingerprint: str
     ) -> EvaluationRuntimeObservation:

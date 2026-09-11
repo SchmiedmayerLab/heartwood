@@ -589,6 +589,8 @@ def format_workflow_lines(projection: SessionProjection) -> tuple[str, ...]:
             for check in run.evaluation.checks
         )
     lines.extend(format_research_review_lines(run.research_review))
+    if projection.review_execution is not None:
+        lines.append(terminal_safe_text(projection.review_execution.summary))
     lines.extend(format_research_correction_lines(run.corrections))
     lines.extend(format_workflow_artifact_lines(run.binding))
     lines.extend(

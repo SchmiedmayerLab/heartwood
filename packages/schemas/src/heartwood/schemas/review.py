@@ -18,6 +18,7 @@ from pydantic import Field, model_validator
 from heartwood.schemas.artifacts import ResearchArtifactPath
 from heartwood.schemas.experiments import Digest, ExperimentFile, ExperimentRecord, Reference
 from heartwood.schemas.identifiers import WorkflowIdentifier
+from heartwood.schemas.parallel_reviews import ParallelReviewPlan, ReviewDispatchAction
 from heartwood.schemas.project_paths import project_relative_path
 from heartwood.schemas.research import ResearchText
 
@@ -172,6 +173,8 @@ class ResearchReviewRun(ExperimentRecord):
     status: Literal["pending", "assessed", "unavailable", "cancelled"] = "pending"
     submissions: tuple[ReviewSubmission, ...] = Field(default=(), max_length=16)
     assessment: ReviewAssessment | None = None
+    parallel_plan: ParallelReviewPlan | None = None
+    parallel_dispatch: tuple[ReviewDispatchAction, ...] = Field(default=(), max_length=16)
     unavailable_reason: (
         Literal["incomplete-review", "invalid-review", "no-structured-outcome"] | None
     ) = None
@@ -181,6 +184,21 @@ class ResearchReviewRun(ExperimentRecord):
         """Persist only results associated with this evidence and selected reviewers."""
         if len(set(self.reviewer_ids)) != len(self.reviewer_ids):
             raise ValueError("Reviewers must be distinct")
+        if self.parallel_plan is not None and (
+            self.parallel_plan.scope.snapshot_fingerprint != self.snapshot.fingerprint
+            or set(self.parallel_plan.scope.reviewer_ids) != set(self.reviewer_ids)
+        ):
+            raise ValueError("Parallel execution must match the recorded review evidence and roles")
+        if self.parallel_dispatch and (
+            self.parallel_plan is None
+            or len(self.parallel_dispatch) != len(self.reviewer_ids)
+            or {item.reviewer_id for item in self.parallel_dispatch} != set(self.reviewer_ids)
+            or len({item.event_id for item in self.parallel_dispatch})
+            != len(self.parallel_dispatch)
+            or len({item.tool_call_id for item in self.parallel_dispatch})
+            != len(self.parallel_dispatch)
+        ):
+            raise ValueError("Parallel dispatch requires one distinct native action per reviewer")
         if len({item.review_id for item in self.submissions}) != len(self.submissions):
             raise ValueError("Review submissions must be distinct")
         if any(

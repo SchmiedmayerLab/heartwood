@@ -96,3 +96,12 @@ class ParallelReviewPlan(EvaluationRecord):
     policy: ParallelReviewPolicy
     evidence: tuple[ReviewQualificationEvidence, ...] = Field(min_length=6)
     valid_until: AwareDatetime
+
+
+class ReviewDispatchAction(EvaluationRecord):
+    """Native action identity and content digest recorded before advisory dispatch."""
+
+    event_id: str = Field(min_length=1)
+    tool_call_id: str = Field(min_length=1)
+    reviewer_id: EvaluationIdentifier
+    action_fingerprint: Sha256

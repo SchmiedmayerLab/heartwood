@@ -253,6 +253,14 @@ Slow authorization runs off the agent event loop so cancellation can prevent dis
 Prepared children retain the parent's native cancellation token and check it before asynchronous startup, preventing a pre-start pause from being mistaken for permission to resume.
 The normal grouped-action policy still applies before this execution boundary; qualification does not approve actions.
 
+`SessionGateway` accepts a deployment-owned parallel-review preparer and binds it to the existing workflow evaluator and native adapter.
+Without that preparer, the default factory does not enable parallel review controls or execution.
+The preparer must assess trusted evidence against the current route; it is not a project setting or a model-supplied eligibility claim.
+The workflow first journals a preview, then exact researcher consent, and finally native action admission through the same paired session and audit journal.
+Qualification I/O runs outside the session command lock; dispatch then rechecks cancellation, ownership, workflow state, expiry, files, and remaining work limits.
+This protects session transitions but does not provide a filesystem transaction against external programs changing project files.
+The gateway supplies one review-execution summary and exact revision-bound controls to the terminal, browser, and notebook.
+
 ### Research Specialist Catalog
 
 The gateway loads the maintained specialist catalog through OpenHands `AgentDefinition` and registers enabled roles with OpenHands' public agent factory and Task tool.

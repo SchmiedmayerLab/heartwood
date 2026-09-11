@@ -226,6 +226,7 @@ from heartwood.skills import (
 )
 
 if TYPE_CHECKING:
+    from heartwood.gateway._research_evaluation import ParallelReviewPreparer
     from heartwood.gateway._specialists import SpecialistCatalog
 
 _RESERVED_MODEL_PROFILE_IDS = {"heartwood"}
@@ -432,6 +433,7 @@ class SessionGateway:
         subscription_provider: SubscriptionProvider | None = None,
         workspace_inspector: WorkspaceInspector | None = None,
         skill_source_registry: SkillSourceRegistry | None = None,
+        parallel_review_preparer: ParallelReviewPreparer | None = None,
         backend_id: str = "auto",
     ) -> None:
         prepare_openhands_import()
@@ -439,6 +441,7 @@ class SessionGateway:
         self.sessions_root = self.project.sessions_dir
         self.env = dict(os.environ if env is None else env)
         self.backend_id = backend_id
+        self._parallel_review_preparer = parallel_review_preparer
         self._checkpoint_signer_registry_override = checkpoint_signer_registry
         self._checkpoint_signer_registry_cache: CheckpointSignerRegistry | None = None
         self._checkpoint_signer_factory = checkpoint_signer_factory
@@ -1115,6 +1118,7 @@ class SessionGateway:
                 streaming_text=self._streaming_text.get(session_id, ""),
                 stream_epoch=self._stream_epoch,
                 stream_revision=self._stream_revisions.get(session_id, 0),
+                parallel_reviews_available=self._parallel_review_preparer is not None,
             )
 
     @_serialized_state
@@ -2215,13 +2219,16 @@ class SessionGateway:
             selected_model=configuration.local_model,
             session_id=session_id,
         )
-        return SessionService.local_default(
+        service = SessionService.local_default(
             self.sessions_root,
             session_id=session_id,
             backend=backend,
             policy_profile=configuration.policy_profile,
             env=self.env,
-            workflow_evaluator=ResearchStageEvaluator(self.workspace_inspector),
+            workflow_evaluator=ResearchStageEvaluator(
+                self.workspace_inspector,
+                parallel_review_preparer=self._parallel_review_preparer,
+            ),
             event_sink=lambda events: self._publish_background_events(
                 session_id=session_id,
                 events=events,
@@ -2231,6 +2238,13 @@ class SessionGateway:
                 delta=delta,
             ),
         )
+        if self._parallel_review_preparer is not None:
+            from heartwood.gateway._openhands_sdk import OpenHandsSdkBackend
+            from heartwood.gateway._workflow_review_execution import bind_workflow_review_execution
+
+            if isinstance(backend, OpenHandsSdkBackend):
+                bind_workflow_review_execution(backend, service)
+        return service
 
     def _storage_service(self, session_id: str) -> SessionService:
         """Build an uncached service for commands that only access durable state."""
@@ -2243,7 +2257,10 @@ class SessionGateway:
             backend=_UnconfiguredAgentBackend(configuration.action_settings.confirmation_mode),
             policy_profile=configuration.policy_profile,
             env=self.env,
-            workflow_evaluator=ResearchStageEvaluator(self.workspace_inspector),
+            workflow_evaluator=ResearchStageEvaluator(
+                self.workspace_inspector,
+                parallel_review_preparer=self._parallel_review_preparer,
+            ),
         )
 
     def _backend(
@@ -2428,6 +2445,7 @@ class SessionGateway:
                     streaming_text=self._streaming_text.get(session_id, ""),
                     stream_epoch=self._stream_epoch,
                     stream_revision=self._stream_revisions.get(session_id, 0),
+                    parallel_reviews_available=self._parallel_review_preparer is not None,
                 ),
             )
 

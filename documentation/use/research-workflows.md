@@ -106,6 +106,23 @@ Changing its conversation context invalidates the assessment; Heartwood reports 
 Reviewing does not automatically repair files or accept the stage.
 Continue to use **Check Results** and the normal researcher review after inspecting the findings.
 
+### Parallel Reviews
+
+Reviews are sequential by default.
+If your deployment has configured qualified parallel reviews, a stage with multiple reviewers offers **Preview Parallel Review**.
+The preview shows the worker count and work limits without starting the model.
+Choose the displayed parallel-review action to authorize that exact plan, or choose **Review Analysis** to keep the review sequential.
+The terminal, browser, and notebook use the same plan and controls.
+
+Plan authorization does not approve tool actions.
+Review the complete proposed specialist action set in the conversation before allowing it.
+The status distinguishes a preview, an authorized plan, and admitted work; admission alone does not establish that every reviewer finished or that the findings are correct.
+Work limits apply to the stage's remaining budget and are not guaranteed provider billing caps.
+
+If the files, model route, workflow, or qualification evidence change, refresh the preview before deciding.
+Expired or changed authorization cannot start parallel work.
+After interruption, Heartwood retains the review record and does not automatically repeat an admitted batch.
+
 ### Correct Verified Findings
 
 When a review verifies a supported defect, select **Correct Findings (Up to 2 Attempts)**.

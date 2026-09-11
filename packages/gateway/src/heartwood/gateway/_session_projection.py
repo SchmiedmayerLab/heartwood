@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field, computed_field
 from heartwood.core_adapter import backend_error_is_fatal
 from heartwood.core_adapter.workflow_provenance import workflow_experiment_events
 from heartwood.core_adapter.workflow_runtime import workflow_controls, workflow_run
-from heartwood.schemas.execution import ExecutionUsage
+from heartwood.schemas.execution import ExecutionBudget, ExecutionUsage
 from heartwood.schemas.experiments import ExperimentRun, reduce_experiment_events
 from heartwood.schemas.project_paths import ProjectPathError, project_relative_path
 from heartwood.schemas.review import ReviewProposals
@@ -273,12 +273,59 @@ class ProjectionSuggestion(_ProjectionRecord):
     kind: Literal["task", "follow-up", "recovery"]
 
 
+class ProjectionReviewExecution(_ProjectionRecord):
+    """One shared description of requested versus admitted advisory concurrency."""
+
+    status: Literal["preview", "authorized", "admitted", "assessed", "unavailable", "cancelled"]
+    workers: int = Field(ge=2)
+    reviewers: tuple[str, ...]
+    budget: ExecutionBudget
+    summary: str
+
+
+def _review_execution(run: WorkflowRun | None) -> ProjectionReviewExecution | None:
+    if run is None:
+        return None
+    review = run.research_review
+    plan = run.parallel_review_plan or (review.parallel_plan if review else None)
+    if plan is None:
+        return None
+    status: Literal["preview", "authorized", "admitted", "assessed", "unavailable", "cancelled"]
+    if run.parallel_review_plan is not None:
+        status = "preview"
+    elif review is not None and review.status != "pending":
+        status = review.status
+    elif review is not None and review.parallel_dispatch:
+        status = "admitted"
+    else:
+        status = "authorized"
+    scope = plan.scope
+    budget = scope.budget
+    return ProjectionReviewExecution(
+        status=status,
+        workers=scope.workers,
+        reviewers=scope.reviewer_ids,
+        budget=budget,
+        summary=(
+            f"Parallel review ({status}): {scope.workers} workers; "
+            f"up to {budget.maximum_seconds:g}s, {budget.maximum_model_calls} model calls, "
+            f"{budget.maximum_tokens:,} tokens, {budget.maximum_actions} actions, "
+            f"${budget.maximum_reported_cost_usd:g} reported cost. "
+            "Action confirmation still applies."
+        ),
+    )
+
+
 class SessionProjection(_ProjectionRecord):
     """Complete session projection owned by the gateway."""
 
     schema_version: Literal["heartwood.session-projection.v1"] = "heartwood.session-projection.v1"
     session_id: str = Field(serialization_alias="sessionId")
     workflow: WorkflowRun | None = None
+    review_execution: ProjectionReviewExecution | None = Field(
+        default=None,
+        serialization_alias="reviewExecution",
+    )
     experiments: tuple[ExperimentRun, ...] = ()
     workflow_controls: tuple[WorkflowControl, ...] = Field(
         default=(), serialization_alias="workflowControls"
@@ -362,6 +409,7 @@ def project_session(
     streaming_text: str = "",
     stream_epoch: str = "standalone",
     stream_revision: int = 0,
+    parallel_reviews_available: bool = False,
 ) -> SessionProjection:
     """Reduce durable session events once at the gateway boundary."""
     activity: list[ProjectionActivity] = []
@@ -818,14 +866,17 @@ def project_session(
         has_pending_approval=pending_approval is not None,
         error_recoverable=lifecycle_error_recoverable,
     )
+    current_workflow = workflow_run(events)
     return SessionProjection(
         session_id=session_id,
-        workflow=workflow_run(events),
+        workflow=current_workflow,
+        review_execution=_review_execution(current_workflow),
         experiments=reduce_experiment_events(workflow_experiment_events(events)),
         workflow_controls=workflow_controls(
             events,
             active=lifecycle_status == SessionLifecycle.RUNNING,
             pending_actions=pending_approval is not None,
+            parallel_reviews_available=parallel_reviews_available,
         ),
         event_count=len(events),
         revision=events[-1].sequence if events else -1,

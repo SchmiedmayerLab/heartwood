@@ -48,9 +48,11 @@ from heartwood.core_adapter.reproduction_journal import (
     prepare_reproduction,
     reproduction_records,
 )
+from heartwood.core_adapter.workflow_review import validate_parallel_review_plan
 from heartwood.core_adapter.workflow_runtime import (
     WorkflowEvaluator,
     handle_workflow_command,
+    record_parallel_review_admission,
     settle_workflow_correction,
     settle_workflow_review,
     workflow_admission_reason,
@@ -59,6 +61,8 @@ from heartwood.core_adapter.workflow_runtime import (
 from heartwood.model_policy import ModelPolicyEngine
 from heartwood.schemas import ConfirmationRequest, JsonValue, PolicyProfile
 from heartwood.schemas.experiments import ExperimentExportBinding
+from heartwood.schemas.parallel_reviews import ParallelReviewPlan, ReviewDispatchAction
+from heartwood.schemas.workflows import WorkflowRun
 from heartwood.session import (
     CommandKind,
     EventKind,
@@ -378,7 +382,62 @@ class SessionService:
     def close(self) -> None:
         """Release backend resources."""
         self.backend.close()
-        self.store.release_writer()
+        with self._command_lock:
+            self.store.release_writer()
+
+    def admit_parallel_review(
+        self, actions: tuple[ReviewDispatchAction, ...], *, cancelled: Callable[[], bool]
+    ) -> ParallelReviewPlan | None:
+        """Recheck a consented review without holding session locks during qualification I/O."""
+        with self._command_lock:
+            self._require_review_owner(cancelled)
+            self._recover_pending_commit_locked()
+            current = workflow_run(self.replay_events())
+            review = current.research_review if current is not None else None
+            if review is None or review.parallel_plan is None:
+                return None
+            if review.status != "pending" or review.parallel_dispatch:
+                raise ValueError("Parallel review was already admitted or has ended")
+            evaluator = self._workflow_evaluator
+            if evaluator is None or current is None:
+                raise ValueError("Parallel review evidence is unavailable")
+            plan = review.parallel_plan
+            prepared = WorkflowRun.model_validate(
+                {
+                    **current.model_dump(),
+                    "revision": plan.scope.revision,
+                    "research_review": None,
+                    "parallel_review_plan": plan,
+                }
+            )
+        now = datetime.fromisoformat(self.clock())
+        snapshot = evaluator.prepare_review(current.binding, current.stage_id)
+        refreshed = validate_parallel_review_plan(
+            evaluator.prepare_parallel_review(prepared, session_id=self.store.session_id, now=now),
+            prepared,
+            snapshot,
+            session_id=self.store.session_id,
+            now=now,
+        )
+        if refreshed.fingerprint != plan.fingerprint:
+            raise ValueError("Parallel review qualification changed before dispatch")
+        if evaluator.prepare_review(current.binding, current.stage_id) != snapshot:
+            raise ValueError("Parallel review files changed during qualification")
+        with self._command_lock:
+            self._require_review_owner(cancelled)
+            if workflow_run(
+                self.replay_events()
+            ) != current or refreshed.valid_until <= datetime.fromisoformat(self.clock()):
+                raise ValueError("Parallel review changed or was cancelled before dispatch")
+            if reason := workflow_admission_reason(self, evaluator, None):
+                raise ValueError(reason)
+            event = record_parallel_review_admission(self, current, actions)
+        self._event_sink((event,))
+        return refreshed
+
+    def _require_review_owner(self, cancelled: Callable[[], bool]) -> None:
+        if cancelled() or not self.store.owns_writer:
+            raise ValueError("Parallel review no longer owns an active session")
 
     def wait_for_idle(self, timeout: float = 0) -> bool:
         """Wait for final callbacks without taking the session command lock.

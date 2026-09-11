@@ -55,6 +55,11 @@ def build_widget_spec(view_model: NotebookViewModel) -> tuple[WidgetSpec, ...]:
                     f"{run.binding.workflow_id}: {run.stage_id} ({run.phase})",
                     *checks,
                     *(
+                        (view_model.projection.review_execution.summary,)
+                        if view_model.projection.review_execution is not None
+                        else ()
+                    ),
+                    *(
                         (
                             "Review limitation: "
                             + run.research_review.unavailable_reason.replace("-", " "),

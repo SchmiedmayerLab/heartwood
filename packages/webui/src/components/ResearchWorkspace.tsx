@@ -394,6 +394,9 @@ const WorkflowWorkspace = ({
               : "Open Conversation"}
             </Button>
           </div>
+          {projection.reviewExecution ?
+            <p role="status">{projection.reviewExecution.summary}</p>
+          : null}
           {run.research_review ?
             <details className="research-provenance">
               <summary>Research Review: {run.research_review.status}</summary>

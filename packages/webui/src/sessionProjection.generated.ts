@@ -79,6 +79,8 @@ export type ResearchText = string;
 export type WorkflowInputValue = string;
 export type ReviewVerification =
   "verified" | "rejected" | "unsupported" | "stale" | "unavailable";
+export type Sha256 = string;
+export type EvaluationIdentifier = string;
 export type WorkflowText = string;
 
 /**
@@ -101,6 +103,7 @@ export interface SessionProjection {
   pendingApproval: ProjectionApprovalGroup | null;
   researcherNotice: ProjectionResearcherNotice | null;
   researcherStatus: ProjectionResearcherStatus;
+  reviewExecution: ProjectionReviewExecution | null;
   revision: number;
   schema_version: "heartwood.session-projection.v1";
   sessionId: string;
@@ -362,6 +365,32 @@ export interface ProjectionResearcherStatus {
   recoverable: boolean;
   tone: "neutral" | "progress" | "attention" | "success" | "danger";
 }
+/**
+ * One shared description of requested versus admitted advisory concurrency.
+ */
+export interface ProjectionReviewExecution {
+  budget: ExecutionBudget;
+  reviewers: string[];
+  status:
+    | "preview"
+    | "authorized"
+    | "admitted"
+    | "assessed"
+    | "unavailable"
+    | "cancelled";
+  summary: string;
+  workers: number;
+}
+/**
+ * Observed admission limits, not a provider-side spending or preemption cap.
+ */
+export interface ExecutionBudget {
+  maximum_actions: number;
+  maximum_model_calls: number;
+  maximum_reported_cost_usd: number;
+  maximum_seconds: number;
+  maximum_tokens: number;
+}
 export interface ProjectionSubagent {
   agentName: string;
   invocationId: string;
@@ -445,6 +474,7 @@ export interface WorkflowRun {
   corrections: ResearchCorrectionRun[];
   created_at: string;
   evaluation: WorkflowStageEvaluation | null;
+  parallel_review_plan: ParallelReviewPlan | null;
   phase: "ready" | "running" | "review" | "blocked" | "completed" | "cancelled";
   research_review: ResearchReviewRun | null;
   revision: number;
@@ -619,6 +649,11 @@ export interface ReviewCorrectionPlan {
  */
 export interface ResearchReviewRun {
   assessment: ReviewAssessment | null;
+  /**
+   * @maxItems 16
+   */
+  parallel_dispatch: ReviewDispatchAction[];
+  parallel_plan: ParallelReviewPlan | null;
   review_id: Reference;
   /**
    * @minItems 1
@@ -674,6 +709,68 @@ export interface ReviewSource {
   reviewer_id: Reference;
 }
 /**
+ * Native action identity and content digest recorded before advisory dispatch.
+ */
+export interface ReviewDispatchAction {
+  action_fingerprint: Sha256;
+  event_id: string;
+  reviewer_id: EvaluationIdentifier;
+  tool_call_id: string;
+}
+/**
+ * Stable preview identity; the gateway still journals consent and rechecks dispatch.
+ */
+export interface ParallelReviewPlan {
+  case_id: EvaluationIdentifier;
+  /**
+   * @minItems 6
+   */
+  evidence: ReviewQualificationEvidence[];
+  parallel_configuration_fingerprint: Sha256;
+  policy: ParallelReviewPolicy;
+  scope: ReviewExecutionScope;
+  sequential_configuration_fingerprint: Sha256;
+  suite_fingerprint: Sha256;
+  valid_until: string;
+}
+/**
+ * Bind each retained result's content, not just its mutable filename or identity.
+ */
+export interface ReviewQualificationEvidence {
+  record_fingerprint: Sha256;
+  run_id: string;
+}
+/**
+ * A non-regression gate with an explicit latency benefit and consumption allowance.
+ */
+export interface ParallelReviewPolicy {
+  maximum_age_days?: number;
+  maximum_cost_ratio?: number;
+  maximum_token_ratio?: number;
+  maximum_workers?: number;
+  minimum_latency_reduction?: number;
+  minimum_repeats?: number;
+}
+/**
+ * The exact session work a researcher may authorize, not a standing permission.
+ */
+export interface ReviewExecutionScope {
+  budget: ExecutionBudget;
+  project_fingerprint: Sha256;
+  /**
+   * @minItems 2
+   * @maxItems 16
+   */
+  reviewer_ids: EvaluationIdentifier[];
+  revision: number;
+  session_id: EvaluationIdentifier;
+  snapshot_fingerprint: Sha256;
+  stage_id: EvaluationIdentifier;
+  workers: number;
+  workflow_id: EvaluationIdentifier;
+  workflow_run_id: EvaluationIdentifier;
+}
+/**
  * Gateway-associated reviewer output for one immutable review context.
  */
 export interface ReviewSubmission {
@@ -708,15 +805,30 @@ export interface WorkflowControl {
     | "decline"
     | "cancel"
     | "request-review"
-    | "correct";
+    | "correct"
+    | "prepare-parallel-review"
+    | "request-parallel-review";
   label: WorkflowText;
-  request: WorkflowTransition | WorkflowReview | WorkflowCorrectionRequest;
+  request:
+    | WorkflowTransition
+    | WorkflowReviewRequest
+    | WorkflowReview
+    | WorkflowCorrectionRequest;
 }
 /**
  * Apply a transition only to the exact run and revision the researcher saw.
  */
 export interface WorkflowTransition {
-  action: "run" | "evaluate" | "cancel" | "request-review";
+  action: "run" | "evaluate" | "cancel" | "prepare-parallel-review";
+  revision: number;
+  run_id: string;
+}
+/**
+ * Request advisory review; parallel work requires the exact journaled preview.
+ */
+export interface WorkflowReviewRequest {
+  action: "request-review";
+  parallel_review_fingerprint: string | null;
   revision: number;
   run_id: string;
 }

@@ -43,11 +43,13 @@ from heartwood.core_adapter.workflow_provenance import (
 from heartwood.core_adapter.workflow_review import (
     WorkflowReviewInspector,
     assess_workflow_review,
+    validate_parallel_review_plan,
     workflow_review_prompt,
 )
 from heartwood.schemas import JsonValue
 from heartwood.schemas.execution import ExecutionUsage
 from heartwood.schemas.experiments import ExperimentEvent
+from heartwood.schemas.parallel_reviews import ReviewDispatchAction
 from heartwood.schemas.research import (
     AnalysisPlan,
     BaselineResult,
@@ -67,6 +69,7 @@ from heartwood.schemas.workflows import (
     WorkflowProjectBinding,
     WorkflowRequest,
     WorkflowReview,
+    WorkflowReviewRequest,
     WorkflowRun,
     WorkflowStageEvaluation,
     WorkflowStart,
@@ -82,7 +85,11 @@ _STATUS: TypeAdapter[WorkflowOutcomeStatus] = TypeAdapter(WorkflowOutcomeStatus)
 
 
 def workflow_controls(
-    events: Sequence[SessionEvent], *, active: bool, pending_actions: bool
+    events: Sequence[SessionEvent],
+    *,
+    active: bool,
+    pending_actions: bool,
+    parallel_reviews_available: bool = False,
 ) -> tuple[WorkflowControl, ...]:
     """Project exact commands; execution still revalidates ownership, state, and evidence."""
     current = workflow_run(events)
@@ -166,11 +173,47 @@ def workflow_controls(
                 WorkflowControl(
                     control_id="request-review",
                     label="Review Analysis",
-                    request=WorkflowTransition(
+                    request=WorkflowReviewRequest(
                         action="request-review", run_id=current.run_id, revision=current.revision
                     ),
                 )
             )
+            plan = current.parallel_review_plan
+            if plan is not None:
+                controls.append(
+                    WorkflowControl(
+                        control_id="request-parallel-review",
+                        label=f"Review with {plan.scope.workers} Parallel Specialists",
+                        request=WorkflowReviewRequest(
+                            action="request-review",
+                            run_id=current.run_id,
+                            revision=current.revision,
+                            parallel_review_fingerprint=plan.fingerprint,
+                        ),
+                    )
+                )
+            if (
+                parallel_reviews_available
+                and len(
+                    research_workflow(current.binding.workflow_id)
+                    .stage(current.stage_id)
+                    .specialist_ids
+                )
+                > 1
+            ):
+                controls.append(
+                    WorkflowControl(
+                        control_id="prepare-parallel-review",
+                        label="Refresh Parallel Review"
+                        if plan is not None
+                        else "Preview Parallel Review",
+                        request=WorkflowTransition(
+                            action="prepare-parallel-review",
+                            run_id=current.run_id,
+                            revision=current.revision,
+                        ),
+                    )
+                )
         if current.phase == "review" and current.evaluation is not None:
             for control_id, label, approved in (
                 ("accept", "Accept Stage", True),
@@ -382,7 +425,7 @@ def handle_workflow_command(
         ):
             return (_error(service, "This correction series has stopped or its consent changed"),)
         return _start_correction(service, evaluator, command, current, request.maximum_attempts)
-    if request.action == "request-review":
+    if request.action in {"request-review", "prepare-parallel-review"}:
         if (
             current.phase not in {"running", "review", "blocked"}
             or _stage_outcome(events, current) is None
@@ -396,16 +439,52 @@ def handle_workflow_command(
         if not stage.specialist_ids:
             return (_error(service, "This stage does not declare advisory reviewers"),)
         try:
+            snapshot = evaluator.prepare_review(current.binding, current.stage_id)
+            if request.action == "prepare-parallel-review":
+                prepared = _replace(current)
+                preview = validate_parallel_review_plan(
+                    evaluator.prepare_parallel_review(
+                        prepared, session_id=command.session_id, now=_now(service)
+                    ),
+                    prepared,
+                    snapshot,
+                    session_id=command.session_id,
+                    now=_now(service),
+                )
+                prepared = WorkflowRun.model_validate(
+                    {**prepared.model_dump(), "parallel_review_plan": preview}
+                )
+                return (_record(service, command, prepared),)
+            assert isinstance(request, WorkflowReviewRequest)
+            plan = None
+            if request.parallel_review_fingerprint is not None:
+                recorded = current.parallel_review_plan
+                if recorded is None or recorded.fingerprint != request.parallel_review_fingerprint:
+                    raise ValueError("Parallel review consent does not match the preview")
+                plan = validate_parallel_review_plan(
+                    evaluator.prepare_parallel_review(
+                        current, session_id=command.session_id, now=_now(service)
+                    ),
+                    current,
+                    snapshot,
+                    session_id=command.session_id,
+                    now=_now(service),
+                )
+                if plan.fingerprint != recorded.fingerprint:
+                    raise ValueError("Parallel review qualification changed after preview")
             review = ResearchReviewRun(
                 review_id=command.command_id,
-                snapshot=evaluator.prepare_review(current.binding, current.stage_id),
+                snapshot=snapshot,
                 reviewer_ids=stage.specialist_ids,
                 started_sequence=service.store.next_sequence(),
+                parallel_plan=plan,
             )
         except ValueError:
             return (
                 _error(
-                    service, "Review evidence is incomplete or unavailable; no work was started"
+                    service,
+                    "Review evidence or parallel preparation changed or is unavailable; "
+                    "no work was started",
                 ),
             )
         updated = _record(service, command, _replace(current, research_review=review))
@@ -521,7 +600,7 @@ def _now(service: SessionService) -> datetime:
 def workflow_admission_reason(
     service: SessionService,
     evaluator: WorkflowEvaluator | None,
-    command: SessionCommand,
+    command: SessionCommand | None,
     *,
     admit: bool = True,
 ) -> str | None:
@@ -559,7 +638,9 @@ def workflow_admission_reason(
                     | {
                         limit
                         for limit in usage.exhausted_limits(budget)
-                        if command.kind != CommandKind.APPROVE or limit != "actions"
+                        if command is None
+                        or command.kind != CommandKind.APPROVE
+                        or limit != "actions"
                     }
                 )
             if limits:
@@ -569,10 +650,30 @@ def workflow_admission_reason(
     return None
 
 
+def record_parallel_review_admission(
+    service: SessionService, current: WorkflowRun, actions: tuple[ReviewDispatchAction, ...]
+) -> SessionEvent:
+    """Use the existing paired journal; an uncertain admission is never dispatched again."""
+    review = current.research_review
+    if review is None or review.parallel_plan is None or review.parallel_dispatch:
+        raise ValueError("There is no unconsumed parallel review consent")
+    admitted = ResearchReviewRun.model_validate(
+        {**review.model_dump(), "parallel_dispatch": actions}
+    )
+    return _record_snapshot(
+        service,
+        _replace(current, research_review=admitted),
+        command_id=review.review_id,
+        actor_id="gateway",
+        transition="admit-parallel-review",
+    )
+
+
 def _replace(current: WorkflowRun, **changes: object) -> WorkflowRun:
     return WorkflowRun.model_validate(
         {
             **current.model_dump(),
+            "parallel_review_plan": None,
             **changes,
             "revision": current.revision + 1,
         }
