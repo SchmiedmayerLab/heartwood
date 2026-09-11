@@ -20,7 +20,13 @@ import {
   TabsTrigger,
 } from "@schmiedmayerlab/grove-design-system/components/Tabs";
 import { GroveProvider } from "@schmiedmayerlab/grove-design-system/GroveProvider";
-import { FileCode2, GitCompareArrows, MessagesSquare, X } from "lucide-react";
+import {
+  FileCode2,
+  GitCompareArrows,
+  MessagesSquare,
+  FlaskConical,
+  X,
+} from "lucide-react";
 import {
   type ComponentProps,
   useCallback,
@@ -39,6 +45,7 @@ import {
 import { useColorTheme } from "./colorTheme";
 import { ConversationWorkspace } from "./components/ConversationWorkspace";
 import { ProjectWorkspace } from "./components/ProjectWorkspace";
+import { ResearchWorkspace } from "./components/ResearchWorkspace";
 import {
   SessionRail,
   SessionRailContent,
@@ -91,7 +98,7 @@ interface ProjectionSelection {
   retiredEpoch: string | null;
 }
 
-type WorkspaceView = "changes" | "conversation" | "files";
+type WorkspaceView = "changes" | "conversation" | "files" | "research";
 type SessionConnectionState = "replaying" | SessionStreamState;
 
 const connectionPresentation = {
@@ -981,6 +988,10 @@ export const App = ({ client, initialSessionId }: AppProps) => {
                 <FileCode2 aria-hidden="true" size={15} />
                 Files
               </TabsTrigger>
+              <TabsTrigger value="research">
+                <FlaskConical aria-hidden="true" size={15} />
+                Research
+              </TabsTrigger>
               <TabsTrigger value="changes">
                 <GitCompareArrows aria-hidden="true" size={15} />
                 Changes
@@ -1011,6 +1022,42 @@ export const App = ({ client, initialSessionId }: AppProps) => {
                 onPrompt={setPrompt}
                 onSubmit={submitPrompt}
               />
+            </TabsContent>
+            <TabsContent
+              className="workspace-tab-panel"
+              forceMount
+              value="research"
+            >
+              {!visitedWorkspaceViews.has("research") ?
+                null
+              : sessionId !== null && projection !== null ?
+                <ResearchWorkspace
+                  key={sessionId}
+                  client={resolvedClient}
+                  sessionId={sessionId}
+                  projection={projection}
+                  busy={requestStatus === "busy"}
+                  modelReady={modelReady}
+                  onSubmit={(request) => {
+                    void send("workflow", { ...request });
+                  }}
+                  onConversation={() => setWorkspaceView("conversation")}
+                  onNewSession={() => void createSession()}
+                />
+              : <div className="workspace-state" role="status">
+                  {startupPlan?.phase === "project-review" ?
+                    <>
+                      Confirm the project before starting a research workflow.
+                      <Button
+                        variant="outline"
+                        onClick={() => openPanel("settings")}
+                      >
+                        Open Settings
+                      </Button>
+                    </>
+                  : "Loading the session"}
+                </div>
+              }
             </TabsContent>
             <TabsContent
               className="workspace-tab-panel"

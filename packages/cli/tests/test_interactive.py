@@ -34,6 +34,7 @@ from heartwood.cli._tui import (
     _risk_presentation,
     _unavailable_mode_summary,
 )
+from heartwood.cli._workflow_screen import WorkflowScreen
 from heartwood.gateway import (
     ActionSettingsError,
     ProjectContext,
@@ -197,6 +198,94 @@ def _approval_action(
         proposed_sequence=sequence,
         updated_sequence=sequence,
     )
+
+
+def test_terminal_workflow_form_starts_without_an_agent_call(tmp_path: Path) -> None:
+    from textual.widgets import Button
+
+    (tmp_path / "data.csv").write_text("x\n1\n")
+    (tmp_path / "dictionary.json").write_text("{}")
+    gateway = SessionGateway(project=ProjectContext(tmp_path), env={})
+
+    async def exercise() -> None:
+        session = InteractiveSession(gateway, session_id="workflow")
+        app = HeartwoodTerminalApp(session)
+        async with app.run_test(size=(80, 30)) as pilot:
+            await pilot.pause()
+            app.action_show_workflow()
+            await pilot.pause()
+            assert isinstance(app.screen, WorkflowScreen)
+            app.screen.query_one("#workflow-input-0", Input).value = "data.csv"
+            app.screen.query_one("#workflow-input-1", Input).value = "dictionary.json"
+            app.screen.query_one("#workflow-output", Input).value = "x" * 513
+            app.screen.query_one("#workflow-start", Button).focus()
+            await pilot.press("enter")
+            assert isinstance(app.screen, WorkflowScreen)
+            assert session.replay().workflow is None
+            app.screen.query_one("#workflow-output", Input).value = "results"
+            app.screen.query_one("#workflow-start", Button).focus()
+            await pilot.press("enter")
+            await _wait_for_tui(
+                pilot,
+                lambda: session.replay().workflow is not None,
+                description="workflow setup to persist",
+            )
+            run = session.replay().workflow
+            assert run is not None
+            assert run.phase == "ready"
+            assert session.replay().conversation == ()
+            assert session.submit("/workflow cancel").error
+            session.submit("/workflow")
+            cancelled = session.submit("/workflow cancel")
+            assert cancelled.projection is not None
+            assert cancelled.projection.workflow is not None
+            assert cancelled.projection.workflow.phase == "cancelled"
+
+    try:
+        asyncio.run(exercise())
+    finally:
+        gateway.stop()
+
+
+def test_plain_workflow_setup_and_keyboard_stage_controls(tmp_path: Path) -> None:
+    (tmp_path / "data sample.csv").write_text("x\n1\n")
+    (tmp_path / "dictionary.json").write_text("{}")
+    gateway = SessionGateway(project=ProjectContext(tmp_path), env={})
+    session = InteractiveSession(gateway, session_id="workflow")
+
+    async def exercise() -> None:
+        assert session.submit("/workflow start dataset-readiness invalid").error
+        assert session.submit("/workflow start dataset-readiness data=a data=b").error
+        assert session.replay().workflow is None
+        result = session.submit(
+            '/workflow start dataset-readiness data="data sample.csv" '
+            'dictionary=dictionary.json output="analysis results"'
+        )
+        assert result.projection is not None
+        assert result.projection.workflow is not None
+        assert result.projection.workflow.binding.output_directory == "analysis results"
+        assert not result.projection.conversation
+        app = HeartwoodTerminalApp(session)
+        async with app.run_test(size=(80, 30)) as pilot:
+            await pilot.pause()
+            app.action_show_workflow()
+            await pilot.pause()
+            assert isinstance(app.screen, WorkflowScreen)
+            choices = app.screen.query_one("#workflow-actions", OptionList)
+            choices.highlighted = 1
+            choices.focus()
+            await pilot.press("enter")
+            await _wait_for_tui(
+                pilot,
+                lambda: (run := session.replay().workflow) is not None and run.phase == "cancelled",
+                description="workflow cancellation to persist",
+            )
+            assert not session.replay().conversation
+
+    try:
+        asyncio.run(exercise())
+    finally:
+        gateway.stop()
 
 
 def test_terminal_workflow_catalog_preserves_shared_availability(tmp_path: Path) -> None:

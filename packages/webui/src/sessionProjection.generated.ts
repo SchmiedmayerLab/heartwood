@@ -68,6 +68,8 @@ export type CommandKind =
   | "audit.export"
   | "workflow";
 export type WorkflowIdentifier = string;
+export type WorkflowInputValue = string;
+export type WorkflowText = string;
 
 /**
  * Complete session projection owned by the gateway.
@@ -100,6 +102,7 @@ export interface SessionProjection {
   usage: ProjectionUsage | null;
   usageByPurpose: ProjectionUsage[];
   workflow: WorkflowRun | null;
+  workflowControls: WorkflowControl[];
   workspaceRevision: number;
 }
 /**
@@ -319,16 +322,16 @@ export interface ProjectionUsage {
  */
 export interface WorkflowRun {
   binding: WorkflowProjectBinding;
-  completed?: WorkflowStageEvaluation[];
+  completed: WorkflowStageEvaluation[];
   created_at: string;
-  evaluation?: WorkflowStageEvaluation | null;
+  evaluation: WorkflowStageEvaluation | null;
   phase: "ready" | "running" | "review" | "blocked" | "completed" | "cancelled";
   revision: number;
   run_id: string;
   stage_id: WorkflowIdentifier;
-  stage_started_at?: string | null;
-  stage_usage_baseline?: ExecutionUsage | null;
-  started_sequence?: number | null;
+  stage_started_at: string | null;
+  stage_usage_baseline: ExecutionUsage | null;
+  started_sequence: number | null;
 }
 /**
  * Project-relative inputs and output location; never an external workspace root.
@@ -350,7 +353,7 @@ export interface WorkflowBoundInput {
   input_id: WorkflowIdentifier;
   kind: "file" | "text";
   sha256: string;
-  value: string;
+  value: WorkflowInputValue;
 }
 /**
  * Content-minimized checks and assessment, not permission to advance a stage.
@@ -397,4 +400,30 @@ export interface ExecutionUsage {
   output_tokens?: number | null;
   proposed_actions?: number | null;
   reported_cost_usd?: number | null;
+}
+/**
+ * A presentation affordance carrying the exact revision-bound command to submit.
+ */
+export interface WorkflowControl {
+  control_id: "run" | "evaluate" | "accept" | "decline" | "cancel";
+  label: WorkflowText;
+  request: WorkflowTransition | WorkflowReview;
+}
+/**
+ * Apply a transition only to the exact run and revision the researcher saw.
+ */
+export interface WorkflowTransition {
+  action: "run" | "evaluate" | "cancel";
+  revision: number;
+  run_id: string;
+}
+/**
+ * Accept or reject checked stage evidence, never the underlying tool actions.
+ */
+export interface WorkflowReview {
+  action: "review";
+  approved: boolean;
+  evidence_fingerprint: string;
+  revision: number;
+  run_id: string;
 }

@@ -6,6 +6,119 @@
  * SPDX-License-Identifier: MIT
  */
 
+.research-workspace {
+  overflow: auto;
+  min-height: 0;
+  padding: 24px;
+  width: 100%;
+}
+.research-workspace > * {
+  max-width: 960px;
+  margin-inline: auto;
+}
+.research-workspace h2 {
+  font-size: 22px;
+}
+.research-workspace h3 {
+  font-size: 17px;
+}
+.research-workspace p,
+.research-workspace small {
+  color: var(--color-muted-foreground);
+}
+.research-setup {
+  display: grid;
+  gap: 18px;
+  padding-block: 20px;
+}
+.research-setup label,
+.research-field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.research-setup textarea {
+  min-height: 96px;
+  width: 100%;
+  padding: 10px;
+  border: 1px solid var(--color-input);
+  border-radius: 6px;
+  background: var(--color-surface-primary);
+  color: var(--color-foreground);
+}
+.research-setup dl {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+.research-stages {
+  list-style: none;
+  padding: 16px 0;
+}
+.research-stages li {
+  display: grid;
+  grid-template-columns: 20px 1fr auto;
+  gap: 8px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--color-border);
+}
+.research-stages li[aria-current="step"] {
+  color: var(--color-primary);
+  font-weight: 600;
+}
+.research-checks {
+  padding: 0;
+  list-style: none;
+}
+.research-checks li {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 8px 0;
+}
+.research-controls,
+.research-artifacts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-block: 12px;
+}
+.research-workspace button {
+  white-space: normal;
+  height: auto;
+  min-height: 36px;
+}
+.research-preview {
+  border-top: 1px solid var(--color-border);
+  padding-top: 16px;
+}
+.research-preview pre {
+  overflow: auto;
+  padding: 12px;
+  background: var(--color-muted);
+  max-height: 480px;
+}
+.research-workspace h3,
+.research-workspace p,
+.research-workspace li {
+  overflow-wrap: anywhere;
+}
+@media (max-width: 600px) {
+  .research-workspace {
+    padding: 16px;
+  }
+  .research-stages li {
+    grid-template-columns: 20px 1fr;
+  }
+  .research-stages small {
+    grid-column: 2;
+  }
+  .research-checks li {
+    flex-direction: column;
+    gap: 4px;
+  }
+}
+
 :root {
   --color-surface: #f4f6f4;
   --color-surface-primary: #fff;
@@ -320,6 +433,10 @@ summary:focus-visible {
 
 .workspace-tabs button {
   gap: 6px;
+}
+
+.workspace-tabs svg {
+  flex-shrink: 0;
 }
 
 .workspace-tab-panel {
@@ -2238,6 +2355,10 @@ summary:focus-visible {
     min-width: 0;
     flex: 1;
     padding-inline: 7px;
+  }
+
+  .workspace-tabs svg {
+    display: none;
   }
 
   .project-workspace {

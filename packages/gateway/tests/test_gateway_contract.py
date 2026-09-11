@@ -158,7 +158,7 @@ class _FailingResolutionBackend(DeterministicAgentBackend):
         )
 
 
-def test_gateway_lifecycle_does_not_load_openhands_before_agent_use(
+def test_gateway_lifecycle_does_not_prepare_an_agent_before_use(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -176,6 +176,8 @@ def test_gateway_lifecycle_does_not_load_openhands_before_agent_use(
     gateway.start()
 
     assert prepared == []
+    assert not gateway._services
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_gateway_prepares_openhands_before_skill_loading(

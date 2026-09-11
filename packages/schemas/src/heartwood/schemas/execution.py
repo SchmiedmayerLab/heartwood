@@ -16,7 +16,12 @@ from pydantic import BaseModel, ConfigDict, Field
 class ExecutionBudget(BaseModel):
     """Observed admission limits, not a provider-side spending or preemption cap."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        allow_inf_nan=False,
+        json_schema_serialization_defaults_required=True,
+    )
 
     maximum_seconds: float = Field(default=300, gt=0, le=3600)
     maximum_model_calls: int = Field(default=20, gt=0, le=100)

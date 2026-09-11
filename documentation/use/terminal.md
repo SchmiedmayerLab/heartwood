@@ -75,6 +75,7 @@ Press `Ctrl-P` to open the command palette for these views, action review, statu
 | `/status` | Show model, credential, policy, and action-review status |
 | `/permissions` | Review or change when Heartwood pauses before actions |
 | `/specialists` | Show the bounded research specialists available to the parent agent |
+| `/workflow` | Set up or review a [research workflow](research-workflows.md); show its state and available commands in plain mode |
 | `/allow` | Allow the complete pending action set once |
 | `/reject` | Reject the complete pending action set |
 | `/pause` | Pause active OpenHands work |

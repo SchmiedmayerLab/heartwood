@@ -40,6 +40,24 @@ class _WidgetFactory(Protocol):
 
 def build_widget_spec(view_model: NotebookViewModel) -> tuple[WidgetSpec, ...]:
     """Build deterministic widget section specifications."""
+    workflow_sections: tuple[WidgetSpec, ...] = ()
+    run = view_model.workflow
+    if run is not None:
+        checks = (
+            ()
+            if run.evaluation is None
+            else tuple(f"{check.check_id}: {check.status}" for check in run.evaluation.checks)
+        )
+        workflow_sections = (
+            WidgetSpec(
+                "Research Workflow",
+                (
+                    f"{run.binding.workflow_id}: {run.stage_id} ({run.phase})",
+                    *checks,
+                    *(control.label for control in view_model.workflow_controls),
+                ),
+            ),
+        )
     return (
         WidgetSpec(
             "Conversation",
@@ -63,6 +81,7 @@ def build_widget_spec(view_model: NotebookViewModel) -> tuple[WidgetSpec, ...]:
             "Tasks",
             tuple(f"{task.status_label}: {task.title}" for task in view_model.task_plan),
         ),
+        *workflow_sections,
         WidgetSpec(
             "Suggested Next Steps",
             tuple(

@@ -39,6 +39,42 @@ from heartwood.schemas.workflows import WorkflowOutcomeStatus, WorkflowRun
 from heartwood.session import CommandKind, EventKind, SessionCommand
 
 
+def test_stage_controls_keep_review_bound_to_displayed_evidence(tmp_path: Path) -> None:
+    backend = FinishedBackend()
+    gateway = _gateway(tmp_path, backend)
+    try:
+        _start(gateway, _inputs(tmp_path))
+        initial = _projected_command(gateway, "run")
+        gateway.handle(initial)
+        gateway.handle(initial.model_copy(update={"command_id": "stale-start"}))
+        assert len(backend.prompts) == 1
+        _readiness(tmp_path)
+        gateway.handle(_projected_command(gateway, "evaluate"))
+        gateway.handle(_projected_command(gateway, "run"))
+        (tmp_path / "results/readiness.md").write_text("# Synthetic findings\n")
+        gateway.handle(_projected_command(gateway, "evaluate"))
+        displayed = _projected_command(gateway, "accept")
+        gateway.handle(_projected_command(gateway, "evaluate"))
+        response = gateway.handle(displayed)
+        assert any(event.kind == EventKind.ERROR_RECORDED for event in response.events)
+        assert _state(gateway).phase == "review"
+        gateway.handle(_projected_command(gateway, "decline"))
+        assert _state(gateway).phase == "blocked"
+        gateway.handle(_projected_command(gateway, "cancel"))
+        assert gateway.session_projection(session_id="research").workflow_controls == ()
+    finally:
+        gateway.stop()
+
+
+def _projected_command(gateway: SessionGateway, control_id: str) -> SessionCommand:
+    control = next(
+        item
+        for item in gateway.session_projection(session_id="research").workflow_controls
+        if item.control_id == control_id
+    )
+    return _command(**control.request.model_dump(mode="json"))
+
+
 class FinishedBackend(DeterministicAgentBackend):
     def __init__(self) -> None:
         super().__init__()
@@ -567,7 +603,7 @@ def test_real_sdk_baseline_reproduces_through_journaled_actions(
         )
         for stage_id in ("plan", "execute", "verify", "report"):
             assert _state(gateway).stage_id == stage_id
-            gateway.handle(_transition(gateway, "run"))
+            gateway.handle(_projected_command(gateway, "run"))
             for _ in range(5):
                 assert gateway.wait_for_session_idle(session_id="research", timeout=30)
                 projection = gateway.session_projection(session_id="research")
@@ -575,6 +611,7 @@ def test_real_sdk_baseline_reproduces_through_journaled_actions(
                 if group is None:
                     assert projection.lifecycle.status == "finished"
                     break
+                assert projection.workflow_controls == ()
                 if stage_id == "verify" and group.actions[0].tool_name == "terminal":
                     assert not (tmp_path / "results/reproduced").exists()
                     if mutation in {"input", "program"}:
@@ -595,7 +632,7 @@ def test_real_sdk_baseline_reproduces_through_journaled_actions(
                 assert gateway.handle(approval).replayed
             else:
                 pytest.fail("Synthetic stage did not settle within its bounded action count")
-            gateway.handle(_transition(gateway, "evaluate"))
+            gateway.handle(_projected_command(gateway, "evaluate"))
             state = _state(gateway)
             if stage_id == "verify" and mutation is not None:
                 assert not any(item.assessment.stage_id == "verify" for item in state.completed)
@@ -608,14 +645,7 @@ def test_real_sdk_baseline_reproduces_through_journaled_actions(
             assert state.phase != "blocked", state
             if stage_id == "plan":
                 assert state.evaluation is not None
-                gateway.handle(
-                    _transition(
-                        gateway,
-                        "review",
-                        approved=True,
-                        evidence_fingerprint=state.evaluation.assessment.evidence_fingerprint,
-                    )
-                )
+                gateway.handle(_projected_command(gateway, "accept"))
         assert _state(gateway).phase == "review"
         events = gateway._services["research"].replay_events()
         proof = [event for event in events if event.kind == EventKind.WORKFLOW_EXECUTION_RECORDED]

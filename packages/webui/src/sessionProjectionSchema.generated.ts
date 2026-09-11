@@ -491,7 +491,7 @@ export const sessionProjectionJsonSchema = {
         input_id: { $ref: "#/$defs/WorkflowIdentifier" },
         kind: { enum: ["file", "text"], type: "string" },
         sha256: { pattern: "^[0-9a-f]{64}$", type: "string" },
-        value: { maxLength: 8000, minLength: 1, type: "string" },
+        value: { $ref: "#/$defs/WorkflowInputValue" },
       },
       required: ["input_id", "kind", "value", "sha256"],
       type: "object",
@@ -510,10 +510,29 @@ export const sessionProjectionJsonSchema = {
       required: ["check_id", "evaluator_id", "status", "inspected"],
       type: "object",
     },
+    WorkflowControl: {
+      additionalProperties: false,
+      properties: {
+        control_id: {
+          enum: ["run", "evaluate", "accept", "decline", "cancel"],
+          type: "string",
+        },
+        label: { $ref: "#/$defs/WorkflowText" },
+        request: {
+          anyOf: [
+            { $ref: "#/$defs/WorkflowTransition" },
+            { $ref: "#/$defs/WorkflowReview" },
+          ],
+        },
+      },
+      required: ["control_id", "label", "request"],
+      type: "object",
+    },
     WorkflowIdentifier: {
       pattern: "^[a-z][a-z0-9_.-]{0,127}$",
       type: "string",
     },
+    WorkflowInputValue: { maxLength: 8000, minLength: 1, type: "string" },
     WorkflowProjectBinding: {
       additionalProperties: false,
       properties: {
@@ -532,6 +551,24 @@ export const sessionProjectionJsonSchema = {
         "workflow_fingerprint",
         "output_directory",
         "inputs",
+      ],
+      type: "object",
+    },
+    WorkflowReview: {
+      additionalProperties: false,
+      properties: {
+        action: { const: "review", type: "string" },
+        approved: { type: "boolean" },
+        evidence_fingerprint: { pattern: "^[0-9a-f]{64}$", type: "string" },
+        revision: { minimum: 0, type: "integer" },
+        run_id: { minLength: 1, type: "string" },
+      },
+      required: [
+        "action",
+        "run_id",
+        "revision",
+        "evidence_fingerprint",
+        "approved",
       ],
       type: "object",
     },
@@ -580,7 +617,12 @@ export const sessionProjectionJsonSchema = {
         "binding",
         "stage_id",
         "phase",
+        "completed",
+        "evaluation",
+        "started_sequence",
         "created_at",
+        "stage_started_at",
+        "stage_usage_baseline",
       ],
       type: "object",
     },
@@ -618,6 +660,17 @@ export const sessionProjectionJsonSchema = {
         },
       },
       required: ["artifacts", "checks", "assessment"],
+      type: "object",
+    },
+    WorkflowText: { maxLength: 8000, minLength: 1, type: "string" },
+    WorkflowTransition: {
+      additionalProperties: false,
+      properties: {
+        action: { enum: ["run", "evaluate", "cancel"], type: "string" },
+        revision: { minimum: 0, type: "integer" },
+        run_id: { minLength: 1, type: "string" },
+      },
+      required: ["action", "run_id", "revision"],
       type: "object",
     },
     WorkflowValueFingerprint: {
@@ -683,12 +736,17 @@ export const sessionProjectionJsonSchema = {
       type: "array",
     },
     workflow: { anyOf: [{ $ref: "#/$defs/WorkflowRun" }, { type: "null" }] },
+    workflowControls: {
+      items: { $ref: "#/$defs/WorkflowControl" },
+      type: "array",
+    },
     workspaceRevision: { minimum: -1, type: "integer" },
   },
   required: [
     "schema_version",
     "sessionId",
     "workflow",
+    "workflowControls",
     "eventCount",
     "revision",
     "workspaceRevision",

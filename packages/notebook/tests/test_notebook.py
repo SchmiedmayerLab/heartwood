@@ -57,6 +57,7 @@ from heartwood.notebook import (
 )
 from heartwood.notebook._widgets import WidgetSpec, _section_html
 from heartwood.schemas import ModelTransferResponse
+from heartwood.schemas.workflows import WorkflowStart
 from heartwood.session import JsonValue, SessionCommand
 
 
@@ -69,6 +70,49 @@ def test_notebook_workflow_catalog_does_not_start_a_session(tmp_path: Path) -> N
         assert list(tmp_path.iterdir()) == []
     finally:
         gateway.stop()
+
+
+def test_notebook_workflow_uses_persisted_gateway_controls(tmp_path: Path) -> None:
+    (tmp_path / "data.csv").write_text("x,y\n1,2\n")
+    (tmp_path / "dictionary.json").write_text("{}")
+    gateway = SessionGateway(project=ProjectContext(tmp_path), env={})
+    try:
+        notebook = NotebookSession(gateway=gateway, session_id="workflow")
+        view = notebook.workflow(
+            WorkflowStart(
+                action="start",
+                workflow_id="dataset-readiness",
+                inputs={"data": "data.csv", "dictionary": "dictionary.json"},
+                output_directory="results",
+            )
+        )
+        assert view.workflow is not None
+        assert view.workflow.phase == "ready"
+        assert not view.conversation
+        assert (
+            view.workflow_controls
+            == gateway.session_projection(session_id="workflow").workflow_controls
+        )
+        section = next(
+            item for item in build_widget_spec(view) if item.title == "Research Workflow"
+        )
+        assert "Run Inspect Data" in section.items
+        displayed = next(
+            item.request for item in view.workflow_controls if item.control_id == "cancel"
+        )
+    finally:
+        gateway.stop()
+
+    reopened = SessionGateway(project=ProjectContext(tmp_path), env={})
+    try:
+        notebook = NotebookSession(gateway=reopened, session_id="workflow")
+        view = notebook.workflow(displayed)
+        assert view.workflow is not None
+        assert view.workflow.phase == "cancelled"
+        assert view.workflow_controls == ()
+        assert not view.conversation
+    finally:
+        reopened.stop()
 
 
 def _approval_action(

@@ -546,7 +546,10 @@ class SessionGateway:
         self._pending_stream_events: dict[str, dict[int, SessionEvent]] = {}
 
     def start(self) -> None:
-        """Start the interface lifecycle without requiring an agent dependency import."""
+        """Initialize SDK modules before concurrent requests enter its import graph."""
+        from importlib import import_module
+
+        import_module("openhands.sdk")
 
     @_serialized_state
     def initialize_project(self, *, interface: InterfaceKind = "web") -> StartupPlanResponse:

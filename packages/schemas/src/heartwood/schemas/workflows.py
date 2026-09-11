@@ -30,13 +30,19 @@ type WorkflowIdentifier = Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0
 type WorkflowText = Annotated[
     str, StringConstraints(strip_whitespace=True, min_length=1, max_length=8000)
 ]
+type WorkflowInputValue = Annotated[str, StringConstraints(min_length=1, max_length=8000)]
 type WorkflowOutcomeStatus = Literal["success", "partial_success", "blocked", "failed", "unknown"]
 
 
 class WorkflowRecord(BaseModel):
     """Closed immutable workflow metadata, without model or provider settings."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        allow_inf_nan=False,
+        json_schema_serialization_defaults_required=True,
+    )
 
 
 class WorkflowInput(WorkflowRecord):
@@ -213,7 +219,7 @@ class WorkflowBoundInput(WorkflowRecord):
 
     input_id: WorkflowIdentifier
     kind: Literal["file", "text"]
-    value: str = Field(min_length=1, max_length=8000)
+    value: WorkflowInputValue
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
     @model_validator(mode="after")
@@ -256,8 +262,8 @@ class WorkflowStart(WorkflowRecord):
 
     action: Literal["start"]
     workflow_id: WorkflowIdentifier
-    inputs: dict[WorkflowIdentifier, str]
-    output_directory: str
+    inputs: dict[WorkflowIdentifier, WorkflowInputValue] = Field(min_length=1, max_length=32)
+    output_directory: str = Field(min_length=1, max_length=512)
 
 
 class WorkflowTransition(WorkflowRecord):
@@ -281,6 +287,14 @@ class WorkflowReview(WorkflowRecord):
 type WorkflowRequest = Annotated[
     WorkflowStart | WorkflowTransition | WorkflowReview, Field(discriminator="action")
 ]
+
+
+class WorkflowControl(WorkflowRecord):
+    """A presentation affordance carrying the exact revision-bound command to submit."""
+
+    control_id: Literal["run", "evaluate", "accept", "decline", "cancel"]
+    label: WorkflowText
+    request: WorkflowTransition | WorkflowReview
 
 
 class WorkflowRun(WorkflowRecord):

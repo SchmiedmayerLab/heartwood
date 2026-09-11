@@ -12,7 +12,7 @@ import json
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 from pathlib import PurePosixPath
-from typing import TYPE_CHECKING, Protocol, cast
+from typing import TYPE_CHECKING, Literal, Protocol, cast
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
@@ -34,6 +34,7 @@ from heartwood.schemas.research import (
     ResultVerification,
 )
 from heartwood.schemas.workflows import (
+    WorkflowControl,
     WorkflowOutcomeStatus,
     WorkflowProjectBinding,
     WorkflowRequest,
@@ -41,6 +42,7 @@ from heartwood.schemas.workflows import (
     WorkflowRun,
     WorkflowStageEvaluation,
     WorkflowStart,
+    WorkflowTransition,
 )
 from heartwood.session import CommandKind, EventKind, SessionCommand, SessionEvent
 
@@ -49,6 +51,65 @@ if TYPE_CHECKING:
 
 _REQUEST: TypeAdapter[WorkflowRequest] = TypeAdapter(WorkflowRequest)
 _STATUS: TypeAdapter[WorkflowOutcomeStatus] = TypeAdapter(WorkflowOutcomeStatus)
+
+
+def workflow_controls(
+    events: Sequence[SessionEvent], *, active: bool, pending_actions: bool
+) -> tuple[WorkflowControl, ...]:
+    """Project exact commands; execution still revalidates ownership, state, and evidence."""
+    current = workflow_run(events)
+    if current is None or current.phase in {"completed", "cancelled"} or active or pending_actions:
+        return ()
+    controls: list[WorkflowControl] = []
+    if current.phase == "ready":
+        stage = research_workflow(current.binding.workflow_id).stage(current.stage_id)
+        controls.append(
+            WorkflowControl(
+                control_id="run",
+                label=f"Run {stage.label}",
+                request=WorkflowTransition(
+                    action="run", run_id=current.run_id, revision=current.revision
+                ),
+            )
+        )
+    elif _stage_outcome(events, current) is not None:
+        if current.phase == "review" and current.evaluation is not None:
+            for control_id, label, approved in (
+                ("accept", "Accept Stage", True),
+                ("decline", "Decline Stage", False),
+            ):
+                controls.append(
+                    WorkflowControl(
+                        control_id=cast(Literal["accept", "decline"], control_id),
+                        label=label,
+                        request=WorkflowReview(
+                            action="review",
+                            run_id=current.run_id,
+                            revision=current.revision,
+                            evidence_fingerprint=current.evaluation.assessment.evidence_fingerprint,
+                            approved=approved,
+                        ),
+                    )
+                )
+        controls.append(
+            WorkflowControl(
+                control_id="evaluate",
+                label="Check Results",
+                request=WorkflowTransition(
+                    action="evaluate", run_id=current.run_id, revision=current.revision
+                ),
+            )
+        )
+    controls.append(
+        WorkflowControl(
+            control_id="cancel",
+            label="Cancel Workflow",
+            request=WorkflowTransition(
+                action="cancel", run_id=current.run_id, revision=current.revision
+            ),
+        )
+    )
+    return tuple(controls)
 
 
 class WorkflowEvaluator(ReproductionInspector, Protocol):

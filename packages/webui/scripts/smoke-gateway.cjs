@@ -6,13 +6,15 @@
  * SPDX-License-Identifier: MIT
  */
 
-/* global clearTimeout */
+/* global clearTimeout, document, window */
 
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
+const { chromium, expect } = require("@playwright/test");
+const AccessibilityScanner = require("@axe-core/playwright").default;
 
 const scriptDir = __dirname;
 const packageRoot = path.resolve(scriptDir, "..");
@@ -58,6 +60,10 @@ async function main() {
       cwd: workspace,
       detached: true,
       env: Object.assign({}, process.env, {
+        HOME: path.join(workspace, ".test-home"),
+        OH_PERSISTENCE_DIR: path.join(workspace, ".openhands"),
+        XDG_CONFIG_HOME: path.join(workspace, ".config"),
+        XDG_CACHE_HOME: path.join(workspace, ".cache"),
         UV_CACHE_DIR: path.join(repoRoot, ".uv-cache"),
       }),
       stdio: ["ignore", "pipe", "pipe"],
@@ -96,6 +102,8 @@ async function main() {
     if (asset.length === 0) {
       throw new Error("proxied web UI asset was empty");
     }
+
+    await inspectResearchSetup(proxiedBaseUrl);
 
     const createdSession = await fetchJson(`${origin}${basePath}sessions`, {
       body: JSON.stringify({ title: "Web smoke session" }),
@@ -203,6 +211,100 @@ async function main() {
     terminateProcessGroup(server);
     await waitForExit(server);
     fs.rmSync(workspace, { force: true, recursive: true });
+  }
+}
+
+async function inspectResearchSetup(url) {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const context = await browser.newContext({
+      viewport: { width: 1440, height: 1000 },
+    });
+    const page = await context.newPage();
+    page.on("response", (response) => {
+      if (response.status() >= 500) {
+        console.error(
+          `Gateway failure: ${response.status()} ${response.url()}`,
+        );
+      }
+    });
+    await page.goto(url);
+    await expect(
+      page.getByRole("heading", { name: "Set up Heartwood" }),
+    ).toBeVisible();
+    await page
+      .getByRole("button", { name: "Use this project", exact: true })
+      .click();
+    await expect(
+      page.getByRole("button", { name: "Use this project", exact: true }),
+    ).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    await expect(
+      page.getByRole("heading", { name: "Main session", exact: true }),
+    ).toBeVisible();
+    await page.getByRole("tab", { name: "Research", exact: true }).click();
+    await expect(
+      page.getByRole("heading", { name: "Research Workflows" }),
+    ).toBeVisible();
+    await expect(page.getByLabel("Dataset", { exact: true })).toBeVisible();
+    await page.getByLabel("Dataset", { exact: true }).fill("synthetic.csv");
+    await page.getByRole("tab", { name: "Conversation", exact: true }).click();
+    await page.getByRole("tab", { name: "Research", exact: true }).click();
+    await expect(page.getByLabel("Dataset", { exact: true })).toHaveValue(
+      "synthetic.csv",
+    );
+    await expect(
+      page.getByRole("button", { name: "Start Workflow" }),
+    ).toBeDisabled();
+    const catalog = await fetchJson(`${url}research/workflows`);
+    if (
+      !catalog.workflows.some(
+        (entry) =>
+          entry.definition.workflow_id === "baseline-analysis" &&
+          entry.available,
+      )
+    ) {
+      throw new Error("baseline workflow is missing from the shared catalog");
+    }
+    for (const theme of ["light", "dark"]) {
+      if (theme === "dark")
+        await page.getByRole("button", { name: "Switch to dark mode" }).click();
+      for (const width of [1440, 390]) {
+        await page.setViewportSize({ width, height: 1000 });
+        await page.evaluate(() =>
+          Promise.allSettled(
+            document
+              .getAnimations()
+              .filter(
+                (animation) =>
+                  animation.effect?.getTiming().iterations !== Infinity,
+              )
+              .map((animation) => animation.finished),
+          ),
+        );
+        const violations = (await new AccessibilityScanner({ page }).analyze())
+          .violations;
+        if (violations.length) throw new Error(JSON.stringify(violations));
+        expect(
+          await page.evaluate(
+            () => document.documentElement.scrollWidth <= window.innerWidth,
+          ),
+        ).toBe(true);
+        const screenshots = process.env.HEARTWOOD_WEB_SMOKE_SCREENSHOT_DIR;
+        if (screenshots) {
+          fs.mkdirSync(screenshots, { recursive: true });
+          await page.screenshot({
+            path: path.join(screenshots, `research-${theme}-${width}.png`),
+            fullPage: true,
+          });
+        }
+      }
+    }
+  } catch (error) {
+    console.error(logs.join(""));
+    throw error;
+  } finally {
+    await browser.close();
   }
 }
 

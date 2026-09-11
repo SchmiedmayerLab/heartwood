@@ -44,6 +44,7 @@ from heartwood.cli._interactive import (
     format_runtime_lines,
     interaction_activity,
 )
+from heartwood.cli._workflow_screen import WorkflowScreen
 from heartwood.cli._workspace_presentation import (
     format_workspace_changes,
     format_workspace_diff,
@@ -68,6 +69,7 @@ from heartwood.schemas import (
     WorkspaceFileResponse,
     WorkspaceTreeResponse,
 )
+from heartwood.schemas.workflows import WorkflowRequest
 
 
 class ActionModeScreen(ModalScreen[str | None]):
@@ -336,6 +338,10 @@ class HeartwoodTerminalApp(App[None]):
         if event.value.strip() == "/permissions":
             event.input.value = ""
             self.action_show_permissions()
+            return
+        if event.value.strip() in {"/workflow", "/workflows"}:
+            event.input.value = ""
+            self.action_show_workflow()
             return
         event.input.value = ""
         self._set_busy(True, activity=interaction_activity(event.value))
@@ -1037,6 +1043,26 @@ class HeartwoodTerminalApp(App[None]):
         """Show model, policy, and action-review status."""
         self._run_directive("/status")
 
+    def action_show_workflow(self) -> None:
+        """Open workflow setup or exact stage decisions from the shared projection."""
+        self.push_screen(
+            WorkflowScreen(self.session.research_workflows(), self.session.replay()),
+            self._workflow_selected,
+        )
+
+    def _workflow_selected(self, request: WorkflowRequest | None) -> None:
+        if request is not None:
+            self._set_busy(True, activity=interaction_activity("/workflow"))
+            self._submit_workflow(request)
+
+    @work(thread=True, exclusive=True)
+    def _submit_workflow(self, request: WorkflowRequest) -> None:
+        try:
+            result = self.session.workflow(request)
+        except Exception as error:
+            result = InteractionResult(message=f"Error: {error}", error=True)
+        self.call_from_thread(self._finish_interaction, result)
+
     def action_replay(self) -> None:
         """Reload the persisted conversation."""
         self._run_directive("/replay")
@@ -1048,6 +1074,11 @@ class HeartwoodTerminalApp(App[None]):
     def get_system_commands(self, screen: Screen[object]) -> Iterable[SystemCommand]:
         """Add Heartwood workflows to Textual's built-in command palette."""
         yield from super().get_system_commands(screen)
+        yield SystemCommand(
+            "Research Workflow",
+            "Start an analysis or review its current stage",
+            self.action_show_workflow,
+        )
         yield SystemCommand(
             "Action Review",
             "Choose how Heartwood confirms proposed actions",

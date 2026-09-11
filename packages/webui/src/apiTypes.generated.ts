@@ -15,6 +15,7 @@
 export type HeartwoodApiContract =
   | ApiResponse
   | WorkflowCatalog
+  | WorkflowRequest
   | ActionConfirmationRequest
   | CustomLocalModelDownloadRequest
   | LocalModelImportRequest
@@ -89,6 +90,9 @@ export type ModelSource =
 export type InterfaceKind = "terminal" | "web" | "notebook";
 export type WorkflowIdentifier = string;
 export type WorkflowText = string;
+export type WorkflowRequest =
+  WorkflowStart | WorkflowTransition | WorkflowReview;
+export type WorkflowInputValue = string;
 
 /**
  * Shared action-confirmation settings.
@@ -788,7 +792,7 @@ export interface WorkflowCatalogEntry {
    */
   available: boolean;
   definition: WorkflowDefinition;
-  unavailable_checks?: WorkflowIdentifier[];
+  unavailable_checks: WorkflowIdentifier[];
 }
 /**
  * Pinned sequential task contract; advisory concurrency does not change its order.
@@ -807,7 +811,7 @@ export interface WorkflowDefinition {
    */
   inputs: WorkflowInput[];
   label: WorkflowText;
-  schema_version?: "heartwood.workflow-definition.v1";
+  schema_version: "heartwood.workflow-definition.v1";
   /**
    * @minItems 1
    * @maxItems 32
@@ -830,11 +834,11 @@ export interface WorkflowArtifact {
  * Observed admission limits, not a provider-side spending or preemption cap.
  */
 export interface ExecutionBudget {
-  maximum_actions?: number;
-  maximum_model_calls?: number;
-  maximum_reported_cost_usd?: number;
-  maximum_seconds?: number;
-  maximum_tokens?: number;
+  maximum_actions: number;
+  maximum_model_calls: number;
+  maximum_reported_cost_usd: number;
+  maximum_seconds: number;
+  maximum_tokens: number;
 }
 /**
  * An explicit researcher-supplied file or research objective.
@@ -849,7 +853,7 @@ export interface WorkflowInput {
  * One ordered task with explicit context, outputs, and completion gates.
  */
 export interface WorkflowStage {
-  budget?: ExecutionBudget;
+  budget: ExecutionBudget;
   /**
    * @minItems 1
    */
@@ -860,9 +864,9 @@ export interface WorkflowStage {
    * @minItems 1
    */
   reads: WorkflowIdentifier[];
-  reviewer_gate?: "none" | "researcher";
-  skill_ids?: WorkflowIdentifier[];
-  specialist_ids?: WorkflowIdentifier[];
+  reviewer_gate: "none" | "researcher";
+  skill_ids: WorkflowIdentifier[];
+  specialist_ids: WorkflowIdentifier[];
   stage_id: WorkflowIdentifier;
   /**
    * @minItems 1
@@ -880,6 +884,35 @@ export interface WorkflowCheck {
   check_id: WorkflowIdentifier;
   description: WorkflowText;
   evaluator_id: WorkflowIdentifier;
+}
+/**
+ * Explicitly bind a new workflow to an unused session.
+ */
+export interface WorkflowStart {
+  action: "start";
+  inputs: {
+    [k: string]: WorkflowInputValue;
+  };
+  output_directory: string;
+  workflow_id: WorkflowIdentifier;
+}
+/**
+ * Apply a transition only to the exact run and revision the researcher saw.
+ */
+export interface WorkflowTransition {
+  action: "run" | "evaluate" | "cancel";
+  revision: number;
+  run_id: string;
+}
+/**
+ * Accept or reject checked stage evidence, never the underlying tool actions.
+ */
+export interface WorkflowReview {
+  action: "review";
+  approved: boolean;
+  evidence_fingerprint: string;
+  revision: number;
+  run_id: string;
 }
 /**
  * Select the shared action-confirmation policy.

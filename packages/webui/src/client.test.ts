@@ -453,6 +453,11 @@ describe("GatewayClient", () => {
         revision: 0,
         stage_id: "inspect",
         phase: "ready",
+        completed: [],
+        evaluation: null,
+        started_sequence: null,
+        stage_started_at: null,
+        stage_usage_baseline: null,
         created_at: "2026-09-11T00:00:00Z",
         binding: {
           workflow_id: "dataset-readiness",

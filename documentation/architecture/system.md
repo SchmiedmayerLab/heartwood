@@ -102,6 +102,11 @@ Previously accepted inputs and results are checked again before another stage st
 Researcher review binds the exact assessment to the observed run revision and does not approve future tool actions.
 The shared session projection includes the persisted workflow state; clients do not reconstruct it from model prose.
 
+The projection also supplies typed stage controls, including the exact run revision and evidence fingerprint for each decision.
+Clients submit the displayed request unchanged; they do not replace it with a newer revision when the researcher acts.
+Active work and unresolved tool approvals suppress stage controls, while command handling independently rechecks those boundaries.
+Browser artifact previews use the existing bounded workspace reader and invalidate displayed content when its workspace revision changes.
+
 Reproduction preparation and completion are recorded in the same session journal, not a separate execution cache.
 Before approving a separately proposed canonical rerun, the gateway checks the original inputs, accepted artifacts, and absence of the destination through confined workspace inspection.
 Completion links that preparation to the actual OpenHands terminal observation, its reported working directory, and the intervening single-action approval.
@@ -163,6 +168,9 @@ It does not derive platform proxy paths or reduce gateway events itself.
 The selected platform adapter advertises supported ingress modes, while deployment configuration supplies exact proxy values.
 
 ### OpenHands Adapter
+
+Gateway lifecycle startup imports the SDK before accepting concurrent browser requests, avoiding competing cold imports through the Skill and specialist catalogs.
+This initializes modules only; model clients, conversations, and tool executors are created when agent work is requested.
 
 The adapter creates an OpenHands conversation with `OpenHandsAgentSettings`, the selected LiteLLM-compatible model profile, project workspace, Skills, persistence directory, and confirmation policy.
 It uses public typed OpenHands events and conversation state to derive lifecycle, unmatched actions, task progress, usage, and errors.

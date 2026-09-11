@@ -13,6 +13,7 @@ import shlex
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import cast
 
 from heartwood.cli._workspace_presentation import (
     format_workspace_changes,
@@ -45,7 +46,12 @@ from heartwood.schemas import (
     WorkspaceFileResponse,
     WorkspaceTreeResponse,
 )
-from heartwood.schemas.workflows import WorkflowCatalog
+from heartwood.schemas.workflows import (
+    WorkflowCatalog,
+    WorkflowControl,
+    WorkflowRequest,
+    WorkflowStart,
+)
 from heartwood.session import (
     CommandKind,
     JsonValue,
@@ -167,6 +173,7 @@ class InteractiveSession:
     def __init__(self, gateway: SessionGateway, *, session_id: str) -> None:
         self.gateway = gateway
         self.session_id = session_id
+        self._displayed_workflow_controls: tuple[WorkflowControl, ...] = ()
 
     def replay(self) -> SessionProjection:
         """Return the gateway-owned session projection."""
@@ -210,6 +217,13 @@ class InteractiveSession:
     def research_workflows(self) -> WorkflowCatalog:
         """Return gateway-owned workflow choices without creating a session."""
         return self.gateway.research_workflows()
+
+    def workflow(self, request: WorkflowRequest) -> InteractionResult:
+        """Submit an explicit workflow request without substituting a newer revision."""
+        events = self._handle(
+            CommandKind.WORKFLOW, cast(dict[str, JsonValue], request.model_dump(mode="json"))
+        )
+        return InteractionResult(events=events, projection=self.replay())
 
     def workspace_tree(
         self,
@@ -311,6 +325,56 @@ class InteractiveSession:
                 )
         if directive == "/specialists" and len(parts) == 1:
             return InteractionResult(message=format_specialist_settings(self.specialist_settings()))
+        if directive == "/workflow":
+            if len(parts) == 1:
+                projection = self.replay()
+                self._displayed_workflow_controls = projection.workflow_controls
+                workflow_lines = format_workflow_lines(projection)
+                return InteractionResult(
+                    message="\n".join(workflow_lines)
+                    if workflow_lines
+                    else "No workflow is active. Use /workflows to inspect available analyses."
+                )
+            if len(parts) >= 3 and parts[1] == "start":
+                try:
+                    values: dict[str, str] = {}
+                    for item in parts[3:]:
+                        key, value = item.split("=", 1)
+                        if key in values:
+                            raise ValueError("Duplicate input")
+                        values[key] = value
+                    output = values.pop("output", "results")
+                    return self.workflow(
+                        WorkflowStart(
+                            action="start",
+                            workflow_id=parts[2],
+                            inputs=values,
+                            output_directory=output,
+                        )
+                    )
+                except ValueError:
+                    return InteractionResult(
+                        message=(
+                            "Use /workflow start WORKFLOW input=value output=results; "
+                            "quote values containing spaces."
+                        ),
+                        error=True,
+                    )
+            if len(parts) == 2:
+                control = next(
+                    (
+                        item
+                        for item in self._displayed_workflow_controls
+                        if item.control_id == parts[1]
+                    ),
+                    None,
+                )
+                if control is not None:
+                    return self.workflow(control.request)
+                return InteractionResult(
+                    message="Inspect /workflow first and select one of its available actions.",
+                    error=True,
+                )
         if directive == "/workflows" and len(parts) == 1:
             lines = ["Research workflows", ""]
             for entry in self.research_workflows().workflows:
@@ -386,7 +450,8 @@ def command_help() -> str:
     """Return the commands common to terminal clients."""
     return (
         "/allow  /reject  /permissions  /pause  /resume  /status  "
-        "/specialists  /workflows  /files  /show  /changes  /replay  /audit-export  /help  /exit"
+        "/specialists  /workflows  /workflow  /files  /show  /changes  "
+        "/replay  /audit-export  /help  /exit"
     )
 
 
@@ -489,9 +554,31 @@ def format_conversation_lines(
     return tuple(lines)
 
 
+def format_workflow_lines(projection: SessionProjection) -> tuple[str, ...]:
+    """Render shared workflow state and exact available commands without reducing events."""
+    run = projection.workflow
+    if run is None:
+        return ()
+    lines = [
+        f"Research workflow: {terminal_safe_text(run.binding.workflow_id)}",
+        f"Stage: {terminal_safe_text(run.stage_id)} ({run.phase})",
+    ]
+    if run.evaluation is not None:
+        lines.extend(
+            f"  {terminal_safe_text(check.check_id)}: {check.status}"
+            for check in run.evaluation.checks
+        )
+    lines.extend(
+        f"  /workflow {control.control_id} - {terminal_safe_text(control.label)}"
+        for control in projection.workflow_controls
+    )
+    return tuple(lines)
+
+
 def format_runtime_lines(projection: SessionProjection) -> tuple[str, ...]:
     """Render current task, usage, and specialist state from the projection."""
     lines: list[str] = []
+    lines.extend(format_workflow_lines(projection))
     if projection.researcher_notice is not None:
         lines.append(
             f"Notice: {terminal_safe_text(projection.researcher_notice.label)}: "
