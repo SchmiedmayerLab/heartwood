@@ -9,6 +9,8 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
 from pathlib import Path
 from typing import cast
 from uuid import uuid4
@@ -17,6 +19,7 @@ import pytest
 from openhands.sdk.llm import Message, MessageToolCall
 from openhands.sdk.testing import TestLLM
 
+from heartwood.compliance.research import research_tasks
 from heartwood.core_adapter import (
     BackendAgentMessageEvent,
     BackendEvent,
@@ -461,6 +464,198 @@ def test_real_sdk_runs_reviewed_stages_and_restores_structured_outcome(
         assert _state(restored).phase == "completed"
         assert unused.call_count == 0
         assert (tmp_path / "results/readiness.md").read_text() == report
+    finally:
+        restored.stop()
+
+
+@pytest.mark.parametrize("mutation", [None, "input", "program", "destination"])
+def test_real_sdk_baseline_reproduces_through_journaled_actions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str | None
+) -> None:
+    monkeypatch.setenv("PATH", f"{Path(sys.executable).parent}{os.pathsep}{os.environ['PATH']}")
+    task = next(task for task in research_tasks() if task.case.case_id == "baseline-analysis")
+    for name, content in task.inputs.items():
+        (tmp_path / name).write_text(content)
+    source = (
+        Path(__file__).parents[2] / "compliance/tests/fixtures/research/reference_analysis.py"
+    ).read_text()
+    question = "Does measurement predict response for held-out subjects?"
+    plan = json.dumps(
+        {
+            "question": question,
+            "estimand": "Held-out visit prediction error",
+            "outcome": "response",
+            "features": ["measurement"],
+            "group_column": "subject_id",
+            "split_column": "partition",
+            "assumptions": ["Prespecified subject-disjoint split"],
+            "limitations": ["Small synthetic dataset"],
+        }
+    )
+
+    def create(name: str, content: str) -> Message:
+        return _tool_message(
+            "file_editor",
+            command="create",
+            path=str(tmp_path / "results" / name),
+            file_text=content,
+        )
+
+    def finish() -> Message:
+        return _tool_message(
+            "finish",
+            message="Stage complete",
+            status="success",
+            outcome_summary="Independent checks still required.",
+        )
+
+    mkdir = _tool_message("terminal", command="mkdir results")
+    plan_message = create("plan.json", plan)
+    assert mkdir.tool_calls
+    assert plan_message.tool_calls
+    llm = TestLLM.from_messages(
+        [
+            Message(
+                role="assistant",
+                content=[],
+                tool_calls=[*mkdir.tool_calls, *plan_message.tool_calls],
+            ),
+            finish(),
+            create("analysis.py", source),
+            _tool_message(
+                "terminal",
+                command="python results/analysis.py --data data.csv --output-dir results",
+            ),
+            finish(),
+            _tool_message(
+                "terminal",
+                command=(
+                    "python results/analysis.py --data data.csv --output-dir results/reproduced"
+                ),
+            ),
+            create(
+                "verification.json",
+                json.dumps(
+                    {
+                        "status": "reproduced",
+                        "matching_artifacts": ["metrics.json", "predictions.csv"],
+                        "mismatched_artifacts": [],
+                    }
+                ),
+            ),
+            finish(),
+            create(
+                "report.md",
+                "# Baseline\nReproduced synthetic analysis; not scientific validation.\n",
+            ),
+            finish(),
+        ]
+    )
+    gateway = _sdk_gateway(tmp_path, llm, monkeypatch)
+    try:
+        gateway.handle(
+            _command(
+                action="start",
+                workflow_id="baseline-analysis",
+                inputs={
+                    "data": "data.csv",
+                    "dictionary": "dictionary.json",
+                    "question": question,
+                },
+                output_directory="results",
+            )
+        )
+        for stage_id in ("plan", "execute", "verify", "report"):
+            assert _state(gateway).stage_id == stage_id
+            gateway.handle(_transition(gateway, "run"))
+            for _ in range(5):
+                assert gateway.wait_for_session_idle(session_id="research", timeout=30)
+                projection = gateway.session_projection(session_id="research")
+                group = projection.pending_approval
+                if group is None:
+                    assert projection.lifecycle.status == "finished"
+                    break
+                if stage_id == "verify" and group.actions[0].tool_name == "terminal":
+                    assert not (tmp_path / "results/reproduced").exists()
+                    if mutation in {"input", "program"}:
+                        path = tmp_path / (
+                            "data.csv" if mutation == "input" else "results/analysis.py"
+                        )
+                        path.write_text(path.read_text() + "\n")
+                    elif mutation == "destination":
+                        (tmp_path / "results/reproduced").mkdir()
+                approval = SessionCommand(
+                    command_id=uuid4().hex,
+                    session_id="research",
+                    kind=CommandKind.APPROVE,
+                    created_at="2026-09-11T00:00:00Z",
+                    payload={"target_id": group.group_id},
+                )
+                gateway.handle(approval)
+                assert gateway.handle(approval).replayed
+            else:
+                pytest.fail("Synthetic stage did not settle within its bounded action count")
+            gateway.handle(_transition(gateway, "evaluate"))
+            state = _state(gateway)
+            if stage_id == "verify" and mutation is not None:
+                assert not any(item.assessment.stage_id == "verify" for item in state.completed)
+                assert not any(
+                    event.kind == EventKind.WORKFLOW_EXECUTION_RECORDED
+                    for event in gateway._services["research"].replay_events()
+                )
+                assert state.phase != "completed"
+                return
+            assert state.phase != "blocked", state
+            if stage_id == "plan":
+                assert state.evaluation is not None
+                gateway.handle(
+                    _transition(
+                        gateway,
+                        "review",
+                        approved=True,
+                        evidence_fingerprint=state.evaluation.assessment.evidence_fingerprint,
+                    )
+                )
+        assert _state(gateway).phase == "review"
+        events = gateway._services["research"].replay_events()
+        proof = [event for event in events if event.kind == EventKind.WORKFLOW_EXECUTION_RECORDED]
+        assert [event.payload["status"] for event in proof] == ["prepared", "succeeded"]
+        assert proof[1].payload["preparation_event_id"] == proof[0].event_id
+        assert (tmp_path / "results/metrics.json").read_bytes() == (
+            tmp_path / "results/reproduced/metrics.json"
+        ).read_bytes()
+        assert llm.call_count == 10
+        before = _state(gateway)
+    finally:
+        gateway.stop()
+    unused = TestLLM.from_messages([])
+    restored = _sdk_gateway(tmp_path, unused, monkeypatch)
+    try:
+        assert before.evaluation is not None
+        restored.handle(
+            _transition(
+                restored,
+                "review",
+                approved=True,
+                evidence_fingerprint=before.evaluation.assessment.evidence_fingerprint,
+            )
+        )
+        assert _state(restored).phase == "completed"
+        assert unused.call_count == 0
+        restored.handle(
+            SessionCommand(
+                command_id="export",
+                session_id="research",
+                kind=CommandKind.AUDIT_EXPORT,
+                created_at="2026-09-11T00:00:00Z",
+            )
+        )
+        audit = (restored.sessions_root / "research/audit-export.jsonl").read_text()
+        assert "workflow.execution.recorded" in audit
+        assert "observation_fingerprint" in audit
+        assert "results/analysis.py" not in audit
+        assert str(tmp_path) not in audit
+        assert "subject_id" not in audit
     finally:
         restored.stop()
 

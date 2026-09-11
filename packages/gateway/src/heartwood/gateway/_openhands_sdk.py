@@ -69,7 +69,7 @@ from openhands.tools.file_editor import FileEditorAction
 from openhands.tools.preset import TaskOutcome
 from openhands.tools.task import TaskAction, TaskObservation
 from openhands.tools.task_tracker import TaskTrackerObservation
-from openhands.tools.terminal import TerminalAction
+from openhands.tools.terminal import TerminalAction, TerminalObservation
 
 from heartwood.core_adapter import (
     BackendAgentMessageEvent,
@@ -1737,6 +1737,11 @@ def _tool_observation(
             summary=f"{tool_name} {'failed' if failed else 'completed'}",
             result=result,
             result_truncated=result_truncated,
+            working_directory=(
+                observation.metadata.working_dir
+                if isinstance(observation, TerminalObservation)
+                else None
+            ),
         ),
         source_event_id=source_event_id,
     )

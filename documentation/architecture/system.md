@@ -98,6 +98,13 @@ Previously accepted inputs and results are checked again before another stage st
 Researcher review binds the exact assessment to the observed run revision and does not approve future tool actions.
 The shared session projection includes the persisted workflow state; clients do not reconstruct it from model prose.
 
+Reproduction preparation and completion are recorded in the same session journal, not a separate execution cache.
+Before approving a separately proposed canonical rerun, the gateway checks the original inputs, accepted artifacts, and absence of the destination through confined workspace inspection.
+Completion links that preparation to the actual OpenHands terminal observation, its reported working directory, and the intervening single-action approval.
+The gateway captures protected-file and output hashes at live completion and rechecks them during stage assessment.
+Missing completion observations remain unverified after restart; replay never inspects later files to manufacture execution evidence.
+These observations establish the bounded reproduction contract, not an adversarial filesystem sandbox or scientific validity.
+
 Run and stage budgets use the same observed usage contract as research benchmarks.
 Known overruns prevent acceptance, and exhausted limits prevent further model continuations; already-counted tool proposals exactly at the action limit can still be approved.
 Elapsed-time limits include waiting for review, and unavailable provider measurements remain unknown.

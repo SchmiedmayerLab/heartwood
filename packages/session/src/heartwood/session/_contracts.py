@@ -90,6 +90,7 @@ class EventKind(StrEnum):
     AUDIT_EXPORT_RECORDED = "audit.export.recorded"
     ERROR_RECORDED = "error.recorded"
     WORKFLOW_UPDATED = "workflow.updated"
+    WORKFLOW_EXECUTION_RECORDED = "workflow.execution.recorded"
 
 
 class _SessionRecord(BaseModel):

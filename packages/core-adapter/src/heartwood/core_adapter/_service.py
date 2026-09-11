@@ -41,10 +41,17 @@ from heartwood.core_adapter._facade import (
     backend_error_message,
 )
 from heartwood.core_adapter._state import FileSessionStore, SessionRecoveryError
+from heartwood.core_adapter.reproduction_journal import (
+    JournaledReproduction,
+    observe_reproduction,
+    prepare_reproduction,
+    reproduction_records,
+)
 from heartwood.core_adapter.workflow_runtime import (
     WorkflowEvaluator,
     handle_workflow_command,
     workflow_admission_reason,
+    workflow_run,
 )
 from heartwood.model_policy import ModelPolicyEngine
 from heartwood.schemas import ConfirmationRequest, JsonValue, PolicyProfile
@@ -530,6 +537,21 @@ class SessionService:
             if not authorized:
                 return tuple(events)
         decision = "approved" if approved else "denied"
+        if approved and self._workflow_evaluator is not None:
+            current = workflow_run(self.replay_events())
+            if current is not None:
+                recorded = reproduction_records(
+                    self.replay_events(), run_id=current.run_id, stage_id=current.stage_id
+                )
+                if not any(record.group_id == pending_group.group_id for _, record in recorded):
+                    observation = prepare_reproduction(
+                        current,
+                        session_id=command.session_id,
+                        group=pending_group,
+                        inspector=self._workflow_evaluator,
+                    )
+                    if observation is not None:
+                        events.append(self._record_reproduction(observation))
         events.append(
             self._record_event(
                 EventKind.APPROVAL_RECORDED,
@@ -568,7 +590,9 @@ class SessionService:
             )
         return tuple(events)
 
-    def _translate_backend_events(self, stream: tuple[BackendEvent, ...]) -> list[SessionEvent]:
+    def _translate_backend_events(
+        self, stream: tuple[BackendEvent, ...], *, live: bool = True
+    ) -> list[SessionEvent]:
         translated: list[SessionEvent] = []
         known_source_event_ids = self._known_source_event_ids_locked()
         for event in stream:
@@ -647,10 +671,22 @@ class SessionService:
                             "summary": execution.summary,
                             "result": execution.result,
                             "result_truncated": execution.result_truncated,
+                            "working_directory": execution.working_directory,
                             **source_payload,
                         },
                     )
                 )
+                if live and self._workflow_evaluator is not None:
+                    current = workflow_run(self.replay_events())
+                    if current is not None:
+                        observation = observe_reproduction(
+                            current,
+                            events=self.replay_events(),
+                            execution=translated[-1],
+                            inspector=self._workflow_evaluator,
+                        )
+                        if observation is not None:
+                            translated.append(self._record_reproduction(observation))
             elif isinstance(event, BackendLifecycleEvent):
                 translated.append(
                     self._record_event(
@@ -783,7 +819,8 @@ class SessionService:
                 self.backend.reconcile(
                     session_id=self.store.session_id,
                     known_source_event_ids=frozenset(known_source_event_ids),
-                )
+                ),
+                live=False,
             )
         )
 
@@ -883,6 +920,26 @@ class SessionService:
         self.store.write_audit_export(content)
         return event
 
+    def _record_reproduction(self, observation: JournaledReproduction) -> SessionEvent:
+        payload = cast(dict[str, JsonValue], observation.model_dump(mode="json"))
+        fingerprint = hashlib.sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        return self._record_event(
+            EventKind.WORKFLOW_EXECUTION_RECORDED,
+            {
+                "observation": payload,
+                "run_id": observation.witness.run_id,
+                "stage_id": observation.witness.stage_id,
+                "tool_call_id": observation.witness.tool_call_id,
+                "group_id": observation.group_id,
+                "status": observation.witness.status,
+                "observation_fingerprint": fingerprint,
+                "preparation_event_id": observation.preparation_event_id,
+                "execution_event_id": observation.execution_event_id,
+            },
+        )
+
     def _record_event(self, kind: EventKind, payload: dict[str, JsonValue]) -> SessionEvent:
         sequence, previous_event_hash = self.store.verified_head()
         occurred_at = self.clock()
@@ -925,6 +982,18 @@ class SessionService:
 
 def _audit_payload(kind: EventKind, payload: dict[str, JsonValue]) -> dict[str, JsonValue]:
     """Project an operational event into its content-minimized audit representation."""
+    if kind == EventKind.WORKFLOW_EXECUTION_RECORDED:
+        return _selected_audit_fields(
+            payload,
+            "run_id",
+            "stage_id",
+            "tool_call_id",
+            "group_id",
+            "status",
+            "observation_fingerprint",
+            "preparation_event_id",
+            "execution_event_id",
+        )
     if kind == EventKind.WORKFLOW_UPDATED:
         return _selected_audit_fields(
             payload,

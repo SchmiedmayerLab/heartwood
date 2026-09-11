@@ -258,6 +258,19 @@ class WorkspaceInspector:
             },
         )
 
+    def is_absent(self, path: str) -> bool:
+        """Establish absence under an existing confined parent without following links."""
+        try:
+            relative = _relative_path(path)
+            with self._open_parent(relative) as (descriptor, name):
+                try:
+                    os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+                except FileNotFoundError:
+                    return True
+        except (WorkspaceInspectionError, OSError):
+            return False
+        return False
+
     def file(self, path: str) -> WorkspaceFileResponse:
         """Return a bounded UTF-8 text file without following symbolic links."""
         relative = _relative_path(path)

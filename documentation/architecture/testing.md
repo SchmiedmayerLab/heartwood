@@ -115,6 +115,10 @@ The shared reproduction contract records the session, run, stage, action, exact 
 Preparation is not execution evidence or permission.
 The first observed outcome must be an approved successful action with all protected files unchanged and every expected output available; failed evidence cannot be repaired by copying files later.
 Restoring a serialized record does not independently establish execution: the session owner must supply its trusted ordering and approval history.
+Workflow journal tests reject missing, repeated, reordered, cross-session, denied, grouped, failed, or wrong-directory execution sources.
+Interruption tests cover persisted tool completion without a reproduction observation and ensure duplicate callbacks, reconciliation, and restart cannot capture replacement evidence or repeat work.
+The baseline conformance test uses real OpenHands tools with deterministic `TestLLM` for plan review, analysis execution, separately approved reproduction, independent checks, reporting, restart, and content-minimized audit export.
+It establishes orchestration behavior, not capable-model research performance.
 These bounded observations are not a sandbox or proof against an adversarial process changing and restoring files between observations.
 Fresh-process checks compare the gateway's persisted projection, event-chain identity, and verified audit identity without creating a model client.
 

@@ -144,6 +144,7 @@ class ToolExecution:
     summary: str
     result: str | None = None
     result_truncated: bool = False
+    working_directory: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -16,6 +16,11 @@ from typing import TYPE_CHECKING, Protocol, cast
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
+from heartwood.core_adapter.reproduction import ReproductionWitness
+from heartwood.core_adapter.reproduction_journal import (
+    ReproductionInspector,
+    reproduction_records,
+)
 from heartwood.core_adapter.research_workflows import (
     research_workflow,
     workflow_reproduction_spec,
@@ -46,7 +51,7 @@ _REQUEST: TypeAdapter[WorkflowRequest] = TypeAdapter(WorkflowRequest)
 _STATUS: TypeAdapter[WorkflowOutcomeStatus] = TypeAdapter(WorkflowOutcomeStatus)
 
 
-class WorkflowEvaluator(Protocol):
+class WorkflowEvaluator(ReproductionInspector, Protocol):
     """Project inspection supplied by the gateway, without a second tool executor."""
 
     def prepare(
@@ -60,6 +65,7 @@ class WorkflowEvaluator(Protocol):
         stage_id: str,
         *,
         model_status: WorkflowOutcomeStatus | None,
+        reproductions: tuple[ReproductionWitness, ...] = (),
     ) -> WorkflowStageEvaluation:
         """Evaluate exact current project artifacts independently of the model."""
 
@@ -151,7 +157,7 @@ def handle_workflow_command(
     ):
         return (_error(service, reason),)
     try:
-        _check_inputs(evaluator, current)
+        _check_inputs(evaluator, current, events)
     except ValueError:
         return (_error(service, "Workflow inputs or accepted results changed; start a new run"),)
     if request.action == "run":
@@ -184,7 +190,12 @@ def handle_workflow_command(
     status = _stage_outcome(events, current)
     if status is None:
         return (_error(service, "The current stage has no settled structured model outcome"),)
-    evaluation = evaluator.evaluate(current.binding, current.stage_id, model_status=status)
+    evaluation = evaluator.evaluate(
+        current.binding,
+        current.stage_id,
+        model_status=status,
+        reproductions=_reproductions(events, current.run_id, current.stage_id),
+    )
     if isinstance(request, WorkflowReview) and evaluation != current.evaluation:
         return (_error(service, "Stage evidence changed; evaluate it again before reviewing"),)
     if not evaluation.assessment.evidence_satisfied:
@@ -311,7 +322,9 @@ def _error(service: SessionService, message: str) -> SessionEvent:
     )
 
 
-def _check_inputs(evaluator: WorkflowEvaluator, current: WorkflowRun) -> None:
+def _check_inputs(
+    evaluator: WorkflowEvaluator, current: WorkflowRun, events: Sequence[SessionEvent]
+) -> None:
     binding = current.binding
     if (
         evaluator.prepare(
@@ -327,9 +340,19 @@ def _check_inputs(evaluator: WorkflowEvaluator, current: WorkflowRun) -> None:
             binding,
             accepted.assessment.stage_id,
             model_status="success",
+            reproductions=_reproductions(events, current.run_id, accepted.assessment.stage_id),
         )
         if actual != accepted:
             raise ValueError("Accepted evidence changed")
+
+
+def _reproductions(
+    events: Sequence[SessionEvent], run_id: str, stage_id: str
+) -> tuple[ReproductionWitness, ...]:
+    return tuple(
+        record.witness
+        for _, record in reproduction_records(events, run_id=run_id, stage_id=stage_id)
+    )
 
 
 def _stage_outcome(

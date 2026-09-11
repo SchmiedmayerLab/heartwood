@@ -99,7 +99,10 @@ def test_idle_wait_allows_pause_and_invalidates_a_replaced_service(
 
     class WaitingBackend(DeterministicAgentBackend):
         def submit_turn(
-            self, *, session_id: str, prompt: str  # noqa: ARG002
+            self,
+            *,
+            session_id: str,
+            prompt: str,  # noqa: ARG002
         ) -> tuple[BackendEvent, ...]:
             return (BackendLifecycleEvent(lifecycle=BackendLifecycle.RUNNING),)
 

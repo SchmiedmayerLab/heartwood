@@ -22,11 +22,33 @@ from heartwood.schemas.research import (
     BaselineResult,
     ReadinessResult,
     ResearchDictionary,
+    ResultVerification,
 )
 
 MAX_RESEARCH_TEXT_BYTES = 512 * 1024
 MAX_RESEARCH_ROWS = 10_000
 MAX_SENSITIVITY_GROUPS = 128
+
+
+def compare_reproduction_artifacts(artifacts: Mapping[str, str], *, require_match: bool) -> bool:
+    """Check an honest byte comparison; this function does not establish execution."""
+    try:
+        if any(len(text.encode("utf-8")) > MAX_RESEARCH_TEXT_BYTES for text in artifacts.values()):
+            return False
+        reported = ResultVerification.model_validate_json(artifacts["verification"])
+        matching: list[str] = []
+        mismatched: list[str] = []
+        for name, filename in (("metrics", "metrics.json"), ("predictions", "predictions.csv")):
+            target = matching if artifacts[name] == artifacts[f"reproduced-{name}"] else mismatched
+            target.append(filename)
+        return (
+            sorted(reported.matching_artifacts) == sorted(matching)
+            and sorted(reported.mismatched_artifacts) == sorted(mismatched)
+            and reported.status == ("discrepancy" if mismatched else "reproduced")
+            and (not require_match or not mismatched)
+        )
+    except (ValueError, KeyError):
+        return False
 
 
 def evaluate_research_check(

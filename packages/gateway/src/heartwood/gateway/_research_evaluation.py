@@ -12,8 +12,12 @@ import hashlib
 from collections.abc import Mapping, Sequence
 from pathlib import PurePosixPath
 
-from heartwood.core_adapter.research_checks import evaluate_research_check
-from heartwood.core_adapter.research_workflows import research_workflow
+from heartwood.core_adapter.reproduction import ReproductionWitness
+from heartwood.core_adapter.research_checks import (
+    compare_reproduction_artifacts,
+    evaluate_research_check,
+)
+from heartwood.core_adapter.research_workflows import research_workflow, workflow_reproduction_spec
 from heartwood.core_adapter.workflow_evidence import assess_workflow_stage
 from heartwood.gateway._session_projection import project_session
 from heartwood.gateway._workspace import WorkspaceInspectionError, WorkspaceInspector
@@ -83,12 +87,26 @@ class ResearchStageEvaluator:
             session_id=events[0].session_id,
         ).execution_usage(elapsed_seconds=0)
 
+    def read_files(self, paths: tuple[str, ...]) -> dict[str, str]:
+        """Inspect complete project text through the shared confinement boundary."""
+        return {path: content for path in paths if (content := self._read(path)) is not None}
+
+    @property
+    def project_directory(self) -> str:
+        """Return the authoritative project root used by the agent workspace."""
+        return str(self.workspace.project.root)
+
+    def is_absent(self, path: str) -> bool:
+        """Require an existing safe parent and an absent final directory entry."""
+        return self.workspace.is_absent(path)
+
     def evaluate(
         self,
         binding: WorkflowProjectBinding,
         stage_id: str,
         *,
         model_status: WorkflowOutcomeStatus | None,
+        reproductions: tuple[ReproductionWitness, ...] = (),
     ) -> WorkflowStageEvaluation:
         """Produce read-only stage evidence; missing execution proof remains not run."""
         definition = research_workflow(binding.workflow_id)
@@ -107,6 +125,31 @@ class ResearchStageEvaluator:
                 if len(selected) == len(check.artifact_ids)
                 else "not_run"
             )
+            if check.evaluator_id in {"execution.reproduction", "execution.comparison"}:
+                spec = workflow_reproduction_spec(binding, stage_id)
+                eligible = tuple(
+                    witness
+                    for witness in reproductions
+                    if witness.spec == spec and witness.stage_id == stage_id
+                )
+                if any(
+                    witness.verifies(
+                        protected=self.read_files(witness.spec.protected_paths),
+                        outputs=self.read_files(witness.spec.output_paths),
+                    )
+                    for witness in eligible
+                ):
+                    status = (
+                        "passed"
+                        if compare_reproduction_artifacts(
+                            selected, require_match=check.evaluator_id == "execution.reproduction"
+                        )
+                        else "failed"
+                    )
+                elif eligible:
+                    status = (
+                        "failed" if any(w.status != "prepared" for w in eligible) else "not_run"
+                    )
             checks.append(
                 WorkflowCheckResult(
                     check_id=check.check_id,

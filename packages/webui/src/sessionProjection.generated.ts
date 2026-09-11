@@ -53,7 +53,8 @@ export type EventKind =
   | "session.resumed"
   | "audit.export.recorded"
   | "error.recorded"
-  | "workflow.updated";
+  | "workflow.updated"
+  | "workflow.execution.recorded";
 /**
  * Commands accepted by a Heartwood session.
  */
