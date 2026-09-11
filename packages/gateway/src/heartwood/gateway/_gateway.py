@@ -39,6 +39,7 @@ from heartwood.core_adapter import (
     BackendErrorEvent,
     BackendEvent,
     BackendEventSink,
+    CommandConflictError,
     DeterministicAgentBackend,
     FileSessionStore,
     PendingActionGroup,
@@ -170,6 +171,7 @@ from heartwood.schemas import (
     ActionSettingsResponse,
     AuditExportResponse,
     CredentialSettingsResponse,
+    JsonValue,
     LocalModelImportResponse,
     ModelArtifactsResponse,
     ModelCatalogResponse,
@@ -196,7 +198,11 @@ from heartwood.schemas import (
     api_response,
 )
 from heartwood.schemas.evaluation import EvaluationRuntimeObservation
-from heartwood.schemas.experiments import ExperimentCollection, ExperimentExport
+from heartwood.schemas.experiments import (
+    ExperimentCollection,
+    ExperimentExport,
+    ExperimentExportBinding,
+)
 from heartwood.schemas.workflows import (
     WorkflowCatalog,
     WorkflowOutcomeStatus,
@@ -567,9 +573,16 @@ class SessionGateway:
         finally:
             self.credential_store.clear_process_values()
 
-    @_serialized_state
     def handle(self, command: SessionCommand) -> SessionResult:
         """Handle one command and publish emitted events."""
+        if "experiment_export" in command.payload:
+            raise CommandConflictError(
+                "Experiment checkpoint bindings must be computed by the gateway"
+            )
+        return self._handle_command(command)
+
+    @_serialized_state
+    def _handle_command(self, command: SessionCommand) -> SessionResult:
         with self.config_store.locked():
             self.project.initialize()
             if command.session_id == DEFAULT_SESSION_ID:
@@ -752,6 +765,7 @@ class SessionGateway:
             raise ProjectStateError("unable to write the audit copy safely") from error
         return resolved
 
+    @_serialized_state
     def create_audit_checkpoint(
         self,
         *,
@@ -760,6 +774,7 @@ class SessionGateway:
         deployment_id: str,
         retention_policy_id: str,
         retain_until: str,
+        include_experiments: bool = False,
     ) -> AuditCheckpointVerification:
         """Generate and sign an authoritative export outside the agent project."""
         resolved_output = self._deployment_owned_path(output, label="checkpoint output")
@@ -771,7 +786,14 @@ class SessionGateway:
             if self._checkpoint_signer_factory is None
             else profile.validating_signer(self._checkpoint_signer_factory(profile))
         )
-        self.handle(
+        snapshot = self.export_experiments().jsonl if include_experiments else None
+        payload: dict[str, JsonValue] = {}
+        if snapshot is not None:
+            binding = ExperimentExportBinding.from_content(snapshot.encode("utf-8"))
+            payload["experiment_export"] = cast(
+                dict[str, JsonValue], binding.model_dump(mode="json")
+            )
+        self._handle_command(
             SessionCommand(
                 command_id=f"audit-checkpoint-{uuid4().hex}",
                 session_id=session_id,
@@ -780,7 +802,7 @@ class SessionGateway:
                 created_at=(
                     datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
                 ),
-                payload={},
+                payload=payload,
             )
         )
         content = self.audit_export(session_id)["content"]
@@ -792,6 +814,7 @@ class SessionGateway:
             retention_policy_id=retention_policy_id,
             retain_until=retain_until,
             signer=signer,
+            experiment_content=snapshot,
         )
 
     def checkpoint_signers(self) -> tuple[CheckpointSignerProfile, ...]:

@@ -18,8 +18,9 @@ A signed checkpoint is the artifact a deployment can retain as authoritative evi
 | Scrubbed audit export | Review or transfer content-minimized operational events | Temporary reviewed destination |
 | Signed audit checkpoint | Preserve an authenticated export with deployment and retention metadata | Deployment-controlled records storage outside the project |
 
-A checkpoint contains only `audit.jsonl` and `checkpoint.json`.
+A standard checkpoint contains `audit.jsonl` and `checkpoint.json`.
 Its signature covers the canonical audit digest, event count, terminal chain hash, session, deployment identifier, creation time, retention declaration, signer identity, key identifier, key version, algorithm, and public-key fingerprint.
+An operator can also include a verified project experiment export, as described below.
 
 ## Understand Configuration Ownership
 
@@ -156,6 +157,36 @@ heartwood audit verify-checkpoint \
 ```
 
 Verification rejects altered audit content, a broken hash chain, changed signed metadata, an invalid signature, an unexpected file, noncanonical encoding, or a mismatched key.
+
+## Retain Experiment Records
+
+Add `--include-experiments` when the retained checkpoint should also identify the project's recorded analyses:
+
+```bash
+heartwood --session-id session-main audit checkpoint \
+  --include-experiments \
+  --output /records/heartwood/session-main-with-experiments \
+  --deployment-id research-environment \
+  --retention-policy research-audit-7y \
+  --retain-until 2033-08-02
+```
+
+The gateway verifies and snapshots the [project's experiment records](../architecture/experiments.md), including recorded scripts and workflow stages from all sessions in that project.
+It records only the snapshot's digest, byte count, filename, and binding format in the session audit.
+The same signed checkpoint then retains the exact scientific export as `experiments.jsonl`; no additional signer or private key is needed.
+Later project changes do not change this retained snapshot.
+An empty project collection produces a bound empty export, not a claim that analyses have been completed.
+
+Use the same `heartwood audit verify-checkpoint` command to verify both files and their binding.
+Verification rejects a missing or altered experiment export, an unbound added file, and a binding that does not belong to the terminal audit-export event.
+Preserve the complete checkpoint directory when copying or restoring it.
+If signing fails, restore signer availability and retry with an unused output path; this creates another audit-export event but does not rerun an analysis.
+If a checkpoint directory already exists after an interrupted publication, verify it before choosing a new destination; Heartwood will not overwrite it.
+
+Experiment metadata can include project-relative paths, declared actor references, and environment fingerprints even though raw file contents, arguments, and parameter values are excluded.
+Include it only when the destination's access and retention rules permit that metadata.
+The signature authenticates the retained bytes and deployment statement; it does not establish scientific correctness, independently authenticate a declared researcher, or prove that every dependency was declared.
+Ordinary browser, notebook, and command-line experiment exports remain unsigned; checkpoint creation remains an explicit deployment-operator workflow outside the agent-writable project.
 
 ## Rotate Keys and Enforce Retention
 

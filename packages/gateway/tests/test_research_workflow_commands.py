@@ -669,7 +669,10 @@ def test_project_provenance_export_rejects_corrupt_records(tmp_path: Path) -> No
 
 @pytest.mark.parametrize("mutation", [None, "input", "program", "destination"])
 def test_real_sdk_baseline_reproduces_through_journaled_actions(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str | None
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str | None,
 ) -> None:
     monkeypatch.setenv("PATH", f"{Path(sys.executable).parent}{os.pathsep}{os.environ['PATH']}")
     task = next(task for task in research_tasks() if task.case.case_id == "baseline-analysis")
@@ -881,6 +884,47 @@ def test_real_sdk_baseline_reproduces_through_journaled_actions(
         assert "subject_id" not in audit
     finally:
         restored.stop()
+    _checkpoint_research_project(tmp_path, tmp_path_factory.mktemp("research-checkpoint"))
+    assert unused.call_count == 0
+
+
+def _checkpoint_research_project(root: Path, deployment: Path) -> None:
+    from heartwood.audit import (
+        LocalEd25519CheckpointSigner,
+        initialize_local_checkpoint_signer,
+        load_checkpoint_signer_registry,
+    )
+
+    setup = initialize_local_checkpoint_signer(directory=deployment / "signer")
+    gateway = SessionGateway(
+        project=ProjectContext(root),
+        backend_id="deterministic",
+        checkpoint_signer_registry=load_checkpoint_signer_registry(setup.registry),
+        checkpoint_signer_factory=lambda profile: LocalEd25519CheckpointSigner(
+            private_key=setup.private_key,
+            signer_id=profile.signer_id,
+            key_id=profile.key_id,
+            key_version=profile.key_version,
+        ),
+    )
+    try:
+        snapshot = gateway.export_experiments()
+        assert len(gateway.experiment_records().runs) == 4
+        bundle = deployment / "baseline"
+        created = gateway.create_audit_checkpoint(
+            session_id="research",
+            output=bundle,
+            deployment_id="synthetic-research",
+            retention_policy_id="research-audit-7y",
+            retain_until="2033-08-02",
+            include_experiments=True,
+        )
+        assert gateway.verify_audit_checkpoint(bundle=bundle) == created
+        assert created.experiments is not None
+        assert created.experiments.sha256 == snapshot.sha256
+        assert (bundle / "experiments.jsonl").read_bytes() == snapshot.jsonl.encode()
+    finally:
+        gateway.stop()
 
 
 @pytest.mark.parametrize("calls", [20, 21, 80])

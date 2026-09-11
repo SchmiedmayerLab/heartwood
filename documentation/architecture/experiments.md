@@ -188,6 +188,8 @@ These script APIs cannot recover, cancel, or replace gateway-owned workflow stag
 
 `recorder.export()` returns a deterministic, verified JSON Lines snapshot.
 An export is not a signed checkpoint or deployment-owned immutable record.
+An operator can bind its exact bytes to the existing audit checkpoint with [`heartwood audit checkpoint --include-experiments`](../operate/audit-checkpoints.md#retain-experiment-records).
+This retains a verified project snapshot separately from the content-minimized audit and uses the deployment's existing signer and retention controls.
 The `ExperimentSink` contract separates ordered, idempotent appends from their storage implementation; the implemented backend is project-local storage.
 
 ## Evidence Boundaries

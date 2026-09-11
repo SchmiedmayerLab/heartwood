@@ -524,6 +524,11 @@ def _build_parser() -> argparse.ArgumentParser:
     audit_checkpoint.add_argument("--deployment-id", required=True)
     audit_checkpoint.add_argument("--retention-policy", required=True)
     audit_checkpoint.add_argument(
+        "--include-experiments",
+        action="store_true",
+        help="Retain and bind the project's current experiment records to the checkpoint",
+    )
+    audit_checkpoint.add_argument(
         "--retain-until",
         required=True,
         help="Retention end date in YYYY-MM-DD format.",
@@ -848,6 +853,7 @@ def _main(argv: Sequence[str] | None = None) -> int:
                 deployment_id=args.deployment_id,
                 retention_policy_id=args.retention_policy,
                 retain_until=args.retain_until,
+                include_experiments=args.include_experiments,
             )
         if args.command == "audit" and args.audit_command == "verify-checkpoint":
             return _handle_audit_checkpoint_verification(
@@ -2359,6 +2365,7 @@ def _handle_audit_checkpoint(
     deployment_id: str,
     retention_policy_id: str,
     retain_until: str,
+    include_experiments: bool = False,
 ) -> int:
     verification = gateway.create_audit_checkpoint(
         session_id=session_id,
@@ -2366,9 +2373,12 @@ def _handle_audit_checkpoint(
         deployment_id=deployment_id,
         retention_policy_id=retention_policy_id,
         retain_until=retain_until,
+        include_experiments=include_experiments,
     )
     statement = verification.checkpoint.statement
     signature = verification.checkpoint.signature
+    if verification.experiments is not None:
+        print(f"Experiment export digest: {verification.experiments.sha256}")
     print(
         "\n".join(
             (
@@ -2391,6 +2401,8 @@ def _handle_audit_checkpoint_verification(
     public_key: Path | None,
 ) -> int:
     verification = gateway.verify_audit_checkpoint(bundle=bundle, public_key=public_key)
+    if verification.experiments is not None:
+        print(f"Experiment export verified: {verification.experiments.sha256}")
     statement = verification.checkpoint.statement
     print(
         "\n".join(

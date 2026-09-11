@@ -43,9 +43,11 @@ from heartwood.schemas import (
     AuditEvent,
     AuditRetention,
 )
+from heartwood.schemas.experiments import ExperimentExportBinding
 
 AUDIT_FILENAME = "audit.jsonl"
 CHECKPOINT_FILENAME = "checkpoint.json"
+EXPERIMENTS_FILENAME = "experiments.jsonl"
 
 
 class AuditCheckpointError(ValueError):
@@ -58,6 +60,7 @@ class AuditCheckpointVerification:
 
     checkpoint: AuditCheckpoint
     audit: AuditVerification
+    experiments: ExperimentExportBinding | None = None
 
 
 def create_audit_checkpoint(
@@ -70,6 +73,7 @@ def create_audit_checkpoint(
     retain_until: str,
     signer: CheckpointSigner,
     created_at: str | None = None,
+    experiment_content: str | None = None,
 ) -> AuditCheckpointVerification:
     """Create one atomically published, signed audit bundle."""
     try:
@@ -78,6 +82,7 @@ def create_audit_checkpoint(
         raise AuditCheckpointError("audit checkpoint input failed full verification") from error
     if events and any(event.session_id != session_id for event in events):
         raise AuditCheckpointError("audit checkpoint session does not match its export")
+    experiments = _verify_experiment_content(events, experiment_content)
 
     canonical = canonical_audit_jsonl(events)
     try:
@@ -101,8 +106,15 @@ def create_audit_checkpoint(
     except CheckpointSignerError as error:
         raise AuditCheckpointError(str(error)) from error
     checkpoint = AuditCheckpoint(statement=statement, signature=signature)
-    _publish_bundle(output, audit_content=canonical, checkpoint=checkpoint)
-    return AuditCheckpointVerification(checkpoint=checkpoint, audit=verification)
+    _publish_bundle(
+        output,
+        audit_content=canonical,
+        checkpoint=checkpoint,
+        experiment_content=experiment_content,
+    )
+    return AuditCheckpointVerification(
+        checkpoint=checkpoint, audit=verification, experiments=experiments
+    )
 
 
 def verify_audit_checkpoint(
@@ -111,12 +123,13 @@ def verify_audit_checkpoint(
     public_key: Path,
 ) -> AuditCheckpointVerification:
     """Verify one canonical bundle against a trusted deployment public key."""
-    audit_path, checkpoint_path = _bundle_paths(bundle)
+    audit_path, checkpoint_path, experiment_path = _bundle_paths(bundle)
     try:
         audit_content = read_private_text(audit_path)
         checkpoint_content = read_private_text(checkpoint_path)
         raw_checkpoint = json.loads(checkpoint_content)
         checkpoint = AuditCheckpoint.model_validate(raw_checkpoint)
+        experiment_content = read_private_text(experiment_path) if experiment_path else None
     except (
         DurableFileError,
         OSError,
@@ -145,7 +158,33 @@ def verify_audit_checkpoint(
         )
     except CheckpointSignerError as error:
         raise AuditCheckpointError(str(error)) from error
-    return AuditCheckpointVerification(checkpoint=checkpoint, audit=verification)
+    experiments = _verify_experiment_content(events, experiment_content)
+    return AuditCheckpointVerification(
+        checkpoint=checkpoint, audit=verification, experiments=experiments
+    )
+
+
+def _verify_experiment_content(
+    events: tuple[AuditEvent, ...], content: str | None
+) -> ExperimentExportBinding | None:
+    raw = (
+        events[-1].payload.get("experiment_export")
+        if events and events[-1].event_type == "audit.export.recorded"
+        else None
+    )
+    if raw is None:
+        if content is not None:
+            raise AuditCheckpointError("experiment export is not bound by the terminal audit event")
+        return None
+    try:
+        binding = ExperimentExportBinding.model_validate(raw)
+    except ValidationError:
+        raise AuditCheckpointError("experiment export binding is invalid") from None
+    if content is None:
+        raise AuditCheckpointError("checkpoint is missing its bound experiment export")
+    if binding != ExperimentExportBinding.from_content(content.encode("utf-8")):
+        raise AuditCheckpointError("experiment export does not match its signed binding")
+    return binding
 
 
 def _verify_statement(
@@ -170,6 +209,7 @@ def _publish_bundle(
     *,
     audit_content: str,
     checkpoint: AuditCheckpoint,
+    experiment_content: str | None,
 ) -> None:
     output = output.expanduser()
     parent = output.parent
@@ -192,6 +232,8 @@ def _publish_bundle(
             staging = Path(tempfile.mkdtemp(prefix=f".{output.name}-", dir=parent))
             staging.chmod(0o700)
             write_private_text_atomic(staging / AUDIT_FILENAME, audit_content)
+            if experiment_content is not None:
+                write_private_text_atomic(staging / EXPERIMENTS_FILENAME, experiment_content)
             write_private_json_atomic(
                 staging / CHECKPOINT_FILENAME,
                 checkpoint.model_dump(mode="json"),
@@ -210,7 +252,7 @@ def _publish_bundle(
             shutil.rmtree(staging, ignore_errors=True)
 
 
-def _bundle_paths(bundle: Path) -> tuple[Path, Path]:
+def _bundle_paths(bundle: Path) -> tuple[Path, Path, Path | None]:
     if bundle.is_symlink() or not bundle.is_dir():
         raise AuditCheckpointError("audit checkpoint bundle must be a regular directory")
     expected = {AUDIT_FILENAME, CHECKPOINT_FILENAME}
@@ -218,9 +260,13 @@ def _bundle_paths(bundle: Path) -> tuple[Path, Path]:
         entries = {path.name for path in bundle.iterdir()}
     except OSError as error:
         raise AuditCheckpointError("audit checkpoint bundle is unavailable") from error
-    if entries != expected:
+    if entries not in (expected, expected | {EXPERIMENTS_FILENAME}):
         raise AuditCheckpointError("audit checkpoint bundle contains unexpected files")
-    return bundle / AUDIT_FILENAME, bundle / CHECKPOINT_FILENAME
+    return (
+        bundle / AUDIT_FILENAME,
+        bundle / CHECKPOINT_FILENAME,
+        bundle / EXPERIMENTS_FILENAME if EXPERIMENTS_FILENAME in entries else None,
+    )
 
 
 def _canonical_checkpoint(checkpoint: AuditCheckpoint) -> str:

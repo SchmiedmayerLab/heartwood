@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from typing import Annotated, Literal, Self
 from uuid import UUID
 
@@ -53,6 +54,22 @@ class ExperimentFile(ExperimentRecord):
     path: ExperimentPath
     sha256: Digest
     size_bytes: int = Field(ge=0, strict=True)
+
+
+class ExperimentExportBinding(ExperimentRecord):
+    """Exact retained export identity, not an assertion of scientific correctness."""
+
+    schema_version: Literal["heartwood.experiment-export-binding.v1"] = (
+        "heartwood.experiment-export-binding.v1"
+    )
+    filename: Literal["experiments.jsonl"] = "experiments.jsonl"
+    sha256: Digest
+    size_bytes: int = Field(ge=0, strict=True)
+
+    @classmethod
+    def from_content(cls, content: bytes) -> Self:
+        """Fingerprint the exact snapshot rather than a later reread of project state."""
+        return cls(sha256=hashlib.sha256(content).hexdigest(), size_bytes=len(content))
 
 
 class ExperimentEnvironment(ExperimentRecord):
