@@ -82,11 +82,12 @@ The candidate does not move release or `edge` tags.
 
 ## CI Runners and Runtime Locks
 
-Every workflow runs on standard GitHub-hosted runners: `ubuntu-24.04` for x64 jobs and `ubuntu-24.04-arm` for ARM images.
-Container builds and capable-model acceptance start with the shared `reclaim-runner-disk` action, which removes preinstalled toolchains the job does not use and reports the remaining space.
-The capable-model job verifies at least 15 GiB of memory and matches llama.cpp threads to the runner's cores.
+Standard GitHub-hosted runners run every job except capable-model acceptance: `ubuntu-24.04` for x64 jobs and `ubuntu-24.04-arm` for ARM images.
+Container builds start with the shared `reclaim-runner-disk` action, which removes preinstalled toolchains the job does not use and reports the remaining space.
 The Terra image jobs carry longer timeouts because the Terra base image is large.
-Larger hosted runners require a GitHub Team or Enterprise plan; move a job there only after a standard runner has run out of disk or time.
+Capable-model acceptance runs on the organization's `heartwood-ubuntu-large` hosted runner because llama.cpp prompt processing on a standard runner does not finish inside the qualification command deadline.
+The job verifies at least 30 GiB of memory so it cannot silently run on a standard runner, and it matches llama.cpp threads to the runner's cores.
+The runner group is limited to this repository, and fork pull requests need approval before their workflows run; keep the large-runner label out of every other workflow.
 
 Regenerate the isolated GPU dependency lock with `bash images/gpu/compile_requirements.sh`.
 This is the same command CI uses to verify the lock, including its release-date cutoff and hashes.

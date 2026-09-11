@@ -1617,8 +1617,8 @@ def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
     )
     assert "run_capable_model" not in smoke
     assert "qwen25-7b-instruct-q4_k_m" in capable_workflow
-    assert "runs-on: ubuntu-24.04" in capable_workflow
-    assert "minimum_kib=$((15 * 1024 * 1024))" in capable_workflow
+    assert "runs-on: heartwood-ubuntu-large" in capable_workflow
+    assert "minimum_kib=$((30 * 1024 * 1024))" in capable_workflow
     assert "capable_model_e2e.sh" in capable_workflow
     assert "--network none --read-only" in capable_workflow
     assert "docker run --rm --platform linux/amd64 --network none" in capable_workflow
