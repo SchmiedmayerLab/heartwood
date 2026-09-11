@@ -9,6 +9,31 @@ SPDX-License-Identifier: MIT
 Scientific execution records describe declared code, inputs, parameters, environment, and outputs.
 They are separate from the [session audit](sessions-audit.md), which records agent decisions and action permissions.
 
+## Research Workflow Records
+
+[Research workflows](../use/research-workflows.md) record each stage before asking the agent to work.
+The definition binds the stage to its workflow version, input fingerprints, previously accepted artifacts, and declared output paths.
+Generated Python artifacts are identified as code, so a later verification stage can reference the exact program accepted earlier.
+
+A stage receives a successful record only after its independent checks and any required researcher review pass.
+The outcome links to the recorded tool proposals, action decisions, tool results, and reproduction evidence for that stage.
+It does not invent a process exit code: stage acceptance and an individual command's exit status are different observations.
+Cancelling a started stage records cancellation; cancelling before a stage starts does not imply execution occurred.
+
+Inspect **Experiment Records** in the browser's Research tab, enter `/experiments` in the terminal, or read `NotebookViewModel.experiments` in a notebook.
+All three use the same gateway-owned session projection.
+The notebook widget also includes an Experiment Records section.
+
+The start and outcome are committed with their workflow transitions in the existing paired session and audit journal.
+Their content-minimized fingerprints are included in the security audit; the full scientific records remain project-private.
+Project queries rebuild `.heartwood/experiments.jsonl` from those verified source events using idempotent appends.
+Rebuilding never reads newer artifact contents or repeats model calls or tool actions.
+
+The gateway exposes `experiment_records()` and `export_experiments()` for project-wide inspection and export.
+The corresponding authenticated HTTP routes are `GET /research/experiments` and `GET /research/experiments/export`.
+An export includes canonical JSON Lines and its SHA-256 digest; it is not a signed audit checkpoint.
+The project collection also includes analyses explicitly recorded through the Python API below.
+
 ## Record a Python Analysis
 
 Use the Python recorder around the call that runs your analysis.
@@ -62,12 +87,14 @@ Its shared reducer produces `ExperimentRun` summaries.
 | Parameters and invocation | Digests of the explicit declarations, without raw values or arguments |
 | Environment | A digest and whether its description was observed or declared |
 | Git revision and cleanliness | Optional explicit context; unknown values remain unset |
-| Workflow stage | Optional session, workflow run, stage, and tool association |
+| Workflow stage | Optional session, workflow run, definition fingerprint, stage, and tool association |
+| Evidence links | Source session-event identities, kinds, and fingerprints, without commands or results |
 | Outcome | Attempt number, timestamps, status, exit code when known, and observed outputs |
 
 The default Python environment digest covers interpreter identity, operating-system family, machine architecture, and installed package names and versions.
 It excludes installation paths, package source URLs, credentials, and environment-variable values.
 It does not capture external executables, native libraries, a GPU driver, or the complete contents of an installed package.
+For research stages, it describes the gateway's Python environment, not a remote model server or an independently attested execution environment.
 An explicit `ExperimentEnvironment` can instead identify a declared container or environment description.
 
 ## Persistence and Recovery
@@ -90,6 +117,7 @@ The `ExperimentSink` contract separates ordered, idempotent appends from their s
 ## Evidence Boundaries
 
 These records do not establish scientific correctness, independently authenticate the actor, or prove that a declared script generated an output.
+Workflow actor references are hashed session-command actor identifiers, not independent identity attestations.
 Boundary fingerprints detect ordinary changes, not adversarial change-and-restore between observations.
 Someone who can rewrite project state can rewrite the records and recompute their chain; an intact suffix can also be deleted without an independently retained reference.
 

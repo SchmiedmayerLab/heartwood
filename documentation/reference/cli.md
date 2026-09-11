@@ -95,6 +95,8 @@ Inside an interactive terminal session, `/specialists` presents the same gateway
 
 `/workflow` opens research workflow setup or stage review in the full-screen terminal.
 In plain mode, `/workflows` lists definitions and `/workflow` shows the current stage and available commands.
+Use `/experiments` to inspect recorded stage identities, output fingerprints, and links to recorded actions in the current session.
+See [Experiment Records](../architecture/experiments.md) for project-wide queries and export.
 See [Research Workflows](../use/research-workflows.md) for input requirements, stage controls, and completion checks.
 Workflows with unimplemented checks are marked unavailable.
 Specialists are selected by the parent OpenHands agent during a task; this command inspects the available roles rather than launching a separate agent session.

@@ -59,6 +59,7 @@ from heartwood.gateway._credential_isolation import (
     credential_isolation_unavailable_reason,
 )
 from heartwood.gateway._credentials import CredentialStore, CredentialStoreError
+from heartwood.gateway._experiment_store import ExperimentStore
 from heartwood.gateway._gpu_environment import (
     GpuEnvironment,
     inspect_gpu_environment,
@@ -195,6 +196,7 @@ from heartwood.schemas import (
     api_response,
 )
 from heartwood.schemas.evaluation import EvaluationRuntimeObservation
+from heartwood.schemas.experiments import ExperimentCollection, ExperimentExport
 from heartwood.schemas.workflows import (
     WorkflowCatalog,
     WorkflowOutcomeStatus,
@@ -976,6 +978,33 @@ class SessionGateway:
         from heartwood.gateway._research_evaluation import ResearchStageEvaluator
 
         return ResearchStageEvaluator.catalog()
+
+    @_serialized_state
+    def experiment_records(self) -> ExperimentCollection:
+        """Synchronize committed stage records and query the shared project provenance store."""
+        store = self._experiment_store()
+        if store is None:
+            return ExperimentCollection()
+        return ExperimentCollection(runs=store.runs())
+
+    @_serialized_state
+    def export_experiments(self) -> ExperimentExport:
+        """Return a verified scientific export without model work or new observations."""
+        store = self._experiment_store()
+        content = store.export() if store is not None else b""
+        return ExperimentExport(sha256=hashlib.sha256(content).hexdigest(), jsonl=content.decode())
+
+    def _experiment_store(self) -> ExperimentStore | None:
+        from heartwood.core_adapter.workflow_provenance import workflow_experiment_events
+
+        if not self.project.state_exists():
+            return None
+        store = ExperimentStore(self.project.state_root / "experiments.jsonl")
+        for summary in sorted(self.session_catalog.list(), key=lambda item: item.session_id):
+            events = FileSessionStore(self.sessions_root, summary.session_id).replay_events()
+            for record in workflow_experiment_events(events):
+                store.append(record)
+        return store
 
     @_serialized_state
     def prepare_research_workflow(

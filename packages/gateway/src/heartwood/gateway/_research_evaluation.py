@@ -26,7 +26,9 @@ from heartwood.core_adapter.research_workflows import (
 from heartwood.core_adapter.workflow_evidence import assess_workflow_stage
 from heartwood.gateway._session_projection import project_session
 from heartwood.gateway._workspace import WorkspaceInspectionError, WorkspaceInspector
+from heartwood.gateway.experiments import experiment_digest, observed_python_environment
 from heartwood.schemas.execution import ExecutionUsage
+from heartwood.schemas.experiments import ExperimentDefinition, ExperimentFile, ExperimentStage
 from heartwood.schemas.project_paths import project_relative_path
 from heartwood.schemas.workflows import (
     WorkflowBoundInput,
@@ -36,6 +38,7 @@ from heartwood.schemas.workflows import (
     WorkflowDefinition,
     WorkflowOutcomeStatus,
     WorkflowProjectBinding,
+    WorkflowRun,
     WorkflowStageEvaluation,
     WorkflowValueFingerprint,
 )
@@ -49,6 +52,72 @@ class ResearchStageEvaluator:
 
     def __init__(self, workspace: WorkspaceInspector) -> None:
         self.workspace = workspace
+
+    def experiment_definition(
+        self, run: WorkflowRun, *, session_id: str, actor_id: str, invocation: str
+    ) -> ExperimentDefinition:
+        """Bind a stage to its declared files and gateway Python runtime before dispatch."""
+        definition = research_workflow(run.binding.workflow_id)
+        stage = definition.stage(run.stage_id)
+        artifacts = {item.artifact_id: item for item in definition.artifacts}
+        paths = {item.value for item in run.binding.inputs if item.kind == "file"}
+        paths.update(
+            str(PurePosixPath(run.binding.output_directory) / artifacts[name].relative_path)
+            for name in stage.reads
+            if name in artifacts
+        )
+        code_paths = {
+            str(PurePosixPath(run.binding.output_directory) / artifacts[name].relative_path)
+            for name in stage.reads
+            if name in artifacts and artifacts[name].media_type == "text/x-python"
+        }
+        observed = {path: self._fingerprint(path) for path in sorted(paths)}
+        outputs = tuple(
+            str(PurePosixPath(run.binding.output_directory) / artifacts[name].relative_path)
+            for name in stage.writes
+        )
+        return ExperimentDefinition(
+            actor_ref="sha256:" + _digest(actor_id),
+            source="heartwood",
+            inputs=tuple(item for path, item in observed.items() if path not in code_paths),
+            code=tuple(item for path, item in observed.items() if path in code_paths),
+            output_paths=outputs,
+            code_output_paths=tuple(
+                path
+                for name, path in zip(stage.writes, outputs, strict=True)
+                if artifacts[name].media_type == "text/x-python"
+            ),
+            environment=observed_python_environment(),
+            parameters_sha256=experiment_digest(run.binding.model_dump(mode="json")),
+            invocation_sha256=_digest(invocation),
+            stage=ExperimentStage(
+                session_id=session_id,
+                workflow_run_id=run.run_id,
+                stage_id=run.stage_id,
+                workflow_sha256=run.binding.workflow_fingerprint,
+            ),
+        )
+
+    def experiment_outputs(
+        self, run: WorkflowRun, evaluation: WorkflowStageEvaluation
+    ) -> tuple[ExperimentFile, ...]:
+        """Capture only bytes matching the independently checked stage outputs."""
+        definition = research_workflow(run.binding.workflow_id)
+        expected = {item.artifact_id: item.sha256 for item in evaluation.artifacts}
+        outputs = []
+        stage = definition.stage(run.stage_id)
+        for artifact in definition.artifacts:
+            if artifact.artifact_id in stage.writes:
+                observed = self._fingerprint(
+                    str(PurePosixPath(run.binding.output_directory) / artifact.relative_path)
+                )
+                if observed.sha256 != expected.get(artifact.artifact_id):
+                    raise ValueError("Stage output changed after evaluation")
+                outputs.append(observed)
+        return tuple(outputs)
+
+    def _fingerprint(self, path: str) -> ExperimentFile:
+        return self.workspace.fingerprint(path, max_bytes=self.workspace.limits.max_file_bytes)
 
     @staticmethod
     def catalog() -> WorkflowCatalog:

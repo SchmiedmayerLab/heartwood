@@ -75,6 +75,7 @@ class ExperimentStage(ExperimentRecord):
     session_id: Reference
     workflow_run_id: Reference
     stage_id: Reference
+    workflow_sha256: Digest
     tool_call_id: Reference | None = None
 
 
@@ -83,10 +84,11 @@ class ExperimentDefinition(ExperimentRecord):
 
     actor_ref: Reference
     source: Literal["python", "shell", "heartwood"]
-    entry_point: ExperimentPath
-    code: tuple[ExperimentFile, ...] = Field(min_length=1, max_length=256)
+    entry_point: ExperimentPath | None = None
+    code: tuple[ExperimentFile, ...] = Field(default=(), max_length=256)
     inputs: tuple[ExperimentFile, ...] = Field(default=(), max_length=256)
     output_paths: tuple[ExperimentPath, ...] = Field(default=(), max_length=256)
+    code_output_paths: tuple[ExperimentPath, ...] = Field(default=(), max_length=256)
     environment: ExperimentEnvironment
     parameters_sha256: Digest
     invocation_sha256: Digest
@@ -101,8 +103,14 @@ class ExperimentDefinition(ExperimentRecord):
         for paths in (code_paths, input_paths, self.output_paths):
             if len(paths) != len({path.casefold() for path in paths}):
                 raise ValueError("Experiment file references must be unique")
-        if self.entry_point not in code_paths:
+        if self.entry_point is not None and self.entry_point not in code_paths:
             raise ValueError("The executable entry point must have a code fingerprint")
+        if self.source != "heartwood" and self.entry_point is None:
+            raise ValueError("Script experiments require a file-backed entry point")
+        if not set(self.code_output_paths).issubset(self.output_paths) or len(
+            self.code_output_paths
+        ) != len(set(self.code_output_paths)):
+            raise ValueError("Generated code must reference unique declared outputs")
         references: dict[str, ExperimentFile] = {}
         for item in (*self.code, *self.inputs):
             key = item.path.casefold()
@@ -129,6 +137,14 @@ type ExperimentStatus = Literal[
 ]
 
 
+class ExperimentEvidence(ExperimentRecord):
+    """A link to an existing session event, never a copy of its command or result."""
+
+    event_id: str = Field(min_length=1, max_length=256)
+    event_sha256: Digest
+    kind: Reference
+
+
 class ExperimentEvent(ExperimentRecord):
     """One idempotent append; timestamps and identities come from the record owner."""
 
@@ -141,6 +157,7 @@ class ExperimentEvent(ExperimentRecord):
     definition: ExperimentDefinition | None = None
     outputs: tuple[ExperimentFile, ...] = Field(default=(), max_length=256)
     exit_code: int | None = Field(default=None, strict=True)
+    evidence: tuple[ExperimentEvidence, ...] = Field(default=(), max_length=1024)
 
     @model_validator(mode="after")
     def _payload(self) -> Self:
@@ -152,13 +169,15 @@ class ExperimentEvent(ExperimentRecord):
             self.outputs or self.exit_code is not None
         ):
             raise ValueError("Only terminal outcomes can contain output observations")
-        if self.status == "succeeded" and self.exit_code != 0:
-            raise ValueError("Successful execution requires a zero exit code")
+        if self.status == "succeeded" and self.exit_code not in {0, None}:
+            raise ValueError("Successful execution cannot have a nonzero exit code")
         if self.status == "failed" and self.exit_code == 0:
             raise ValueError("Failed execution cannot have a zero exit code")
         paths = tuple(item.path.casefold() for item in self.outputs)
         if len(paths) != len(set(paths)):
             raise ValueError("Output observations must be unique")
+        if len(self.evidence) != len({item.event_id for item in self.evidence}):
+            raise ValueError("Experiment evidence identities must be unique")
         return self
 
 
@@ -174,6 +193,25 @@ class ExperimentRun(ExperimentRecord):
     attempt: int = Field(ge=1, strict=True)
     outputs: tuple[ExperimentFile, ...] = ()
     exit_code: int | None = Field(default=None, strict=True)
+    evidence: tuple[ExperimentEvidence, ...] = ()
+
+
+class ExperimentCollection(ExperimentRecord):
+    """Project-local scientific records; no immutable-retention claim."""
+
+    schema_version: Literal["heartwood.experiment-collection.v1"] = (
+        "heartwood.experiment-collection.v1"
+    )
+    retention: Literal["project-local"] = "project-local"
+    runs: tuple[ExperimentRun, ...] = ()
+
+
+class ExperimentExport(ExperimentRecord):
+    """Canonical record bytes and their digest, not a signed checkpoint."""
+
+    schema_version: Literal["heartwood.experiment-export.v1"] = "heartwood.experiment-export.v1"
+    sha256: Digest
+    jsonl: str
 
 
 def reduce_experiment_events(events: tuple[ExperimentEvent, ...]) -> tuple[ExperimentRun, ...]:
@@ -214,6 +252,12 @@ def reduce_experiment_events(events: tuple[ExperimentEvent, ...]) -> tuple[Exper
             raise ValueError("Experiment outcome contains undeclared outputs")
         if event.status == "succeeded" and observed != declared:
             raise ValueError("Successful execution requires every declared output")
+        if (
+            event.status == "succeeded"
+            and event.exit_code is None
+            and not (definition.source == "heartwood" and definition.entry_point is None)
+        ):
+            raise ValueError("Successful script execution requires a zero exit code")
         runs[event.run_id] = ExperimentRun(
             run_id=event.run_id,
             definition=definition,
@@ -223,5 +267,6 @@ def reduce_experiment_events(events: tuple[ExperimentEvent, ...]) -> tuple[Exper
             attempt=event.attempt,
             outputs=event.outputs,
             exit_code=event.exit_code,
+            evidence=event.evidence,
         )
     return tuple(runs.values())

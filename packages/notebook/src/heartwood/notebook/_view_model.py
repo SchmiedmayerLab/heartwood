@@ -56,6 +56,7 @@ from heartwood.schemas import (
     WorkspaceFileResponse,
     WorkspaceTreeResponse,
 )
+from heartwood.schemas.experiments import ExperimentRun
 from heartwood.schemas.workflows import (
     WorkflowCatalog,
     WorkflowControl,
@@ -80,6 +81,11 @@ class NotebookViewModel:
     def workflow_controls(self) -> tuple[WorkflowControl, ...]:
         """Return exact stage requests for explicit researcher selection."""
         return self.projection.workflow_controls
+
+    @property
+    def experiments(self) -> tuple[ExperimentRun, ...]:
+        """Return the same session provenance records shown in the terminal and browser."""
+        return self.projection.experiments
 
     @property
     def session_id(self) -> str:

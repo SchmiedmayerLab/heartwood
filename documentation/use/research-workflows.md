@@ -94,6 +94,11 @@ An agent's claim that it reran the analysis is not sufficient.
 It does not grant approval for later tool actions or certify a scientific conclusion.
 If inputs or reviewed artifacts change, the gateway refuses to continue using stale evidence.
 
+**Experiment records** connect each accepted stage's outputs to its declared inputs, code, and recorded actions.
+Open **Experiment Records** in the browser's Research tab or enter `/experiments` in the terminal to inspect them.
+The notebook exposes the same records through `view.experiments` and its Experiment Records widget section.
+See [Experiment Records](../architecture/experiments.md) for evidence boundaries and project-wide export.
+
 **Work limits** bound work at observed execution boundaries.
 They are not a guaranteed provider billing cap: an in-flight request can finish before its usage is reported, and some providers do not report every usage field.
 

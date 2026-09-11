@@ -367,6 +367,50 @@ export const ResearchWorkspace = ({
             </Button>
           </div>
           <h3>Analysis Artifacts</h3>
+          {projection.experiments.length > 0 ?
+            <details className="research-provenance">
+              <summary>Experiment Records</summary>
+              {projection.experiments.map((experiment) => (
+                <section
+                  key={experiment.run_id}
+                  aria-label={`Experiment ${experiment.definition.stage?.stage_id ?? experiment.run_id}`}
+                >
+                  <h4>
+                    {definition.stages.find(
+                      (item) =>
+                        item.stage_id === experiment.definition.stage?.stage_id,
+                    )?.label ?? experiment.run_id}
+                  </h4>
+                  <p>
+                    {experiment.status === "started" ?
+                      "Awaiting stage acceptance"
+                    : experiment.status}
+                  </p>
+                  <dl>
+                    <dt>Run</dt>
+                    <dd>
+                      <code>{experiment.run_id}</code>
+                    </dd>
+                    <dt>Environment Digest</dt>
+                    <dd>
+                      <code>{experiment.definition.environment.sha256}</code>
+                    </dd>
+                    <dt>Linked Events</dt>
+                    <dd>{experiment.evidence.length}</dd>
+                  </dl>
+                  <ul>
+                    {experiment.outputs.map((file) => (
+                      <li key={file.path}>
+                        <code>{file.path}</code>
+                        <br />
+                        <code>{file.sha256}</code>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              ))}
+            </details>
+          : null}
           <div className="research-artifacts">
             {definition.artifacts.map((item) => (
               <Button

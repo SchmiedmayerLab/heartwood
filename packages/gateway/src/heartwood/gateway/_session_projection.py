@@ -14,8 +14,10 @@ from typing import Annotated, ClassVar, Literal, cast
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 from heartwood.core_adapter import backend_error_is_fatal
+from heartwood.core_adapter.workflow_provenance import workflow_experiment_events
 from heartwood.core_adapter.workflow_runtime import workflow_controls, workflow_run
 from heartwood.schemas.execution import ExecutionUsage
+from heartwood.schemas.experiments import ExperimentRun, reduce_experiment_events
 from heartwood.schemas.project_paths import ProjectPathError, project_relative_path
 from heartwood.schemas.workflows import WorkflowControl, WorkflowRun
 from heartwood.session import CommandKind, EventKind, JsonValue, SessionEvent
@@ -273,6 +275,7 @@ class SessionProjection(_ProjectionRecord):
     schema_version: Literal["heartwood.session-projection.v1"] = "heartwood.session-projection.v1"
     session_id: str = Field(serialization_alias="sessionId")
     workflow: WorkflowRun | None = None
+    experiments: tuple[ExperimentRun, ...] = ()
     workflow_controls: tuple[WorkflowControl, ...] = Field(
         default=(), serialization_alias="workflowControls"
     )
@@ -814,6 +817,7 @@ def project_session(
     return SessionProjection(
         session_id=session_id,
         workflow=workflow_run(events),
+        experiments=reduce_experiment_events(workflow_experiment_events(events)),
         workflow_controls=workflow_controls(
             events,
             active=lifecycle_status == SessionLifecycle.RUNNING,
