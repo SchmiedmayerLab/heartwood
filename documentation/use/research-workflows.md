@@ -16,7 +16,7 @@ Start in a new session with a configured model and project-local input files.
 |---|---|---|
 | Dataset Readiness Review | Inspect data quality and review a report before modeling | CSV dataset and JSON data dictionary |
 | Reproducible Baseline Analysis | Plan a baseline, run it, reproduce its outputs, and review the report | CSV dataset, JSON data dictionary, and research question |
-| Independent Result Verification | Check Python compatibility, re-run an existing analysis, and compare outputs | Dataset, Python script, original metrics and predictions, and Python environment record |
+| Independent Result Verification | Rebuild an analysis environment, re-run the original code, and compare outputs | Dataset, Python script, original results, environment record, and dependency lock |
 
 !!! note "Scope of the maintained checks"
     The baseline checks cover a single-predictor linear model with a numeric outcome, held-out metrics, a mean-only comparator, and group-omission sensitivity checks.
@@ -91,27 +91,49 @@ Independent Result Verification preserves the original analysis and writes fresh
 The script must accept `--data FILE --output-dir NEW_FOLDER` and create `metrics.json` and `predictions.csv` in that folder.
 Heartwood compares the generated files byte for byte; matching outputs do not establish scientific validity.
 
-Capture the required Python versions in the environment where the analysis is intended to run:
+Retain the original analysis's environment record and dependency lock alongside its code and results.
+For an existing analysis environment, select its Python executable explicitly:
 
 ```sh
-heartwood experiments environment > python-environment.json
+heartwood experiments environment --python analysis-env/bin/python > python-environment.json
 ```
 
-In the browser, choose **Independent Result Verification**, then **Export Verification Environment** to download the same record from the Heartwood server.
-Place that downloaded file in the project and enter its project-relative path as **Environment Record**.
-For a notebook, `session.verification_environment()` returns the same typed record.
-Capturing today's environment does not recover an unknown historical environment; retain the record alongside the original analysis.
+Replace `analysis-env/bin/python` with the executable used for the original analysis.
+For a notebook, `session.verification_environment(python="analysis-env/bin/python")` returns the same typed record.
+Omitting `--python`, or choosing **Export Server Python Environment** in the browser, captures Heartwood's server environment instead; use it only when that was the analysis environment.
+Capturing today's environment does not recover an unknown historical environment.
 
-The first stage proposes a separately approved Python environment probe.
-Review its result before continuing to reproduction.
-Both stages use Heartwood's Python in isolated mode, which excludes `PYTHONPATH`, user-site packages, and implicit project-module imports.
-Use explicitly installed dependencies and a self-contained entry-point script for this workflow.
+??? details "Prepare the dependency lock"
 
-If required interpreter or package versions differ, the environment check fails.
-Heartwood also rechecks captured versions immediately before reproduction and stops if they changed.
-It never installs or changes packages automatically.
-Resolve dependencies deliberately, retain the original evidence, and start a new verification with a fresh output folder.
-An interrupted probe may leave an incomplete folder; inspect it rather than overwriting it.
+    Use a standard `pylock.toml` file containing the analysis's exact dependencies and wheel hashes.
+    [uv's locking tools](https://docs.astral.sh/uv/pip/compile/) can generate it from pinned analysis requirements:
+
+    ```sh
+    uv pip compile requirements.txt --python analysis-env/bin/python --format pylock.toml -o pylock.toml
+    ```
+
+    Review the lock against the original environment record; newly resolving unpinned requirements does not reproduce a historical environment.
+    Heartwood accepts hash-pinned wheels from HTTPS URLs without credentials or project-relative wheel paths.
+    Source builds, editable projects, and authenticated package indexes are not supported by reconstruction.
+    For offline use, retain the required wheels in the project and reference them using `path` entries in the lock.
+    An analysis using only the Python standard library can use a lock with `lock-version = "1.0"`, `created-by = "researcher"`, and `packages = []`.
+
+In **Independent Result Verification**, select the record as **Environment Record** and the lock as **Dependency Lock**.
+The first stage proposes one setup action; approving it permits downloading and installing the locked packages into a fresh environment under `.heartwood/runtime/`.
+Heartwood and vLLM dependencies are not changed.
+Only approve dependencies from sources you trust: package hashes establish identity, not safety.
+
+Review the observed environment before continuing.
+Reproduction uses its isolated Python, excluding inherited environment variables, user-site packages, and implicit project-module imports.
+Use installed dependencies and a self-contained entry-point script.
+Heartwood rechecks the observed versions immediately before execution and stops if they changed.
+
+If setup fails, retain the failure evidence and start a new verification with a fresh output folder after resolving the cause.
+Missing Python versions must be installed deliberately; reconstruction never downloads an interpreter.
+The operating-system family and architecture must match the record.
+For slow or unavailable downloads, stage wheels in the project first.
+An interrupted setup is not reusable, and a still-running terminal command is not successful execution evidence.
+Stop any outstanding command before retrying; Heartwood never overwrites a previous environment or result folder.
 
 The record includes Python implementation and version, operating-system family, architecture, and installed distribution names and versions.
 It does not attest binaries, native libraries, GPU drivers, or package contents.

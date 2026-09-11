@@ -1091,11 +1091,16 @@ class SessionGateway:
 
         return ResearchStageEvaluator.catalog()
 
-    def verification_environment(self) -> PythonEnvironmentSnapshot:
-        """Inspect the isolated verification Python without model work or project writes."""
+    def verification_environment(self, *, python: str | None = None) -> PythonEnvironmentSnapshot:
+        """Inspect server Python or an explicitly selected interpreter, without project writes."""
         from heartwood.gateway.python_environment import inspect_verification_environment
 
-        return inspect_verification_environment()
+        if python is None:
+            return inspect_verification_environment()
+        executable = Path(python).expanduser()
+        if not executable.is_absolute():
+            executable = self.project.root / executable
+        return inspect_verification_environment(executable)
 
     @_serialized_state
     def prepare_research_review(self, artifacts: Mapping[str, str]) -> ReviewSnapshot:

@@ -6,6 +6,7 @@
 
 """First-party research task definitions, independent of model and platform routing."""
 
+import hashlib
 from pathlib import PurePosixPath
 
 from heartwood.core_adapter.reproduction import ReproductionSpec
@@ -120,6 +121,12 @@ def workflow_reproduction_spec(
         data=paths["environment"] if environment else paths["data"],
         purpose="python-environment" if environment else "analysis",
         python_executable=binding.python_executable,
+        analysis_environment=(
+            hashlib.sha256(paths["environment-check"].encode()).hexdigest()
+            if binding.workflow_id == "result-verification"
+            else None
+        ),
+        lockfile=paths["lockfile"] if environment else None,
         required_environment=(
             paths["environment-check"]
             if binding.workflow_id == "result-verification" and not environment
@@ -345,7 +352,7 @@ def _verification() -> WorkflowDefinition:
         workflow_id="result-verification",
         version=1,
         label="Independent Result Verification",
-        description="Check Python compatibility, rerun an analysis, and compare its outputs.",
+        description="Rebuild a Python environment, rerun an analysis, and compare outputs.",
         inputs=(
             WorkflowInput(
                 input_id="data",
@@ -377,6 +384,12 @@ def _verification() -> WorkflowDefinition:
                 kind="file",
                 description="Required Python interpreter and package versions.",
             ),
+            WorkflowInput(
+                input_id="lockfile",
+                label="Dependency Lock",
+                kind="file",
+                description="A pylock.toml file with hash-pinned wheels for the analysis.",
+            ),
         ),
         budget=_BUDGET,
         artifacts=(
@@ -397,14 +410,15 @@ def _verification() -> WorkflowDefinition:
         stages=(
             WorkflowStage(
                 stage_id="environment",
-                label="Check Environment",
-                reads=("environment", "program"),
+                label="Rebuild Environment",
+                reads=("environment", "program", "lockfile"),
                 writes=("environment-check",),
                 instruction=(
-                    "Propose the supplied environment probe as one separate terminal action. "
-                    "It captures the bound Python in isolated mode without changing packages. "
+                    "Propose the supplied environment setup as one separate terminal action. "
+                    "Explain that approval permits downloading the lock's package wheels into a "
+                    "fresh project-private environment, without changing Heartwood or vLLM. "
                     "Do not write its output yourself. Compare required and observed versions "
-                    "and report differences. Any setup still requires normal action review."
+                    "and report differences. Never replace the lock or bypass a failed setup."
                 ),
                 checks=(
                     WorkflowCheck(

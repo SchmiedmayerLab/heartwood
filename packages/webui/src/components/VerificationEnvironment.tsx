@@ -65,7 +65,7 @@ export const VerificationEnvironment = ({
         }}
       >
         <Download size={16} />
-        Export Verification Environment
+        Export Server Python Environment
       </Button>
       {current?.pending && (
         <span role="status">Inspecting Python environment</span>

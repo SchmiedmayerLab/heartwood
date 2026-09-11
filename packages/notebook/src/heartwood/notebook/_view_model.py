@@ -221,9 +221,9 @@ class NotebookSession:
         """Read workflow and script records for this project without starting model work."""
         return self.gateway.experiment_records()
 
-    def verification_environment(self) -> PythonEnvironmentSnapshot:
+    def verification_environment(self, *, python: str | None = None) -> PythonEnvironmentSnapshot:
         """Inspect the same isolated Python used by independent result verification."""
-        return self.gateway.verification_environment()
+        return self.gateway.verification_environment(python=python)
 
     def export_experiments(self) -> ExperimentExport:
         """Return the gateway's verified canonical scientific export and its digest."""

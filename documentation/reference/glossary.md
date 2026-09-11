@@ -51,6 +51,9 @@ SPDX-License-Identifier: MIT
 **CUDA**
 : NVIDIA's software platform and application binary interface for GPU computing.
 
+**Dependency lock**
+: A file recording exact dependency versions and artifact hashes; Heartwood uses `pylock.toml` to reconstruct Python analysis environments.
+
 **Device-code sign-in**
 : An OAuth flow in which one interface displays a short-lived code that the user enters on a separate provider sign-in page.
 
@@ -141,8 +144,14 @@ SPDX-License-Identifier: MIT
 **Terra**
 : A cloud platform for biomedical research workspaces, data, workflows, and interactive Jupyter compute.
 
+**uv**
+: A Python package and environment manager used by Heartwood to install locked analysis dependencies in a separate environment.
+
 **vLLM**
 : A GPU-oriented inference server used by supported Heartwood NVIDIA deployments.
+
+**Wheel**
+: A prebuilt Python package file (`.whl`) that can be installed without running a source-build backend.
 
 **ZIP64**
 : An extension of the ZIP archive format that supports files and archives larger than the original ZIP size limits.

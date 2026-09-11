@@ -8,27 +8,40 @@
 
 import argparse
 import os
+import subprocess
 import sys
+from pathlib import Path
 
 from heartwood.core_adapter.research_checks import MAX_RESEARCH_TEXT_BYTES
+from heartwood.gateway._analysis_environment import (
+    environment_directory,
+    environment_python,
+    read_environment,
+    reconstruct_environment,
+)
 from heartwood.gateway._project import ProjectContext
 from heartwood.gateway._workspace import WorkspaceInspector, _open_child_directory
-from heartwood.gateway.python_environment import observe_python_environment
+from heartwood.gateway.python_environment import (
+    inspect_verification_environment,
+    observe_python_environment,
+)
 from heartwood.schemas.project_paths import project_relative_path
-from heartwood.schemas.python_environment import PythonEnvironmentSnapshot
 
 
-def _snapshot_bytes() -> bytes:
-    payload = (observe_python_environment().model_dump_json(indent=2) + "\n").encode()
+def _snapshot_bytes(python: Path | None = None) -> bytes:
+    snapshot = inspect_verification_environment(python) if python else observe_python_environment()
+    payload = (snapshot.model_dump_json(indent=2) + "\n").encode()
     if len(payload) > MAX_RESEARCH_TEXT_BYTES:
         raise ValueError("Python environment metadata exceeds the inspection limit")
     return payload
 
 
-def capture_environment(project: ProjectContext, output_directory: str) -> None:
+def capture_environment(
+    project: ProjectContext, output_directory: str, python: Path | None = None
+) -> None:
     """Never overwrite a prior observation or follow a project directory link."""
     relative = project_relative_path(output_directory, allow_root=False)
-    payload = _snapshot_bytes()
+    payload = _snapshot_bytes(python)
     workspace = WorkspaceInspector(project)
     with workspace._open_directory(relative.parent) as parent:
         os.mkdir(relative.name, mode=0o700, dir_fd=parent)
@@ -46,31 +59,79 @@ def capture_environment(project: ProjectContext, output_directory: str) -> None:
             os.close(descriptor)
 
 
-def require_environment(project: ProjectContext, path: str) -> None:
+def require_environment(project: ProjectContext, path: str, python: Path | None = None) -> None:
     """Refuse analysis when the captured interpreter or package versions have changed."""
-    record = WorkspaceInspector(project).file(path)
-    if record["status"] != "available" or record["content"] is None:
-        raise ValueError("The required Python environment record is unavailable")
-    required = PythonEnvironmentSnapshot.model_validate_json(record["content"])
-    if required.differences(observe_python_environment()):
+    required = read_environment(project, path)
+    observed = inspect_verification_environment(python) if python else observe_python_environment()
+    if required.differences(observed):
         raise ValueError("Python environment changed; capture and review a new verification run")
 
 
 def main() -> None:
     """Execute only when called explicitly, ordinarily through a reviewed terminal action."""
-    parser = argparse.ArgumentParser(description="Capture this Python runtime without changing it.")
-    output = parser.add_mutually_exclusive_group(required=True)
-    output.add_argument("--output-dir")
-    output.add_argument("--stdout", action="store_true")
-    output.add_argument("--require")
+    parser = argparse.ArgumentParser(description="Capture or reconstruct an analysis environment.")
+    parser.add_argument("--output-dir")
+    parser.add_argument("--stdout", action="store_true")
+    parser.add_argument("--require")
+    parser.add_argument("--environment-id")
+    parser.add_argument("--lockfile")
+    parser.add_argument("--expected")
+    parser.add_argument("--program")
+    parser.add_argument("--data")
+    parser.add_argument("--python", type=Path)
     args = parser.parse_args()
-    if args.stdout:
-        sys.stdout.buffer.write(_snapshot_bytes())
-    elif args.require:
-        require_environment(ProjectContext.current(), args.require)
+    project = ProjectContext.current()
+    if args.environment_id:
+        if args.stdout or args.python or not args.output_dir:
+            parser.error("Reconstruction requires its bound environment and output directory")
+        if args.lockfile and args.expected and not (args.program or args.data or args.require):
+            python = reconstruct_environment(
+                project,
+                environment_id=args.environment_id,
+                lockfile=args.lockfile,
+                expected=args.expected,
+            )
+            capture_environment(project, args.output_dir, python)
+        elif args.program and args.data and args.require and not (args.lockfile or args.expected):
+            python = environment_python(environment_directory(project, args.environment_id))
+            require_environment(project, args.require, python)
+            for path in (args.program, args.data, args.output_dir):
+                project_relative_path(path, allow_root=False)
+                project.require_project_path(Path(path))
+            raise SystemExit(
+                subprocess.run(
+                    [
+                        str(python),
+                        "-I",
+                        args.program,
+                        "--data",
+                        args.data,
+                        "--output-dir",
+                        args.output_dir,
+                    ],
+                    cwd=project.root,
+                    env={"PATH": os.defpath},
+                    check=False,
+                ).returncode
+            )
+        else:
+            parser.error("Supply either a dependency lock and expected record or guarded analysis")
     else:
-        capture_environment(ProjectContext.current(), args.output_dir)
+        if (
+            any((args.lockfile, args.expected, args.program, args.data))
+            or sum(bool(value) for value in (args.stdout, args.require, args.output_dir)) != 1
+        ):
+            parser.error("Choose exactly one environment capture or comparison operation")
+        if args.stdout:
+            sys.stdout.buffer.write(_snapshot_bytes(args.python))
+        elif args.require:
+            require_environment(project, args.require, args.python)
+        else:
+            capture_environment(project, args.output_dir, args.python)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        raise SystemExit(f"Analysis environment operation failed: {error}") from None

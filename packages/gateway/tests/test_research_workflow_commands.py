@@ -1288,11 +1288,14 @@ def test_native_independent_verification_records_environment_execution_and_repla
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     incompatible: bool,
+    analysis_lock: Path,
 ) -> None:
     from heartwood.core_adapter.research_workflows import workflow_reproduction_spec
     from heartwood.gateway.python_environment import inspect_verification_environment
 
-    expected = inspect_verification_environment()
+    expected = inspect_verification_environment().model_copy(
+        update={"packages": (("synthetic-analysis", "1.0"),)}
+    )
     if incompatible:
         expected = expected.model_copy(update={"python": "0.0.1"})
     (tmp_path / "environment.json").write_text(expected.model_dump_json())
@@ -1300,13 +1303,13 @@ def test_native_independent_verification_records_environment_execution_and_repla
     (tmp_path / "metrics.json").write_text('{"mean": 3.0}')
     (tmp_path / "predictions.csv").write_text("centered\n-2.0\n0.0\n2.0\n")
     (tmp_path / "analysis.py").write_text(
-        "import argparse, json, statistics\nfrom pathlib import Path\n"
+        "import argparse, json\nfrom pathlib import Path\nfrom synthetic_analysis import mean\n"
         "p=argparse.ArgumentParser()\np.add_argument('--data')\n"
         "p.add_argument('--output-dir')\na=p.parse_args()\n"
         "values=[float(x) for x in Path(a.data).read_text().splitlines()]\n"
-        "mean=statistics.mean(values)\nout=Path(a.output_dir)\nout.mkdir()\n"
-        "(out/'metrics.json').write_text(json.dumps({'mean':mean}))\n"
-        "centered=''.join(f'{x-mean}\\n' for x in values)\n"
+        "average=mean(values)\nout=Path(a.output_dir)\nout.mkdir()\n"
+        "(out/'metrics.json').write_text(json.dumps({'mean':average}))\n"
+        "centered=''.join(f'{x-average}\\n' for x in values)\n"
         "(out/'predictions.csv').write_text('centered\\n'+centered)\n"
     )
     (tmp_path / "results").mkdir()
@@ -1321,6 +1324,7 @@ def test_native_independent_verification_records_environment_execution_and_repla
         )
     }
     inputs["program"] = "analysis.py"
+    inputs["lockfile"] = analysis_lock.name
     gateway = _sdk_gateway(tmp_path, TestLLM.from_messages([]), monkeypatch)
     try:
         binding = gateway.prepare_research_workflow(
@@ -1401,7 +1405,7 @@ def test_native_independent_verification_records_environment_execution_and_repla
             current = _state(gateway)
             if incompatible:
                 assert current.evaluation is not None
-                assert current.evaluation.checks[0].status == "failed"
+                assert current.evaluation.checks[0].status in {"failed", "not_run"}
                 assert current.stage_id == "environment"
                 assert not (tmp_path / "results/reproduced").exists()
                 return

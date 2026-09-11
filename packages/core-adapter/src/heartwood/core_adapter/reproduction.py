@@ -45,6 +45,8 @@ class ReproductionSpec(_Record):
     purpose: Literal["analysis", "python-environment"] = "analysis"
     python_executable: PythonExecutable | None = None
     required_environment: str | None = None
+    analysis_environment: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    lockfile: str | None = None
     directory: str
     protected_paths: tuple[str, ...] = Field(min_length=2, max_length=128)
     output_names: tuple[str, ...] = Field(min_length=1, max_length=32)
@@ -52,6 +54,19 @@ class ReproductionSpec(_Record):
     @model_validator(mode="after")
     def validate_paths(self) -> Self:
         """Keep outputs distinct from inputs and disallow overlapping file identities."""
+        if self.analysis_environment is not None and self.python_executable is None:
+            raise ValueError("Environment reconstruction requires its control Python")
+        if self.lockfile is not None and (
+            self.analysis_environment is None
+            or self.purpose != "python-environment"
+            or self.lockfile not in self.protected_paths
+        ):
+            raise ValueError("Reconstruction requires a protected dependency lock")
+        if self.analysis_environment is not None and (
+            (self.purpose == "python-environment" and self.lockfile is None)
+            or (self.purpose == "analysis" and self.required_environment is None)
+        ):
+            raise ValueError("Reconstruction requires a lock or an observed environment guard")
         if self.purpose == "python-environment" and (
             self.python_executable is None or self.output_names != ("environment.json",)
         ):
@@ -95,6 +110,34 @@ class ReproductionSpec(_Record):
     @property
     def command(self) -> str:
         """Return a shell-quoted invocation without allowing model-supplied shell syntax."""
+        if self.analysis_environment is not None:
+            assert self.python_executable is not None
+            arguments = (
+                ("--lockfile", self.lockfile, "--expected", self.data)
+                if self.purpose == "python-environment"
+                else (
+                    "--require",
+                    self.required_environment,
+                    "--program",
+                    self.program,
+                    "--data",
+                    self.data,
+                )
+            )
+            assert all(isinstance(value, str) for value in arguments)
+            return shlex.join(
+                (
+                    self.python_executable,
+                    "-I",
+                    "-m",
+                    "heartwood.gateway._environment_probe",
+                    "--environment-id",
+                    self.analysis_environment,
+                    "--output-dir",
+                    self.directory,
+                    *(str(value) for value in arguments),
+                )
+            )
         if self.purpose == "python-environment":
             assert self.python_executable is not None
             return shlex.join(

@@ -159,7 +159,13 @@ It does not capture external executables, native libraries, a GPU driver, or the
 For research stages, it describes the gateway's Python environment, not a remote model server or an independently attested execution environment.
 Independent Result Verification separately captures an isolated Python process through a reviewed probe and rechecks its versions immediately before the reviewed analysis command.
 That execution witness supplements the stage record; it does not turn package metadata into binary or platform attestation.
-The gateway, `heartwood experiments environment`, browser export, and `NotebookSession.verification_environment()` expose the same isolated capture for preparing a required environment record.
+The gateway, `heartwood experiments environment`, browser export, and `NotebookSession.verification_environment()` share the same metadata capture.
+The terminal and notebook accept an explicitly selected analysis interpreter; the browser export describes server Python and does not execute arbitrary client-supplied executables.
+Independent Result Verification separately reconstructs a wheel-only `pylock.toml` with uv in a fresh `.heartwood/runtime/` environment through a reviewed tool action.
+Its execution witness binds the original lock and inputs to the observed environment artifact, then guards that artifact before analysis execution.
+Package installation uses a private lock snapshot and cache without inherited credentials, installer overrides, source builds, or automatic interpreter downloads.
+Metadata probing and analysis execution also exclude inherited environment variables so Python startup hooks do not receive provider credentials.
+This isolates dependencies; it is not an operating-system sandbox or an attestation of dependency safety.
 An explicit `ExperimentEnvironment` can instead identify a declared container or environment description.
 
 ## Persistence and Recovery

@@ -1234,12 +1234,14 @@ def workflow_stage_prompt(run: WorkflowRun) -> str:
     if reproduction := workflow_reproduction_spec(run.binding, run.stage_id):
         specification["reproduction"] = {
             "command": reproduction.command,
+            "timeout": stage.budget.maximum_seconds,
             "parent_directory": str(PurePosixPath(reproduction.directory).parent),
             "protected_paths": reproduction.protected_paths,
             "output_paths": reproduction.output_paths,
             "instruction": (
                 "Propose this exact terminal command as a separate action group from the "
-                "project root. Create only missing parent directories through normal review. "
+                "project root, using the supplied terminal timeout. "
+                "Create only missing parent directories through normal review. "
                 "The output directory must not already exist. Do not create "
                 "it or copy outputs before execution. Keep the program, inputs, and original "
                 "outputs unchanged. This instruction is not permission to execute."

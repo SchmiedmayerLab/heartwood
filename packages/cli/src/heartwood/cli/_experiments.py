@@ -23,8 +23,11 @@ from heartwood.schemas.experiments import ExperimentEnvironment
 def configure_experiments(parser: argparse.ArgumentParser) -> None:
     """Attach script recording and project-wide inspection commands."""
     commands = parser.add_subparsers(dest="experiment_command", required=True)
-    commands.add_parser(
-        "environment", help="Print the isolated verification Python environment as JSON."
+    environment = commands.add_parser(
+        "environment", help="Print a Python environment's version metadata as JSON."
+    )
+    environment.add_argument(
+        "--python", help="Explicit analysis Python executable; defaults to Heartwood's Python."
     )
     listing = commands.add_parser("list", help="Inspect this project's recorded experiments.")
     listing.add_argument(
@@ -72,7 +75,11 @@ def handle_experiments(args: argparse.Namespace, *, project: ProjectContext) -> 
             gateway = SessionGateway(project=project)
             try:
                 if args.experiment_command == "environment":
-                    print(gateway.verification_environment().model_dump_json(indent=2))
+                    print(
+                        gateway.verification_environment(python=args.python).model_dump_json(
+                            indent=2
+                        )
+                    )
                 elif args.experiment_command == "export":
                     sys.stdout.write(gateway.export_experiments().jsonl)
                 else:

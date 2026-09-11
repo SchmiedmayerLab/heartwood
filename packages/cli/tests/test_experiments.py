@@ -22,11 +22,16 @@ from heartwood.schemas.experiments import ExperimentCollection
 from heartwood.schemas.python_environment import PythonEnvironmentSnapshot
 
 
+@pytest.mark.parametrize("explicit", [False, True])
 def test_environment_command_is_read_only_json(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    explicit: bool,
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    assert main(["experiments", "environment"]) == 0
+    arguments = ["--python", sys.executable] if explicit else []
+    assert main(["experiments", "environment", *arguments]) == 0
     captured = capsys.readouterr()
     value = PythonEnvironmentSnapshot.model_validate_json(captured.out)
     assert value.implementation == "CPython"

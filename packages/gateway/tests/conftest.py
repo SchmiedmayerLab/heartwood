@@ -6,11 +6,15 @@
 
 """Synthetic authorization supplied by tests, never deployment qualification evidence."""
 
+import hashlib
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from uuid import NAMESPACE_URL, uuid5
+from zipfile import ZipFile
 
 import pytest
+import tomli_w
 
 from heartwood.compliance.review_benchmarks import planning_review_suite
 from heartwood.schemas.evaluation import (
@@ -28,6 +32,49 @@ from heartwood.schemas.parallel_reviews import (
     ReviewQualificationEvidence,
     ReviewQualifications,
 )
+
+
+@pytest.fixture
+def analysis_lock(tmp_path: Path) -> Path:
+    """An offline wheel with real importable analysis code, absent from Heartwood itself."""
+    wheel = tmp_path / "synthetic_analysis-1.0-py3-none-any.whl"
+    with ZipFile(wheel, "w") as archive:
+        archive.writestr(
+            "synthetic_analysis.py", "def mean(values):\n    return sum(values)/len(values)\n"
+        )
+        archive.writestr(
+            "synthetic_analysis-1.0.dist-info/METADATA",
+            "Metadata-Version: 2.1\nName: synthetic-analysis\nVersion: 1.0\n",
+        )
+        archive.writestr(
+            "synthetic_analysis-1.0.dist-info/WHEEL",
+            "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+        )
+        archive.writestr("synthetic_analysis-1.0.dist-info/RECORD", "")
+    lock = tmp_path / "pylock.toml"
+    lock.write_text(
+        tomli_w.dumps(
+            {
+                "lock-version": "1.0",
+                "created-by": "heartwood-test",
+                "packages": [
+                    {
+                        "name": "synthetic-analysis",
+                        "version": "1.0",
+                        "wheels": [
+                            {
+                                "path": wheel.name,
+                                "hashes": {
+                                    "sha256": hashlib.sha256(wheel.read_bytes()).hexdigest()
+                                },
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+    )
+    return lock
 
 
 @pytest.fixture

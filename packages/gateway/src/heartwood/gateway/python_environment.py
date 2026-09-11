@@ -6,33 +6,31 @@
 
 """Read the current Python process through standard interpreter and package metadata."""
 
-import platform
+import os
 import subprocess
 import sys
-from importlib.metadata import distributions
+from pathlib import Path
 
+from heartwood.gateway import _python_metadata
 from heartwood.schemas.python_environment import PythonEnvironmentSnapshot
 
 
 def observe_python_environment() -> PythonEnvironmentSnapshot:
     """Describe this process, never infer the environment of an external interpreter."""
-    return PythonEnvironmentSnapshot(
-        implementation=platform.python_implementation(),
-        python=platform.python_version(),
-        system=platform.system(),
-        machine=platform.machine(),
-        packages=tuple(sorted((item.metadata["Name"], item.version) for item in distributions())),
-    )
+    return PythonEnvironmentSnapshot.model_validate(_python_metadata.python_metadata())
 
 
-def inspect_verification_environment() -> PythonEnvironmentSnapshot:
+def inspect_verification_environment(
+    python: str | Path = sys.executable,
+) -> PythonEnvironmentSnapshot:
     """Inspect the exact isolated Python used by verification, without running user code."""
     try:
         result = subprocess.run(
-            [sys.executable, "-I", "-m", "heartwood.gateway._environment_probe", "--stdout"],
+            [str(python), "-I", str(Path(_python_metadata.__file__))],
             capture_output=True,
             check=True,
             timeout=30,
+            env={"PATH": os.defpath},
         )
         return PythonEnvironmentSnapshot.model_validate_json(result.stdout)
     except (OSError, subprocess.SubprocessError, ValueError):
