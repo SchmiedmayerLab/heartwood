@@ -13,10 +13,13 @@ from pydantic import AwareDatetime, Field, TypeAdapter, model_validator
 
 from heartwood.schemas.evaluation import (
     EvaluationAssessment,
+    EvaluationConfiguration,
     EvaluationIdentifier,
     EvaluationPolicy,
     EvaluationReason,
     EvaluationRecord,
+    EvaluationRun,
+    EvaluationSuite,
     Sha256,
 )
 from heartwood.schemas.execution import ExecutionBudget
@@ -41,6 +44,26 @@ class ParallelReviewComparison(EvaluationRecord):
     parallel_reported_cost_usd: float = Field(ge=0)
     sequential_tokens: int = Field(ge=0)
     parallel_tokens: int = Field(ge=0)
+
+
+class ReviewQualification(EvaluationRecord):
+    """Operator-supplied retained evidence for one route and workflow review stage."""
+
+    suite: EvaluationSuite
+    case_id: EvaluationIdentifier
+    sequential: EvaluationConfiguration
+    parallel: EvaluationConfiguration
+    policy: ParallelReviewPolicy = Field(default_factory=ParallelReviewPolicy)
+    runs: tuple[EvaluationRun, ...] = Field(min_length=6, max_length=1000)
+
+
+class ReviewQualifications(EvaluationRecord):
+    """Deployment input, not a project setting or a self-authenticating success claim."""
+
+    schema_version: Literal["heartwood.review-qualifications.v1"] = (
+        "heartwood.review-qualifications.v1"
+    )
+    routes: tuple[ReviewQualification, ...] = Field(min_length=1, max_length=32)
 
 
 class ParallelReviewAssessment(EvaluationRecord):

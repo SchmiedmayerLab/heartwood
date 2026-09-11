@@ -223,6 +223,7 @@ The selected platform adapter advertises supported ingress modes, while deployme
 ### OpenHands Adapter
 
 Gateway lifecycle startup imports the SDK before accepting concurrent browser requests, avoiding competing cold imports through the Skill and specialist catalogs.
+Approval requests are published only after native execution settles, so every interface receives the complete action group rather than a partially appended batch.
 This initializes modules only; model clients, conversations, and tool executors are created when agent work is requested.
 
 The adapter creates an OpenHands conversation with `OpenHandsAgentSettings`, the selected LiteLLM-compatible model profile, project workspace, Skills, persistence directory, and confirmation policy.
@@ -255,6 +256,9 @@ The normal grouped-action policy still applies before this execution boundary; q
 
 `SessionGateway` accepts a deployment-owned parallel-review preparer and binds it to the existing workflow evaluator and native adapter.
 Without that preparer, the default factory does not enable parallel review controls or execution.
+Standard deployments can supply `HEARTWOOD_REVIEW_QUALIFICATIONS` to use the built-in preparer over an operator-owned retained-evidence file outside the project.
+The same gateway configuration serves terminal, browser, and notebook sessions; no interface can install qualification evidence.
+See [Qualify Parallel Reviews](../operate/parallel-reviews.md) for preparation and trust boundaries.
 The preparer must assess trusted evidence against the current route; it is not a project setting or a model-supplied eligibility claim.
 The workflow first journals a preview, then exact researcher consent, and finally native action admission through the same paired session and audit journal.
 Qualification I/O runs outside the session command lock; dispatch then rechecks cancellation, ownership, workflow state, expiry, files, and remaining work limits.

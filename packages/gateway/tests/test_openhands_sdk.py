@@ -77,6 +77,7 @@ from openhands.tools.terminal import TerminalAction, TerminalObservation
 import heartwood.gateway._openhands_sdk as openhands_sdk_module
 from heartwood.core_adapter import (
     BackendAgentMessageEvent,
+    BackendConfirmationRequestEvent,
     BackendConfirmationResolutionEvent,
     BackendErrorCode,
     BackendErrorEvent,
@@ -992,6 +993,48 @@ def test_persisted_user_rejection_reconstructs_denied_confirmation(
     assert resolutions[0].tool_call.tool_call_id == "call-1"
     assert not resolutions[0].approved
     backend.close()
+
+
+def test_confirmation_groups_are_published_only_after_native_execution_settles(
+    tmp_path: Path,
+) -> None:
+    conversation = _ControlledConversation()
+    state = _BranchState(conversation.id)
+    conversation.state = state
+    state.execution_status = ConversationExecutionStatus.WAITING_FOR_CONFIRMATION
+    first = _terminal_action_event("action-1", "call-1", "printf first")
+    second = _terminal_action_event("action-2", "call-2", "printf second")
+    backend = _backend(
+        tmp_path,
+        cast(ConversationFactory, lambda _event_callback, _token_callback: conversation),
+    )
+    seen: set[str] = set()
+    try:
+        backend._execution_active = True
+        for branch in ((first,), (first, second)):
+            state.events = branch
+            events = backend.reconcile(
+                session_id="session-1", known_source_event_ids=frozenset(seen)
+            )
+            assert not any(isinstance(event, BackendConfirmationRequestEvent) for event in events)
+            assert all(
+                event.lifecycle == BackendLifecycle.RUNNING
+                for event in events
+                if isinstance(event, BackendLifecycleEvent)
+            )
+            seen.update(event.source_event_id for event in events if event.source_event_id)
+        backend._execution_active = False
+        events = backend.reconcile(session_id="session-1", known_source_event_ids=frozenset(seen))
+        requests = [event for event in events if isinstance(event, BackendConfirmationRequestEvent)]
+        assert len(requests) == 2
+        assert len({event.action_group_id for event in requests}) == 1
+        assert {event.tool_call.tool_call_id for event in requests} == {
+            first.tool_call_id,
+            second.tool_call_id,
+        }
+    finally:
+        backend._execution_active = False
+        backend.close()
 
 
 def test_openhands_adapter_uses_typed_public_state_only() -> None:

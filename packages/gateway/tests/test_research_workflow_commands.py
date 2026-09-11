@@ -13,7 +13,8 @@ import json
 import os
 import subprocess
 import sys
-from datetime import datetime
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, cast
 from uuid import NAMESPACE_URL, uuid4, uuid5
@@ -50,10 +51,12 @@ from heartwood.gateway import ModelProfile, OpenHandsSdkBackend, ProjectContext,
 from heartwood.gateway import _openhands_sdk as sdk_module
 from heartwood.gateway._research_evaluation import ParallelReviewPreparer, ResearchStageEvaluator
 from heartwood.schemas import JsonValue
+from heartwood.schemas.evaluation import EvaluationRuntimeObservation
 from heartwood.schemas.parallel_reviews import (
     ParallelReviewPlan,
     ReviewDispatchAction,
     ReviewExecutionPlan,
+    ReviewQualifications,
 )
 from heartwood.schemas.review import (
     ResearchReviewRun,
@@ -1446,6 +1449,7 @@ def _sdk_gateway(
     *,
     specialists: bool = False,
     parallel_review_preparer: ParallelReviewPreparer | None = None,
+    environment: dict[str, str] | None = None,
 ) -> SessionGateway:
     from heartwood.gateway._specialists import load_specialist_catalog
 
@@ -1479,11 +1483,121 @@ def _sdk_gateway(
 
     gateway = SessionGateway(
         project=ProjectContext(root),
-        env={},
+        env=environment or {},
         parallel_review_preparer=parallel_review_preparer,
     )
     monkeypatch.setattr(gateway, "_backend", backend_factory)
     return gateway
+
+
+@pytest.mark.parametrize("revoke", [False, True])
+def test_native_gateway_loads_deployment_evidence_and_rechecks_before_dispatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    revoke: bool,
+    review_evidence: Callable[[EvaluationRuntimeObservation, datetime], ReviewQualifications],
+) -> None:
+    from openhands.sdk import LocalConversation
+    from openhands.tools.task.manager import TaskManager
+
+    child_runs: list[str] = []
+    native_run = TaskManager._run_until_finished
+
+    def run_child(manager: TaskManager, task_id: str, conversation: LocalConversation) -> None:
+        child_runs.append(task_id)
+        native_run(manager, task_id, conversation)
+
+    monkeypatch.setattr(TaskManager, "_run_until_finished", run_child)
+    project = tmp_path / "project"
+    project.mkdir()
+    evidence_path = tmp_path / "qualifications.json"
+    messages = [
+        _tool_message(
+            "task", description="Review plan", prompt="Review synthetic plan.", subagent_type=role
+        )
+        for role in ("research-planner", "statistical-reviewer")
+    ]
+    llm = TestLLM.from_messages(
+        [
+            _tool_message(
+                "finish", message="Plan prepared.", status="success", outcome_summary="Done."
+            ),
+            Message(
+                role="assistant",
+                content=[],
+                tool_calls=[call for message in messages for call in message.tool_calls or []],
+            ),
+            _tool_message("finish", message="No findings.", candidates=[]),
+            _tool_message("finish", message="No findings.", candidates=[]),
+            _tool_message(
+                "finish", message="Reviews settled.", status="success", outcome_summary="Done."
+            ),
+        ]
+    )
+    environment = {"HEARTWOOD_REVIEW_QUALIFICATIONS": str(evidence_path)}
+    llm.max_input_tokens = 32768
+    llm.max_output_tokens = 4096
+    gateway = _sdk_gateway(project, llm, monkeypatch, specialists=True, environment=environment)
+    try:
+        _begin_baseline_plan(gateway, project)
+        assert gateway.wait_for_session_idle(session_id="research", timeout=30)
+        observed = gateway.evaluation_observation(session_id="research")
+        evidence_path.write_text(review_evidence(observed, datetime.now(UTC)).model_dump_json())
+        evidence_path.chmod(0o600)
+        preview = _projected_command(gateway, "prepare-parallel-review")
+        preview_result = gateway.handle(preview)
+        assert llm.call_count == 1
+        state = _state(gateway)
+        assert state.parallel_review_plan is not None, [
+            event.payload
+            for event in preview_result.events
+            if event.kind == EventKind.ERROR_RECORDED
+        ]
+        command = _projected_command(gateway, "request-parallel-review")
+        gateway.handle(command)
+        assert gateway.wait_for_session_idle(session_id="research", timeout=30)
+        group = gateway.session_projection(session_id="research").pending_approval
+        assert group is not None
+        assert len(group.actions) == 2
+        assert child_runs == []
+        if revoke:
+            evidence_path.unlink()
+        approval = SessionCommand(
+            command_id=uuid4().hex,
+            session_id="research",
+            kind=CommandKind.APPROVE,
+            created_at=datetime.now(UTC).isoformat(),
+            payload={"target_id": group.group_id},
+        )
+        gateway.handle(approval)
+        assert gateway.wait_for_session_idle(session_id="research", timeout=30)
+        projection = gateway.session_projection(session_id="research")
+        if revoke:
+            assert child_runs == []
+            assert all(child.task_id is None for child in projection.subagents)
+            return
+        assert len(set(child_runs)) == 2
+        assert projection.workflow is not None
+        review = projection.workflow.research_review
+        assert review is not None
+        assert review.status == "assessed"
+        assert len(review.submissions) == 2
+        assert all(child.task_id is not None for child in projection.subagents)
+        assert gateway.handle(command).replayed
+        assert gateway.handle(approval).replayed
+        calls = llm.call_count
+        before = _state(gateway)
+    finally:
+        gateway.stop()
+    unused = TestLLM.from_messages([])
+    reopened = _sdk_gateway(project, unused, monkeypatch, specialists=True, environment=environment)
+    try:
+        assert _state(reopened) == before
+        assert reopened.handle(command).replayed
+        assert unused.call_count == 0
+        assert calls == 3  # Native child conversations own their separate model counters.
+    finally:
+        reopened.stop()
 
 
 def test_real_sdk_review_settles_after_approval_and_reopens_without_model_work(

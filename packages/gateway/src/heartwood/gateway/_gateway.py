@@ -203,6 +203,7 @@ from heartwood.schemas.experiments import (
     ExperimentExport,
     ExperimentExportBinding,
 )
+from heartwood.schemas.parallel_reviews import ParallelReviewPlan
 from heartwood.schemas.python_environment import PythonEnvironmentSnapshot
 from heartwood.schemas.review import (
     ResearchReviewRun,
@@ -216,6 +217,7 @@ from heartwood.schemas.workflows import (
     WorkflowCatalog,
     WorkflowOutcomeStatus,
     WorkflowProjectBinding,
+    WorkflowRun,
     WorkflowStageEvaluation,
 )
 from heartwood.session import CommandKind, EventKind, SessionCommand, SessionEvent
@@ -442,7 +444,15 @@ class SessionGateway:
         self.sessions_root = self.project.sessions_dir
         self.env = dict(os.environ if env is None else env)
         self.backend_id = backend_id
-        self._parallel_review_preparer = parallel_review_preparer
+        from heartwood.gateway._review_qualification import QUALIFICATION_ENV
+
+        qualification_path = self.env.get(QUALIFICATION_ENV)
+        if parallel_review_preparer is not None and qualification_path is not None:
+            raise ValueError("Configure only one deployment review evidence source")
+        self._review_qualification_path = Path(qualification_path) if qualification_path else None
+        self._parallel_review_preparer = parallel_review_preparer or (
+            self._qualified_review_preparer if self._review_qualification_path is not None else None
+        )
         self._checkpoint_signer_registry_override = checkpoint_signer_registry
         self._checkpoint_signer_registry_cache: CheckpointSignerRegistry | None = None
         self._checkpoint_signer_factory = checkpoint_signer_factory
@@ -993,6 +1003,13 @@ class SessionGateway:
         """
         service = self._service(session_id)
 
+        return self._owned_evaluation_observer(session_id, service)
+
+    def _owned_evaluation_observer(
+        self, session_id: str, service: SessionService
+    ) -> Callable[[str], EvaluationRuntimeObservation]:
+        """Construct an observation capability without acquiring locks or session ownership."""
+
         def owned() -> bool:
             return self._services.get(session_id) is service and service.store.owns_writer
 
@@ -1008,6 +1025,34 @@ class SessionGateway:
             return result
 
         return observe
+
+    def _qualified_review_preparer(
+        self, run: WorkflowRun, snapshot: ReviewSnapshot, session_id: str, now: datetime
+    ) -> ParallelReviewPlan:
+        """Reassess deployment evidence without reentering gateway or native agent locks."""
+        from heartwood.gateway._review_qualification import (
+            load_review_qualifications,
+            qualified_review_plan,
+        )
+
+        service = self._services.get(session_id)
+        path = self._review_qualification_path
+        if service is None or path is None:
+            raise ValueError("Qualified review requires its owned runtime and deployment evidence")
+        observe = self._owned_evaluation_observer(session_id, service)
+        runtime = observe(session_id)
+        result = qualified_review_plan(
+            evidence=load_review_qualifications(path, project_root=self.project.root),
+            project_root=self.project.root,
+            run=run,
+            snapshot=snapshot,
+            session_id=session_id,
+            runtime=runtime,
+            now=now,
+        )
+        if observe(session_id) != runtime:
+            raise ValueError("Review runtime changed while reading deployment evidence")
+        return result
 
     @staticmethod
     def _evaluation_observation(service: SessionService) -> EvaluationRuntimeObservation:

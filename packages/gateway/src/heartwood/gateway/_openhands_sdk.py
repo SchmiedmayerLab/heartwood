@@ -1538,6 +1538,10 @@ class OpenHandsSdkBackend:
     ) -> tuple[BackendEvent, ...]:
         if conversation is None:
             conversation = self._get_conversation()
+        with self._run_lock:
+            run_failed = self._run_failed
+            execution_active = self._execution_active
+            run_cancelled = self._run_cancelled.is_set()
         state = _conversation_state(conversation)
         branch = state.active_branch()
         anchor = branch[-1].id if branch else str(conversation.id)
@@ -1547,10 +1551,6 @@ class OpenHandsSdkBackend:
         has_typed_conversation_error = any(
             isinstance(event, ConversationErrorEvent) for event in branch
         )
-        with self._run_lock:
-            run_failed = self._run_failed
-            execution_active = self._execution_active
-            run_cancelled = self._run_cancelled.is_set()
         if (
             execution_active
             and not run_cancelled
@@ -1559,6 +1559,7 @@ class OpenHandsSdkBackend:
                 in {
                     ConversationExecutionStatus.IDLE,
                     ConversationExecutionStatus.PAUSED,
+                    ConversationExecutionStatus.WAITING_FOR_CONFIRMATION,
                 }
                 or (
                     state.execution_status in _OPENHANDS_ERROR_STATUSES
@@ -1597,7 +1598,12 @@ class OpenHandsSdkBackend:
                     source_event_id=(f"openhands-state:{anchor}:conversation-stopped"),
                 )
             )
-        if state.execution_status == ConversationExecutionStatus.WAITING_FOR_CONFIRMATION:
+        # OpenHands can expose WAITING while the action batch is still being appended.
+        # Publish its complete approval identity only after the native run settles.
+        if (
+            state.execution_status == ConversationExecutionStatus.WAITING_FOR_CONFIRMATION
+            and not execution_active
+        ):
             if unmatched_group is None:  # pragma: no cover - SDK state contract
                 raise OpenHandsSdkError(
                     "OpenHands is waiting for confirmation without unmatched actions"
