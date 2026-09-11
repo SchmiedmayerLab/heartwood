@@ -16,7 +16,10 @@ from typing import TYPE_CHECKING, Protocol, cast
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
-from heartwood.core_adapter.research_workflows import research_workflow
+from heartwood.core_adapter.research_workflows import (
+    research_workflow,
+    workflow_reproduction_spec,
+)
 from heartwood.schemas import JsonValue
 from heartwood.schemas.execution import ExecutionUsage
 from heartwood.schemas.research import (
@@ -392,6 +395,18 @@ def workflow_stage_prompt(run: WorkflowRun) -> str:
             name: schemas[name].model_json_schema() for name in stage.writes if name in schemas
         },
     }
+    if reproduction := workflow_reproduction_spec(run.binding, run.stage_id):
+        specification["reproduction"] = {
+            "command": reproduction.command,
+            "protected_paths": reproduction.protected_paths,
+            "output_paths": reproduction.output_paths,
+            "instruction": (
+                "Propose this exact terminal command as a separate action group from the "
+                "project root. The output directory must not already exist. Do not create "
+                "it or copy outputs before execution. Keep the program, inputs, and original "
+                "outputs unchanged. This instruction is not permission to execute."
+            ),
+        }
     return (
         "Perform only this research workflow stage using the normal reviewed coding tools. "
         "Do not modify supplied inputs or accepted outputs from earlier stages. "

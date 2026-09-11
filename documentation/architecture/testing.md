@@ -111,6 +111,11 @@ The independent verification case distinguishes a truthful byte comparison from 
 Reproduction evidence requires a previously absent output directory and captures the outputs after a separately approved command, before approving subsequent actions.
 It binds the original program, fixture inputs, and primary outputs before approval and after execution.
 A no-op command followed or preceded by copied outputs does not satisfy this check.
+The shared reproduction contract records the session, run, stage, action, exact shell-quoted invocation, and inspected file hashes without retaining file content.
+Preparation is not execution evidence or permission.
+The first observed outcome must be an approved successful action with all protected files unchanged and every expected output available; failed evidence cannot be repaired by copying files later.
+Restoring a serialized record does not independently establish execution: the session owner must supply its trusted ordering and approval history.
+These bounded observations are not a sandbox or proof against an adversarial process changing and restoring files between observations.
 Fresh-process checks compare the gateway's persisted projection, event-chain identity, and verified audit identity without creating a model client.
 
 The driver reserves a private result under `.heartwood/evaluations/` before starting model work.

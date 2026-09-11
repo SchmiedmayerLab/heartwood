@@ -6,12 +6,16 @@
 
 """First-party research task definitions, independent of model and platform routing."""
 
+from pathlib import PurePosixPath
+
+from heartwood.core_adapter.reproduction import ReproductionSpec
 from heartwood.schemas.execution import ExecutionBudget
 from heartwood.schemas.workflows import (
     WorkflowArtifact,
     WorkflowCheck,
     WorkflowDefinition,
     WorkflowInput,
+    WorkflowProjectBinding,
     WorkflowStage,
 )
 
@@ -69,6 +73,48 @@ def research_workflow(workflow_id: str) -> WorkflowDefinition:
         if definition.workflow_id == workflow_id:
             return definition
     raise ValueError("Unknown research workflow")
+
+
+def workflow_reproduction_spec(
+    binding: WorkflowProjectBinding, stage_id: str
+) -> ReproductionSpec | None:
+    """Derive reproduction instructions from bound inputs and declared stage artifacts."""
+    definition = research_workflow(binding.workflow_id)
+    if definition.fingerprint != binding.workflow_fingerprint:
+        raise ValueError("Workflow definition changed; prepare a new binding")
+    stage = definition.stage(stage_id)
+    if not any(
+        check.evaluator_id in {"execution.reproduction", "execution.comparison"}
+        for check in stage.checks
+    ):
+        return None
+    files = {item.input_id: item.value for item in binding.inputs if item.kind == "file"}
+    paths = {
+        **files,
+        **{
+            artifact.artifact_id: str(
+                PurePosixPath(binding.output_directory) / artifact.relative_path
+            )
+            for artifact in definition.artifacts
+        },
+    }
+    protected = set(files.values())
+    for previous in definition.stages:
+        if previous.stage_id == stage_id:
+            break
+        protected.update(paths[name] for name in previous.writes)
+    outputs = tuple(
+        PurePosixPath(paths[name]) for name in ("reproduced-metrics", "reproduced-predictions")
+    )
+    if outputs[0].parent != outputs[1].parent:
+        raise ValueError("Reproduction outputs require one dedicated directory")
+    return ReproductionSpec(
+        program=paths["program"],
+        data=paths["data"],
+        directory=str(outputs[0].parent),
+        protected_paths=tuple(sorted(protected)),
+        output_names=tuple(path.name for path in outputs),
+    )
 
 
 def _readiness() -> WorkflowDefinition:

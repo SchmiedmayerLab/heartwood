@@ -35,18 +35,46 @@ from openhands.tools import TerminalTool
 
 from heartwood.compliance.evaluation_store import EvaluationStore
 from heartwood.compliance.research import ResearchTask, research_tasks
-from heartwood.compliance.research_runner import ReviewDecision, run_research_trial
+from heartwood.compliance.research_runner import ReviewDecision, _rerun_spec, run_research_trial
 from heartwood.core_adapter import SessionService
 from heartwood.gateway import (
     ModelProfile,
     OpenHandsSdkBackend,
     ProjectContext,
+    ProjectionActionRecord,
     ProjectionApprovalGroup,
     SessionGateway,
 )
 from heartwood.gateway._project_file_editor import PROJECT_FILE_EDITOR_SPEC
 from heartwood.schemas.evaluation import EvaluationConfiguration
 from heartwood.schemas.execution import ExecutionBudget
+
+
+@pytest.mark.parametrize(
+    ("is_input", "reset", "eligible"),
+    [(False, False, True), (True, False, False), (False, True, False)],
+)
+def test_reproduction_requires_a_normal_terminal_invocation(
+    is_input: bool, reset: bool, eligible: bool
+) -> None:
+    action = ProjectionActionRecord.model_validate(
+        {
+            "tool_call_id": "reviewed-reproduction",
+            "tool_name": "terminal",
+            "risk": "unknown",
+            "summary": "Synthetic rerun",
+            "details": {
+                "kind": "terminal",
+                "command": "python analysis.py --data data.csv --output-dir reproduced",
+                "is_input": is_input,
+                "reset": reset,
+            },
+            "state": "awaiting-review",
+            "proposed_sequence": 1,
+            "updated_sequence": 1,
+        }
+    )
+    assert (_rerun_spec(action) is not None) is eligible
 
 
 def _configuration() -> EvaluationConfiguration:

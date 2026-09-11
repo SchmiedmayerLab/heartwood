@@ -9,18 +9,116 @@
 from __future__ import annotations
 
 import hashlib
+import json
+from datetime import UTC, datetime
 
 import pytest
 from pydantic import ValidationError
 
-from heartwood.core_adapter.research_workflows import research_workflow, research_workflows
+from heartwood.core_adapter.research_workflows import (
+    research_workflow,
+    research_workflows,
+    workflow_reproduction_spec,
+)
 from heartwood.core_adapter.workflow_evidence import assess_workflow_stage
+from heartwood.core_adapter.workflow_runtime import workflow_stage_prompt
 from heartwood.schemas.workflows import (
+    WorkflowBoundInput,
     WorkflowCheckResult,
     WorkflowDefinition,
     WorkflowOutcomeStatus,
+    WorkflowProjectBinding,
+    WorkflowRun,
     WorkflowValueFingerprint,
 )
+
+
+def _binding(workflow_id: str) -> WorkflowProjectBinding:
+    definition = research_workflow(workflow_id)
+    return WorkflowProjectBinding(
+        workflow_id=workflow_id,
+        workflow_fingerprint=definition.fingerprint,
+        output_directory="research results",
+        inputs=tuple(
+            WorkflowBoundInput(
+                input_id=item.input_id,
+                kind=item.kind,
+                value=(f"inputs/{item.input_id}.txt" if item.kind == "file" else "Question?"),
+                sha256="a" * 64,
+            )
+            for item in definition.inputs
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ("workflow_id", "stage_id", "program"),
+    [
+        ("baseline-analysis", "verify", "research results/analysis.py"),
+        ("result-verification", "reproduce", "inputs/program.txt"),
+    ],
+)
+def test_reproduction_uses_bound_inputs_and_the_same_exact_prompt_command(
+    workflow_id: str, stage_id: str, program: str
+) -> None:
+    binding = _binding(workflow_id)
+    spec = workflow_reproduction_spec(binding, stage_id)
+    assert spec is not None
+    assert spec.program == program
+    assert spec.data == "inputs/data.txt"
+    assert spec.directory == "research results/reproduced"
+    assert set(spec.output_paths) == {
+        "research results/reproduced/metrics.json",
+        "research results/reproduced/predictions.csv",
+    }
+    assert {item.value for item in binding.inputs if item.kind == "file"}.issubset(
+        spec.protected_paths
+    )
+    assert "Question?" not in spec.protected_paths
+    assert "research results/verification.json" not in spec.protected_paths
+    assert "research results/report.md" not in spec.protected_paths
+    if workflow_id == "baseline-analysis":
+        assert "research results/plan.json" in spec.protected_paths
+        assert "research results/metrics.json" in spec.protected_paths
+    else:
+        assert "research results/environment-check.json" in spec.protected_paths
+    run = WorkflowRun(
+        run_id="research-run",
+        revision=0,
+        binding=binding,
+        stage_id=stage_id,
+        phase="ready",
+        created_at=datetime.now(UTC),
+    )
+    prompt = json.loads(workflow_stage_prompt(run).split("\n", 1)[1])
+    assert spec.matches_command(prompt["reproduction"]["command"])
+    assert prompt["reproduction"]["protected_paths"] == list(spec.protected_paths)
+    assert prompt["reproduction"]["output_paths"] == list(spec.output_paths)
+
+
+@pytest.mark.parametrize(
+    ("workflow_id", "stage_id"),
+    [
+        ("dataset-readiness", "inspect"),
+        ("baseline-analysis", "plan"),
+        ("baseline-analysis", "execute"),
+        ("result-verification", "environment"),
+    ],
+)
+def test_non_reproduction_stages_do_not_acquire_an_execution_recipe(
+    workflow_id: str, stage_id: str
+) -> None:
+    assert workflow_reproduction_spec(_binding(workflow_id), stage_id) is None
+
+
+def test_reproduction_rejects_changed_definition_and_unknown_stage() -> None:
+    binding = _binding("baseline-analysis")
+    with pytest.raises(ValueError, match="definition changed"):
+        workflow_reproduction_spec(
+            binding.model_copy(update={"workflow_fingerprint": "b" * 64}), "verify"
+        )
+    with pytest.raises(ValueError, match="Unknown workflow stage"):
+        workflow_reproduction_spec(binding, "other")
 
 
 def test_workflow_definitions_round_trip_and_keep_execution_provider_neutral() -> None:

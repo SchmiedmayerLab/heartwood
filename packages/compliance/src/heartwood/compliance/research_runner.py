@@ -9,7 +9,6 @@
 from __future__ import annotations
 
 import json
-import shlex
 import subprocess
 import sys
 import time
@@ -24,6 +23,7 @@ from heartwood.compliance.evaluation_store import EvaluationStore
 from heartwood.compliance.replay_evidence import replay_evidence
 from heartwood.compliance.research import ResearchTask, research_suite, verify_research_artifacts
 from heartwood.core_adapter import SessionResult
+from heartwood.core_adapter.reproduction import ReproductionSpec, ReproductionWitness
 from heartwood.gateway import (
     ProjectionActionRecord,
     ProjectionApprovalGroup,
@@ -44,8 +44,18 @@ type ReviewDecision = Literal["approve", "reject", "stop"]
 type ResearchStop = Literal[
     "finished", "error", "paused", "rejected", "review-stopped", "budget-exceeded"
 ]
-_RERUN_COMMAND = "python analysis.py --data data.csv --output-dir benchmark-reproduced"
 _PRIMARY_OUTPUTS = ("metrics.json", "predictions.csv")
+_REPRODUCTION_SPECS = tuple(
+    ReproductionSpec(
+        program="analysis.py",
+        data="data.csv",
+        directory=directory,
+        protected_paths=("analysis.py", "data.csv"),
+        output_names=_PRIMARY_OUTPUTS,
+    )
+    for directory in ("benchmark-reproduced", "reproduced")
+)
+_RERUN_COMMAND = _REPRODUCTION_SPECS[0].command
 _DEFAULT_BUDGET = ExecutionBudget()
 
 
@@ -58,13 +68,6 @@ class ResearchTrial:
     artifacts: Mapping[str, str]
 
 
-@dataclass
-class _Reproduction:
-    directory: str
-    inputs: dict[str, str]
-    outputs: dict[str, str] | None = None
-
-
 @dataclass(frozen=True)
 class _TrialSession:
     gateway: SessionGateway
@@ -73,7 +76,7 @@ class _TrialSession:
     created_at: str
     runtime: EvaluationRuntimeObservation
     approved_action_ids: set[str] = field(default_factory=set)
-    reproductions: dict[str, _Reproduction] = field(default_factory=dict)
+    reproductions: dict[str, ReproductionWitness] = field(default_factory=dict)
     reproduction_inputs: dict[str, str] = field(default_factory=dict)
 
     def command(self, suffix: str, kind: CommandKind, payload: dict[str, object]) -> SessionResult:
@@ -103,14 +106,17 @@ class _TrialSession:
     def observe_reproductions(self, projection: SessionProjection) -> None:
         for action in projection.actions:
             witness = self.reproductions.get(action.tool_call_id)
-            if witness is not None and witness.outputs is None and action.state == "succeeded":
-                witness.outputs = (
-                    _read_artifacts(
-                        self.gateway,
-                        tuple(f"{witness.directory}/{name}" for name in _PRIMARY_OUTPUTS),
-                    )
-                    if witness.inputs == _read_artifacts(self.gateway, tuple(witness.inputs))
-                    else {}
+            if witness is not None and witness.status == "prepared" and action.outcome is not None:
+                self.reproductions[action.tool_call_id] = witness.observe(
+                    tool_call_id=action.tool_call_id,
+                    approved=(
+                        action.tool_call_id in self.approved_action_ids
+                        and action.decision == "approved"
+                        and action.state == "succeeded"
+                    ),
+                    exit_code=action.outcome.exit_code,
+                    protected=_read_artifacts(self.gateway, witness.spec.protected_paths),
+                    outputs=_read_artifacts(self.gateway, witness.spec.output_paths),
                 )
 
     def reproduced(self, action: ProjectionActionRecord, directory: str) -> bool:
@@ -119,9 +125,10 @@ class _TrialSession:
             _is_approved_rerun(action, directory)
             and action.tool_call_id in self.approved_action_ids
             and witness is not None
-            and witness.outputs is not None
-            and len(witness.outputs) == len(_PRIMARY_OUTPUTS)
-            and witness.outputs == _read_artifacts(self.gateway, tuple(witness.outputs))
+            and witness.verifies(
+                protected=_read_artifacts(self.gateway, witness.spec.protected_paths),
+                outputs=_read_artifacts(self.gateway, witness.spec.output_paths),
+            )
         )
 
 
@@ -399,17 +406,29 @@ def _drive(
                 raise ValueError("Benchmark review must explicitly approve, reject, or stop")
             if decision == "approve" and len(group.actions) == 1:
                 action = group.actions[0]
-                directory = _rerun_directory(action)
-                if (
-                    directory is not None
-                    and _destination_absent(session.gateway, directory)
-                    and session.reproduction_inputs
-                    and session.reproduction_inputs
-                    == _read_artifacts(session.gateway, tuple(session.reproduction_inputs))
-                ):
-                    session.reproductions[action.tool_call_id] = _Reproduction(
-                        directory, dict(session.reproduction_inputs)
+                selected = _rerun_spec(action)
+                if selected is not None and session.reproduction_inputs:
+                    spec = ReproductionSpec(
+                        program=selected.program,
+                        data=selected.data,
+                        directory=selected.directory,
+                        protected_paths=tuple(session.reproduction_inputs),
+                        output_names=selected.output_names,
                     )
+                    witness = ReproductionWitness.prepare(
+                        session_id=session.session_id,
+                        run_id=str(session.run_id),
+                        stage_id="reproduce",
+                        tool_call_id=action.tool_call_id,
+                        spec=spec,
+                        command=selected.command,
+                        group_size=len(group.actions),
+                        destination_absent=_destination_absent(session.gateway, spec.directory),
+                        expected=session.reproduction_inputs,
+                        observed=_read_artifacts(session.gateway, spec.protected_paths),
+                    )
+                    if witness is not None:
+                        session.reproductions[action.tool_call_id] = witness
             result = session.command(
                 f"review-{group.group_id}",
                 CommandKind.APPROVE if decision == "approve" else CommandKind.DENY,
@@ -461,26 +480,21 @@ def _reviewed_execution(projection: SessionProjection, approved_ids: set[str]) -
 
 
 def _is_approved_rerun(action: ProjectionActionRecord, output_directory: str) -> bool:
+    spec = _rerun_spec(action)
     return (
         action.state == "succeeded"
         and action.decision == "approved"
-        and _rerun_directory(action) == output_directory
+        and spec is not None
+        and spec.directory == output_directory
     )
 
 
-def _rerun_directory(action: ProjectionActionRecord) -> str | None:
-    if action.details.kind != "terminal":
+def _rerun_spec(action: ProjectionActionRecord) -> ReproductionSpec | None:
+    if action.details.kind != "terminal" or action.details.is_input or action.details.reset:
         return None
-    try:
-        arguments = shlex.split(action.details.command)
-    except ValueError:
-        return None
-    if (
-        len(arguments) == 6
-        and arguments[:5] == ["python", "analysis.py", "--data", "data.csv", "--output-dir"]
-        and arguments[5] in ("reproduced", "benchmark-reproduced")
-    ):
-        return arguments[5]
+    for spec in _REPRODUCTION_SPECS:
+        if spec.matches_command(action.details.command):
+            return spec
     return None
 
 
