@@ -8,10 +8,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from collections.abc import Sequence
 from pathlib import Path
-from threading import RLock
 from typing import TypedDict, override
 
 from openhands.sdk import Agent, ImageContent, LocalConversation, TextContent, Tool
@@ -73,6 +73,14 @@ class SpecialistToolRole(TypedDict):
     description: str
 
 
+class _InterruptibleSpecialistConversation(LocalConversation):
+    """Use native cancellable I/O inside the Task manager's blocking worker contract."""
+
+    @override
+    def run(self) -> None:  # type: ignore[override]  # Upstream tracing types this method as Never.
+        asyncio.run(self.arun())
+
+
 class _CatalogTaskManager(TaskManager):
     """Reuse OpenHands task orchestration behind a strict Heartwood allowlist."""
 
@@ -86,8 +94,6 @@ class _CatalogTaskManager(TaskManager):
         super().__init__(confirmation_handler=confirmation_handler)
         self._allowed_specialist_ids = allowed_specialist_ids
         self._structured_reviews = structured_reviews
-        self._active_child: LocalConversation | None = None
-        self._active_child_lock = RLock()
 
     @override
     def _generate_ids(self) -> tuple[str, uuid.UUID]:
@@ -168,7 +174,7 @@ class _CatalogTaskManager(TaskManager):
             cache_limit_size=max_iteration_per_run,
         )
         with detached_delegate_context() as link:
-            return LocalConversation(
+            return _InterruptibleSpecialistConversation(
                 agent=worker_agent,
                 workspace=parent.state.workspace.working_dir,
                 persistence_dir=persistence_dir,
@@ -191,22 +197,29 @@ class _CatalogTaskManager(TaskManager):
 
     @override
     def _run_task(self, task: Task, prompt: str) -> Task:
-        child = task.conversation
-        with self._active_child_lock:
-            self._active_child = child
-        try:
-            return super()._run_task(task, prompt)
-        finally:
-            with self._active_child_lock:
-                if self._active_child is child:
-                    self._active_child = None
+        token = self.parent_conversation.cancel_token
+        if token is not None and token.is_cancelled:
+            task.set_error("The parent cancelled the specialist before execution.")
+            self._evict_task(task)
+            return task
+        return super()._run_task(task, prompt)
 
-    def interrupt_active_child(self) -> None:
-        """Propagate parent interruption to the currently running child."""
-        with self._active_child_lock:
-            child = self._active_child
-        if child is not None:
-            child.interrupt()
+    def interrupt_active_children(self) -> None:
+        """Interrupt native running tasks without maintaining another active-task registry."""
+        with self._tasks_lock:
+            children = tuple(
+                task.conversation
+                for task in self._tasks.values()
+                if task.status == TaskStatus.RUNNING and task.conversation is not None
+            )
+        errors: list[Exception] = []
+        for child in children:
+            try:
+                child.interrupt()
+            except Exception as error:
+                errors.append(error)
+        if errors:
+            raise ExceptionGroup("Specialist interruption failed", errors)
 
     @override
     def _evict_task(self, task: Task) -> None:
@@ -239,7 +252,7 @@ class _CatalogTaskExecutor(TaskExecutor):
 
     @override
     def interrupt(self) -> None:
-        self._catalog_manager.interrupt_active_child()
+        self._catalog_manager.interrupt_active_children()
 
     @override
     def __call__(

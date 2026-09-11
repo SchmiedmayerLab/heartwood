@@ -16,7 +16,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import replace
 from functools import cache
 from pathlib import Path
-from threading import Event, Thread
+from threading import Barrier, Event, Lock, Thread
 from types import SimpleNamespace
 from typing import Literal, cast
 
@@ -45,7 +45,7 @@ from openhands.sdk.event.conversation_error import ConversationErrorEvent
 from openhands.sdk.event.error_classification import ErrorClassification, FailureKind
 from openhands.sdk.llm import LLMResponse, Message, MessageToolCall, Metrics, TextContent
 from openhands.sdk.llm.llm import LLMCallContext
-from openhands.sdk.llm.streaming import TokenCallbackType
+from openhands.sdk.llm.streaming import AnyTokenCallbackType, TokenCallbackType
 from openhands.sdk.security import (
     AlwaysConfirm,
     ConfirmRisky,
@@ -3234,6 +3234,300 @@ def test_completed_specialist_workflow_replays_without_model_calls(
     restored.close()
 
 
+@pytest.mark.parametrize("workers", [1, 2])
+@pytest.mark.parametrize("partial_failure", [False, True])
+def test_native_specialist_task_concurrency_preserves_results_and_approval(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, workers: int, partial_failure: bool
+) -> None:
+    from openhands.sdk.llm.llm_registry import RegistryEvent
+    from openhands.tools.task.manager import TaskManager
+
+    active = 0
+    maximum_active = 0
+    calls = 0
+    lock = Lock()
+    barrier = Barrier(workers)
+    run = TaskManager._run_until_finished
+
+    def inspect_overlap(
+        manager: TaskManager, task_id: str, conversation: LocalConversation
+    ) -> None:
+        nonlocal active, maximum_active, calls
+        with lock:
+            active += 1
+            calls += 1
+            maximum_active = max(maximum_active, active)
+        try:
+            barrier.wait(timeout=10)
+            run(manager, task_id, conversation)
+        finally:
+            with lock:
+                active -= 1
+            # TestLLM has no provider accounting; supply a known native usage report.
+            conversation.conversation_stats.register_llm(RegistryEvent(llm=conversation.agent.llm))
+            metrics = conversation.conversation_stats.get_metrics_for_usage(
+                conversation.agent.llm.usage_id
+            )
+            metrics.add_token_usage(11, 7, 0, 0, 32_768, task_id)
+            metrics.add_cost(0.01)
+
+    monkeypatch.setattr(TaskManager, "_run_until_finished", inspect_overlap)
+    reviewers = ("data-quality-reviewer", "statistical-reviewer")
+    messages = [
+        _task_message(
+            f"review-{index}",
+            description="Review supplied evidence",
+            prompt="Review only the supplied synthetic aggregate evidence.",
+            specialist_id=reviewer,
+        )
+        for index, reviewer in enumerate(reviewers)
+    ]
+    llm = TestLLM.from_messages(
+        [
+            Message(
+                role="assistant",
+                content=[],
+                tool_calls=[call for message in messages for call in (message.tool_calls or [])],
+            ),
+            RuntimeError("Synthetic private review failure")
+            if partial_failure
+            else _specialist_result("Review of supplied evidence complete.", True),
+            _specialist_result("Review of supplied evidence complete.", True),
+            _assistant_message("Both advisory results are ready for independent checks."),
+        ]
+    )
+    conversation_id = uuid.uuid4()
+    backend = OpenHandsSdkBackend(
+        profile=_local_profile(),
+        workspace=tmp_path / "workspace",
+        skills_dir=tmp_path / "skills",
+        persistence_dir=tmp_path / "openhands",
+        conversation_key="parallel-conformance",
+        specialist_catalog=_specialist_catalog(),
+        env={},
+        conversation_factory=_conversation_factory(
+            tmp_path,
+            llm,
+            tools=[_specialist_tool(structured_reviews=True)],
+            tool_concurrency_limit=workers,
+            conversation_id=conversation_id,
+        ),
+    )
+    try:
+        backend._register_specialized_agents()
+        backend.submit_turn(session_id="session-1", prompt="Review the synthetic evidence.")
+        group = _wait_for_pending_group(backend)
+        assert len(group.actions) == 2
+        assert calls == 0
+        backend.resolve_confirmation(
+            session_id="session-1", action_group_id=group.group_id, approved=True
+        )
+        _wait_for_lifecycle(backend, BackendLifecycle.FINISHED)
+        events = backend.reconcile(session_id="session-1", known_source_event_ids=frozenset())
+        completed = [
+            event.subagent
+            for event in events
+            if isinstance(event, BackendSubagentEvent)
+            and event.subagent.status == BackendSubagentStatus.COMPLETED
+        ]
+        assert maximum_active == workers
+        assert calls == 2
+        terminal = [
+            event.subagent
+            for event in events
+            if isinstance(event, BackendSubagentEvent)
+            and event.subagent.status
+            in {BackendSubagentStatus.COMPLETED, BackendSubagentStatus.ERROR}
+        ]
+        assert {item.agent_name for item in terminal} == set(reviewers)
+        assert len({item.task_id for item in terminal}) == 2
+        assert len(completed) == (1 if partial_failure else 2)
+        assert all(item.review_proposals is not None for item in completed)
+        assert "Synthetic private review failure" not in repr(events)
+        assert (
+            len(
+                [
+                    key
+                    for key in backend._get_conversation().conversation_stats.usage_to_metrics
+                    if key.startswith("task:")
+                ]
+            )
+            == 2
+        )
+        assert active == 0
+        usage = backend._get_conversation().conversation_stats.get_combined_metrics().get_snapshot()
+        assert usage.accumulated_token_usage is not None
+        assert usage.accumulated_token_usage.prompt_tokens == 22
+        assert usage.accumulated_token_usage.completion_tokens == 14
+        assert usage.accumulated_cost == pytest.approx(0.02)
+    finally:
+        barrier.abort()
+        backend.close()
+    empty = TestLLM.from_messages([])
+    restored = OpenHandsSdkBackend(
+        profile=_local_profile(),
+        workspace=tmp_path / "workspace",
+        skills_dir=tmp_path / "skills",
+        persistence_dir=tmp_path / "openhands",
+        conversation_key="parallel-conformance",
+        specialist_catalog=_specialist_catalog(),
+        env={},
+        conversation_factory=_conversation_factory(
+            tmp_path,
+            empty,
+            tools=[_specialist_tool(structured_reviews=True)],
+            tool_concurrency_limit=workers,
+            conversation_id=conversation_id,
+        ),
+    )
+    try:
+        replayed = restored.reconcile(session_id="session-1", known_source_event_ids=frozenset())
+        assert [
+            event.subagent
+            for event in replayed
+            if isinstance(event, BackendSubagentEvent)
+            and event.subagent.status
+            in {BackendSubagentStatus.COMPLETED, BackendSubagentStatus.ERROR}
+        ] == terminal
+        assert empty.call_count == 0
+        assert calls == 2
+        restored_usage = (
+            restored._get_conversation().conversation_stats.get_combined_metrics().get_snapshot()
+        )
+        assert restored_usage.accumulated_token_usage == usage.accumulated_token_usage
+        assert restored_usage.accumulated_cost == usage.accumulated_cost
+    finally:
+        restored.close()
+
+
+@pytest.mark.parametrize("task_count", [2, 3])
+def test_parent_pause_interrupts_both_native_specialist_model_calls(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, task_count: int
+) -> None:
+    started = 0
+    stopped = 0
+    lock = Lock()
+    both_started = Event()
+    both_stopped = Event()
+    complete = TestLLM.acompletion
+
+    async def wait_for_interrupt(
+        llm: TestLLM,
+        messages: list[Message],
+        tools: Sequence[ToolDefinition[Action, Observation]] | None = None,
+        add_security_risk_prediction: bool = False,
+        on_token: AnyTokenCallbackType | None = None,
+        call_context: LLMCallContext | None = None,
+        **kwargs: object,
+    ) -> LLMResponse:
+        nonlocal started, stopped
+        if any(tool.name == "task" for tool in tools or []):
+            return await complete(
+                llm,
+                messages=messages,
+                tools=tools,
+                add_security_risk_prediction=add_security_risk_prediction,
+                on_token=on_token,
+                call_context=call_context,
+                **kwargs,
+            )
+        with lock:
+            started += 1
+            if started == 2:
+                both_started.set()
+        try:
+            await asyncio.sleep(30)
+            raise AssertionError("Specialist model request was not cancelled")
+        finally:
+            with lock:
+                stopped += 1
+                if stopped == 2:
+                    both_stopped.set()
+
+    monkeypatch.setattr(TestLLM, "acompletion", wait_for_interrupt)
+    messages = [
+        _task_message(
+            f"pause-{index}",
+            description="Review evidence",
+            prompt="Synthetic review",
+            specialist_id=reviewer,
+        )
+        for index, reviewer in enumerate(
+            ("data-quality-reviewer", "statistical-reviewer", "reproducibility-reviewer")[
+                :task_count
+            ]
+        )
+    ]
+    llm = TestLLM.from_messages(
+        [
+            Message(
+                role="assistant",
+                content=[],
+                tool_calls=[call for message in messages for call in (message.tool_calls or [])],
+            ),
+        ]
+    )
+    conversation_id = uuid.uuid4()
+    backend = OpenHandsSdkBackend(
+        profile=_local_profile(),
+        workspace=tmp_path / "workspace",
+        skills_dir=tmp_path / "skills",
+        persistence_dir=tmp_path / "openhands",
+        conversation_key="parallel-interrupt",
+        specialist_catalog=_specialist_catalog(),
+        env={},
+        conversation_factory=_conversation_factory(
+            tmp_path,
+            llm,
+            tools=[_specialist_tool(structured_reviews=True)],
+            tool_concurrency_limit=2,
+            conversation_id=conversation_id,
+        ),
+    )
+    try:
+        backend._register_specialized_agents()
+        backend.submit_turn(session_id="session-1", prompt="Review the synthetic evidence.")
+        group = _wait_for_pending_group(backend)
+        backend.resolve_confirmation(
+            session_id="session-1", action_group_id=group.group_id, approved=True
+        )
+        assert both_started.wait(5)
+        events = backend.pause(session_id="session-1")
+        assert both_stopped.wait(5)
+        assert not backend._run_active()
+        assert any(
+            isinstance(event, BackendLifecycleEvent) and event.lifecycle == BackendLifecycle.PAUSED
+            for event in events
+        )
+        assert llm.call_count == 1
+        assert started == stopped == 2
+    finally:
+        backend.close()
+    empty = TestLLM.from_messages([])
+    restored = OpenHandsSdkBackend(
+        profile=_local_profile(),
+        workspace=tmp_path / "workspace",
+        skills_dir=tmp_path / "skills",
+        persistence_dir=tmp_path / "openhands",
+        conversation_key="parallel-interrupt",
+        specialist_catalog=_specialist_catalog(),
+        env={},
+        conversation_factory=_conversation_factory(
+            tmp_path,
+            empty,
+            tools=[_specialist_tool(structured_reviews=True)],
+            tool_concurrency_limit=2,
+            conversation_id=conversation_id,
+        ),
+    )
+    try:
+        restored.reconcile(session_id="session-1", known_source_event_ids=frozenset())
+        assert empty.call_count == 0
+        assert started == stopped == 2
+    finally:
+        restored.close()
+
+
 def test_structured_specialist_plain_prose_cannot_replace_review_proposals(tmp_path: Path) -> None:
     llm = TestLLM.from_messages(
         [
@@ -3664,6 +3958,7 @@ def _conversation_factory(
     persistence_dir: Path | None = None,
     workspace: Path | None = None,
     skills: list[Skill] | None = None,
+    tool_concurrency_limit: int = 1,
 ) -> ConversationFactory:
     def factory(
         callback: Callable[[OpenHandsEvent], None],
@@ -3676,7 +3971,7 @@ def _conversation_factory(
             tools=tools,
             agent_context=_agent_context([] if skills is None else skills),
             enable_switch_llm_tool=False,
-            tool_concurrency_limit=1,
+            tool_concurrency_limit=tool_concurrency_limit,
         )
         conversation = LocalConversation(
             agent=settings.create_agent(),

@@ -36,6 +36,8 @@ Before changing files, ask the Research Planner to identify the inputs, assumpti
 When the parent agent delegates the task, Heartwood presents the OpenHands Task action in the complete pending action set.
 Review the specialist name and delegated objective before allowing the set.
 After the specialist finishes, its result returns to the parent agent, which decides how to continue.
+Use **Pause** to request cancellation of active specialist work.
+Cancellation does not undo completed actions or guarantee that the model provider stops processing or billing an already accepted request.
 
 Specialist output is model-generated review, not independent scientific validation.
 Inspect the evidence and apply the same domain, statistical, and reproducibility review required for manually produced work.

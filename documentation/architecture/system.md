@@ -230,6 +230,8 @@ It uses public typed OpenHands events and conversation state to derive lifecycle
 OpenHands' privacy-safe failure classifications are translated into stable Heartwood diagnostics, and raw conversation-error detail is minimized at the OpenHands file-store boundary before persistence.
 OpenHands owns the agent loop, conversation persistence, coding tools, Task Tracker, and sequential specialist execution.
 The gateway supplies a catalog-scoped Task adapter that reuses OpenHands orchestration while rejecting agents outside the executable catalog, supervising child interruption, and applying the same content-minimized persistence policy to parent and child conversations.
+Specialist conversations use OpenHands' asynchronous run API inside its blocking Task worker so interruption can cancel active model I/O.
+The adapter reads running children from the native task manager rather than maintaining a separate active-child registry, and attempts interruption of every running child even if one reports an error.
 Heartwood translates that state into its stable event contract instead of maintaining a parallel agent loop or pending-action cache.
 Persisted non-token progress is reconciled while a run is active, while raw token deltas remain transient.
 The gateway's bounded idle wait includes final worker callbacks, not only the SDK's reported lifecycle or the availability of its execution slot.

@@ -16,6 +16,7 @@ from uuid import uuid4
 
 import pytest
 from openhands.sdk import Agent, LocalConversation
+from openhands.sdk.conversation.cancellation import CancellationToken
 from openhands.tools.task import TaskAction
 from openhands.tools.task.manager import Task, TaskStatus
 
@@ -52,15 +53,28 @@ def test_catalog_task_manager_rejects_non_durable_resume() -> None:
         )
 
 
-def test_task_executor_propagates_interrupt_to_the_active_child() -> None:
+@pytest.mark.parametrize("failed_interrupt", [False, True])
+def test_task_executor_interrupts_all_native_running_children(failed_interrupt: bool) -> None:
     manager = _CatalogTaskManager(allowed_specialist_ids=frozenset({"research-planner"}))
-    child = Mock(spec=LocalConversation)
-    manager._active_child = cast(LocalConversation, child)
+    children = [Mock(spec=LocalConversation) for _ in range(3)]
+    for index, child in enumerate(children):
+        task = Task(
+            id=f"task-{index}",
+            conversation_id=uuid4(),
+            conversation=cast(LocalConversation, child),
+            status=TaskStatus.COMPLETED if index == 2 else TaskStatus.RUNNING,
+        )
+        manager._tasks[task.id] = task
+    if failed_interrupt:
+        children[0].interrupt.side_effect = RuntimeError("Synthetic interruption failure")
     executor = _CatalogTaskExecutor(manager)
 
-    executor.interrupt()
+    with pytest.raises(ExceptionGroup) if failed_interrupt else nullcontext():
+        executor.interrupt()
 
-    child.interrupt.assert_called_once_with()
+    children[0].interrupt.assert_called_once_with()
+    children[1].interrupt.assert_called_once_with()
+    children[2].interrupt.assert_not_called()
 
 
 def test_catalog_task_manager_preserves_delegate_observability_metadata(
@@ -89,6 +103,9 @@ def test_catalog_task_manager_preserves_delegate_observability_metadata(
     child = Mock(spec=LocalConversation)
     conversation_type.return_value = child
     monkeypatch.setattr(specialist_task_module, "LocalConversation", conversation_type)
+    monkeypatch.setattr(
+        specialist_task_module, "_InterruptibleSpecialistConversation", conversation_type
+    )
 
     created = manager._get_conversation(
         description="Review the analysis plan",
@@ -111,6 +128,31 @@ def test_catalog_task_manager_preserves_delegate_observability_metadata(
     assert options["observability_tags"] == ["delegate"]
     assert isinstance(options["file_store"], ContentMinimizedLocalFileStore)
     assert options["profile_store_dir"] == tmp_path / "subagent" / "profiles"
+
+
+def test_cancelled_parent_cannot_start_an_already_created_specialist(tmp_path: Path) -> None:
+    manager = _CatalogTaskManager(allowed_specialist_ids=frozenset({"research-planner"}))
+    parent = Mock(spec=LocalConversation)
+    parent.cancel_token = CancellationToken()
+    parent.state.persistence_dir = tmp_path
+    manager.attach_parent(cast(LocalConversation, parent))
+    child = Mock(spec=LocalConversation)
+    task = Task(
+        id="prepared-task",
+        conversation_id=uuid4(),
+        conversation=cast(LocalConversation, child),
+        status=TaskStatus.RUNNING,
+    )
+    manager._tasks[task.id] = task
+    parent.cancel_token.cancel()
+
+    result = manager._run_task(task, "This request must not reach a model.")
+
+    assert result.status == TaskStatus.ERROR
+    child.send_message.assert_not_called()
+    child.run.assert_not_called()
+    child.close.assert_called_once_with()
+    assert manager._tasks[task.id].conversation is None
 
 
 def test_task_identity_does_not_restart_with_the_manager() -> None:
