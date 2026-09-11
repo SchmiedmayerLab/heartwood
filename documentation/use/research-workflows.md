@@ -97,7 +97,8 @@ In plain terminal mode, inspect `/workflow` and use `/workflow request-review` w
 The notebook receives the same controls and review state.
 
 The assessment distinguishes verified observations, rejected claims, unsupported conditions, stale evidence, and unavailable evidence.
-Checks currently cover invalid Python syntax, supported baseline result inconsistencies, and artifact byte mismatches.
+Checks cover analysis plans that conflict with the baseline's predictor, outcome, grouping, or split requirements; invalid Python syntax; supported baseline result inconsistencies; and artifact byte mismatches.
+Plan findings require readable, valid input data and a data dictionary; they do not establish that the research question or statistical method is scientifically appropriate.
 A byte mismatch is not proof of re-execution, and a review with no findings is not proof of correctness.
 Missing specialist results are reported as unavailable rather than a successful review.
 

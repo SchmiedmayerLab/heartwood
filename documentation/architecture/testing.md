@@ -101,6 +101,9 @@ Both configurations must pass the complete research checks and additional checks
 The configurations differ only in requested specialist concurrency; model, context, tools, Skills, specialist definitions, fixtures, seeds, and budgets remain matched.
 The gateway observes the actual global OpenHands tool limit and whether its scoped advisory executor is installed, separately from the requested reviewer count.
 Both trials retain the same runtime observation and fingerprint; the reviewer scheduling check must establish actual sequential or overlapping execution.
+The maintained plan-review suite pairs a prohibited outcome-derived predictor with a valid-plan control over the same pinned synthetic data.
+Its finding scorer reuses the workflow's independent baseline-plan checks, requires the exact fixture snapshot and selected reviewers, and rejects missed defects and false accusations.
+This finding check alone does not establish scheduling, provider execution, isolation, parent synthesis, recovery, or route qualification.
 Completed and failed native specialist observations retain a monotonic execution interval through the session journal and shared projection.
 The interval covers the native task's execution and cleanup, excluding approval, queuing, and child creation; cancellation before execution has no interval.
 Only intervals with the same process-local clock identity can establish overlap.

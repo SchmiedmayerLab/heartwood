@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 from heartwood.core_adapter.research_checks import evaluate_research_check
+from heartwood.core_adapter.research_review import research_correction_roles
 from heartwood.core_adapter.research_workflows import workflow_reproduction_spec
 from heartwood.core_adapter.workflow_runtime import workflow_stage_prompt
 from heartwood.gateway import ProjectContext, SessionGateway
@@ -91,6 +92,83 @@ def _values() -> dict[str, str]:
             }
         ),
         "report": "# Analysis\nSynthetic results require interpretation and independent review.\n",
+    }
+
+
+@pytest.mark.parametrize(
+    ("damage", "expected"),
+    [
+        ("none", "rejected"),
+        ("predictor", "verified"),
+        ("outcome", "verified"),
+        ("group", "verified"),
+        ("split", "verified"),
+        ("duplicate-feature", "verified"),
+        ("malformed-plan", "unavailable"),
+        ("malformed-dictionary", "unavailable"),
+        ("malformed-data", "unavailable"),
+        ("overlap", "unavailable"),
+        ("invalid-values", "unavailable"),
+        ("nonnumeric", "unavailable"),
+    ],
+)
+def test_plan_review_reuses_stage_rules_without_blame_for_invalid_inputs(
+    tmp_path: Path, damage: str, expected: str
+) -> None:
+    values = _values()
+    changes: dict[str, dict[str, object]] = {
+        "predictor": {"features": ["post_outcome"]},
+        "outcome": {"outcome": "signal"},
+        "group": {"group_column": "visit"},
+        "split": {"split_column": "person"},
+        "duplicate-feature": {"features": ["signal", "signal"]},
+    }
+    if damage in changes:
+        values["plan"] = json.dumps({**json.loads(values["plan"]), **changes[damage]})
+    elif damage.startswith("malformed-"):
+        values[damage.removeprefix("malformed-")] = "not structured data"
+    elif damage == "overlap":
+        values["data"] = values["data"].replace("c,1,5,11", "a,3,5,11")
+    elif damage == "invalid-values":
+        values["data"] = values["data"].replace("a,1,1,3", "a,1,-1,3")
+    elif damage == "nonnumeric":
+        values["data"] = values["data"].replace("a,1,1,3", "a,1,1,NaN")
+    paths = {name: f"{name}.txt" for name in ("data", "dictionary", "plan")}
+    for name, path in paths.items():
+        (tmp_path / path).write_text(values[name])
+    gateway = SessionGateway(project=ProjectContext(tmp_path))
+    snapshot = gateway.prepare_research_review(paths)
+    submissions = tuple(
+        ReviewSubmission.associate(
+            ReviewProposals(
+                candidates=(
+                    ReviewCandidate(
+                        candidate_id="plan-claim",
+                        condition="analysis-plan-incompatible",
+                        category="statistical",
+                        severity="critical",
+                        summary="Untrusted claim about the plan.",
+                        artifact_ids=("plan",),
+                    ),
+                )
+            ),
+            review_id=f"task-{index}",
+            reviewer_id=reviewer,
+            snapshot=snapshot,
+        )
+        for index, reviewer in enumerate(("research-planner", "statistical-reviewer"))
+    )
+    assessment = gateway.assess_research_review(snapshot, submissions)
+    assert len(assessment.findings) == 1
+    finding = assessment.findings[0]
+    assert finding.verification == expected
+    assert len(finding.sources) == 2
+    assert finding.severity == "high"
+    assert research_correction_roles(assessment) == (
+        frozenset({"plan"}) if expected == "verified" else frozenset()
+    )
+    assert {name: (tmp_path / path).read_text() for name, path in paths.items()} == {
+        name: values[name] for name in paths
     }
 
 

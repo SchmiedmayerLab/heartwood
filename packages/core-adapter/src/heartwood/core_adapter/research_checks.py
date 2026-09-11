@@ -13,7 +13,7 @@ import csv
 import io
 import math
 from collections import Counter
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from statistics import linear_regression, mean
 from typing import Literal
 
@@ -149,6 +149,14 @@ def _valid_plan(artifacts: Mapping[str, str]) -> bool:
     return bool(artifacts["question"].strip()) and _valid_baseline_inputs(artifacts)
 
 
+def _valid_analysis_inputs(artifacts: Mapping[str, str]) -> bool:
+    dictionary, rows = _data(artifacts)
+    _partitions(dictionary, rows)
+    return _valid_numeric_data(
+        dictionary, rows, (dictionary.outcome, *dictionary.permitted_predictors)
+    )
+
+
 def _valid_baseline_inputs(artifacts: Mapping[str, str]) -> bool:
     dictionary, rows = _data(artifacts)
     plan = AnalysisPlan.model_validate_json(artifacts["plan"])
@@ -166,10 +174,16 @@ def _compatible_plan(
         and len(plan.features) == len(set(plan.features)) == 1
         and set(plan.features) <= set(dictionary.permitted_predictors)
     )
-    if not matches or any(_invalid_counts(dictionary, rows).values()):
+    return matches and _valid_numeric_data(dictionary, rows, (plan.outcome, *plan.features))
+
+
+def _valid_numeric_data(
+    dictionary: ResearchDictionary, rows: list[dict[str, str]], columns: Sequence[str]
+) -> bool:
+    if any(_invalid_counts(dictionary, rows).values()):
         return False
     for row in rows:
-        for name in (plan.outcome, *plan.features):
+        for name in columns:
             _number(row[name])
     return True
 
@@ -327,6 +341,7 @@ _EVALUATORS: dict[str, Callable[[Mapping[str, str]], bool]] = {
         bool(artifacts) and all(ast.parse(text).body for text in artifacts.values())
     ),
     "research.analysis-plan": _valid_plan,
+    "research.analysis-inputs": _valid_analysis_inputs,
     "research.baseline-inputs": _valid_baseline_inputs,
     "research.readiness": _valid_readiness,
     "research.baseline": _valid_baseline,

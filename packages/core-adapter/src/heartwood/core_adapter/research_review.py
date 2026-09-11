@@ -41,6 +41,19 @@ class _Condition:
 
 
 _CONDITIONS = {
+    "analysis-plan-incompatible": _Condition(
+        category="statistical",
+        severity="high",
+        required=frozenset({"data", "dictionary", "plan"}),
+        affected=frozenset({"plan"}),
+        correctable=frozenset({"plan"}),
+        claim=(
+            "The baseline analysis plan conflicts with the supported predictor, outcome, "
+            "grouping, or split requirements."
+        ),
+        evaluator="research.baseline-inputs",
+        prerequisite="research.analysis-inputs",
+    ),
     "python-source-invalid": _Condition(
         category="coding",
         severity="high",

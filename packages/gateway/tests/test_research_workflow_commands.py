@@ -22,7 +22,12 @@ import pytest
 from openhands.sdk.llm import Message, MessageToolCall
 from openhands.sdk.testing import TestLLM
 
-from heartwood.compliance.research import research_tasks
+from heartwood.compliance.research import ResearchTask, research_tasks
+from heartwood.compliance.review_benchmarks import (
+    planning_review_suite,
+    planning_review_tasks,
+    verify_planning_review,
+)
 from heartwood.compliance.review_trials import ReservedReviewTrial
 from heartwood.core_adapter import (
     BackendAgentMessageEvent,
@@ -2767,7 +2772,9 @@ def test_parallel_review_enforces_the_narrower_consented_stage_budget(
         gateway.stop()
 
 
-def _reserve_parallel_trial(gateway: SessionGateway) -> ReservedReviewTrial:
+def _reserve_parallel_trial(
+    gateway: SessionGateway, task: ResearchTask | None = None
+) -> ReservedReviewTrial:
     from heartwood.compliance.evaluation_store import EvaluationStore
     from heartwood.model_policy.parallel_reviews import PARALLEL_REVIEW_CHECKS
     from heartwood.schemas.evaluation import (
@@ -2812,6 +2819,10 @@ def _reserve_parallel_trial(gateway: SessionGateway) -> ReservedReviewTrial:
             ),
         ),
     )
+    if task is not None:
+        suite = planning_review_suite()
+        assert task.case in suite.cases
+    case = suite.cases[0] if task is None else task.case
     configuration = EvaluationConfiguration(
         provider="synthetic",
         model=runtime.request_model or "unknown",
@@ -2836,8 +2847,8 @@ def _reserve_parallel_trial(gateway: SessionGateway) -> ReservedReviewTrial:
         run_id=uuid4(),
         suite_id=suite.suite_id,
         suite_fingerprint=suite.fingerprint,
-        case_id=suite.cases[0].case_id,
-        fixture_digest=suite.cases[0].fixture_digest,
+        case_id=case.case_id,
+        fixture_digest=case.fixture_digest,
         seed=0,
         execution="deterministic",
         configuration=configuration,
@@ -2849,7 +2860,7 @@ def _reserve_parallel_trial(gateway: SessionGateway) -> ReservedReviewTrial:
         session_id="research",
         checks=tuple(
             EvaluationCheck(**check.model_dump(), status="not_run")
-            for check in suite.cases[0].required_checks
+            for check in case.required_checks
         ),
         usage=ExecutionUsage(elapsed_seconds=0),
     )
@@ -2905,13 +2916,15 @@ def test_reserved_trial_is_rechecked_before_model_work(
 
 
 @pytest.mark.parametrize("approve", [False, True])
-@pytest.mark.parametrize("experimental", [False, True])
-def test_native_parallel_workflow_journals_before_children_and_replays_without_calls(
+@pytest.mark.parametrize("mode", ["sequential", "qualified", "experimental"])
+@pytest.mark.parametrize("case_id", ["plan-valid", "plan-outcome-leakage"])
+def test_native_review_comparison_preserves_findings_consent_and_replay(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     parallel_review_plan: ParallelReviewPlan,
     approve: bool,
-    experimental: bool,
+    mode: str,
+    case_id: str,
 ) -> None:
     from threading import Barrier, Lock
 
@@ -2921,11 +2934,27 @@ def test_native_parallel_workflow_journals_before_children_and_replays_without_c
     from heartwood.core_adapter.workflow_runtime import workflow_run
 
     roles = ("research-planner", "statistical-reviewer")
+    workers = 1 if mode == "sequential" else 2
+    task = next(task for task in planning_review_tasks() if task.case.case_id == case_id)
+    candidates = (
+        [
+            {
+                "candidate_id": "plan-claim",
+                "condition": "analysis-plan-incompatible",
+                "category": "statistical",
+                "severity": "high",
+                "summary": "The plan uses an outcome-derived predictor.",
+                "artifact_ids": ["plan"],
+            }
+        ]
+        if case_id == "plan-outcome-leakage"
+        else []
+    )
     task_messages = [
         _tool_message(
             "task",
             description="Review synthetic analysis plan",
-            prompt="Review only the supplied synthetic plan. Return no findings.",
+            prompt=task.instruction,
             subagent_type=role,
         )
         for role in roles
@@ -2942,8 +2971,8 @@ def test_native_parallel_workflow_journals_before_children_and_replays_without_c
                     call for message in task_messages for call in (message.tool_calls or [])
                 ],
             ),
-            _tool_message("finish", message="First review.", candidates=[]),
-            _tool_message("finish", message="Second review.", candidates=[]),
+            _tool_message("finish", message="First review.", candidates=candidates),
+            _tool_message("finish", message="Second review.", candidates=candidates),
             _tool_message(
                 "finish", message="Reviews settled.", status="success", outcome_summary="Done."
             ),
@@ -2955,7 +2984,7 @@ def test_native_parallel_workflow_journals_before_children_and_replays_without_c
     def preparer(
         run: WorkflowRun, snapshot: ReviewSnapshot, session_id: str, now: datetime
     ) -> ReviewExecutionPlan:
-        if experimental:
+        if mode == "experimental":
             assert reservation is not None
             return reservation(run, snapshot, session_id, now)
         return qualified_preparer(run, snapshot, session_id, now)
@@ -2967,7 +2996,7 @@ def test_native_parallel_workflow_journals_before_children_and_replays_without_c
         specialists=True,
         parallel_review_preparer=preparer,
     )
-    barrier, lock = Barrier(2), Lock()
+    barrier, lock = Barrier(workers), Lock()
     children = 0
     child_calls: list[int] = []
     native_run = TaskManager._run_until_finished
@@ -2977,7 +3006,7 @@ def test_native_parallel_workflow_journals_before_children_and_replays_without_c
         current = workflow_run(gateway._services["research"].replay_events())
         assert current is not None
         assert current.research_review is not None
-        assert len(current.research_review.parallel_dispatch) == 2
+        assert len(current.research_review.parallel_dispatch) == (2 if workers == 2 else 0)
         with lock:
             children += 1
         barrier.wait(timeout=5)
@@ -2991,13 +3020,19 @@ def test_native_parallel_workflow_journals_before_children_and_replays_without_c
     try:
         _begin_baseline_plan(gateway, tmp_path)
         assert gateway.wait_for_session_idle(session_id="research", timeout=30)
-        if experimental:
-            reservation = _reserve_parallel_trial(gateway)
-        gateway.handle(_projected_command(gateway, "prepare-parallel-review"))
-        preview = _state(gateway).parallel_review_plan
-        assert preview is not None
-        assert preview.purpose == ("qualification-trial" if experimental else "qualified-review")
-        request = _projected_command(gateway, "request-parallel-review")
+        (tmp_path / "results/plan.json").write_text(task.inputs["plan.json"])
+        if mode == "experimental":
+            reservation = _reserve_parallel_trial(gateway, task)
+        if workers == 2:
+            gateway.handle(_projected_command(gateway, "prepare-parallel-review"))
+            preview = _state(gateway).parallel_review_plan
+            assert preview is not None
+            assert preview.purpose == (
+                "qualification-trial" if mode == "experimental" else "qualified-review"
+            )
+        request = _projected_command(
+            gateway, "request-parallel-review" if workers == 2 else "request-review"
+        )
         gateway.handle(request)
         assert gateway.wait_for_session_idle(session_id="research", timeout=30)
         projection = gateway.session_projection(session_id="research")
@@ -3016,17 +3051,24 @@ def test_native_parallel_workflow_journals_before_children_and_replays_without_c
         review = _state(gateway).research_review
         assert review is not None
         assert children == (2 if approve else 0)
-        assert len(review.parallel_dispatch) == (2 if approve else 0)
+        assert len(review.parallel_dispatch) == (2 if approve and workers == 2 else 0)
         observed_tasks = gateway.session_projection(session_id="research").subagents
         intervals = [item.native_execution for item in observed_tasks if item.native_execution]
         assert len(intervals) == (2 if approve else 0)
         if approve:
-            assert intervals[0].overlap_seconds(intervals[1]) > 0
+            assert (intervals[0].overlap_seconds(intervals[1]) > 0) == (workers == 2)
             assert review.status == "assessed"
+            assert verify_planning_review(task, review).status == "passed"
             assert {item.reviewer_id for item in review.submissions} == set(roles)
             projected = gateway.session_projection(session_id="research").review_execution
-            assert projected is not None
-            assert projected.status == "assessed"
+            if workers == 2:
+                assert projected is not None
+                assert projected.status == "assessed"
+            else:
+                assert projected is None
+                workflow = gateway.session_projection(session_id="research").workflow
+                assert workflow is not None
+                assert workflow.research_review == review
         assert llm.call_count == (3 if approve else 2)
         assert child_calls == ([1, 1] if approve else [])
         assert llm.remaining_responses == (0 if approve else 3)
@@ -3056,6 +3098,8 @@ def test_native_parallel_workflow_journals_before_children_and_replays_without_c
         assert restored.handle(request).replayed
         assert restored.handle(decision).replayed
         assert _state(restored).research_review == review
+        if approve:
+            assert verify_planning_review(task, review).status == "passed"
         assert restored.session_projection(session_id="research").subagents == observed_tasks
         assert unused.call_count == 0
     finally:
