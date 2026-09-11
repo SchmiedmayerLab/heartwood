@@ -9,9 +9,11 @@
 from __future__ import annotations
 
 import json
+from pathlib import PurePosixPath
 from typing import Protocol
 from uuid import NAMESPACE_URL, UUID, uuid5
 
+from heartwood.core_adapter.research_workflows import workflow_reproduction_spec
 from heartwood.schemas.experiments import ExperimentDefinition, ExperimentEvent, ExperimentFile
 from heartwood.schemas.review import (
     ResearchCorrectionAttempt,
@@ -59,6 +61,23 @@ class WorkflowCorrectionInspector(Protocol):
 def current_correction(run: WorkflowRun) -> ResearchCorrectionRun | None:
     """Resolve the stage's retained correction series without a separate state cache."""
     return next((item for item in run.corrections if item.stage_id == run.stage_id), None)
+
+
+def correction_artifact_binding(
+    binding: WorkflowProjectBinding, plan: ReviewCorrectionPlan
+) -> WorkflowProjectBinding:
+    """Resolve declared correction paths; callers separately authorize execution or promotion."""
+    replacements = {item.artifact_id: item for item in plan.outputs}
+    if not replacements.keys() <= {item.artifact_id for item in binding.artifacts}:
+        raise ValueError("Correction outputs must use declared workflow roles")
+    return WorkflowProjectBinding.model_validate(
+        {
+            **binding.model_dump(),
+            "artifacts": tuple(
+                replacements.get(item.artifact_id, item) for item in binding.artifacts
+            ),
+        }
+    )
 
 
 def correction_experiment_id(session_id: str, run_id: str, attempt_id: str) -> UUID:
@@ -125,12 +144,15 @@ def validate_correction_experiment(
     return series, attempt
 
 
-def workflow_correction_prompt(series: ResearchCorrectionRun) -> str:
+def workflow_correction_prompt(run: WorkflowRun, series: ResearchCorrectionRun) -> str:
     """Give the parent an exact correction task while preserving normal tool confirmation."""
     attempt = series.attempts[-1]
     assessment = series.review.assessment
     if assessment is None:
         raise ValueError("Corrections require independently verified findings")
+    reproduction = workflow_reproduction_spec(
+        correction_artifact_binding(run.binding, attempt.plan), run.stage_id
+    )
     return (
         "Correct only the independently verified findings below using the normal reviewed "
         "coding tools. Keep every original evidence file unchanged. Create the declared new "
@@ -157,6 +179,22 @@ def workflow_correction_prompt(series: ResearchCorrectionRun) -> str:
                     if previous.assessment is not None
                     for check in previous.assessment.checks
                 ],
+                "reproduction": (
+                    {
+                        "command": reproduction.command,
+                        "parent_directory": str(PurePosixPath(reproduction.directory).parent),
+                        "instructions": (
+                            "Create the parent directory if needed through a reviewed action, "
+                            "but leave the reproduction output directory absent. Then propose "
+                            "this exact terminal command as a separate action. "
+                            "Keep the program unchanged; copied "
+                            "files do not establish reproduction. Write the comparison report "
+                            "afterwards."
+                        ),
+                    }
+                    if reproduction is not None
+                    else None
+                ),
             },
             sort_keys=True,
         )

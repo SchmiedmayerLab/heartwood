@@ -238,14 +238,19 @@ def test_unsupported_claims_remain_nonactionable(
 def test_artifact_comparison_is_not_execution_evidence(tmp_path: Path) -> None:
     (tmp_path / "original.txt").write_bytes(b"value\r\n")
     (tmp_path / "reproduced.txt").write_bytes(b"value\n")
+    (tmp_path / "predictions.csv").write_text("prediction\n1\n")
+    (tmp_path / "reproduced.csv").write_text("prediction\n1\n")
+    (tmp_path / "verification.json").write_text("{}")
     gateway = SessionGateway(project=ProjectContext(tmp_path))
-    snapshot = gateway.prepare_research_review(
-        {
-            "original": "original.txt",
-            "reproduced": "reproduced.txt",
-        }
-    )
-    original = next(item for item in snapshot.artifacts if item.artifact_id == "original")
+    paths = {
+        "metrics": "original.txt",
+        "reproduced-metrics": "reproduced.txt",
+        "predictions": "predictions.csv",
+        "reproduced-predictions": "reproduced.csv",
+        "verification": "verification.json",
+    }
+    snapshot = gateway.prepare_research_review(paths)
+    original = next(item for item in snapshot.artifacts if item.artifact_id == "metrics")
     assert original.file.size_bytes == 7
     assert original.file.sha256 == hashlib.sha256(b"value\r\n").hexdigest()
     submission = _submission(
@@ -257,7 +262,12 @@ def test_artifact_comparison_is_not_execution_evidence(tmp_path: Path) -> None:
                 "category": "reproducibility",
                 "severity": "high",
                 "summary": "The result was fabricated.",
-                "artifact_ids": ["reproduced", "original"],
+                "artifact_ids": [
+                    "metrics",
+                    "predictions",
+                    "reproduced-metrics",
+                    "reproduced-predictions",
+                ],
             }
         ],
     )
@@ -266,12 +276,7 @@ def test_artifact_comparison_is_not_execution_evidence(tmp_path: Path) -> None:
     assert finding.verified_claim is not None
     assert "execution is not verified" in finding.verified_claim
     (tmp_path / "reproduced.txt").write_bytes(b"value\r\n")
-    changed = gateway.prepare_research_review(
-        {
-            "original": "original.txt",
-            "reproduced": "reproduced.txt",
-        }
-    )
+    changed = gateway.prepare_research_review(paths)
     assert changed.fingerprint != snapshot.fingerprint
     with pytest.raises(ValueError, match="different evidence snapshot"):
         gateway.assess_research_review(changed, [submission])

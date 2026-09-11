@@ -726,7 +726,7 @@ def _start_correction(
         maximum_attempts=maximum_attempts,
         attempts=(*attempts, attempt),
     )
-    prompt = workflow_correction_prompt(series)
+    prompt = workflow_correction_prompt(current, series)
     try:
         definition = evaluator.correction_definition(
             current,

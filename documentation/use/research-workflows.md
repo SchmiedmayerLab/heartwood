@@ -117,6 +117,10 @@ If the defect remains, it can make a second attempt within the same stage's rema
 Original evidence, accepted earlier stages, and previous attempts remain preserved.
 The browser, terminal, and notebook show the attempts and their checks from the same session state.
 
+For a reproduction discrepancy, the agent receives the unchanged program's rerun command and a fresh output location.
+It may first propose creating the parent folder, then request approval for the rerun separately.
+Matching copied files do not satisfy the reproduction stage: Heartwood must have recorded the approved execution and unchanged inputs.
+
 A successful correction means the specific checked defect is no longer observed, not that the analysis is scientifically valid.
 Use **Check Results** again and inspect the complete stage before accepting it.
 The original execution remains a failed experiment record; each correction has its own record linked to the source evidence.

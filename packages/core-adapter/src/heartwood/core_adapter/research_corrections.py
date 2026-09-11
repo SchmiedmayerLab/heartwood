@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from pathlib import PurePosixPath
+from posixpath import commonpath
 
 from heartwood.core_adapter.research_review import (
     assess_research_review,
@@ -40,6 +41,10 @@ def plan_research_correction(
     roles = research_correction_roles(actual)
     if not roles:
         raise ValueError("No independently verified findings can be corrected")
+    outputs = tuple(item for item in review.snapshot.artifacts if item.artifact_id in roles)
+    common = PurePosixPath(
+        commonpath([str(PurePosixPath(item.file.path).parent) for item in outputs])
+    )
     directory = PurePosixPath(output_directory.casefold())
     for artifact in review.snapshot.artifacts:
         original = PurePosixPath(artifact.file.path.casefold())
@@ -57,11 +62,10 @@ def plan_research_correction(
                 artifact_id=item.artifact_id,
                 path=str(
                     PurePosixPath(output_directory)
-                    / f"{item.artifact_id}-{PurePosixPath(item.file.path).name}"
+                    / PurePosixPath(item.file.path).relative_to(common)
                 ),
             )
-            for item in sorted(review.snapshot.artifacts, key=lambda item: item.artifact_id)
-            if item.artifact_id in roles
+            for item in sorted(outputs, key=lambda item: item.artifact_id)
         ),
     )
 

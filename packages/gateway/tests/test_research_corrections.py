@@ -45,10 +45,23 @@ def _review(
     elif category == "reproducibility":
         (root / "original.txt").write_text("synthetic,1\n")
         (root / "reproduced.txt").write_text("synthetic,2\n")
-        paths = {"original": "original.txt", "reproduced": "reproduced.txt"}
-        corrected = {"reproduced": "synthetic,1\n"}
+        (root / "predictions.csv").write_text("prediction\n1\n")
+        (root / "reproduced.csv").write_text("prediction\n1\n")
+        (root / "verification.json").write_text("{}")
+        paths = {
+            "metrics": "original.txt",
+            "reproduced-metrics": "reproduced.txt",
+            "predictions": "predictions.csv",
+            "reproduced-predictions": "reproduced.csv",
+            "verification": "verification.json",
+        }
+        corrected = {
+            "reproduced-metrics": "synthetic,1\n",
+            "reproduced-predictions": "prediction\n1\n",
+            "verification": "{}",
+        }
         condition = "reproduction-artifact-mismatch"
-        affected = ("original", "reproduced")
+        affected = ("metrics", "predictions", "reproduced-metrics", "reproduced-predictions")
     else:
         task = next(item for item in research_tasks() if item.case.case_id == "baseline-analysis")
         for name, content in task.inputs.items():

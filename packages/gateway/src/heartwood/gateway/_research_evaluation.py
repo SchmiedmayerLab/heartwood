@@ -22,6 +22,7 @@ from heartwood.core_adapter.research_workflows import (
     research_workflows,
     workflow_reproduction_spec,
 )
+from heartwood.core_adapter.workflow_corrections import correction_artifact_binding
 from heartwood.core_adapter.workflow_evidence import assess_workflow_stage
 from heartwood.gateway._research_review import ResearchReviewEvaluator
 from heartwood.gateway._session_projection import project_session
@@ -187,14 +188,7 @@ class ResearchStageEvaluator:
         replacements = {item.artifact_id: item for item in plan.outputs}
         if not replacements.keys() <= set(definition.stage(run.stage_id).writes):
             raise ValueError("Correction can replace only the current stage's declared outputs")
-        return WorkflowProjectBinding.model_validate(
-            {
-                **run.binding.model_dump(),
-                "artifacts": tuple(
-                    replacements.get(item.artifact_id, item) for item in run.binding.artifacts
-                ),
-            }
-        )
+        return correction_artifact_binding(run.binding, plan)
 
     def experiment_definition(
         self, run: WorkflowRun, *, session_id: str, actor_id: str, invocation: str

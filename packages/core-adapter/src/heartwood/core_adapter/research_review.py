@@ -37,6 +37,7 @@ class _Condition:
     claim: str
     evaluator: str | None = None
     prerequisite: str | None = None
+    comparison_pairs: tuple[tuple[str, str], ...] = ()
 
 
 _CONDITIONS = {
@@ -62,11 +63,25 @@ _CONDITIONS = {
     "reproduction-artifact-mismatch": _Condition(
         category="reproducibility",
         severity="medium",
-        required=frozenset({"original", "reproduced"}),
-        affected=frozenset({"original", "reproduced"}),
-        correctable=frozenset({"reproduced"}),
+        required=frozenset(
+            {
+                "metrics",
+                "predictions",
+                "reproduced-metrics",
+                "reproduced-predictions",
+                "verification",
+            }
+        ),
+        affected=frozenset(
+            {"metrics", "predictions", "reproduced-metrics", "reproduced-predictions"}
+        ),
+        correctable=frozenset({"reproduced-metrics", "reproduced-predictions", "verification"}),
         claim=(
             "The original and reproduced artifacts have different bytes; execution is not verified."
+        ),
+        comparison_pairs=(
+            ("metrics", "reproduced-metrics"),
+            ("predictions", "reproduced-predictions"),
         ),
     ),
 }
@@ -228,7 +243,12 @@ def _verify(condition: _Condition, observed: Mapping[str, str]) -> tuple[ReviewV
     ):
         return "unavailable", "invalid-prerequisites"
     if condition.evaluator is None:
-        differs = values["original"] != values["reproduced"]
+        if not condition.comparison_pairs:
+            return "unavailable", "check-unavailable"
+        differs = any(
+            values[original] != values[reproduced]
+            for original, reproduced in condition.comparison_pairs
+        )
         return ("verified", "artifact-bytes-differ") if differs else ("rejected", "artifacts-match")
     result = evaluate_research_check(condition.evaluator, values, invalid_status="not_run")
     if result == "not_run":

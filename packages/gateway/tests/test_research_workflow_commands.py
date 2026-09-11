@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 from typing import cast
@@ -205,10 +206,11 @@ class ReviewBackend(FinishedBackend):
         events = super().submit_turn(session_id=session_id, prompt=prompt)
         if not prompt.startswith("Review the following bound analysis evidence"):
             return events
+        reviewer = json.loads(prompt.split("\n", 1)[1])["reviewers"][0]
         specialist = BackendSubagent(
             invocation_id="review-call",
             task_id="native-review",
-            agent_name="statistical-reviewer",
+            agent_name=reviewer,
             role_label="Statistical Reviewer",
             status=BackendSubagentStatus.PROPOSED,
             parent_session_id=session_id,
@@ -350,7 +352,7 @@ def test_automatic_review_respects_terminal_and_interruption_states(
 @pytest.mark.parametrize(
     "boundary", ["intent", "audit-before", "audit-after", "events-before", "events-after"]
 )
-@pytest.mark.parametrize("operation", ["review", "correction"])
+@pytest.mark.parametrize("operation", ["review", "correction", "correction-retry"])
 def test_automatic_review_recovers_each_append_boundary_without_model_retry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, boundary: str, operation: str
 ) -> None:
@@ -358,7 +360,7 @@ def test_automatic_review_recovers_each_append_boundary_without_model_retry(
 
     backend = ReviewBackend()
     gateway = _gateway(tmp_path, backend)
-    transition = f"assess-{operation}"
+    transition = "assess-review" if operation == "review" else "assess-correction"
     try:
         if operation == "review":
             _start(gateway, _inputs(tmp_path))
@@ -385,7 +387,9 @@ def test_automatic_review_recovers_each_append_boundary_without_model_retry(
             attempt = _state(gateway).corrections[-1].attempts[-1]
             output = tmp_path / attempt.plan.outputs[0].path
             output.parent.mkdir()
-            output.write_text("print('corrected')\n")
+            output.write_text(
+                "def still_broken(\n" if operation == "correction-retry" else "print('corrected')\n"
+            )
 
             def finish() -> None:
                 backend.idle = True
@@ -429,15 +433,41 @@ def test_automatic_review_recovers_each_append_boundary_without_model_retry(
         if operation == "review":
             assert view.workflow.research_review is not None
             assert view.workflow.research_review.status == "assessed"
-        else:
+        elif operation == "correction":
             assert view.workflow.corrections[-1].stop_reason == "corrected"
             assert restored.experiment_records().runs[-1].status == "succeeded"
+        else:
+            assert view.workflow.corrections[-1].stop_reason is None
+            assert len(view.workflow.corrections[-1].attempts) == 1
+            assert restored.experiment_records().runs[-1].status == "failed"
         service = restored._services["research"]
         service.reconcile()
         service.reconcile()
         events = service.replay_events()
         assert sum(event.payload.get("transition") == transition for event in events) == 1
         assert not replacement.prompts
+        if operation == "correction-retry":
+            before = _state(restored)
+            submit = replacement.submit_turn
+
+            def correct_again(*, session_id: str, prompt: str) -> tuple[BackendEvent, ...]:
+                attempt = _state(restored).corrections[-1].attempts[-1]
+                path = tmp_path / attempt.plan.outputs[0].path
+                path.parent.mkdir()
+                path.write_text("print('corrected')\n")
+                return submit(session_id=session_id, prompt=prompt)
+
+            monkeypatch.setattr(replacement, "submit_turn", correct_again)
+            resume = _projected_command(restored, "correct")
+            restored.handle(resume)
+            continued = _state(restored)
+            assert continued.corrections[-1].stop_reason == "corrected"
+            assert len(continued.corrections[-1].attempts) == 2
+            assert continued.corrections[-1].attempts[0] == before.corrections[-1].attempts[0]
+            assert continued.stage_usage_baseline == before.stage_usage_baseline
+            assert continued.stage_started_at == before.stage_started_at
+            assert restored.handle(resume).replayed
+            assert len(replacement.prompts) == 1
     finally:
         restored.stop()
 
@@ -648,9 +678,6 @@ def _begin_seeded_code_review(
     backend: ReviewBackend,
     root: Path,
 ) -> Path:
-    task = next(item for item in research_tasks() if item.case.case_id == "baseline-analysis")
-    for name, content in task.inputs.items():
-        (root / name).write_text(content)
     backend.proposals = ReviewProposals.model_validate(
         {
             "candidates": [
@@ -665,6 +692,19 @@ def _begin_seeded_code_review(
             ]
         }
     )
+    _begin_baseline_execution(gateway, root)
+    source = root / "results/analysis.py"
+    source.write_text("def broken(\n")
+    (root / "results/metrics.json").write_text("{}")
+    (root / "results/predictions.csv").write_text("prediction\n")
+    gateway.handle(_projected_command(gateway, "request-review"))
+    return source
+
+
+def _begin_baseline_execution(gateway: SessionGateway, root: Path) -> None:
+    task = next(item for item in research_tasks() if item.case.case_id == "baseline-analysis")
+    for name, content in task.inputs.items():
+        (root / name).write_text(content)
     gateway.handle(
         _command(
             action="start",
@@ -697,15 +737,11 @@ def _begin_seeded_code_review(
     gateway.handle(_projected_command(gateway, "accept"))
     assert _state(gateway).stage_id == "execute"
     gateway.handle(_projected_command(gateway, "run"))
-    source = root / "results/analysis.py"
-    source.write_text("def broken(\n")
-    (root / "results/metrics.json").write_text("{}")
-    (root / "results/predictions.csv").write_text("prediction\n")
-    gateway.handle(_projected_command(gateway, "request-review"))
-    return source
 
 
-@pytest.mark.parametrize("result", ["corrected", "attempt-limit", "missing", "changed-source"])
+@pytest.mark.parametrize(
+    "result", ["corrected", "attempt-limit", "missing", "changed-source", "changed-history"]
+)
 def test_bounded_workflow_correction_journals_and_rechecks_attempts(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -743,6 +779,10 @@ def test_bounded_workflow_correction_journals_and_rechecks_attempts(
                 )
             if result == "changed-source":
                 source.write_text("print('changed source')\n")
+            if result == "changed-history" and len(series.attempts) == 2:
+                (tmp_path / series.attempts[0].plan.outputs[0].path).write_text(
+                    "print('changed earlier attempt')\n"
+                )
             return events
 
         monkeypatch.setattr(backend, "submit_turn", correct)
@@ -769,7 +809,7 @@ def test_bounded_workflow_correction_journals_and_rechecks_attempts(
                 assert output.path in notebook
         assert series.stop_reason.replace("-", " ") in terminal
         assert series.stop_reason.replace("-", " ") in notebook
-        assert len(series.attempts) == (2 if result in {"corrected", "attempt-limit"} else 1)
+        assert len(series.attempts) == (1 if result in {"missing", "changed-source"} else 2)
         assert current.stage_started_at == before.stage_started_at
         assert current.stage_usage_baseline == before.stage_usage_baseline
         assert current.completed == before.completed
@@ -1109,6 +1149,86 @@ def test_interrupted_dispatch_is_never_automatically_repeated(tmp_path: Path) ->
         fresh.stop()
 
 
+@pytest.mark.parametrize(
+    "boundary",
+    ["intent", "audit-before", "audit-after", "events-before", "events-after", "dispatch"],
+)
+def test_correction_admission_interruption_never_repeats_uncertain_execution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, boundary: str
+) -> None:
+    from heartwood.core_adapter import _state as state_module
+
+    backend = ReviewBackend()
+    gateway = _gateway(tmp_path, backend)
+    try:
+        _begin_seeded_code_review(gateway, backend, tmp_path)
+        backend.finish_review()
+        command = _projected_command(gateway, "correct")
+        store = gateway._services["research"].store
+        append = state_module._append_private_json_line
+        write = state_module._write_private_json_atomic
+
+        def correction_start(payload: dict[str, object]) -> bool:
+            experiment = payload.get("experiment")
+            return (
+                payload.get("transition") == "correct"
+                and isinstance(experiment, dict)
+                and experiment.get("status") == "started"
+            )
+
+        def interrupt_append(path: Path, text: str) -> None:
+            target = store.audit_path if boundary.startswith("audit") else store.events_path
+            payload = json.loads(text).get("payload", {})
+            # The audit contains only the experiment fingerprint, not the scientific record.
+            is_start = (
+                payload.get("transition") == "correct" and payload.get("phase") == "running"
+                if path == store.audit_path
+                else correction_start(payload)
+            )
+            if path != target or not is_start:
+                append(path, text)
+                return
+            if boundary.endswith("after"):
+                append(path, text)
+            raise OSError("Synthetic correction admission interruption")
+
+        def interrupt_intent(path: Path, value: dict[str, object]) -> None:
+            event = value.get("session_event")
+            if isinstance(event, dict) and correction_start(event.get("payload", {})):
+                raise OSError("Synthetic correction admission interruption")
+            write(path, value)
+
+        with monkeypatch.context() as patches:
+            if boundary == "dispatch":
+                backend.fail_submission = True
+                with pytest.raises(RuntimeError, match="Synthetic interruption"):
+                    gateway.handle(command)
+            else:
+                if boundary == "intent":
+                    patches.setattr(state_module, "_write_private_json_atomic", interrupt_intent)
+                else:
+                    patches.setattr(state_module, "_append_private_json_line", interrupt_append)
+                with pytest.raises(OSError, match="Synthetic correction admission interruption"):
+                    gateway.handle(command)
+        assert len(backend.prompts) == (4 if boundary == "dispatch" else 3)
+    finally:
+        gateway.stop()
+    replacement = FinishedBackend()
+    restored = _gateway(tmp_path, replacement)
+    try:
+        with pytest.raises(SessionRecoveryError):
+            restored.handle(command)
+        assert not replacement.prompts
+        current = _state(restored)
+        assert len(current.corrections) == (0 if boundary == "intent" else 1)
+        if current.corrections:
+            assert current.corrections[-1].attempts[-1].status == "pending"
+            assert len(current.corrections[-1].attempts) == 1
+        assert restored.experiment_records().runs[1].status == "failed"
+    finally:
+        restored.stop()
+
+
 def _tool_message(name: str, **arguments: object) -> Message:
     return Message(
         role="assistant",
@@ -1357,7 +1477,7 @@ def test_real_sdk_correction_keeps_reviewed_source_and_requires_action_approval(
 ) -> None:
     source = tmp_path / "analysis.py"
     source.write_text("def broken(\n")
-    corrected_path = tmp_path / "correction-one/program-analysis.py"
+    corrected_path = tmp_path / "correction-one/analysis.py"
     mkdir = _tool_message("terminal", command="mkdir correction-one")
     create = _tool_message(
         "file_editor", command="create", path=str(corrected_path), file_text="print('synthetic')\n"
@@ -1485,7 +1605,7 @@ def test_native_workflow_corrects_twice_with_normal_grouped_approvals_and_replay
     for index in (1, 2):
         attempt_id = uuid5(NAMESPACE_URL, json.dumps([command.command_id, "execute", index])).hex
         directory = f"correction-{attempt_id[:12]}-{index}"
-        output = tmp_path / directory / "program-analysis.py"
+        output = tmp_path / directory / "analysis.py"
         outputs.append(output)
         mkdir = _tool_message("terminal", command=f"mkdir {directory}")
         create = _tool_message(
@@ -1560,7 +1680,7 @@ def test_native_workflow_corrects_twice_with_normal_grouped_approvals_and_replay
         )
         audit = (gateway.sessions_root / "research/audit-export.jsonl").read_text()
         assert "research_correction_fingerprint" in audit
-        assert "program-analysis.py" not in audit
+        assert "analysis.py" not in audit
         assert "Untrusted proposed diagnosis" not in audit
     finally:
         gateway.stop()
@@ -1571,6 +1691,210 @@ def test_native_workflow_corrects_twice_with_normal_grouped_approvals_and_replay
         assert restored.export_experiments() == export
         assert restored.handle(command).replayed
         assert all(restored.handle(approval).replayed for approval in approvals)
+        assert unused.call_count == 0
+    finally:
+        restored.stop()
+
+
+@pytest.mark.parametrize("case", ["statistical", "reproduction", "copied-results"])
+def test_native_correction_rechecks_analysis_and_requires_recorded_reproduction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    from heartwood.core_adapter.research_workflows import workflow_reproduction_spec
+    from heartwood.core_adapter.workflow_corrections import correction_artifact_binding
+
+    monkeypatch.setenv("PATH", f"{Path(sys.executable).parent}{os.pathsep}{os.environ['PATH']}")
+    backend = ReviewBackend()
+    baseline = _gateway(tmp_path, backend)
+    try:
+        _begin_baseline_execution(baseline, tmp_path)
+        source = (
+            Path(__file__).parents[2] / "compliance/tests/fixtures/research/reference_analysis.py"
+        )
+        (tmp_path / "results/analysis.py").write_text(source.read_text())
+        subprocess.run(
+            [
+                sys.executable,
+                "results/analysis.py",
+                "--data",
+                "data.csv",
+                "--output-dir",
+                "results",
+            ],
+            cwd=tmp_path,
+            check=True,
+            timeout=30,
+        )
+        if case == "statistical":
+            metrics = json.loads((tmp_path / "results/metrics.json").read_text())
+            metrics["test_rmse"] += 5
+            (tmp_path / "results/metrics.json").write_text(json.dumps(metrics))
+            condition, category = "baseline-result-inconsistent", "statistical"
+            affected = ["metrics", "predictions"]
+        else:
+            baseline.handle(_projected_command(baseline, "evaluate"))
+            assert _state(baseline).stage_id == "verify"
+            baseline.handle(_projected_command(baseline, "run"))
+            (tmp_path / "results/reproduced").mkdir()
+            (tmp_path / "results/reproduced/metrics.json").write_text("{}")
+            (tmp_path / "results/reproduced/predictions.csv").write_text(
+                (tmp_path / "results/predictions.csv").read_text()
+            )
+            (tmp_path / "results/verification.json").write_text(
+                json.dumps(
+                    {
+                        "status": "discrepancy",
+                        "matching_artifacts": ["predictions.csv"],
+                        "mismatched_artifacts": ["metrics.json"],
+                    }
+                )
+            )
+            condition, category = "reproduction-artifact-mismatch", "reproducibility"
+            affected = ["metrics", "predictions", "reproduced-metrics", "reproduced-predictions"]
+        backend.proposals = ReviewProposals.model_validate(
+            {
+                "candidates": [
+                    {
+                        "candidate_id": "defect",
+                        "condition": condition,
+                        "category": category,
+                        "severity": "high",
+                        "summary": "Synthetic seeded defect",
+                        "artifact_ids": affected,
+                    }
+                ]
+            }
+        )
+        baseline.handle(_projected_command(baseline, "request-review"))
+        backend.finish_review()
+        original = _state(baseline)
+        review = original.research_review
+        assert review is not None
+        assert review.assessment is not None
+        assert review.assessment.findings[0].verification == "verified"
+        command = _projected_command(baseline, "correct").model_copy(
+            update={"command_id": "native-analysis-correction"}
+        )
+        attempt_id = uuid5(
+            NAMESPACE_URL, json.dumps([command.command_id, original.stage_id, 1])
+        ).hex
+        directory = f"correction-{attempt_id[:12]}-1"
+        plan = baseline.prepare_research_correction(review, output_directory=directory)
+        preserved = {
+            item.file.path: (tmp_path / item.file.path).read_bytes()
+            for item in review.snapshot.artifacts
+        }
+    finally:
+        baseline.stop()
+
+    responses: list[Message | Exception] = []
+    if case == "statistical":
+        responses.append(
+            _tool_message(
+                "terminal",
+                command=f"python results/analysis.py --data data.csv --output-dir {directory}",
+            )
+        )
+    else:
+        spec = workflow_reproduction_spec(
+            correction_artifact_binding(original.binding, plan), "verify"
+        )
+        assert spec is not None
+        invocation = spec.command
+        if case == "copied-results":
+            invocation = (
+                f"mkdir -p {spec.directory} && cp results/metrics.json "
+                f"results/predictions.csv {spec.directory}/"
+            )
+        else:
+            responses.append(_tool_message("terminal", command=f"mkdir {directory}"))
+        responses.extend(
+            [
+                _tool_message("terminal", command=invocation),
+                _tool_message(
+                    "file_editor",
+                    command="create",
+                    path=str(tmp_path / directory / "verification.json"),
+                    file_text=json.dumps(
+                        {
+                            "status": "reproduced",
+                            "matching_artifacts": ["metrics.json", "predictions.csv"],
+                            "mismatched_artifacts": [],
+                        }
+                    ),
+                ),
+            ]
+        )
+    responses.append(
+        _tool_message(
+            "finish",
+            message="Correction complete; verify independently.",
+            status="success",
+            outcome_summary="Preserved source evidence.",
+        )
+    )
+    llm = TestLLM.from_messages(responses)
+    gateway = _sdk_gateway(tmp_path, llm, monkeypatch)
+    try:
+        gateway.handle(command)
+        for index in range(len(responses) - 1):
+            assert gateway.wait_for_session_idle(session_id="research", timeout=30)
+            group = gateway.session_projection(session_id="research").pending_approval
+            assert group is not None
+            assert len(group.actions) == 1
+            if index == 0:
+                assert not (tmp_path / directory).exists()
+            approval = SessionCommand(
+                command_id=f"approve-analysis-correction-{index}",
+                session_id="research",
+                kind=CommandKind.APPROVE,
+                created_at="2026-09-11T00:00:00Z",
+                payload={"target_id": group.group_id},
+            )
+            gateway.handle(approval)
+            assert gateway.handle(approval).replayed
+        assert gateway.wait_for_session_idle(session_id="research", timeout=30)
+        corrected = _state(gateway)
+        assert corrected.corrections[-1].stop_reason == "corrected"
+        assert corrected.completed == original.completed
+        assert {path: (tmp_path / path).read_bytes() for path in preserved} == preserved
+        gateway.handle(_projected_command(gateway, "evaluate"))
+        final = _state(gateway)
+        if case == "copied-results":
+            assert final.phase == "blocked"
+            assert final.stage_id == "verify"
+            assert final.evaluation is not None
+            assert final.evaluation.checks[0].status == "not_run"
+        else:
+            assert final.phase == "ready"
+            assert final.stage_id == ("verify" if case == "statistical" else "report")
+        assert llm.call_count == len(responses)
+        assert gateway.handle(command).replayed
+        export = gateway.export_experiments()
+        runs = gateway.experiment_records().runs
+        assert runs[-2].status == "failed"
+        assert runs[-1].status == "succeeded"  # Narrow correction outcome, not stage acceptance.
+        if case == "reproduction":
+            assert any(item.kind == "workflow.execution.recorded" for item in runs[-1].evidence)
+        gateway.handle(
+            SessionCommand(
+                command_id="analysis-correction-audit",
+                session_id="research",
+                kind=CommandKind.AUDIT_EXPORT,
+                created_at="2026-09-11T00:00:00Z",
+            )
+        )
+        audit = (gateway.sessions_root / "research/audit-export.jsonl").read_text()
+        assert "research_correction_fingerprint" in audit
+        assert "metrics.json" not in audit
+    finally:
+        gateway.stop()
+    unused = TestLLM.from_messages([])
+    restored = _sdk_gateway(tmp_path, unused, monkeypatch)
+    try:
+        assert _state(restored) == final
+        assert restored.export_experiments() == export
+        assert restored.handle(command).replayed
         assert unused.call_count == 0
     finally:
         restored.stop()
