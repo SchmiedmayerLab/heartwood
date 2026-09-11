@@ -92,9 +92,7 @@ def workflow_reproduction_spec(
     paths = {
         **files,
         **{
-            artifact.artifact_id: str(
-                PurePosixPath(binding.output_directory) / artifact.relative_path
-            )
+            artifact.artifact_id: binding.artifact_path(artifact.artifact_id)
             for artifact in definition.artifacts
         },
     }

@@ -9,14 +9,13 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from pathlib import PurePosixPath
 from typing import Protocol, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from heartwood.core_adapter._facade import PendingActionGroup
 from heartwood.core_adapter.reproduction import ReproductionWitness
-from heartwood.core_adapter.research_workflows import research_workflow, workflow_reproduction_spec
+from heartwood.core_adapter.research_workflows import workflow_reproduction_spec
 from heartwood.schemas.workflows import WorkflowRun
 from heartwood.session import EventKind, SessionEvent
 
@@ -98,12 +97,7 @@ def prepare_reproduction(
     if witness is None:
         return None
     expected = {item.value: item.sha256 for item in run.binding.inputs if item.kind == "file"}
-    paths = {
-        artifact.artifact_id: str(
-            PurePosixPath(run.binding.output_directory) / artifact.relative_path
-        )
-        for artifact in research_workflow(run.binding.workflow_id).artifacts
-    }
+    paths = {artifact.artifact_id: artifact.path for artifact in run.binding.artifacts}
     for accepted in run.completed:
         for artifact in accepted.artifacts:
             if artifact.artifact_id in paths:

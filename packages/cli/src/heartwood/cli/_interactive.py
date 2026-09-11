@@ -50,6 +50,7 @@ from heartwood.schemas.review import ResearchReviewRun
 from heartwood.schemas.workflows import (
     WorkflowCatalog,
     WorkflowControl,
+    WorkflowProjectBinding,
     WorkflowRequest,
     WorkflowStart,
 )
@@ -588,11 +589,23 @@ def format_workflow_lines(projection: SessionProjection) -> tuple[str, ...]:
             for check in run.evaluation.checks
         )
     lines.extend(format_research_review_lines(run.research_review))
+    lines.extend(format_workflow_artifact_lines(run.binding))
     lines.extend(
         f"  /workflow {control.control_id} - {terminal_safe_text(control.label)}"
         for control in projection.workflow_controls
     )
     return tuple(lines)
+
+
+def format_workflow_artifact_lines(binding: WorkflowProjectBinding) -> tuple[str, ...]:
+    """Use the recorded artifact locations in both terminal presentations."""
+    return (
+        "Analysis artifacts:",
+        *(
+            f"  {terminal_safe_text(item.artifact_id)}: {terminal_safe_text(item.path)}"
+            for item in binding.artifacts
+        ),
+    )
 
 
 def format_research_review_lines(review: ResearchReviewRun | None) -> tuple[str, ...]:

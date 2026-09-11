@@ -15,11 +15,11 @@ from heartwood.core_adapter.research_review import (
     assess_research_review,
     research_correction_roles,
 )
+from heartwood.schemas.artifacts import ResearchArtifactPath
 from heartwood.schemas.review import (
     ResearchReviewRun,
     ReviewCorrectionAssessment,
     ReviewCorrectionCheck,
-    ReviewCorrectionOutput,
     ReviewCorrectionPlan,
     ReviewProposals,
     ReviewSnapshot,
@@ -53,7 +53,7 @@ def plan_research_correction(
         ),
         output_directory=output_directory,
         outputs=tuple(
-            ReviewCorrectionOutput(
+            ResearchArtifactPath(
                 artifact_id=item.artifact_id,
                 path=str(
                     PurePosixPath(output_directory)

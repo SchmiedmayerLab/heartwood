@@ -80,6 +80,10 @@ def build_widget_spec(view_model: NotebookViewModel) -> tuple[WidgetSpec, ...]:
                     *(control.label for control in view_model.workflow_controls),
                 ),
             ),
+            WidgetSpec(
+                "Analysis Artifacts",
+                tuple(f"{item.artifact_id}: {item.path}" for item in run.binding.artifacts),
+            ),
         )
     if view_model.experiments:
         workflow_sections += (

@@ -11,7 +11,6 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Literal, Protocol, cast
 from uuid import uuid5
 
@@ -601,14 +600,14 @@ def _check_inputs(
     evaluator: WorkflowEvaluator, current: WorkflowRun, events: Sequence[SessionEvent]
 ) -> None:
     binding = current.binding
-    if (
-        evaluator.prepare(
-            binding.workflow_id,
-            inputs={item.input_id: item.value for item in binding.inputs},
-            output_directory=binding.output_directory,
-        )
-        != binding
-    ):
+    expected = evaluator.prepare(
+        binding.workflow_id,
+        inputs={item.input_id: item.value for item in binding.inputs},
+        output_directory=binding.output_directory,
+    )
+    if expected.model_copy(update={"artifacts": binding.artifacts}) != binding or {
+        item.artifact_id for item in expected.artifacts
+    } != {item.artifact_id for item in binding.artifacts}:
         raise ValueError("Input changed")
     for accepted in current.completed:
         actual = evaluator.evaluate(
@@ -683,9 +682,7 @@ def workflow_stage_prompt(run: WorkflowRun) -> str:
         item.input_id: {"kind": item.kind, "value": item.value} for item in run.binding.inputs
     }
     paths = {
-        artifact.artifact_id: str(
-            PurePosixPath(run.binding.output_directory) / artifact.relative_path
-        )
+        artifact.artifact_id: run.binding.artifact_path(artifact.artifact_id)
         for artifact in definition.artifacts
         if artifact.artifact_id in (*stage.reads, *stage.writes)
     }

@@ -39,6 +39,7 @@ def _binding(workflow_id: str) -> WorkflowProjectBinding:
         workflow_id=workflow_id,
         workflow_fingerprint=definition.fingerprint,
         output_directory="research results",
+        artifacts=definition.bind_artifacts("research results"),
         inputs=tuple(
             WorkflowBoundInput(
                 input_id=item.input_id,

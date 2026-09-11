@@ -132,6 +132,12 @@ For artifact comparisons, only the reproduced copy is replaceable, never the ori
 These planning and inspection APIs neither start model work nor grant approval or advance a workflow stage.
 They validate content and declared associations; authenticated task lineage still requires the owning session journal.
 
+Workflow bindings retain a resolved project-relative path for every declared artifact.
+Stage prompts, independent checks, reproduction instructions, provenance, and interface artifact links use that same map rather than reconstructing locations from the catalog.
+The initial output directory is a preparation default, not an alternative source of current file locations.
+A proposed correction binding may replace only the unaccepted stage's declared outputs after a fresh recheck; it preserves all input and earlier-stage bindings.
+Constructing that candidate binding does not mutate the run or bypass the stage's ordinary checks and researcher acceptance.
+
 ### Journaled Stage Execution
 
 The gateway accepts explicit workflow start, run, evaluate, review, and cancel commands through the existing session command journal.

@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Mapping, Sequence
-from pathlib import PurePosixPath
 
 from heartwood.core_adapter.reproduction import ReproductionWitness
 from heartwood.core_adapter.research_checks import (
@@ -31,7 +30,13 @@ from heartwood.gateway.experiments import experiment_digest, observed_python_env
 from heartwood.schemas.execution import ExecutionUsage
 from heartwood.schemas.experiments import ExperimentDefinition, ExperimentFile, ExperimentStage
 from heartwood.schemas.project_paths import project_relative_path
-from heartwood.schemas.review import ReviewAssessment, ReviewSnapshot, ReviewSubmission
+from heartwood.schemas.review import (
+    ReviewAssessment,
+    ReviewCorrectionAssessment,
+    ReviewCorrectionPlan,
+    ReviewSnapshot,
+    ReviewSubmission,
+)
 from heartwood.schemas.workflows import (
     WorkflowBoundInput,
     WorkflowCatalog,
@@ -68,7 +73,7 @@ class ResearchStageEvaluator:
         }
         paths.update(
             {
-                item.artifact_id: str(PurePosixPath(binding.output_directory) / item.relative_path)
+                item.artifact_id: binding.artifact_path(item.artifact_id)
                 for item in definition.artifacts
                 if item.artifact_id in scope
             }
@@ -81,6 +86,39 @@ class ResearchStageEvaluator:
         """Reuse the independent bounded review verifier."""
         return ResearchReviewEvaluator(self.workspace).assess(snapshot, submissions)
 
+    def correction_binding(
+        self, run: WorkflowRun, plan: ReviewCorrectionPlan, assessment: ReviewCorrectionAssessment
+    ) -> WorkflowProjectBinding:
+        """Propose checked replacement locations without accepting or mutating a workflow."""
+        definition = research_workflow(run.binding.workflow_id)
+        self._validate_binding(definition, run.binding)
+        plan = ReviewCorrectionPlan.model_validate(plan)
+        if run.research_review is None or run.phase not in {"running", "blocked", "review"}:
+            raise ValueError("Correction requires an unaccepted stage with a research review")
+        if any(item.assessment.stage_id == run.stage_id for item in run.completed):
+            raise ValueError("Correction cannot replace accepted stage artifacts")
+        if self.prepare_review(run.binding, run.stage_id) != run.research_review.snapshot:
+            raise ValueError("Correction review does not match the current stage evidence")
+        assessment = ReviewCorrectionAssessment.model_validate(assessment)
+        actual = ResearchReviewEvaluator(self.workspace).assess_correction(
+            run.research_review, plan
+        )
+        if actual != assessment or any(item.status != "not_observed" for item in actual.checks):
+            raise ValueError(
+                "Correction evidence is changed, unavailable, or still contains the defect"
+            )
+        replacements = {item.artifact_id: item for item in plan.outputs}
+        if not replacements.keys() <= set(definition.stage(run.stage_id).writes):
+            raise ValueError("Correction can replace only the current stage's declared outputs")
+        return WorkflowProjectBinding.model_validate(
+            {
+                **run.binding.model_dump(),
+                "artifacts": tuple(
+                    replacements.get(item.artifact_id, item) for item in run.binding.artifacts
+                ),
+            }
+        )
+
     def experiment_definition(
         self, run: WorkflowRun, *, session_id: str, actor_id: str, invocation: str
     ) -> ExperimentDefinition:
@@ -89,21 +127,14 @@ class ResearchStageEvaluator:
         stage = definition.stage(run.stage_id)
         artifacts = {item.artifact_id: item for item in definition.artifacts}
         paths = {item.value for item in run.binding.inputs if item.kind == "file"}
-        paths.update(
-            str(PurePosixPath(run.binding.output_directory) / artifacts[name].relative_path)
-            for name in stage.reads
-            if name in artifacts
-        )
+        paths.update(run.binding.artifact_path(name) for name in stage.reads if name in artifacts)
         code_paths = {
-            str(PurePosixPath(run.binding.output_directory) / artifacts[name].relative_path)
+            run.binding.artifact_path(name)
             for name in stage.reads
             if name in artifacts and artifacts[name].media_type == "text/x-python"
         }
         observed = {path: self._fingerprint(path) for path in sorted(paths)}
-        outputs = tuple(
-            str(PurePosixPath(run.binding.output_directory) / artifacts[name].relative_path)
-            for name in stage.writes
-        )
+        outputs = tuple(run.binding.artifact_path(name) for name in stage.writes)
         return ExperimentDefinition(
             actor_ref="sha256:" + _digest(actor_id),
             source="heartwood",
@@ -136,9 +167,7 @@ class ResearchStageEvaluator:
         stage = definition.stage(run.stage_id)
         for artifact in definition.artifacts:
             if artifact.artifact_id in stage.writes:
-                observed = self._fingerprint(
-                    str(PurePosixPath(run.binding.output_directory) / artifact.relative_path)
-                )
+                observed = self._fingerprint(run.binding.artifact_path(artifact.artifact_id))
                 if observed.sha256 != expected.get(artifact.artifact_id):
                     raise ValueError("Stage output changed after evaluation")
                 outputs.append(observed)
@@ -196,6 +225,7 @@ class ResearchStageEvaluator:
             workflow_fingerprint=definition.fingerprint,
             output_directory=output_directory,
             inputs=tuple(bound),
+            artifacts=definition.bind_artifacts(output_directory),
         )
         self._validate_binding(definition, binding)
         return binding
@@ -322,33 +352,24 @@ class ResearchStageEvaluator:
         stage = definition.stage(stage_id)
         for artifact in definition.artifacts:
             if artifact.artifact_id in (*stage.reads, *stage.writes):
-                text = self._read(
-                    str(PurePosixPath(binding.output_directory) / artifact.relative_path)
-                )
+                text = self._read(binding.artifact_path(artifact.artifact_id))
                 if text is not None:
                     values[artifact.artifact_id] = text
         return values
 
     @staticmethod
     def _validate_binding(definition: WorkflowDefinition, binding: WorkflowProjectBinding) -> None:
+        binding = WorkflowProjectBinding.model_validate(binding)
         if binding.workflow_fingerprint != definition.fingerprint:
             raise ValueError("Workflow definition changed; prepare a new binding")
         if {item.input_id: item.kind for item in binding.inputs} != {
             item.input_id: item.kind for item in definition.inputs
         }:
             raise ValueError("Workflow binding does not match the declared inputs")
-        outputs = [
-            PurePosixPath(binding.output_directory.casefold()) / artifact.relative_path.casefold()
-            for artifact in definition.artifacts
-        ]
-        for item in binding.inputs:
-            if item.kind == "file":
-                path = PurePosixPath(item.value.casefold())
-                if any(
-                    path == output or path in output.parents or output in path.parents
-                    for output in outputs
-                ):
-                    raise ValueError("Workflow outputs must not overlap input files")
+        if {item.artifact_id for item in binding.artifacts} != {
+            item.artifact_id for item in definition.artifacts
+        }:
+            raise ValueError("Workflow binding does not match the declared artifacts")
 
 
 def _digest(text: str) -> str:

@@ -455,12 +455,24 @@ export interface WorkflowRun {
 export interface WorkflowProjectBinding {
   /**
    * @minItems 1
+   * @maxItems 64
+   */
+  artifacts: ResearchArtifactPath[];
+  /**
+   * @minItems 1
    * @maxItems 32
    */
   inputs: WorkflowBoundInput[];
   output_directory: string;
   workflow_fingerprint: string;
   workflow_id: WorkflowIdentifier;
+}
+/**
+ * A resolved file location for a workflow or a proposed correction output.
+ */
+export interface ResearchArtifactPath {
+  artifact_id: WorkflowIdentifier;
+  path: ExperimentPath;
 }
 /**
  * Private researcher input, bound to the bytes accepted at preparation.

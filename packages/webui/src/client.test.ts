@@ -497,6 +497,10 @@ describe("GatewayClient", () => {
           workflow_id: "dataset-readiness",
           workflow_fingerprint: "a".repeat(64),
           output_directory: "results",
+          artifacts: [
+            { artifact_id: "readiness", path: "results/readiness.json" },
+            { artifact_id: "report", path: "results/readiness.md" },
+          ],
           inputs: [
             {
               input_id: "data",

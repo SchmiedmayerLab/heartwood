@@ -638,6 +638,15 @@ export const sessionProjectionJsonSchema = {
       pattern: "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
       type: "string",
     },
+    ResearchArtifactPath: {
+      additionalProperties: false,
+      properties: {
+        artifact_id: { $ref: "#/$defs/WorkflowIdentifier" },
+        path: { $ref: "#/$defs/ExperimentPath" },
+      },
+      required: ["artifact_id", "path"],
+      type: "object",
+    },
     ResearchReviewRun: {
       additionalProperties: false,
       properties: {
@@ -920,6 +929,12 @@ export const sessionProjectionJsonSchema = {
     WorkflowProjectBinding: {
       additionalProperties: false,
       properties: {
+        artifacts: {
+          items: { $ref: "#/$defs/ResearchArtifactPath" },
+          maxItems: 64,
+          minItems: 1,
+          type: "array",
+        },
         inputs: {
           items: { $ref: "#/$defs/WorkflowBoundInput" },
           maxItems: 32,
@@ -935,6 +950,7 @@ export const sessionProjectionJsonSchema = {
         "workflow_fingerprint",
         "output_directory",
         "inputs",
+        "artifacts",
       ],
       type: "object",
     },

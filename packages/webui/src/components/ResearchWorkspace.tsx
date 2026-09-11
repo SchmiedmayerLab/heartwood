@@ -439,18 +439,16 @@ const WorkflowWorkspace = ({
             </details>
           : null}
           <div className="research-artifacts">
-            {definition.artifacts.map((item) => (
+            {run.binding.artifacts.map((item) => (
               <Button
                 key={item.artifact_id}
                 variant="ghost"
-                onClick={() =>
-                  setArtifact(
-                    `${run.binding.output_directory}/${item.relative_path}`,
-                  )
-                }
+                onClick={() => setArtifact(item.path)}
               >
                 <FileText size={16} />
-                {item.label}
+                {definition.artifacts.find(
+                  (definition) => definition.artifact_id === item.artifact_id,
+                )?.label ?? item.artifact_id}
               </Button>
             ))}
           </div>

@@ -15,6 +15,7 @@ from typing import Literal, Self
 
 from pydantic import Field, model_validator
 
+from heartwood.schemas.artifacts import ResearchArtifactPath
 from heartwood.schemas.experiments import Digest, ExperimentFile, ExperimentRecord, Reference
 from heartwood.schemas.identifiers import WorkflowIdentifier
 from heartwood.schemas.project_paths import project_relative_path
@@ -205,19 +206,6 @@ class ResearchReviewRun(ExperimentRecord):
         return self
 
 
-class ReviewCorrectionOutput(ExperimentRecord):
-    """A new artifact location; never permission to overwrite the reviewed file."""
-
-    artifact_id: WorkflowIdentifier
-    path: str = Field(min_length=1, max_length=512)
-
-    @model_validator(mode="after")
-    def public_path(self) -> Self:
-        """Use the shared project boundary for generated correction paths."""
-        project_relative_path(self.path, allow_root=False)
-        return self
-
-
 class ReviewCorrectionPlan(ExperimentRecord):
     """Gateway-selected findings and fresh output locations for one correction attempt."""
 
@@ -225,7 +213,7 @@ class ReviewCorrectionPlan(ExperimentRecord):
     snapshot_sha256: Digest
     finding_ids: tuple[Digest, ...] = Field(min_length=1, max_length=512)
     output_directory: str = Field(min_length=1, max_length=512)
-    outputs: tuple[ReviewCorrectionOutput, ...] = Field(min_length=1, max_length=32)
+    outputs: tuple[ResearchArtifactPath, ...] = Field(min_length=1, max_length=32)
 
     @model_validator(mode="after")
     def distinct_outputs(self) -> Self:

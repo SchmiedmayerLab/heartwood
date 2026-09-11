@@ -92,6 +92,7 @@ const run = (): NonNullable<SessionProjection["workflow"]> => ({
     workflow_id: "synthetic-analysis",
     workflow_fingerprint: "a".repeat(64),
     output_directory: "results",
+    artifacts: [{ artifact_id: "report", path: "results/report.md" }],
     inputs: [
       {
         input_id: "data",
@@ -299,41 +300,48 @@ describe("research workflow workspace", () => {
     });
   });
 
-  it("submits the exact displayed review request and inspects actual artifacts", async () => {
-    const request = {
-      action: "review" as const,
-      run_id: "run",
-      revision: 3,
-      approved: true,
-      evidence_fingerprint: "c".repeat(64),
-    };
-    const view = setup(
-      syntheticProjection({
-        workflow: run(),
-        pendingApproval: null,
-        workflowControls: [
-          { control_id: "accept", label: "Accept Stage", request },
-        ],
-      }),
-    );
-    view.client.getWorkspaceFile.mockResolvedValue({
-      status: "available",
-      content: "# Synthetic Report\nMeasured findings",
-      message: null,
-    });
-    fireEvent.click(await screen.findByRole("button", { name: "Report" }));
-    expect(
-      await screen.findByRole("heading", { name: "Synthetic Report" }),
-    ).toBeVisible();
-    expect(view.client.getWorkspaceFile).toHaveBeenCalledWith(
-      "session-test",
-      "results/report.md",
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Accept Stage" }));
-    expect(view.onSubmit).toHaveBeenCalledWith(request);
-    fireEvent.click(screen.getByRole("button", { name: "Open Conversation" }));
-    expect(view.onConversation).toHaveBeenCalledOnce();
-  });
+  it.each(["results/report.md", "correction-one/report.md"])(
+    "submits the displayed review and inspects the bound artifact %s",
+    async (path) => {
+      const request = {
+        action: "review" as const,
+        run_id: "run",
+        revision: 3,
+        approved: true,
+        evidence_fingerprint: "c".repeat(64),
+      };
+      const state = run();
+      state.binding.artifacts = [{ artifact_id: "report", path }];
+      const view = setup(
+        syntheticProjection({
+          workflow: state,
+          pendingApproval: null,
+          workflowControls: [
+            { control_id: "accept", label: "Accept Stage", request },
+          ],
+        }),
+      );
+      view.client.getWorkspaceFile.mockResolvedValue({
+        status: "available",
+        content: "# Synthetic Report\nMeasured findings",
+        message: null,
+      });
+      fireEvent.click(await screen.findByRole("button", { name: "Report" }));
+      expect(
+        await screen.findByRole("heading", { name: "Synthetic Report" }),
+      ).toBeVisible();
+      expect(view.client.getWorkspaceFile).toHaveBeenCalledWith(
+        "session-test",
+        path,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Accept Stage" }));
+      expect(view.onSubmit).toHaveBeenCalledWith(request);
+      fireEvent.click(
+        screen.getByRole("button", { name: "Open Conversation" }),
+      );
+      expect(view.onConversation).toHaveBeenCalledOnce();
+    },
+  );
 
   it("does not infer stage controls from model messages or lifecycle", async () => {
     setup(syntheticProjection({ workflow: run(), workflowControls: [] }));

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from pathlib import PurePosixPath
 from typing import Annotated, Literal, Self
 
 from pydantic import (
@@ -23,6 +24,7 @@ from pydantic import (
     model_validator,
 )
 
+from heartwood.schemas.artifacts import ResearchArtifactPath
 from heartwood.schemas.execution import ExecutionBudget, ExecutionUsage
 from heartwood.schemas.identifiers import WorkflowIdentifier as WorkflowIdentifier
 from heartwood.schemas.project_paths import project_relative_path
@@ -132,6 +134,17 @@ class WorkflowDefinition(WorkflowRecord):
                 return stage
         raise ValueError("Unknown workflow stage")
 
+    def bind_artifacts(self, output_directory: str) -> tuple[ResearchArtifactPath, ...]:
+        """Resolve initial locations once, before the workflow enters the session journal."""
+        project_relative_path(output_directory, allow_root=False)
+        return tuple(
+            ResearchArtifactPath(
+                artifact_id=item.artifact_id,
+                path=str(PurePosixPath(output_directory) / item.relative_path),
+            )
+            for item in self.artifacts
+        )
+
     @model_validator(mode="after")
     def coherent_data_flow(self) -> Self:
         """Require ordered dependencies, one output owner, and checks for every output."""
@@ -236,10 +249,20 @@ class WorkflowBoundInput(WorkflowRecord):
 class WorkflowProjectBinding(WorkflowRecord):
     """Project-relative inputs and output location; never an external workspace root."""
 
+    model_config = ConfigDict(revalidate_instances="always")
+
     workflow_id: WorkflowIdentifier
     workflow_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
     output_directory: str = Field(min_length=1, max_length=512)
     inputs: tuple[WorkflowBoundInput, ...] = Field(min_length=1, max_length=32)
+    artifacts: tuple[ResearchArtifactPath, ...] = Field(min_length=1, max_length=64)
+
+    def artifact_path(self, artifact_id: str) -> str:
+        """Resolve a recorded artifact; never guess a path from its display metadata."""
+        for item in self.artifacts:
+            if item.artifact_id == artifact_id:
+                return item.path
+        raise ValueError("Unknown bound artifact")
 
     @model_validator(mode="after")
     def safe_binding(self) -> Self:
@@ -247,6 +270,18 @@ class WorkflowProjectBinding(WorkflowRecord):
         project_relative_path(self.output_directory, allow_root=False)
         if len({item.input_id for item in self.inputs}) != len(self.inputs):
             raise ValueError("Workflow input bindings must be unique")
+        if len({item.artifact_id for item in self.artifacts}) != len(self.artifacts):
+            raise ValueError("Workflow artifact bindings must be unique")
+        outputs = [PurePosixPath(item.path.casefold()) for item in self.artifacts]
+        inputs = [
+            PurePosixPath(item.value.casefold()) for item in self.inputs if item.kind == "file"
+        ]
+        for index, path in enumerate(outputs):
+            if any(
+                path == other or path in other.parents or other in path.parents
+                for other in (*outputs[index + 1 :], *inputs)
+            ):
+                raise ValueError("Workflow output paths must not overlap outputs or inputs")
         return self
 
 

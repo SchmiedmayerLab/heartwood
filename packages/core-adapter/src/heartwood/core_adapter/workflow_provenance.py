@@ -12,7 +12,6 @@ import hashlib
 import json
 from collections.abc import Sequence
 from datetime import datetime
-from pathlib import PurePosixPath
 from typing import Literal, Protocol
 from uuid import NAMESPACE_URL, UUID, uuid5
 
@@ -193,10 +192,7 @@ def _validate_artifacts(
     contract = research_workflow(workflow.binding.workflow_id)
     stage = contract.stage(stage_reference.stage_id)
     artifacts = {item.artifact_id: item for item in contract.artifacts}
-    paths = {
-        name: str(PurePosixPath(workflow.binding.output_directory) / item.relative_path)
-        for name, item in artifacts.items()
-    }
+    paths = {name: workflow.binding.artifact_path(name) for name in artifacts}
     if set(definition.output_paths) != {paths[name] for name in stage.writes} or set(
         definition.code_output_paths
     ) != {paths[name] for name in stage.writes if artifacts[name].media_type == "text/x-python"}:
