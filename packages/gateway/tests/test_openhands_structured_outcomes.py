@@ -9,13 +9,22 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from pathlib import Path
+from typing import cast
 from uuid import UUID, uuid4
 
 import pytest
 from openhands.sdk import LocalConversation, Tool
 from openhands.sdk.conversation import BaseConversation, ConversationExecutionStatus
-from openhands.sdk.event import ActionEvent
+from openhands.sdk.critic import (
+    CriticBase,
+    CriticResult,
+    EmptyPatchCritic,
+    IterativeRefinementConfig,
+    PassCritic,
+)
+from openhands.sdk.event import ActionEvent, LLMConvertibleEvent
 from openhands.sdk.llm import Message, MessageToolCall
 from openhands.sdk.security import AlwaysConfirm
 from openhands.sdk.settings import OpenHandsAgentSettings
@@ -47,7 +56,9 @@ def _finish(status: str) -> Message:
     )
 
 
-def _conversation(root: Path, conversation_id: UUID, llm: TestLLM) -> BaseConversation:
+def _conversation(
+    root: Path, conversation_id: UUID, llm: TestLLM, *, critic: CriticBase | None = None
+) -> BaseConversation:
     persistence = root / "openhands"
     agent = OpenHandsAgentSettings(
         llm=llm,
@@ -60,7 +71,8 @@ def _conversation(root: Path, conversation_id: UUID, llm: TestLLM) -> BaseConver
         update={
             "include_default_tools": [
                 name for name in agent.include_default_tools if name != "FinishTool"
-            ]
+            ],
+            "critic": critic,
         }
     )
     conversation = LocalConversation(
@@ -110,6 +122,74 @@ def test_structured_outcome_survives_restart_without_repeating_work(
         assert reopened.state.execution_status == ConversationExecutionStatus.FINISHED
     finally:
         reopened.close()
+
+
+@pytest.mark.parametrize("critic_passes", [False, True])
+def test_native_refinement_is_bounded_and_preserves_critic_evidence_on_restart(
+    tmp_path: Path, critic_passes: bool
+) -> None:
+    configuration = IterativeRefinementConfig(max_iterations=1, success_threshold=0.9)
+    critic = (
+        PassCritic(iterative_refinement=configuration)
+        if critic_passes
+        else EmptyPatchCritic(iterative_refinement=configuration)
+    )
+    llm = TestLLM.from_messages([_finish("failed"), _finish("success")])
+    identity = uuid4()
+    conversation = _conversation(tmp_path, identity, llm, critic=critic)
+    parser = FinishTool.create()[0].set_response_schema(TaskOutcome)
+    try:
+        conversation.send_message("Finish the synthetic task; no external work is requested.")
+        conversation.run()
+        actions = [event for event in conversation.state.events if isinstance(event, ActionEvent)]
+        assert llm.call_count == (1 if critic_passes else 2)
+        for event in actions:
+            assert event.critic_result is not None
+            assert event.critic_result.score == float(critic_passes)
+        assert conversation.state.execution_status == ConversationExecutionStatus.FINISHED
+        outcome = parser.parse_last_response(list(conversation.state.events))
+        assert isinstance(outcome, TaskOutcome)
+        # Model completion and the critic score can disagree in either direction.
+        assert outcome.status == ("failed" if critic_passes else "success")
+        agent_state = dict(cast(LocalConversation, conversation).state.agent_state)
+    finally:
+        conversation.close()
+    unused = TestLLM.from_messages([])
+    reopened = _conversation(tmp_path, identity, unused, critic=critic)
+    try:
+        restored = [event for event in reopened.state.events if isinstance(event, ActionEvent)]
+        assert [(event.id, event.critic_result) for event in restored] == [
+            (event.id, event.critic_result) for event in actions
+        ]
+        assert dict(cast(LocalConversation, reopened).state.agent_state) == agent_state
+        assert unused.call_count == 0
+    finally:
+        reopened.close()
+
+
+def test_missing_native_critic_result_is_not_evidence_of_a_successful_review(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def unavailable(
+        self: EmptyPatchCritic, events: Sequence[LLMConvertibleEvent], git_patch: str | None = None
+    ) -> CriticResult:
+        del self, events, git_patch
+        raise RuntimeError("synthetic reviewer unavailable")
+
+    monkeypatch.setattr(EmptyPatchCritic, "evaluate", unavailable)
+    critic = EmptyPatchCritic(iterative_refinement=IterativeRefinementConfig(max_iterations=1))
+    llm = TestLLM.from_messages([_finish("success")])
+    conversation = _conversation(tmp_path, uuid4(), llm, critic=critic)
+    try:
+        conversation.send_message("Report only the synthetic task outcome.")
+        conversation.run()
+        actions = [event for event in conversation.state.events if isinstance(event, ActionEvent)]
+        assert len(actions) == 1
+        assert actions[0].critic_result is None
+        assert conversation.state.execution_status == ConversationExecutionStatus.FINISHED
+        assert llm.call_count == 1
+    finally:
+        conversation.close()
 
 
 def test_invalid_structured_outcome_is_rejected_before_finish(tmp_path: Path) -> None:
