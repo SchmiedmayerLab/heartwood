@@ -6,4 +6,5 @@
 
 self-hosted-runner:
   labels:
+    - heartwood-ubuntu-large
     - gpu
