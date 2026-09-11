@@ -80,6 +80,18 @@ The workflow publishes one commit-bound `candidate-sha-…-terra-gpu-nvidia` tag
 Use the tag reported in the workflow summary when recreating the Terra environment.
 The candidate does not move release or `edge` tags.
 
+## CI Runners and Runtime Locks
+
+Every workflow runs on standard GitHub-hosted runners: `ubuntu-24.04` for x64 jobs and `ubuntu-24.04-arm` for ARM images.
+Container builds and capable-model acceptance start with the shared `reclaim-runner-disk` action, which removes preinstalled toolchains the job does not use and reports the remaining space.
+The capable-model job verifies at least 15 GiB of memory and matches llama.cpp threads to the runner's cores.
+The Terra image jobs carry longer timeouts because the Terra base image is large.
+Larger hosted runners require a GitHub Team or Enterprise plan; move a job there only after a standard runner has run out of disk or time.
+
+Regenerate the isolated GPU dependency lock with `bash images/gpu/compile_requirements.sh`.
+This is the same command CI uses to verify the lock, including its release-date cutoff and hashes.
+Update the security floors in `images/gpu/vllm.in` and the cutoff in that script when refreshing dependencies; do not edit generated hashes by hand.
+
 ## Static Analysis
 
 Python packages use strict mypy checking with the Pydantic plugin, and each published namespace subpackage includes a PEP 561 `py.typed` marker.

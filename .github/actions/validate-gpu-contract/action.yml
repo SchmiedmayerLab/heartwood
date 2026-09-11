@@ -26,16 +26,7 @@ runs:
       shell: bash
       run: |
         cp images/gpu/vllm-requirements.txt /tmp/vllm-requirements.expected
-        uv pip compile \
-          --python-version 3.12 \
-          --python-platform x86_64-manylinux_2_28 \
-          --generate-hashes \
-          --emit-index-url \
-          --exclude-newer 2026-08-14T05:05:00Z \
-          --override images/gpu/vllm-overrides.txt \
-          --exclude images/gpu/vllm-exclusions.txt \
-          --output-file images/gpu/vllm-requirements.txt \
-          images/gpu/vllm.in
+        bash images/gpu/compile_requirements.sh
         cmp /tmp/vllm-requirements.expected images/gpu/vllm-requirements.txt
         grep --fixed-strings 'vllm-0.27.2rc1.dev77%2Bgac7509e2b.cu129-cp38-abi3-manylinux_2_28_x86_64.whl' images/gpu/vllm-requirements.txt
         grep --fixed-strings 'torch-2.13.0%2Bcu129-cp312-cp312-manylinux_2_28_x86_64.whl' images/gpu/vllm-requirements.txt

@@ -388,8 +388,8 @@ def test_pull_request_validation_has_no_optional_job_placeholders() -> None:
     assert "runtime.cache-to=type=gha,scope=${{ matrix.cache_scope }},mode=min" in smoke
     assert "docker compose -f images/generic/compose.yaml run --rm heartwood" in smoke
     assert "runner: ubuntu-24.04" in gpu
-    assert "runner: blacksmith-16vcpu-ubuntu-2404" in gpu
-    assert "runs-on: blacksmith-8vcpu-ubuntu-2404" in capable
+    assert "uses: ./.github/actions/reclaim-runner-disk" in gpu
+    assert "runs-on: ubuntu-24.04" in capable
     assert "uses: docker/bake-action@v7" in capable
     assert "uses: docker/bake-action@v7" in gpu
     assert "cache-from=type=gha" not in gpu
@@ -397,37 +397,36 @@ def test_pull_request_validation_has_no_optional_job_placeholders() -> None:
     assert dependabot.count('multi-ecosystem-group: "weekly-dependencies"') == 3
 
 
-def test_blacksmith_runners_are_reserved_for_high_memory_validation() -> None:
+def test_compute_intensive_validation_runs_on_standard_runners() -> None:
     workflow_root = Path(".github/workflows")
-    blacksmith_workflows = {
-        path.name
-        for path in workflow_root.glob("*.yml")
-        if "blacksmith-" in path.read_text(encoding="utf-8")
+    workflows = {
+        path.name: path.read_text(encoding="utf-8") for path in workflow_root.glob("*.yml")
     }
-
-    assert blacksmith_workflows == {
+    assert not [name for name, text in workflows.items() if "blacksmith-" in text]
+    reclaiming = {
+        name for name, text in workflows.items() if "./.github/actions/reclaim-runner-disk" in text
+    }
+    assert reclaiming == {
         "capable-model.yml",
         "gpu-container-image.yml",
         "gpu-container-pr-validation.yml",
         "gpu-container-pr.yml",
     }
-    gpu_workflows = blacksmith_workflows - {"capable-model.yml"}
-    for workflow_name in gpu_workflows:
-        workflow = (workflow_root / workflow_name).read_text(encoding="utf-8")
-        assert workflow.count("blacksmith-16vcpu-ubuntu-2404") == 1
-    capable = (workflow_root / "capable-model.yml").read_text(encoding="utf-8")
-    assert capable.count("blacksmith-8vcpu-ubuntu-2404") == 1
-    assert "minimum_kib=$((24 * 1024 * 1024))" in capable
-    for workflow_name in gpu_workflows - {"gpu-container-pr.yml"}:
-        workflow = (workflow_root / workflow_name).read_text(encoding="utf-8")
+    capable = workflows["capable-model.yml"]
+    assert capable.count("runs-on: ubuntu-24.04") == 1
+    assert "minimum_kib=$((15 * 1024 * 1024))" in capable
+    assert '--env HEARTWOOD_LOCAL_MODEL_THREADS="$(nproc)"' in capable
+    for workflow_name in ("gpu-container-image.yml", "gpu-container-pr-validation.yml"):
+        workflow = workflows[workflow_name]
         assert "target: runtime-gpu-nvidia\n            runner: ubuntu-24.04" in workflow
-        assert (
-            "target: terra-runtime-gpu-nvidia\n            runner: blacksmith-16vcpu-ubuntu-2404"
-        ) in workflow
-    manual = (workflow_root / "gpu-container-pr.yml").read_text(encoding="utf-8")
-    assert "runs-on: blacksmith-16vcpu-ubuntu-2404" in manual
+        assert "target: terra-runtime-gpu-nvidia\n            runner: ubuntu-24.04" in workflow
+    manual = workflows["gpu-container-pr.yml"]
+    assert "runs-on: ubuntu-24.04" in manual
     assert "targets: terra-runtime-gpu-nvidia" in manual
     assert "targets: runtime-gpu-nvidia" not in manual
+    action = Path(".github/actions/reclaim-runner-disk/action.yml").read_text(encoding="utf-8")
+    assert "/usr/local/lib/android" in action
+    assert "docker image prune --all --force" in action
 
 
 def test_release_gate_is_fail_fast_and_uses_readiness_check() -> None:

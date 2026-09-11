@@ -32,6 +32,7 @@ jobs:
     name: Build And Validate ${{ matrix.target }}
     needs: contract
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
     permissions:
       contents: read
       packages: write
@@ -47,7 +48,7 @@ jobs:
             validation_mode: linux-amd64-index
             media_output: type=image,push-by-digest=true,name-canonical=true,push=true
           - target: terra-runtime-gpu-nvidia
-            runner: blacksmith-16vcpu-ubuntu-2404
+            runner: ubuntu-24.04
             commit_suffix: terra-gpu-nvidia
             diagnostic_name: Terra GPU commit tag
             flatten: "true"
@@ -59,6 +60,8 @@ jobs:
         with:
           persist-credentials: false
           submodules: true
+      - name: Reclaim runner disk
+        uses: ./.github/actions/reclaim-runner-disk
       - name: Set image name
         id: image
         run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "${GITHUB_OUTPUT}"
