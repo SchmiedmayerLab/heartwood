@@ -16,7 +16,7 @@ permissions:
 jobs:
   acceptance:
     name: Capable Model OpenHands Acceptance (linux/amd64)
-    runs-on: ubuntu-24.04
+    runs-on: heartwood-ubuntu-large
     timeout-minutes: 45
     steps:
       - name: Checkout repository
@@ -24,14 +24,12 @@ jobs:
         with:
           persist-credentials: false
           submodules: true
-      - name: Reclaim runner disk
-        uses: ./.github/actions/reclaim-runner-disk
       - name: Verify capable-model runner memory
         run: |
-          minimum_kib=$((15 * 1024 * 1024))
+          minimum_kib=$((30 * 1024 * 1024))
           total_kib="$(awk '$1 == "MemTotal:" { print $2 }' /proc/meminfo)"
           if [[ -z "${total_kib}" ]] || (( total_kib < minimum_kib )); then
-            printf 'Capable-model acceptance requires at least 15 GiB RAM; runner reports %s KiB.\n' \
+            printf 'Capable-model acceptance requires at least 30 GiB RAM; runner reports %s KiB.\n' \
               "${total_kib:-unknown}" >&2
             exit 1
           fi
