@@ -638,7 +638,69 @@ export const sessionProjectionJsonSchema = {
       pattern: "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
       type: "string",
     },
+    ResearchReviewRun: {
+      additionalProperties: false,
+      properties: {
+        assessment: {
+          anyOf: [{ $ref: "#/$defs/ReviewAssessment" }, { type: "null" }],
+        },
+        review_id: { $ref: "#/$defs/Reference" },
+        reviewer_ids: {
+          items: { $ref: "#/$defs/WorkflowIdentifier" },
+          maxItems: 16,
+          minItems: 1,
+          type: "array",
+        },
+        snapshot: { $ref: "#/$defs/ReviewSnapshot" },
+        started_sequence: { minimum: 0, type: "integer" },
+        status: {
+          enum: ["pending", "assessed", "unavailable"],
+          type: "string",
+        },
+        submissions: {
+          items: { $ref: "#/$defs/ReviewSubmission" },
+          maxItems: 16,
+          type: "array",
+        },
+      },
+      required: [
+        "review_id",
+        "snapshot",
+        "reviewer_ids",
+        "started_sequence",
+        "status",
+        "submissions",
+        "assessment",
+      ],
+      type: "object",
+    },
     ResearchText: { maxLength: 4000, minLength: 1, type: "string" },
+    ReviewArtifact: {
+      additionalProperties: false,
+      properties: {
+        artifact_id: { $ref: "#/$defs/WorkflowIdentifier" },
+        file: { $ref: "#/$defs/ExperimentFile" },
+      },
+      required: ["artifact_id", "file"],
+      type: "object",
+    },
+    ReviewAssessment: {
+      additionalProperties: false,
+      properties: {
+        findings: {
+          items: { $ref: "#/$defs/ReviewFinding" },
+          maxItems: 512,
+          type: "array",
+        },
+        schema_version: {
+          const: "heartwood.review-assessment.v1",
+          type: "string",
+        },
+        snapshot_sha256: { $ref: "#/$defs/Digest" },
+      },
+      required: ["schema_version", "snapshot_sha256", "findings"],
+      type: "object",
+    },
     ReviewCandidate: {
       additionalProperties: false,
       properties: {
@@ -668,6 +730,41 @@ export const sessionProjectionJsonSchema = {
       enum: ["coding", "statistical", "reproducibility"],
       type: "string",
     },
+    ReviewFinding: {
+      additionalProperties: false,
+      properties: {
+        category: { $ref: "#/$defs/ReviewCategory" },
+        condition: { $ref: "#/$defs/WorkflowIdentifier" },
+        disposition: { enum: ["open", "not_actionable"], type: "string" },
+        evidence: { items: { $ref: "#/$defs/ReviewArtifact" }, type: "array" },
+        finding_id: { $ref: "#/$defs/Digest" },
+        reason: { $ref: "#/$defs/WorkflowIdentifier" },
+        severity: { $ref: "#/$defs/ReviewSeverity" },
+        sources: {
+          items: { $ref: "#/$defs/ReviewSource" },
+          maxItems: 512,
+          minItems: 1,
+          type: "array",
+        },
+        verification: { $ref: "#/$defs/ReviewVerification" },
+        verified_claim: {
+          anyOf: [{ $ref: "#/$defs/ResearchText" }, { type: "null" }],
+        },
+      },
+      required: [
+        "finding_id",
+        "condition",
+        "category",
+        "severity",
+        "verification",
+        "disposition",
+        "verified_claim",
+        "reason",
+        "evidence",
+        "sources",
+      ],
+      type: "object",
+    },
     ReviewProposals: {
       additionalProperties: false,
       properties: {
@@ -682,6 +779,62 @@ export const sessionProjectionJsonSchema = {
     },
     ReviewSeverity: {
       enum: ["low", "medium", "high", "critical"],
+      type: "string",
+    },
+    ReviewSnapshot: {
+      additionalProperties: false,
+      properties: {
+        artifacts: {
+          items: { $ref: "#/$defs/ReviewArtifact" },
+          maxItems: 32,
+          minItems: 1,
+          type: "array",
+        },
+        schema_version: {
+          const: "heartwood.review-snapshot.v1",
+          type: "string",
+        },
+      },
+      required: ["schema_version", "artifacts"],
+      type: "object",
+    },
+    ReviewSource: {
+      additionalProperties: false,
+      properties: {
+        candidate: { $ref: "#/$defs/ReviewCandidate" },
+        review_id: { $ref: "#/$defs/Reference" },
+        reviewer_id: { $ref: "#/$defs/Reference" },
+      },
+      required: ["review_id", "reviewer_id", "candidate"],
+      type: "object",
+    },
+    ReviewSubmission: {
+      additionalProperties: false,
+      properties: {
+        candidates: {
+          items: { $ref: "#/$defs/ReviewCandidate" },
+          maxItems: 32,
+          type: "array",
+        },
+        review_id: { $ref: "#/$defs/Reference" },
+        reviewer_id: { $ref: "#/$defs/Reference" },
+        schema_version: {
+          const: "heartwood.review-submission.v1",
+          type: "string",
+        },
+        snapshot_sha256: { $ref: "#/$defs/Digest" },
+      },
+      required: [
+        "candidates",
+        "schema_version",
+        "review_id",
+        "reviewer_id",
+        "snapshot_sha256",
+      ],
+      type: "object",
+    },
+    ReviewVerification: {
+      enum: ["verified", "rejected", "unsupported", "stale", "unavailable"],
       type: "string",
     },
     SessionLifecycle: {
@@ -724,7 +877,15 @@ export const sessionProjectionJsonSchema = {
       additionalProperties: false,
       properties: {
         control_id: {
-          enum: ["run", "evaluate", "accept", "decline", "cancel"],
+          enum: [
+            "run",
+            "evaluate",
+            "accept",
+            "decline",
+            "cancel",
+            "request-review",
+            "assess-review",
+          ],
           type: "string",
         },
         label: { $ref: "#/$defs/WorkflowText" },
@@ -808,6 +969,9 @@ export const sessionProjectionJsonSchema = {
           ],
           type: "string",
         },
+        research_review: {
+          anyOf: [{ $ref: "#/$defs/ResearchReviewRun" }, { type: "null" }],
+        },
         revision: { minimum: 0, type: "integer" },
         run_id: { minLength: 1, type: "string" },
         stage_id: { $ref: "#/$defs/WorkflowIdentifier" },
@@ -833,6 +997,7 @@ export const sessionProjectionJsonSchema = {
         "created_at",
         "stage_started_at",
         "stage_usage_baseline",
+        "research_review",
       ],
       type: "object",
     },
@@ -876,7 +1041,16 @@ export const sessionProjectionJsonSchema = {
     WorkflowTransition: {
       additionalProperties: false,
       properties: {
-        action: { enum: ["run", "evaluate", "cancel"], type: "string" },
+        action: {
+          enum: [
+            "run",
+            "evaluate",
+            "cancel",
+            "request-review",
+            "assess-review",
+          ],
+          type: "string",
+        },
         revision: { minimum: 0, type: "integer" },
         run_id: { minLength: 1, type: "string" },
       },

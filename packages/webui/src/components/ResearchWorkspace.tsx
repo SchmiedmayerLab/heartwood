@@ -35,7 +35,7 @@ import {
   ExperimentRunList,
   ProjectExperimentRecords,
 } from "./ExperimentRecords";
-import { SafeMarkdown } from "./SafeMarkdown";
+import { displaySafeText, SafeMarkdown } from "./SafeMarkdown";
 
 interface ResearchWorkspaceProps {
   client: Pick<
@@ -394,6 +394,30 @@ const WorkflowWorkspace = ({
               : "Open Conversation"}
             </Button>
           </div>
+          {run.research_review ?
+            <details className="research-provenance">
+              <summary>Research Review: {run.research_review.status}</summary>
+              {run.research_review.assessment ?
+                <ul
+                  className="research-checks"
+                  aria-label="Research review findings"
+                >
+                  {run.research_review.assessment.findings.map((finding) => (
+                    <li key={finding.finding_id}>
+                      {displaySafeText(
+                        finding.verified_claim ?? finding.reason,
+                      )}
+                      <strong>{finding.verification}</strong>
+                    </li>
+                  ))}
+                </ul>
+              : null}
+              <p>
+                Review findings do not authorize changes or establish scientific
+                correctness.
+              </p>
+            </details>
+          : null}
           <h3>Analysis Artifacts</h3>
           {projection.experiments.length > 0 ?
             <details className="research-provenance">

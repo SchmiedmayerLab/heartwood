@@ -24,12 +24,14 @@ from heartwood.core_adapter.research_workflows import (
     workflow_reproduction_spec,
 )
 from heartwood.core_adapter.workflow_evidence import assess_workflow_stage
+from heartwood.gateway._research_review import ResearchReviewEvaluator
 from heartwood.gateway._session_projection import project_session
 from heartwood.gateway._workspace import WorkspaceInspectionError, WorkspaceInspector
 from heartwood.gateway.experiments import experiment_digest, observed_python_environment
 from heartwood.schemas.execution import ExecutionUsage
 from heartwood.schemas.experiments import ExperimentDefinition, ExperimentFile, ExperimentStage
 from heartwood.schemas.project_paths import project_relative_path
+from heartwood.schemas.review import ReviewAssessment, ReviewSnapshot, ReviewSubmission
 from heartwood.schemas.workflows import (
     WorkflowBoundInput,
     WorkflowCatalog,
@@ -52,6 +54,32 @@ class ResearchStageEvaluator:
 
     def __init__(self, workspace: WorkspaceInspector) -> None:
         self.workspace = workspace
+
+    def prepare_review(self, binding: WorkflowProjectBinding, stage_id: str) -> ReviewSnapshot:
+        """Bind declared files, not paths or evidence roles selected by a model."""
+        definition = research_workflow(binding.workflow_id)
+        self._validate_binding(definition, binding)
+        stage = definition.stage(stage_id)
+        scope = set(stage.reads) | set(stage.writes)
+        paths = {
+            item.input_id: item.value
+            for item in binding.inputs
+            if item.kind == "file" and item.input_id in scope
+        }
+        paths.update(
+            {
+                item.artifact_id: str(PurePosixPath(binding.output_directory) / item.relative_path)
+                for item in definition.artifacts
+                if item.artifact_id in scope
+            }
+        )
+        return ResearchReviewEvaluator(self.workspace).prepare(paths)
+
+    def assess_review(
+        self, snapshot: ReviewSnapshot, submissions: Sequence[ReviewSubmission]
+    ) -> ReviewAssessment:
+        """Reuse the independent bounded review verifier."""
+        return ResearchReviewEvaluator(self.workspace).assess(snapshot, submissions)
 
     def experiment_definition(
         self, run: WorkflowRun, *, session_id: str, actor_id: str, invocation: str

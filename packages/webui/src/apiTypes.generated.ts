@@ -1002,7 +1002,7 @@ export interface WorkflowStart {
  * Apply a transition only to the exact run and revision the researcher saw.
  */
 export interface WorkflowTransition {
-  action: "run" | "evaluate" | "cancel";
+  action: "run" | "evaluate" | "cancel" | "request-review" | "assess-review";
   revision: number;
   run_id: string;
 }

@@ -143,6 +143,7 @@ def _readiness() -> WorkflowDefinition:
             WorkflowStage(
                 stage_id="inspect",
                 label="Inspect Data",
+                specialist_ids=("statistical-reviewer",),
                 reads=("data", "dictionary"),
                 writes=("readiness",),
                 reviewer_gate="none",
@@ -254,6 +255,7 @@ def _baseline() -> WorkflowDefinition:
             WorkflowStage(
                 stage_id="execute",
                 label="Run Baseline",
+                specialist_ids=("statistical-reviewer",),
                 reads=("data", "dictionary", "plan"),
                 writes=("program", "metrics", "predictions"),
                 reviewer_gate="none",

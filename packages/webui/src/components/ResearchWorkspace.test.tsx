@@ -85,6 +85,7 @@ const catalog: WorkflowCatalog = {
 };
 
 const run = (): NonNullable<SessionProjection["workflow"]> => ({
+  research_review: null,
   run_id: "run",
   revision: 3,
   binding: {
@@ -229,6 +230,53 @@ describe("research workflow workspace", () => {
     expect(record).toHaveTextContent("3064c9dc-826f-4793-9203-e381dbf26303");
     expect(record).toHaveTextContent("b".repeat(64));
     expect(record).not.toHaveTextContent("succeeded");
+  });
+
+  it("renders bound review status and sends the exact assessment request", async () => {
+    const state = run();
+    state.research_review = {
+      review_id: "review-one",
+      reviewer_ids: ["statistical-reviewer"],
+      started_sequence: 8,
+      status: "pending",
+      submissions: [],
+      assessment: null,
+      snapshot: {
+        schema_version: "heartwood.review-snapshot.v1",
+        artifacts: [
+          {
+            artifact_id: "program",
+            file: {
+              path: "analysis.py",
+              sha256: "a".repeat(64),
+              size_bytes: 20,
+            },
+          },
+        ],
+      },
+    };
+    const request = {
+      action: "assess-review" as const,
+      run_id: state.run_id,
+      revision: state.revision,
+    };
+    const view = setup(
+      syntheticProjection({
+        workflow: state,
+        workflowControls: [
+          {
+            control_id: "assess-review",
+            label: "Check Review Findings",
+            request,
+          },
+        ],
+      }),
+    );
+    expect(await screen.findByText("Research Review: pending")).toBeVisible();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Check Review Findings" }),
+    );
+    expect(view.onSubmit).toHaveBeenCalledExactlyOnceWith(request);
   });
 
   it("collects catalog-declared inputs without starting an agent implicitly", async () => {

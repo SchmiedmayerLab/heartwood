@@ -25,6 +25,9 @@ from heartwood.core_adapter import (
     BackendEvent,
     BackendLifecycle,
     BackendLifecycleEvent,
+    BackendSubagent,
+    BackendSubagentEvent,
+    BackendSubagentStatus,
     BackendUsage,
     BackendUsageEvent,
     DeterministicAgentBackend,
@@ -35,6 +38,7 @@ from heartwood.gateway import ModelProfile, OpenHandsSdkBackend, ProjectContext,
 from heartwood.gateway import _openhands_sdk as sdk_module
 from heartwood.gateway._research_evaluation import ResearchStageEvaluator
 from heartwood.schemas import JsonValue
+from heartwood.schemas.review import ReviewProposals
 from heartwood.schemas.workflows import WorkflowOutcomeStatus, WorkflowRun
 from heartwood.session import CommandKind, EventKind, SessionCommand
 
@@ -186,6 +190,290 @@ def _start(gateway: SessionGateway, inputs: dict[str, str]) -> SessionCommand:
     gateway.handle(command)
     assert _state(gateway).phase == "ready"
     return command
+
+
+class ReviewBackend(FinishedBackend):
+    def __init__(self, mode: str = "complete") -> None:
+        super().__init__()
+        self.mode = mode
+        self.proposals = ReviewProposals(candidates=())
+
+    def submit_turn(self, *, session_id: str, prompt: str) -> tuple[BackendEvent, ...]:
+        events = super().submit_turn(session_id=session_id, prompt=prompt)
+        if not prompt.startswith("Review the following bound analysis evidence"):
+            return events
+        specialist = BackendSubagent(
+            invocation_id="review-call",
+            task_id="native-review",
+            agent_name="statistical-reviewer",
+            role_label="Statistical Reviewer",
+            status=BackendSubagentStatus.PROPOSED,
+            parent_session_id=session_id,
+            parent_action_id="review-action",
+        )
+        from dataclasses import replace
+
+        completed = replace(
+            specialist,
+            status=BackendSubagentStatus.COMPLETED,
+            parent_action_id="other-action" if self.mode == "unpaired" else "review-action",
+            parent_session_id="other-session" if self.mode == "other-session" else session_id,
+            review_proposals=None if self.mode == "missing" else self.proposals,
+        )
+        return (
+            events[0],
+            BackendSubagentEvent(subagent=specialist),
+            BackendSubagentEvent(subagent=completed),
+            *events[1:],
+        )
+
+
+@pytest.mark.parametrize("mode", ["complete", "unpaired", "other-session", "missing"])
+def test_research_review_binds_native_tasks_and_replays_without_dispatch(
+    tmp_path: Path, mode: str
+) -> None:
+    backend = ReviewBackend(mode)
+    gateway = _gateway(tmp_path, backend)
+    try:
+        _start(gateway, _inputs(tmp_path))
+        gateway.handle(_transition(gateway, "run"))
+        _readiness(tmp_path)
+        command = _projected_command(gateway, "request-review")
+        gateway.handle(command)
+        pending = _state(gateway)
+        assert pending.research_review is not None
+        assert pending.research_review.status == "pending"
+        assert {item.artifact_id for item in pending.research_review.snapshot.artifacts} == {
+            "data",
+            "dictionary",
+            "readiness",
+        }
+        assert gateway.handle(command).replayed
+        assert len(backend.prompts) == 2
+        events = gateway._services["research"].replay_events()
+        preparation = next(
+            event for event in events if event.sequence == pending.research_review.started_sequence
+        )
+        assert preparation.kind == EventKind.WORKFLOW_UPDATED
+        recorded = WorkflowRun.model_validate(preparation.payload["run"])
+        assert recorded.research_review is not None
+        assert recorded.research_review.status == "pending"
+        assert any(
+            event.sequence > preparation.sequence and event.kind == EventKind.SUBAGENT_UPDATED
+            for event in events
+        )
+        denied = gateway.handle(_transition(gateway, "evaluate"))
+        assert any(event.kind == EventKind.ERROR_RECORDED for event in denied.events)
+        assessment_command = _projected_command(gateway, "assess-review")
+    finally:
+        gateway.stop()
+    fresh_backend = ReviewBackend()
+    restored = _gateway(tmp_path, fresh_backend)
+    try:
+        restored.handle(assessment_command)
+        assert restored.handle(assessment_command).replayed
+        assessed = _state(restored)
+        assert assessed.research_review is not None
+        assert assessed.research_review.status == (
+            "assessed" if mode == "complete" else "unavailable"
+        )
+        assert assessed.research_review.assessment is not None
+        assert assessed.research_review.assessment.findings == ()
+        assert not fresh_backend.prompts
+        from heartwood.cli._interactive import format_workflow_lines
+        from heartwood.notebook import build_view_model, build_widget_spec
+
+        projection = restored.session_projection(session_id="research")
+        label = f"Research review: {assessed.research_review.status}"
+        assert label in format_workflow_lines(projection)
+        section = next(
+            item
+            for item in build_widget_spec(build_view_model(projection))
+            if item.title == "Research Workflow"
+        )
+        assert label in section.items
+        restored.handle(_projected_command(restored, "evaluate"))
+        assert _state(restored).stage_id == "report"
+        restored.handle(
+            SessionCommand(
+                command_id="review-export",
+                session_id="research",
+                kind=CommandKind.AUDIT_EXPORT,
+                created_at="2026-09-11T00:00:00Z",
+            )
+        )
+        audit = (restored.sessions_root / "research/audit-export.jsonl").read_text()
+        assert "research_review_fingerprint" in audit
+        assert "readiness.json" not in audit
+        assert "candidates" not in audit
+    finally:
+        restored.stop()
+
+
+def test_research_review_missing_evidence_does_not_start_model_work(tmp_path: Path) -> None:
+    backend = ReviewBackend()
+    gateway = _gateway(tmp_path, backend)
+    try:
+        _start(gateway, _inputs(tmp_path))
+        gateway.handle(_transition(gateway, "run"))
+        result = gateway.handle(_projected_command(gateway, "request-review"))
+        assert any(event.kind == EventKind.ERROR_RECORDED for event in result.events)
+        assert len(backend.prompts) == 1
+        assert _state(gateway).research_review is None
+    finally:
+        gateway.stop()
+
+
+def test_interrupted_research_review_is_not_redispatched(tmp_path: Path) -> None:
+    backend = ReviewBackend()
+    gateway = _gateway(tmp_path, backend)
+    try:
+        _start(gateway, _inputs(tmp_path))
+        gateway.handle(_transition(gateway, "run"))
+        _readiness(tmp_path)
+        command = _projected_command(gateway, "request-review")
+        backend.fail_submission = True
+        with pytest.raises(RuntimeError, match="Synthetic interruption"):
+            gateway.handle(command)
+        review = _state(gateway).research_review
+        assert review is not None
+        assert review.status == "pending"
+    finally:
+        gateway.stop()
+    replacement = ReviewBackend()
+    restored = _gateway(tmp_path, replacement)
+    try:
+        with pytest.raises(SessionRecoveryError):
+            restored.handle(command)
+        assert not replacement.prompts
+        assert _state(restored).research_review == review
+    finally:
+        restored.stop()
+
+
+def test_research_review_can_be_assessed_after_budget_expiry(tmp_path: Path) -> None:
+    from datetime import timedelta
+
+    backend = ReviewBackend()
+    gateway = _gateway(tmp_path, backend)
+    try:
+        _start(gateway, _inputs(tmp_path))
+        gateway.handle(_transition(gateway, "run"))
+        _readiness(tmp_path)
+        gateway.handle(_projected_command(gateway, "request-review"))
+        before = _state(gateway)
+        gateway._services["research"].clock = lambda: (
+            before.created_at + timedelta(hours=2)
+        ).isoformat()
+        gateway.handle(_projected_command(gateway, "assess-review"))
+        review = _state(gateway).research_review
+        assert review is not None
+        assert review.status == "assessed"
+        assert len(backend.prompts) == 2
+        denied = gateway.handle(_transition(gateway, "evaluate"))
+        assert any("budget reached" in str(event.payload.get("reason")) for event in denied.events)
+    finally:
+        gateway.stop()
+
+
+@pytest.mark.parametrize("change", [None, "edited", "removed", "steered"])
+def test_bound_review_independently_verifies_a_seeded_code_defect(
+    tmp_path: Path, change: str | None
+) -> None:
+    task = next(item for item in research_tasks() if item.case.case_id == "baseline-analysis")
+    for name, content in task.inputs.items():
+        (tmp_path / name).write_text(content)
+    backend = ReviewBackend()
+    backend.proposals = ReviewProposals.model_validate(
+        {
+            "candidates": [
+                {
+                    "candidate_id": "syntax",
+                    "condition": "python-source-invalid",
+                    "category": "coding",
+                    "severity": "critical",
+                    "summary": "Untrusted proposed diagnosis",
+                    "artifact_ids": ["program"],
+                }
+            ]
+        }
+    )
+    gateway = _gateway(tmp_path, backend)
+    try:
+        gateway.handle(
+            _command(
+                action="start",
+                workflow_id="baseline-analysis",
+                output_directory="results",
+                inputs={
+                    "data": "data.csv",
+                    "dictionary": "dictionary.json",
+                    "question": "Predict response",
+                },
+            )
+        )
+        gateway.handle(_projected_command(gateway, "run"))
+        (tmp_path / "results").mkdir()
+        (tmp_path / "results/plan.json").write_text(
+            json.dumps(
+                {
+                    "question": "Predict response",
+                    "estimand": "Held-out prediction error",
+                    "outcome": "response",
+                    "features": ["measurement"],
+                    "group_column": "subject_id",
+                    "split_column": "partition",
+                    "assumptions": ["Prespecified split"],
+                    "limitations": ["Synthetic data"],
+                }
+            )
+        )
+        gateway.handle(_projected_command(gateway, "evaluate"))
+        gateway.handle(_projected_command(gateway, "accept"))
+        assert _state(gateway).stage_id == "execute"
+        gateway.handle(_projected_command(gateway, "run"))
+        source = tmp_path / "results/analysis.py"
+        source.write_text("def broken(\n")
+        (tmp_path / "results/metrics.json").write_text("{}")
+        (tmp_path / "results/predictions.csv").write_text("prediction\n")
+        gateway.handle(_projected_command(gateway, "request-review"))
+        if change == "edited":
+            source.write_text("print('changed')\n")
+        elif change == "removed":
+            source.unlink()
+        elif change == "steered":
+            gateway.handle(
+                SessionCommand(
+                    command_id="steer-review",
+                    session_id="research",
+                    kind=CommandKind.CHAT,
+                    created_at="2026-09-11T00:00:00Z",
+                    payload={"prompt": "Review something else"},
+                )
+            )
+        response = gateway.handle(_transition(gateway, "assess-review"))
+        review = _state(gateway).research_review
+        assert review is not None
+        if change == "steered":
+            assert review.status == "pending"
+            assert any(event.kind == EventKind.ERROR_RECORDED for event in response.events)
+            return
+        assert review.assessment is not None
+        (finding,) = review.assessment.findings
+        assert (
+            finding.verification
+            == {None: "verified", "edited": "stale", "removed": "unavailable"}[change]
+        )
+        assert finding.verified_claim == (
+            "The Python source is empty or syntactically invalid." if change is None else None
+        )
+        assert finding.severity == "high"
+        assert len(backend.prompts) == 3
+        gateway.handle(_projected_command(gateway, "evaluate"))
+        assert _state(gateway).stage_id == "execute"
+        assert _state(gateway).phase == "blocked"
+    finally:
+        gateway.stop()
 
 
 def test_run_review_and_restart_share_one_authoritative_sequence(tmp_path: Path) -> None:

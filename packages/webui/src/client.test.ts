@@ -491,6 +491,7 @@ describe("GatewayClient", () => {
         started_sequence: null,
         stage_started_at: null,
         stage_usage_baseline: null,
+        research_review: null,
         created_at: "2026-09-11T00:00:00Z",
         binding: {
           workflow_id: "dataset-readiness",

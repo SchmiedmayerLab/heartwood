@@ -24,9 +24,10 @@ from pydantic import (
 )
 
 from heartwood.schemas.execution import ExecutionBudget, ExecutionUsage
+from heartwood.schemas.identifiers import WorkflowIdentifier as WorkflowIdentifier
 from heartwood.schemas.project_paths import project_relative_path
+from heartwood.schemas.review import ResearchReviewRun
 
-type WorkflowIdentifier = Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9_.-]{0,127}$")]
 type WorkflowText = Annotated[
     str, StringConstraints(strip_whitespace=True, min_length=1, max_length=8000)
 ]
@@ -269,7 +270,7 @@ class WorkflowStart(WorkflowRecord):
 class WorkflowTransition(WorkflowRecord):
     """Apply a transition only to the exact run and revision the researcher saw."""
 
-    action: Literal["run", "evaluate", "cancel"]
+    action: Literal["run", "evaluate", "cancel", "request-review", "assess-review"]
     run_id: str = Field(min_length=1)
     revision: int = Field(ge=0, strict=True)
 
@@ -292,7 +293,9 @@ type WorkflowRequest = Annotated[
 class WorkflowControl(WorkflowRecord):
     """A presentation affordance carrying the exact revision-bound command to submit."""
 
-    control_id: Literal["run", "evaluate", "accept", "decline", "cancel"]
+    control_id: Literal[
+        "run", "evaluate", "accept", "decline", "cancel", "request-review", "assess-review"
+    ]
     label: WorkflowText
     request: WorkflowTransition | WorkflowReview
 
@@ -311,3 +314,4 @@ class WorkflowRun(WorkflowRecord):
     created_at: AwareDatetime
     stage_started_at: AwareDatetime | None = None
     stage_usage_baseline: ExecutionUsage | None = None
+    research_review: ResearchReviewRun | None = None

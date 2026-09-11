@@ -86,6 +86,28 @@ The dictionary describes your intended analysis; it does not establish that the 
 
 ## Understand the Checks
 
+### Request an Advisory Review
+
+After a stage with declared specialists finishes, choose **Review Analysis** before moving to the next stage.
+Heartwood records the declared evidence and asks the selected specialists to review it through the normal agent and tool-approval flow.
+This uses the stage's remaining work budget; it does not grant permission to change files.
+
+When the review finishes, choose **Check Review Findings**.
+In plain terminal mode, inspect `/workflow` and use `/workflow request-review` or `/workflow assess-review` when offered.
+The notebook receives the same controls and review state.
+
+The assessment distinguishes verified observations, rejected claims, unsupported conditions, stale evidence, and unavailable evidence.
+Checks currently cover invalid Python syntax, supported baseline result inconsistencies, and artifact byte mismatches.
+A byte mismatch is not proof of re-execution, and a review with no findings is not proof of correctness.
+Missing specialist results are reported as unavailable rather than a successful review.
+
+Each stage accepts one advisory review.
+Changing its conversation context invalidates the assessment; inspect or cancel that run rather than treating the redirected work as the original review.
+Reviewing does not automatically repair files or accept the stage.
+Continue to use **Check Results** and the normal researcher review after inspecting the findings.
+
+### Verify and Accept Results
+
 **Checking results** reads the bound inputs and expected artifacts and compares them using maintained checks.
 For reproduction, the workflow also requires a separately approved execution of the unchanged analysis in a fresh process and output directory.
 An agent's claim that it reran the analysis is not sufficient.

@@ -14,6 +14,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, OptionList, Select, Static
 from textual.widgets.option_list import Option
 
+from heartwood.cli._interactive import format_research_review_lines
 from heartwood.gateway import SessionProjection, display_safe_text
 from heartwood.schemas.workflows import (
     WorkflowCatalog,
@@ -74,6 +75,8 @@ class WorkflowScreen(ModalScreen[WorkflowRequest | None]):
                 yield Static(
                     "Artifacts: " + display_safe_text(run.binding.output_directory), markup=False
                 )
+                if review_lines := format_research_review_lines(run.research_review):
+                    yield Static("\n".join(review_lines), markup=False)
                 if run.phase == "review":
                     yield Static(
                         "Inspect the stage artifacts before accepting. "

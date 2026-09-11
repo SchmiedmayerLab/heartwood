@@ -46,6 +46,7 @@ from heartwood.schemas import (
     WorkspaceFileResponse,
     WorkspaceTreeResponse,
 )
+from heartwood.schemas.review import ResearchReviewRun
 from heartwood.schemas.workflows import (
     WorkflowCatalog,
     WorkflowControl,
@@ -586,11 +587,29 @@ def format_workflow_lines(projection: SessionProjection) -> tuple[str, ...]:
             f"  {terminal_safe_text(check.check_id)}: {check.status}"
             for check in run.evaluation.checks
         )
+    lines.extend(format_research_review_lines(run.research_review))
     lines.extend(
         f"  /workflow {control.control_id} - {terminal_safe_text(control.label)}"
         for control in projection.workflow_controls
     )
     return tuple(lines)
+
+
+def format_research_review_lines(review: ResearchReviewRun | None) -> tuple[str, ...]:
+    """Share review presentation between plain output and the keyboard workflow dialog."""
+    if review is None:
+        return ()
+    return (
+        f"Research review: {review.status}",
+        *(
+            tuple(
+                f"  {item.verification}: {terminal_safe_text(item.verified_claim or item.reason)}"
+                for item in review.assessment.findings
+            )
+            if review.assessment is not None
+            else ()
+        ),
+    )
 
 
 def format_runtime_lines(projection: SessionProjection) -> tuple[str, ...]:

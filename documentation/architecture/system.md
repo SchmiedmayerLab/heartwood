@@ -113,6 +113,13 @@ Ordinary conversations retain unstructured specialist summaries.
 The existing session event journal and shared projection preserve proposals and native task lineage across replay without repeating model work.
 Terminal, browser, and notebook presentations explicitly distinguish these unverified proposals from independently assessed findings.
 
+Explicit workflow review commands capture the declared stage files before model dispatch and record that intent through the existing command receipt and paired journal.
+The gateway associates completed proposals only with selected native tasks that were proposed within that review and belong to the same session.
+It re-reads the captured evidence for independent assessment; changed conversation context invalidates the association.
+Assessment is read-only and remains available after the work budget expires, while further model work and stage acceptance remain budget-gated.
+The shared workflow projection retains the review state and findings, and the security audit retains a digest of the review record rather than its file paths or findings.
+An advisory review does not replace stage checks, authorize corrections, or turn the reviewer's finish status into the original stage's outcome.
+
 ### Journaled Stage Execution
 
 The gateway accepts explicit workflow start, run, evaluate, review, and cancel commands through the existing session command journal.

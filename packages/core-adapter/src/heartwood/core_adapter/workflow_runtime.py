@@ -32,6 +32,11 @@ from heartwood.core_adapter.workflow_provenance import (
     stage_experiment_id,
     stage_experiment_outcome,
 )
+from heartwood.core_adapter.workflow_review import (
+    WorkflowReviewInspector,
+    assess_workflow_review,
+    workflow_review_prompt,
+)
 from heartwood.schemas import JsonValue
 from heartwood.schemas.execution import ExecutionUsage
 from heartwood.schemas.experiments import ExperimentEvent
@@ -41,6 +46,7 @@ from heartwood.schemas.research import (
     ReadinessResult,
     ResultVerification,
 )
+from heartwood.schemas.review import ResearchReviewRun, review_digest
 from heartwood.schemas.workflows import (
     WorkflowControl,
     WorkflowOutcomeStatus,
@@ -69,6 +75,27 @@ def workflow_controls(
     if current is None or current.phase in {"completed", "cancelled"} or active or pending_actions:
         return ()
     controls: list[WorkflowControl] = []
+    if current.research_review is not None and current.research_review.status == "pending":
+        if _stage_outcome(events, current, include_review=True) is not None:
+            controls.append(
+                WorkflowControl(
+                    control_id="assess-review",
+                    label="Check Review Findings",
+                    request=WorkflowTransition(
+                        action="assess-review", run_id=current.run_id, revision=current.revision
+                    ),
+                )
+            )
+        controls.append(
+            WorkflowControl(
+                control_id="cancel",
+                label="Cancel Workflow",
+                request=WorkflowTransition(
+                    action="cancel", run_id=current.run_id, revision=current.revision
+                ),
+            )
+        )
+        return tuple(controls)
     if current.phase == "ready":
         stage = research_workflow(current.binding.workflow_id).stage(current.stage_id)
         controls.append(
@@ -81,6 +108,21 @@ def workflow_controls(
             )
         )
     elif _stage_outcome(events, current) is not None:
+        if (
+            current.research_review is None
+            and research_workflow(current.binding.workflow_id)
+            .stage(current.stage_id)
+            .specialist_ids
+        ):
+            controls.append(
+                WorkflowControl(
+                    control_id="request-review",
+                    label="Review Analysis",
+                    request=WorkflowTransition(
+                        action="request-review", run_id=current.run_id, revision=current.revision
+                    ),
+                )
+            )
         if current.phase == "review" and current.evaluation is not None:
             for control_id, label, approved in (
                 ("accept", "Accept Stage", True),
@@ -120,7 +162,9 @@ def workflow_controls(
     return tuple(controls)
 
 
-class WorkflowEvaluator(ReproductionInspector, WorkflowProvenanceInspector, Protocol):
+class WorkflowEvaluator(
+    ReproductionInspector, WorkflowProvenanceInspector, WorkflowReviewInspector, Protocol
+):
     """Project inspection supplied by the gateway, without a second tool executor."""
 
     def prepare(
@@ -214,6 +258,21 @@ def handle_workflow_command(
         return (
             _record(service, command, _replace(current, phase="cancelled"), experiment=experiment),
         )
+    review = current.research_review
+    if review is not None and review.status == "pending" and request.action != "assess-review":
+        return (_error(service, "Check the requested research review before continuing"),)
+    if request.action == "assess-review":
+        if review is None or review.status != "pending":
+            return (_error(service, "There is no research review awaiting assessment"),)
+        if _stage_outcome(events, current, include_review=True) is None:
+            return (_error(service, "Wait for a settled structured review outcome"),)
+        try:
+            assessed = assess_workflow_review(review, events, evaluator)
+        except ValueError:
+            return (
+                _error(service, "Research review evidence is invalid; inspect or cancel the run"),
+            )
+        return (_record(service, command, _replace(current, research_review=assessed)),)
     if isinstance(request, WorkflowReview):
         if current.phase != "review" or current.evaluation is None:
             return (_error(service, "There is no stage awaiting researcher review"),)
@@ -225,13 +284,44 @@ def handle_workflow_command(
         service,
         evaluator,
         command,
-        admit=request.action == "run",
+        admit=request.action in {"run", "request-review"},
     ):
         return (_error(service, reason),)
     try:
         _check_inputs(evaluator, current, events)
     except ValueError:
         return (_error(service, "Workflow inputs or accepted results changed; start a new run"),)
+    if request.action == "request-review":
+        if (
+            current.phase not in {"running", "review", "blocked"}
+            or _stage_outcome(events, current) is None
+        ):
+            return (
+                _error(service, "Run and settle the stage before requesting a research review"),
+            )
+        if review is not None:
+            return (_error(service, "This stage already has a research review"),)
+        stage = research_workflow(current.binding.workflow_id).stage(current.stage_id)
+        if not stage.specialist_ids:
+            return (_error(service, "This stage does not declare advisory reviewers"),)
+        try:
+            review = ResearchReviewRun(
+                review_id=command.command_id,
+                snapshot=evaluator.prepare_review(current.binding, current.stage_id),
+                reviewer_ids=stage.specialist_ids,
+                started_sequence=service.store.next_sequence(),
+            )
+        except ValueError:
+            return (
+                _error(
+                    service, "Review evidence is incomplete or unavailable; no work was started"
+                ),
+            )
+        updated = _record(service, command, _replace(current, research_review=review))
+        review_command = command.model_copy(
+            update={"kind": CommandKind.CHAT, "payload": {"prompt": workflow_review_prompt(review)}}
+        )
+        return (updated, *service._handle_task(review_command))
     if request.action == "run":
         if current.phase != "ready":
             return (
@@ -317,6 +407,7 @@ def handle_workflow_command(
             stage_started_at=None,
             stage_usage_baseline=None,
             phase="completed" if finished else "ready",
+            research_review=None,
             stage_id=current.stage_id if finished else definition.stages[len(completed)].stage_id,
         )
     return (_record(service, command, next_state, experiment=experiment),)
@@ -413,6 +504,11 @@ def _record(
             "evidence_fingerprint": command.payload.get("evidence_fingerprint")
             or (evaluation.assessment.evidence_fingerprint if evaluation else None),
             "assessed_stage_id": evaluation.assessment.stage_id if evaluation else None,
+            "research_review_fingerprint": (
+                review_digest(run.research_review.model_dump(mode="json"))
+                if run.research_review is not None
+                else None
+            ),
             "run": cast(dict[str, JsonValue], run.model_dump(mode="json")),
             **(
                 {
@@ -471,12 +567,29 @@ def _reproductions(
 
 
 def _stage_outcome(
-    events: Sequence[SessionEvent], current: WorkflowRun
+    events: Sequence[SessionEvent], current: WorkflowRun, *, include_review: bool = False
 ) -> WorkflowOutcomeStatus | None:
     """Only a structured finish after the latest user turn can qualify the stage."""
     lifecycle: str | None = None
     status: WorkflowOutcomeStatus | None = None
     for event in reversed(events):
+        if (
+            not include_review
+            and current.research_review is not None
+            and event.sequence >= current.research_review.started_sequence
+        ):
+            if (
+                event.kind == EventKind.USER_MESSAGE_RECORDED
+                and event.payload.get("command_id") != current.research_review.review_id
+            ):
+                return None
+            continue
+        if (
+            include_review
+            and current.research_review is not None
+            and event.sequence <= current.research_review.started_sequence
+        ):
+            break
         if current.started_sequence is None or event.sequence <= current.started_sequence:
             break
         if (

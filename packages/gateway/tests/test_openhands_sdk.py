@@ -3038,6 +3038,13 @@ def test_completed_specialist_workflow_replays_without_model_calls(
         ),
     )
     first._register_specialized_agents()
+    if structured_reviews:
+        from heartwood.gateway import ProjectContext, SessionGateway
+
+        (tmp_path / "workspace").mkdir(exist_ok=True)
+        review_gateway = SessionGateway(project=ProjectContext(tmp_path / "workspace"), env={})
+        (tmp_path / "workspace/analysis.py").write_text("def incomplete(\n")
+        review_snapshot = review_gateway.prepare_research_review({"program": "analysis.py"})
     first.submit_turn(session_id="session-1", prompt="Review cohort timing")
     group = _wait_for_pending_group(first)
     first.resolve_confirmation(
@@ -3101,6 +3108,38 @@ def test_completed_specialist_workflow_replays_without_model_calls(
     if structured_reviews:
         assert completed_review.review_proposals is not None
         assert completed_review.review_proposals.candidates[0].candidate_id == "syntax-1"
+        from heartwood.core_adapter import DeterministicAgentBackend, SessionService
+        from heartwood.core_adapter.workflow_review import assess_workflow_review
+        from heartwood.gateway._research_evaluation import ResearchStageEvaluator
+        from heartwood.schemas.review import ResearchReviewRun
+
+        journal = SessionService.local_default(
+            tmp_path / "review-journal",
+            session_id="session-1",
+            backend=DeterministicAgentBackend(),
+            env={},
+        )
+        try:
+            journal.reconcile()
+            record = ResearchReviewRun(
+                review_id="native-review",
+                snapshot=review_snapshot,
+                reviewer_ids=("cohort-feature-reviewer",),
+                started_sequence=0,
+            )
+            journal._translate_backend_events(replayed)
+            assessed = assess_workflow_review(
+                record,
+                journal.replay_events(),
+                ResearchStageEvaluator(review_gateway.workspace_inspector),
+            )
+            assert assessed.status == "assessed"
+            assert assessed.assessment is not None
+            assert assessed.assessment.findings[0].verification == "verified"
+            assert restored_llm.call_count == 0
+        finally:
+            journal.close()
+            review_gateway.stop()
     else:
         assert completed_review.review_proposals is None
     assert any(

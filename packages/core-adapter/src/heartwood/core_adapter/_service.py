@@ -1027,6 +1027,7 @@ def _audit_payload(kind: EventKind, payload: dict[str, JsonValue]) -> dict[str, 
             "evidence_fingerprint",
             "assessed_stage_id",
             "experiment_fingerprint",
+            "research_review_fingerprint",
         )
     if kind == EventKind.COMMAND_RECEIVED:
         return _selected_audit_fields(

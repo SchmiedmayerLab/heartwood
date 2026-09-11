@@ -15,8 +15,8 @@ from typing import Literal, Self
 from pydantic import Field, model_validator
 
 from heartwood.schemas.experiments import Digest, ExperimentFile, ExperimentRecord, Reference
+from heartwood.schemas.identifiers import WorkflowIdentifier
 from heartwood.schemas.research import ResearchText
-from heartwood.schemas.workflows import WorkflowIdentifier
 
 type ReviewCategory = Literal["coding", "statistical", "reproducibility"]
 type ReviewSeverity = Literal["low", "medium", "high", "critical"]
@@ -157,6 +157,45 @@ class ReviewAssessment(ExperimentRecord):
     schema_version: Literal["heartwood.review-assessment.v1"] = "heartwood.review-assessment.v1"
     snapshot_sha256: Digest
     findings: tuple[ReviewFinding, ...] = Field(default=(), max_length=512)
+
+
+class ResearchReviewRun(ExperimentRecord):
+    """Pre-dispatch evidence and native reviewer results retained by the workflow journal."""
+
+    review_id: Reference
+    snapshot: ReviewSnapshot
+    reviewer_ids: tuple[WorkflowIdentifier, ...] = Field(min_length=1, max_length=16)
+    started_sequence: int = Field(ge=0, strict=True)
+    status: Literal["pending", "assessed", "unavailable"] = "pending"
+    submissions: tuple[ReviewSubmission, ...] = Field(default=(), max_length=16)
+    assessment: ReviewAssessment | None = None
+
+    @model_validator(mode="after")
+    def coherent_evidence(self) -> Self:
+        """Persist only results associated with this evidence and selected reviewers."""
+        if len(set(self.reviewer_ids)) != len(self.reviewer_ids):
+            raise ValueError("Reviewers must be distinct")
+        if len({item.review_id for item in self.submissions}) != len(self.submissions):
+            raise ValueError("Review submissions must be distinct")
+        if any(
+            item.snapshot_sha256 != self.snapshot.fingerprint
+            or item.reviewer_id not in self.reviewer_ids
+            for item in self.submissions
+        ):
+            raise ValueError("Review submissions do not match the prepared context")
+        if self.status == "pending" and (self.submissions or self.assessment is not None):
+            raise ValueError("Pending reviews cannot have assessed results")
+        if self.status == "assessed" and (
+            self.assessment is None
+            or {item.reviewer_id for item in self.submissions} != set(self.reviewer_ids)
+        ):
+            raise ValueError("An assessed review requires all selected reviewers")
+        if (
+            self.assessment is not None
+            and self.assessment.snapshot_sha256 != self.snapshot.fingerprint
+        ):
+            raise ValueError("Review assessment belongs to different evidence")
+        return self
 
 
 def review_digest(value: object) -> str:

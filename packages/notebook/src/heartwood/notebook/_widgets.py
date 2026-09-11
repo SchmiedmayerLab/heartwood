@@ -54,6 +54,20 @@ def build_widget_spec(view_model: NotebookViewModel) -> tuple[WidgetSpec, ...]:
                 (
                     f"{run.binding.workflow_id}: {run.stage_id} ({run.phase})",
                     *checks,
+                    *(
+                        (f"Research review: {run.research_review.status}",)
+                        if run.research_review is not None
+                        else ()
+                    ),
+                    *(
+                        tuple(
+                            f"{item.verification}: {item.verified_claim or item.reason}"
+                            for item in run.research_review.assessment.findings
+                        )
+                        if run.research_review is not None
+                        and run.research_review.assessment is not None
+                        else ()
+                    ),
                     *(control.label for control in view_model.workflow_controls),
                 ),
             ),

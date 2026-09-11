@@ -77,6 +77,8 @@ export type ReviewCategory = "coding" | "statistical" | "reproducibility";
 export type ReviewSeverity = "low" | "medium" | "high" | "critical";
 export type ResearchText = string;
 export type WorkflowInputValue = string;
+export type ReviewVerification =
+  "verified" | "rejected" | "unsupported" | "stale" | "unavailable";
 export type WorkflowText = string;
 
 /**
@@ -439,6 +441,7 @@ export interface WorkflowRun {
   created_at: string;
   evaluation: WorkflowStageEvaluation | null;
   phase: "ready" | "running" | "review" | "blocked" | "completed" | "cancelled";
+  research_review: ResearchReviewRun | null;
   revision: number;
   run_id: string;
   stage_id: WorkflowIdentifier;
@@ -504,6 +507,94 @@ export interface WorkflowCheckResult {
   status: "passed" | "failed" | "not_run";
 }
 /**
+ * Pre-dispatch evidence and native reviewer results retained by the workflow journal.
+ */
+export interface ResearchReviewRun {
+  assessment: ReviewAssessment | null;
+  review_id: Reference;
+  /**
+   * @minItems 1
+   * @maxItems 16
+   */
+  reviewer_ids: WorkflowIdentifier[];
+  snapshot: ReviewSnapshot;
+  started_sequence: number;
+  status: "pending" | "assessed" | "unavailable";
+  /**
+   * @maxItems 16
+   */
+  submissions: ReviewSubmission[];
+}
+/**
+ * A deterministic evidence projection, not an approval or a quality benchmark.
+ */
+export interface ReviewAssessment {
+  /**
+   * @maxItems 512
+   */
+  findings: ReviewFinding[];
+  schema_version: "heartwood.review-assessment.v1";
+  snapshot_sha256: Digest;
+}
+/**
+ * One deduplicated observation; verification never grants action permission.
+ */
+export interface ReviewFinding {
+  category: ReviewCategory;
+  condition: WorkflowIdentifier;
+  disposition: "open" | "not_actionable";
+  evidence: ReviewArtifact[];
+  finding_id: Digest;
+  reason: WorkflowIdentifier;
+  severity: ReviewSeverity;
+  /**
+   * @minItems 1
+   * @maxItems 512
+   */
+  sources: ReviewSource[];
+  verification: ReviewVerification;
+  verified_claim: ResearchText | null;
+}
+/**
+ * A named evidence role bound to one observed project file.
+ */
+export interface ReviewArtifact {
+  artifact_id: WorkflowIdentifier;
+  file: ExperimentFile;
+}
+/**
+ * Retain each advisory claim without confusing it with verified evidence.
+ */
+export interface ReviewSource {
+  candidate: ReviewCandidate;
+  review_id: Reference;
+  reviewer_id: Reference;
+}
+/**
+ * Exact file context authorized for a review, without its contents.
+ */
+export interface ReviewSnapshot {
+  /**
+   * @minItems 1
+   * @maxItems 32
+   */
+  artifacts: ReviewArtifact[];
+  schema_version: "heartwood.review-snapshot.v1";
+}
+/**
+ * Gateway-associated reviewer output for one immutable review context.
+ */
+export interface ReviewSubmission {
+  /**
+   * @maxItems 32
+   */
+  candidates: ReviewCandidate[];
+  review_id: Reference;
+  reviewer_id: Reference;
+  schema_version: "heartwood.review-submission.v1";
+  snapshot_sha256: Digest;
+}
+/**
  * Observed consumption; unavailable provider measurements remain unknown.
  */
 export interface ExecutionUsage {
@@ -518,7 +609,14 @@ export interface ExecutionUsage {
  * A presentation affordance carrying the exact revision-bound command to submit.
  */
 export interface WorkflowControl {
-  control_id: "run" | "evaluate" | "accept" | "decline" | "cancel";
+  control_id:
+    | "run"
+    | "evaluate"
+    | "accept"
+    | "decline"
+    | "cancel"
+    | "request-review"
+    | "assess-review";
   label: WorkflowText;
   request: WorkflowTransition | WorkflowReview;
 }
@@ -526,7 +624,7 @@ export interface WorkflowControl {
  * Apply a transition only to the exact run and revision the researcher saw.
  */
 export interface WorkflowTransition {
-  action: "run" | "evaluate" | "cancel";
+  action: "run" | "evaluate" | "cancel" | "request-review" | "assess-review";
   revision: number;
   run_id: string;
 }

@@ -17,6 +17,7 @@ from heartwood.core_adapter.research_review import assess_research_review
 from heartwood.gateway import ProjectContext, SessionGateway
 from heartwood.schemas.experiments import ExperimentFile
 from heartwood.schemas.review import (
+    ResearchReviewRun,
     ReviewArtifact,
     ReviewAssessment,
     ReviewCandidate,
@@ -24,6 +25,53 @@ from heartwood.schemas.review import (
     ReviewSnapshot,
     ReviewSubmission,
 )
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        "reviewer",
+        "snapshot",
+        "duplicate",
+        "pending-result",
+        "missing-reviewer",
+        "assessment-snapshot",
+    ],
+)
+def test_persisted_review_context_rejects_inconsistent_associations(
+    tmp_path: Path, damage: str
+) -> None:
+    (tmp_path / "analysis.py").write_text("broken(\n")
+    gateway = SessionGateway(project=ProjectContext(tmp_path))
+    snapshot = gateway.prepare_research_review({"program": "analysis.py"})
+    submission = _submission(snapshot)
+    result = gateway.assess_research_review(snapshot, [submission])
+    values = {
+        "review_id": "requested-review",
+        "snapshot": snapshot.model_dump(mode="json"),
+        "reviewer_ids": ["coding-reviewer"],
+        "started_sequence": 1,
+        "status": "assessed",
+        "submissions": [submission.model_dump(mode="json")],
+        "assessment": result.model_dump(mode="json"),
+    }
+    assert ResearchReviewRun.model_validate(values).assessment == result
+    if damage == "reviewer":
+        values["reviewer_ids"] = ["different-reviewer"]
+    elif damage == "snapshot":
+        values["submissions"] = [
+            {**submission.model_dump(mode="json"), "snapshot_sha256": "0" * 64}
+        ]
+    elif damage == "duplicate":
+        values["reviewer_ids"] = ["coding-reviewer", "coding-reviewer"]
+    elif damage == "pending-result":
+        values["status"] = "pending"
+    elif damage == "missing-reviewer":
+        values["submissions"] = []
+    else:
+        values["assessment"] = {**result.model_dump(mode="json"), "snapshot_sha256": "0" * 64}
+    with pytest.raises(ValidationError):
+        ResearchReviewRun.model_validate(values)
 
 
 def _submission(snapshot: ReviewSnapshot, **changes: object) -> ReviewSubmission:
