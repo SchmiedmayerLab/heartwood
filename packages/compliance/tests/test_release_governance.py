@@ -389,7 +389,7 @@ def test_pull_request_validation_has_no_optional_job_placeholders() -> None:
     assert "docker compose -f images/generic/compose.yaml run --rm heartwood" in smoke
     assert "runner: ubuntu-24.04" in gpu
     assert "uses: ./.github/actions/reclaim-runner-disk" in gpu
-    assert "runs-on: ubuntu-24.04" in capable
+    assert "runs-on: heartwood-ubuntu-large" in capable
     assert "uses: docker/bake-action@v7" in capable
     assert "uses: docker/bake-action@v7" in gpu
     assert "cache-from=type=gha" not in gpu
@@ -397,7 +397,7 @@ def test_pull_request_validation_has_no_optional_job_placeholders() -> None:
     assert dependabot.count('multi-ecosystem-group: "weekly-dependencies"') == 3
 
 
-def test_compute_intensive_validation_runs_on_standard_runners() -> None:
+def test_only_capable_model_acceptance_uses_the_large_hosted_runner() -> None:
     workflow_root = Path(".github/workflows")
     workflows = {
         path.name: path.read_text(encoding="utf-8") for path in workflow_root.glob("*.yml")
@@ -407,14 +407,16 @@ def test_compute_intensive_validation_runs_on_standard_runners() -> None:
         name for name, text in workflows.items() if "./.github/actions/reclaim-runner-disk" in text
     }
     assert reclaiming == {
-        "capable-model.yml",
         "gpu-container-image.yml",
         "gpu-container-pr-validation.yml",
         "gpu-container-pr.yml",
     }
+    large = {name for name, text in workflows.items() if "heartwood-ubuntu-large" in text}
+    assert large == {"capable-model.yml"}
     capable = workflows["capable-model.yml"]
-    assert capable.count("runs-on: ubuntu-24.04") == 1
-    assert "minimum_kib=$((15 * 1024 * 1024))" in capable
+    assert capable.count("runs-on: heartwood-ubuntu-large") == 1
+    assert "runs-on: ubuntu-24.04" not in capable
+    assert "minimum_kib=$((30 * 1024 * 1024))" in capable
     assert '--env HEARTWOOD_LOCAL_MODEL_THREADS="$(nproc)"' in capable
     for workflow_name in ("gpu-container-image.yml", "gpu-container-pr-validation.yml"):
         workflow = workflows[workflow_name]
