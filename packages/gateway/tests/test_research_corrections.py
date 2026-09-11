@@ -152,6 +152,48 @@ def _write_correction(root: Path, plan: ReviewCorrectionPlan, contents: dict[str
 
 
 @pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("reviewer_ids", ["selected-reviewer", "selected-reviewer"]),
+        ("reviewer_ids", ["unrelated-reviewer"]),
+        ("status", "pending"),
+        ("status", "unavailable"),
+        ("unavailable_reason", "invalid-review"),
+        ("submissions", []),
+        ("assessment", None),
+    ],
+)
+def test_review_journal_rejects_unbound_or_incomplete_results(
+    tmp_path: Path, field: str, value: object
+) -> None:
+    _, review, _ = _review(tmp_path)
+    record = review.model_dump(mode="json")
+    record[field] = value
+    with pytest.raises(ValidationError):
+        ResearchReviewRun.model_validate(record)
+
+
+@pytest.mark.parametrize("mutation", ["source", "assessment", "duplicate", "claim", "alias"])
+def test_review_journal_rejects_substituted_evidence(tmp_path: Path, mutation: str) -> None:
+    _, review, _ = _review(tmp_path)
+    record = review.model_dump(mode="json")
+    if mutation == "source":
+        record["submissions"][0]["snapshot_sha256"] = "0" * 64
+    elif mutation == "assessment":
+        record["assessment"]["snapshot_sha256"] = "0" * 64
+    elif mutation == "duplicate":
+        record["submissions"].append(record["submissions"][0])
+    elif mutation == "claim":
+        record["assessment"]["findings"][0]["verified_claim"] = None
+    else:
+        record["snapshot"]["artifacts"][1]["file"]["path"] = record["snapshot"]["artifacts"][0][
+            "file"
+        ]["path"]
+    with pytest.raises(ValidationError):
+        ResearchReviewRun.model_validate(record)
+
+
+@pytest.mark.parametrize(
     "mutation",
     [
         "limit",

@@ -18,6 +18,7 @@ import pytest
 import tomli_w
 
 from heartwood.gateway import ProjectContext
+from heartwood.gateway import _environment_probe as probe
 from heartwood.gateway._analysis_environment import (
     environment_directory,
     reconstruct_environment,
@@ -31,6 +32,110 @@ def _expected(project: Path) -> None:
         update={"packages": (("synthetic-analysis", "1.0"),)}
     )
     (project / "expected.json").write_text(value.model_dump_json())
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        [],
+        ["--stdout", "--output-dir", "observation"],
+        ["--program", "analysis.py", "--stdout"],
+        ["--environment-id", "a" * 64],
+        ["--environment-id", "a" * 64, "--stdout", "--output-dir", "observation"],
+        ["--environment-id", "a" * 64, "--python", "/bin/python", "--output-dir", "out"],
+        ["--environment-id", "a" * 64, "--output-dir", "out", "--lockfile", "lock.toml"],
+    ],
+)
+def test_probe_rejects_ambiguous_operations_without_writing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, arguments: list[str]
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["environment-probe", *arguments])
+    with pytest.raises(SystemExit) as error:
+        probe.main()
+    assert error.value.code == 2
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_probe_capture_stdout_and_comparison_share_the_environment_contract(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["environment-probe", "--stdout"])
+    probe.main()
+    assert json.loads(capfd.readouterr().out) == json.loads(probe._snapshot_bytes())
+    monkeypatch.setattr(sys, "argv", ["environment-probe", "--output-dir", "observation"])
+    probe.main()
+    path = tmp_path / "observation/environment.json"
+    monkeypatch.setattr(
+        sys, "argv", ["environment-probe", "--require", str(path.relative_to(tmp_path))]
+    )
+    probe.main()
+    value = json.loads(path.read_text())
+    value["machine"] = "different-machine"
+    path.write_text(json.dumps(value))
+    with pytest.raises(ValueError, match="environment changed"):
+        probe.main()
+    monkeypatch.setattr(probe, "MAX_RESEARCH_TEXT_BYTES", 1)
+    with pytest.raises(ValueError, match="inspection limit"):
+        probe.capture_environment(ProjectContext.current(), "oversized")
+    assert not (tmp_path / "oversized").exists()
+
+
+def test_probe_reconstructs_and_runs_guarded_analysis_with_minimal_environment(
+    tmp_path: Path, analysis_lock: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _expected(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    environment_id = "9" * 64
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "environment-probe",
+            "--environment-id",
+            environment_id,
+            "--lockfile",
+            analysis_lock.name,
+            "--expected",
+            "expected.json",
+            "--output-dir",
+            "observation",
+        ],
+    )
+    probe.main()
+    (tmp_path / "data.csv").write_text("synthetic\n")
+    (tmp_path / "analysis.py").write_text(
+        "import os, sys\nfrom pathlib import Path\n"
+        "assert 'OPENAI_API_KEY' not in os.environ\n"
+        "assert sys.flags.isolated\n"
+        "assert sys.argv[1:] == ['--data', 'data.csv', '--output-dir', 'results']\n"
+        "Path('completed').write_text('synthetic')\nsys.exit(7)\n"
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "synthetic-test-key")
+    arguments = [
+        "environment-probe",
+        "--environment-id",
+        environment_id,
+        "--require",
+        "observation/environment.json",
+        "--program",
+        "analysis.py",
+        "--data",
+        "data.csv",
+        "--output-dir",
+        "results",
+    ]
+    monkeypatch.setattr(sys, "argv", arguments)
+    with pytest.raises(SystemExit) as error:
+        probe.main()
+    assert error.value.code == 7
+    assert (tmp_path / "completed").read_text() == "synthetic"
+    (tmp_path / "completed").unlink()
+    monkeypatch.setattr(sys, "argv", [*arguments[:-1], "../outside"])
+    with pytest.raises(ValueError, match="project"):
+        probe.main()
+    assert not (tmp_path / "completed").exists()
 
 
 def test_offline_reconstruction_installs_only_locked_analysis_dependencies(
