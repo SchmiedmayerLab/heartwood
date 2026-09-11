@@ -27,12 +27,6 @@ if TYPE_CHECKING:
 
 from heartwood.gateway._project import ProjectContext
 from heartwood.gateway._session_projection import SessionProjection
-from heartwood.gateway._workspace_paths import (
-    RESERVED_PROJECT_COMPONENTS,
-    ProjectPathError,
-    ProjectPathViolation,
-    project_relative_path,
-)
 from heartwood.schemas import (
     WorkspaceChangeResponse,
     WorkspaceChangesResponse,
@@ -42,6 +36,12 @@ from heartwood.schemas import (
     WorkspaceTreeEntryResponse,
     WorkspaceTreeResponse,
     api_response,
+)
+from heartwood.schemas.project_paths import (
+    RESERVED_PROJECT_COMPONENTS,
+    ProjectPathError,
+    ProjectPathViolation,
+    project_relative_path,
 )
 
 

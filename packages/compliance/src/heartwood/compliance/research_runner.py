@@ -32,12 +32,12 @@ from heartwood.gateway import (
     WorkspaceInspectionError,
 )
 from heartwood.schemas.evaluation import (
-    EvaluationBudget,
     EvaluationCheck,
     EvaluationConfiguration,
     EvaluationRun,
     EvaluationUsage,
 )
+from heartwood.schemas.execution import ExecutionBudget
 from heartwood.session import CommandKind, EventKind, SessionCommand
 
 type ReviewDecision = Literal["approve", "reject", "stop"]
@@ -46,7 +46,7 @@ type ResearchStop = Literal[
 ]
 _RERUN_COMMAND = "python analysis.py --data data.csv --output-dir benchmark-reproduced"
 _PRIMARY_OUTPUTS = ("metrics.json", "predictions.csv")
-_DEFAULT_BUDGET = EvaluationBudget()
+_DEFAULT_BUDGET = ExecutionBudget()
 
 
 @dataclass(frozen=True)
@@ -125,7 +125,7 @@ def run_research_trial(
     configuration: EvaluationConfiguration,
     execution: Literal["deterministic", "live_model"],
     review: Callable[[ProjectionApprovalGroup], ReviewDecision],
-    budget: EvaluationBudget = _DEFAULT_BUDGET,
+    budget: ExecutionBudget = _DEFAULT_BUDGET,
     seed: int = 0,
     observe: Callable[[SessionProjection], None] | None = None,
 ) -> ResearchTrial:
@@ -321,7 +321,7 @@ def run_research_trial(
 def _drive(
     session: _TrialSession,
     review: Callable[[ProjectionApprovalGroup], ReviewDecision],
-    budget: EvaluationBudget,
+    budget: ExecutionBudget,
     started: float,
     observe: Callable[[SessionProjection], None] | None,
 ) -> ResearchStop:
@@ -393,7 +393,7 @@ def _drive(
 
 
 def _budget_exceeded(
-    projection: SessionProjection, budget: EvaluationBudget, started: float
+    projection: SessionProjection, budget: ExecutionBudget, started: float
 ) -> bool:
     usage = projection.usage
     return (

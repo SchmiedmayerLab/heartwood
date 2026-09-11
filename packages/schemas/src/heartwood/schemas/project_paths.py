@@ -4,7 +4,7 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Shared project-relative path validation for action and workspace evidence."""
+"""Shared project-relative path validation for actions, artifacts, and inspection."""
 
 from __future__ import annotations
 
@@ -26,6 +26,7 @@ class ProjectPathError(ValueError):
     """Raised when a value cannot identify a public project path."""
 
     def __init__(self, reason: ProjectPathViolation, message: str) -> None:
+        """Retain a stable violation category for interface diagnostics."""
         self.reason = reason
         super().__init__(message)
 

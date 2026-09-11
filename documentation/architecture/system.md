@@ -55,6 +55,22 @@ The gateway also owns researcher-facing setup choices, model-connection categori
 Interfaces may present these differently, but they do not infer separate labels, capabilities, or persistence behavior.
 Technical identifiers remain in the typed projection for diagnosis and correlation, while presentation adapters keep them out of the primary workflow.
 
+### Research Workflow Contracts
+
+A versioned workflow definition declares researcher inputs, ordered stages, expected artifacts, deterministic check identifiers, researcher gates, and bounded work budgets.
+Definitions reference existing Skills and advisory specialists; they contain no provider routes, credentials, tool implementations, or platform-specific execution logic.
+Artifact paths use the same project-relative validation as workspace inspection.
+Each output has one producing stage and at least one required check, and a stage cannot depend on an output from a later stage.
+
+The evidence gate compares gateway-produced check results with the exact input and output digests they inspected.
+Missing, failed, unknown, or stale evidence cannot be replaced by a model-reported success.
+An assessment identifies its definition, stage, and evidence fingerprint and records whether researcher review is required.
+Evidence eligibility does not grant permission to advance a workflow or execute a tool.
+The researcher decision must bind to the workflow run, stage, and exact assessment, while tool actions retain the normal session review policy.
+
+These contracts describe task structure and evaluate evidence; they do not run an agent, implement deterministic evaluators, or provide a separate persistence layer.
+Execution and recovery belong to the existing gateway and authoritative session command/event path.
+
 ### Model Artifact Lifecycle
 
 The gateway owns one local-model choice contract for catalog recommendations, inspected Hugging Face repositories, raw imports, downloads, and transferred bundles.

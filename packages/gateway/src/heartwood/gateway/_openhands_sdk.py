@@ -123,8 +123,8 @@ from heartwood.gateway._subscriptions import (
     SubscriptionError,
     create_openai_subscription_llm,
 )
-from heartwood.gateway._workspace_paths import ProjectPathError, project_relative_path
 from heartwood.schemas import ActionConfirmationMode, JsonValue
+from heartwood.schemas.project_paths import ProjectPathError, project_relative_path
 
 install_privacy_safe_retry_logging()
 

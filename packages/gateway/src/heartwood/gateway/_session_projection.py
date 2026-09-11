@@ -14,7 +14,7 @@ from typing import Annotated, ClassVar, Literal, cast
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 from heartwood.core_adapter import backend_error_is_fatal
-from heartwood.gateway._workspace_paths import ProjectPathError, project_relative_path
+from heartwood.schemas.project_paths import ProjectPathError, project_relative_path
 from heartwood.session import CommandKind, EventKind, JsonValue, SessionEvent
 
 

@@ -36,7 +36,8 @@ from heartwood.gateway import (
     SessionGateway,
 )
 from heartwood.gateway._project_file_editor import PROJECT_FILE_EDITOR_SPEC
-from heartwood.schemas.evaluation import EvaluationBudget, EvaluationConfiguration
+from heartwood.schemas.evaluation import EvaluationConfiguration
+from heartwood.schemas.execution import ExecutionBudget
 
 
 def _configuration() -> EvaluationConfiguration:
@@ -217,7 +218,7 @@ def test_baseline_uses_reviewed_tools_and_a_separate_process_to_reproduce_and_re
             configuration=_configuration(),
             execution="deterministic",
             review=review,
-            budget=EvaluationBudget(maximum_seconds=20),
+            budget=ExecutionBudget(maximum_seconds=20),
         )
         assert trial.stop == "finished"
         assert len(groups) == len(set(groups)) == (4 if scratch_directory else 3)
@@ -274,7 +275,7 @@ def test_baseline_uses_reviewed_tools_and_a_separate_process_to_reproduce_and_re
             configuration=_configuration(),
             execution="deterministic",
             review=verify_review,
-            budget=EvaluationBudget(maximum_seconds=20),
+            budget=ExecutionBudget(maximum_seconds=20),
         )
         assert verified.stop == "finished"
         assert all(check.status == "passed" for check in verified.record.checks)
@@ -332,7 +333,7 @@ def test_budget_stops_before_any_pending_tool_is_approved(tmp_path: Path) -> Non
             configuration=_configuration(),
             execution="deterministic",
             review=lambda _group: pytest.fail("No action should be reviewed after the budget"),
-            budget=EvaluationBudget(maximum_seconds=0.001),
+            budget=ExecutionBudget(maximum_seconds=0.001),
         )
         assert trial.stop == "budget-exceeded"
         assert not (tmp_path / "analysis.py").exists()
@@ -351,7 +352,7 @@ def test_rejected_group_never_executes_and_does_not_schedule_a_reproduction(tmp_
             configuration=_configuration(),
             execution="deterministic",
             review=lambda _group: "reject",
-            budget=EvaluationBudget(maximum_seconds=10),
+            budget=ExecutionBudget(maximum_seconds=10),
         )
         assert not trial.artifacts
         assert llm.call_count == 1
@@ -402,7 +403,7 @@ def test_readiness_completes_through_grouped_tools_without_an_extra_model_turn(
             configuration=_configuration(),
             execution="deterministic",
             review=review,
-            budget=EvaluationBudget(maximum_seconds=10),
+            budget=ExecutionBudget(maximum_seconds=10),
         )
         assert trial.stop == "finished"
         assert llm.call_count == 2
@@ -452,7 +453,7 @@ def test_copied_outputs_are_not_evidence_of_independent_execution(
             configuration=_configuration(),
             execution="deterministic",
             review=lambda _group: "approve",
-            budget=EvaluationBudget(maximum_seconds=10),
+            budget=ExecutionBudget(maximum_seconds=10),
         )
         checks = {check.check_id: check.status for check in trial.record.checks}
         assert checks["verification-comparison"] == "passed"
@@ -618,7 +619,7 @@ def test_replacing_the_program_for_reexecution_then_restoring_it_does_not_qualif
             configuration=_configuration(),
             execution="deterministic",
             review=lambda _group: "approve",
-            budget=EvaluationBudget(maximum_seconds=15),
+            budget=ExecutionBudget(maximum_seconds=15),
         )
         assert trial.stop == "finished"
         assert llm.call_count == 5

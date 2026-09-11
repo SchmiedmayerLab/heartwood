@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 from openhands.sdk.testing import TestLLM
 
+from heartwood.core_adapter.research_workflows import research_workflows
 from heartwood.gateway._specialists import (
     SpecialistAvailability,
     SpecialistCapability,
@@ -55,6 +56,20 @@ def test_bundled_specialist_catalog_is_ordered_and_bounded() -> None:
 def test_catalog_rejects_unknown_specialist_id() -> None:
     with pytest.raises(SpecialistCatalogError, match="unknown specialist"):
         _catalog().role("unknown-reviewer")
+
+
+def test_workflow_references_resolve_to_existing_advisory_roles_and_verified_skills() -> None:
+    catalog = _catalog()
+    available = {role.specialist_id for role in catalog.available_roles}
+    skills = {skill.name for role in catalog.available_roles for skill in role.verified_skills}
+    for workflow in research_workflows():
+        for stage in workflow.stages:
+            assert set(stage.specialist_ids) <= available
+            assert set(stage.skill_ids) <= skills
+            assert all(
+                catalog.role(name).capability == SpecialistCapability.ADVISORY
+                for name in stage.specialist_ids
+            )
 
 
 def test_catalog_rejects_an_empty_directory(tmp_path: Path) -> None:
