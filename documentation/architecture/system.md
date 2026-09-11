@@ -228,7 +228,7 @@ This initializes modules only; model clients, conversations, and tool executors 
 The adapter creates an OpenHands conversation with `OpenHandsAgentSettings`, the selected LiteLLM-compatible model profile, project workspace, Skills, persistence directory, and confirmation policy.
 It uses public typed OpenHands events and conversation state to derive lifecycle, unmatched actions, task progress, usage, and errors.
 OpenHands' privacy-safe failure classifications are translated into stable Heartwood diagnostics, and raw conversation-error detail is minimized at the OpenHands file-store boundary before persistence.
-OpenHands owns the agent loop, conversation persistence, coding tools, Task Tracker, and sequential specialist execution.
+OpenHands owns the agent loop, conversation persistence, coding tools, Task Tracker, and specialist execution.
 The gateway supplies a catalog-scoped Task adapter that reuses OpenHands orchestration while rejecting agents outside the executable catalog, supervising child interruption, and applying the same content-minimized persistence policy to parent and child conversations.
 Specialist conversations use OpenHands' asynchronous run API inside its blocking Task worker so interruption can cancel active model I/O.
 The adapter reads running children from the native task manager rather than maintaining a separate active-child registry, and attempts interruption of every running child even if one reports an error.
@@ -241,7 +241,17 @@ Standard provider routes use OpenHands' LiteLLM-backed LLM interface.
 ChatGPT account access uses OpenHands' native subscription registry, OAuth credential store and refresh, and Codex Responses API transport without a Heartwood token implementation.
 
 The default tool contract enables the OpenHands terminal, project file editor, Task Tracker, and sequential Task tool.
-Tool concurrency is one, model switching and Model Context Protocol servers are disabled, and critic refinement is disabled unless a future reviewed contract enables them.
+Global tool concurrency is one, model switching and Model Context Protocol servers are disabled, and critic refinement is disabled.
+
+The adapter can bind an optional gateway-owned authorizer for structured advisory Task batches.
+The authorizer must recheck qualification and record exact action identities before returning a scoped review plan; it is not exposed as model input or an interface eligibility flag.
+The adapter checks the native tool and executor types, selected roles, distinct action identities, and absence of task resumption before using OpenHands' bounded `ParallelToolExecutor`.
+Terminal, editor, mixed, unconfigured, and ordinary Task batches retain sequential execution.
+There is no separate worker pool, agent loop, pending-action cache, or usage ledger.
+Each usage projection takes one temporary snapshot of OpenHands metrics so a completing child cannot change the metric collection between per-purpose rows and totals.
+Slow authorization runs off the agent event loop so cancellation can prevent dispatch while shared storage is being checked.
+Prepared children retain the parent's native cancellation token and check it before asynchronous startup, preventing a pre-start pause from being mistaken for permission to resume.
+The normal grouped-action policy still applies before this execution boundary; qualification does not approve actions.
 
 ### Research Specialist Catalog
 
@@ -250,7 +260,7 @@ Heartwood validates presentation metadata, model inheritance, confirmation mode,
 It injects verified OpenHands `Skill` objects directly and disables user, public, and project Skill discovery for child agents.
 
 The enabled planning and review roles are advisory and tool-free.
-They inherit the parent's model route, run sequentially through OpenHands, and receive only the evidence delegated by the parent agent.
+They inherit the parent's model route, run sequentially by default through OpenHands, and receive only the evidence delegated by the parent agent.
 Heartwood projects OpenHands Task lifecycle, lineage, result, failure, and combined usage into the same gateway-owned session view used by every interface.
 It does not add a scheduler, child-agent loop, conversation store, or role-specific interface reducer.
 

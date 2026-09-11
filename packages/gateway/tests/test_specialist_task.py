@@ -86,6 +86,7 @@ def test_catalog_task_manager_preserves_delegate_observability_metadata(
     parent.state.persistence_dir = tmp_path / "openhands"
     parent.state.workspace.working_dir = tmp_path / "project"
     parent.state.id = uuid4()
+    parent.cancel_token = CancellationToken()
     manager._parent_conversation = cast(LocalConversation, parent)
 
     link = {
@@ -117,6 +118,7 @@ def test_catalog_task_manager_preserves_delegate_observability_metadata(
     )
 
     assert created is child
+    assert child._parent_cancel_token is parent.cancel_token
     options = conversation_type.call_args.kwargs
     assert options["observability_metadata"] == {
         "is_delegate": True,

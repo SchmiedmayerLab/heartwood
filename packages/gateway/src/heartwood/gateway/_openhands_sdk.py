@@ -27,12 +27,13 @@ os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 os.environ.setdefault("LOG_LEVEL", "ERROR")
 os.environ.setdefault("OPENHANDS_SUPPRESS_BANNER", "1")
 
-from openhands.sdk import LLM, AgentContext, LLMStreamChunk, LocalConversation, Tool
+from openhands.sdk import LLM, Agent, AgentContext, LLMStreamChunk, LocalConversation, Tool
 from openhands.sdk.conversation import (
     BaseConversation,
     ConversationExecutionStatus,
     ConversationState,
 )
+from openhands.sdk.conversation.conversation_stats import ConversationStats
 from openhands.sdk.event import (
     ActionEvent,
     AgentErrorEvent,
@@ -113,6 +114,7 @@ from heartwood.gateway._openhands_models import (
     request_endpoint_for_model,
 )
 from heartwood.gateway._openhands_persistence import ContentMinimizedLocalFileStore
+from heartwood.gateway._review_executor import ReviewBatchAuthorizer, bind_review_executor
 from heartwood.gateway._specialist_task import (
     HeartwoodSpecialistObservation,
     HeartwoodSpecialistToolSet,
@@ -211,6 +213,7 @@ class OpenHandsSdkBackend:
         native_tool_calling: bool | None = None,
         conversation_factory: ConversationFactory | None = None,
         structured_task_outcomes: bool = False,
+        review_batch_authorizer: ReviewBatchAuthorizer | None = None,
     ) -> None:
         profile.validate()
         if action_confirmation_mode not in {"always-confirm", "confirm-risky"}:
@@ -232,6 +235,7 @@ class OpenHandsSdkBackend:
         self._conversation_factory = conversation_factory or self._default_conversation_factory
         self._injected_conversation_factory = conversation_factory is not None
         self._structured_task_outcomes = structured_task_outcomes
+        self._review_batch_authorizer = review_batch_authorizer
         self._conversation: BaseConversation | None = None
         self._conversation_lock = RLock()
         self._conversation_closing = False
@@ -671,6 +675,16 @@ class OpenHandsSdkBackend:
                     self._handle_sdk_event,
                     self._handle_token,
                 )
+                if self._review_batch_authorizer is not None:
+                    try:
+                        agent = conversation.state.agent
+                        if not isinstance(agent, Agent):
+                            raise OpenHandsSdkError("Advisory execution requires the native agent")
+                        bind_review_executor(agent, self._review_batch_authorizer)
+                    except Exception:
+                        with suppress(Exception):
+                            conversation.close()
+                        raise
                 self._conversation = conversation
             return conversation
 
@@ -1822,13 +1836,21 @@ def _task_status(status: str) -> BackendTaskStatus:
 
 
 def _usage(state: ConversationState) -> tuple[BackendUsage, ...]:
+    # A child can register its final metrics during projection. Freeze the native
+    # values once so totals and per-purpose rows describe the same observation.
+    stats = ConversationStats(
+        usage_to_metrics={
+            usage_id: metrics.model_copy(deep=True)
+            for usage_id, metrics in state.stats.usage_to_metrics.copy().items()
+        }
+    )
     by_purpose = tuple(
         _usage_snapshot(usage_id, metrics)
-        for usage_id, metrics in sorted(state.stats.usage_to_metrics.items())
+        for usage_id, metrics in sorted(stats.usage_to_metrics.items())
     )
     if not by_purpose:
         return ()
-    combined = _usage_snapshot("total", state.stats.get_combined_metrics())
+    combined = _usage_snapshot("total", stats.get_combined_metrics())
     return (combined, *by_purpose)
 
 

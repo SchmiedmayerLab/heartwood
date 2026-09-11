@@ -12,10 +12,11 @@ import asyncio
 import uuid
 from collections.abc import Sequence
 from pathlib import Path
-from typing import TypedDict, override
+from typing import Any, TypedDict, override
 
 from openhands.sdk import Agent, ImageContent, LocalConversation, TextContent, Tool
 from openhands.sdk.context import AgentContext
+from openhands.sdk.conversation.cancellation import CancellationToken
 from openhands.sdk.conversation.state import ConversationState
 from openhands.sdk.hooks.config import HookConfig
 from openhands.sdk.observability.laminar import detached_delegate_context
@@ -76,9 +77,27 @@ class SpecialistToolRole(TypedDict):
 class _InterruptibleSpecialistConversation(LocalConversation):
     """Use native cancellable I/O inside the Task manager's blocking worker contract."""
 
+    _parent_cancel_token: CancellationToken | None = None
+
     @override
     def run(self) -> None:  # type: ignore[override]  # Upstream tracing types this method as Never.
         asyncio.run(self.arun())
+
+    @override
+    async def arun(self) -> None:  # type: ignore[override]  # Upstream tracing types this as Never.
+        # Publish the native task before checking cancellation so an interrupt racing
+        # with startup targets this task, not the idle child's resumable pause state.
+        self._arun_task = asyncio.current_task()
+        try:
+            if self._parent_cancel_token is not None and self._parent_cancel_token.is_cancelled:
+                self.pause()
+                return
+            await super().arun()
+        except asyncio.CancelledError:
+            # Native arun's cancellation handler starts after lazy initialization.
+            self.pause()
+        finally:
+            self._arun_task = None
 
 
 class _CatalogTaskManager(TaskManager):
@@ -174,7 +193,7 @@ class _CatalogTaskManager(TaskManager):
             cache_limit_size=max_iteration_per_run,
         )
         with detached_delegate_context() as link:
-            return _InterruptibleSpecialistConversation(
+            conversation = _InterruptibleSpecialistConversation(
                 agent=worker_agent,
                 workspace=parent.state.workspace.working_dir,
                 persistence_dir=persistence_dir,
@@ -194,6 +213,8 @@ class _CatalogTaskManager(TaskManager):
                 ),
                 observability_tags=["delegate"],
             )
+            conversation._parent_cancel_token = parent.cancel_token
+            return conversation
 
     @override
     def _run_task(self, task: Task, prompt: str) -> Task:
@@ -276,6 +297,14 @@ class _CatalogTaskExecutor(TaskExecutor):
             is_error=failed,
             review_proposals=proposals,
         )
+
+
+def supports_parallel_review(tool: ToolDefinition[Any, Any]) -> bool:
+    """Only the catalog's structured advisory executor may use scoped concurrency."""
+    return (
+        isinstance(tool.executor, _CatalogTaskExecutor)
+        and tool.executor._catalog_manager._structured_reviews
+    )
 
 
 class HeartwoodSpecialistToolSet(ToolDefinition[TaskAction, TaskObservation]):

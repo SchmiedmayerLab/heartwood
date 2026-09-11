@@ -134,6 +134,7 @@ from heartwood.gateway._specialists import (
     SpecialistCatalogError,
     load_specialist_catalog,
 )
+from heartwood.schemas.parallel_reviews import ParallelReviewPlan
 from heartwood.session import CommandKind, EventKind, JsonValue, SessionCommand
 
 
@@ -1227,6 +1228,32 @@ def test_real_sdk_test_llm_turn_runs_in_background_and_reconciles_once(
         == ()
     )
     backend.close()
+
+
+def test_child_completion_during_usage_projection_uses_one_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    agent = Metrics(model_name="agent")
+    agent.add_token_usage(100, 20, 0, 0, 32_768, "agent-response")
+    child = Metrics(model_name="child")
+    child.add_token_usage(11, 7, 0, 0, 32_768, "child-response")
+    stats = ConversationStats(usage_to_metrics={"agent": agent})
+    state = cast(ConversationState, SimpleNamespace(stats=stats))
+    merge = Metrics.merge
+
+    def complete_child(total: Metrics, other: Metrics) -> None:
+        stats.usage_to_metrics["task:child"] = child
+        merge(total, other)
+
+    monkeypatch.setattr(Metrics, "merge", complete_child)
+    first = {usage.usage_id: usage for usage in _usage(state)}
+    assert set(first) == {"total", "agent"}
+    assert first["total"].prompt_tokens == first["agent"].prompt_tokens == 100
+    second = {usage.usage_id: usage for usage in _usage(state)}
+    assert set(second) == {"total", "agent", "task:child"}
+    assert second["total"].prompt_tokens == 111
+    assert second["total"].completion_tokens == 27
+    assert second["total"].call_count == 2
 
 
 def test_usage_is_reported_as_total_agent_and_condenser_metrics() -> None:
@@ -3236,8 +3263,14 @@ def test_completed_specialist_workflow_replays_without_model_calls(
 
 @pytest.mark.parametrize("workers", [1, 2])
 @pytest.mark.parametrize("partial_failure", [False, True])
+@pytest.mark.parametrize("scoped", [False, True])
 def test_native_specialist_task_concurrency_preserves_results_and_approval(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, workers: int, partial_failure: bool
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    workers: int,
+    partial_failure: bool,
+    scoped: bool,
+    parallel_review_plan: ParallelReviewPlan,
 ) -> None:
     from openhands.sdk.llm.llm_registry import RegistryEvent
     from openhands.tools.task.manager import TaskManager
@@ -3245,9 +3278,14 @@ def test_native_specialist_task_concurrency_preserves_results_and_approval(
     active = 0
     maximum_active = 0
     calls = 0
+    authorizations: list[tuple[str, ...]] = []
     lock = Lock()
     barrier = Barrier(workers)
     run = TaskManager._run_until_finished
+
+    def authorize(actions: Sequence[ActionEvent]) -> ParallelReviewPlan | None:
+        authorizations.append(tuple(action.tool_call_id for action in actions))
+        return parallel_review_plan if workers == 2 else None
 
     def inspect_overlap(
         manager: TaskManager, task_id: str, conversation: LocalConversation
@@ -3304,12 +3342,13 @@ def test_native_specialist_task_concurrency_preserves_results_and_approval(
         persistence_dir=tmp_path / "openhands",
         conversation_key="parallel-conformance",
         specialist_catalog=_specialist_catalog(),
+        review_batch_authorizer=authorize if scoped else None,
         env={},
         conversation_factory=_conversation_factory(
             tmp_path,
             llm,
             tools=[_specialist_tool(structured_reviews=True)],
-            tool_concurrency_limit=workers,
+            tool_concurrency_limit=1 if scoped else workers,
             conversation_id=conversation_id,
         ),
     )
@@ -3319,8 +3358,9 @@ def test_native_specialist_task_concurrency_preserves_results_and_approval(
         group = _wait_for_pending_group(backend)
         assert len(group.actions) == 2
         assert calls == 0
+        assert authorizations == []
         observed = backend.evaluation_observation(platform="generic", policy_fingerprint="a" * 64)
-        assert observed.specialist_concurrency == workers
+        assert observed.specialist_concurrency == (1 if scoped else workers)
         assert observed.specialist_catalog_fingerprint == _specialist_catalog().fingerprint
         backend.resolve_confirmation(
             session_id="session-1", action_group_id=group.group_id, approved=True
@@ -3335,6 +3375,7 @@ def test_native_specialist_task_concurrency_preserves_results_and_approval(
         ]
         assert maximum_active == workers
         assert calls == 2
+        assert authorizations == ([("review-0", "review-1")] if scoped else [])
         terminal = [
             event.subagent
             for event in events
@@ -3374,12 +3415,13 @@ def test_native_specialist_task_concurrency_preserves_results_and_approval(
         persistence_dir=tmp_path / "openhands",
         conversation_key="parallel-conformance",
         specialist_catalog=_specialist_catalog(),
+        review_batch_authorizer=authorize if scoped else None,
         env={},
         conversation_factory=_conversation_factory(
             tmp_path,
             empty,
             tools=[_specialist_tool(structured_reviews=True)],
-            tool_concurrency_limit=workers,
+            tool_concurrency_limit=1 if scoped else workers,
             conversation_id=conversation_id,
         ),
     )
@@ -3393,6 +3435,7 @@ def test_native_specialist_task_concurrency_preserves_results_and_approval(
             in {BackendSubagentStatus.COMPLETED, BackendSubagentStatus.ERROR}
         ] == terminal
         assert empty.call_count == 0
+        assert authorizations == ([("review-0", "review-1")] if scoped else [])
         assert calls == 2
         restored_usage = (
             restored._get_conversation().conversation_stats.get_combined_metrics().get_snapshot()
@@ -3403,9 +3446,77 @@ def test_native_specialist_task_concurrency_preserves_results_and_approval(
         restored.close()
 
 
+@pytest.mark.parametrize("decision", ["reject", "revoked"])
+def test_scoped_review_denial_never_starts_a_child(tmp_path: Path, decision: str) -> None:
+    messages = [
+        _task_message(
+            f"denied-{index}",
+            description="Review evidence",
+            prompt="Review the supplied synthetic evidence.",
+            specialist_id=reviewer,
+        )
+        for index, reviewer in enumerate(("data-quality-reviewer", "statistical-reviewer"))
+    ]
+    llm = TestLLM.from_messages(
+        [
+            Message(
+                role="assistant",
+                content=[],
+                tool_calls=[call for message in messages for call in message.tool_calls or []],
+            )
+        ]
+    )
+    checks: list[tuple[str, ...]] = []
+
+    def authorize(actions: Sequence[ActionEvent]) -> ParallelReviewPlan | None:
+        checks.append(tuple(action.tool_call_id for action in actions))
+        raise ValueError("The scoped review authorization expired")
+
+    backend = OpenHandsSdkBackend(
+        profile=_local_profile(),
+        workspace=tmp_path / "workspace",
+        skills_dir=tmp_path / "skills",
+        persistence_dir=tmp_path / "openhands",
+        conversation_key="denied-parallel-review",
+        specialist_catalog=_specialist_catalog(),
+        review_batch_authorizer=authorize,
+        env={},
+        conversation_factory=_conversation_factory(
+            tmp_path, llm, tools=[_specialist_tool(structured_reviews=True)]
+        ),
+    )
+    try:
+        backend._register_specialized_agents()
+        backend.submit_turn(session_id="session-1", prompt="Review synthetic evidence")
+        group = _wait_for_pending_group(backend)
+        assert len(group.actions) == 2
+        assert checks == []
+        backend.resolve_confirmation(
+            session_id="session-1", action_group_id=group.group_id, approved=decision == "revoked"
+        )
+        if decision == "revoked":
+            _wait_for_lifecycle(backend, BackendLifecycle.ERROR)
+        assert checks == ([("denied-0", "denied-1")] if decision == "revoked" else [])
+        assert llm.call_count == 1
+        events = backend.reconcile(session_id="session-1", known_source_event_ids=frozenset())
+        assert not any(
+            isinstance(event, BackendSubagentEvent)
+            and event.subagent.status
+            in {BackendSubagentStatus.RUNNING, BackendSubagentStatus.COMPLETED}
+            for event in events
+        )
+    finally:
+        backend.close()
+
+
 @pytest.mark.parametrize("task_count", [2, 3])
+@pytest.mark.parametrize("scoped", [False, True])
 def test_parent_pause_interrupts_both_native_specialist_model_calls(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, task_count: int
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    task_count: int,
+    scoped: bool,
+    parallel_review_plan: ParallelReviewPlan,
 ) -> None:
     started = 0
     stopped = 0
@@ -3413,6 +3524,12 @@ def test_parent_pause_interrupts_both_native_specialist_model_calls(
     both_started = Event()
     both_stopped = Event()
     complete = TestLLM.acompletion
+    reviewers = ("data-quality-reviewer", "statistical-reviewer", "reproducibility-reviewer")[
+        :task_count
+    ]
+    plan = parallel_review_plan.model_copy(
+        update={"scope": parallel_review_plan.scope.model_copy(update={"reviewer_ids": reviewers})}
+    )
 
     async def wait_for_interrupt(
         llm: TestLLM,
@@ -3455,11 +3572,7 @@ def test_parent_pause_interrupts_both_native_specialist_model_calls(
             prompt="Synthetic review",
             specialist_id=reviewer,
         )
-        for index, reviewer in enumerate(
-            ("data-quality-reviewer", "statistical-reviewer", "reproducibility-reviewer")[
-                :task_count
-            ]
-        )
+        for index, reviewer in enumerate(reviewers)
     ]
     llm = TestLLM.from_messages(
         [
@@ -3478,12 +3591,13 @@ def test_parent_pause_interrupts_both_native_specialist_model_calls(
         persistence_dir=tmp_path / "openhands",
         conversation_key="parallel-interrupt",
         specialist_catalog=_specialist_catalog(),
+        review_batch_authorizer=(lambda _: plan) if scoped else None,
         env={},
         conversation_factory=_conversation_factory(
             tmp_path,
             llm,
             tools=[_specialist_tool(structured_reviews=True)],
-            tool_concurrency_limit=2,
+            tool_concurrency_limit=1 if scoped else 2,
             conversation_id=conversation_id,
         ),
     )
@@ -3514,12 +3628,13 @@ def test_parent_pause_interrupts_both_native_specialist_model_calls(
         persistence_dir=tmp_path / "openhands",
         conversation_key="parallel-interrupt",
         specialist_catalog=_specialist_catalog(),
+        review_batch_authorizer=(lambda _: plan) if scoped else None,
         env={},
         conversation_factory=_conversation_factory(
             tmp_path,
             empty,
             tools=[_specialist_tool(structured_reviews=True)],
-            tool_concurrency_limit=2,
+            tool_concurrency_limit=1 if scoped else 2,
             conversation_id=conversation_id,
         ),
     )
@@ -3529,6 +3644,58 @@ def test_parent_pause_interrupts_both_native_specialist_model_calls(
         assert started == stopped == 2
     finally:
         restored.close()
+
+
+@pytest.mark.parametrize("during_initialization", [False, True])
+def test_prepared_specialist_does_not_restart_after_parent_pause(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, during_initialization: bool
+) -> None:
+    from openhands.sdk.conversation.cancellation import CancellationToken
+
+    from heartwood.gateway._specialist_task import _InterruptibleSpecialistConversation
+
+    llm = TestLLM.from_messages([_assistant_message("This cancelled child must not run.")])
+    child = _InterruptibleSpecialistConversation(
+        agent=Agent(llm=llm, tools=[]),
+        workspace=tmp_path / "workspace",
+        persistence_dir=tmp_path / "openhands",
+        profile_store_dir=tmp_path / "profiles",
+        visualizer=None,
+    )
+    token = CancellationToken()
+    child._parent_cancel_token = token
+    try:
+        cast(BaseConversation, child).send_message("Review only the supplied synthetic evidence.")
+        if during_initialization:
+            started = Event()
+            release = Event()
+
+            def initialize() -> None:
+                started.set()
+                assert release.wait(5)
+
+            monkeypatch.setattr(child, "_ensure_agent_ready", initialize)
+
+            async def cancel_initialization() -> None:
+                task = asyncio.create_task(child.arun())
+                try:
+                    assert await asyncio.to_thread(started.wait, 2)
+                    token.cancel()
+                    child.interrupt()
+                    await asyncio.wait_for(task, timeout=2)
+                finally:
+                    release.set()
+
+            asyncio.run(cancel_initialization())
+        else:
+            token.cancel()
+            child.interrupt()
+            child.run()
+        assert llm.call_count == 0
+        assert child.state.execution_status == ConversationExecutionStatus.PAUSED
+        assert child._arun_task is None
+    finally:
+        child.close()
 
 
 def test_structured_specialist_plain_prose_cannot_replace_review_proposals(tmp_path: Path) -> None:
