@@ -11,17 +11,22 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from openhands.sdk import LLMStreamChunk, LocalConversation, Tool
 from openhands.sdk.event import Event
-from openhands.sdk.llm import Message, MessageToolCall, TextContent
+from openhands.sdk.llm import LLMResponse, Message, MessageToolCall, TextContent
+from openhands.sdk.llm.llm import LLMCallContext
+from openhands.sdk.llm.streaming import TokenCallbackType
 from openhands.sdk.security import AlwaysConfirm
 from openhands.sdk.settings import OpenHandsAgentSettings
 from openhands.sdk.testing import TestLLM
+from openhands.sdk.tool import Action, Observation, ToolDefinition
 from openhands.tools import TerminalTool
 
 from heartwood.compliance.evaluation_store import EvaluationStore
@@ -151,6 +156,10 @@ def _gateway(root: Path, llm: TestLLM) -> SessionGateway:
                 delete_on_close=False,
             )
             conversation.set_confirmation_policy(AlwaysConfirm())
+            if isinstance(llm, _MeteredTestLLM):
+                # SDK discovery intentionally excludes LLM subclasses such as TestLLM.
+                conversation.llm_registry.subscribe(conversation.state.stats.register_llm)
+                conversation.llm_registry.add(llm)
             return conversation
 
         backend = OpenHandsSdkBackend(
@@ -173,6 +182,182 @@ def _gateway(root: Path, llm: TestLLM) -> SessionGateway:
         )
 
     return SessionGateway(project=ProjectContext(root), service_factory=service_factory, env={})
+
+
+class _MeteredTestLLM(TestLLM):
+    """Exercise production usage projection with deterministic provider measurements."""
+
+    def completion(
+        self,
+        messages: list[Message],
+        tools: Sequence[ToolDefinition[Action, Observation]] | None = None,
+        add_security_risk_prediction: bool = False,
+        on_token: TokenCallbackType | None = None,
+        call_context: LLMCallContext | None = None,
+        **kwargs: object,
+    ) -> LLMResponse:
+        response = super().completion(
+            messages,
+            tools,
+            add_security_risk_prediction,
+            on_token,
+            call_context,
+            **kwargs,
+        )
+        self.metrics.add_token_usage(80, 20, 0, 0, 32768, f"measured-{self.call_count}")
+        self.metrics.add_cost(0.01)
+        return response.model_copy(update={"metrics": self.metrics.get_snapshot()})
+
+
+@pytest.mark.parametrize(
+    "limits",
+    [
+        {"maximum_model_calls": 1},
+        {"maximum_tokens": 100},
+        {"maximum_reported_cost_usd": 0.01},
+    ],
+)
+@pytest.mark.parametrize("finished", [False, True])
+def test_exact_provider_limit_allows_completion_but_never_another_reviewed_action(
+    tmp_path: Path, limits: dict[str, int | float], finished: bool
+) -> None:
+    task = _prepare(tmp_path, "dataset-readiness")
+    llm = _MeteredTestLLM.from_messages([_finish() if finished else _file_message(tmp_path)])
+    gateway = _gateway(tmp_path, llm)
+    try:
+        trial = run_research_trial(
+            gateway,
+            task,
+            configuration=_configuration(),
+            execution="deterministic",
+            review=lambda _: pytest.fail("No action may be admitted at the provider limit"),
+            budget=ExecutionBudget.model_validate(limits),
+        )
+        assert trial.stop == ("finished" if finished else "budget-exceeded")
+        assert llm.call_count == trial.record.usage.model_calls == 1
+        assert trial.record.usage.input_tokens == 80
+        assert trial.record.usage.output_tokens == 20
+        assert trial.record.usage.reported_cost_usd == 0.01
+        assert not (tmp_path / "analysis.py").exists()
+        assert trial.record.usage.exceeded_limits(trial.record.budget) == ()
+    finally:
+        gateway.stop()
+
+
+def test_response_overrun_cannot_be_reported_as_successful_completion(tmp_path: Path) -> None:
+    task = _prepare(tmp_path, "dataset-readiness")
+    llm = _MeteredTestLLM.from_messages([_finish()])
+    gateway = _gateway(tmp_path, llm)
+    try:
+        trial = run_research_trial(
+            gateway,
+            task,
+            configuration=_configuration(),
+            execution="deterministic",
+            review=lambda _: pytest.fail("No tools expected"),
+            budget=ExecutionBudget(maximum_tokens=99),
+        )
+        assert trial.stop == "budget-exceeded"
+        assert llm.call_count == 1
+        assert trial.record.usage.exceeded_limits(trial.record.budget) == ("tokens",)
+        assert next(
+            c for c in trial.record.checks if c.check_id == "workflow-completed"
+        ).status == ("failed")
+    finally:
+        gateway.stop()
+
+
+@pytest.mark.parametrize("maximum_actions", [1, 2])
+def test_group_at_action_limit_is_allowed_but_oversized_group_never_executes(
+    tmp_path: Path, maximum_actions: int
+) -> None:
+    task = _prepare(tmp_path, "dataset-readiness")
+    outputs = {"readiness.md": "Synthetic review", "readiness.json": "{}"}
+    llm = TestLLM.from_messages([_file_message(tmp_path, outputs), _finish()])
+    gateway = _gateway(tmp_path, llm)
+    reviewed: list[str] = []
+
+    def review(group: ProjectionApprovalGroup) -> ReviewDecision:
+        reviewed.append(group.group_id)
+        return "approve"
+
+    try:
+        trial = run_research_trial(
+            gateway,
+            task,
+            configuration=_configuration(),
+            execution="deterministic",
+            review=review,
+            budget=ExecutionBudget(maximum_actions=maximum_actions),
+        )
+        assert trial.stop == ("finished" if maximum_actions == 2 else "budget-exceeded")
+        assert len(reviewed) == (1 if maximum_actions == 2 else 0)
+        assert (tmp_path / "readiness.md").exists() is (maximum_actions == 2)
+        assert trial.record.usage.proposed_actions == 2
+    finally:
+        gateway.stop()
+
+
+def test_expired_budget_after_review_does_not_execute_the_approved_group(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    task = _prepare(tmp_path)
+    llm = TestLLM.from_messages([_file_message(tmp_path)])
+    gateway = _gateway(tmp_path, llm)
+    clock = [0.0]
+    monkeypatch.setattr(
+        "heartwood.compliance.research_runner.time",
+        SimpleNamespace(monotonic=lambda: clock[0], sleep=time.sleep),
+    )
+
+    def review(_group: ProjectionApprovalGroup) -> ReviewDecision:
+        clock[0] = 300.0
+        return "approve"
+
+    try:
+        trial = run_research_trial(
+            gateway,
+            task,
+            configuration=_configuration(),
+            execution="deterministic",
+            review=review,
+        )
+        assert trial.stop == "budget-exceeded"
+        assert llm.call_count == 1
+        assert not (tmp_path / "analysis.py").exists()
+        assert trial.record.usage.elapsed_seconds == 300.0
+    finally:
+        gateway.stop()
+
+
+def test_exhausted_baseline_cannot_start_reproduction_or_claim_workflow_completion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PATH", f"{Path(sys.executable).parent}{os.pathsep}{os.environ['PATH']}")
+    task = _prepare(tmp_path)
+    command = "python analysis.py --data data.csv --output-dir ."
+    llm = _MeteredTestLLM.from_messages(
+        [_file_message(tmp_path), _message(command, "primary"), _finish()]
+    )
+    gateway = _gateway(tmp_path, llm)
+    try:
+        trial = run_research_trial(
+            gateway,
+            task,
+            configuration=_configuration(),
+            execution="deterministic",
+            review=lambda _: "approve",
+            budget=ExecutionBudget(maximum_model_calls=3),
+        )
+        assert trial.stop == "budget-exceeded"
+        assert llm.call_count == trial.record.usage.model_calls == 3
+        assert (tmp_path / "metrics.json").exists()
+        assert not (tmp_path / "benchmark-reproduced").exists()
+        checks = {check.check_id: check.status for check in trial.record.checks}
+        assert checks["workflow-completed"] == checks["independent-script-rerun"] == "failed"
+        assert checks["baseline-heldout-metrics"] == "passed"
+    finally:
+        gateway.stop()
 
 
 @pytest.mark.parametrize("scratch_directory", [False, True])

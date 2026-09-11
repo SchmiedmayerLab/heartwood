@@ -27,9 +27,9 @@ from heartwood.schemas.evaluation import (
     EvaluationPolicy,
     EvaluationRun,
     EvaluationSuite,
-    EvaluationUsage,
     RequiredEvaluationCheck,
 )
+from heartwood.schemas.execution import ExecutionUsage
 
 NOW = datetime(2026, 9, 10, tzinfo=UTC)
 
@@ -87,7 +87,7 @@ def _runs() -> list[EvaluationRun]:
                 EvaluationCheck(check_id=check.check_id, dimension=check.dimension, status="passed")
                 for check in case.required_checks
             ),
-            usage=EvaluationUsage(elapsed_seconds=60),
+            usage=ExecutionUsage(elapsed_seconds=60),
         )
         for case in _suite().cases
         for repeat in range(3)
@@ -207,6 +207,34 @@ def test_duplicate_trial_cannot_count_as_repeated_evidence() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    ("field", "limit", "maximum"),
+    [
+        ("elapsed_seconds", "seconds", 300),
+        ("model_calls", "model_calls", 20),
+        ("output_tokens", "tokens", 100_000),
+        ("reported_cost_usd", "reported_cost_usd", 1),
+        ("proposed_actions", "actions", 30),
+    ],
+)
+@pytest.mark.parametrize("overrun", [False, True])
+def test_passing_checks_do_not_override_observed_budget_overruns(
+    field: str, limit: str, maximum: int, overrun: bool
+) -> None:
+    runs = _runs()
+    usage = ExecutionUsage.model_validate({"elapsed_seconds": 60, field: maximum + int(overrun)})
+    runs[0] = runs[0].model_copy(update={"usage": usage})
+    result = assess_research_evidence(
+        suite=_suite(),
+        configuration=_configuration(),
+        runs=runs,
+        policy=EvaluationPolicy(),
+        now=NOW,
+    )
+    assert result.qualified is not overrun
+    assert result.reasons == ((f"dataset-readiness:budget_exceeded:{limit}",) if overrun else ())
+
+
 def test_unknown_model_revision_is_not_a_qualified_snapshot() -> None:
     configuration = _configuration().model_copy(update={"model_revision": None})
     runs = [run.model_copy(update={"configuration": configuration}) for run in _runs()]
@@ -238,7 +266,7 @@ def test_evidence_schema_does_not_accept_raw_execution_content(field: str) -> No
 @pytest.mark.parametrize("value", [-1, float("inf"), float("nan")])
 def test_efficiency_measurements_reject_invalid_values(value: float) -> None:
     with pytest.raises(ValidationError):
-        EvaluationUsage(elapsed_seconds=value)
+        ExecutionUsage(elapsed_seconds=value)
 
 
 def test_evidence_round_trip_preserves_metadata_and_unknown_cost() -> None:

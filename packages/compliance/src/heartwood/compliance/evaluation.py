@@ -74,6 +74,8 @@ def assess_research_evidence(
         for run in candidates:
             if run.status != "completed":
                 reasons.add(f"{case.case_id}:incomplete_trial")
+            for limit in run.usage.exceeded_limits(run.budget):
+                reasons.add(f"{case.case_id}:budget_exceeded:{limit}")
             observed = {check.check_id: check for check in run.checks}
             for check_id, dimension in required.items():
                 check = observed.get(check_id)

@@ -16,7 +16,7 @@ from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
-from heartwood.schemas.execution import ExecutionBudget
+from heartwood.schemas.execution import ExecutionBudget, ExecutionUsage
 
 type EvaluationIdentifier = Annotated[
     str, StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:/+-]{0,255}$")
@@ -125,16 +125,6 @@ class EvaluationSuite(EvaluationRecord):
         return self
 
 
-class EvaluationUsage(EvaluationRecord):
-    """Measured efficiency; unavailable usage and cost remain unknown, not zero."""
-
-    input_tokens: int | None = Field(default=None, ge=0)
-    output_tokens: int | None = Field(default=None, ge=0)
-    model_calls: int | None = Field(default=None, ge=0)
-    reported_cost_usd: NonnegativeFloat | None = None
-    elapsed_seconds: NonnegativeFloat
-
-
 class EvaluationRun(EvaluationRecord):
     """One dated trial of a pinned case against an exact runtime configuration."""
 
@@ -150,7 +140,7 @@ class EvaluationRun(EvaluationRecord):
     started_at: AwareDatetime
     finished_at: AwareDatetime
     checks: tuple[EvaluationCheck, ...]
-    usage: EvaluationUsage
+    usage: ExecutionUsage
     budget: ExecutionBudget = Field(default_factory=ExecutionBudget)
     status: Literal["incomplete", "completed"] = "completed"
     session_id: EvaluationIdentifier | None = None

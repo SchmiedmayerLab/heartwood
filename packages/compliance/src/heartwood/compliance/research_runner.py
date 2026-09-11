@@ -35,9 +35,8 @@ from heartwood.schemas.evaluation import (
     EvaluationCheck,
     EvaluationConfiguration,
     EvaluationRun,
-    EvaluationUsage,
 )
-from heartwood.schemas.execution import ExecutionBudget
+from heartwood.schemas.execution import ExecutionBudget, ExecutionUsage
 from heartwood.session import CommandKind, EventKind, SessionCommand
 
 type ReviewDecision = Literal["approve", "reject", "stop"]
@@ -184,25 +183,32 @@ def run_research_trial(
             EvaluationCheck(check_id=check.check_id, dimension=check.dimension, status="not_run")
             for check in task.case.required_checks
         ),
-        usage=EvaluationUsage(elapsed_seconds=0),
+        usage=ExecutionUsage(elapsed_seconds=0, proposed_actions=0),
     )
     store.begin(pending)
     stop: ResearchStop = "error"
     try:
-        session.command("task", CommandKind.CHAT, {"prompt": task.instruction})
-        stop = _drive(session, review, budget, started, observe)
+        if _usage(gateway.session_projection(session_id=session_id), started).exhausted_limits(
+            budget
+        ):
+            stop = "budget-exceeded"
+        else:
+            session.command("task", CommandKind.CHAT, {"prompt": task.instruction})
+            stop = _drive(session, review, budget, started, observe)
         artifacts = _read_artifacts(gateway, task.artifact_paths)
         rerun = False
-        if (
+        baseline_ready = (
             task.case.case_id == "baseline-analysis"
             and stop == "finished"
             and all(
                 check.status == "passed" for check in verify_research_artifacts(task, artifacts)
             )
-            and not _budget_exceeded(
-                gateway.session_projection(session_id=session_id), budget, started
-            )
-        ):
+        )
+        if baseline_ready and _usage(
+            gateway.session_projection(session_id=session_id), started
+        ).exhausted_limits(budget):
+            stop = "budget-exceeded"
+        if baseline_ready and stop == "finished":
             primary = _read_artifacts(gateway, ("analysis.py", *_PRIMARY_OUTPUTS))
             session.reproduction_inputs.update({**inputs, **primary})
             prior_actions = gateway.session_projection(session_id=session_id).actions
@@ -249,6 +255,9 @@ def run_research_trial(
                 and all(f"reproduced/{name}" in artifacts for name in _PRIMARY_OUTPUTS)
             )
 
+        measured = _usage(gateway.session_projection(session_id=session_id), started)
+        if measured.exceeded_limits(budget):
+            stop = "budget-exceeded"
         session.command("audit", CommandKind.AUDIT_EXPORT, {})
         gateway.audit_export(session_id)
         expected_replay = replay_evidence(gateway, session_id)
@@ -284,7 +293,6 @@ def run_research_trial(
             states["independent-script-rerun"] = "passed" if rerun else "failed"
         if inputs != _read_artifacts(gateway, tuple(inputs)):
             states["approved-actions-only"] = "failed"
-        usage = projection.usage
         record = EvaluationRun.model_validate(
             {
                 **pending.model_dump(),
@@ -298,17 +306,7 @@ def run_research_trial(
                     )
                     for check in task.case.required_checks
                 ),
-                "usage": EvaluationUsage(
-                    input_tokens=usage.prompt_tokens if usage else None,
-                    output_tokens=usage.completion_tokens if usage else None,
-                    model_calls=usage.call_count if usage else None,
-                    # The current gateway projection cannot distinguish unpriced from
-                    # zero-cost calls. Preserve unknown until upstream reports that fact.
-                    reported_cost_usd=(
-                        usage.accumulated_cost if usage and usage.accumulated_cost > 0 else None
-                    ),
-                    elapsed_seconds=time.monotonic() - started,
-                ),
+                "usage": measured,
             }
         )
         store.complete(record)
@@ -333,7 +331,8 @@ def _drive(
         if observe is not None and projection.revision != seen_revision:
             observe(projection)
             seen_revision = projection.revision
-        if _budget_exceeded(projection, budget, started):
+        consumption = _usage(projection, started)
+        if consumption.exceeded_limits(budget):
             session.pause()
             return "budget-exceeded"
         if projection.last_command_outcome is not None and (
@@ -346,14 +345,18 @@ def _drive(
             if projection.lifecycle.status == "finished":
                 return "finished"
             return "paused" if projection.lifecycle.status == "paused" else "error"
+        if _admission_blocked(consumption, budget):
+            session.pause()
+            return "budget-exceeded"
         group = projection.pending_approval
         if group is not None:
             if group.group_id in reviewed:
                 time.sleep(0.02)
                 continue
             decision = review(group)
-            if _budget_exceeded(
-                session.gateway.session_projection(session_id=session.session_id), budget, started
+            if _admission_blocked(
+                _usage(session.gateway.session_projection(session_id=session.session_id), started),
+                budget,
             ):
                 session.pause()
                 return "budget-exceeded"
@@ -392,21 +395,24 @@ def _drive(
         time.sleep(0.02)
 
 
-def _budget_exceeded(
-    projection: SessionProjection, budget: ExecutionBudget, started: float
-) -> bool:
+def _usage(projection: SessionProjection, started: float) -> ExecutionUsage:
     usage = projection.usage
-    return (
-        time.monotonic() - started >= budget.maximum_seconds
-        or len(projection.actions) > budget.maximum_actions
-        or (
-            usage is not None
-            and (
-                usage.call_count >= budget.maximum_model_calls
-                or usage.prompt_tokens + usage.completion_tokens >= budget.maximum_tokens
-                or usage.accumulated_cost >= budget.maximum_reported_cost_usd
-            )
-        )
+    return ExecutionUsage(
+        input_tokens=usage.prompt_tokens if usage else None,
+        output_tokens=usage.completion_tokens if usage else None,
+        model_calls=usage.call_count if usage else None,
+        # The gateway cannot yet distinguish unpriced calls from genuinely free calls.
+        reported_cost_usd=usage.accumulated_cost if usage and usage.accumulated_cost > 0 else None,
+        proposed_actions=len(projection.actions),
+        elapsed_seconds=time.monotonic() - started,
+    )
+
+
+def _admission_blocked(usage: ExecutionUsage, budget: ExecutionBudget) -> bool:
+    # Already-counted proposals at the action limit can still be reviewed and executed.
+    # A further proposal exceeds that limit; a new benchmark turn requires spare capacity.
+    return bool(usage.exceeded_limits(budget)) or any(
+        limit != "actions" for limit in usage.exhausted_limits(budget)
     )
 
 

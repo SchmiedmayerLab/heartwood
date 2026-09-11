@@ -115,6 +115,11 @@ These reports do not replace authoritative session events or signed audit checkp
 
 Evaluation records include observed time, action, model-call, token, and reported-cost budgets.
 Limits are checked between gateway updates and after review, before admitting another action; a request already in flight may finish before pause takes effect.
+Durable provider usage is reported at SDK run boundaries, so these observed limits do not cap every request inside an uninterrupted agent run.
+Finishing exactly at a provider limit is allowed, but reaching that limit prevents another reviewed continuation or benchmark turn.
+Action limits count proposals, including unsuccessful or rejected actions; a group already counted at the limit may execute after review, but an oversized group cannot.
+The evidence assessor independently rejects measured overruns even when the reported task checks passed.
+Elapsed task time includes researcher review and reproduction, but excludes the subsequent audit export and fresh-process replay checks.
 Unavailable usage remains unknown, including a zero value when the gateway cannot distinguish an unpriced call from a genuinely free call.
 Use provider-side spending limits as an additional control for hosted evaluations.
 Run generated code in an appropriately isolated synthetic environment and inspect complete action groups before approving them.
