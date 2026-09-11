@@ -2614,13 +2614,15 @@ def _checkpoint_research_project(root: Path, deployment: Path) -> None:
         gateway.stop()
 
 
-@pytest.mark.parametrize("calls", [20, 21, 80])
+@pytest.mark.parametrize("offset", [0, 1, 50])
 def test_observed_stage_budget_blocks_more_work_but_allows_exact_completion(
     tmp_path: Path,
-    calls: int,
+    offset: int,
 ) -> None:
     backend = FinishedBackend()
-    backend.model_calls = calls
+    backend.model_calls = (
+        research_workflow("dataset-readiness").stage("inspect").budget.maximum_model_calls + offset
+    )
     gateway = _gateway(tmp_path, backend)
     try:
         _start(gateway, _inputs(tmp_path))
@@ -2646,10 +2648,12 @@ def test_observed_stage_budget_blocks_more_work_but_allows_exact_completion(
         gateway.stop()
 
 
-@pytest.mark.parametrize(("calls", "phase"), [(20, "ready"), (21, "running")])
-def test_budget_completion_boundary(tmp_path: Path, calls: int, phase: str) -> None:
+@pytest.mark.parametrize(("offset", "phase"), [(0, "ready"), (1, "running")])
+def test_budget_completion_boundary(tmp_path: Path, offset: int, phase: str) -> None:
     backend = FinishedBackend()
-    backend.model_calls = calls
+    backend.model_calls = (
+        research_workflow("dataset-readiness").stage("inspect").budget.maximum_model_calls + offset
+    )
     gateway = _gateway(tmp_path, backend)
     try:
         _start(gateway, _inputs(tmp_path))

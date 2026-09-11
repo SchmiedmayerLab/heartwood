@@ -77,6 +77,29 @@ def test_reproduction_requires_a_normal_terminal_invocation(
     assert (_rerun_spec(action) is not None) is eligible
 
 
+def test_verification_task_publishes_the_witnessed_terminal_command() -> None:
+    task = next(task for task in research_tasks() if task.case.case_id == "result-verification")
+    command = task.instruction.split("```sh\n", 1)[1].split("\n```", 1)[0]
+    action = ProjectionActionRecord.model_validate(
+        {
+            "tool_call_id": "published-reproduction",
+            "tool_name": "terminal",
+            "risk": "unknown",
+            "summary": "Reproduce the synthetic analysis",
+            "details": {"kind": "terminal", "command": command},
+            "state": "awaiting-review",
+            "proposed_sequence": 1,
+            "updated_sequence": 1,
+        }
+    )
+    spec = _rerun_spec(action)
+    assert spec is not None
+    assert spec.directory == "reproduced"
+    assert spec.output_paths == ("reproduced/metrics.json", "reproduced/predictions.csv")
+    assert not spec.matches_command(command.replace("python ", "python3 ", 1))
+    assert not spec.matches_command(f"echo changed && {command}")
+
+
 def _configuration() -> EvaluationConfiguration:
     return EvaluationConfiguration(
         provider="synthetic",
@@ -436,6 +459,12 @@ def test_exact_provider_limit_allows_completion_but_never_another_reviewed_actio
         assert trial.record.usage.reported_cost_usd == 0.01
         assert not (tmp_path / "analysis.py").exists()
         assert trial.record.usage.exceeded_limits(trial.record.budget) == ()
+        assert (
+            next(
+                check for check in trial.record.checks if check.check_id == "workflow-completed"
+            ).status
+            == "failed"
+        )
     finally:
         gateway.stop()
 

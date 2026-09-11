@@ -22,6 +22,7 @@ from heartwood.core_adapter.research_workflows import (
 )
 from heartwood.core_adapter.workflow_evidence import assess_workflow_stage
 from heartwood.core_adapter.workflow_runtime import workflow_stage_prompt
+from heartwood.schemas.execution import ExecutionUsage
 from heartwood.schemas.workflows import (
     WorkflowBoundInput,
     WorkflowCheckResult,
@@ -31,6 +32,33 @@ from heartwood.schemas.workflows import (
     WorkflowRun,
     WorkflowValueFingerprint,
 )
+
+
+@pytest.mark.parametrize("definition", research_workflows(), ids=lambda item: item.workflow_id)
+def test_stage_budgets_allow_repeated_context_but_preserve_admission_limits(
+    definition: WorkflowDefinition,
+) -> None:
+    planning_and_review = ExecutionUsage(
+        input_tokens=413_780,
+        output_tokens=16_008,
+        model_calls=28,
+        reported_cost_usd=0.487754,
+        proposed_actions=29,
+        elapsed_seconds=500,
+    )
+    for stage in definition.stages:
+        assert planning_and_review.exhausted_limits(stage.budget) == ()
+        for field, limit in (
+            ("input_tokens", "tokens"),
+            ("model_calls", "model_calls"),
+            ("reported_cost_usd", "reported_cost_usd"),
+            ("proposed_actions", "actions"),
+            ("elapsed_seconds", "seconds"),
+        ):
+            maximum = getattr(stage.budget, f"maximum_{limit}")
+            usage = ExecutionUsage(elapsed_seconds=0).model_copy(update={field: maximum})
+            assert usage.exhausted_limits(stage.budget) == (limit,)
+        assert stage.budget.maximum_reported_cost_usd <= definition.budget.maximum_reported_cost_usd
 
 
 def _binding(workflow_id: str) -> WorkflowProjectBinding:

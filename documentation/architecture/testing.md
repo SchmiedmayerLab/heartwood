@@ -191,6 +191,7 @@ Fresh-process checks compare the gateway's persisted projection, event-chain ide
 The driver reserves a private result under `.heartwood/evaluations/` before starting model work.
 Before reviewing a pending group or assessing completion, it waits for the SDK worker's final publication and reconciles usage through the shared gateway.
 An early finished lifecycle cannot by itself trigger reproduction or finalize an evaluation.
+Workflow completion additionally requires passing artifact checks and, where required, independently witnessed reproduction; a final message alone is not evidence of completion.
 If finalization does not settle within the bounded wait, the trial remains incomplete.
 An interrupted evaluator leaves an incomplete trial with unverified checks, rather than silently removing an unsuccessful attempt from the evidence.
 Successful evaluation replaces that record atomically; completed evidence cannot be overwritten with different results.

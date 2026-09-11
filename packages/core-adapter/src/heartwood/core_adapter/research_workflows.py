@@ -37,9 +37,16 @@ _DATA = (
 _BUDGET = ExecutionBudget(
     maximum_seconds=1800,
     maximum_model_calls=80,
-    maximum_tokens=400_000,
+    maximum_tokens=1_600_000,
     maximum_reported_cost_usd=4,
     maximum_actions=100,
+)
+_STAGE_BUDGET = ExecutionBudget(
+    maximum_seconds=900,
+    maximum_model_calls=40,
+    maximum_tokens=600_000,
+    maximum_reported_cost_usd=1,
+    maximum_actions=45,
 )
 _REPRODUCTION_ARTIFACTS = (
     WorkflowArtifact(
@@ -163,6 +170,7 @@ def _readiness() -> WorkflowDefinition:
         stages=(
             WorkflowStage(
                 stage_id="inspect",
+                budget=_STAGE_BUDGET,
                 label="Inspect Data",
                 specialist_ids=("statistical-reviewer",),
                 reads=("data", "dictionary"),
@@ -182,6 +190,7 @@ def _readiness() -> WorkflowDefinition:
             ),
             WorkflowStage(
                 stage_id="report",
+                budget=_STAGE_BUDGET,
                 label="Review Findings",
                 reads=("readiness",),
                 writes=("report",),
@@ -255,6 +264,7 @@ def _baseline() -> WorkflowDefinition:
         stages=(
             WorkflowStage(
                 stage_id="plan",
+                budget=_STAGE_BUDGET,
                 label="Plan Analysis",
                 reads=("data", "dictionary", "question"),
                 writes=("plan",),
@@ -275,6 +285,7 @@ def _baseline() -> WorkflowDefinition:
             ),
             WorkflowStage(
                 stage_id="execute",
+                budget=_STAGE_BUDGET,
                 label="Run Baseline",
                 specialist_ids=("statistical-reviewer",),
                 reads=("data", "dictionary", "plan"),
@@ -301,6 +312,7 @@ def _baseline() -> WorkflowDefinition:
             ),
             WorkflowStage(
                 stage_id="verify",
+                budget=_STAGE_BUDGET,
                 label="Verify Reproduction",
                 reads=("data", "program", "metrics", "predictions"),
                 writes=("verification", "reproduced-metrics", "reproduced-predictions"),
@@ -328,6 +340,7 @@ def _baseline() -> WorkflowDefinition:
             ),
             WorkflowStage(
                 stage_id="report",
+                budget=_STAGE_BUDGET,
                 label="Review Analysis",
                 reads=("plan", "metrics", "verification"),
                 writes=("report",),
@@ -410,6 +423,7 @@ def _verification() -> WorkflowDefinition:
         stages=(
             WorkflowStage(
                 stage_id="environment",
+                budget=_STAGE_BUDGET,
                 label="Rebuild Environment",
                 reads=("environment", "program", "lockfile"),
                 writes=("environment-check",),
@@ -431,6 +445,7 @@ def _verification() -> WorkflowDefinition:
             ),
             WorkflowStage(
                 stage_id="reproduce",
+                budget=_STAGE_BUDGET,
                 label="Re-execute Analysis",
                 reads=("data", "program", "metrics", "predictions", "environment-check"),
                 writes=("verification", "reproduced-metrics", "reproduced-predictions"),
@@ -457,6 +472,7 @@ def _verification() -> WorkflowDefinition:
             ),
             WorkflowStage(
                 stage_id="report",
+                budget=_STAGE_BUDGET,
                 label="Review Reproduction",
                 reads=("environment-check", "verification"),
                 writes=("report",),

@@ -105,10 +105,17 @@ class AnalysisPlan(ResearchArtifact):
 
     question: ResearchText
     estimand: ResearchText
-    outcome: ResearchText
-    features: list[ResearchText] = Field(min_length=1)
-    group_column: ResearchText
-    split_column: ResearchText
+    outcome: ResearchText = Field(description="Exact outcome column name from the data dictionary.")
+    features: list[ResearchText] = Field(
+        min_length=1,
+        description="Exact predictor column names only, without prose, backticks, or explanations.",
+    )
+    group_column: ResearchText = Field(
+        description="Exact grouping column name from the dictionary."
+    )
+    split_column: ResearchText = Field(
+        description="Exact partition column name from the dictionary."
+    )
     assumptions: list[ResearchText] = Field(min_length=1)
     limitations: list[ResearchText] = Field(min_length=1)
 
@@ -116,8 +123,11 @@ class AnalysisPlan(ResearchArtifact):
 class BaselineResult(ResearchArtifact):
     """Held-out univariate linear baseline metrics and group-omission sensitivity."""
 
-    outcome: ResearchText
-    features: list[ResearchText] = Field(min_length=1)
+    outcome: ResearchText = Field(description="Exact outcome column name used by the fitted model.")
+    features: list[ResearchText] = Field(
+        min_length=1,
+        description="Exact predictor column names used by the fitted model, without explanations.",
+    )
     n_train: int = Field(gt=0)
     n_test: int = Field(gt=0)
     train_subjects: int = Field(gt=0)

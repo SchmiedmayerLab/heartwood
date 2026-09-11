@@ -85,6 +85,19 @@ The dictionary describes your intended analysis; it does not establish that the 
     The [notebook bridge](notebooks.md#research-workflows) exposes the same definitions, run state, and available requests.
     It does not run a second agent or maintain separate workflow state.
 
+### Work Limits
+
+Review the displayed limits before starting a stage or requesting specialist review.
+Each stage allows up to 15 minutes, 40 model calls, 600,000 cumulative tokens, 45 proposed actions, and $1 of reported model cost.
+The entire workflow also has limits: 30 minutes, 80 calls, 1.6 million cumulative tokens, 100 actions, and $4 of reported model cost.
+The first reached limit prevents admitting more work.
+
+Cumulative tokens include input context sent again on later calls; they are not the model's context-window size.
+Elapsed time includes time waiting for action review.
+Specialist review and corrections share the stage's remaining allowance.
+An in-flight request can exceed a limit before Heartwood receives its usage, and some providers do not report cost; these are execution safeguards, not guaranteed billing caps.
+When a limit is reached, retain the outputs and inspect the session before starting another bounded task.
+
 ## Verify an Existing Analysis
 
 Independent Result Verification preserves the original analysis and writes fresh reproduction outputs.

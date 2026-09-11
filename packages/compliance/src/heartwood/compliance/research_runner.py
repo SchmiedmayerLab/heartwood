@@ -21,7 +21,12 @@ from uuid import UUID, uuid4
 
 from heartwood.compliance.evaluation_store import EvaluationStore
 from heartwood.compliance.replay_evidence import replay_evidence
-from heartwood.compliance.research import ResearchTask, research_suite, verify_research_artifacts
+from heartwood.compliance.research import (
+    RESEARCH_REPRODUCTION_SPECS,
+    ResearchTask,
+    research_suite,
+    verify_research_artifacts,
+)
 from heartwood.core_adapter import SessionResult
 from heartwood.core_adapter.reproduction import ReproductionSpec, ReproductionWitness
 from heartwood.gateway import (
@@ -45,17 +50,7 @@ type ResearchStop = Literal[
     "finished", "error", "paused", "rejected", "review-stopped", "budget-exceeded"
 ]
 _PRIMARY_OUTPUTS = ("metrics.json", "predictions.csv")
-_REPRODUCTION_SPECS = tuple(
-    ReproductionSpec(
-        program="analysis.py",
-        data="data.csv",
-        directory=directory,
-        protected_paths=("analysis.py", "data.csv"),
-        output_names=_PRIMARY_OUTPUTS,
-    )
-    for directory in ("benchmark-reproduced", "reproduced")
-)
-_RERUN_COMMAND = _REPRODUCTION_SPECS[0].command
+_RERUN_COMMAND = RESEARCH_REPRODUCTION_SPECS[0].command
 _DEFAULT_BUDGET = ExecutionBudget()
 
 
@@ -298,6 +293,10 @@ def run_research_trial(
         states = {
             check.check_id: check.status for check in verify_research_artifacts(task, artifacts)
         }
+        artifacts_verified = all(status == "passed" for status in states.values())
+        requires_rerun = "independent-script-rerun" in {
+            check.check_id for check in task.case.required_checks
+        }
         states.update(
             {
                 "model-connected": "passed"
@@ -313,7 +312,9 @@ def run_research_trial(
                     for action in projection.actions
                 )
                 else "failed",
-                "workflow-completed": "passed" if stop == "finished" else "failed",
+                "workflow-completed": "passed"
+                if stop == "finished" and artifacts_verified and (rerun or not requires_rerun)
+                else "failed",
                 "approved-actions-only": "passed"
                 if _reviewed_execution(projection, session.approved_action_ids)
                 else "failed",
@@ -321,7 +322,7 @@ def run_research_trial(
                 "audit-verified": "passed",
             }
         )
-        if "independent-script-rerun" in {check.check_id for check in task.case.required_checks}:
+        if requires_rerun:
             states["independent-script-rerun"] = "passed" if rerun else "failed"
         if inputs != _read_artifacts(gateway, tuple(inputs)):
             states["approved-actions-only"] = "failed"
@@ -499,7 +500,7 @@ def _is_approved_rerun(action: ProjectionActionRecord, output_directory: str) ->
 def _rerun_spec(action: ProjectionActionRecord) -> ReproductionSpec | None:
     if action.details.kind != "terminal" or action.details.is_input or action.details.reset:
         return None
-    for spec in _REPRODUCTION_SPECS:
+    for spec in RESEARCH_REPRODUCTION_SPECS:
         if spec.matches_command(action.details.command):
             return spec
     return None
