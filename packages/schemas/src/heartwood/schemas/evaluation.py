@@ -144,6 +144,8 @@ class EvaluationCase(EvaluationRecord):
     workflow_id: EvaluationIdentifier
     fixture_digest: Sha256
     required_checks: tuple[RequiredEvaluationCheck, ...] = Field(min_length=1)
+    specialist_ids: tuple[EvaluationIdentifier, ...] = Field(default=(), max_length=16)
+    review_stage_id: EvaluationIdentifier | None = None
 
     @model_validator(mode="after")
     def unique_checks(self) -> Self:
@@ -151,6 +153,8 @@ class EvaluationCase(EvaluationRecord):
         identifiers = [check.check_id for check in self.required_checks]
         if len(identifiers) != len(set(identifiers)):
             raise ValueError("Evaluation check identifiers must be unique")
+        if len(self.specialist_ids) != len(set(self.specialist_ids)):
+            raise ValueError("Evaluation specialist identifiers must be unique")
         return self
 
 

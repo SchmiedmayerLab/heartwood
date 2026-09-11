@@ -12,7 +12,11 @@ from uuid import NAMESPACE_URL, uuid5
 import pytest
 from pydantic import ValidationError
 
-from heartwood.compliance.parallel_reviews import PARALLEL_REVIEW_CHECKS, assess_parallel_reviews
+from heartwood.model_policy.parallel_reviews import (
+    PARALLEL_REVIEW_CHECKS,
+    assess_parallel_reviews,
+    prepare_parallel_review,
+)
 from heartwood.schemas.evaluation import (
     EvaluationCase,
     EvaluationCheck,
@@ -23,8 +27,13 @@ from heartwood.schemas.evaluation import (
     EvaluationSuite,
     RequiredEvaluationCheck,
 )
-from heartwood.schemas.execution import ExecutionUsage
-from heartwood.schemas.parallel_reviews import ParallelReviewAssessment, ParallelReviewPolicy
+from heartwood.schemas.execution import ExecutionBudget, ExecutionUsage
+from heartwood.schemas.parallel_reviews import (
+    ParallelReviewAssessment,
+    ParallelReviewPlan,
+    ParallelReviewPolicy,
+    ReviewExecutionScope,
+)
 
 NOW = datetime(2026, 9, 11, tzinfo=UTC)
 
@@ -78,6 +87,8 @@ def _suite() -> EvaluationSuite:
                 case_id="seeded-review",
                 workflow_id="baseline-analysis",
                 fixture_digest="0" * 64,
+                specialist_ids=("statistical-reviewer", "reproduction-reviewer"),
+                review_stage_id="verification",
                 required_checks=tuple(
                     RequiredEvaluationCheck(check_id=key, dimension=value)
                     for key, value in checks.items()
@@ -356,3 +367,241 @@ def test_exact_declared_comparison_limits_are_inclusive() -> None:
         for run in _runs()
     ]
     assert _assess(runs).qualified
+
+
+def _scope() -> ReviewExecutionScope:
+    return ReviewExecutionScope(
+        project_fingerprint="1" * 64,
+        session_id="research-001",
+        workflow_run_id="baseline-001",
+        workflow_id="baseline-analysis",
+        stage_id="verification",
+        revision=4,
+        snapshot_fingerprint="2" * 64,
+        reviewer_ids=_suite().cases[0].specialist_ids,
+        workers=2,
+        budget=ExecutionBudget(),
+    )
+
+
+def _prepare(
+    *,
+    scope: ReviewExecutionScope | None = None,
+    runtime: EvaluationRuntimeObservation | None = None,
+    configuration: EvaluationConfiguration | None = None,
+    runs: list[EvaluationRun] | None = None,
+    policy: ParallelReviewPolicy | None = None,
+    now: datetime = NOW,
+    consent: str | None = None,
+) -> ParallelReviewPlan:
+    return prepare_parallel_review(
+        scope=scope or _scope(),
+        case_id="seeded-review",
+        suite=_suite(),
+        sequential=_configuration(1),
+        parallel=_configuration(2),
+        runtime=runtime or _runtime(1),
+        configuration=configuration or _configuration(1),
+        runs=_runs() if runs is None else runs,
+        policy=policy or ParallelReviewPolicy(),
+        now=now,
+        consent_fingerprint=consent,
+    )
+
+
+def test_review_preview_is_stable_until_evidence_changes_or_expires() -> None:
+    initial = _prepare()
+    assert initial == _prepare(now=NOW + timedelta(minutes=3), consent=initial.fingerprint)
+    assert initial == _prepare(runs=list(reversed(_runs())))
+    assert len(initial.evidence) == 6
+    assert {item.record_fingerprint for item in initial.evidence} == {
+        run.fingerprint for run in _runs()
+    }
+    assert _prepare(now=initial.valid_until, consent=initial.fingerprint) == initial
+    with pytest.raises(ValueError, match="not qualified"):
+        _prepare(now=initial.valid_until + timedelta(microseconds=1), consent=initial.fingerprint)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("project_fingerprint", "3" * 64),
+        ("session_id", "research-002"),
+        ("workflow_run_id", "baseline-002"),
+        ("revision", 5),
+        ("snapshot_fingerprint", "4" * 64),
+        ("budget", ExecutionBudget(maximum_tokens=20_000)),
+    ],
+)
+def test_consent_cannot_be_reused_for_changed_work(field: str, value: object) -> None:
+    consent = _prepare().fingerprint
+    changed = ReviewExecutionScope.model_validate({**_scope().model_dump(), field: value})
+    assert _prepare(scope=changed).fingerprint != consent
+    with pytest.raises(ValueError, match="consent changed"):
+        _prepare(scope=changed, consent=consent)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("workflow_id", "another-workflow"),
+        ("stage_id", "another-stage"),
+        ("reviewer_ids", ("statistical-reviewer", "untested-reviewer")),
+        ("reviewer_ids", (*_suite().cases[0].specialist_ids, "untested-reviewer")),
+    ],
+)
+def test_catalog_qualification_is_not_blanket_review_permission(field: str, value: object) -> None:
+    changed = ReviewExecutionScope.model_validate({**_scope().model_dump(), field: value})
+    with pytest.raises(ValueError, match="does not cover"):
+        _prepare(scope=changed)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("source", "injected"),
+        ("request_model", "different-model"),
+        ("model_options_fingerprint", "5" * 64),
+        ("policy_fingerprint", "6" * 64),
+        ("specialist_catalog_fingerprint", "7" * 64),
+        ("openhands_version", "1.47.0"),
+        ("max_input_tokens", 65536),
+        ("specialist_concurrency", 2),
+    ],
+)
+def test_changed_live_runtime_requires_qualification(field: str, value: object) -> None:
+    runtime = EvaluationRuntimeObservation.model_validate(
+        {**_runtime(1).model_dump(), field: value}
+    )
+    with pytest.raises(ValueError, match="current runtime differs"):
+        _prepare(runtime=runtime)
+
+
+@pytest.mark.parametrize("field", ["harness_revision", "skill_tree_digest", "model_revision"])
+def test_changed_configuration_cannot_reuse_a_matching_runtime(field: str) -> None:
+    configuration = EvaluationConfiguration.model_validate(
+        {**_configuration(1).model_dump(), field: "8" * 64}
+    )
+    with pytest.raises(ValueError, match="current runtime differs"):
+        _prepare(configuration=configuration)
+
+
+def test_replaced_results_require_new_consent_even_when_still_qualified() -> None:
+    consent = _prepare().fingerprint
+    runs = _runs()
+    runs[-1] = runs[-1].model_copy(
+        update={"usage": runs[-1].usage.model_copy(update={"input_tokens": 201})}
+    )
+    assert _assess(runs).qualified
+    with pytest.raises(ValueError, match="consent changed"):
+        _prepare(runs=runs, consent=consent)
+
+
+def test_changed_qualification_policy_requires_new_consent() -> None:
+    with pytest.raises(ValueError, match="consent changed"):
+        _prepare(
+            policy=ParallelReviewPolicy(maximum_cost_ratio=1.1), consent=_prepare().fingerprint
+        )
+
+
+def test_unqualified_evidence_cannot_produce_a_preview() -> None:
+    with pytest.raises(ValueError, match="not qualified"):
+        _prepare(runs=[])
+
+
+@pytest.mark.parametrize("specialists", [(), ("statistical-reviewer",)])
+def test_a_case_must_pin_multiple_distinct_reviewers(specialists: tuple[str, ...]) -> None:
+    suite = _suite().model_copy(
+        update={"cases": (_suite().cases[0].model_copy(update={"specialist_ids": specialists}),)}
+    )
+    runs = [run.model_copy(update={"suite_fingerprint": suite.fingerprint}) for run in _runs()]
+    result = assess_parallel_reviews(
+        suite=suite,
+        sequential=_configuration(1),
+        parallel=_configuration(2),
+        runs=runs,
+        policy=ParallelReviewPolicy(),
+        now=NOW,
+    )
+    assert "seeded-review:reviewers_unbound" in result.reasons
+    assert not result.qualified
+
+
+def test_duplicate_reviewers_and_unused_workers_are_invalid() -> None:
+    with pytest.raises(ValidationError, match="distinct"):
+        ReviewExecutionScope.model_validate(
+            {**_scope().model_dump(), "reviewer_ids": ("statistical-reviewer",) * 2}
+        )
+    with pytest.raises(ValidationError, match="Worker count"):
+        ReviewExecutionScope.model_validate({**_scope().model_dump(), "workers": 3})
+    with pytest.raises(ValidationError, match="unique"):
+        EvaluationCase.model_validate(
+            {**_suite().cases[0].model_dump(), "specialist_ids": ("statistical-reviewer",) * 2}
+        )
+
+
+def test_extra_workers_cannot_be_qualified_with_only_two_reviewers() -> None:
+    result = assess_parallel_reviews(
+        suite=_suite(),
+        sequential=_configuration(1),
+        parallel=_configuration(3),
+        runs=_runs(),
+        policy=ParallelReviewPolicy(),
+        now=NOW,
+    )
+    assert "seeded-review:workers_exceed_reviewers" in result.reasons
+    assert not result.qualified
+
+
+def test_review_evidence_must_bind_the_stage_not_just_the_workflow() -> None:
+    suite = _suite().model_copy(
+        update={"cases": (_suite().cases[0].model_copy(update={"review_stage_id": None}),)}
+    )
+    runs = [run.model_copy(update={"suite_fingerprint": suite.fingerprint}) for run in _runs()]
+    result = assess_parallel_reviews(
+        suite=suite,
+        sequential=_configuration(1),
+        parallel=_configuration(2),
+        runs=runs,
+        policy=ParallelReviewPolicy(),
+        now=NOW,
+    )
+    assert "seeded-review:review_stage_unbound" in result.reasons
+    assert not result.qualified
+
+
+def test_newer_failed_trial_invalidates_a_previously_consented_plan() -> None:
+    runs = _runs()
+    latest = runs[-1]
+    runs.append(
+        latest.model_copy(
+            update={
+                "run_id": uuid5(NAMESPACE_URL, "later-failed-review"),
+                "started_at": NOW - timedelta(minutes=5),
+                "finished_at": NOW - timedelta(minutes=4),
+                "checks": tuple(
+                    check.model_copy(update={"status": "failed"}) for check in latest.checks
+                ),
+            }
+        )
+    )
+    with pytest.raises(ValueError, match="not qualified"):
+        _prepare(runs=runs, consent=_prepare().fingerprint)
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "maximum_seconds",
+        "maximum_model_calls",
+        "maximum_tokens",
+        "maximum_reported_cost_usd",
+        "maximum_actions",
+    ],
+)
+def test_qualification_cannot_authorize_larger_untested_budgets(field: str) -> None:
+    budget = ExecutionBudget.model_validate(
+        {**ExecutionBudget().model_dump(), field: getattr(ExecutionBudget(), field) * 2}
+    )
+    with pytest.raises(ValueError, match="exceed the qualified workload budget"):
+        _prepare(scope=_scope().model_copy(update={"budget": budget}))

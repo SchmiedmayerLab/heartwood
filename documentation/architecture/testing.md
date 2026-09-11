@@ -94,7 +94,9 @@ An assessment includes its policy, time, exact configuration and suite digests, 
 
 ### Parallel Review Comparison
 
-`heartwood.compliance.parallel_reviews.assess_parallel_reviews` compares matched sequential and parallel trials through the same evidence assessor.
+`heartwood.model_policy.parallel_reviews.assess_parallel_reviews` compares matched sequential and parallel trials through the same evidence assessor.
+Pure qualification rules live in the policy package so runtime admission can reuse them without importing benchmark execution.
+Each case binds the exact advisory specialist identifiers; evidence does not qualify additional roles or a larger worker pool.
 Both configurations must pass the complete research checks and additional checks for reviewer scheduling, isolation, lineage, findings, and parent synthesis.
 The configurations differ only in specialist concurrency and the runtime fingerprint that records it; model, context, tools, Skills, specialist definitions, fixtures, seeds, and budgets remain matched.
 The gateway observes the actual OpenHands concurrency setting and a fingerprint of executable specialist definitions and supplied Skill metadata.
@@ -104,6 +106,13 @@ The default comparison policy requires three recent trials per case, at least a 
 Unknown usage, missing reviewer checks, changed configurations, and failed trials prevent qualification.
 These thresholds are explicit policy parameters, not statistical evidence of general model superiority.
 The assessment preserves both source assessments and per-case measurements; it neither authenticates arbitrary evidence files nor grants permission to launch parallel tasks.
+
+`prepare_parallel_review` validates the current route and exact workflow stage against retained qualification evidence.
+Its preview binds the project, session, workflow revision, artifact snapshot, reviewers, worker count, and requested budget to the source trial digests and qualification policy.
+Requested limits cannot exceed the tested workload's budget; smaller limits remain admission controls, not guaranteed completion or provider-side billing caps.
+The preview remains stable while that evidence is unchanged and fresh; a changed route, replaced trial, new failed trial, or expired evidence requires reevaluation.
+Supplying its fingerprint checks an exact consent match but does not itself record consent or approve a tool action.
+Evidence must come from the deployment's trusted evaluation process, not model output or a researcher-supplied success flag.
 
 ### Synthetic Research Cases
 

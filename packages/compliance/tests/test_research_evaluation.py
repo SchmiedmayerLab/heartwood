@@ -16,8 +16,8 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
-from heartwood.compliance.evaluation import assess_research_evidence
 from heartwood.compliance.evaluation_store import EvaluationStore
+from heartwood.model_policy.evaluation import assess_research_evidence
 from heartwood.persistence import DurableFileError
 from heartwood.schemas.evaluation import (
     EvaluationCase,

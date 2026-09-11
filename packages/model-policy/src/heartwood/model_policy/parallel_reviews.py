@@ -7,23 +7,27 @@
 """Compare matched sequential and parallel reviews without changing execution policy."""
 
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 from statistics import median
 from types import MappingProxyType
 
-from heartwood.compliance.evaluation import assess_research_evidence
+from heartwood.model_policy.evaluation import assess_research_evidence
 from heartwood.schemas.evaluation import (
     EvaluationConfiguration,
     EvaluationDimension,
     EvaluationPolicy,
     EvaluationRun,
+    EvaluationRuntimeObservation,
     EvaluationSuite,
 )
 from heartwood.schemas.parallel_reviews import (
     ParallelReviewAssessment,
     ParallelReviewComparison,
+    ParallelReviewPlan,
     ParallelReviewPolicy,
+    ReviewExecutionScope,
+    ReviewQualificationEvidence,
 )
 
 PARALLEL_REVIEW_CHECKS = MappingProxyType(
@@ -80,6 +84,12 @@ def assess_parallel_reviews(
     before = {run.run_id: run for run in runs if run.run_id in baseline.evidence_run_ids}
     after = {run.run_id: run for run in runs if run.run_id in candidate.evidence_run_ids}
     for case in suite.cases:
+        if len(case.specialist_ids) < 2:
+            reasons.add(f"{case.case_id}:reviewers_unbound")
+        elif parallel.specialist_concurrency > len(case.specialist_ids):
+            reasons.add(f"{case.case_id}:workers_exceed_reviewers")
+        if case.review_stage_id is None:
+            reasons.add(f"{case.case_id}:review_stage_unbound")
         checks = {check.check_id: check.dimension for check in case.required_checks}
         if any(checks.get(key) != dimension for key, dimension in PARALLEL_REVIEW_CHECKS.items()):
             reasons.add(f"{case.case_id}:review_checks_missing")
@@ -166,3 +176,84 @@ def assess_parallel_reviews(
         qualified=not reasons,
         reasons=tuple(sorted(reasons)),
     )
+
+
+def prepare_parallel_review(
+    *,
+    scope: ReviewExecutionScope,
+    case_id: str,
+    suite: EvaluationSuite,
+    sequential: EvaluationConfiguration,
+    parallel: EvaluationConfiguration,
+    runtime: EvaluationRuntimeObservation,
+    configuration: EvaluationConfiguration,
+    runs: Sequence[EvaluationRun],
+    policy: ParallelReviewPolicy,
+    now: datetime,
+    consent_fingerprint: str | None = None,
+) -> ParallelReviewPlan:
+    """Recompute a preview from trusted evidence and optionally require its exact consent.
+
+    The caller supplies deployment-owned evidence and gateway-observed session state,
+    never an assessment or eligibility flag from a model or browser. This does not
+    approve tools, reserve provider capacity, or dispatch work. Re-run it at admission.
+    """
+    scope = ReviewExecutionScope.model_validate(scope.model_dump())
+    runtime = EvaluationRuntimeObservation.model_validate(runtime.model_dump())
+    configuration = EvaluationConfiguration.model_validate(configuration.model_dump())
+    runs = tuple(EvaluationRun.model_validate(run.model_dump()) for run in runs)
+    assessment = assess_parallel_reviews(
+        suite=suite, sequential=sequential, parallel=parallel, runs=runs, policy=policy, now=now
+    )
+    if not assessment.qualified:
+        raise ValueError(
+            "Parallel review evidence is not qualified: " + ", ".join(assessment.reasons)
+        )
+    case = next((item for item in suite.cases if item.case_id == case_id), None)
+    if (
+        case is None
+        or case.workflow_id != scope.workflow_id
+        or case.review_stage_id != scope.stage_id
+        or set(case.specialist_ids) != set(scope.reviewer_ids)
+        or parallel.specialist_concurrency != scope.workers
+    ):
+        raise ValueError("Parallel review evidence does not cover the requested work")
+    # The live parent remains sequential until this exact advisory batch is admitted.
+    # Only the measured worker setting may differ from its qualified runtime.
+    effective_runtime = runtime.model_copy(update={"specialist_concurrency": scope.workers})
+    if (
+        runtime.specialist_concurrency != 1
+        or effective_runtime.fingerprint != parallel.runtime_fingerprint
+        or configuration.fingerprint != sequential.fingerprint
+    ):
+        raise ValueError("The current runtime differs from the qualified review route")
+    selected_ids = set(assessment.sequential.evidence_run_ids) | set(
+        assessment.parallel.evidence_run_ids
+    )
+    selected = sorted(
+        (run for run in runs if run.run_id in selected_ids), key=lambda run: str(run.run_id)
+    )
+    requested_limits = scope.budget.model_dump()
+    if any(
+        any(value > run.budget.model_dump()[name] for name, value in requested_limits.items())
+        for run in selected
+        if run.case_id == case_id
+    ):
+        raise ValueError("Requested review limits exceed the qualified workload budget")
+    plan = ParallelReviewPlan(
+        scope=scope,
+        suite_fingerprint=suite.fingerprint,
+        case_id=case_id,
+        sequential_configuration_fingerprint=sequential.fingerprint,
+        parallel_configuration_fingerprint=parallel.fingerprint,
+        policy=policy,
+        evidence=tuple(
+            ReviewQualificationEvidence(run_id=run.run_id, record_fingerprint=run.fingerprint)
+            for run in selected
+        ),
+        valid_until=min(run.finished_at for run in selected)
+        + timedelta(days=policy.maximum_age_days),
+    )
+    if consent_fingerprint is not None and consent_fingerprint != plan.fingerprint:
+        raise ValueError("Parallel review consent changed; refresh and confirm the current plan")
+    return plan

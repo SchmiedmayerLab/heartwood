@@ -4,7 +4,7 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Independent evaluation of research benchmark evidence across platforms."""
+"""Pure policy assessment of research benchmark evidence across platforms."""
 
 from __future__ import annotations
 
