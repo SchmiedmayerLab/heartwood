@@ -10,12 +10,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+from pathlib import PurePosixPath
 from typing import Literal, Self
 
 from pydantic import Field, model_validator
 
 from heartwood.schemas.experiments import Digest, ExperimentFile, ExperimentRecord, Reference
 from heartwood.schemas.identifiers import WorkflowIdentifier
+from heartwood.schemas.project_paths import project_relative_path
 from heartwood.schemas.research import ResearchText
 
 type ReviewCategory = Literal["coding", "statistical", "reproducibility"]
@@ -200,6 +202,82 @@ class ResearchReviewRun(ExperimentRecord):
             and self.assessment.snapshot_sha256 != self.snapshot.fingerprint
         ):
             raise ValueError("Review assessment belongs to different evidence")
+        return self
+
+
+class ReviewCorrectionOutput(ExperimentRecord):
+    """A new artifact location; never permission to overwrite the reviewed file."""
+
+    artifact_id: WorkflowIdentifier
+    path: str = Field(min_length=1, max_length=512)
+
+    @model_validator(mode="after")
+    def public_path(self) -> Self:
+        """Use the shared project boundary for generated correction paths."""
+        project_relative_path(self.path, allow_root=False)
+        return self
+
+
+class ReviewCorrectionPlan(ExperimentRecord):
+    """Gateway-selected findings and fresh output locations for one correction attempt."""
+
+    review_id: Reference
+    snapshot_sha256: Digest
+    finding_ids: tuple[Digest, ...] = Field(min_length=1, max_length=512)
+    output_directory: str = Field(min_length=1, max_length=512)
+    outputs: tuple[ReviewCorrectionOutput, ...] = Field(min_length=1, max_length=32)
+
+    @model_validator(mode="after")
+    def distinct_outputs(self) -> Self:
+        """Require unambiguous evidence identities and confined non-overlapping files."""
+        project_relative_path(self.output_directory, allow_root=False)
+        if len(set(self.finding_ids)) != len(self.finding_ids):
+            raise ValueError("Correction findings must be distinct")
+        if len({item.artifact_id for item in self.outputs}) != len(self.outputs):
+            raise ValueError("Correction output roles must be distinct")
+        directory = PurePosixPath(self.output_directory)
+        paths = [PurePosixPath(item.path) for item in self.outputs]
+        if any(directory not in path.parents for path in paths):
+            raise ValueError("Correction files must be beneath their declared directory")
+        folded = [PurePosixPath(str(path).casefold()) for path in paths]
+        for index, path in enumerate(folded):
+            if any(
+                path == other or path in other.parents or other in path.parents
+                for other in folded[index + 1 :]
+            ):
+                raise ValueError("Correction files must not overlap")
+        return self
+
+    @property
+    def fingerprint(self) -> str:
+        """Bind an attempt's selected findings and output scope to one identity."""
+        return review_digest(self.model_dump(mode="json"))
+
+
+class ReviewCorrectionCheck(ExperimentRecord):
+    """A narrow defect recheck, not execution evidence or scientific acceptance."""
+
+    finding_id: Digest
+    status: Literal["not_observed", "still_observed", "unavailable", "stale"]
+    reason: WorkflowIdentifier
+
+
+class ReviewCorrectionAssessment(ExperimentRecord):
+    """Independently observed corrected bytes and checks bound to their proposal."""
+
+    plan_sha256: Digest
+    snapshot: ReviewSnapshot | None = None
+    checks: tuple[ReviewCorrectionCheck, ...] = Field(min_length=1, max_length=512)
+
+    @model_validator(mode="after")
+    def complete_observations(self) -> Self:
+        """Do not retain a positive result without complete observed file evidence."""
+        if len({item.finding_id for item in self.checks}) != len(self.checks):
+            raise ValueError("Correction checks must be distinct")
+        if self.snapshot is None and any(
+            item.status in {"not_observed", "still_observed"} for item in self.checks
+        ):
+            raise ValueError("Correction observations require a complete snapshot")
         return self
 
 

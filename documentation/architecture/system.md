@@ -123,6 +123,15 @@ Assessment is read-only and runs even after the work budget expires, while furth
 The shared workflow projection retains the review state and findings, and the security audit retains a digest of the review record rather than its file paths or findings.
 An advisory review does not replace stage checks, authorize corrections, or turn the reviewer's finish status into the original stage's outcome.
 
+Correction evidence uses separate, explicitly declared output paths while preserving every file in the reviewed snapshot.
+The gateway's read-only correction planner recomputes the original assessment before selecting repairable outputs from the maintained verifier registry.
+It refuses stale reviews, unsupported findings, existing destinations, and destinations overlapping reviewed files.
+The rechecker applies the same independent validators to the new files and their unchanged dependencies.
+A `not_observed` result means only that the original bounded defect was not observed in those bytes; it does not establish execution, successful reproduction, or scientific correctness.
+For artifact comparisons, only the reproduced copy is replaceable, never the original reference.
+These planning and inspection APIs neither start model work nor grant approval or advance a workflow stage.
+They validate content and declared associations; authenticated task lineage still requires the owning session journal.
+
 ### Journaled Stage Execution
 
 The gateway accepts explicit workflow start, run, evaluate, review, and cancel commands through the existing session command journal.

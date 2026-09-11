@@ -203,7 +203,14 @@ from heartwood.schemas.experiments import (
     ExperimentExport,
     ExperimentExportBinding,
 )
-from heartwood.schemas.review import ReviewAssessment, ReviewSnapshot, ReviewSubmission
+from heartwood.schemas.review import (
+    ResearchReviewRun,
+    ReviewAssessment,
+    ReviewCorrectionAssessment,
+    ReviewCorrectionPlan,
+    ReviewSnapshot,
+    ReviewSubmission,
+)
 from heartwood.schemas.workflows import (
     WorkflowCatalog,
     WorkflowOutcomeStatus,
@@ -1018,6 +1025,26 @@ class SessionGateway:
         from heartwood.gateway._research_review import ResearchReviewEvaluator
 
         return ResearchReviewEvaluator(self.workspace_inspector).assess(snapshot, submissions)
+
+    @_serialized_state
+    def prepare_research_correction(
+        self, review: ResearchReviewRun, *, output_directory: str
+    ) -> ReviewCorrectionPlan:
+        """Declare fresh outputs for verified defects; do not allocate or authorize execution."""
+        from heartwood.gateway._research_review import ResearchReviewEvaluator
+
+        return ResearchReviewEvaluator(self.workspace_inspector).prepare_correction(
+            review, output_directory=output_directory
+        )
+
+    @_serialized_state
+    def assess_research_correction(
+        self, review: ResearchReviewRun, plan: ReviewCorrectionPlan
+    ) -> ReviewCorrectionAssessment:
+        """Recheck declared correction bytes without attesting execution or scientific validity."""
+        from heartwood.gateway._research_review import ResearchReviewEvaluator
+
+        return ResearchReviewEvaluator(self.workspace_inspector).assess_correction(review, plan)
 
     @_serialized_state
     def experiment_records(self) -> ExperimentCollection:

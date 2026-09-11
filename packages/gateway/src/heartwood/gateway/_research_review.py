@@ -12,12 +12,20 @@ import hashlib
 from collections.abc import Mapping, Sequence
 
 from heartwood.core_adapter.research_checks import MAX_RESEARCH_TEXT_BYTES
+from heartwood.core_adapter.research_corrections import (
+    assess_research_correction,
+    plan_research_correction,
+)
 from heartwood.core_adapter.research_review import assess_research_review
 from heartwood.gateway._workspace import WorkspaceInspectionError, WorkspaceInspector
 from heartwood.schemas.experiments import ExperimentFile
 from heartwood.schemas.review import (
+    ResearchReviewRun,
     ReviewArtifact,
     ReviewAssessment,
+    ReviewCorrectionAssessment,
+    ReviewCorrectionCheck,
+    ReviewCorrectionPlan,
     ReviewSnapshot,
     ReviewSubmission,
 )
@@ -56,12 +64,70 @@ class ResearchReviewEvaluator:
     ) -> ReviewAssessment:
         """Reject changed context and retain unavailable evidence without a false finding."""
         snapshot = ReviewSnapshot.model_validate(snapshot)
-        observed: dict[str, str] = {}
-        for artifact in snapshot.artifacts:
-            text = self._read(artifact.file.path)
-            if text is not None:
-                observed[artifact.artifact_id] = text
-        return assess_research_review(snapshot, submissions, observed=observed)
+        return assess_research_review(snapshot, submissions, observed=self._observed(snapshot))
+
+    def prepare_correction(
+        self, review: ResearchReviewRun, *, output_directory: str
+    ) -> ReviewCorrectionPlan:
+        """Require unchanged reviewed evidence and an unused confined destination."""
+        review = ResearchReviewRun.model_validate(review)
+        plan = plan_research_correction(
+            review, output_directory=output_directory, observed=self._observed(review.snapshot)
+        )
+        if not self.workspace.is_absent(plan.output_directory):
+            raise ValueError("Correction destination must be absent beneath an existing directory")
+        return plan
+
+    def assess_correction(
+        self, review: ResearchReviewRun, plan: ReviewCorrectionPlan
+    ) -> ReviewCorrectionAssessment:
+        """Recheck declared new files while preserving every original reviewed artifact."""
+        review = ResearchReviewRun.model_validate(review)
+        plan = ReviewCorrectionPlan.model_validate(plan)
+        observed = self._observed(review.snapshot)
+        if (
+            plan_research_correction(
+                review, output_directory=plan.output_directory, observed=observed
+            )
+            != plan
+        ):
+            raise ValueError("Correction plan does not match the verified review")
+        replacements = {item.artifact_id: item.path for item in plan.outputs}
+        paths = {
+            item.artifact_id: replacements.get(item.artifact_id, item.file.path)
+            for item in review.snapshot.artifacts
+        }
+        try:
+            corrected = self.prepare(paths)
+        except ValueError:
+            return ReviewCorrectionAssessment(
+                plan_sha256=plan.fingerprint,
+                checks=tuple(
+                    ReviewCorrectionCheck(
+                        finding_id=identity,
+                        status="unavailable",
+                        reason="missing-correction-evidence",
+                    )
+                    for identity in plan.finding_ids
+                ),
+            )
+        result = assess_research_correction(
+            review,
+            plan,
+            corrected,
+            original_observed=observed,
+            corrected_observed=self._observed(corrected),
+        )
+        if self._observed(review.snapshot) != observed:
+            raise ValueError("Original evidence changed during correction assessment")
+        return result
+
+    def _observed(self, snapshot: ReviewSnapshot) -> dict[str, str]:
+        return {
+            item.artifact_id: text
+            for item in snapshot.artifacts
+            if (text := self._read(item.file.path)) is not None
+        }
 
     def _read(self, path: str) -> str | None:
         try:

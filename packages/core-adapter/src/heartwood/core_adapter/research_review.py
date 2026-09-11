@@ -33,6 +33,7 @@ class _Condition:
     severity: ReviewSeverity
     required: frozenset[str]
     affected: frozenset[str]
+    correctable: frozenset[str]
     claim: str
     evaluator: str | None = None
     prerequisite: str | None = None
@@ -44,6 +45,7 @@ _CONDITIONS = {
         severity="high",
         required=frozenset({"program"}),
         affected=frozenset({"program"}),
+        correctable=frozenset({"program"}),
         claim="The Python source is empty or syntactically invalid.",
         evaluator="python.syntax",
     ),
@@ -52,6 +54,7 @@ _CONDITIONS = {
         severity="high",
         required=frozenset({"data", "dictionary", "plan", "metrics", "predictions"}),
         affected=frozenset({"metrics", "predictions"}),
+        correctable=frozenset({"metrics", "predictions"}),
         claim="The baseline results disagree with the independently recomputed analysis.",
         evaluator="research.baseline",
         prerequisite="research.baseline-inputs",
@@ -61,11 +64,22 @@ _CONDITIONS = {
         severity="medium",
         required=frozenset({"original", "reproduced"}),
         affected=frozenset({"original", "reproduced"}),
+        correctable=frozenset({"reproduced"}),
         claim=(
             "The original and reproduced artifacts have different bytes; execution is not verified."
         ),
     ),
 }
+
+
+def research_correction_roles(assessment: ReviewAssessment) -> frozenset[str]:
+    """Select repairable outputs from the maintained verifier registry, not model text."""
+    return frozenset(
+        role
+        for finding in assessment.findings
+        if finding.verification == "verified" and finding.condition in _CONDITIONS
+        for role in _CONDITIONS[finding.condition].correctable
+    )
 
 
 def research_review_instructions() -> str:

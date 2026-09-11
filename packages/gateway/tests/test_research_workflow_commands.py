@@ -38,7 +38,7 @@ from heartwood.gateway import ModelProfile, OpenHandsSdkBackend, ProjectContext,
 from heartwood.gateway import _openhands_sdk as sdk_module
 from heartwood.gateway._research_evaluation import ResearchStageEvaluator
 from heartwood.schemas import JsonValue
-from heartwood.schemas.review import ReviewProposals
+from heartwood.schemas.review import ResearchReviewRun, ReviewProposals, ReviewSubmission
 from heartwood.schemas.workflows import WorkflowOutcomeStatus, WorkflowRun
 from heartwood.session import CommandKind, EventKind, SessionCommand
 
@@ -1048,6 +1048,119 @@ def test_real_sdk_runs_reviewed_stages_and_restores_structured_outcome(
         assert '"command"' not in export.jsonl
         assert unused.call_count == 0
         assert (tmp_path / "results/readiness.md").read_text() == report
+    finally:
+        restored.stop()
+
+
+def test_real_sdk_correction_keeps_reviewed_source_and_requires_action_approval(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "analysis.py"
+    source.write_text("def broken(\n")
+    corrected_path = tmp_path / "correction-one/program-analysis.py"
+    mkdir = _tool_message("terminal", command="mkdir correction-one")
+    create = _tool_message(
+        "file_editor", command="create", path=str(corrected_path), file_text="print('synthetic')\n"
+    )
+    assert mkdir.tool_calls is not None
+    assert create.tool_calls is not None
+    llm = TestLLM.from_messages(
+        [
+            Message(
+                role="assistant", content=[], tool_calls=[*mkdir.tool_calls, *create.tool_calls]
+            ),
+            _tool_message(
+                "finish",
+                message="Correction proposed.",
+                status="success",
+                outcome_summary="Independent verification required.",
+            ),
+        ]
+    )
+    gateway = _sdk_gateway(tmp_path, llm, monkeypatch)
+    try:
+        snapshot = gateway.prepare_research_review({"program": "analysis.py"})
+        proposals = ReviewProposals.model_validate(
+            {
+                "candidates": [
+                    {
+                        "candidate_id": "syntax",
+                        "condition": "python-source-invalid",
+                        "category": "coding",
+                        "severity": "high",
+                        "summary": "The source is incomplete.",
+                        "artifact_ids": ["program"],
+                    }
+                ]
+            }
+        )
+        submission = ReviewSubmission.associate(
+            proposals, review_id="native-review", reviewer_id="coding-reviewer", snapshot=snapshot
+        )
+        review = ResearchReviewRun(
+            review_id="review-one",
+            snapshot=snapshot,
+            reviewer_ids=("coding-reviewer",),
+            started_sequence=0,
+            status="assessed",
+            submissions=(submission,),
+            assessment=gateway.assess_research_review(snapshot, (submission,)),
+        )
+        plan = gateway.prepare_research_correction(review, output_directory="correction-one")
+        request = SessionCommand(
+            command_id="correct-source",
+            session_id="research",
+            kind=CommandKind.CHAT,
+            created_at="2026-09-11T00:00:00Z",
+            payload={
+                "prompt": "Create the declared synthetic correction; preserve the original. "
+                + plan.model_dump_json()
+            },
+        )
+        gateway.handle(request)
+        assert gateway.wait_for_session_idle(session_id="research", timeout=30)
+        pending = gateway.session_projection(session_id="research").pending_approval
+        assert pending is not None
+        assert len(pending.actions) == 2
+        assert not corrected_path.exists()
+        assert source.read_text() == "def broken(\n"
+        approval = SessionCommand(
+            command_id="approve-correction",
+            session_id="research",
+            kind=CommandKind.APPROVE,
+            created_at="2026-09-11T00:00:00Z",
+            payload={"target_id": pending.group_id},
+        )
+        gateway.handle(approval)
+        assert gateway.wait_for_session_idle(session_id="research", timeout=30)
+        result = gateway.assess_research_correction(review, plan)
+        assert result.checks[0].status == "not_observed"
+        assert source.read_text() == "def broken(\n"
+        calls = llm.call_count
+        assert gateway.handle(approval).replayed
+        assert gateway.handle(request).replayed
+        assert llm.call_count == calls
+    finally:
+        gateway.stop()
+    unused = TestLLM.from_messages([])
+    restored = _sdk_gateway(tmp_path, unused, monkeypatch)
+    try:
+        assert restored.handle(approval).replayed
+        assert restored.handle(request).replayed
+        assert restored.assess_research_correction(review, plan) == result
+        restored.handle(
+            SessionCommand(
+                command_id="export-correction",
+                session_id="research",
+                kind=CommandKind.AUDIT_EXPORT,
+                created_at="2026-09-11T00:00:00Z",
+            )
+        )
+        audit = (restored.sessions_root / "research/audit-export.jsonl").read_text()
+        assert "approval.recorded" in audit
+        assert "analysis.py" not in audit
+        assert "synthetic" not in audit
+        assert unused.call_count == 0
     finally:
         restored.stop()
 
