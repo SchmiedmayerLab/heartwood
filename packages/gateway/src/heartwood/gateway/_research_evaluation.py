@@ -31,6 +31,8 @@ from heartwood.schemas.execution import ExecutionUsage
 from heartwood.schemas.experiments import ExperimentDefinition, ExperimentFile, ExperimentStage
 from heartwood.schemas.project_paths import project_relative_path
 from heartwood.schemas.review import (
+    ResearchCorrectionRun,
+    ResearchReviewRun,
     ReviewAssessment,
     ReviewCorrectionAssessment,
     ReviewCorrectionPlan,
@@ -85,6 +87,81 @@ class ResearchStageEvaluator:
     ) -> ReviewAssessment:
         """Reuse the independent bounded review verifier."""
         return ResearchReviewEvaluator(self.workspace).assess(snapshot, submissions)
+
+    def prepare_correction(
+        self, review: ResearchReviewRun, *, output_directory: str
+    ) -> ReviewCorrectionPlan:
+        """Reuse the confined correction planner and its unchanged-evidence requirement."""
+        return ResearchReviewEvaluator(self.workspace).prepare_correction(
+            review, output_directory=output_directory
+        )
+
+    def assess_correction(
+        self, review: ResearchReviewRun, plan: ReviewCorrectionPlan
+    ) -> ReviewCorrectionAssessment:
+        """Reuse independent correction checks without a second scientific evaluator."""
+        return ResearchReviewEvaluator(self.workspace).assess_correction(review, plan)
+
+    def correction_definition(
+        self,
+        run: WorkflowRun,
+        series: ResearchCorrectionRun,
+        *,
+        session_id: str,
+        actor_id: str,
+        invocation: str,
+    ) -> ExperimentDefinition:
+        """Observe execution context and preserve the exact source of a corrective attempt."""
+        series = ResearchCorrectionRun.model_validate(series)
+        if self.prepare_review(run.binding, run.stage_id) != series.review.snapshot:
+            raise ValueError("Correction evidence changed before dispatch")
+        base = self.experiment_definition(
+            run, session_id=session_id, actor_id=actor_id, invocation=invocation
+        )
+        assert base.stage is not None
+        attempt = series.attempts[-1]
+        code_roles = {
+            item.artifact_id
+            for item in research_workflow(run.binding.workflow_id).artifacts
+            if item.media_type == "text/x-python"
+        }
+        return ExperimentDefinition.model_validate(
+            {
+                **base.model_dump(),
+                "inputs": tuple(
+                    item.file
+                    for item in series.review.snapshot.artifacts
+                    if item.artifact_id not in code_roles
+                ),
+                "code": tuple(
+                    item.file
+                    for item in series.review.snapshot.artifacts
+                    if item.artifact_id in code_roles
+                ),
+                "output_paths": tuple(item.path for item in attempt.plan.outputs),
+                "code_output_paths": tuple(
+                    item.path for item in attempt.plan.outputs if item.artifact_id in code_roles
+                ),
+                "parameters_sha256": experiment_digest(
+                    {
+                        "binding": run.binding.model_dump(mode="json"),
+                        "plan": attempt.plan.fingerprint,
+                    }
+                ),
+                "stage": base.stage.model_copy(update={"correction_id": attempt.attempt_id}),
+            }
+        )
+
+    def verify_correction_history(self, series: ResearchCorrectionRun) -> None:
+        """Check prior replacement bytes rather than allowing another attempt to overwrite them."""
+        series = ResearchCorrectionRun.model_validate(series)
+        for attempt in series.attempts:
+            if attempt.assessment is None or attempt.assessment.snapshot is None:
+                continue
+            outputs = {item.artifact_id for item in attempt.plan.outputs}
+            for item in attempt.assessment.snapshot.artifacts:
+                if item.artifact_id in outputs and self._fingerprint(item.file.path) != item.file:
+                    raise ValueError("Earlier correction output changed")
 
     def correction_binding(
         self, run: WorkflowRun, plan: ReviewCorrectionPlan, assessment: ReviewCorrectionAssessment

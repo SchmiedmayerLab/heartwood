@@ -201,6 +201,9 @@ export const sessionProjectionJsonSchema = {
     ExperimentStage: {
       additionalProperties: false,
       properties: {
+        correction_id: {
+          anyOf: [{ $ref: "#/$defs/Reference" }, { type: "null" }],
+        },
         session_id: { $ref: "#/$defs/Reference" },
         stage_id: { $ref: "#/$defs/Reference" },
         tool_call_id: {
@@ -215,6 +218,7 @@ export const sessionProjectionJsonSchema = {
         "stage_id",
         "workflow_sha256",
         "tool_call_id",
+        "correction_id",
       ],
       type: "object",
     },
@@ -647,6 +651,86 @@ export const sessionProjectionJsonSchema = {
       required: ["artifact_id", "path"],
       type: "object",
     },
+    ResearchCorrectionAttempt: {
+      additionalProperties: false,
+      properties: {
+        assessment: {
+          anyOf: [
+            { $ref: "#/$defs/ReviewCorrectionAssessment" },
+            { type: "null" },
+          ],
+        },
+        attempt_id: { $ref: "#/$defs/Reference" },
+        plan: { $ref: "#/$defs/ReviewCorrectionPlan" },
+        started_sequence: { minimum: 0, type: "integer" },
+        status: {
+          enum: ["pending", "assessed", "unavailable", "cancelled"],
+          type: "string",
+        },
+        unavailable_reason: {
+          anyOf: [
+            {
+              enum: [
+                "no-structured-outcome",
+                "changed-context",
+                "invalid-evidence",
+                "admission-denied",
+              ],
+              type: "string",
+            },
+            { type: "null" },
+          ],
+        },
+      },
+      required: [
+        "attempt_id",
+        "plan",
+        "started_sequence",
+        "status",
+        "assessment",
+        "unavailable_reason",
+      ],
+      type: "object",
+    },
+    ResearchCorrectionRun: {
+      additionalProperties: false,
+      properties: {
+        attempts: {
+          items: { $ref: "#/$defs/ResearchCorrectionAttempt" },
+          maxItems: 3,
+          minItems: 1,
+          type: "array",
+        },
+        correction_id: { $ref: "#/$defs/Reference" },
+        maximum_attempts: { maximum: 3, minimum: 1, type: "integer" },
+        review: { $ref: "#/$defs/ResearchReviewRun" },
+        stage_id: { $ref: "#/$defs/WorkflowIdentifier" },
+        stop_reason: {
+          anyOf: [
+            {
+              enum: [
+                "corrected",
+                "attempt-limit",
+                "budget",
+                "unavailable",
+                "cancelled",
+              ],
+              type: "string",
+            },
+            { type: "null" },
+          ],
+        },
+      },
+      required: [
+        "correction_id",
+        "stage_id",
+        "review",
+        "maximum_attempts",
+        "attempts",
+        "stop_reason",
+      ],
+      type: "object",
+    },
     ResearchReviewRun: {
       additionalProperties: false,
       properties: {
@@ -752,6 +836,64 @@ export const sessionProjectionJsonSchema = {
     ReviewCategory: {
       enum: ["coding", "statistical", "reproducibility"],
       type: "string",
+    },
+    ReviewCorrectionAssessment: {
+      additionalProperties: false,
+      properties: {
+        checks: {
+          items: { $ref: "#/$defs/ReviewCorrectionCheck" },
+          maxItems: 512,
+          minItems: 1,
+          type: "array",
+        },
+        plan_sha256: { $ref: "#/$defs/Digest" },
+        snapshot: {
+          anyOf: [{ $ref: "#/$defs/ReviewSnapshot" }, { type: "null" }],
+        },
+      },
+      required: ["plan_sha256", "snapshot", "checks"],
+      type: "object",
+    },
+    ReviewCorrectionCheck: {
+      additionalProperties: false,
+      properties: {
+        finding_id: { $ref: "#/$defs/Digest" },
+        reason: { $ref: "#/$defs/WorkflowIdentifier" },
+        status: {
+          enum: ["not_observed", "still_observed", "unavailable", "stale"],
+          type: "string",
+        },
+      },
+      required: ["finding_id", "status", "reason"],
+      type: "object",
+    },
+    ReviewCorrectionPlan: {
+      additionalProperties: false,
+      properties: {
+        finding_ids: {
+          items: { $ref: "#/$defs/Digest" },
+          maxItems: 512,
+          minItems: 1,
+          type: "array",
+        },
+        output_directory: { maxLength: 512, minLength: 1, type: "string" },
+        outputs: {
+          items: { $ref: "#/$defs/ResearchArtifactPath" },
+          maxItems: 32,
+          minItems: 1,
+          type: "array",
+        },
+        review_id: { $ref: "#/$defs/Reference" },
+        snapshot_sha256: { $ref: "#/$defs/Digest" },
+      },
+      required: [
+        "review_id",
+        "snapshot_sha256",
+        "finding_ids",
+        "output_directory",
+        "outputs",
+      ],
+      type: "object",
     },
     ReviewFinding: {
       additionalProperties: false,
@@ -907,6 +1049,7 @@ export const sessionProjectionJsonSchema = {
             "decline",
             "cancel",
             "request-review",
+            "correct",
           ],
           type: "string",
         },
@@ -915,10 +1058,22 @@ export const sessionProjectionJsonSchema = {
           anyOf: [
             { $ref: "#/$defs/WorkflowTransition" },
             { $ref: "#/$defs/WorkflowReview" },
+            { $ref: "#/$defs/WorkflowCorrectionRequest" },
           ],
         },
       },
       required: ["control_id", "label", "request"],
+      type: "object",
+    },
+    WorkflowCorrectionRequest: {
+      additionalProperties: false,
+      properties: {
+        action: { const: "correct", type: "string" },
+        maximum_attempts: { maximum: 3, minimum: 1, type: "integer" },
+        revision: { minimum: 0, type: "integer" },
+        run_id: { minLength: 1, type: "string" },
+      },
+      required: ["action", "run_id", "revision", "maximum_attempts"],
       type: "object",
     },
     WorkflowIdentifier: {
@@ -980,6 +1135,11 @@ export const sessionProjectionJsonSchema = {
           items: { $ref: "#/$defs/WorkflowStageEvaluation" },
           type: "array",
         },
+        corrections: {
+          items: { $ref: "#/$defs/ResearchCorrectionRun" },
+          maxItems: 32,
+          type: "array",
+        },
         created_at: { format: "date-time", type: "string" },
         evaluation: {
           anyOf: [
@@ -1027,6 +1187,7 @@ export const sessionProjectionJsonSchema = {
         "stage_started_at",
         "stage_usage_baseline",
         "research_review",
+        "corrections",
       ],
       type: "object",
     },

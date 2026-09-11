@@ -28,7 +28,7 @@ from heartwood.schemas.artifacts import ResearchArtifactPath
 from heartwood.schemas.execution import ExecutionBudget, ExecutionUsage
 from heartwood.schemas.identifiers import WorkflowIdentifier as WorkflowIdentifier
 from heartwood.schemas.project_paths import project_relative_path
-from heartwood.schemas.review import ResearchReviewRun
+from heartwood.schemas.review import ResearchCorrectionRun, ResearchReviewRun
 
 type WorkflowText = Annotated[
     str, StringConstraints(strip_whitespace=True, min_length=1, max_length=8000)
@@ -320,17 +320,29 @@ class WorkflowReview(WorkflowRecord):
     approved: bool = Field(strict=True)
 
 
+class WorkflowCorrectionRequest(WorkflowRecord):
+    """Authorize bounded parent-agent corrections without approving their tool actions."""
+
+    action: Literal["correct"]
+    run_id: str = Field(min_length=1)
+    revision: int = Field(ge=0, strict=True)
+    maximum_attempts: int = Field(default=2, ge=1, le=3, strict=True)
+
+
 type WorkflowRequest = Annotated[
-    WorkflowStart | WorkflowTransition | WorkflowReview, Field(discriminator="action")
+    WorkflowStart | WorkflowTransition | WorkflowReview | WorkflowCorrectionRequest,
+    Field(discriminator="action"),
 ]
 
 
 class WorkflowControl(WorkflowRecord):
     """A presentation affordance carrying the exact revision-bound command to submit."""
 
-    control_id: Literal["run", "evaluate", "accept", "decline", "cancel", "request-review"]
+    control_id: Literal[
+        "run", "evaluate", "accept", "decline", "cancel", "request-review", "correct"
+    ]
     label: WorkflowText
-    request: WorkflowTransition | WorkflowReview
+    request: WorkflowTransition | WorkflowReview | WorkflowCorrectionRequest
 
 
 class WorkflowRun(WorkflowRecord):
@@ -348,3 +360,13 @@ class WorkflowRun(WorkflowRecord):
     stage_started_at: AwareDatetime | None = None
     stage_usage_baseline: ExecutionUsage | None = None
     research_review: ResearchReviewRun | None = None
+    corrections: tuple[ResearchCorrectionRun, ...] = Field(default=(), max_length=32)
+
+    @model_validator(mode="after")
+    def distinct_corrections(self) -> Self:
+        """Keep one explicitly authorized correction series per stage."""
+        if len({item.stage_id for item in self.corrections}) != len(self.corrections) or len(
+            {item.correction_id for item in self.corrections}
+        ) != len(self.corrections):
+            raise ValueError("Workflow correction identities and stages must be distinct")
+        return self

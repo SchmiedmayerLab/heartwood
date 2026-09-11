@@ -106,6 +106,26 @@ Changing its conversation context invalidates the assessment; Heartwood reports 
 Reviewing does not automatically repair files or accept the stage.
 Continue to use **Check Results** and the normal researcher review after inspecting the findings.
 
+### Correct Verified Findings
+
+When a review verifies a supported defect, select **Correct Findings (Up to 2 Attempts)**.
+In the terminal, use the displayed `/workflow correct` command or the workflow form.
+This authorizes a bounded correction task, not its tool actions: review each proposed action set in the conversation as usual.
+
+Heartwood gives the agent fresh output paths and rechecks the result independently after each attempt.
+If the defect remains, it can make a second attempt within the same stage's remaining work limits.
+Original evidence, accepted earlier stages, and previous attempts remain preserved.
+The browser, terminal, and notebook show the attempts and their checks from the same session state.
+
+A successful correction means the specific checked defect is no longer observed, not that the analysis is scientifically valid.
+Use **Check Results** again and inspect the complete stage before accepting it.
+The original execution remains a failed experiment record; each correction has its own record linked to the source evidence.
+
+Corrections stop when evidence is missing or changed, the conversation is redirected, or an attempt or work limit is reached.
+They do not silently restart after reopening a session.
+If an assessed attempt has remaining consent and budget, Heartwood may offer **Continue Corrections**; inspect the retained results before continuing.
+Pause active work before cancelling the workflow.
+
 ### Verify and Accept Results
 
 **Checking results** reads the bound inputs and expected artifacts and compares them using maintained checks.

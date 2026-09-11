@@ -14,6 +14,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from heartwood.compliance.research import research_tasks
 from heartwood.core_adapter.research_corrections import assess_research_correction
@@ -21,6 +22,8 @@ from heartwood.gateway import ProjectContext, SessionGateway
 from heartwood.gateway._research_review import ResearchReviewEvaluator
 from heartwood.gateway._workspace import WorkspaceInspector
 from heartwood.schemas.review import (
+    ResearchCorrectionAttempt,
+    ResearchCorrectionRun,
     ResearchReviewRun,
     ReviewCandidate,
     ReviewCorrectionPlan,
@@ -133,6 +136,61 @@ def _write_correction(root: Path, plan: ReviewCorrectionPlan, contents: dict[str
         path = root / output.path
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(contents[output.artifact_id])
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "limit",
+        "duplicate-attempt",
+        "pending-success",
+        "wrong-review",
+        "wrong-plan",
+        "changed-source",
+        "missing-finding",
+    ],
+)
+def test_correction_series_rejects_inconsistent_persisted_evidence(
+    tmp_path: Path, mutation: str
+) -> None:
+    evaluator, review, corrected = _review(tmp_path)
+    plan = evaluator.prepare_correction(review, output_directory="correction-one")
+    _write_correction(tmp_path, plan, corrected)
+    attempt = ResearchCorrectionAttempt(
+        attempt_id="attempt-one",
+        plan=plan,
+        started_sequence=10,
+        status="assessed",
+        assessment=evaluator.assess_correction(review, plan),
+    )
+    series = ResearchCorrectionRun(
+        correction_id="correction-one",
+        stage_id="execute",
+        review=review,
+        maximum_attempts=2,
+        attempts=(attempt,),
+        stop_reason="corrected",
+    )
+    data = series.model_dump(mode="json")
+    if mutation == "limit":
+        data["maximum_attempts"] = 0
+    elif mutation == "duplicate-attempt":
+        data["attempts"].append(data["attempts"][0])
+    elif mutation == "pending-success":
+        data["attempts"][0].update(status="pending", assessment=None)
+    elif mutation == "wrong-review":
+        data["attempts"][0]["plan"]["review_id"] = "unrelated-review"
+    elif mutation == "wrong-plan":
+        data["attempts"][0]["assessment"]["plan_sha256"] = "0" * 64
+    elif mutation == "changed-source":
+        data["attempts"][0]["assessment"]["snapshot"]["artifacts"][0]["file"]["path"] = (
+            "unrelated.py"
+        )
+    else:
+        data["attempts"][0]["assessment"]["checks"] = []
+    with pytest.raises(ValidationError):
+        ResearchCorrectionRun.model_validate(data)
+    assert ResearchCorrectionRun.model_validate_json(series.model_dump_json()) == series
 
 
 @pytest.mark.parametrize("category", ["coding", "statistical", "reproducibility"])

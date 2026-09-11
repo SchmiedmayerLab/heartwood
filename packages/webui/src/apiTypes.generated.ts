@@ -98,7 +98,10 @@ export type ExperimentStatus =
 export type WorkflowIdentifier = string;
 export type WorkflowText = string;
 export type WorkflowRequest =
-  WorkflowStart | WorkflowTransition | WorkflowReview;
+  | WorkflowStart
+  | WorkflowTransition
+  | WorkflowReview
+  | WorkflowCorrectionRequest;
 export type WorkflowInputValue = string;
 
 /**
@@ -857,6 +860,7 @@ export interface ExperimentEnvironment {
  * Association with the owning Heartwood session and research stage.
  */
 export interface ExperimentStage {
+  correction_id: Reference | null;
   session_id: Reference;
   stage_id: Reference;
   tool_call_id: Reference | null;
@@ -1013,6 +1017,15 @@ export interface WorkflowReview {
   action: "review";
   approved: boolean;
   evidence_fingerprint: string;
+  revision: number;
+  run_id: string;
+}
+/**
+ * Authorize bounded parent-agent corrections without approving their tool actions.
+ */
+export interface WorkflowCorrectionRequest {
+  action: "correct";
+  maximum_attempts: number;
   revision: number;
   run_id: string;
 }

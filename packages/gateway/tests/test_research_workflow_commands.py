@@ -13,7 +13,7 @@ import os
 import sys
 from pathlib import Path
 from typing import cast
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 import pytest
 from openhands.sdk.llm import Message, MessageToolCall
@@ -350,19 +350,47 @@ def test_automatic_review_respects_terminal_and_interruption_states(
 @pytest.mark.parametrize(
     "boundary", ["intent", "audit-before", "audit-after", "events-before", "events-after"]
 )
+@pytest.mark.parametrize("operation", ["review", "correction"])
 def test_automatic_review_recovers_each_append_boundary_without_model_retry(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, boundary: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, boundary: str, operation: str
 ) -> None:
     from heartwood.core_adapter import _state as state_module
 
     backend = ReviewBackend()
     gateway = _gateway(tmp_path, backend)
+    transition = f"assess-{operation}"
     try:
-        _start(gateway, _inputs(tmp_path))
-        gateway.handle(_transition(gateway, "run"))
-        _readiness(tmp_path)
-        command = _projected_command(gateway, "request-review")
-        gateway.handle(command)
+        if operation == "review":
+            _start(gateway, _inputs(tmp_path))
+            gateway.handle(_transition(gateway, "run"))
+            _readiness(tmp_path)
+            command = _projected_command(gateway, "request-review")
+            gateway.handle(command)
+            finish = backend.finish_review
+        else:
+            _begin_seeded_code_review(gateway, backend, tmp_path)
+            backend.finish_review()
+            submit = backend.submit_turn
+            held: tuple[BackendEvent, ...] = ()
+
+            def defer(*, session_id: str, prompt: str) -> tuple[BackendEvent, ...]:
+                nonlocal held
+                held = submit(session_id=session_id, prompt=prompt)
+                backend.idle = False
+                return (BackendLifecycleEvent(lifecycle=BackendLifecycle.RUNNING),)
+
+            monkeypatch.setattr(backend, "submit_turn", defer)
+            command = _projected_command(gateway, "correct")
+            gateway.handle(command)
+            attempt = _state(gateway).corrections[-1].attempts[-1]
+            output = tmp_path / attempt.plan.outputs[0].path
+            output.parent.mkdir()
+            output.write_text("print('corrected')\n")
+
+            def finish() -> None:
+                backend.idle = True
+                backend._event_sink(held)
+
         store = gateway._services["research"].store
         append = state_module._append_private_json_line
         write = state_module._write_private_json_atomic
@@ -370,7 +398,7 @@ def test_automatic_review_recovers_each_append_boundary_without_model_retry(
         def interrupt_append(path: Path, text: str) -> None:
             payload = json.loads(text)
             target = store.audit_path if boundary.startswith("audit") else store.events_path
-            if path != target or payload.get("payload", {}).get("transition") != "assess-review":
+            if path != target or payload.get("payload", {}).get("transition") != transition:
                 append(path, text)
                 return
             if boundary.endswith("after"):
@@ -379,10 +407,7 @@ def test_automatic_review_recovers_each_append_boundary_without_model_retry(
 
         def interrupt_intent(path: Path, value: dict[str, object]) -> None:
             event = value.get("session_event")
-            if (
-                isinstance(event, dict)
-                and event.get("payload", {}).get("transition") == "assess-review"
-            ):
+            if isinstance(event, dict) and event.get("payload", {}).get("transition") == transition:
                 raise OSError("Synthetic review append interruption")
             write(path, value)
 
@@ -392,7 +417,7 @@ def test_automatic_review_recovers_each_append_boundary_without_model_retry(
             else:
                 patches.setattr(state_module, "_append_private_json_line", interrupt_append)
             with pytest.raises(OSError, match="Synthetic review append interruption"):
-                backend.finish_review()
+                finish()
     finally:
         gateway.stop()
     replacement = ReviewBackend()
@@ -401,13 +426,17 @@ def test_automatic_review_recovers_each_append_boundary_without_model_retry(
         assert restored.handle(command).replayed
         view = restored.session_projection(session_id="research")
         assert view.workflow is not None
-        assert view.workflow.research_review is not None
-        assert view.workflow.research_review.status == "assessed"
+        if operation == "review":
+            assert view.workflow.research_review is not None
+            assert view.workflow.research_review.status == "assessed"
+        else:
+            assert view.workflow.corrections[-1].stop_reason == "corrected"
+            assert restored.experiment_records().runs[-1].status == "succeeded"
         service = restored._services["research"]
         service.reconcile()
         service.reconcile()
         events = service.replay_events()
-        assert sum(event.payload.get("transition") == "assess-review" for event in events) == 1
+        assert sum(event.payload.get("transition") == transition for event in events) == 1
         assert not replacement.prompts
     finally:
         restored.stop()
@@ -571,63 +600,10 @@ def test_research_review_can_be_assessed_after_budget_expiry(tmp_path: Path) -> 
 def test_bound_review_independently_verifies_a_seeded_code_defect(
     tmp_path: Path, change: str | None
 ) -> None:
-    task = next(item for item in research_tasks() if item.case.case_id == "baseline-analysis")
-    for name, content in task.inputs.items():
-        (tmp_path / name).write_text(content)
     backend = ReviewBackend()
-    backend.proposals = ReviewProposals.model_validate(
-        {
-            "candidates": [
-                {
-                    "candidate_id": "syntax",
-                    "condition": "python-source-invalid",
-                    "category": "coding",
-                    "severity": "critical",
-                    "summary": "Untrusted proposed diagnosis",
-                    "artifact_ids": ["program"],
-                }
-            ]
-        }
-    )
     gateway = _gateway(tmp_path, backend)
     try:
-        gateway.handle(
-            _command(
-                action="start",
-                workflow_id="baseline-analysis",
-                output_directory="results",
-                inputs={
-                    "data": "data.csv",
-                    "dictionary": "dictionary.json",
-                    "question": "Predict response",
-                },
-            )
-        )
-        gateway.handle(_projected_command(gateway, "run"))
-        (tmp_path / "results").mkdir()
-        (tmp_path / "results/plan.json").write_text(
-            json.dumps(
-                {
-                    "question": "Predict response",
-                    "estimand": "Held-out prediction error",
-                    "outcome": "response",
-                    "features": ["measurement"],
-                    "group_column": "subject_id",
-                    "split_column": "partition",
-                    "assumptions": ["Prespecified split"],
-                    "limitations": ["Synthetic data"],
-                }
-            )
-        )
-        gateway.handle(_projected_command(gateway, "evaluate"))
-        gateway.handle(_projected_command(gateway, "accept"))
-        assert _state(gateway).stage_id == "execute"
-        gateway.handle(_projected_command(gateway, "run"))
-        source = tmp_path / "results/analysis.py"
-        source.write_text("def broken(\n")
-        (tmp_path / "results/metrics.json").write_text("{}")
-        (tmp_path / "results/predictions.csv").write_text("prediction\n")
-        gateway.handle(_projected_command(gateway, "request-review"))
+        source = _begin_seeded_code_review(gateway, backend, tmp_path)
         if change == "edited":
             source.write_text("print('changed')\n")
         elif change == "removed":
@@ -663,6 +639,293 @@ def test_bound_review_independently_verifies_a_seeded_code_defect(
         gateway.handle(_projected_command(gateway, "evaluate"))
         assert _state(gateway).stage_id == "execute"
         assert _state(gateway).phase == "blocked"
+    finally:
+        gateway.stop()
+
+
+def _begin_seeded_code_review(
+    gateway: SessionGateway,
+    backend: ReviewBackend,
+    root: Path,
+) -> Path:
+    task = next(item for item in research_tasks() if item.case.case_id == "baseline-analysis")
+    for name, content in task.inputs.items():
+        (root / name).write_text(content)
+    backend.proposals = ReviewProposals.model_validate(
+        {
+            "candidates": [
+                {
+                    "candidate_id": "syntax",
+                    "condition": "python-source-invalid",
+                    "category": "coding",
+                    "severity": "critical",
+                    "summary": "Untrusted proposed diagnosis",
+                    "artifact_ids": ["program"],
+                }
+            ]
+        }
+    )
+    gateway.handle(
+        _command(
+            action="start",
+            workflow_id="baseline-analysis",
+            output_directory="results",
+            inputs={
+                "data": "data.csv",
+                "dictionary": "dictionary.json",
+                "question": "Predict response",
+            },
+        )
+    )
+    gateway.handle(_projected_command(gateway, "run"))
+    (root / "results").mkdir()
+    (root / "results/plan.json").write_text(
+        json.dumps(
+            {
+                "question": "Predict response",
+                "estimand": "Held-out prediction error",
+                "outcome": "response",
+                "features": ["measurement"],
+                "group_column": "subject_id",
+                "split_column": "partition",
+                "assumptions": ["Prespecified split"],
+                "limitations": ["Synthetic data"],
+            }
+        )
+    )
+    gateway.handle(_projected_command(gateway, "evaluate"))
+    gateway.handle(_projected_command(gateway, "accept"))
+    assert _state(gateway).stage_id == "execute"
+    gateway.handle(_projected_command(gateway, "run"))
+    source = root / "results/analysis.py"
+    source.write_text("def broken(\n")
+    (root / "results/metrics.json").write_text("{}")
+    (root / "results/predictions.csv").write_text("prediction\n")
+    gateway.handle(_projected_command(gateway, "request-review"))
+    return source
+
+
+@pytest.mark.parametrize("result", ["corrected", "attempt-limit", "missing", "changed-source"])
+def test_bounded_workflow_correction_journals_and_rechecks_attempts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    result: str,
+) -> None:
+    backend = ReviewBackend()
+    gateway = _gateway(tmp_path, backend)
+    try:
+        source = _begin_seeded_code_review(gateway, backend, tmp_path)
+        backend.finish_review()
+        before = _state(gateway)
+        submit = backend.submit_turn
+        directories: list[Path] = []
+
+        def correct(*, session_id: str, prompt: str) -> tuple[BackendEvent, ...]:
+            events = submit(session_id=session_id, prompt=prompt)
+            if not prompt.startswith("Correct only the independently verified findings"):
+                return events
+            series = _state(gateway).corrections[-1]
+            attempt = series.attempts[-1]
+            assert attempt.status == "pending"
+            assert (
+                attempt.plan.model_dump(mode="json") == json.loads(prompt.split("\n", 1)[1])["plan"]
+            )
+            assert gateway.experiment_records().runs[-1].status == "started"
+            directory = tmp_path / attempt.plan.output_directory
+            assert not directory.exists()
+            directories.append(directory)
+            if result != "missing":
+                directory.mkdir()
+                (tmp_path / attempt.plan.outputs[0].path).write_text(
+                    "print('corrected')\n"
+                    if result == "corrected" and len(directories) == 2
+                    else "def still_broken(\n"
+                )
+            if result == "changed-source":
+                source.write_text("print('changed source')\n")
+            return events
+
+        monkeypatch.setattr(backend, "submit_turn", correct)
+        command = _projected_command(gateway, "correct")
+        response = gateway.handle(command)
+        current = _state(gateway)
+        series = current.corrections[-1]
+        assert series.stop_reason == (
+            result if result in {"corrected", "attempt-limit"} else "unavailable"
+        )
+        from heartwood.cli._interactive import format_workflow_lines
+        from heartwood.notebook import build_view_model, build_widget_spec
+
+        projection = gateway.session_projection(session_id="research")
+        terminal = "\n".join(format_workflow_lines(projection))
+        notebook = "\n".join(
+            item
+            for section in build_widget_spec(build_view_model(projection))
+            for item in section.items
+        )
+        for attempt in series.attempts:
+            for output in attempt.plan.outputs:
+                assert output.path in terminal
+                assert output.path in notebook
+        assert series.stop_reason.replace("-", " ") in terminal
+        assert series.stop_reason.replace("-", " ") in notebook
+        assert len(series.attempts) == (2 if result in {"corrected", "attempt-limit"} else 1)
+        assert current.stage_started_at == before.stage_started_at
+        assert current.stage_usage_baseline == before.stage_usage_baseline
+        assert current.completed == before.completed
+        if result != "changed-source":
+            assert source.read_text() == "def broken(\n"
+        assert current.binding.inputs == before.binding.inputs
+        if result == "corrected":
+            assert (
+                current.binding.artifact_path("program") == series.attempts[-1].plan.outputs[0].path
+            )
+            assert series.attempts[-1].assessment is not None
+            assert series.attempts[-1].assessment.checks[0].status == "not_observed"
+            assert (
+                tmp_path / series.attempts[0].plan.outputs[0].path
+            ).read_text() == "def still_broken(\n"
+            gateway.handle(_projected_command(gateway, "evaluate"))
+            assert _state(gateway).phase == "blocked"  # Other baseline outputs are still invalid.
+        else:
+            assert current.binding == before.binding
+        experiments = gateway.experiment_records().runs
+        assert [item.status for item in experiments] == [
+            "succeeded",
+            "failed",
+            *(["failed"] * (len(series.attempts) - 1)),
+            "succeeded" if result == "corrected" else "failed",
+        ]
+        assert all(item.definition.stage is not None for item in experiments)
+        assert experiments[-1].definition.stage is not None
+        assert experiments[-1].definition.stage.correction_id == series.attempts[-1].attempt_id
+        calls = len(backend.prompts)
+        assert gateway.handle(command).events == response.events
+        assert len(backend.prompts) == calls
+        state = _state(gateway)
+        export = gateway.export_experiments()
+    finally:
+        gateway.stop()
+    restored_backend = FinishedBackend()
+    restored = _gateway(tmp_path, restored_backend)
+    try:
+        assert _state(restored) == state
+        assert restored.export_experiments() == export
+        assert restored.handle(command).replayed
+        assert not restored_backend.prompts
+    finally:
+        restored.stop()
+
+
+@pytest.mark.parametrize("action", ["cancel", "steer", "pause", "denied", "budget"])
+def test_correction_respects_control_and_admission_boundaries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    action: str,
+) -> None:
+    backend = ReviewBackend()
+    gateway = _gateway(tmp_path, backend)
+    try:
+        source = _begin_seeded_code_review(gateway, backend, tmp_path)
+        backend.finish_review()
+        submit = backend.submit_turn
+        held: tuple[BackendEvent, ...] = ()
+
+        def defer(*, session_id: str, prompt: str) -> tuple[BackendEvent, ...]:
+            nonlocal held
+            if prompt.startswith("Correct only the independently verified findings"):
+                if action == "budget":
+                    backend.model_calls = 100
+                held = submit(session_id=session_id, prompt=prompt)
+                backend.idle = False
+                return (BackendLifecycleEvent(lifecycle=BackendLifecycle.RUNNING),)
+            return submit(session_id=session_id, prompt=prompt)
+
+        monkeypatch.setattr(backend, "submit_turn", defer)
+        if action == "denied":
+            monkeypatch.setattr(
+                type(backend),
+                "configuration_error",
+                property(lambda _self: "Synthetic unavailable model"),
+            )
+        gateway.handle(_projected_command(gateway, "correct"))
+        if action == "denied":
+            series = _state(gateway).corrections[-1]
+            assert series.stop_reason == "unavailable"
+            assert series.attempts[-1].status == "unavailable"
+            assert len(backend.prompts) == 3
+            return
+        assert len(backend.prompts) == 4
+        pending = _state(gateway).corrections[-1]
+        assert pending.attempts[-1].status == "pending"
+        backend.idle = True
+        if action == "cancel":
+            backend._event_sink((BackendLifecycleEvent(lifecycle=BackendLifecycle.PAUSED),))
+            gateway.handle(_projected_command(gateway, "cancel"))
+            backend._event_sink(held)
+            assert _state(gateway).phase == "cancelled"
+            assert _state(gateway).corrections[-1].stop_reason == "cancelled"
+            assert gateway.experiment_records().runs[-1].status == "cancelled"
+        elif action == "steer":
+            gateway.handle(
+                SessionCommand(
+                    command_id="steer-correction",
+                    session_id="research",
+                    kind=CommandKind.CHAT,
+                    created_at="2026-09-11T00:00:00Z",
+                    payload={"prompt": "Stop correcting and explain the limitations."},
+                )
+            )
+            backend._event_sink(held)
+            series = _state(gateway).corrections[-1]
+            assert series.stop_reason == "unavailable"
+            assert series.attempts[-1].unavailable_reason == "changed-context"
+        else:
+            attempt = pending.attempts[-1]
+            if action == "pause":
+                backend._event_sink((BackendLifecycleEvent(lifecycle=BackendLifecycle.PAUSED),))
+                assert _state(gateway).corrections[-1] == pending
+            output = tmp_path / attempt.plan.outputs[0].path
+            output.parent.mkdir()
+            output.write_text(
+                "def still_broken(\n" if action == "budget" else "print('corrected')\n"
+            )
+            backend._event_sink(held)
+            assert _state(gateway).corrections[-1].stop_reason == (
+                "budget" if action == "budget" else "corrected"
+            )
+            assert len(backend.prompts) == 4
+        assert source.read_text() == "def broken(\n"
+        assert len(_state(gateway).corrections[-1].attempts) == 1
+        before = _state(gateway)
+        backend._event_sink((BackendExecutionSettledEvent(),))
+        assert _state(gateway) == before
+    finally:
+        gateway.stop()
+
+
+def test_redirected_conversation_cannot_start_correction_from_an_old_review(tmp_path: Path) -> None:
+    backend = ReviewBackend()
+    gateway = _gateway(tmp_path, backend)
+    try:
+        _begin_seeded_code_review(gateway, backend, tmp_path)
+        backend.finish_review()
+        command = _projected_command(gateway, "correct")
+        gateway.handle(
+            SessionCommand(
+                command_id="redirect-before-correction",
+                session_id="research",
+                kind=CommandKind.CHAT,
+                created_at="2026-09-11T00:00:00Z",
+                payload={"prompt": "Explain the limitations instead; do not correct files."},
+            )
+        )
+        calls = len(backend.prompts)
+        response = gateway.handle(command)
+        assert any("Conversation changed" in str(event.payload) for event in response.events)
+        assert len(backend.prompts) == calls
+        assert _state(gateway).corrections == ()
+        assert gateway.experiment_records().runs[-1].status == "started"
     finally:
         gateway.stop()
 
@@ -1197,6 +1460,117 @@ def test_real_sdk_correction_keeps_reviewed_source_and_requires_action_approval(
         assert "approval.recorded" in audit
         assert "analysis.py" not in audit
         assert "synthetic" not in audit
+        assert unused.call_count == 0
+    finally:
+        restored.stop()
+
+
+def test_native_workflow_corrects_twice_with_normal_grouped_approvals_and_replay(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    baseline_backend = ReviewBackend()
+    baseline = _gateway(tmp_path, baseline_backend)
+    try:
+        source = _begin_seeded_code_review(baseline, baseline_backend, tmp_path)
+        baseline_backend.finish_review()
+        command = _projected_command(baseline, "correct").model_copy(
+            update={"command_id": "native-correct"}
+        )
+        original = _state(baseline)
+    finally:
+        baseline.stop()
+    responses: list[Message | Exception] = []
+    outputs: list[Path] = []
+    for index in (1, 2):
+        attempt_id = uuid5(NAMESPACE_URL, json.dumps([command.command_id, "execute", index])).hex
+        directory = f"correction-{attempt_id[:12]}-{index}"
+        output = tmp_path / directory / "program-analysis.py"
+        outputs.append(output)
+        mkdir = _tool_message("terminal", command=f"mkdir {directory}")
+        create = _tool_message(
+            "file_editor",
+            command="create",
+            path=str(output),
+            file_text="def still_broken(\n" if index == 1 else "print('corrected')\n",
+        )
+        assert mkdir.tool_calls is not None
+        assert create.tool_calls is not None
+        responses.extend(
+            [
+                Message(
+                    role="assistant", content=[], tool_calls=[*mkdir.tool_calls, *create.tool_calls]
+                ),
+                _tool_message(
+                    "finish",
+                    message="Check the correction.",
+                    status="success",
+                    outcome_summary="Needs verification.",
+                ),
+            ]
+        )
+    llm = TestLLM.from_messages(responses)
+    gateway = _sdk_gateway(tmp_path, llm, monkeypatch)
+    approvals: list[SessionCommand] = []
+    try:
+        gateway.handle(command)
+        for index in (0, 1):
+            assert gateway.wait_for_session_idle(session_id="research", timeout=30)
+            projection = gateway.session_projection(session_id="research")
+            assert projection.pending_approval is not None
+            assert len(projection.pending_approval.actions) == 2
+            assert not outputs[index].exists()
+            assert source.read_text() == "def broken(\n"
+            approval = SessionCommand(
+                command_id=f"approve-correction-{index}",
+                session_id="research",
+                kind=CommandKind.APPROVE,
+                created_at="2026-09-11T00:00:00Z",
+                payload={"target_id": projection.pending_approval.group_id},
+            )
+            approvals.append(approval)
+            gateway.handle(approval)
+        assert gateway.wait_for_session_idle(session_id="research", timeout=30)
+        current = _state(gateway)
+        series = current.corrections[-1]
+        assert series.stop_reason == "corrected"
+        assert len(series.attempts) == 2
+        assert llm.call_count == 4
+        assert current.completed == original.completed
+        assert current.stage_usage_baseline == original.stage_usage_baseline
+        assert current.stage_started_at == original.stage_started_at
+        assert outputs[0].read_text() == "def still_broken(\n"
+        assert outputs[1].read_text() == "print('corrected')\n"
+        assert source.read_text() == "def broken(\n"
+        assert gateway.handle(command).replayed
+        assert all(gateway.handle(approval).replayed for approval in approvals)
+        export = gateway.export_experiments()
+        runs = gateway.experiment_records().runs
+        assert [run.status for run in runs] == ["succeeded", "failed", "failed", "succeeded"]
+        assert all(
+            any(item.kind == "approval.recorded" for item in run.evidence) for run in runs[-2:]
+        )
+        gateway.handle(
+            SessionCommand(
+                command_id="correction-audit",
+                session_id="research",
+                kind=CommandKind.AUDIT_EXPORT,
+                created_at="2026-09-11T00:00:00Z",
+            )
+        )
+        audit = (gateway.sessions_root / "research/audit-export.jsonl").read_text()
+        assert "research_correction_fingerprint" in audit
+        assert "program-analysis.py" not in audit
+        assert "Untrusted proposed diagnosis" not in audit
+    finally:
+        gateway.stop()
+    unused = TestLLM.from_messages([])
+    restored = _sdk_gateway(tmp_path, unused, monkeypatch)
+    try:
+        assert _state(restored) == current
+        assert restored.export_experiments() == export
+        assert restored.handle(command).replayed
+        assert all(restored.handle(approval).replayed for approval in approvals)
         assert unused.call_count == 0
     finally:
         restored.stop()

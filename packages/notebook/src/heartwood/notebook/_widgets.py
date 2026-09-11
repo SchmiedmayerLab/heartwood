@@ -84,6 +84,37 @@ def build_widget_spec(view_model: NotebookViewModel) -> tuple[WidgetSpec, ...]:
                 "Analysis Artifacts",
                 tuple(f"{item.artifact_id}: {item.path}" for item in run.binding.artifacts),
             ),
+            *(
+                WidgetSpec(
+                    f"Corrections: {series.stage_id}",
+                    (
+                        (series.stop_reason or "running").replace("-", " "),
+                        *(
+                            "\n".join(
+                                (
+                                    f"Attempt {index}/{series.maximum_attempts}: {attempt.status}",
+                                    *(
+                                        (attempt.unavailable_reason.replace("-", " "),)
+                                        if attempt.unavailable_reason
+                                        else ()
+                                    ),
+                                    *(
+                                        tuple(
+                                            f"{check.status.replace('_', ' ')}: {check.reason}"
+                                            for check in attempt.assessment.checks
+                                        )
+                                        if attempt.assessment is not None
+                                        else ()
+                                    ),
+                                    *(item.path for item in attempt.plan.outputs),
+                                )
+                            )
+                            for index, attempt in enumerate(series.attempts, start=1)
+                        ),
+                    ),
+                )
+                for series in run.corrections
+            ),
         )
     if view_model.experiments:
         workflow_sections += (

@@ -423,6 +423,43 @@ const WorkflowWorkspace = ({
               </p>
             </details>
           : null}
+          {run.corrections.map((series) => (
+            <details className="research-provenance" key={series.correction_id}>
+              <summary>
+                Corrections:{" "}
+                {(series.stop_reason ?? "running").replaceAll("-", " ")}
+              </summary>
+              {series.attempts.map((attempt, index) => (
+                <div key={attempt.attempt_id}>
+                  <h4>
+                    Attempt {index + 1}/{series.maximum_attempts}:{" "}
+                    {attempt.status}
+                  </h4>
+                  {attempt.unavailable_reason ?
+                    <p>{attempt.unavailable_reason.replaceAll("-", " ")}</p>
+                  : null}
+                  <ul className="research-checks">
+                    {attempt.assessment?.checks.map((check) => (
+                      <li key={check.finding_id}>
+                        {displaySafeText(check.reason.replaceAll("-", " "))}
+                        <strong>{check.status.replaceAll("_", " ")}</strong>
+                      </li>
+                    ))}
+                  </ul>
+                  {attempt.plan.outputs.map((output) => (
+                    <Button
+                      key={output.artifact_id}
+                      variant="ghost"
+                      onClick={() => setArtifact(output.path)}
+                    >
+                      <FileText size={16} />
+                      {displaySafeText(output.path)}
+                    </Button>
+                  ))}
+                </div>
+              ))}
+            </details>
+          ))}
           <h3>Analysis Artifacts</h3>
           {projection.experiments.length > 0 ?
             <details className="research-provenance">

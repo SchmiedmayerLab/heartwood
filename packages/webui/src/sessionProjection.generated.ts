@@ -285,6 +285,7 @@ export interface ExperimentEnvironment {
  * Association with the owning Heartwood session and research stage.
  */
 export interface ExperimentStage {
+  correction_id: Reference | null;
   session_id: Reference;
   stage_id: Reference;
   tool_call_id: Reference | null;
@@ -438,6 +439,10 @@ export interface ProjectionUsage {
 export interface WorkflowRun {
   binding: WorkflowProjectBinding;
   completed: WorkflowStageEvaluation[];
+  /**
+   * @maxItems 32
+   */
+  corrections: ResearchCorrectionRun[];
   created_at: string;
   evaluation: WorkflowStageEvaluation | null;
   phase: "ready" | "running" | "review" | "blocked" | "completed" | "cancelled";
@@ -519,6 +524,97 @@ export interface WorkflowCheckResult {
   status: "passed" | "failed" | "not_run";
 }
 /**
+ * Explicit bounded correction consent, using the existing stage's cumulative budget.
+ */
+export interface ResearchCorrectionRun {
+  /**
+   * @minItems 1
+   * @maxItems 3
+   */
+  attempts: ResearchCorrectionAttempt[];
+  correction_id: Reference;
+  maximum_attempts: number;
+  review: ResearchReviewRun;
+  stage_id: WorkflowIdentifier;
+  stop_reason:
+    | ("corrected" | "attempt-limit" | "budget" | "unavailable" | "cancelled")
+    | null;
+}
+/**
+ * One journaled parent-agent attempt and its independently observed result.
+ */
+export interface ResearchCorrectionAttempt {
+  assessment: ReviewCorrectionAssessment | null;
+  attempt_id: Reference;
+  plan: ReviewCorrectionPlan;
+  started_sequence: number;
+  status: "pending" | "assessed" | "unavailable" | "cancelled";
+  unavailable_reason:
+    | (
+        | "no-structured-outcome"
+        | "changed-context"
+        | "invalid-evidence"
+        | "admission-denied"
+      )
+    | null;
+}
+/**
+ * Independently observed corrected bytes and checks bound to their proposal.
+ */
+export interface ReviewCorrectionAssessment {
+  /**
+   * @minItems 1
+   * @maxItems 512
+   */
+  checks: ReviewCorrectionCheck[];
+  plan_sha256: Digest;
+  snapshot: ReviewSnapshot | null;
+}
+/**
+ * A narrow defect recheck, not execution evidence or scientific acceptance.
+ */
+export interface ReviewCorrectionCheck {
+  finding_id: Digest;
+  reason: WorkflowIdentifier;
+  status: "not_observed" | "still_observed" | "unavailable" | "stale";
+}
+/**
+ * Exact file context authorized for a review, without its contents.
+ */
+export interface ReviewSnapshot {
+  /**
+   * @minItems 1
+   * @maxItems 32
+   */
+  artifacts: ReviewArtifact[];
+  schema_version: "heartwood.review-snapshot.v1";
+}
+/**
+ * A named evidence role bound to one observed project file.
+ */
+export interface ReviewArtifact {
+  artifact_id: WorkflowIdentifier;
+  file: ExperimentFile;
+}
+/**
+ * Gateway-selected findings and fresh output locations for one correction attempt.
+ */
+export interface ReviewCorrectionPlan {
+  /**
+   * @minItems 1
+   * @maxItems 512
+   */
+  finding_ids: Digest[];
+  output_directory: string;
+  /**
+   * @minItems 1
+   * @maxItems 32
+   */
+  outputs: ResearchArtifactPath[];
+  review_id: Reference;
+  snapshot_sha256: Digest;
+}
+/**
  * Pre-dispatch evidence and native reviewer results retained by the workflow journal.
  */
 export interface ResearchReviewRun {
@@ -570,30 +666,12 @@ export interface ReviewFinding {
   verified_claim: ResearchText | null;
 }
 /**
- * A named evidence role bound to one observed project file.
- */
-export interface ReviewArtifact {
-  artifact_id: WorkflowIdentifier;
-  file: ExperimentFile;
-}
-/**
  * Retain each advisory claim without confusing it with verified evidence.
  */
 export interface ReviewSource {
   candidate: ReviewCandidate;
   review_id: Reference;
   reviewer_id: Reference;
-}
-/**
- * Exact file context authorized for a review, without its contents.
- */
-export interface ReviewSnapshot {
-  /**
-   * @minItems 1
-   * @maxItems 32
-   */
-  artifacts: ReviewArtifact[];
-  schema_version: "heartwood.review-snapshot.v1";
 }
 /**
  * Gateway-associated reviewer output for one immutable review context.
@@ -624,9 +702,15 @@ export interface ExecutionUsage {
  */
 export interface WorkflowControl {
   control_id:
-    "run" | "evaluate" | "accept" | "decline" | "cancel" | "request-review";
+    | "run"
+    | "evaluate"
+    | "accept"
+    | "decline"
+    | "cancel"
+    | "request-review"
+    | "correct";
   label: WorkflowText;
-  request: WorkflowTransition | WorkflowReview;
+  request: WorkflowTransition | WorkflowReview | WorkflowCorrectionRequest;
 }
 /**
  * Apply a transition only to the exact run and revision the researcher saw.
@@ -643,6 +727,15 @@ export interface WorkflowReview {
   action: "review";
   approved: boolean;
   evidence_fingerprint: string;
+  revision: number;
+  run_id: string;
+}
+/**
+ * Authorize bounded parent-agent corrections without approving their tool actions.
+ */
+export interface WorkflowCorrectionRequest {
+  action: "correct";
+  maximum_attempts: number;
   revision: number;
   run_id: string;
 }

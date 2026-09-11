@@ -86,6 +86,7 @@ const catalog: WorkflowCatalog = {
 
 const run = (): NonNullable<SessionProjection["workflow"]> => ({
   research_review: null,
+  corrections: [],
   run_id: "run",
   revision: 3,
   binding: {
@@ -157,6 +158,139 @@ const setup = (
 };
 
 describe("research workflow workspace", () => {
+  it("submits bounded correction consent and inspects recorded attempt outputs", async () => {
+    const state = run();
+    const snapshot = {
+      schema_version: "heartwood.review-snapshot.v1" as const,
+      artifacts: [
+        {
+          artifact_id: "report",
+          file: {
+            path: "results/report.md",
+            sha256: "a".repeat(64),
+            size_bytes: 20,
+          },
+        },
+      ],
+    };
+    state.corrections = [
+      {
+        correction_id: "correction-one",
+        stage_id: "inspect",
+        maximum_attempts: 2,
+        stop_reason: "unavailable",
+        review: {
+          review_id: "review-one",
+          reviewer_ids: ["statistical-reviewer"],
+          started_sequence: 8,
+          status: "assessed",
+          submissions: [],
+          unavailable_reason: null,
+          snapshot,
+          assessment: {
+            schema_version: "heartwood.review-assessment.v1",
+            snapshot_sha256: "b".repeat(64),
+            findings: [],
+          },
+        },
+        attempts: [
+          {
+            attempt_id: "attempt-one",
+            started_sequence: 12,
+            status: "assessed",
+            unavailable_reason: null,
+            plan: {
+              review_id: "review-one",
+              snapshot_sha256: "b".repeat(64),
+              finding_ids: ["c".repeat(64)],
+              output_directory: "correction-one",
+              outputs: [
+                { artifact_id: "report", path: "correction-one/report.md" },
+              ],
+            },
+            assessment: {
+              plan_sha256: "d".repeat(64),
+              snapshot,
+              checks: [
+                {
+                  finding_id: "c".repeat(64),
+                  status: "still_observed",
+                  reason: "artifact-byte-mismatch",
+                },
+              ],
+            },
+          },
+          {
+            attempt_id: "attempt-two",
+            started_sequence: 20,
+            status: "unavailable",
+            unavailable_reason: "changed-context",
+            plan: {
+              review_id: "review-one",
+              snapshot_sha256: "b".repeat(64),
+              finding_ids: ["c".repeat(64)],
+              output_directory: "correction-two",
+              outputs: [
+                { artifact_id: "report", path: "correction-two/report.md" },
+              ],
+            },
+            assessment: null,
+          },
+        ],
+      },
+    ];
+    const view = setup(
+      syntheticProjection({ workflow: state, workflowControls: [] }),
+    );
+    fireEvent.click(await screen.findByText("Corrections: unavailable"));
+    expect(screen.getByText("Attempt 1/2: assessed")).toBeVisible();
+    expect(screen.getByText("still observed")).toBeVisible();
+    expect(screen.getByText("changed context")).toBeVisible();
+    view.client.getWorkspaceFile.mockResolvedValue({
+      status: "available",
+      content: "# Preserved Attempt",
+      message: null,
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "correction-one/report.md" }),
+    );
+    await screen.findByRole("heading", { name: "Preserved Attempt" });
+    expect(view.client.getWorkspaceFile).toHaveBeenCalledWith(
+      "session-test",
+      "correction-one/report.md",
+    );
+    expect(view.onSubmit).not.toHaveBeenCalled();
+
+    const request = {
+      action: "correct" as const,
+      run_id: "run",
+      revision: 4,
+      maximum_attempts: 2,
+    };
+    view.rerender(
+      <ResearchWorkspace
+        {...view}
+        projection={{
+          ...view.projection,
+          workflow: run(),
+          workflowControls: [
+            {
+              control_id: "correct",
+              label: "Correct Findings (Up to 2 Attempts)",
+              request,
+            },
+          ],
+        }}
+      />,
+    );
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Correct Findings (Up to 2 Attempts)",
+      }),
+    );
+    expect(view.onSubmit).toHaveBeenCalledExactlyOnceWith(request);
+  });
+
   it("does not reload project provenance for unrelated session events", async () => {
     const view = setup();
     fireEvent.click(screen.getByText("Project Experiment Records"));
@@ -210,6 +344,7 @@ describe("research workflow workspace", () => {
                 stage_id: "inspect",
                 workflow_sha256: "a".repeat(64),
                 tool_call_id: null,
+                correction_id: null,
               },
             },
             started_at: "2026-09-11T00:00:00Z",

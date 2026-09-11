@@ -18,6 +18,11 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 from pydantic import ValidationError
 
 from heartwood.core_adapter.research_workflows import research_workflow
+from heartwood.core_adapter.workflow_corrections import (
+    correction_experiment_id,
+    current_correction,
+    validate_correction_experiment,
+)
 from heartwood.schemas.experiments import (
     ExperimentDefinition,
     ExperimentEvent,
@@ -63,11 +68,26 @@ def experiment_event_fingerprint(event: ExperimentEvent) -> str:
     ).hexdigest()
 
 
+def execution_evidence(
+    events: Sequence[SessionEvent], started_sequence: int
+) -> tuple[ExperimentEvidence, ...]:
+    """Reuse the same minimized action lineage for stages and correction attempts."""
+    return tuple(
+        ExperimentEvidence(
+            event_id=event.event_id,
+            event_sha256=compute_session_event_hash(event).removeprefix("sha256:"),
+            kind=str(event.kind),
+        )
+        for event in events
+        if event.sequence > started_sequence and event.kind in _EVIDENCE_KINDS
+    )
+
+
 def stage_experiment_outcome(
     events: Sequence[SessionEvent],
     run: WorkflowRun,
     *,
-    status: Literal["succeeded", "cancelled"],
+    status: Literal["succeeded", "failed", "cancelled"],
     at: datetime,
     outputs: tuple[ExperimentFile, ...] = (),
 ) -> ExperimentEvent | None:
@@ -81,6 +101,16 @@ def stage_experiment_outcome(
     )
     if current is None:
         raise ValueError("The stage has no recorded experiment start")
+    if current.status == "failed":
+        if status in {"failed", "cancelled"}:
+            return None
+        series = current_correction(run)
+        if series is not None and series.attempts[-1].defect_not_observed:
+            corrected = correction_experiment_id(
+                events[0].session_id, run.run_id, series.attempts[-1].attempt_id
+            )
+            if any(item.run_id == corrected and item.status == "succeeded" for item in records):
+                return None
     if current.status != "started":
         raise ValueError("The stage experiment already has a terminal outcome")
     return ExperimentEvent(
@@ -90,15 +120,7 @@ def stage_experiment_outcome(
         at=at,
         attempt=1,
         outputs=outputs,
-        evidence=tuple(
-            ExperimentEvidence(
-                event_id=event.event_id,
-                event_sha256=compute_session_event_hash(event).removeprefix("sha256:"),
-                kind=str(event.kind),
-            )
-            for event in events
-            if event.sequence > run.started_sequence and event.kind in _EVIDENCE_KINDS
-        ),
+        evidence=execution_evidence(events, run.started_sequence),
     )
 
 
@@ -128,6 +150,20 @@ def workflow_experiment_events(events: Sequence[SessionEvent]) -> tuple[Experime
                 if definition is None or definition.stage is None:
                     raise ValueError("Workflow experiment is missing its stage identity")
                 stage = definition.stage
+                started_sequence: int | None
+                if stage.correction_id is not None:
+                    _, correction = validate_correction_experiment(event, workflow, definition)
+                    started_sequence = correction.started_sequence
+                    transition = "correct"
+                    identity = correction_experiment_id(
+                        source.session_id, workflow.run_id, correction.attempt_id
+                    )
+                else:
+                    started_sequence = workflow.started_sequence
+                    transition = "run"
+                    identity = stage_experiment_id(
+                        source.session_id, workflow.run_id, workflow.stage_id
+                    )
                 if (
                     definition.source != "heartwood"
                     or definition.entry_point is not None
@@ -136,10 +172,9 @@ def workflow_experiment_events(events: Sequence[SessionEvent]) -> tuple[Experime
                     or stage.stage_id != workflow.stage_id
                     or stage.workflow_sha256 != workflow.binding.workflow_fingerprint
                     or workflow.phase != "running"
-                    or workflow.started_sequence != source.sequence
-                    or source.payload.get("transition") != "run"
-                    or event.run_id
-                    != stage_experiment_id(source.session_id, workflow.run_id, workflow.stage_id)
+                    or started_sequence != source.sequence
+                    or source.payload.get("transition") != transition
+                    or event.run_id != identity
                     or event.event_id != uuid5(event.run_id, "started")
                     or event.evidence
                 ):
@@ -157,23 +192,31 @@ def workflow_experiment_events(events: Sequence[SessionEvent]) -> tuple[Experime
                     or workflow.run_id != outcome_stage.workflow_run_id
                 ):
                     raise ValueError("Workflow experiment outcome identity changed")
-                if event.status == "succeeded":
+                if outcome_stage.correction_id is not None:
+                    validate_correction_experiment(event, workflow, definition)
+                elif event.status == "succeeded":
                     if not any(
                         item.assessment.stage_id == outcome_stage.stage_id
                         for item in workflow.completed
                     ):
                         raise ValueError("Successful experiment requires accepted stage evidence")
+                elif event.status == "failed":
+                    review = workflow.research_review
+                    if (
+                        source.payload.get("transition") != "correct"
+                        or workflow.phase != "blocked"
+                        or review is None
+                        or review.status != "assessed"
+                        or review.assessment is None
+                        or not any(
+                            finding.verification == "verified"
+                            for finding in review.assessment.findings
+                        )
+                    ):
+                        raise ValueError("Failed original execution requires a verified defect")
                 elif event.status != "cancelled" or workflow.phase != "cancelled":
                     raise ValueError("Workflow experiment outcome does not match its transition")
-                expected = tuple(
-                    ExperimentEvidence(
-                        event_id=item.event_id,
-                        event_sha256=compute_session_event_hash(item).removeprefix("sha256:"),
-                        kind=str(item.kind),
-                    )
-                    for item in sources.values()
-                    if item.sequence > beginning.sequence and item.kind in _EVIDENCE_KINDS
-                )
+                expected = execution_evidence(tuple(sources.values()), beginning.sequence)
                 if event.evidence != expected:
                     raise ValueError("Workflow experiment evidence links are incomplete or changed")
             _validate_artifacts(event, workflow, definition)
@@ -189,6 +232,9 @@ def _validate_artifacts(
     stage_reference = definition.stage
     if stage_reference is None:
         raise ValueError("Workflow experiment has no stage")
+    if stage_reference.correction_id is not None:
+        validate_correction_experiment(event, workflow, definition)
+        return
     contract = research_workflow(workflow.binding.workflow_id)
     stage = contract.stage(stage_reference.stage_id)
     artifacts = {item.artifact_id: item for item in contract.artifacts}

@@ -46,7 +46,7 @@ from heartwood.schemas import (
     WorkspaceFileResponse,
     WorkspaceTreeResponse,
 )
-from heartwood.schemas.review import ResearchReviewRun
+from heartwood.schemas.review import ResearchCorrectionRun, ResearchReviewRun
 from heartwood.schemas.workflows import (
     WorkflowCatalog,
     WorkflowControl,
@@ -589,6 +589,7 @@ def format_workflow_lines(projection: SessionProjection) -> tuple[str, ...]:
             for check in run.evaluation.checks
         )
     lines.extend(format_research_review_lines(run.research_review))
+    lines.extend(format_research_correction_lines(run.corrections))
     lines.extend(format_workflow_artifact_lines(run.binding))
     lines.extend(
         f"  /workflow {control.control_id} - {terminal_safe_text(control.label)}"
@@ -606,6 +607,27 @@ def format_workflow_artifact_lines(binding: WorkflowProjectBinding) -> tuple[str
             for item in binding.artifacts
         ),
     )
+
+
+def format_research_correction_lines(
+    corrections: tuple[ResearchCorrectionRun, ...],
+) -> tuple[str, ...]:
+    """Show retained attempts and their independent checks in both terminal views."""
+    lines: list[str] = []
+    for series in corrections:
+        state = (series.stop_reason or "running").replace("-", " ")
+        lines.append(f"Corrections for {terminal_safe_text(series.stage_id)}: {state}")
+        for index, attempt in enumerate(series.attempts, start=1):
+            lines.append(f"  Attempt {index}/{series.maximum_attempts}: {attempt.status}")
+            if attempt.unavailable_reason:
+                lines.append(f"    {attempt.unavailable_reason.replace('-', ' ')}")
+            if attempt.assessment:
+                lines.extend(
+                    f"    {check.status.replace('_', ' ')}: {terminal_safe_text(check.reason)}"
+                    for check in attempt.assessment.checks
+                )
+            lines.extend(f"    {terminal_safe_text(item.path)}" for item in attempt.plan.outputs)
+    return tuple(lines)
 
 
 def format_research_review_lines(review: ResearchReviewRun | None) -> tuple[str, ...]:

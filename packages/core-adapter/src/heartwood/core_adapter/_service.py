@@ -51,6 +51,7 @@ from heartwood.core_adapter.reproduction_journal import (
 from heartwood.core_adapter.workflow_runtime import (
     WorkflowEvaluator,
     handle_workflow_command,
+    settle_workflow_correction,
     settle_workflow_review,
     workflow_admission_reason,
     workflow_run,
@@ -786,6 +787,14 @@ class SessionService:
                 self, self._workflow_evaluator, execution_settled=execution_settled
             )
         )
+        translated.extend(
+            settle_workflow_correction(
+                self,
+                self._workflow_evaluator,
+                execution_settled=execution_settled,
+                live=live,
+            )
+        )
         return translated
 
     def _record_confirmation_request(
@@ -1039,6 +1048,7 @@ def _audit_payload(kind: EventKind, payload: dict[str, JsonValue]) -> dict[str, 
             "assessed_stage_id",
             "experiment_fingerprint",
             "research_review_fingerprint",
+            "research_correction_fingerprint",
         )
     if kind == EventKind.COMMAND_RECEIVED:
         return _selected_audit_fields(

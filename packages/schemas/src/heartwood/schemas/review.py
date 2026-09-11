@@ -269,6 +269,117 @@ class ReviewCorrectionAssessment(ExperimentRecord):
         return self
 
 
+class ResearchCorrectionAttempt(ExperimentRecord):
+    """One journaled parent-agent attempt and its independently observed result."""
+
+    attempt_id: Reference
+    plan: ReviewCorrectionPlan
+    started_sequence: int = Field(ge=0, strict=True)
+    status: Literal["pending", "assessed", "unavailable", "cancelled"] = "pending"
+    assessment: ReviewCorrectionAssessment | None = None
+    unavailable_reason: (
+        Literal["no-structured-outcome", "changed-context", "invalid-evidence", "admission-denied"]
+        | None
+    ) = None
+
+    @model_validator(mode="after")
+    def coherent_result(self) -> Self:
+        """Do not attach an assessment to a different plan or incomplete finding set."""
+        if (self.status == "assessed") != (self.assessment is not None):
+            raise ValueError("Only assessed corrections retain an assessment")
+        if (self.status == "unavailable") != (self.unavailable_reason is not None):
+            raise ValueError("Unavailable corrections require a reason")
+        if self.assessment is not None and (
+            self.assessment.plan_sha256 != self.plan.fingerprint
+            or {item.finding_id for item in self.assessment.checks} != set(self.plan.finding_ids)
+        ):
+            raise ValueError("Correction assessment does not match its planned findings")
+        return self
+
+    @property
+    def defect_not_observed(self) -> bool:
+        """Report the narrow recheck, never scientific acceptance or action permission."""
+        return self.assessment is not None and all(
+            item.status == "not_observed" for item in self.assessment.checks
+        )
+
+
+class ResearchCorrectionRun(ExperimentRecord):
+    """Explicit bounded correction consent, using the existing stage's cumulative budget."""
+
+    correction_id: Reference
+    stage_id: WorkflowIdentifier
+    review: ResearchReviewRun
+    maximum_attempts: int = Field(ge=1, le=3, strict=True)
+    attempts: tuple[ResearchCorrectionAttempt, ...] = Field(min_length=1, max_length=3)
+    stop_reason: (
+        Literal["corrected", "attempt-limit", "budget", "unavailable", "cancelled"] | None
+    ) = None
+
+    @model_validator(mode="after")
+    def bounded_attempts(self) -> Self:
+        """Retain one evidence source and distinct, ordered, non-overwriting attempts."""
+        if self.review.status != "assessed" or self.review.assessment is None:
+            raise ValueError("Correction requires independently assessed review evidence")
+        if len(self.attempts) > self.maximum_attempts:
+            raise ValueError("Correction attempt limit exceeded")
+        if self.stop_reason == "corrected" and not self.attempts[-1].defect_not_observed:
+            raise ValueError("Corrected state requires independently checked evidence")
+        if self.stop_reason is not None and self.attempts[-1].status == "pending":
+            raise ValueError("A stopped correction cannot retain pending execution")
+        if len({item.attempt_id for item in self.attempts}) != len(self.attempts):
+            raise ValueError("Correction attempt identities must be distinct")
+        paths: list[PurePosixPath] = []
+        findings = {
+            item.finding_id
+            for item in self.review.assessment.findings
+            if item.verification == "verified"
+        }
+        original = {item.artifact_id: item.file for item in self.review.snapshot.artifacts}
+        previous_sequence = self.review.started_sequence
+        for index, attempt in enumerate(self.attempts):
+            if (
+                attempt.plan.review_id != self.review.review_id
+                or attempt.plan.snapshot_sha256 != self.review.snapshot.fingerprint
+                or attempt.started_sequence <= previous_sequence
+                or set(attempt.plan.finding_ids) != findings
+                or not {item.artifact_id for item in attempt.plan.outputs} <= original.keys()
+            ):
+                raise ValueError("Correction attempt does not match its source review")
+            if attempt.assessment is not None and attempt.assessment.snapshot is not None:
+                replacements = {item.artifact_id: item.path for item in attempt.plan.outputs}
+                observed = {
+                    item.artifact_id: item.file for item in attempt.assessment.snapshot.artifacts
+                }
+                if observed.keys() != original.keys() or any(
+                    item.path != replacements.get(role, original[role].path)
+                    or (role not in replacements and item != original[role])
+                    for role, item in observed.items()
+                ):
+                    raise ValueError(
+                        "Correction observations changed their evidence roles or paths"
+                    )
+            if index < len(self.attempts) - 1 and (
+                attempt.status != "assessed"
+                or attempt.defect_not_observed
+                or attempt.assessment is None
+                or any(
+                    check.status not in {"not_observed", "still_observed"}
+                    for check in attempt.assessment.checks
+                )
+            ):
+                raise ValueError("Only a completed, still-observed defect can have another attempt")
+            directory = PurePosixPath(attempt.plan.output_directory.casefold())
+            if any(
+                directory == path or directory in path.parents or path in directory.parents
+                for path in paths
+            ):
+                raise ValueError("Correction attempts require separate output directories")
+            paths.append(directory)
+            previous_sequence = attempt.started_sequence
+        return self
+
+
 def review_digest(value: object) -> str:
     """Fingerprint JSON-compatible review identities with one canonical encoding."""
     content = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)

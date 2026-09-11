@@ -20,7 +20,10 @@ export type ExperimentCollection = Api.ExperimentCollection;
 export type ExperimentExport = Api.ExperimentExport;
 export type ExperimentRun = Api.ExperimentRun;
 export type WorkflowRequest =
-  Api.WorkflowStart | Api.WorkflowTransition | Api.WorkflowReview;
+  | Api.WorkflowStart
+  | Api.WorkflowTransition
+  | Api.WorkflowReview
+  | Api.WorkflowCorrectionRequest;
 
 export interface SessionCommand {
   schema_version: "heartwood.session-command.v1";

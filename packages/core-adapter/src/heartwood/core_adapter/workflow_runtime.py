@@ -11,8 +11,9 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping, Sequence
 from datetime import datetime
+from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Literal, Protocol, cast
-from uuid import uuid5
+from uuid import NAMESPACE_URL, uuid5
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
@@ -25,8 +26,16 @@ from heartwood.core_adapter.research_workflows import (
     research_workflow,
     workflow_reproduction_spec,
 )
+from heartwood.core_adapter.workflow_corrections import (
+    WorkflowCorrectionInspector,
+    correction_experiment_id,
+    correction_output_files,
+    current_correction,
+    workflow_correction_prompt,
+)
 from heartwood.core_adapter.workflow_provenance import (
     WorkflowProvenanceInspector,
+    execution_evidence,
     experiment_event_fingerprint,
     stage_experiment_id,
     stage_experiment_outcome,
@@ -45,9 +54,15 @@ from heartwood.schemas.research import (
     ReadinessResult,
     ResultVerification,
 )
-from heartwood.schemas.review import ResearchReviewRun, review_digest
+from heartwood.schemas.review import (
+    ResearchCorrectionAttempt,
+    ResearchCorrectionRun,
+    ResearchReviewRun,
+    review_digest,
+)
 from heartwood.schemas.workflows import (
     WorkflowControl,
+    WorkflowCorrectionRequest,
     WorkflowOutcomeStatus,
     WorkflowProjectBinding,
     WorkflowRequest,
@@ -74,6 +89,31 @@ def workflow_controls(
     if current is None or current.phase in {"completed", "cancelled"} or active or pending_actions:
         return ()
     controls: list[WorkflowControl] = []
+    correction = current_correction(current)
+    if correction is not None and correction.stop_reason is None:
+        if correction.attempts[-1].status != "pending":
+            controls.append(
+                WorkflowControl(
+                    control_id="correct",
+                    label="Continue Corrections",
+                    request=WorkflowCorrectionRequest(
+                        action="correct",
+                        run_id=current.run_id,
+                        revision=current.revision,
+                        maximum_attempts=correction.maximum_attempts,
+                    ),
+                )
+            )
+        controls.append(
+            WorkflowControl(
+                control_id="cancel",
+                label="Cancel Workflow",
+                request=WorkflowTransition(
+                    action="cancel", run_id=current.run_id, revision=current.revision
+                ),
+            )
+        )
+        return tuple(controls)
     if current.research_review is not None and current.research_review.status == "pending":
         controls.append(
             WorkflowControl(
@@ -97,6 +137,25 @@ def workflow_controls(
             )
         )
     elif _stage_outcome(events, current) is not None:
+        review = current.research_review
+        if (
+            correction is None
+            and review is not None
+            and review.status == "assessed"
+            and review.assessment is not None
+            and any(item.verification == "verified" for item in review.assessment.findings)
+        ):
+            controls.append(
+                WorkflowControl(
+                    control_id="correct",
+                    label="Correct Findings (Up to 2 Attempts)",
+                    request=WorkflowCorrectionRequest(
+                        action="correct",
+                        run_id=current.run_id,
+                        revision=current.revision,
+                    ),
+                )
+            )
         if (
             current.research_review is None
             and research_workflow(current.binding.workflow_id)
@@ -152,7 +211,11 @@ def workflow_controls(
 
 
 class WorkflowEvaluator(
-    ReproductionInspector, WorkflowProvenanceInspector, WorkflowReviewInspector, Protocol
+    ReproductionInspector,
+    WorkflowProvenanceInspector,
+    WorkflowReviewInspector,
+    WorkflowCorrectionInspector,
+    Protocol,
 ):
     """Project inspection supplied by the gateway, without a second tool executor."""
 
@@ -243,6 +306,35 @@ def handle_workflow_command(
             _error(service, "Resolve the pending tool actions before changing workflow stages"),
         )
     if request.action == "cancel":
+        correction = current_correction(current)
+        if correction is not None and correction.attempts[-1].status == "pending":
+            attempt = ResearchCorrectionAttempt.model_validate(
+                {
+                    **correction.attempts[-1].model_dump(),
+                    "status": "cancelled",
+                }
+            )
+            correction = ResearchCorrectionRun.model_validate(
+                {
+                    **correction.model_dump(),
+                    "attempts": (*correction.attempts[:-1], attempt),
+                    "stop_reason": "cancelled",
+                }
+            )
+            cancelled_run = _with_correction(current, correction, phase="cancelled")
+            return (
+                _record(
+                    service,
+                    command,
+                    cancelled_run,
+                    experiment=_correction_outcome(
+                        service,
+                        events,
+                        current,
+                        attempt,
+                    ),
+                ),
+            )
         experiment = stage_experiment_outcome(events, current, status="cancelled", at=_now(service))
         review = current.research_review
         if review is not None and review.status == "pending":
@@ -260,6 +352,9 @@ def handle_workflow_command(
     review = current.research_review
     if review is not None and review.status == "pending":
         return (_error(service, "Wait for the research review to settle before continuing"),)
+    correction = current_correction(current)
+    if correction is not None and correction.attempts[-1].status == "pending":
+        return (_error(service, "Wait for correction work to settle before continuing"),)
     if isinstance(request, WorkflowReview):
         if current.phase != "review" or current.evaluation is None:
             return (_error(service, "There is no stage awaiting researcher review"),)
@@ -271,13 +366,22 @@ def handle_workflow_command(
         service,
         evaluator,
         command,
-        admit=request.action in {"run", "request-review"},
+        admit=request.action in {"run", "request-review", "correct"},
     ):
         return (_error(service, reason),)
     try:
         _check_inputs(evaluator, current, events)
     except ValueError:
         return (_error(service, "Workflow inputs or accepted results changed; start a new run"),)
+    if isinstance(request, WorkflowCorrectionRequest):
+        if current.phase not in {"running", "blocked", "review"}:
+            return (_error(service, "Run and review the stage before correcting its findings"),)
+        if correction is not None and (
+            correction.stop_reason is not None
+            or correction.maximum_attempts != request.maximum_attempts
+        ):
+            return (_error(service, "This correction series has stopped or its consent changed"),)
+        return _start_correction(service, evaluator, command, current, request.maximum_attempts)
     if request.action == "request-review":
         if (
             current.phase not in {"running", "review", "blocked"}
@@ -358,6 +462,13 @@ def handle_workflow_command(
     status = _stage_outcome(events, current)
     if status is None:
         return (_error(service, "The current stage has no settled structured model outcome"),)
+    if correction is not None and correction.attempts[-1].defect_not_observed:
+        try:
+            attempt = correction.attempts[-1]
+            if evaluator.assess_correction(correction.review, attempt.plan) != attempt.assessment:
+                raise ValueError("Correction evidence changed")
+        except ValueError:
+            return (_error(service, "Correction evidence changed; inspect the preserved analysis"),)
     evaluation = evaluator.evaluate(
         current.binding,
         current.stage_id,
@@ -520,6 +631,11 @@ def _record_snapshot(
                 if run.research_review is not None
                 else None
             ),
+            "research_correction_fingerprint": (
+                review_digest([item.model_dump(mode="json") for item in run.corrections])
+                if run.corrections
+                else None
+            ),
             "run": cast(dict[str, JsonValue], run.model_dump(mode="json")),
             **(
                 {
@@ -531,6 +647,283 @@ def _record_snapshot(
             ),
         },
     )
+
+
+def _with_correction(
+    run: WorkflowRun, series: ResearchCorrectionRun, **changes: object
+) -> WorkflowRun:
+    corrections = tuple(
+        series if item.stage_id == series.stage_id else item for item in run.corrections
+    )
+    if not any(item.stage_id == series.stage_id for item in run.corrections):
+        corrections = (*corrections, series)
+    return _replace(run, corrections=corrections, **changes)
+
+
+def _start_correction(
+    service: SessionService,
+    evaluator: WorkflowEvaluator,
+    command: SessionCommand,
+    current: WorkflowRun,
+    maximum_attempts: int,
+) -> tuple[SessionEvent, ...]:
+    series = current_correction(current)
+    review = current.research_review if series is None else series.review
+    if review is None or review.status != "assessed":
+        return (_error(service, "Corrective work requires independently verified review findings"),)
+    attempts = () if series is None else series.attempts
+    expected_turn = attempts[-1].attempt_id if attempts else review.review_id
+    if any(
+        event.sequence > (attempts[-1].started_sequence if attempts else review.started_sequence)
+        and event.kind == EventKind.USER_MESSAGE_RECORDED
+        and event.payload.get("command_id") != expected_turn
+        for event in service.replay_events()
+    ):
+        return (
+            _error(
+                service, "Conversation changed; the earlier correction scope is no longer current"
+            ),
+        )
+    if len(attempts) >= maximum_attempts:
+        return (_error(service, "Correction attempt limit reached"),)
+    identity = command.command_id if series is None else series.correction_id
+    attempt_id = uuid5(
+        NAMESPACE_URL, json.dumps([identity, current.stage_id, len(attempts) + 1])
+    ).hex
+    directory = str(
+        PurePosixPath(current.binding.output_directory).with_name(
+            f"correction-{attempt_id[:12]}-{len(attempts) + 1}"
+        )
+    )
+    try:
+        if series is not None:
+            evaluator.verify_correction_history(series)
+        plan = evaluator.prepare_correction(review, output_directory=directory)
+        stage = research_workflow(current.binding.workflow_id).stage(current.stage_id)
+        if not {item.artifact_id for item in plan.outputs} <= set(stage.writes):
+            raise ValueError("Correction cannot replace accepted or undeclared outputs")
+        if evaluator.prepare_review(current.binding, current.stage_id) != review.snapshot:
+            raise ValueError("Correction source changed")
+    except ValueError:
+        return (
+            _error(service, "Correction source or destination is unavailable; no work was started"),
+        )
+    recorded: list[SessionEvent] = []
+    if series is None:
+        failed = stage_experiment_outcome(
+            service.replay_events(), current, status="failed", at=_now(service)
+        )
+        if failed is not None:
+            current = _replace(current, phase="blocked", evaluation=None)
+            recorded.append(_record(service, command, current, experiment=failed))
+    attempt = ResearchCorrectionAttempt(
+        attempt_id=attempt_id, plan=plan, started_sequence=service.store.next_sequence()
+    )
+    series = ResearchCorrectionRun(
+        correction_id=identity,
+        stage_id=current.stage_id,
+        review=review,
+        maximum_attempts=maximum_attempts,
+        attempts=(*attempts, attempt),
+    )
+    prompt = workflow_correction_prompt(series)
+    try:
+        definition = evaluator.correction_definition(
+            current,
+            series,
+            session_id=command.session_id,
+            actor_id=command.actor_id,
+            invocation=prompt,
+        )
+    except ValueError:
+        return (
+            *recorded,
+            _error(service, "Correction provenance is unavailable; no work was started"),
+        )
+    experiment_id = correction_experiment_id(command.session_id, current.run_id, attempt_id)
+    experiment = ExperimentEvent(
+        event_id=uuid5(experiment_id, "started"),
+        run_id=experiment_id,
+        status="started",
+        at=_now(service),
+        attempt=1,
+        definition=definition,
+    )
+    recorded.append(
+        _record(
+            service,
+            command,
+            _with_correction(
+                current,
+                series,
+                phase="running",
+                evaluation=None,
+            ),
+            experiment=experiment,
+        )
+    )
+    turn = command.model_copy(
+        update={
+            "command_id": attempt_id,
+            "kind": CommandKind.CHAT,
+            "payload": {"prompt": prompt},
+        }
+    )
+    submitted = service._handle_task(turn)
+    if any(event.kind == EventKind.ERROR_RECORDED for event in submitted):
+        return (*recorded, *submitted, *settle_workflow_correction(service, evaluator, live=False))
+    return (*recorded, *submitted)
+
+
+def _correction_outcome(
+    service: SessionService,
+    events: Sequence[SessionEvent],
+    run: WorkflowRun,
+    attempt: ResearchCorrectionAttempt,
+) -> ExperimentEvent:
+    identity = correction_experiment_id(service.store.session_id, run.run_id, attempt.attempt_id)
+    status: Literal["succeeded", "failed", "cancelled"] = (
+        "cancelled"
+        if attempt.status == "cancelled"
+        else "succeeded"
+        if attempt.defect_not_observed
+        else "failed"
+    )
+    return ExperimentEvent(
+        event_id=uuid5(identity, status),
+        run_id=identity,
+        status=status,
+        at=_now(service),
+        attempt=1,
+        outputs=correction_output_files(attempt),
+        evidence=execution_evidence(events, attempt.started_sequence),
+    )
+
+
+def settle_workflow_correction(
+    service: SessionService,
+    evaluator: WorkflowEvaluator | None,
+    *,
+    execution_settled: bool = False,
+    live: bool = True,
+) -> tuple[SessionEvent, ...]:
+    """Recheck a settled attempt and continue only within its recorded consent and budget."""
+    if evaluator is None:
+        return ()
+    events = service.replay_events()
+    current = workflow_run(events)
+    if current is None or current.phase in {"completed", "cancelled"}:
+        return ()
+    series = current_correction(current)
+    if series is None or series.stop_reason is not None or series.attempts[-1].status != "pending":
+        return ()
+    if not execution_settled and not service.backend.wait_for_idle(0):
+        return ()
+    attempt = series.attempts[-1]
+    lifecycle = next(
+        (
+            event.payload.get("status")
+            for event in reversed(events)
+            if event.sequence > attempt.started_sequence
+            and event.kind == EventKind.AGENT_LIFECYCLE_UPDATED
+        ),
+        None,
+    )
+    failed_without_lifecycle = lifecycle is None and any(
+        event.sequence > attempt.started_sequence and event.kind == EventKind.ERROR_RECORDED
+        for event in events
+    )
+    if lifecycle not in {"finished", "error"} and not failed_without_lifecycle:
+        return ()
+    reason = None
+    assessment = None
+    binding = current.binding
+    if any(
+        event.sequence > attempt.started_sequence
+        and event.kind == EventKind.USER_MESSAGE_RECORDED
+        and event.payload.get("command_id") != attempt.attempt_id
+        for event in events
+    ):
+        reason = "changed-context"
+    elif _stage_outcome(events, current) is None:
+        reason = "no-structured-outcome"
+    else:
+        try:
+            _check_inputs(evaluator, current, events)
+            evaluator.verify_correction_history(series)
+            assessment = evaluator.assess_correction(series.review, attempt.plan)
+            if all(item.status == "not_observed" for item in assessment.checks):
+                binding = evaluator.correction_binding(current, attempt.plan, assessment)
+        except ValueError:
+            reason = "invalid-evidence"
+            assessment = None
+    attempt = ResearchCorrectionAttempt.model_validate(
+        {
+            **attempt.model_dump(),
+            "status": "assessed" if assessment is not None else "unavailable",
+            "assessment": assessment,
+            "unavailable_reason": reason,
+        }
+    )
+    stop_reason = (
+        "corrected"
+        if attempt.defect_not_observed
+        else "unavailable"
+        if assessment is None
+        or any(item.status not in {"not_observed", "still_observed"} for item in assessment.checks)
+        else "attempt-limit"
+        if len(series.attempts) >= series.maximum_attempts
+        else None
+    )
+    series = ResearchCorrectionRun.model_validate(
+        {
+            **series.model_dump(),
+            "attempts": (*series.attempts[:-1], attempt),
+            "stop_reason": stop_reason,
+        }
+    )
+    current = _with_correction(
+        current,
+        series,
+        binding=binding,
+        evaluation=None,
+        phase="running" if attempt.defect_not_observed else "blocked",
+    )
+    recorded = _record_snapshot(
+        service,
+        current,
+        command_id=series.correction_id,
+        actor_id="gateway",
+        transition="assess-correction",
+        experiment=_correction_outcome(service, events, current, attempt),
+    )
+    if stop_reason is not None or not live:
+        return (recorded,)
+    command = SessionCommand(
+        command_id=series.correction_id,
+        session_id=service.store.session_id,
+        kind=CommandKind.WORKFLOW,
+        actor_id="gateway",
+        created_at=service.clock(),
+        payload={
+            "action": "correct",
+            "run_id": current.run_id,
+            "revision": current.revision,
+            "maximum_attempts": series.maximum_attempts,
+        },
+    )
+    if workflow_admission_reason(service, evaluator, command):
+        series = ResearchCorrectionRun.model_validate(
+            {**series.model_dump(), "stop_reason": "budget"}
+        )
+        return (recorded, _record(service, command, _with_correction(current, series)))
+    continued = _start_correction(service, evaluator, command, current, series.maximum_attempts)
+    if not any(event.kind == EventKind.WORKFLOW_UPDATED for event in continued):
+        series = ResearchCorrectionRun.model_validate(
+            {**series.model_dump(), "stop_reason": "unavailable"}
+        )
+        return (recorded, *continued, _record(service, command, _with_correction(current, series)))
+    return (recorded, *continued)
 
 
 def settle_workflow_review(
@@ -639,9 +1032,16 @@ def _stage_outcome(
     """Only a structured finish after the latest user turn can qualify the stage."""
     lifecycle: str | None = None
     status: WorkflowOutcomeStatus | None = None
+    correction = current_correction(current) if not include_review else None
+    started_sequence = (
+        correction.attempts[-1].started_sequence
+        if correction is not None
+        else current.started_sequence
+    )
     for event in reversed(events):
         if (
             not include_review
+            and correction is None
             and current.research_review is not None
             and event.sequence >= current.research_review.started_sequence
         ):
@@ -657,7 +1057,7 @@ def _stage_outcome(
             and event.sequence <= current.research_review.started_sequence
         ):
             break
-        if current.started_sequence is None or event.sequence <= current.started_sequence:
+        if started_sequence is None or event.sequence <= started_sequence:
             break
         if (
             event.kind in {EventKind.SESSION_PAUSED, EventKind.SESSION_RESUMED}
