@@ -446,6 +446,51 @@ describe("GatewayClient", () => {
     ).resolves.toEqual({ events: [], projection });
   });
 
+  it("preserves the gateway-owned workflow state without a client reducer", async () => {
+    const projection = syntheticProjection({
+      workflow: {
+        run_id: "research-run",
+        revision: 0,
+        stage_id: "inspect",
+        phase: "ready",
+        created_at: "2026-09-11T00:00:00Z",
+        binding: {
+          workflow_id: "dataset-readiness",
+          workflow_fingerprint: "a".repeat(64),
+          output_directory: "results",
+          inputs: [
+            {
+              input_id: "data",
+              kind: "file",
+              value: "data.csv",
+              sha256: "b".repeat(64),
+            },
+            {
+              input_id: "dictionary",
+              kind: "file",
+              value: "dictionary.json",
+              sha256: "c".repeat(64),
+            },
+          ],
+        },
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response(JSON.stringify(projectionResponse([], projection))),
+        ),
+    );
+    await expect(
+      new GatewayClient("/proxy/8767").replayEvents("session-test"),
+    ).resolves.toEqual({
+      events: [],
+      projection,
+    });
+  });
+
   it("enforces canonical numeric projection constraints at runtime", async () => {
     const malformed = {
       ...syntheticProjection(),

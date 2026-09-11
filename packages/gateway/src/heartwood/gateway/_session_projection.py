@@ -14,7 +14,10 @@ from typing import Annotated, ClassVar, Literal, cast
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 from heartwood.core_adapter import backend_error_is_fatal
+from heartwood.core_adapter.workflow_runtime import workflow_run
+from heartwood.schemas.execution import ExecutionUsage
 from heartwood.schemas.project_paths import ProjectPathError, project_relative_path
+from heartwood.schemas.workflows import WorkflowRun
 from heartwood.session import CommandKind, EventKind, JsonValue, SessionEvent
 
 
@@ -269,6 +272,7 @@ class SessionProjection(_ProjectionRecord):
 
     schema_version: Literal["heartwood.session-projection.v1"] = "heartwood.session-projection.v1"
     session_id: str = Field(serialization_alias="sessionId")
+    workflow: WorkflowRun | None = None
     event_count: int = Field(ge=0, serialization_alias="eventCount")
     revision: int = Field(ge=-1)
     workspace_revision: int = Field(
@@ -325,6 +329,20 @@ class SessionProjection(_ProjectionRecord):
     def safe_dict(self) -> dict[str, object]:
         """Return the complete interface-safe projection payload."""
         return cast(dict[str, object], self.model_dump(mode="json", by_alias=True))
+
+    def execution_usage(self, *, elapsed_seconds: float) -> ExecutionUsage:
+        """Share observed task consumption without treating unpriced calls as free."""
+        usage = self.usage
+        return ExecutionUsage(
+            input_tokens=usage.prompt_tokens if usage else None,
+            output_tokens=usage.completion_tokens if usage else None,
+            model_calls=usage.call_count if usage else None,
+            reported_cost_usd=usage.accumulated_cost
+            if usage and usage.accumulated_cost > 0
+            else None,
+            proposed_actions=len(self.actions),
+            elapsed_seconds=elapsed_seconds,
+        )
 
 
 def project_session(
@@ -792,6 +810,7 @@ def project_session(
     )
     return SessionProjection(
         session_id=session_id,
+        workflow=workflow_run(events),
         event_count=len(events),
         revision=events[-1].sequence if events else -1,
         workspace_revision=max(

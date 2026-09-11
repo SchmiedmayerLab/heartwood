@@ -428,16 +428,7 @@ def _drive(
 
 
 def _usage(projection: SessionProjection, started: float) -> ExecutionUsage:
-    usage = projection.usage
-    return ExecutionUsage(
-        input_tokens=usage.prompt_tokens if usage else None,
-        output_tokens=usage.completion_tokens if usage else None,
-        model_calls=usage.call_count if usage else None,
-        # The gateway cannot yet distinguish unpriced calls from genuinely free calls.
-        reported_cost_usd=usage.accumulated_cost if usage and usage.accumulated_cost > 0 else None,
-        proposed_actions=len(projection.actions),
-        elapsed_seconds=time.monotonic() - started,
-    )
+    return projection.execution_usage(elapsed_seconds=time.monotonic() - started)
 
 
 def _admission_blocked(usage: ExecutionUsage, budget: ExecutionBudget) -> bool:

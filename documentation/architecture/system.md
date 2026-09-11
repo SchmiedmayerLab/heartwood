@@ -84,6 +84,26 @@ The checks do not establish that an analysis is scientifically appropriate or re
 They neither launch an agent nor grant permission to advance stages or approve tools.
 Execution and recovery belong to the existing gateway and authoritative session command/event path, not a separate workflow persistence layer.
 
+### Journaled Stage Execution
+
+The gateway accepts explicit workflow start, run, evaluate, review, and cancel commands through the existing session command journal.
+A workflow starts in an unused session, before OpenHands creates its conversation, and enables the SDK's structured `FinishTool` outcome for that conversation only.
+Ordinary conversations retain their existing finish behavior.
+Each transition records a run identity and revision in the paired event and audit journal; command receipts prevent repeated submissions across retries and restarts.
+An interruption with an uncertain dispatch outcome requires the existing session recovery procedure rather than automatic resubmission.
+
+A stage runs as an ordinary OpenHands turn with the existing coding tools and action-confirmation policy.
+Advancement requires settled workers, resolved tool approvals, a structured outcome from the latest stage turn, and independent artifact checks.
+Previously accepted inputs and results are checked again before another stage starts.
+Researcher review binds the exact assessment to the observed run revision and does not approve future tool actions.
+The shared session projection includes the persisted workflow state; clients do not reconstruct it from model prose.
+
+Run and stage budgets use the same observed usage contract as research benchmarks.
+Known overruns prevent acceptance, and exhausted limits prevent further model continuations; already-counted tool proposals exactly at the action limit can still be approved.
+Elapsed-time limits include waiting for review, and unavailable provider measurements remain unknown.
+These are admission checks at observed boundaries, not hard spending caps or preemption within an uninterrupted model run.
+Cancellation requires settled work and no pending tool approvals; pausing and rejecting tools remain separate session controls.
+
 ### Model Artifact Lifecycle
 
 The gateway owns one local-model choice contract for catalog recommendations, inspected Hugging Face repositories, raw imports, downloads, and transferred bundles.

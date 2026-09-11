@@ -9,13 +9,15 @@
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import PurePosixPath
 
 from heartwood.core_adapter.research_checks import evaluate_research_check
 from heartwood.core_adapter.research_workflows import research_workflow
 from heartwood.core_adapter.workflow_evidence import assess_workflow_stage
+from heartwood.gateway._session_projection import project_session
 from heartwood.gateway._workspace import WorkspaceInspectionError, WorkspaceInspector
+from heartwood.schemas.execution import ExecutionUsage
 from heartwood.schemas.project_paths import project_relative_path
 from heartwood.schemas.workflows import (
     WorkflowBoundInput,
@@ -26,6 +28,7 @@ from heartwood.schemas.workflows import (
     WorkflowStageEvaluation,
     WorkflowValueFingerprint,
 )
+from heartwood.session import EventKind, SessionEvent
 
 
 class ResearchStageEvaluator:
@@ -63,6 +66,22 @@ class ResearchStageEvaluator:
         )
         self._validate_binding(definition, binding)
         return binding
+
+    def usage(self, events: Sequence[SessionEvent]) -> ExecutionUsage:
+        """Reuse the interface's authoritative usage reduction for admission."""
+        if not any(event.kind == EventKind.USER_MESSAGE_RECORDED for event in events):
+            return ExecutionUsage(
+                input_tokens=0,
+                output_tokens=0,
+                model_calls=0,
+                reported_cost_usd=0,
+                proposed_actions=0,
+                elapsed_seconds=0,
+            )
+        return project_session(
+            tuple(events),
+            session_id=events[0].session_id,
+        ).execution_usage(elapsed_seconds=0)
 
     def evaluate(
         self,

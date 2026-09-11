@@ -13,6 +13,7 @@ import json
 from typing import Annotated, Literal, Self
 
 from pydantic import (
+    AwareDatetime,
     BaseModel,
     ConfigDict,
     Field,
@@ -21,7 +22,7 @@ from pydantic import (
     model_validator,
 )
 
-from heartwood.schemas.execution import ExecutionBudget
+from heartwood.schemas.execution import ExecutionBudget, ExecutionUsage
 from heartwood.schemas.project_paths import project_relative_path
 
 type WorkflowIdentifier = Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9_.-]{0,127}$")]
@@ -228,3 +229,51 @@ class WorkflowStageEvaluation(WorkflowRecord):
     artifacts: tuple[WorkflowValueFingerprint, ...]
     checks: tuple[WorkflowCheckResult, ...]
     assessment: WorkflowStageAssessment
+
+
+class WorkflowStart(WorkflowRecord):
+    """Explicitly bind a new workflow to an unused session."""
+
+    action: Literal["start"]
+    workflow_id: WorkflowIdentifier
+    inputs: dict[WorkflowIdentifier, str]
+    output_directory: str
+
+
+class WorkflowTransition(WorkflowRecord):
+    """Apply a transition only to the exact run and revision the researcher saw."""
+
+    action: Literal["run", "evaluate", "cancel"]
+    run_id: str = Field(min_length=1)
+    revision: int = Field(ge=0, strict=True)
+
+
+class WorkflowReview(WorkflowRecord):
+    """Accept or reject checked stage evidence, never the underlying tool actions."""
+
+    action: Literal["review"]
+    run_id: str = Field(min_length=1)
+    revision: int = Field(ge=0, strict=True)
+    evidence_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    approved: bool = Field(strict=True)
+
+
+type WorkflowRequest = Annotated[
+    WorkflowStart | WorkflowTransition | WorkflowReview, Field(discriminator="action")
+]
+
+
+class WorkflowRun(WorkflowRecord):
+    """Authoritative stage snapshot stored in the paired session and audit journal."""
+
+    run_id: str = Field(min_length=1)
+    revision: int = Field(ge=0)
+    binding: WorkflowProjectBinding
+    stage_id: WorkflowIdentifier
+    phase: Literal["ready", "running", "review", "blocked", "completed", "cancelled"]
+    completed: tuple[WorkflowStageEvaluation, ...] = ()
+    evaluation: WorkflowStageEvaluation | None = None
+    started_sequence: int | None = Field(default=None, ge=0)
+    created_at: AwareDatetime
+    stage_started_at: AwareDatetime | None = None
+    stage_usage_baseline: ExecutionUsage | None = None

@@ -41,6 +41,11 @@ from heartwood.core_adapter._facade import (
     backend_error_message,
 )
 from heartwood.core_adapter._state import FileSessionStore, SessionRecoveryError
+from heartwood.core_adapter.workflow_runtime import (
+    WorkflowEvaluator,
+    handle_workflow_command,
+    workflow_admission_reason,
+)
 from heartwood.model_policy import ModelPolicyEngine
 from heartwood.schemas import ConfirmationRequest, JsonValue, PolicyProfile
 from heartwood.session import (
@@ -86,6 +91,7 @@ class SessionService:
         clock: Callable[[], str] | None = None,
         event_sink: Callable[[tuple[SessionEvent, ...]], None] | None = None,
         token_sink: Callable[[str], None] | None = None,
+        workflow_evaluator: WorkflowEvaluator | None = None,
     ) -> None:
         self.store = store
         self.audit_log = AuditLog(store.audit_path)
@@ -99,6 +105,7 @@ class SessionService:
         self._event_sink = event_sink or (lambda _events: None)
         self._token_sink = token_sink or (lambda _delta: None)
         self._known_source_event_ids: set[str] | None = None
+        self._workflow_evaluator = workflow_evaluator
         self.backend.bind_runtime(
             event_sink=self._accept_backend_events,
             token_sink=self._token_sink,
@@ -142,6 +149,7 @@ class SessionService:
         clock: Callable[[], str] | None = None,
         event_sink: Callable[[tuple[SessionEvent, ...]], None] | None = None,
         token_sink: Callable[[str], None] | None = None,
+        workflow_evaluator: WorkflowEvaluator | None = None,
     ) -> SessionService:
         """Build a local service with an explicitly supplied or deterministic backend."""
         active_env = os.environ if env is None else env
@@ -162,6 +170,7 @@ class SessionService:
             clock=clock,
             event_sink=event_sink,
             token_sink=token_sink,
+            workflow_evaluator=workflow_evaluator,
         )
 
     def handle(
@@ -277,7 +286,9 @@ class SessionService:
                 )
             )
             return SessionResult(events=tuple(events))
-        if command_kind == CommandKind.CHAT.value:
+        if command_kind == CommandKind.WORKFLOW.value:
+            events.extend(handle_workflow_command(self, command, self._workflow_evaluator))
+        elif command_kind == CommandKind.CHAT.value:
             events.extend(self._handle_task(command))
         elif command_kind in {CommandKind.APPROVE.value, CommandKind.DENY.value}:
             events.extend(self._handle_action_decision(command))
@@ -412,6 +423,17 @@ class SessionService:
         purpose: str,
     ) -> tuple[bool, list[SessionEvent]]:
         """Authorize one backend operation that may continue model execution."""
+        if reason := workflow_admission_reason(self, self._workflow_evaluator, command):
+            return False, [
+                self._record_event(
+                    EventKind.ERROR_RECORDED,
+                    {
+                        "command": _kind_value(command.kind),
+                        "reason": reason,
+                        "affects_lifecycle": False,
+                    },
+                )
+            ]
         configuration_error = self.backend.configuration_error
         if configuration_error is not None:
             return False, [
@@ -564,7 +586,15 @@ class SessionService:
                 translated.append(
                     self._record_event(
                         EventKind.AGENT_MESSAGE_EMITTED,
-                        {"content": event.message, **source_payload},
+                        {
+                            "content": event.message,
+                            **(
+                                {"outcome_status": event.outcome_status}
+                                if event.outcome_status
+                                else {}
+                            ),
+                            **source_payload,
+                        },
                     )
                 )
             elif isinstance(event, BackendToolCallEvent):
@@ -895,6 +925,21 @@ class SessionService:
 
 def _audit_payload(kind: EventKind, payload: dict[str, JsonValue]) -> dict[str, JsonValue]:
     """Project an operational event into its content-minimized audit representation."""
+    if kind == EventKind.WORKFLOW_UPDATED:
+        return _selected_audit_fields(
+            payload,
+            "command_id",
+            "actor_id",
+            "run_id",
+            "stage_id",
+            "phase",
+            "revision",
+            "transition",
+            "approved",
+            "workflow_fingerprint",
+            "evidence_fingerprint",
+            "assessed_stage_id",
+        )
     if kind == EventKind.COMMAND_RECEIVED:
         return _selected_audit_fields(
             payload,

@@ -571,7 +571,11 @@ class SessionGateway:
             else:
                 self.session_catalog.ensure(command.session_id)
             command_kind = str(command.kind)
-            storage_only = command_kind == CommandKind.AUDIT_EXPORT.value
+            starting_workflow = (
+                command_kind == CommandKind.WORKFLOW.value
+                and command.payload.get("action") == "start"
+            )
+            storage_only = command_kind == CommandKind.AUDIT_EXPORT.value or starting_workflow
             fatal_unavailable_reason: str | None = None
             if not storage_only and command_kind in _PROJECTED_COMMANDS:
                 persisted = FileSessionStore(
@@ -658,6 +662,16 @@ class SessionGateway:
                         session_id=command.session_id,
                         events=result.events,
                     )
+                if (
+                    starting_workflow
+                    and not result.replayed
+                    and any(event.kind == EventKind.WORKFLOW_UPDATED for event in result.events)
+                ):
+                    # The next service must construct its SDK with the persisted
+                    # workflow's structured finish contract, not a cached default.
+                    close_service = True
+                    self._services.pop(command.session_id, None)
+                    self._service_configurations.pop(command.session_id, None)
                 return result
             finally:
                 if close_service:
@@ -2083,6 +2097,8 @@ class SessionGateway:
         session_id: str,
         configuration: _ServiceConfiguration,
     ) -> SessionService:
+        from heartwood.gateway._research_evaluation import ResearchStageEvaluator
+
         backend = self._backend(
             model_settings=configuration.model_settings,
             action_settings=configuration.action_settings,
@@ -2095,6 +2111,7 @@ class SessionGateway:
             backend=backend,
             policy_profile=configuration.policy_profile,
             env=self.env,
+            workflow_evaluator=ResearchStageEvaluator(self.workspace_inspector),
             event_sink=lambda events: self._publish_background_events(
                 session_id=session_id,
                 events=events,
@@ -2107,6 +2124,8 @@ class SessionGateway:
 
     def _storage_service(self, session_id: str) -> SessionService:
         """Build an uncached service for commands that only access durable state."""
+        from heartwood.gateway._research_evaluation import ResearchStageEvaluator
+
         configuration = self._service_configuration()
         return SessionService.local_default(
             self.sessions_root,
@@ -2114,6 +2133,7 @@ class SessionGateway:
             backend=_UnconfiguredAgentBackend(configuration.action_settings.confirmation_mode),
             policy_profile=configuration.policy_profile,
             env=self.env,
+            workflow_evaluator=ResearchStageEvaluator(self.workspace_inspector),
         )
 
     def _backend(
@@ -2138,6 +2158,7 @@ class SessionGateway:
         except ModelSettingsError:
             return _UnconfiguredAgentBackend(action_settings.confirmation_mode)
         selected_model = selected_model if profile.is_local else None
+        from heartwood.core_adapter.workflow_runtime import workflow_run
         from heartwood.gateway._openhands_sdk import OpenHandsSdkBackend
 
         return OpenHandsSdkBackend(
@@ -2163,6 +2184,10 @@ class SessionGateway:
                 managed_model_native_tool_calling(selected_model.tool_call_parser)
                 if selected_model is not None
                 else None
+            ),
+            structured_task_outcomes=(
+                workflow_run(FileSessionStore(self.sessions_root, session_id).replay_events())
+                is not None
             ),
         )
 

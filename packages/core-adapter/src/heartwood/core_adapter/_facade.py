@@ -18,6 +18,7 @@ from typing import Literal, Protocol, cast
 
 from heartwood.core_adapter._state import _write_private_json_atomic
 from heartwood.schemas import JsonValue
+from heartwood.schemas.workflows import WorkflowOutcomeStatus
 
 
 class BackendEventKind(StrEnum):
@@ -231,6 +232,7 @@ class _BackendEvent:
 @dataclass(frozen=True, slots=True, kw_only=True)
 class BackendAgentMessageEvent(_BackendEvent):
     message: str
+    outcome_status: WorkflowOutcomeStatus | None = None
     kind: Literal[BackendEventKind.AGENT_MESSAGE] = field(
         default=BackendEventKind.AGENT_MESSAGE,
         init=False,

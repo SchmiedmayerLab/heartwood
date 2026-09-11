@@ -6,6 +6,8 @@
 
 """Shared bounded-work contracts for agent tasks and research evaluations."""
 
+from __future__ import annotations
+
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -37,6 +39,19 @@ class ExecutionUsage(BaseModel):
     reported_cost_usd: float | None = Field(default=None, ge=0)
     proposed_actions: int | None = Field(default=None, ge=0)
     elapsed_seconds: float = Field(ge=0)
+
+    def since(self, baseline: ExecutionUsage) -> ExecutionUsage:
+        """Subtract known counters; unknown measurements stay unknown and resets fail closed."""
+        values: dict[str, int | float | None] = {}
+        for name, current in self.model_dump().items():
+            previous = getattr(baseline, name)
+            if current is None or previous is None:
+                values[name] = None
+            elif current < previous:
+                raise ValueError("Execution counters decreased; the measurement is unavailable")
+            else:
+                values[name] = current - previous
+        return ExecutionUsage.model_validate(values)
 
     def exhausted_limits(self, budget: ExecutionBudget) -> tuple[ExecutionLimit, ...]:
         """Limits that prevent admitting more work, including exactly reached limits."""

@@ -52,6 +52,7 @@ class CommandKind(StrEnum):
     RESUME = "resume"
     REPLAY = "replay"
     AUDIT_EXPORT = "audit.export"
+    WORKFLOW = "workflow"
 
 
 def new_command_id(session_id: str, kind: CommandKind | str) -> str:
@@ -88,6 +89,7 @@ class EventKind(StrEnum):
     SESSION_RESUMED = "session.resumed"
     AUDIT_EXPORT_RECORDED = "audit.export.recorded"
     ERROR_RECORDED = "error.recorded"
+    WORKFLOW_UPDATED = "workflow.updated"
 
 
 class _SessionRecord(BaseModel):

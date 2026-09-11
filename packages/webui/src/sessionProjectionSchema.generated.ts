@@ -21,6 +21,7 @@ export const sessionProjectionJsonSchema = {
         "resume",
         "replay",
         "audit.export",
+        "workflow",
       ],
       type: "string",
     },
@@ -44,8 +45,32 @@ export const sessionProjectionJsonSchema = {
         "session.resumed",
         "audit.export.recorded",
         "error.recorded",
+        "workflow.updated",
       ],
       type: "string",
+    },
+    ExecutionUsage: {
+      additionalProperties: false,
+      properties: {
+        elapsed_seconds: { minimum: 0, type: "number" },
+        input_tokens: {
+          anyOf: [{ minimum: 0, type: "integer" }, { type: "null" }],
+        },
+        model_calls: {
+          anyOf: [{ minimum: 0, type: "integer" }, { type: "null" }],
+        },
+        output_tokens: {
+          anyOf: [{ minimum: 0, type: "integer" }, { type: "null" }],
+        },
+        proposed_actions: {
+          anyOf: [{ minimum: 0, type: "integer" }, { type: "null" }],
+        },
+        reported_cost_usd: {
+          anyOf: [{ minimum: 0, type: "number" }, { type: "null" }],
+        },
+      },
+      required: ["elapsed_seconds"],
+      type: "object",
     },
     JsonValue: {
       anyOf: [
@@ -459,6 +484,150 @@ export const sessionProjectionJsonSchema = {
       ],
       type: "string",
     },
+    WorkflowBoundInput: {
+      additionalProperties: false,
+      properties: {
+        input_id: { $ref: "#/$defs/WorkflowIdentifier" },
+        kind: { enum: ["file", "text"], type: "string" },
+        sha256: { pattern: "^[0-9a-f]{64}$", type: "string" },
+        value: { maxLength: 8000, minLength: 1, type: "string" },
+      },
+      required: ["input_id", "kind", "value", "sha256"],
+      type: "object",
+    },
+    WorkflowCheckResult: {
+      additionalProperties: false,
+      properties: {
+        check_id: { $ref: "#/$defs/WorkflowIdentifier" },
+        evaluator_id: { $ref: "#/$defs/WorkflowIdentifier" },
+        inspected: {
+          items: { $ref: "#/$defs/WorkflowValueFingerprint" },
+          type: "array",
+        },
+        status: { enum: ["passed", "failed", "not_run"], type: "string" },
+      },
+      required: ["check_id", "evaluator_id", "status", "inspected"],
+      type: "object",
+    },
+    WorkflowIdentifier: {
+      pattern: "^[a-z][a-z0-9_.-]{0,127}$",
+      type: "string",
+    },
+    WorkflowProjectBinding: {
+      additionalProperties: false,
+      properties: {
+        inputs: {
+          items: { $ref: "#/$defs/WorkflowBoundInput" },
+          maxItems: 32,
+          minItems: 1,
+          type: "array",
+        },
+        output_directory: { maxLength: 512, minLength: 1, type: "string" },
+        workflow_fingerprint: { pattern: "^[0-9a-f]{64}$", type: "string" },
+        workflow_id: { $ref: "#/$defs/WorkflowIdentifier" },
+      },
+      required: [
+        "workflow_id",
+        "workflow_fingerprint",
+        "output_directory",
+        "inputs",
+      ],
+      type: "object",
+    },
+    WorkflowRun: {
+      additionalProperties: false,
+      properties: {
+        binding: { $ref: "#/$defs/WorkflowProjectBinding" },
+        completed: {
+          items: { $ref: "#/$defs/WorkflowStageEvaluation" },
+          type: "array",
+        },
+        created_at: { format: "date-time", type: "string" },
+        evaluation: {
+          anyOf: [
+            { $ref: "#/$defs/WorkflowStageEvaluation" },
+            { type: "null" },
+          ],
+        },
+        phase: {
+          enum: [
+            "ready",
+            "running",
+            "review",
+            "blocked",
+            "completed",
+            "cancelled",
+          ],
+          type: "string",
+        },
+        revision: { minimum: 0, type: "integer" },
+        run_id: { minLength: 1, type: "string" },
+        stage_id: { $ref: "#/$defs/WorkflowIdentifier" },
+        stage_started_at: {
+          anyOf: [{ format: "date-time", type: "string" }, { type: "null" }],
+        },
+        stage_usage_baseline: {
+          anyOf: [{ $ref: "#/$defs/ExecutionUsage" }, { type: "null" }],
+        },
+        started_sequence: {
+          anyOf: [{ minimum: 0, type: "integer" }, { type: "null" }],
+        },
+      },
+      required: [
+        "run_id",
+        "revision",
+        "binding",
+        "stage_id",
+        "phase",
+        "created_at",
+      ],
+      type: "object",
+    },
+    WorkflowStageAssessment: {
+      additionalProperties: false,
+      properties: {
+        evidence_fingerprint: { pattern: "^[0-9a-f]{64}$", type: "string" },
+        evidence_satisfied: { type: "boolean" },
+        reasons: { items: { type: "string" }, type: "array" },
+        researcher_review_required: { type: "boolean" },
+        stage_id: { $ref: "#/$defs/WorkflowIdentifier" },
+        workflow_fingerprint: { pattern: "^[0-9a-f]{64}$", type: "string" },
+      },
+      required: [
+        "workflow_fingerprint",
+        "stage_id",
+        "evidence_fingerprint",
+        "evidence_satisfied",
+        "researcher_review_required",
+        "reasons",
+      ],
+      type: "object",
+    },
+    WorkflowStageEvaluation: {
+      additionalProperties: false,
+      properties: {
+        artifacts: {
+          items: { $ref: "#/$defs/WorkflowValueFingerprint" },
+          type: "array",
+        },
+        assessment: { $ref: "#/$defs/WorkflowStageAssessment" },
+        checks: {
+          items: { $ref: "#/$defs/WorkflowCheckResult" },
+          type: "array",
+        },
+      },
+      required: ["artifacts", "checks", "assessment"],
+      type: "object",
+    },
+    WorkflowValueFingerprint: {
+      additionalProperties: false,
+      properties: {
+        artifact_id: { $ref: "#/$defs/WorkflowIdentifier" },
+        sha256: { pattern: "^[0-9a-f]{64}$", type: "string" },
+      },
+      required: ["artifact_id", "sha256"],
+      type: "object",
+    },
   },
   additionalProperties: false,
   properties: {
@@ -512,11 +681,13 @@ export const sessionProjectionJsonSchema = {
       items: { $ref: "#/$defs/ProjectionUsage" },
       type: "array",
     },
+    workflow: { anyOf: [{ $ref: "#/$defs/WorkflowRun" }, { type: "null" }] },
     workspaceRevision: { minimum: -1, type: "integer" },
   },
   required: [
     "schema_version",
     "sessionId",
+    "workflow",
     "eventCount",
     "revision",
     "workspaceRevision",

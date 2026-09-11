@@ -62,9 +62,11 @@ from openhands.sdk.settings import (
 )
 from openhands.sdk.skills import Skill
 from openhands.sdk.subagent import AgentDefinition, register_agent_if_absent
+from openhands.sdk.tool.builtins.finish import FinishTool
 from openhands.sdk.tool.schema import Observation
 from openhands.tools import TaskTrackerTool, TerminalTool
 from openhands.tools.file_editor import FileEditorAction
+from openhands.tools.preset import TaskOutcome
 from openhands.tools.task import TaskAction, TaskObservation
 from openhands.tools.task_tracker import TaskTrackerObservation
 from openhands.tools.terminal import TerminalAction
@@ -206,6 +208,7 @@ class OpenHandsSdkBackend:
         llm_extra_body: Mapping[str, object] | None = None,
         native_tool_calling: bool | None = None,
         conversation_factory: ConversationFactory | None = None,
+        structured_task_outcomes: bool = False,
     ) -> None:
         profile.validate()
         if action_confirmation_mode not in {"always-confirm", "confirm-risky"}:
@@ -226,6 +229,7 @@ class OpenHandsSdkBackend:
         self._security_analyzer: SecurityAnalyzerBase | None = None
         self._conversation_factory = conversation_factory or self._default_conversation_factory
         self._injected_conversation_factory = conversation_factory is not None
+        self._structured_task_outcomes = structured_task_outcomes
         self._conversation: BaseConversation | None = None
         self._conversation_lock = RLock()
         self._conversation_closing = False
@@ -724,6 +728,8 @@ class OpenHandsSdkBackend:
         ]
         if specialist_tool := self._specialist_tool():
             tools.append(specialist_tool)
+        if self._structured_task_outcomes:
+            tools.append(Tool(name="FinishTool", params={"response_schema": TaskOutcome}))
         settings = _agent_settings(
             llm=llm,
             tools=tools,
@@ -731,6 +737,14 @@ class OpenHandsSdkBackend:
             condenser=_context_condenser_settings(self.profile),
         )
         agent = settings.create_agent()
+        if self._structured_task_outcomes:
+            agent = agent.model_copy(
+                update={
+                    "include_default_tools": [
+                        name for name in agent.include_default_tools if name != "FinishTool"
+                    ]
+                }
+            )
         conversation_id = uuid.uuid5(uuid.NAMESPACE_URL, self.conversation_key)
         conversation_store = ContentMinimizedLocalFileStore(
             LocalConversation.get_persistence_dir(self.persistence_dir, conversation_id),
@@ -1309,10 +1323,14 @@ class OpenHandsSdkBackend:
                 return ()
             if event.tool_name == _OPENHANDS_FINISH_TOOL_NAME:
                 message = _finish_message(event)
+                outcome = _finish_outcome(event) if self._structured_task_outcomes else None
+                if not message and outcome is not None:
+                    message = outcome.summary
                 return (
                     (
                         BackendAgentMessageEvent(
                             message=message,
+                            outcome_status=outcome.status if outcome is not None else None,
                             source_event_id=f"{source}:message",
                         ),
                     )
@@ -1564,6 +1582,13 @@ def _finish_message(event: ActionEvent) -> str:
         return ""
     message = event.action.model_dump(mode="json").get("message")
     return message if isinstance(message, str) else ""
+
+
+def _finish_outcome(event: ActionEvent) -> TaskOutcome | None:
+    """Read the public structured finish contract, including restored SDK events."""
+    parser = FinishTool.create()[0].set_response_schema(TaskOutcome)
+    outcome = parser.parse_last_response([event])
+    return outcome if isinstance(outcome, TaskOutcome) else None
 
 
 def _tool_call(
