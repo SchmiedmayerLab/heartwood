@@ -4,6 +4,10 @@
 #
 # SPDX-License-Identifier: MIT
 
+# Security floors for shared HTTP and credential-handling dependencies.
+aiohttp>=3.14.3
+cryptography>=50.0.0
+
 vllm @ https://wheels.vllm.ai/ac7509e2b1db40fec2f03dde1ed4e9dfdc2338c9/vllm-0.27.2rc1.dev77%2Bgac7509e2b.cu129-cp38-abi3-manylinux_2_28_x86_64.whl#sha256=774cab63c82e511618fe859c2af4335be6f67ce1cab89dfcd0efb85f049e6d7e
 torch @ https://download-r2.pytorch.org/whl/cu129/torch-2.13.0%2Bcu129-cp312-cp312-manylinux_2_28_x86_64.whl#sha256=df28741fcd89e3da7cce2d48cbe5299d6732d510ac20f5d422d0b85edf18c327
 torchaudio @ https://download-r2.pytorch.org/whl/cu129/torchaudio-2.11.0%2Bcu129-cp312-cp312-manylinux_2_28_x86_64.whl#sha256=de4105653562f031edd6ddf7dd1485f07db6ac62cdc90d17364648cd3c89eb5a
