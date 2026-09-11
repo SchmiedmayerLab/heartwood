@@ -52,30 +52,36 @@ def compare_reproduction_artifacts(artifacts: Mapping[str, str], *, require_matc
 
 
 def evaluate_research_check(
-    evaluator_id: str, artifacts: Mapping[str, str]
+    evaluator_id: str,
+    artifacts: Mapping[str, str],
+    *,
+    invalid_status: Literal["failed", "not_run"] = "failed",
 ) -> Literal["passed", "failed", "not_run"]:
     """Evaluate supplied bounded text; never read files or execute generated code.
 
     Execution reproduction needs a gateway-owned execution witness, not matching
     text. Unsupported evaluators cannot become successful checks by default.
+    Reviewers use ``not_run`` for invalid inputs so unavailable evidence cannot
+    become a confirmed defect merely by failing a prerequisite or resource limit.
     """
     try:
         if any(len(text.encode("utf-8")) > MAX_RESEARCH_TEXT_BYTES for text in artifacts.values()):
-            return "failed"
+            return invalid_status
         evaluator = _EVALUATORS.get(evaluator_id)
         if evaluator is None:
             return "not_run"
         return "passed" if evaluator(artifacts) else "failed"
+    except SyntaxError:
+        return "failed" if evaluator_id == "python.syntax" else invalid_status
     except (
         ValueError,
         KeyError,
         TypeError,
         ArithmeticError,
         csv.Error,
-        SyntaxError,
         RecursionError,
     ):
-        return "failed"
+        return invalid_status
 
 
 def supported_research_checks() -> frozenset[str]:
@@ -140,10 +146,14 @@ def _partitions(
 
 
 def _valid_plan(artifacts: Mapping[str, str]) -> bool:
+    return bool(artifacts["question"].strip()) and _valid_baseline_inputs(artifacts)
+
+
+def _valid_baseline_inputs(artifacts: Mapping[str, str]) -> bool:
     dictionary, rows = _data(artifacts)
     plan = AnalysisPlan.model_validate_json(artifacts["plan"])
     _partitions(dictionary, rows)
-    return bool(artifacts["question"].strip()) and _compatible_plan(dictionary, plan, rows)
+    return _compatible_plan(dictionary, plan, rows)
 
 
 def _compatible_plan(
@@ -317,6 +327,7 @@ _EVALUATORS: dict[str, Callable[[Mapping[str, str]], bool]] = {
         bool(artifacts) and all(ast.parse(text).body for text in artifacts.values())
     ),
     "research.analysis-plan": _valid_plan,
+    "research.baseline-inputs": _valid_baseline_inputs,
     "research.readiness": _valid_readiness,
     "research.baseline": _valid_baseline,
 }

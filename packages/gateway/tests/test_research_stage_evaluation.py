@@ -17,6 +17,7 @@ import pytest
 from heartwood.core_adapter.research_checks import evaluate_research_check
 from heartwood.gateway import ProjectContext, SessionGateway
 from heartwood.schemas import WorkspaceFileResponse
+from heartwood.schemas.review import ReviewCandidate, ReviewSubmission
 
 
 def _values() -> dict[str, str]:
@@ -81,6 +82,76 @@ def _values() -> dict[str, str]:
         ),
         "report": "# Analysis\nSynthetic results require interpretation and independent review.\n",
     }
+
+
+@pytest.mark.parametrize(
+    ("damage", "expected"),
+    [
+        ("none", "rejected"),
+        ("metric", "verified"),
+        ("prediction", "verified"),
+        ("malformed-metrics", "unavailable"),
+        ("malformed-data", "unavailable"),
+        ("unsupported-plan", "unavailable"),
+        ("constant-predictor", "unavailable"),
+        ("overlapping-groups", "unavailable"),
+    ],
+)
+def test_statistical_review_separates_inconsistent_outputs_from_unavailable_checks(
+    tmp_path: Path, damage: str, expected: str
+) -> None:
+    values = _values()
+    if damage == "metric":
+        values["metrics"] = json.dumps({**json.loads(values["metrics"]), "test_rmse": 100})
+    elif damage == "prediction":
+        values["predictions"] = values["predictions"].replace("c,1,11", "c,1,12")
+    elif damage == "malformed-metrics":
+        values["metrics"] = "not JSON"
+    elif damage == "malformed-data":
+        values["data"] = "a,b\nwrong-shape\n"
+    elif damage == "unsupported-plan":
+        values["plan"] = json.dumps({**json.loads(values["plan"]), "features": ["post_outcome"]})
+    elif damage == "constant-predictor":
+        values["data"] = (
+            values["data"]
+            .replace("a,2,2", "a,2,1")
+            .replace("b,1,3", "b,1,1")
+            .replace("b,2,4", "b,2,1")
+        )
+    elif damage == "overlapping-groups":
+        values["data"] = values["data"].replace("c,1,5,11", "a,3,5,11")
+    artifacts = {
+        name: f"{name}.txt" for name in ("data", "dictionary", "plan", "metrics", "predictions")
+    }
+    for name, path in artifacts.items():
+        (tmp_path / path).write_text(values[name])
+    gateway = SessionGateway(project=ProjectContext(tmp_path))
+    snapshot = gateway.prepare_research_review(artifacts)
+    submission = ReviewSubmission(
+        review_id="statistical-review-1",
+        reviewer_id="statistical-reviewer",
+        snapshot_sha256=snapshot.fingerprint,
+        candidates=(
+            ReviewCandidate(
+                candidate_id="metrics-wrong",
+                condition="baseline-result-inconsistent",
+                category="statistical",
+                severity="critical",
+                summary="There is definitely data leakage.",
+                artifact_ids=("metrics", "predictions"),
+            ),
+        ),
+    )
+    finding = gateway.assess_research_review(snapshot, [submission]).findings[0]
+    assert finding.verification == expected
+    assert finding.verified_claim == (
+        "The baseline results disagree with the independently recomputed analysis."
+        if expected == "verified"
+        else None
+    )
+    assert finding.disposition == ("open" if expected == "verified" else "not_actionable")
+    assert {item.artifact_id for item in finding.evidence} == artifacts.keys()
+    assert not (tmp_path / ".heartwood").exists()
 
 
 @pytest.mark.parametrize(

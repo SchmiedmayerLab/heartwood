@@ -203,6 +203,7 @@ from heartwood.schemas.experiments import (
     ExperimentExport,
     ExperimentExportBinding,
 )
+from heartwood.schemas.review import ReviewAssessment, ReviewSnapshot, ReviewSubmission
 from heartwood.schemas.workflows import (
     WorkflowCatalog,
     WorkflowOutcomeStatus,
@@ -1001,6 +1002,22 @@ class SessionGateway:
         from heartwood.gateway._research_evaluation import ResearchStageEvaluator
 
         return ResearchStageEvaluator.catalog()
+
+    @_serialized_state
+    def prepare_research_review(self, artifacts: Mapping[str, str]) -> ReviewSnapshot:
+        """Capture explicitly selected review context without model work or state mutation."""
+        from heartwood.gateway._research_review import ResearchReviewEvaluator
+
+        return ResearchReviewEvaluator(self.workspace_inspector).prepare(artifacts)
+
+    @_serialized_state
+    def assess_research_review(
+        self, snapshot: ReviewSnapshot, submissions: Sequence[ReviewSubmission]
+    ) -> ReviewAssessment:
+        """Independently assess associated reviewer proposals without authorizing corrections."""
+        from heartwood.gateway._research_review import ResearchReviewEvaluator
+
+        return ResearchReviewEvaluator(self.workspace_inspector).assess(snapshot, submissions)
 
     @_serialized_state
     def experiment_records(self) -> ExperimentCollection:

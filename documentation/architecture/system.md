@@ -88,6 +88,22 @@ The checks do not establish that an analysis is scientifically appropriate or re
 They neither launch an agent nor grant permission to advance stages or approve tools.
 Execution and recovery belong to the existing gateway and authoritative session command/event path, not a separate workflow persistence layer.
 
+### Independent Review Evidence
+
+Review proposals and independently verified findings have separate typed contracts.
+The gateway binds explicitly selected project files to their exact content hashes and byte counts through the existing confined workspace reader.
+A submission references that snapshot; changed or unavailable context cannot support an actionable finding.
+Review identities reject conflicting retries, and equivalent conditions on the same evidence produce one finding with the original reviewer claims retained separately.
+
+The read-only verification service supports three bounded observations: empty or syntactically invalid Python source, baseline results inconsistent with independent recomputation, and byte differences between declared original and reproduced artifacts.
+Unsupported conditions, invalid analysis prerequisites, and exhausted check limits remain unverified.
+Verified claims and their severity come from the maintained check, not from the model's explanation.
+A syntax check does not execute code, a byte comparison does not prove reproduction, and a matching numerical result does not establish scientific appropriateness.
+
+These assessments are observations, not action permissions or proof that files remain unchanged afterward.
+The service does not execute corrections, start a reviewer, persist session transitions, or authenticate a model-supplied reviewer identity.
+Its caller owns the association between a submission and the actual reviewer; detailed proposals belong to scientific review context, not the content-minimized security audit.
+
 ### Journaled Stage Execution
 
 The gateway accepts explicit workflow start, run, evaluate, review, and cancel commands through the existing session command journal.
