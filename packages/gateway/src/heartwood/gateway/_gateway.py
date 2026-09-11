@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import shutil
 from collections.abc import Callable, Mapping, Sequence
@@ -163,6 +165,7 @@ from heartwood.gateway._workspace import WorkspaceInspector
 from heartwood.model_policy import ModelPolicyEngine
 from heartwood.persistence import DurableFileError, write_private_text_atomic
 from heartwood.schemas import (
+    ActionConfirmationMode,
     ActionSettingsResponse,
     AuditExportResponse,
     CredentialSettingsResponse,
@@ -191,6 +194,7 @@ from heartwood.schemas import (
     WorkspaceTreeResponse,
     api_response,
 )
+from heartwood.schemas.evaluation import EvaluationRuntimeObservation
 from heartwood.session import CommandKind, EventKind, SessionCommand, SessionEvent
 from heartwood.skills import (
     SkillArtifactStore,
@@ -911,6 +915,38 @@ class SessionGateway:
                 return False
             service.reconcile()
             return True
+
+    @_serialized_state
+    def evaluation_observation(self, *, session_id: str) -> EvaluationRuntimeObservation:
+        """Capture the session's client runtime, distinct from declared server metadata."""
+        from heartwood.gateway._openhands_sdk import OpenHandsSdkBackend
+
+        service = self._service(session_id)
+        policy = json.dumps(
+            service.policy_profile.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
+        )
+        digest = hashlib.sha256(policy.encode()).hexdigest()
+        backend = service.backend
+        if isinstance(backend, OpenHandsSdkBackend):
+            return backend.evaluation_observation(
+                platform=service.platform_adapter.adapter_id, policy_fingerprint=digest
+            )
+        return EvaluationRuntimeObservation(
+            backend=backend.backend_id,
+            source=(
+                "deterministic"
+                if isinstance(backend, DeterministicAgentBackend)
+                else "unconfigured"
+                if isinstance(backend, _UnconfiguredAgentBackend)
+                else "injected"
+            ),
+            request_model=None,
+            openhands_version=None,
+            model_options_fingerprint=None,
+            platform=service.platform_adapter.adapter_id,
+            policy_fingerprint=digest,
+            action_confirmation=cast(ActionConfirmationMode, backend.action_confirmation_mode),
+        )
 
     @_serialized_state
     def persisted_session_projection(self, *, session_id: str) -> SessionProjection:

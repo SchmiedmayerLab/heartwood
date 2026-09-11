@@ -44,6 +44,8 @@ def assess_research_evidence(
     evidence: list[UUID] = []
     if configuration.model_revision is None:
         reasons.add("model_revision_unknown")
+    if configuration.runtime_fingerprint is None:
+        reasons.add("runtime_unbound")
     cutoff = now - timedelta(days=policy.maximum_age_days)
     scoped = [
         run
@@ -72,6 +74,27 @@ def assess_research_evidence(
             reasons.add(f"{case.case_id}:insufficient_repeats")
         required = {check.check_id: check.dimension for check in case.required_checks}
         for run in candidates:
+            runtime = run.runtime_observation
+            if runtime is None:
+                reasons.add(f"{case.case_id}:runtime_unobserved")
+            else:
+                if runtime.source != "production":
+                    reasons.add(f"{case.case_id}:runtime_not_production")
+                if runtime.fingerprint != configuration.runtime_fingerprint:
+                    reasons.add(f"{case.case_id}:runtime_mismatch")
+                if runtime.declaration_mismatches(configuration):
+                    reasons.add(f"{case.case_id}:runtime_declaration_mismatch")
+                if any(
+                    value is None
+                    for value in (
+                        runtime.request_model,
+                        runtime.openhands_version,
+                        runtime.model_options_fingerprint,
+                    )
+                ):
+                    reasons.add(f"{case.case_id}:runtime_identity_unknown")
+                if runtime.max_input_tokens is None or runtime.max_output_tokens is None:
+                    reasons.add(f"{case.case_id}:runtime_context_unknown")
             if run.status != "completed":
                 reasons.add(f"{case.case_id}:incomplete_trial")
             for limit in run.usage.exceeded_limits(run.budget):

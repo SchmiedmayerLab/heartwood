@@ -26,6 +26,7 @@ from heartwood.schemas.evaluation import (
     EvaluationDimension,
     EvaluationPolicy,
     EvaluationRun,
+    EvaluationRuntimeObservation,
     EvaluationSuite,
     RequiredEvaluationCheck,
 )
@@ -34,10 +35,26 @@ from heartwood.schemas.execution import ExecutionUsage
 NOW = datetime(2026, 9, 10, tzinfo=UTC)
 
 
+def _runtime() -> EvaluationRuntimeObservation:
+    return EvaluationRuntimeObservation(
+        backend="openhands-sdk",
+        source="production",
+        request_model="test/model",
+        openhands_version="1.46.0",
+        model_options_fingerprint="a" * 64,
+        platform="generic",
+        policy_fingerprint="f" * 64,
+        action_confirmation="always-confirm",
+        max_input_tokens=32768,
+        max_output_tokens=4096,
+    )
+
+
 def _configuration() -> EvaluationConfiguration:
     return EvaluationConfiguration(
         provider="synthetic",
         model="test/model",
+        request_model="test/model",
         model_revision="a" * 40,
         platform="generic",
         hardware=("cpu",),
@@ -49,6 +66,7 @@ def _configuration() -> EvaluationConfiguration:
         tool_parser="native",
         skill_tree_digest="b" * 64,
         harness_revision="c" * 64,
+        runtime_fingerprint=_runtime().fingerprint,
     )
 
 
@@ -81,6 +99,7 @@ def _runs() -> list[EvaluationRun]:
             seed=repeat,
             execution="live_model",
             configuration=_configuration(),
+            runtime_observation=_runtime(),
             started_at=NOW - timedelta(minutes=10 - repeat),
             finished_at=NOW - timedelta(minutes=9 - repeat),
             checks=tuple(
@@ -116,6 +135,64 @@ def test_repeated_results_are_exactly_scoped_and_order_independent() -> None:
     assert assessment == reordered
     assert assessment.configuration_fingerprint == _configuration().fingerprint
     assert runs[0].usage.reported_cost_usd is None
+
+
+@pytest.mark.parametrize(
+    ("changes", "reason"),
+    [
+        ({"source": "injected"}, "runtime_not_production"),
+        ({"source": "deterministic"}, "runtime_not_production"),
+        ({"source": "unconfigured"}, "runtime_not_production"),
+        ({"request_model": None}, "runtime_identity_unknown"),
+        ({"openhands_version": None}, "runtime_identity_unknown"),
+        ({"model_options_fingerprint": None}, "runtime_identity_unknown"),
+        ({"max_input_tokens": None}, "runtime_context_unknown"),
+        ({"max_output_tokens": None}, "runtime_context_unknown"),
+        ({"request_model": "other-model"}, "runtime_declaration_mismatch"),
+        ({"openhands_version": "1.41.0"}, "runtime_declaration_mismatch"),
+        ({"platform": "terra"}, "runtime_declaration_mismatch"),
+        ({"max_input_tokens": 65536}, "runtime_declaration_mismatch"),
+        ({"max_output_tokens": 8192}, "runtime_declaration_mismatch"),
+    ],
+)
+def test_bound_but_ineligible_runtime_cannot_qualify(
+    changes: dict[str, object], reason: str
+) -> None:
+    runtime = EvaluationRuntimeObservation.model_validate({**_runtime().model_dump(), **changes})
+    configuration = _configuration().model_copy(update={"runtime_fingerprint": runtime.fingerprint})
+    runs = [
+        run.model_copy(update={"runtime_observation": runtime, "configuration": configuration})
+        for run in _runs()
+    ]
+    result = assess_research_evidence(
+        suite=_suite(), configuration=configuration, runs=runs, policy=EvaluationPolicy(), now=NOW
+    )
+    assert not result.qualified
+    assert f"dataset-readiness:{reason}" in result.reasons
+
+
+@pytest.mark.parametrize("condition", ["missing", "substituted", "unbound"])
+def test_runtime_binding_is_required_for_qualification(condition: str) -> None:
+    configuration = _configuration()
+    runtime: EvaluationRuntimeObservation | None = _runtime()
+    if condition == "missing":
+        runtime = None
+        reason = "dataset-readiness:runtime_unobserved"
+    elif condition == "substituted":
+        runtime = _runtime().model_copy(update={"policy_fingerprint": "b" * 64})
+        reason = "dataset-readiness:runtime_mismatch"
+    else:
+        configuration = configuration.model_copy(update={"runtime_fingerprint": None})
+        reason = "runtime_unbound"
+    runs = [
+        run.model_copy(update={"runtime_observation": runtime, "configuration": configuration})
+        for run in _runs()
+    ]
+    result = assess_research_evidence(
+        suite=_suite(), configuration=configuration, runs=runs, policy=EvaluationPolicy(), now=NOW
+    )
+    assert not result.qualified
+    assert reason in result.reasons
 
 
 @pytest.mark.parametrize("change", ["hardware", "platform", "context_tokens", "harness_revision"])
@@ -370,7 +447,9 @@ def test_trial_store_retains_pending_evidence_and_finalizes_once(tmp_path: Path)
     assert store.records() == (run,)
 
 
-@pytest.mark.parametrize("field", ["configuration", "seed", "session_id", "checks"])
+@pytest.mark.parametrize(
+    "field", ["configuration", "seed", "session_id", "checks", "runtime_observation"]
+)
 def test_trial_finalization_cannot_substitute_reserved_contract(tmp_path: Path, field: str) -> None:
     run = _runs()[0]
     store = EvaluationStore(tmp_path)
@@ -381,6 +460,7 @@ def test_trial_finalization_cannot_substitute_reserved_contract(tmp_path: Path, 
         "seed": 999,
         "session_id": "other-session",
         "checks": [check.model_dump() for check in run.checks[1:]],
+        "runtime_observation": {**_runtime().model_dump(), "policy_fingerprint": "b" * 64},
     }
     changed = EvaluationRun.model_validate({**run.model_dump(), field: changes[field]})
 

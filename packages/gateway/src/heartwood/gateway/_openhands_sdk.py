@@ -17,6 +17,7 @@ import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
+from importlib.metadata import version
 from pathlib import Path
 from threading import Event as ThreadEvent
 from threading import Lock, RLock, Thread, current_thread
@@ -124,6 +125,7 @@ from heartwood.gateway._subscriptions import (
     create_openai_subscription_llm,
 )
 from heartwood.schemas import ActionConfirmationMode, JsonValue
+from heartwood.schemas.evaluation import EvaluationRuntimeObservation
 from heartwood.schemas.project_paths import ProjectPathError, project_relative_path
 
 install_privacy_safe_retry_logging()
@@ -223,6 +225,7 @@ class OpenHandsSdkBackend:
         self._native_tool_calling = native_tool_calling
         self._security_analyzer: SecurityAnalyzerBase | None = None
         self._conversation_factory = conversation_factory or self._default_conversation_factory
+        self._injected_conversation_factory = conversation_factory is not None
         self._conversation: BaseConversation | None = None
         self._conversation_lock = RLock()
         self._conversation_closing = False
@@ -302,6 +305,68 @@ class OpenHandsSdkBackend:
     def continuation_requires_model_authorization(self) -> bool:
         """Return true because OpenHands may call the model after continuing."""
         return True
+
+    def evaluation_observation(
+        self, *, platform: str, policy_fingerprint: str
+    ) -> EvaluationRuntimeObservation:
+        """Inspect the actual SDK model object without issuing a model request."""
+        state = self._get_conversation().state
+        llm = state.agent.llm
+        options = llm.model_dump(
+            mode="json",
+            include={
+                "model",
+                "base_url",
+                "api_version",
+                "api_mode",
+                "capability_overrides",
+                "max_input_tokens",
+                "max_output_tokens",
+                "max_message_chars",
+                "temperature",
+                "top_p",
+                "top_k",
+                "seed",
+                "reasoning_effort",
+                "reasoning_summary",
+                "enable_encrypted_reasoning",
+                "native_tool_calling",
+                "extended_thinking_budget",
+                "litellm_extra_body",
+                "disable_vision",
+                "disable_stop_word",
+                "force_string_serializer",
+                "custom_tokenizer",
+                "stream",
+                "num_retries",
+                "timeout",
+            },
+        )
+        options["policy_endpoint"] = self.profile.policy_endpoint
+        content = json.dumps(options, sort_keys=True, separators=(",", ":"))
+        security = json.dumps(
+            {
+                "deployment_policy": policy_fingerprint,
+                "confirmation": state.confirmation_policy.model_dump(mode="json"),
+                "analyzer": state.security_analyzer.model_dump(mode="json")
+                if state.security_analyzer is not None
+                else None,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return EvaluationRuntimeObservation(
+            backend=self.backend_id,
+            source="injected" if self._injected_conversation_factory else "production",
+            request_model=llm.model,
+            openhands_version=version("openhands-sdk"),
+            model_options_fingerprint=hashlib.sha256(content.encode()).hexdigest(),
+            platform=platform,
+            policy_fingerprint=hashlib.sha256(security.encode()).hexdigest(),
+            action_confirmation=self._action_confirmation_mode,
+            max_input_tokens=llm.max_input_tokens,
+            max_output_tokens=llm.max_output_tokens,
+        )
 
     def bind_runtime(
         self,

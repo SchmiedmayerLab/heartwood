@@ -78,6 +78,14 @@ Unavailable token counts and reported cost remain unknown rather than being reco
 The records have no fields for prompts, tool output, credentials, or participant data.
 Metadata still requires review before publication, and a content digest does not prove who produced an evaluation.
 
+The gateway separately observes the session's request model, installed OpenHands version, explicit context limits, selected confirmation mode, platform adapter, and fingerprints of model options and security configuration.
+The security fingerprint binds the deployment policy and the actual OpenHands confirmation policy and analyzer configuration.
+The driver binds this observation to the trial before model work and checks it again before reviewed continuations and finalization.
+Runtime changes leave incomplete evidence rather than combining results from different client configurations.
+Injected, deterministic, and unconfigured backends cannot supply live-model qualification; missing runtime identity or explicit context limits also prevent qualification.
+Remote model weights, precision, GPU hardware, and server software remain declared metadata and require deployment-side evidence.
+The client observation does not attest to those remote properties or verify the declared Skill and harness digests.
+
 The evidence assessor requires the latest three real-model trials of every case to pass all required checks within a configurable freshness window, which defaults to 30 days.
 Deterministic test doubles exercise the harness but cannot qualify a model.
 Changed configurations, changed suite definitions, unknown model revisions, expired evidence, missing checks, and recent failures cannot inherit earlier successful results.

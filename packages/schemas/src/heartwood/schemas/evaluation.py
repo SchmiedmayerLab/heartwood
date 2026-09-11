@@ -16,6 +16,7 @@ from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
+from heartwood.schemas._records import ActionConfirmationMode
 from heartwood.schemas.execution import ExecutionBudget, ExecutionUsage
 
 type EvaluationIdentifier = Annotated[
@@ -54,10 +55,11 @@ class EvaluationRecord(BaseModel):
 
 
 class EvaluationConfiguration(EvaluationRecord):
-    """Exact model, runtime, and platform scope of a measurement."""
+    """Declared model, server, and platform scope, not remote-server attestation."""
 
     provider: EvaluationIdentifier
     model: EvaluationIdentifier
+    request_model: EvaluationIdentifier
     model_revision: EvaluationIdentifier | None
     platform: EvaluationIdentifier
     hardware: tuple[EvaluationIdentifier, ...] = Field(min_length=1)
@@ -72,6 +74,35 @@ class EvaluationConfiguration(EvaluationRecord):
     tool_parser: EvaluationIdentifier
     skill_tree_digest: Sha256
     harness_revision: Sha256
+    runtime_fingerprint: Sha256 | None = None
+
+
+class EvaluationRuntimeObservation(EvaluationRecord):
+    """Gateway-observed client runtime without credentials or remote hardware claims."""
+
+    backend: EvaluationIdentifier
+    source: Literal["production", "injected", "deterministic", "unconfigured"]
+    request_model: EvaluationIdentifier | None
+    openhands_version: EvaluationIdentifier | None
+    model_options_fingerprint: Sha256 | None
+    platform: EvaluationIdentifier
+    policy_fingerprint: Sha256
+    action_confirmation: ActionConfirmationMode
+    max_input_tokens: int | None = Field(default=None, gt=0)
+    max_output_tokens: int | None = Field(default=None, gt=0)
+
+    def declaration_mismatches(self, configuration: EvaluationConfiguration) -> tuple[str, ...]:
+        """Compare only observed client fields, not remote-server declarations."""
+        pairs = (
+            ("request_model", self.request_model, configuration.request_model),
+            ("openhands_version", self.openhands_version, configuration.openhands_version),
+            ("platform", self.platform, configuration.platform),
+            ("context_tokens", self.max_input_tokens, configuration.context_tokens),
+            ("output_tokens", self.max_output_tokens, configuration.output_tokens),
+        )
+        return tuple(
+            name for name, actual, expected in pairs if actual is not None and actual != expected
+        )
 
 
 class EvaluationCheck(EvaluationRecord):
@@ -137,6 +168,7 @@ class EvaluationRun(EvaluationRecord):
     seed: int = Field(ge=0)
     execution: Literal["deterministic", "live_model"]
     configuration: EvaluationConfiguration
+    runtime_observation: EvaluationRuntimeObservation | None = None
     started_at: AwareDatetime
     finished_at: AwareDatetime
     checks: tuple[EvaluationCheck, ...]

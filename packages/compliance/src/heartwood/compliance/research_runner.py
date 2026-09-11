@@ -35,6 +35,7 @@ from heartwood.schemas.evaluation import (
     EvaluationCheck,
     EvaluationConfiguration,
     EvaluationRun,
+    EvaluationRuntimeObservation,
 )
 from heartwood.schemas.execution import ExecutionBudget, ExecutionUsage
 from heartwood.session import CommandKind, EventKind, SessionCommand
@@ -70,11 +71,14 @@ class _TrialSession:
     session_id: str
     run_id: UUID
     created_at: str
+    runtime: EvaluationRuntimeObservation
     approved_action_ids: set[str] = field(default_factory=set)
     reproductions: dict[str, _Reproduction] = field(default_factory=dict)
     reproduction_inputs: dict[str, str] = field(default_factory=dict)
 
     def command(self, suffix: str, kind: CommandKind, payload: dict[str, object]) -> SessionResult:
+        if kind in (CommandKind.CHAT, CommandKind.APPROVE, CommandKind.DENY):
+            self.verify_runtime()
         return self.gateway.handle(
             SessionCommand.model_validate(
                 {
@@ -86,6 +90,10 @@ class _TrialSession:
                 }
             )
         )
+
+    def verify_runtime(self) -> None:
+        if self.gateway.evaluation_observation(session_id=self.session_id) != self.runtime:
+            raise ValueError("Research client runtime changed during the trial")
 
     def pause(self) -> None:
         projection = self.gateway.session_projection(session_id=self.session_id)
@@ -159,8 +167,16 @@ def run_research_trial(
 
     run_id = uuid4()
     session_id = gateway.create_session(f"Research benchmark: {task.case.case_id}")["session_id"]
+    runtime = gateway.evaluation_observation(session_id=session_id)
+    if execution == "live_model" and runtime.source != "production":
+        raise ValueError("Live research evaluation requires the production OpenHands backend")
+    if runtime.declaration_mismatches(configuration):
+        raise ValueError("Research configuration does not match the observed client runtime")
+    if configuration.runtime_fingerprint not in (None, runtime.fingerprint):
+        raise ValueError("Research runtime does not match the requested runtime fingerprint")
+    configuration = configuration.model_copy(update={"runtime_fingerprint": runtime.fingerprint})
     started_at = datetime.now(UTC)
-    session = _TrialSession(gateway, session_id, run_id, started_at.isoformat())
+    session = _TrialSession(gateway, session_id, run_id, started_at.isoformat(), runtime)
     if supplied:
         session.reproduction_inputs.update({**inputs, **supplied})
     started = time.monotonic()
@@ -176,6 +192,7 @@ def run_research_trial(
         seed=seed,
         execution=execution,
         configuration=configuration,
+        runtime_observation=runtime,
         started_at=started_at,
         finished_at=started_at,
         budget=budget,
@@ -257,6 +274,7 @@ def run_research_trial(
 
         if not gateway.wait_for_session_idle(session_id=session_id, timeout=30):
             raise TimeoutError("Research trial did not reach a settled execution boundary")
+        session.verify_runtime()
         measured = _usage(gateway.session_projection(session_id=session_id), started)
         if measured.exceeded_limits(budget):
             stop = "budget-exceeded"

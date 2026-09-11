@@ -53,6 +53,7 @@ def _configuration() -> EvaluationConfiguration:
     return EvaluationConfiguration(
         provider="synthetic",
         model="test-model",
+        request_model="test-model",
         model_revision="a" * 40,
         platform="generic",
         hardware=("cpu",),
@@ -191,6 +192,73 @@ def _gateway(
         )
 
     return SessionGateway(project=ProjectContext(root), service_factory=service_factory, env={})
+
+
+@pytest.mark.parametrize("condition", ["live", "model", "platform", "sdk", "fingerprint"])
+def test_invalid_runtime_declarations_fail_before_model_work(
+    tmp_path: Path, condition: str
+) -> None:
+    task = _prepare(tmp_path, "dataset-readiness")
+    llm = TestLLM.from_messages([_finish()])
+    gateway = _gateway(tmp_path, llm)
+    changes: dict[str, dict[str, object]] = {
+        "live": {},
+        "model": {"request_model": "mislabelled-model"},
+        "platform": {"platform": "terra"},
+        "sdk": {"openhands_version": "1.41.0"},
+        "fingerprint": {"runtime_fingerprint": "d" * 64},
+    }
+    try:
+        with pytest.raises(
+            ValueError, match=r"production OpenHands|observed client runtime|runtime fingerprint"
+        ):
+            run_research_trial(
+                gateway,
+                task,
+                configuration=_configuration().model_copy(update=changes[condition]),
+                execution="live_model" if condition == "live" else "deterministic",
+                review=lambda _group: "approve",
+            )
+        assert llm.call_count == 0
+        assert not (gateway.project.state_root / "evaluations").exists()
+    finally:
+        gateway.stop()
+
+
+@pytest.mark.parametrize("during_review", [False, True])
+def test_runtime_change_leaves_incomplete_evidence_and_never_approves_a_tool(
+    tmp_path: Path, during_review: bool
+) -> None:
+    task = _prepare(tmp_path, "dataset-readiness")
+    llm = TestLLM.from_messages([_file_message(tmp_path)] if during_review else [_finish()])
+    gateway = _gateway(tmp_path, llm)
+
+    def review(_group: ProjectionApprovalGroup) -> ReviewDecision:
+        llm.temperature = 0.8
+        return "approve"
+
+    def observe(_projection: object) -> None:
+        if not during_review:
+            llm.temperature = 0.8
+
+    try:
+        with pytest.raises(ValueError, match="runtime changed"):
+            run_research_trial(
+                gateway,
+                task,
+                configuration=_configuration(),
+                execution="deterministic",
+                review=review,
+                observe=observe,
+            )
+        records = EvaluationStore(gateway.project.state_root / "evaluations").records()
+        assert len(records) == 1
+        assert records[0].status == "incomplete"
+        assert all(check.status == "not_run" for check in records[0].checks)
+        assert not (tmp_path / "analysis.py").exists()
+        assert llm.call_count <= 1
+    finally:
+        gateway.stop()
 
 
 class _MeteredTestLLM(TestLLM):
@@ -511,6 +579,11 @@ def test_baseline_uses_reviewed_tools_and_a_separate_process_to_reproduce_and_re
             check.check_id: "passed" for check in task.case.required_checks
         }
         assert trial.record.execution == "deterministic"
+        runtime = trial.record.runtime_observation
+        assert runtime is not None
+        assert runtime.source == "injected"
+        assert runtime.request_model == llm.model
+        assert trial.record.configuration.runtime_fingerprint == runtime.fingerprint
         assert llm.call_count == (6 if scratch_directory else 5)
         assert trial.record.usage.model_calls is None
         assert trial.record.usage.reported_cost_usd is None
