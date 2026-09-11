@@ -15,7 +15,7 @@ import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 import pytest
@@ -28,7 +28,8 @@ from heartwood.compliance.review_benchmarks import (
     planning_review_tasks,
     verify_planning_review,
 )
-from heartwood.compliance.review_trials import ReservedReviewTrial
+from heartwood.compliance.review_runner import run_planning_review_trial
+from heartwood.compliance.review_trials import ReservedReviewTrial, reserve_planning_review_trial
 from heartwood.core_adapter import (
     BackendAgentMessageEvent,
     BackendEvent,
@@ -730,7 +731,9 @@ def _begin_seeded_code_review(
     return source
 
 
-def _begin_baseline_plan(gateway: SessionGateway, root: Path) -> None:
+def _begin_baseline_plan(
+    gateway: SessionGateway, root: Path, *, question: str = "Predict response"
+) -> None:
     task = next(item for item in research_tasks() if item.case.case_id == "baseline-analysis")
     for name, content in task.inputs.items():
         (root / name).write_text(content)
@@ -742,7 +745,7 @@ def _begin_baseline_plan(gateway: SessionGateway, root: Path) -> None:
             inputs={
                 "data": "data.csv",
                 "dictionary": "dictionary.json",
-                "question": "Predict response",
+                "question": question,
             },
         )
     )
@@ -751,7 +754,7 @@ def _begin_baseline_plan(gateway: SessionGateway, root: Path) -> None:
     (root / "results/plan.json").write_text(
         json.dumps(
             {
-                "question": "Predict response",
+                "question": question,
                 "estimand": "Held-out prediction error",
                 "outcome": "response",
                 "features": ["measurement"],
@@ -2773,7 +2776,7 @@ def test_parallel_review_enforces_the_narrower_consented_stage_budget(
 
 
 def _reserve_parallel_trial(
-    gateway: SessionGateway, task: ResearchTask | None = None
+    gateway: SessionGateway, task: ResearchTask | None = None, *, workers: int = 2
 ) -> ReservedReviewTrial:
     from heartwood.compliance.evaluation_store import EvaluationStore
     from heartwood.model_policy.parallel_reviews import PARALLEL_REVIEW_CHECKS
@@ -2783,7 +2786,6 @@ def _reserve_parallel_trial(
         EvaluationConfiguration,
         EvaluationDimension,
         EvaluationRun,
-        EvaluationRuntimeObservation,
         EvaluationSuite,
         RequiredEvaluationCheck,
     )
@@ -2791,15 +2793,7 @@ def _reserve_parallel_trial(
 
     current = _state(gateway)
     stage = research_workflow(current.binding.workflow_id).stage(current.stage_id)
-    backend = gateway._services["research"].backend
-    assert isinstance(backend, OpenHandsSdkBackend)
-
-    def observe(session_id: str) -> EvaluationRuntimeObservation:
-        assert session_id == "research"
-        return backend.evaluation_observation(
-            platform="generic", policy_fingerprint="synthetic-policy"
-        )
-
+    observe = gateway.bind_evaluation_observer(session_id="research")
     runtime = observe("research")
     checks = {dimension.value: dimension for dimension in EvaluationDimension}
     checks.update(PARALLEL_REVIEW_CHECKS)
@@ -2839,9 +2833,18 @@ def _reserve_parallel_trial(
         skill_tree_digest="a" * 64,
         harness_revision="b" * 64,
         runtime_fingerprint=runtime.fingerprint,
-        specialist_concurrency=2,
+        specialist_concurrency=workers,
         specialist_catalog_fingerprint=runtime.specialist_catalog_fingerprint,
     )
+    if task is not None:
+        return reserve_planning_review_trial(
+            gateway,
+            task,
+            session_id="research",
+            configuration=configuration,
+            execution="deterministic",
+            budget=stage.budget,
+        )
     now = datetime.fromisoformat(gateway._services["research"].clock())
     trial = EvaluationRun(
         run_id=uuid4(),
@@ -2916,7 +2919,7 @@ def test_reserved_trial_is_rechecked_before_model_work(
 
 
 @pytest.mark.parametrize("approve", [False, True])
-@pytest.mark.parametrize("mode", ["sequential", "qualified", "experimental"])
+@pytest.mark.parametrize("mode", ["sequential", "qualified", "experimental", "retained-sequential"])
 @pytest.mark.parametrize("case_id", ["plan-valid", "plan-outcome-leakage"])
 def test_native_review_comparison_preserves_findings_consent_and_replay(
     tmp_path: Path,
@@ -2934,7 +2937,7 @@ def test_native_review_comparison_preserves_findings_consent_and_replay(
     from heartwood.core_adapter.workflow_runtime import workflow_run
 
     roles = ("research-planner", "statistical-reviewer")
-    workers = 1 if mode == "sequential" else 2
+    workers = 1 if mode in ("sequential", "retained-sequential") else 2
     task = next(task for task in planning_review_tasks() if task.case.case_id == case_id)
     candidates = (
         [
@@ -3018,35 +3021,60 @@ def test_native_review_comparison_preserves_findings_consent_and_replay(
 
     monkeypatch.setattr(TaskManager, "_run_until_finished", run_child)
     try:
-        _begin_baseline_plan(gateway, tmp_path)
+        _begin_baseline_plan(
+            gateway, tmp_path, question=json.loads(task.inputs["plan.json"])["question"]
+        )
         assert gateway.wait_for_session_idle(session_id="research", timeout=30)
         (tmp_path / "results/plan.json").write_text(task.inputs["plan.json"])
-        if mode == "experimental":
-            reservation = _reserve_parallel_trial(gateway, task)
-        if workers == 2:
-            gateway.handle(_projected_command(gateway, "prepare-parallel-review"))
-            preview = _state(gateway).parallel_review_plan
-            assert preview is not None
-            assert preview.purpose == (
-                "qualification-trial" if mode == "experimental" else "qualified-review"
+        if mode in ("experimental", "retained-sequential"):
+            from heartwood.gateway import ProjectionApprovalGroup
+
+            reservation = _reserve_parallel_trial(gateway, task, workers=workers)
+
+            def decide(group: ProjectionApprovalGroup) -> Literal["approve", "reject"]:
+                assert len(group.actions) == 2
+                assert all(action.details.kind == "task" for action in group.actions)
+                assert children == 0
+                return "approve" if approve else "reject"
+
+            trial = run_planning_review_trial(gateway, reservation, review=decide)
+            assert trial.record == reservation.record()
+            assert trial.record.status == "completed"
+            # TestLLM does not report provider accounting; unknown is not zero.
+            assert trial.record.usage.model_calls is None
+            assert trial.record.usage.proposed_actions == 2
+            checks = {check.check_id: check.status for check in trial.record.checks}
+            if approve:
+                assert set(checks.values()) == {"passed"}, checks
+            else:
+                assert trial.stop == "rejected"
+                assert checks["review.findings"] == "failed"
+                assert checks["review.schedule"] == "failed"
+            with pytest.raises(ValueError, match="incomplete reservation"):
+                run_planning_review_trial(gateway, reservation, review=decide)
+        else:
+            if workers == 2:
+                gateway.handle(_projected_command(gateway, "prepare-parallel-review"))
+                preview = _state(gateway).parallel_review_plan
+                assert preview is not None
+                assert preview.purpose == "qualified-review"
+            request = _projected_command(
+                gateway, "request-parallel-review" if workers == 2 else "request-review"
             )
-        request = _projected_command(
-            gateway, "request-parallel-review" if workers == 2 else "request-review"
-        )
-        gateway.handle(request)
-        assert gateway.wait_for_session_idle(session_id="research", timeout=30)
-        projection = gateway.session_projection(session_id="research")
-        assert projection.pending_approval is not None
-        assert len(projection.pending_approval.actions) == 2
-        assert children == 0
-        decision = SessionCommand(
-            command_id=uuid4().hex,
-            session_id="research",
-            kind=CommandKind.APPROVE if approve else CommandKind.DENY,
-            created_at="2026-09-11T00:00:00Z",
-            payload={"target_id": projection.pending_approval.group_id},
-        )
-        gateway.handle(decision)
+            gateway.handle(request)
+            assert gateway.wait_for_session_idle(session_id="research", timeout=30)
+            projection = gateway.session_projection(session_id="research")
+            assert projection.pending_approval is not None
+            assert len(projection.pending_approval.actions) == 2
+            assert children == 0
+            decision = SessionCommand(
+                command_id=uuid4().hex,
+                session_id="research",
+                kind=CommandKind.APPROVE if approve else CommandKind.DENY,
+                created_at="2026-09-11T00:00:00Z",
+                payload={"target_id": projection.pending_approval.group_id},
+            )
+            gateway.handle(decision)
         assert gateway.wait_for_session_idle(session_id="research", timeout=30)
         review = _state(gateway).research_review
         assert review is not None
@@ -3095,8 +3123,9 @@ def test_native_review_comparison_preserves_findings_consent_and_replay(
         parallel_review_preparer=preparer,
     )
     try:
-        assert restored.handle(request).replayed
-        assert restored.handle(decision).replayed
+        if mode not in ("experimental", "retained-sequential"):
+            assert restored.handle(request).replayed
+            assert restored.handle(decision).replayed
         assert _state(restored).research_review == review
         if approve:
             assert verify_planning_review(task, review).status == "passed"
@@ -3177,3 +3206,97 @@ def test_parallel_admission_recovers_append_boundaries_without_dispatch(
         assert unused.prompts == []
     finally:
         restored.stop()
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "changed-input",
+        "extra-file",
+        "symlink-plan",
+        "changed-after",
+        "observer-changed",
+        "stop",
+        "callback-error",
+    ],
+)
+def test_retained_review_rejects_substitution_and_retains_interruption(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    from dataclasses import replace
+
+    from heartwood.gateway import ProjectionApprovalGroup
+
+    task = planning_review_tasks()[0]
+    llm = TestLLM.from_messages(
+        [
+            _tool_message("finish", message="Plan ready", status="success", outcome_summary="Done"),
+            _tool_message(
+                "task",
+                description="Review plan",
+                prompt=task.instruction,
+                subagent_type="research-planner",
+            ),
+        ]
+    )
+    gateway = _sdk_gateway(tmp_path, llm, monkeypatch, specialists=True)
+    try:
+        _begin_baseline_plan(
+            gateway, tmp_path, question=json.loads(task.inputs["plan.json"])["question"]
+        )
+        assert gateway.wait_for_session_idle(session_id="research", timeout=30)
+        plan = tmp_path / "results/plan.json"
+        plan.write_text(task.inputs["plan.json"])
+        if failure in ("changed-input", "extra-file", "symlink-plan"):
+            if failure == "changed-input":
+                (tmp_path / "data.csv").write_text("substituted\n")
+            elif failure == "extra-file":
+                (tmp_path / "unexpected.txt").write_text("synthetic unrelated file\n")
+            else:
+                plan.unlink()
+                plan.symlink_to(tmp_path / "data.csv")
+            with pytest.raises(ValueError, match="exact synthetic fixture"):
+                _reserve_parallel_trial(gateway, task, workers=1)
+            assert not (gateway.project.state_root / "evaluations").exists()
+            assert llm.call_count == 1
+            return
+        reservation = _reserve_parallel_trial(gateway, task, workers=1)
+        if failure == "changed-after":
+            plan.write_text("{}\n")
+        elif failure == "observer-changed":
+            runtime = reservation.observe_runtime("research")
+            reservation = replace(
+                reservation,
+                observe_runtime=lambda _: runtime.model_copy(
+                    update={"policy_fingerprint": "f" * 64}
+                ),
+            )
+
+        def decide(group: ProjectionApprovalGroup) -> Literal["stop"]:
+            assert group.actions
+            if failure == "callback-error":
+                raise RuntimeError("Synthetic reviewer interruption")
+            return "stop"
+
+        if failure in ("changed-after", "observer-changed"):
+            with pytest.raises(ValueError, match=r"exact synthetic fixture|runtime changed"):
+                run_planning_review_trial(gateway, reservation, review=decide)
+            assert llm.call_count == 1
+            assert reservation.record().status == "incomplete"
+        elif failure == "callback-error":
+            with pytest.raises(RuntimeError, match="reviewer interruption"):
+                run_planning_review_trial(gateway, reservation, review=decide)
+            assert reservation.record().status == "incomplete"
+            assert gateway.wait_for_session_idle(session_id="research")
+            assert gateway.session_projection(session_id="research").pending_approval is not None
+        else:
+            result = run_planning_review_trial(gateway, reservation, review=decide)
+            assert result.stop == "review-stopped"
+            assert result.record.status == "completed"
+            assert any(check.status == "failed" for check in result.record.checks)
+        assert all(
+            item.task_id is None
+            for item in gateway.session_projection(session_id="research").subagents
+        )
+    finally:
+        gateway.stop()

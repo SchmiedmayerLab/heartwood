@@ -978,9 +978,41 @@ class SessionGateway:
     @_serialized_state
     def evaluation_observation(self, *, session_id: str) -> EvaluationRuntimeObservation:
         """Capture the session's client runtime, distinct from declared server metadata."""
+        return self._evaluation_observation(self._service(session_id))
+
+    @_serialized_state
+    def bind_evaluation_observer(
+        self, *, session_id: str
+    ) -> Callable[[str], EvaluationRuntimeObservation]:
+        """Bind a read-only observer for admission callbacks in an already owned session.
+
+        Calling the returned reader does not acquire gateway or session command
+        locks. Replacing or closing the service revokes it; observation neither
+        acquires ownership nor grants authority to execute work.
+        """
+        service = self._service(session_id)
+
+        def owned() -> bool:
+            return self._services.get(session_id) is service and service.store.owns_writer
+
+        if not owned():
+            raise ValueError("Runtime observation requires an owned session")
+
+        def observe(requested_session_id: str) -> EvaluationRuntimeObservation:
+            if requested_session_id != session_id or not owned():
+                raise ValueError("Runtime observation no longer owns the requested session")
+            result = self._evaluation_observation(service)
+            if not owned():
+                raise ValueError("Session ownership changed during runtime observation")
+            return result
+
+        return observe
+
+    @staticmethod
+    def _evaluation_observation(service: SessionService) -> EvaluationRuntimeObservation:
+        """Read one service's actual configuration without entering gateway state machinery."""
         from heartwood.gateway._openhands_sdk import OpenHandsSdkBackend
 
-        service = self._service(session_id)
         policy = json.dumps(
             service.policy_profile.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
         )

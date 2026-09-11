@@ -1065,7 +1065,7 @@ def settle_workflow_review(
     if lifecycle not in {"finished", "error"}:
         return ()
     reason = None
-    if _stage_outcome(events, current, include_review=True) is None:
+    if workflow_review_outcome(events, current) is None:
         reason = "no-structured-outcome"
     else:
         try:
@@ -1133,6 +1133,15 @@ def _reproductions(
         record.witness
         for _, record in reproduction_records(events, run_id=run_id, stage_id=stage_id)
     )
+
+
+def workflow_review_outcome(
+    events: Sequence[SessionEvent], current: WorkflowRun
+) -> WorkflowOutcomeStatus | None:
+    """Read the settled parent outcome for this review, excluding earlier planning work."""
+    if current.research_review is None:
+        return None
+    return _stage_outcome(events, current, include_review=True)
 
 
 def _stage_outcome(

@@ -75,12 +75,13 @@ class _TrialSession:
     run_id: UUID
     created_at: str
     runtime: EvaluationRuntimeObservation
+    usage_baseline: ExecutionUsage | None = None
     approved_action_ids: set[str] = field(default_factory=set)
     reproductions: dict[str, ReproductionWitness] = field(default_factory=dict)
     reproduction_inputs: dict[str, str] = field(default_factory=dict)
 
     def command(self, suffix: str, kind: CommandKind, payload: dict[str, object]) -> SessionResult:
-        if kind in (CommandKind.CHAT, CommandKind.APPROVE, CommandKind.DENY):
+        if kind in (CommandKind.CHAT, CommandKind.APPROVE, CommandKind.DENY, CommandKind.WORKFLOW):
             self.verify_runtime()
         return self.gateway.handle(
             SessionCommand.model_validate(
@@ -102,6 +103,10 @@ class _TrialSession:
         projection = self.gateway.session_projection(session_id=self.session_id)
         if "pause" in projection.available_commands:
             self.command("stop", CommandKind.PAUSE, {})
+
+    def usage(self, projection: SessionProjection, started: float) -> ExecutionUsage:
+        measured = _usage(projection, started)
+        return measured if self.usage_baseline is None else measured.since(self.usage_baseline)
 
     def observe_reproductions(self, projection: SessionProjection) -> None:
         for action in projection.actions:
@@ -360,7 +365,7 @@ def _drive(
             "paused",
         ):
             if not session.gateway.wait_for_session_idle(session_id=session.session_id):
-                if _usage(projection, started).exceeded_limits(budget):
+                if session.usage(projection, started).exceeded_limits(budget):
                     session.pause()
                     return "budget-exceeded"
                 time.sleep(0.02)
@@ -370,7 +375,7 @@ def _drive(
         if observe is not None and projection.revision != seen_revision:
             observe(projection)
             seen_revision = projection.revision
-        consumption = _usage(projection, started)
+        consumption = session.usage(projection, started)
         if consumption.exceeded_limits(budget):
             session.pause()
             return "budget-exceeded"
@@ -394,7 +399,9 @@ def _drive(
                 continue
             decision = review(group)
             if _admission_blocked(
-                _usage(session.gateway.session_projection(session_id=session.session_id), started),
+                session.usage(
+                    session.gateway.session_projection(session_id=session.session_id), started
+                ),
                 budget,
             ):
                 session.pause()

@@ -131,15 +131,27 @@ These deterministic tests establish protocol behavior, not capable-model quality
 
 Qualification requires measurements, but a first benchmark cannot already be qualified.
 `ReservedReviewTrial` therefore prepares explicitly experimental work from one incomplete `EvaluationStore` record, with a closed `qualification-trial` plan type distinct from a qualified recommendation.
-The harness verifies pinned synthetic inputs before reserving the record and uses the owning workflow's clock for its start time.
+The harness verifies pinned synthetic inputs before reserving the record and uses UTC timestamps at the same second precision as workflow admission.
 The plan binds the reserved trial, case, seed, session, configuration, observed runtime, reviewers, limits, and expiry.
 Each preview and dispatch rereads the reservation and observes the owning backend; missing, completed, corrupt, expired, or changed reservations cannot start work.
-The runtime observer must not acquire gateway or native agent-step locks while the parent is awaiting dispatch.
+`SessionGateway.bind_evaluation_observer` binds a read-only observer to the current owned service without acquiring gateway or native agent-step locks during dispatch.
+Closing or replacing that service revokes the observer; reading runtime metadata never acquires ownership or authorizes work.
 
 Experimental trials use the same workflow consent, grouped tool approval, paired journal, cancellation, and restart rules as qualified reviews.
 The shared interfaces label them **Experimental parallel review**; no previous passing results are fabricated to obtain concurrency.
 Narrower consented limits apply to the stage's remaining work, not a fresh allowance for each specialist.
 Admission does not produce a passing evaluation result: the benchmark must separately record and independently assess execution, findings, synthesis, usage, latency, replay, and audit evidence.
+
+`reserve_planning_review_trial` and `run_planning_review_trial` run retained comparisons through the same gateway workflow controls and explicit approval callback as researcher interfaces.
+The caller prepares an isolated synthetic project with `data.csv`, `dictionary.json`, and a single output directory containing `plan.json`, and completes planning before reserving the review.
+The workflow question and files must match one maintained `planning_review_tasks()` case; unrelated files, substituted inputs, changed runtimes, and already reviewed stages are rejected.
+Planning work is excluded from review usage and latency.
+Reservation waiting consumes the execution deadline but is excluded from measured review latency; unavailable provider counters remain unknown.
+The runner records sequential or overlapping native task intervals, exact reviewer lineage, independent findings, unchanged input files, grouped authorization, a settled parent outcome, and fresh-process replay with audit verification.
+The isolation check covers the observed advisory tool scope and supplied files, not operating-system or network sandbox isolation.
+The synthesis check establishes a structured successful parent outcome after the reviewers settle, not the correctness of unrestricted narrative claims.
+Stopped or rejected trials retain failed checks; interrupted trials remain incomplete rather than being retried automatically.
+Neither a successful deterministic trial nor a completed record automatically qualifies or promotes a provider route.
 
 ### Synthetic Research Cases
 
