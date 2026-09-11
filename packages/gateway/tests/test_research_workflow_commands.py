@@ -197,6 +197,8 @@ class ReviewBackend(FinishedBackend):
         super().__init__()
         self.mode = mode
         self.proposals = ReviewProposals(candidates=())
+        self.pending_review_events: tuple[BackendEvent, ...] = ()
+        self.defer_review = True
 
     def submit_turn(self, *, session_id: str, prompt: str) -> tuple[BackendEvent, ...]:
         events = super().submit_turn(session_id=session_id, prompt=prompt)
@@ -220,12 +222,158 @@ class ReviewBackend(FinishedBackend):
             parent_session_id="other-session" if self.mode == "other-session" else session_id,
             review_proposals=None if self.mode == "missing" else self.proposals,
         )
-        return (
+        review_events = (
             events[0],
             BackendSubagentEvent(subagent=specialist),
             BackendSubagentEvent(subagent=completed),
             *events[1:],
         )
+        review_events = tuple(
+            replace(event, source_event_id=f"synthetic-review:{index}")
+            for index, event in enumerate(review_events)
+        )
+        self.pending_review_events = review_events[2:]
+        if not self.defer_review:
+            return review_events
+        self.idle = False
+        return (*review_events[:2], BackendLifecycleEvent(lifecycle=BackendLifecycle.RUNNING))
+
+    def finish_review(self) -> None:
+        self.idle = True
+        self._event_sink(self.pending_review_events)
+
+
+def test_synchronous_review_settlement_is_part_of_the_original_receipt(tmp_path: Path) -> None:
+    backend = ReviewBackend()
+    backend.defer_review = False
+    gateway = _gateway(tmp_path, backend)
+    try:
+        _start(gateway, _inputs(tmp_path))
+        gateway.handle(_transition(gateway, "run"))
+        _readiness(tmp_path)
+        command = _projected_command(gateway, "request-review")
+        result = gateway.handle(command)
+        (assessed,) = [
+            event for event in result.events if event.payload.get("transition") == "assess-review"
+        ]
+        assert assessed.payload["command_id"] == command.command_id
+        assert assessed.payload["actor_id"] == "gateway"
+        assert gateway.handle(command).events == result.events
+        assert len(backend.prompts) == 2
+    finally:
+        gateway.stop()
+
+
+@pytest.mark.parametrize("finish", ["error", "missing-outcome", "cancelled", "pause-resume"])
+def test_automatic_review_respects_terminal_and_interruption_states(
+    tmp_path: Path, finish: str
+) -> None:
+    backend = ReviewBackend()
+    gateway = _gateway(tmp_path, backend)
+    try:
+        _start(gateway, _inputs(tmp_path))
+        gateway.handle(_transition(gateway, "run"))
+        _readiness(tmp_path)
+        gateway.handle(_projected_command(gateway, "request-review"))
+        if finish == "cancelled":
+            backend.idle = True
+            gateway.handle(_transition(gateway, "cancel"))
+        elif finish == "error":
+            backend.pending_review_events = (
+                BackendLifecycleEvent(lifecycle=BackendLifecycle.ERROR),
+            )
+        elif finish == "missing-outcome":
+            backend.pending_review_events = tuple(
+                event
+                for event in backend.pending_review_events
+                if not isinstance(event, BackendAgentMessageEvent)
+            )
+        else:
+            for state in (BackendLifecycle.PAUSED, BackendLifecycle.RUNNING):
+                backend._event_sink((BackendLifecycleEvent(lifecycle=state),))
+                review = _state(gateway).research_review
+                assert review is not None
+                assert review.status == "pending"
+        backend.finish_review()
+        review = _state(gateway).research_review
+        assert review is not None
+        if finish == "cancelled":
+            assert review.status == "cancelled"
+            assert review.assessment is None
+        elif finish == "pause-resume":
+            assert review.status == "assessed"
+        else:
+            assert review.status == "unavailable"
+            assert review.unavailable_reason == "no-structured-outcome"
+        assert len(backend.prompts) == 2
+    finally:
+        gateway.stop()
+
+
+@pytest.mark.parametrize(
+    "boundary", ["intent", "audit-before", "audit-after", "events-before", "events-after"]
+)
+def test_automatic_review_recovers_each_append_boundary_without_model_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, boundary: str
+) -> None:
+    from heartwood.core_adapter import _state as state_module
+
+    backend = ReviewBackend()
+    gateway = _gateway(tmp_path, backend)
+    try:
+        _start(gateway, _inputs(tmp_path))
+        gateway.handle(_transition(gateway, "run"))
+        _readiness(tmp_path)
+        command = _projected_command(gateway, "request-review")
+        gateway.handle(command)
+        store = gateway._services["research"].store
+        append = state_module._append_private_json_line
+        write = state_module._write_private_json_atomic
+
+        def interrupt_append(path: Path, text: str) -> None:
+            payload = json.loads(text)
+            target = store.audit_path if boundary.startswith("audit") else store.events_path
+            if path != target or payload.get("payload", {}).get("transition") != "assess-review":
+                append(path, text)
+                return
+            if boundary.endswith("after"):
+                append(path, text)
+            raise OSError("Synthetic review append interruption")
+
+        def interrupt_intent(path: Path, value: dict[str, object]) -> None:
+            event = value.get("session_event")
+            if (
+                isinstance(event, dict)
+                and event.get("payload", {}).get("transition") == "assess-review"
+            ):
+                raise OSError("Synthetic review append interruption")
+            write(path, value)
+
+        with monkeypatch.context() as patches:
+            if boundary == "intent":
+                patches.setattr(state_module, "_write_private_json_atomic", interrupt_intent)
+            else:
+                patches.setattr(state_module, "_append_private_json_line", interrupt_append)
+            with pytest.raises(OSError, match="Synthetic review append interruption"):
+                backend.finish_review()
+    finally:
+        gateway.stop()
+    replacement = ReviewBackend()
+    restored = _gateway(tmp_path, replacement)
+    try:
+        assert restored.handle(command).replayed
+        view = restored.session_projection(session_id="research")
+        assert view.workflow is not None
+        assert view.workflow.research_review is not None
+        assert view.workflow.research_review.status == "assessed"
+        service = restored._services["research"]
+        service.reconcile()
+        service.reconcile()
+        events = service.replay_events()
+        assert sum(event.payload.get("transition") == "assess-review" for event in events) == 1
+        assert not replacement.prompts
+    finally:
+        restored.stop()
 
 
 @pytest.mark.parametrize("mode", ["complete", "unpaired", "other-session", "missing"])
@@ -264,14 +412,16 @@ def test_research_review_binds_native_tasks_and_replays_without_dispatch(
         )
         denied = gateway.handle(_transition(gateway, "evaluate"))
         assert any(event.kind == EventKind.ERROR_RECORDED for event in denied.events)
-        assessment_command = _projected_command(gateway, "assess-review")
+        backend.finish_review()
+        settled = _state(gateway)
+        backend.finish_review()
+        assert _state(gateway) == settled
     finally:
         gateway.stop()
     fresh_backend = ReviewBackend()
     restored = _gateway(tmp_path, fresh_backend)
     try:
-        restored.handle(assessment_command)
-        assert restored.handle(assessment_command).replayed
+        assert restored.handle(command).replayed
         assessed = _state(restored)
         assert assessed.research_review is not None
         assert assessed.research_review.status == (
@@ -292,6 +442,10 @@ def test_research_review_binds_native_tasks_and_replays_without_dispatch(
             if item.title == "Research Workflow"
         )
         assert label in section.items
+        if mode != "complete":
+            limitation = "Review limitation: incomplete review"
+            assert limitation in format_workflow_lines(projection)
+            assert limitation in section.items
         restored.handle(_projected_command(restored, "evaluate"))
         assert _state(restored).stage_id == "report"
         restored.handle(
@@ -365,7 +519,7 @@ def test_research_review_can_be_assessed_after_budget_expiry(tmp_path: Path) -> 
         gateway._services["research"].clock = lambda: (
             before.created_at + timedelta(hours=2)
         ).isoformat()
-        gateway.handle(_projected_command(gateway, "assess-review"))
+        backend.finish_review()
         review = _state(gateway).research_review
         assert review is not None
         assert review.status == "assessed"
@@ -451,12 +605,12 @@ def test_bound_review_independently_verifies_a_seeded_code_defect(
                     payload={"prompt": "Review something else"},
                 )
             )
-        response = gateway.handle(_transition(gateway, "assess-review"))
+        backend.finish_review()
         review = _state(gateway).research_review
         assert review is not None
         if change == "steered":
-            assert review.status == "pending"
-            assert any(event.kind == EventKind.ERROR_RECORDED for event in response.events)
+            assert review.status == "unavailable"
+            assert review.unavailable_reason == "invalid-review"
             return
         assert review.assessment is not None
         (finding,) = review.assessment.findings
@@ -670,8 +824,24 @@ def _tool_message(name: str, **arguments: object) -> Message:
     )
 
 
-def _sdk_gateway(root: Path, llm: TestLLM, monkeypatch: pytest.MonkeyPatch) -> SessionGateway:
+def _sdk_gateway(
+    root: Path,
+    llm: TestLLM,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    specialists: bool = False,
+) -> SessionGateway:
+    from heartwood.gateway._specialists import load_specialist_catalog
+
     monkeypatch.setattr(sdk_module, "LLM", lambda **_options: llm)
+    repository = Path(__file__).resolve().parents[3]
+    catalog = (
+        load_specialist_catalog(
+            repository / "agents/verified", repository / "vendor/heartwood-skills/skills"
+        )
+        if specialists
+        else None
+    )
 
     def service_factory(sessions: Path, session_id: str) -> SessionService:
         backend = OpenHandsSdkBackend(
@@ -687,6 +857,7 @@ def _sdk_gateway(root: Path, llm: TestLLM, monkeypatch: pytest.MonkeyPatch) -> S
             persistence_dir=sessions / session_id / "openhands",
             conversation_key=f"{root}#{session_id}",
             structured_task_outcomes=True,
+            specialist_catalog=catalog,
             env={},
         )
         return SessionService.local_default(
@@ -699,6 +870,74 @@ def _sdk_gateway(root: Path, llm: TestLLM, monkeypatch: pytest.MonkeyPatch) -> S
 
     gateway = SessionGateway(project=ProjectContext(root), service_factory=service_factory, env={})
     return gateway
+
+
+def test_real_sdk_review_settles_after_approval_and_reopens_without_model_work(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    inputs = _inputs(tmp_path)
+    llm = TestLLM.from_messages(
+        [
+            _tool_message(
+                "finish", message="Inspection settled.", status="success", outcome_summary="Done."
+            ),
+            _tool_message(
+                "task",
+                description="Review synthetic readiness",
+                prompt="Review the supplied synthetic readiness evidence. Return no findings.",
+                subagent_type="statistical-reviewer",
+            ),
+            _tool_message("finish", message="No candidate findings.", candidates=[]),
+            _tool_message(
+                "finish", message="Review settled.", status="success", outcome_summary="Done."
+            ),
+        ]
+    )
+    gateway = _sdk_gateway(tmp_path, llm, monkeypatch, specialists=True)
+    try:
+        _start(gateway, inputs)
+        gateway.handle(_projected_command(gateway, "run"))
+        assert gateway.wait_for_session_idle(session_id="research", timeout=30)
+        _readiness(tmp_path)
+        request = _projected_command(gateway, "request-review")
+        gateway.handle(request)
+        assert gateway.wait_for_session_idle(session_id="research", timeout=30)
+        projection = gateway.session_projection(session_id="research")
+        assert projection.pending_approval is not None
+        pending_review = _state(gateway).research_review
+        assert pending_review is not None
+        assert pending_review.status == "pending"
+        approval = SessionCommand(
+            command_id=uuid4().hex,
+            session_id="research",
+            kind=CommandKind.APPROVE,
+            created_at="2026-09-11T00:00:00Z",
+            payload={"target_id": projection.pending_approval.group_id},
+        )
+        gateway.handle(approval)
+        assert gateway.wait_for_session_idle(session_id="research", timeout=30)
+        review = _state(gateway).research_review
+        assert review is not None
+        assert review.status == "assessed"
+        assert len(review.submissions) == 1
+        assert review.submissions[0].reviewer_id == "statistical-reviewer"
+        assert review.assessment is not None
+        assert review.assessment.findings == ()
+        calls = llm.call_count
+        assert gateway.handle(request).replayed
+        assert gateway.handle(approval).replayed
+        assert llm.call_count == calls
+    finally:
+        gateway.stop()
+    unused = TestLLM.from_messages([])
+    restored = _sdk_gateway(tmp_path, unused, monkeypatch, specialists=True)
+    try:
+        assert restored.handle(request).replayed
+        assert restored.handle(approval).replayed
+        assert _state(restored).research_review == review
+        assert unused.call_count == 0
+    finally:
+        restored.stop()
 
 
 def test_real_sdk_runs_reviewed_stages_and_restores_structured_outcome(

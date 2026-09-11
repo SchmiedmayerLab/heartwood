@@ -122,6 +122,7 @@ def assess_workflow_review(
         {
             **review.model_dump(),
             "status": "assessed" if complete else "unavailable",
+            "unavailable_reason": None if complete else "incomplete-review",
             "submissions": submissions,
             "assessment": inspector.assess_review(review.snapshot, submissions),
         }

@@ -519,11 +519,13 @@ export interface ResearchReviewRun {
   reviewer_ids: WorkflowIdentifier[];
   snapshot: ReviewSnapshot;
   started_sequence: number;
-  status: "pending" | "assessed" | "unavailable";
+  status: "pending" | "assessed" | "unavailable" | "cancelled";
   /**
    * @maxItems 16
    */
   submissions: ReviewSubmission[];
+  unavailable_reason:
+    ("incomplete-review" | "invalid-review" | "no-structured-outcome") | null;
 }
 /**
  * A deterministic evidence projection, not an approval or a quality benchmark.
@@ -610,13 +612,7 @@ export interface ExecutionUsage {
  */
 export interface WorkflowControl {
   control_id:
-    | "run"
-    | "evaluate"
-    | "accept"
-    | "decline"
-    | "cancel"
-    | "request-review"
-    | "assess-review";
+    "run" | "evaluate" | "accept" | "decline" | "cancel" | "request-review";
   label: WorkflowText;
   request: WorkflowTransition | WorkflowReview;
 }
@@ -624,7 +620,7 @@ export interface WorkflowControl {
  * Apply a transition only to the exact run and revision the researcher saw.
  */
 export interface WorkflowTransition {
-  action: "run" | "evaluate" | "cancel" | "request-review" | "assess-review";
+  action: "run" | "evaluate" | "cancel" | "request-review";
   revision: number;
   run_id: string;
 }

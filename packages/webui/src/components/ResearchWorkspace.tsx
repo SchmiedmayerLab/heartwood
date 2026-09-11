@@ -397,6 +397,11 @@ const WorkflowWorkspace = ({
           {run.research_review ?
             <details className="research-provenance">
               <summary>Research Review: {run.research_review.status}</summary>
+              {run.research_review.unavailable_reason ?
+                <p>
+                  {run.research_review.unavailable_reason.replaceAll("-", " ")}
+                </p>
+              : null}
               {run.research_review.assessment ?
                 <ul
                   className="research-checks"

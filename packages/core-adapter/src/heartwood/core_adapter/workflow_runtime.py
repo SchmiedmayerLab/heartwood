@@ -76,16 +76,6 @@ def workflow_controls(
         return ()
     controls: list[WorkflowControl] = []
     if current.research_review is not None and current.research_review.status == "pending":
-        if _stage_outcome(events, current, include_review=True) is not None:
-            controls.append(
-                WorkflowControl(
-                    control_id="assess-review",
-                    label="Check Review Findings",
-                    request=WorkflowTransition(
-                        action="assess-review", run_id=current.run_id, revision=current.revision
-                    ),
-                )
-            )
         controls.append(
             WorkflowControl(
                 control_id="cancel",
@@ -255,24 +245,22 @@ def handle_workflow_command(
         )
     if request.action == "cancel":
         experiment = stage_experiment_outcome(events, current, status="cancelled", at=_now(service))
+        review = current.research_review
+        if review is not None and review.status == "pending":
+            review = ResearchReviewRun.model_validate(
+                {**review.model_dump(), "status": "cancelled"}
+            )
         return (
-            _record(service, command, _replace(current, phase="cancelled"), experiment=experiment),
+            _record(
+                service,
+                command,
+                _replace(current, phase="cancelled", research_review=review),
+                experiment=experiment,
+            ),
         )
     review = current.research_review
-    if review is not None and review.status == "pending" and request.action != "assess-review":
-        return (_error(service, "Check the requested research review before continuing"),)
-    if request.action == "assess-review":
-        if review is None or review.status != "pending":
-            return (_error(service, "There is no research review awaiting assessment"),)
-        if _stage_outcome(events, current, include_review=True) is None:
-            return (_error(service, "Wait for a settled structured review outcome"),)
-        try:
-            assessed = assess_workflow_review(review, events, evaluator)
-        except ValueError:
-            return (
-                _error(service, "Research review evidence is invalid; inspect or cancel the run"),
-            )
-        return (_record(service, command, _replace(current, research_review=assessed)),)
+    if review is not None and review.status == "pending":
+        return (_error(service, "Wait for the research review to settle before continuing"),)
     if isinstance(request, WorkflowReview):
         if current.phase != "review" or current.evaluation is None:
             return (_error(service, "There is no stage awaiting researcher review"),)
@@ -488,20 +476,44 @@ def _record(
     *,
     experiment: ExperimentEvent | None = None,
 ) -> SessionEvent:
+    return _record_snapshot(
+        service,
+        run,
+        command_id=command.command_id,
+        actor_id=command.actor_id,
+        transition=command.payload.get("action"),
+        approved=command.payload.get("approved"),
+        evidence_fingerprint=command.payload.get("evidence_fingerprint"),
+        experiment=experiment,
+    )
+
+
+def _record_snapshot(
+    service: SessionService,
+    run: WorkflowRun,
+    *,
+    command_id: str,
+    actor_id: str,
+    transition: JsonValue,
+    approved: JsonValue = None,
+    evidence_fingerprint: JsonValue = None,
+    experiment: ExperimentEvent | None = None,
+) -> SessionEvent:
+    """Keep explicit commands and their automatic read-only results on one journal boundary."""
     evaluation = run.evaluation or (run.completed[-1] if run.completed else None)
     return service._record_event(
         EventKind.WORKFLOW_UPDATED,
         {
-            "command_id": command.command_id,
-            "actor_id": command.actor_id,
+            "command_id": command_id,
+            "actor_id": actor_id,
             "run_id": run.run_id,
             "stage_id": run.stage_id,
             "phase": run.phase,
             "revision": run.revision,
-            "transition": command.payload.get("action"),
-            "approved": command.payload.get("approved"),
+            "transition": transition,
+            "approved": approved,
             "workflow_fingerprint": run.binding.workflow_fingerprint,
-            "evidence_fingerprint": command.payload.get("evidence_fingerprint")
+            "evidence_fingerprint": evidence_fingerprint
             or (evaluation.assessment.evidence_fingerprint if evaluation else None),
             "assessed_stage_id": evaluation.assessment.stage_id if evaluation else None,
             "research_review_fingerprint": (
@@ -519,6 +531,58 @@ def _record(
                 else {}
             ),
         },
+    )
+
+
+def settle_workflow_review(
+    service: SessionService,
+    evaluator: WorkflowEvaluator | None,
+) -> tuple[SessionEvent, ...]:
+    """Assess settled review evidence under the existing writer lease, without model work."""
+    if evaluator is None:
+        return ()
+    events = service.replay_events()
+    current = workflow_run(events)
+    if current is None or current.phase in {"completed", "cancelled"}:
+        return ()
+    review = current.research_review
+    if review is None or review.status != "pending":
+        return ()
+    lifecycle = next(
+        (
+            event.payload.get("status")
+            for event in reversed(events)
+            if event.sequence > review.started_sequence
+            and event.kind == EventKind.AGENT_LIFECYCLE_UPDATED
+        ),
+        None,
+    )
+    if lifecycle not in {"finished", "error"}:
+        return ()
+    reason = None
+    if _stage_outcome(events, current, include_review=True) is None:
+        reason = "no-structured-outcome"
+    else:
+        try:
+            assessed = assess_workflow_review(review, events, evaluator)
+        except ValueError:
+            reason = "invalid-review"
+    if reason is not None:
+        assessed = ResearchReviewRun.model_validate(
+            {
+                **review.model_dump(),
+                "status": "unavailable",
+                "unavailable_reason": reason,
+            }
+        )
+    return (
+        _record_snapshot(
+            service,
+            _replace(current, research_review=assessed),
+            command_id=review.review_id,
+            actor_id="gateway",
+            transition="assess-review",
+        ),
     )
 
 

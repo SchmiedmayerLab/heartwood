@@ -166,9 +166,12 @@ class ResearchReviewRun(ExperimentRecord):
     snapshot: ReviewSnapshot
     reviewer_ids: tuple[WorkflowIdentifier, ...] = Field(min_length=1, max_length=16)
     started_sequence: int = Field(ge=0, strict=True)
-    status: Literal["pending", "assessed", "unavailable"] = "pending"
+    status: Literal["pending", "assessed", "unavailable", "cancelled"] = "pending"
     submissions: tuple[ReviewSubmission, ...] = Field(default=(), max_length=16)
     assessment: ReviewAssessment | None = None
+    unavailable_reason: (
+        Literal["incomplete-review", "invalid-review", "no-structured-outcome"] | None
+    ) = None
 
     @model_validator(mode="after")
     def coherent_evidence(self) -> Self:
@@ -185,6 +188,8 @@ class ResearchReviewRun(ExperimentRecord):
             raise ValueError("Review submissions do not match the prepared context")
         if self.status == "pending" and (self.submissions or self.assessment is not None):
             raise ValueError("Pending reviews cannot have assessed results")
+        if (self.status == "unavailable") != (self.unavailable_reason is not None):
+            raise ValueError("Unavailable reviews require an explicit reason")
         if self.status == "assessed" and (
             self.assessment is None
             or {item.reviewer_id for item in self.submissions} != set(self.reviewer_ids)

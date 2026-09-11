@@ -232,52 +232,51 @@ describe("research workflow workspace", () => {
     expect(record).not.toHaveTextContent("succeeded");
   });
 
-  it("renders bound review status and sends the exact assessment request", async () => {
-    const state = run();
-    state.research_review = {
-      review_id: "review-one",
-      reviewer_ids: ["statistical-reviewer"],
-      started_sequence: 8,
-      status: "pending",
-      submissions: [],
-      assessment: null,
-      snapshot: {
-        schema_version: "heartwood.review-snapshot.v1",
-        artifacts: [
-          {
-            artifact_id: "program",
-            file: {
-              path: "analysis.py",
-              sha256: "a".repeat(64),
-              size_bytes: 20,
+  it.each(["pending", "unavailable", "cancelled"] as const)(
+    "renders %s review without requiring another assessment request",
+    async (status) => {
+      const state = run();
+      state.research_review = {
+        review_id: "review-one",
+        reviewer_ids: ["statistical-reviewer"],
+        started_sequence: 8,
+        status,
+        submissions: [],
+        assessment: null,
+        unavailable_reason:
+          status === "unavailable" ? "no-structured-outcome" : null,
+        snapshot: {
+          schema_version: "heartwood.review-snapshot.v1",
+          artifacts: [
+            {
+              artifact_id: "program",
+              file: {
+                path: "analysis.py",
+                sha256: "a".repeat(64),
+                size_bytes: 20,
+              },
             },
-          },
-        ],
-      },
-    };
-    const request = {
-      action: "assess-review" as const,
-      run_id: state.run_id,
-      revision: state.revision,
-    };
-    const view = setup(
-      syntheticProjection({
-        workflow: state,
-        workflowControls: [
-          {
-            control_id: "assess-review",
-            label: "Check Review Findings",
-            request,
-          },
-        ],
-      }),
-    );
-    expect(await screen.findByText("Research Review: pending")).toBeVisible();
-    fireEvent.click(
-      screen.getByRole("button", { name: "Check Review Findings" }),
-    );
-    expect(view.onSubmit).toHaveBeenCalledExactlyOnceWith(request);
-  });
+          ],
+        },
+      };
+      const view = setup(
+        syntheticProjection({
+          workflow: state,
+          workflowControls: [],
+        }),
+      );
+      const review = await screen.findByText(`Research Review: ${status}`);
+      expect(review).toBeVisible();
+      fireEvent.click(review);
+      if (status === "unavailable") {
+        expect(screen.getByText("no structured outcome")).toBeVisible();
+      }
+      expect(
+        screen.queryByRole("button", { name: "Check Review Findings" }),
+      ).not.toBeInTheDocument();
+      expect(view.onSubmit).not.toHaveBeenCalled();
+    },
+  );
 
   it("collects catalog-declared inputs without starting an agent implicitly", async () => {
     const view = setup();

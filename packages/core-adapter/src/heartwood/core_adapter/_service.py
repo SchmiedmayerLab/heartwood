@@ -50,6 +50,7 @@ from heartwood.core_adapter.reproduction_journal import (
 from heartwood.core_adapter.workflow_runtime import (
     WorkflowEvaluator,
     handle_workflow_command,
+    settle_workflow_review,
     workflow_admission_reason,
     workflow_run,
 )
@@ -775,6 +776,7 @@ class SessionService:
                 )
             else:
                 assert_never(event)
+        translated.extend(settle_workflow_review(self, self._workflow_evaluator))
         return translated
 
     def _record_confirmation_request(

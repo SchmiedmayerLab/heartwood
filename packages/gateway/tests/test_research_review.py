@@ -36,6 +36,8 @@ from heartwood.schemas.review import (
         "pending-result",
         "missing-reviewer",
         "assessment-snapshot",
+        "missing-unavailable-reason",
+        "unexpected-unavailable-reason",
     ],
 )
 def test_persisted_review_context_rejects_inconsistent_associations(
@@ -68,6 +70,10 @@ def test_persisted_review_context_rejects_inconsistent_associations(
         values["status"] = "pending"
     elif damage == "missing-reviewer":
         values["submissions"] = []
+    elif damage == "missing-unavailable-reason":
+        values["status"] = "unavailable"
+    elif damage == "unexpected-unavailable-reason":
+        values["unavailable_reason"] = "invalid-review"
     else:
         values["assessment"] = {**result.model_dump(mode="json"), "snapshot_sha256": "0" * 64}
     with pytest.raises(ValidationError):

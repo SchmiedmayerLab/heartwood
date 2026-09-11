@@ -602,6 +602,11 @@ def format_research_review_lines(review: ResearchReviewRun | None) -> tuple[str,
     return (
         f"Research review: {review.status}",
         *(
+            (f"Review limitation: {review.unavailable_reason.replace('-', ' ')}",)
+            if review.unavailable_reason
+            else ()
+        ),
+        *(
             tuple(
                 f"  {item.verification}: {terminal_safe_text(item.verified_claim or item.reason)}"
                 for item in review.assessment.findings

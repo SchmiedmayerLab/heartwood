@@ -270,7 +270,7 @@ class WorkflowStart(WorkflowRecord):
 class WorkflowTransition(WorkflowRecord):
     """Apply a transition only to the exact run and revision the researcher saw."""
 
-    action: Literal["run", "evaluate", "cancel", "request-review", "assess-review"]
+    action: Literal["run", "evaluate", "cancel", "request-review"]
     run_id: str = Field(min_length=1)
     revision: int = Field(ge=0, strict=True)
 
@@ -293,9 +293,7 @@ type WorkflowRequest = Annotated[
 class WorkflowControl(WorkflowRecord):
     """A presentation affordance carrying the exact revision-bound command to submit."""
 
-    control_id: Literal[
-        "run", "evaluate", "accept", "decline", "cancel", "request-review", "assess-review"
-    ]
+    control_id: Literal["run", "evaluate", "accept", "decline", "cancel", "request-review"]
     label: WorkflowText
     request: WorkflowTransition | WorkflowReview
 

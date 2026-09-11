@@ -92,8 +92,8 @@ After a stage with declared specialists finishes, choose **Review Analysis** bef
 Heartwood records the declared evidence and asks the selected specialists to review it through the normal agent and tool-approval flow.
 This uses the stage's remaining work budget; it does not grant permission to change files.
 
-When the review finishes, choose **Check Review Findings**.
-In plain terminal mode, inspect `/workflow` and use `/workflow request-review` or `/workflow assess-review` when offered.
+Heartwood checks the findings automatically when the review finishes.
+In plain terminal mode, inspect `/workflow` and use `/workflow request-review` when offered.
 The notebook receives the same controls and review state.
 
 The assessment distinguishes verified observations, rejected claims, unsupported conditions, stale evidence, and unavailable evidence.
@@ -102,7 +102,7 @@ A byte mismatch is not proof of re-execution, and a review with no findings is n
 Missing specialist results are reported as unavailable rather than a successful review.
 
 Each stage accepts one advisory review.
-Changing its conversation context invalidates the assessment; inspect or cancel that run rather than treating the redirected work as the original review.
+Changing its conversation context invalidates the assessment; Heartwood reports that review as unavailable rather than treating redirected work as the original review.
 Reviewing does not automatically repair files or accept the stage.
 Continue to use **Check Results** and the normal researcher review after inspecting the findings.
 

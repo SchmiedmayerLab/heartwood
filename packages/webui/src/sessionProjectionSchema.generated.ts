@@ -654,13 +654,26 @@ export const sessionProjectionJsonSchema = {
         snapshot: { $ref: "#/$defs/ReviewSnapshot" },
         started_sequence: { minimum: 0, type: "integer" },
         status: {
-          enum: ["pending", "assessed", "unavailable"],
+          enum: ["pending", "assessed", "unavailable", "cancelled"],
           type: "string",
         },
         submissions: {
           items: { $ref: "#/$defs/ReviewSubmission" },
           maxItems: 16,
           type: "array",
+        },
+        unavailable_reason: {
+          anyOf: [
+            {
+              enum: [
+                "incomplete-review",
+                "invalid-review",
+                "no-structured-outcome",
+              ],
+              type: "string",
+            },
+            { type: "null" },
+          ],
         },
       },
       required: [
@@ -671,6 +684,7 @@ export const sessionProjectionJsonSchema = {
         "status",
         "submissions",
         "assessment",
+        "unavailable_reason",
       ],
       type: "object",
     },
@@ -884,7 +898,6 @@ export const sessionProjectionJsonSchema = {
             "decline",
             "cancel",
             "request-review",
-            "assess-review",
           ],
           type: "string",
         },
@@ -1042,13 +1055,7 @@ export const sessionProjectionJsonSchema = {
       additionalProperties: false,
       properties: {
         action: {
-          enum: [
-            "run",
-            "evaluate",
-            "cancel",
-            "request-review",
-            "assess-review",
-          ],
+          enum: ["run", "evaluate", "cancel", "request-review"],
           type: "string",
         },
         revision: { minimum: 0, type: "integer" },
