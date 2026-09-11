@@ -68,8 +68,21 @@ An assessment identifies its definition, stage, and evidence fingerprint and rec
 Evidence eligibility does not grant permission to advance a workflow or execute a tool.
 The researcher decision must bind to the workflow run, stage, and exact assessment, while tool actions retain the normal session review policy.
 
-These contracts describe task structure and evaluate evidence; they do not run an agent, implement deterministic evaluators, or provide a separate persistence layer.
-Execution and recovery belong to the existing gateway and authoritative session command/event path.
+The gateway binds explicitly selected project-relative files and researcher text to their initial content digests.
+Its read-only stage evaluator reuses workspace inspection, excludes private state and symbolic links, rejects unavailable or truncated inputs, and detects observed changes during inspection.
+Changing an original input invalidates evidence even if a new artifact is internally consistent with the changed data.
+
+Maintained tabular checks use a declared data dictionary for column roles, primary keys, permitted predictors, held-out partitions, validity rules, and optional group balance.
+They verify aggregate readiness reports, analysis plans, group-disjoint splits, and univariate ordinary least-squares results, including held-out predictions, a training-mean comparator, and leave-one-group-out sensitivity.
+Python's standard statistical routines compute the reference results independently of generated code; benchmark-specific expected answers remain in the compliance suite.
+Static Python and nonempty-report checks establish syntax or presence, not execution or scientific correctness.
+Matching copied artifacts cannot satisfy reproduction, which requires separate evidence from reviewed execution.
+
+Evaluation accepts complete UTF-8 files within the workspace inspection limits, at most 10,000 table rows and 128 columns, and at most 128 training groups for omission sensitivity.
+Unsupported evaluators remain unverified rather than passing by default.
+The checks do not establish that an analysis is scientifically appropriate or replace researcher review.
+They neither launch an agent nor grant permission to advance stages or approve tools.
+Execution and recovery belong to the existing gateway and authoritative session command/event path, not a separate workflow persistence layer.
 
 ### Model Artifact Lifecycle
 

@@ -185,3 +185,46 @@ class WorkflowStageAssessment(WorkflowRecord):
     evidence_satisfied: bool
     researcher_review_required: bool
     reasons: tuple[str, ...]
+
+
+class WorkflowBoundInput(WorkflowRecord):
+    """Private researcher input, bound to the bytes accepted at preparation."""
+
+    input_id: WorkflowIdentifier
+    kind: Literal["file", "text"]
+    value: str = Field(min_length=1, max_length=8000)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def safe_file_path(self) -> Self:
+        """Preserve exact input text while validating public file references."""
+        if self.kind == "file":
+            project_relative_path(self.value, allow_root=False)
+        elif not self.value.strip():
+            raise ValueError("Workflow text inputs must not be blank")
+        return self
+
+
+class WorkflowProjectBinding(WorkflowRecord):
+    """Project-relative inputs and output location; never an external workspace root."""
+
+    workflow_id: WorkflowIdentifier
+    workflow_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    output_directory: str = Field(min_length=1, max_length=512)
+    inputs: tuple[WorkflowBoundInput, ...] = Field(min_length=1, max_length=32)
+
+    @model_validator(mode="after")
+    def safe_binding(self) -> Self:
+        """Reject private output paths and ambiguous input identities."""
+        project_relative_path(self.output_directory, allow_root=False)
+        if len({item.input_id for item in self.inputs}) != len(self.inputs):
+            raise ValueError("Workflow input bindings must be unique")
+        return self
+
+
+class WorkflowStageEvaluation(WorkflowRecord):
+    """Content-minimized checks and assessment, not permission to advance a stage."""
+
+    artifacts: tuple[WorkflowValueFingerprint, ...]
+    checks: tuple[WorkflowCheckResult, ...]
+    assessment: WorkflowStageAssessment

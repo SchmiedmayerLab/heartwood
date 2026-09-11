@@ -195,6 +195,11 @@ from heartwood.schemas import (
     api_response,
 )
 from heartwood.schemas.evaluation import EvaluationRuntimeObservation
+from heartwood.schemas.workflows import (
+    WorkflowOutcomeStatus,
+    WorkflowProjectBinding,
+    WorkflowStageEvaluation,
+)
 from heartwood.session import CommandKind, EventKind, SessionCommand, SessionEvent
 from heartwood.skills import (
     SkillArtifactStore,
@@ -946,6 +951,32 @@ class SessionGateway:
             platform=service.platform_adapter.adapter_id,
             policy_fingerprint=digest,
             action_confirmation=cast(ActionConfirmationMode, backend.action_confirmation_mode),
+        )
+
+    @_serialized_state
+    def prepare_research_workflow(
+        self, workflow_id: str, *, inputs: Mapping[str, str], output_directory: str
+    ) -> WorkflowProjectBinding:
+        """Bind project-local workflow inputs without starting model or tool work."""
+        from heartwood.gateway._research_evaluation import ResearchStageEvaluator
+
+        return ResearchStageEvaluator(self.workspace_inspector).prepare(
+            workflow_id, inputs=inputs, output_directory=output_directory
+        )
+
+    @_serialized_state
+    def evaluate_research_stage(
+        self,
+        binding: WorkflowProjectBinding,
+        stage_id: str,
+        *,
+        model_status: WorkflowOutcomeStatus | None,
+    ) -> WorkflowStageEvaluation:
+        """Evaluate current artifacts without granting stage or tool approval."""
+        from heartwood.gateway._research_evaluation import ResearchStageEvaluator
+
+        return ResearchStageEvaluator(self.workspace_inspector).evaluate(
+            binding, stage_id, model_status=model_status
         )
 
     @_serialized_state

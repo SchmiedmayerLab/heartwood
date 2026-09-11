@@ -28,6 +28,7 @@ def assess_workflow_stage(
     artifacts: Sequence[WorkflowValueFingerprint],
     checks: Sequence[WorkflowCheckResult],
     model_status: WorkflowOutcomeStatus | None,
+    expected_inputs: Sequence[WorkflowValueFingerprint] = (),
 ) -> WorkflowStageAssessment:
     """Require independent, current evidence before a stage is eligible to advance.
 
@@ -42,6 +43,14 @@ def assess_workflow_stage(
         raise ValueError("Workflow evidence identities must be unique")
     scope = set(stage.reads) | set(stage.writes)
     reasons: set[str] = set()
+    expected = {item.artifact_id: item.sha256 for item in expected_inputs}
+    if len(expected) != len(expected_inputs) or not expected.keys() <= {
+        item.input_id for item in definition.inputs
+    }:
+        raise ValueError("Expected inputs must name distinct workflow inputs")
+    for name, digest in expected.items():
+        if current.get(name) != digest:
+            reasons.add(f"{name}:input-changed-or-unavailable")
     if model_status != "success":
         reasons.add("model-outcome-not-successful")
     for artifact_id in scope - current.keys():
@@ -68,6 +77,10 @@ def assess_workflow_stage(
         "workflow": definition.fingerprint,
         "stage": stage_id,
         "model_status": model_status,
+        "expected_inputs": {
+            item.artifact_id: item.sha256
+            for item in sorted(expected_inputs, key=lambda item: item.artifact_id)
+        },
         "artifacts": {name: current[name] for name in sorted(scope) if name in current},
         "checks": [
             {
