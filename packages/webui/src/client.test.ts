@@ -8,6 +8,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GatewayClient, createCommand } from "./client";
+import { sessionProjectionJsonSchema } from "./sessionProjectionSchema.generated";
 import {
   emptyProjection,
   syntheticAction,
@@ -144,6 +145,38 @@ describe("createCommand", () => {
 });
 
 describe("GatewayClient", () => {
+  it.each(sessionProjectionJsonSchema.$defs.EventKind.enum)(
+    "accepts the gateway's %s event in a replay response",
+    async (kind) => {
+      const source = syntheticEvents()[0];
+      if (!source) throw new Error("Synthetic event fixture is empty");
+      const response = projectionResponse([{ ...source, kind }]);
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(new Response(JSON.stringify(response))),
+      );
+      await expect(
+        new GatewayClient("").replayEvents("session-test"),
+      ).resolves.toEqual(response);
+    },
+  );
+
+  it("rejects an unknown event kind without accepting a partial replay", async () => {
+    const response = {
+      ...projectionResponse(),
+      events: [{ ...syntheticEvents()[0], kind: "unknown.event" }],
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response(JSON.stringify(response))),
+    );
+    await expect(
+      new GatewayClient("").replayEvents("session-test"),
+    ).rejects.toThrow(
+      "Gateway response included an invalid session projection",
+    );
+  });
+
   it("ensures the shared first session through an idempotent operation", async () => {
     const session = {
       session_id: "session-main",
