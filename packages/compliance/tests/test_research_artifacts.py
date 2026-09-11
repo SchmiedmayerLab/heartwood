@@ -131,6 +131,7 @@ def test_readiness_reports_real_aggregate_problems_without_silently_cleaning() -
         ("missing_by_column", {}),
         ("invalid_by_column", {}),
         ("arm_counts", {"A": 6, "B": 6}),
+        ("arm_counts", {"A": 4, "B": 4}),
         ("row_count", True),
         ("missing_by_column", {"measurement": -1}),
     ],

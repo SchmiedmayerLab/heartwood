@@ -90,12 +90,23 @@ class ResearchDictionary(ResearchArtifact):
 class ReadinessResult(ResearchArtifact):
     """Aggregate evidence for deciding whether a dataset is ready for analysis."""
 
-    row_count: Count
-    subject_count: Count
-    duplicate_rows: Count
-    missing_by_column: dict[str, Count]
-    invalid_by_column: dict[str, Count]
-    arm_counts: dict[str, Count]
+    row_count: Count = Field(description="All input data rows, including duplicate rows.")
+    subject_count: Count = Field(description="Distinct values of the dictionary's grouping key.")
+    duplicate_rows: Count = Field(
+        description="Exact duplicate rows beyond the first occurrence; do not remove them."
+    )
+    missing_by_column: dict[str, Count] = Field(
+        description="Missing cells per exact column name, counting all input rows."
+    )
+    invalid_by_column: dict[str, Count] = Field(
+        description="Non-missing cells violating declared validity rules, per exact column name."
+    )
+    arm_counts: dict[str, Count] = Field(
+        description=(
+            "Input row counts per arm value, including duplicates and repeated observations; "
+            "not distinct participant counts. Use an empty object if no arm column is defined."
+        )
+    )
     leakage_columns: list[ResearchText] = Field(
         description=(
             "Exact dataset column names that introduce leakage, without prose or explanations. "

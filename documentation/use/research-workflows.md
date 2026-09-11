@@ -50,6 +50,9 @@ For repeated observations, include all identifying columns in `primary_key` and 
 Choose the partition and analysis question before asking the agent to fit a model.
 The dictionary describes your intended analysis; it does not establish that the study design is valid.
 
+Readiness counts describe the original input without dropping rows: row and arm counts include duplicates and repeated observations, while the subject count uses distinct grouping-key values.
+The report explains leakage concerns separately from the exact column names in the structured result.
+
 ## Start and Review
 
 === "Browser"
