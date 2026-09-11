@@ -1448,6 +1448,11 @@ class OpenHandsSdkBackend:
                             ),
                             parent_session_id=session_id,
                             parent_action_id=event.action_id,
+                            native_execution=(
+                                event.observation.native_execution
+                                if isinstance(event.observation, HeartwoodSpecialistObservation)
+                                else None
+                            ),
                             review_proposals=(
                                 event.observation.review_proposals
                                 if isinstance(event.observation, HeartwoodSpecialistObservation)

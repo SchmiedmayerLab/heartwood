@@ -9,8 +9,10 @@
 from __future__ import annotations
 
 import asyncio
+import time
 import uuid
 from collections.abc import Sequence
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, TypedDict, override
 
@@ -34,8 +36,14 @@ from pydantic import Field
 
 from heartwood.core_adapter.research_review import research_review_instructions
 from heartwood.gateway._openhands_persistence import ContentMinimizedLocalFileStore
+from heartwood.schemas.execution import NativeTaskExecution
 from heartwood.schemas.experiments import ExperimentRecord
 from heartwood.schemas.review import ReviewProposals
+
+_EXECUTION_CLOCK_ID = uuid.uuid4()
+_task_execution: ContextVar[NativeTaskExecution | None] = ContextVar(
+    "heartwood_native_task_execution", default=None
+)
 
 
 class _ReviewTaskResult(ExperimentRecord):
@@ -49,6 +57,7 @@ class HeartwoodSpecialistObservation(TaskObservation):
     """Native task lineage and message plus optional advisory review proposals."""
 
     review_proposals: ReviewProposals | None = None
+    native_execution: NativeTaskExecution | None = None
 
     @property
     @override
@@ -223,7 +232,17 @@ class _CatalogTaskManager(TaskManager):
             task.set_error("The parent cancelled the specialist before execution.")
             self._evict_task(task)
             return task
-        return super()._run_task(task, prompt)
+        started = time.monotonic()
+        try:
+            return super()._run_task(task, prompt)
+        finally:
+            _task_execution.set(
+                NativeTaskExecution(
+                    clock_id=_EXECUTION_CLOCK_ID,
+                    started_seconds=started,
+                    finished_seconds=time.monotonic(),
+                )
+            )
 
     def interrupt_active_children(self) -> None:
         """Interrupt native running tasks without maintaining another active-task registry."""
@@ -279,7 +298,14 @@ class _CatalogTaskExecutor(TaskExecutor):
     def __call__(
         self, action: TaskAction, conversation: LocalConversation | None = None
     ) -> TaskObservation:
-        observation = super().__call__(action, conversation)
+        # Native TaskExecutor calls its manager synchronously on the same worker.
+        # A call-local context retains timing without another task registry.
+        timing_token = _task_execution.set(None)
+        try:
+            observation = super().__call__(action, conversation)
+            native_execution = _task_execution.get()
+        finally:
+            _task_execution.reset(timing_token)
         proposals = None
         text = observation.text
         failed = observation.is_error
@@ -296,6 +322,7 @@ class _CatalogTaskExecutor(TaskExecutor):
             status="error" if failed else observation.status,
             is_error=failed,
             review_proposals=proposals,
+            native_execution=native_execution,
         )
 
 

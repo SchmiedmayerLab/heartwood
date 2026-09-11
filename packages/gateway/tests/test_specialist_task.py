@@ -18,7 +18,7 @@ import pytest
 from openhands.sdk import Agent, LocalConversation
 from openhands.sdk.conversation.cancellation import CancellationToken
 from openhands.tools.task import TaskAction
-from openhands.tools.task.manager import Task, TaskStatus
+from openhands.tools.task.manager import Task, TaskManager, TaskStatus
 
 import heartwood.gateway._specialist_task as specialist_task_module
 from heartwood.gateway._openhands_persistence import ContentMinimizedLocalFileStore
@@ -51,6 +51,42 @@ def test_catalog_task_manager_rejects_non_durable_resume() -> None:
             subagent_type="research-planner",
             resume="task_00000001",
         )
+
+
+@pytest.mark.parametrize("failed", [False, True])
+def test_native_timing_is_call_local_and_absent_for_unstarted_tasks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failed: bool
+) -> None:
+    manager = _CatalogTaskManager(allowed_specialist_ids=frozenset({"research-planner"}))
+    parent = Mock(spec=LocalConversation)
+    parent.cancel_token = CancellationToken()
+    parent.state.persistence_dir = tmp_path
+    manager.attach_parent(cast(LocalConversation, parent))
+    task = Task(id="timed-task", conversation_id=uuid4(), status=TaskStatus.RUNNING)
+
+    def run(_manager: TaskManager, current: Task, _prompt: str) -> Task:
+        if failed:
+            raise RuntimeError("Synthetic task failure")
+        current.set_result("Synthetic result")
+        return current
+
+    monkeypatch.setattr(TaskManager, "_run_task", run)
+    monkeypatch.setattr(manager, "start_task", lambda **_kwargs: manager._run_task(task, "Review"))
+    executor = _CatalogTaskExecutor(manager)
+    result = executor(TaskAction(prompt="Review", subagent_type="research-planner"))
+    assert isinstance(result, HeartwoodSpecialistObservation)
+    assert result.is_error == failed
+    assert result.native_execution is not None
+    assert result.native_execution.finished_seconds >= result.native_execution.started_seconds
+    assert "clock_id" not in repr(result.to_llm_content)
+    assert specialist_task_module._task_execution.get() is None
+
+    parent.cancel_token.cancel()
+    cancelled = executor(TaskAction(prompt="Review", subagent_type="research-planner"))
+    assert isinstance(cancelled, HeartwoodSpecialistObservation)
+    assert cancelled.is_error
+    assert cancelled.native_execution is None
+    assert specialist_task_module._task_execution.get() is None
 
 
 @pytest.mark.parametrize("failed_interrupt", [False, True])

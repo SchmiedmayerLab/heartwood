@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field, computed_field
 from heartwood.core_adapter import backend_error_is_fatal
 from heartwood.core_adapter.workflow_provenance import workflow_experiment_events
 from heartwood.core_adapter.workflow_runtime import workflow_controls, workflow_run
-from heartwood.schemas.execution import ExecutionBudget, ExecutionUsage
+from heartwood.schemas.execution import ExecutionBudget, ExecutionUsage, NativeTaskExecution
 from heartwood.schemas.experiments import ExperimentRun, reduce_experiment_events
 from heartwood.schemas.project_paths import ProjectPathError, project_relative_path
 from heartwood.schemas.review import ReviewProposals
@@ -253,6 +253,9 @@ class ProjectionSubagent(_ProjectionRecord):
     parent_action_id: str = Field(serialization_alias="parentActionId")
     review_proposals: ReviewProposals | None = Field(
         default=None, serialization_alias="reviewProposals"
+    )
+    native_execution: NativeTaskExecution | None = Field(
+        default=None, serialization_alias="nativeExecution"
     )
 
 
@@ -1317,6 +1320,11 @@ def _subagent(value: dict[str, JsonValue]) -> ProjectionSubagent:
         }[status],
         parent_session_id=_string(value.get("parent_session_id")),
         parent_action_id=_string(value.get("parent_action_id")),
+        native_execution=(
+            NativeTaskExecution.model_validate(value["native_execution"])
+            if value.get("native_execution") is not None
+            else None
+        ),
         review_proposals=(
             ReviewProposals.model_validate(value["review_proposals"])
             if value.get("review_proposals") is not None

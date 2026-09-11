@@ -11,6 +11,7 @@ from __future__ import annotations
 import pytest
 
 from heartwood.gateway import SessionLifecycle, project_session
+from heartwood.schemas.execution import NativeTaskExecution
 from heartwood.session import EventKind, JsonValue, SessionEvent
 
 
@@ -63,6 +64,11 @@ def test_projection_replays_lifecycle_tasks_usage_and_subagent_lineage() -> None
                     "status": "completed",
                     "parent_session_id": "session-1",
                     "parent_action_id": "action-1",
+                    "native_execution": {
+                        "clock_id": "025c5e8f-b5dd-4c1e-a86e-85f122abfbc6",
+                        "started_seconds": 1.0,
+                        "finished_seconds": 2.0,
+                    },
                 }
             },
         ),
@@ -101,6 +107,11 @@ def test_projection_replays_lifecycle_tasks_usage_and_subagent_lineage() -> None
     assert projection.subagents[0].role_label == "Research Planner"
     assert projection.subagents[0].status_label == "Complete"
     assert projection.subagents[0].parent_session_id == "session-1"
+    native_subagent = events[7].payload["subagent"]
+    assert isinstance(native_subagent, dict)
+    assert projection.subagents[0].native_execution == NativeTaskExecution.model_validate(
+        native_subagent["native_execution"]
+    )
     assert projection.researcher_status.code == "complete"
     assert [item.suggestion_id for item in projection.suggestions] == [
         "continue-plan",

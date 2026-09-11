@@ -815,6 +815,15 @@ class SessionService:
                                 "parent_action_id": subagent.parent_action_id,
                                 **(
                                     {
+                                        "native_execution": subagent.native_execution.model_dump(
+                                            mode="json"
+                                        )
+                                    }
+                                    if subagent.native_execution is not None
+                                    else {}
+                                ),
+                                **(
+                                    {
                                         "review_proposals": subagent.review_proposals.model_dump(
                                             mode="json"
                                         )

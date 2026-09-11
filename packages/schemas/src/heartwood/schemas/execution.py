@@ -8,9 +8,37 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, Self
+from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+
+class NativeTaskExecution(BaseModel):
+    """Observed native task lifetime, not queue time or provider request concurrency."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
+
+    clock_id: UUID
+    started_seconds: float = Field(ge=0, strict=True)
+    finished_seconds: float = Field(ge=0, strict=True)
+
+    @model_validator(mode="after")
+    def ordered_interval(self) -> Self:
+        """Reject an invalid interval rather than inventing a duration."""
+        if self.finished_seconds < self.started_seconds:
+            raise ValueError("Native task execution cannot finish before it starts")
+        return self
+
+    def overlap_seconds(self, other: NativeTaskExecution) -> float:
+        """Only compare observations from the same process-local monotonic clock."""
+        if self.clock_id != other.clock_id:
+            raise ValueError("Native task observations use different clocks")
+        return max(
+            0.0,
+            min(self.finished_seconds, other.finished_seconds)
+            - max(self.started_seconds, other.started_seconds),
+        )
 
 
 class ExecutionBudget(BaseModel):

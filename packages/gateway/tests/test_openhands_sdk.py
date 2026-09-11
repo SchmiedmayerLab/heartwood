@@ -3387,6 +3387,12 @@ def test_native_specialist_task_concurrency_preserves_results_and_approval(
         assert {item.agent_name for item in terminal} == set(reviewers)
         assert len({item.task_id for item in terminal}) == 2
         assert len(completed) == (1 if partial_failure else 2)
+        intervals = [item.native_execution for item in terminal]
+        assert len(intervals) == 2
+        first_interval, second_interval = intervals
+        assert first_interval is not None
+        assert second_interval is not None
+        assert (first_interval.overlap_seconds(second_interval) > 0) == (workers == 2)
         assert all(item.review_proposals is not None for item in completed)
         assert "Synthetic private review failure" not in repr(events)
         assert (

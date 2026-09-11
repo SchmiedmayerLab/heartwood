@@ -6,10 +6,36 @@
 
 """Shared budget boundaries distinguish observed completion from new admission."""
 
+from uuid import uuid4
+
 import pytest
 from pydantic import ValidationError
 
-from heartwood.schemas.execution import ExecutionBudget, ExecutionUsage
+from heartwood.schemas.execution import ExecutionBudget, ExecutionUsage, NativeTaskExecution
+
+
+@pytest.mark.parametrize(("start", "finish", "overlap"), [(2, 4, 1), (3, 4, 0), (1, 1, 0)])
+def test_native_task_overlap_requires_a_shared_clock(
+    start: float, finish: float, overlap: float
+) -> None:
+    clock = uuid4()
+    first = NativeTaskExecution(clock_id=clock, started_seconds=1, finished_seconds=3)
+    second = NativeTaskExecution(clock_id=clock, started_seconds=start, finished_seconds=finish)
+    assert first.overlap_seconds(second) == second.overlap_seconds(first) == overlap
+    assert NativeTaskExecution.model_validate_json(first.model_dump_json()) == first
+    with pytest.raises(ValueError, match="different clocks"):
+        first.overlap_seconds(second.model_copy(update={"clock_id": uuid4()}))
+
+
+@pytest.mark.parametrize(
+    ("start", "finish"),
+    [(2, 1), (-1, 2), (float("nan"), 2), (1, float("inf")), (True, 2), ("1", 2)],
+)
+def test_native_task_invalid_measurements_fail_closed(start: object, finish: object) -> None:
+    with pytest.raises(ValidationError):
+        NativeTaskExecution.model_validate(
+            {"clock_id": uuid4(), "started_seconds": start, "finished_seconds": finish}
+        )
 
 
 @pytest.mark.parametrize(

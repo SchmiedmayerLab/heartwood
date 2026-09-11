@@ -3017,7 +3017,11 @@ def test_native_parallel_workflow_journals_before_children_and_replays_without_c
         assert review is not None
         assert children == (2 if approve else 0)
         assert len(review.parallel_dispatch) == (2 if approve else 0)
+        observed_tasks = gateway.session_projection(session_id="research").subagents
+        intervals = [item.native_execution for item in observed_tasks if item.native_execution]
+        assert len(intervals) == (2 if approve else 0)
         if approve:
+            assert intervals[0].overlap_seconds(intervals[1]) > 0
             assert review.status == "assessed"
             assert {item.reviewer_id for item in review.submissions} == set(roles)
             projected = gateway.session_projection(session_id="research").review_execution
@@ -3052,6 +3056,7 @@ def test_native_parallel_workflow_journals_before_children_and_replays_without_c
         assert restored.handle(request).replayed
         assert restored.handle(decision).replayed
         assert _state(restored).research_review == review
+        assert restored.session_projection(session_id="research").subagents == observed_tasks
         assert unused.call_count == 0
     finally:
         restored.stop()

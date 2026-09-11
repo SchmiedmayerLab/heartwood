@@ -18,6 +18,7 @@ from typing import Literal, Protocol, cast
 
 from heartwood.core_adapter._state import _write_private_json_atomic
 from heartwood.schemas import JsonValue
+from heartwood.schemas.execution import NativeTaskExecution
 from heartwood.schemas.review import ReviewProposals
 from heartwood.schemas.workflows import WorkflowOutcomeStatus
 
@@ -214,7 +215,7 @@ class BackendUsage:
 
 @dataclass(frozen=True, slots=True)
 class BackendSubagent:
-    """One sequential specialized-agent task."""
+    """One specialized-agent task observed through its native lifecycle."""
 
     invocation_id: str
     task_id: str | None
@@ -224,6 +225,7 @@ class BackendSubagent:
     parent_session_id: str
     parent_action_id: str
     review_proposals: ReviewProposals | None = None
+    native_execution: NativeTaskExecution | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

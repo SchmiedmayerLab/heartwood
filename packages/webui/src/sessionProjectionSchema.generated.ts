@@ -269,6 +269,16 @@ export const sessionProjectionJsonSchema = {
         { additionalProperties: { $ref: "#/$defs/JsonValue" }, type: "object" },
       ],
     },
+    NativeTaskExecution: {
+      additionalProperties: false,
+      properties: {
+        clock_id: { format: "uuid", type: "string" },
+        finished_seconds: { minimum: 0, type: "number" },
+        started_seconds: { minimum: 0, type: "number" },
+      },
+      required: ["clock_id", "started_seconds", "finished_seconds"],
+      type: "object",
+    },
     ParallelReviewPlan: {
       additionalProperties: false,
       properties: {
@@ -636,6 +646,9 @@ export const sessionProjectionJsonSchema = {
       properties: {
         agentName: { type: "string" },
         invocationId: { type: "string" },
+        nativeExecution: {
+          anyOf: [{ $ref: "#/$defs/NativeTaskExecution" }, { type: "null" }],
+        },
         parentActionId: { type: "string" },
         parentSessionId: { type: "string" },
         resultSummary: { anyOf: [{ type: "string" }, { type: "null" }] },
@@ -663,6 +676,7 @@ export const sessionProjectionJsonSchema = {
         "parentSessionId",
         "parentActionId",
         "reviewProposals",
+        "nativeExecution",
       ],
       type: "object",
     },

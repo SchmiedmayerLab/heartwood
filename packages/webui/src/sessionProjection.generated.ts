@@ -396,6 +396,7 @@ export interface ExecutionBudget {
 export interface ProjectionSubagent {
   agentName: string;
   invocationId: string;
+  nativeExecution: NativeTaskExecution | null;
   parentActionId: string;
   parentSessionId: string;
   resultSummary: string | null;
@@ -405,6 +406,14 @@ export interface ProjectionSubagent {
   statusLabel: string;
   taskId: string | null;
   taskSummary: string | null;
+}
+/**
+ * Observed native task lifetime, not queue time or provider request concurrency.
+ */
+export interface NativeTaskExecution {
+  clock_id: string;
+  finished_seconds: number;
+  started_seconds: number;
 }
 /**
  * Structured model output has no authority to select a reviewer or evidence snapshot.
