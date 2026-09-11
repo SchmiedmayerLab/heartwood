@@ -28,6 +28,7 @@ import uvicorn
 
 from heartwood.adapters import INGRESS_MODES
 from heartwood.adapters.platform import select_platform_adapter
+from heartwood.cli._experiments import configure_experiments, handle_experiments
 from heartwood.cli._interactive import (
     InteractionActivity,
     InteractionResult,
@@ -209,6 +210,11 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", metavar="<command>")
     doctor = subparsers.add_parser("doctor", help="Inspect environment and setup readiness.")
     doctor.add_argument("--json", action="store_true", help="Print machine-readable diagnostics.")
+    configure_experiments(
+        subparsers.add_parser(
+            "experiments", help="Record analyses and inspect experiment provenance."
+        )
+    )
     setup = subparsers.add_parser("setup", help="Configure a model route and conservative policy.")
     setup.add_argument(
         "--model-source",
@@ -673,6 +679,8 @@ def _main(argv: Sequence[str] | None = None) -> int:
         )
     if args.command == "doctor":
         return _handle_doctor(project=project, as_json=args.json)
+    if args.command == "experiments":
+        return handle_experiments(args, project=project)
     if args.command == "setup":
         return _handle_setup(parser, args, project=project)
     if args.command == "runtime" and args.runtime_command == "start":

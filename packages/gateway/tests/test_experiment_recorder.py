@@ -21,6 +21,7 @@ import pytest
 import heartwood.gateway.experiments as recording
 import heartwood.persistence._files as files
 from heartwood.gateway import ProjectContext, WorkspaceInspectionError
+from heartwood.gateway._experiment_store import ExperimentStore
 from heartwood.gateway.experiments import ExperimentRecorder, experiment_digest
 from heartwood.persistence import NativeLockUnavailableError
 from heartwood.schemas.experiments import (
@@ -123,6 +124,44 @@ def test_same_identity_never_reenters_user_code(tmp_path: Path) -> None:
     ):
         pytest.fail("A retry must not execute user code")
     assert recorder.export() == before
+
+
+def test_command_does_not_execute_until_start_is_durable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recorder, _ = prepare(tmp_path)
+
+    def fail_append(_self: object, _event: object) -> None:
+        raise OSError("synthetic append failure")
+
+    def unexpected_execute(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("A command cannot execute without its recorded start")
+
+    monkeypatch.setattr(ExperimentStore, "append", fail_append)
+    monkeypatch.setattr(subprocess, "run", unexpected_execute)
+    with pytest.raises(OSError, match="synthetic append failure"):
+        recorder.record_command(actor_ref="test", entry_point="analysis.py")
+    assert recorder.runs() == ()
+
+
+@pytest.mark.parametrize("mode", ["missing-runner", "observed-environment"])
+def test_command_rejects_unknown_runner_or_false_environment_observation(
+    tmp_path: Path, mode: str
+) -> None:
+    recorder, definition = prepare(tmp_path)
+    with pytest.raises(ValueError, match=r"unavailable|declared environment"):
+        recorder.record_command(
+            actor_ref="test",
+            entry_point="analysis.py",
+            runner="no-such-heartwood-test-interpreter" if mode == "missing-runner" else "sh",
+            environment=(
+                definition.environment
+                if mode == "missing-runner"
+                else recording.observed_python_environment()
+            ),
+        )
+    assert recorder.runs() == ()
+    assert not (tmp_path / ".heartwood").exists()
 
 
 @pytest.mark.parametrize("path", ["data.csv", "analysis.py"])

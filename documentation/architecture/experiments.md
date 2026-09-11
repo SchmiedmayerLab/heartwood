@@ -32,7 +32,46 @@ Rebuilding never reads newer artifact contents or repeats model calls or tool ac
 The gateway exposes `experiment_records()` and `export_experiments()` for project-wide inspection and export.
 The corresponding authenticated HTTP routes are `GET /research/experiments` and `GET /research/experiments/export`.
 An export includes canonical JSON Lines and its SHA-256 digest; it is not a signed audit checkpoint.
-The project collection also includes analyses explicitly recorded through the Python API below.
+The project collection also includes analyses explicitly recorded through the Python API and command-line recorder below.
+
+## Record a Command-Line Analysis
+
+From your project directory, declare the input and new output files before the script name:
+
+```bash
+heartwood experiments record --input data.csv --output results.json analysis.py --seed 42
+heartwood experiments list
+heartwood experiments export > experiment-records.jsonl
+```
+
+Heartwood uses its installed Python by default and passes everything after `analysis.py` literally to the script.
+Use repeated `--input`, `--output`, and `--code` options for additional files; the script itself is always included as code.
+Output directories must already exist, and declared output files must not exist.
+The command prints a run identity and leaves the analysis's output visible in the terminal without copying it into the journal.
+It returns the script's nonzero exit status when execution fails; a zero exit alone is not success if files changed or declared outputs are missing.
+
+This is an explicit user-run analysis, not an autonomous OpenHands tool or a sandbox.
+The script has the current user's ordinary filesystem and network permissions.
+Use normal Heartwood conversation actions when an agent proposes executing code so that the action-review policy applies.
+
+For another interpreter, use `--runner bash` or `--runner Rscript` and supply `--environment-sha256` with the complete digest of your maintained environment specification.
+That fingerprint is a declaration, not proof that the external interpreter matches it.
+Heartwood does not substitute its own Python environment as evidence for another interpreter.
+For example, a shell script can be recorded with:
+
+```text
+heartwood experiments record --runner bash --environment-sha256 DIGEST --input data.csv --output results.json analysis.sh
+```
+
+Replace `DIGEST` with the actual 64-character SHA-256 digest; do not use a placeholder as reproducibility evidence.
+The same file-boundary checks and versioned record schema apply to Python and command-line analyses.
+Raw arguments, environment-variable values, and process output are not stored in the record.
+Arguments may still appear in shell history or the operating system's process list; never pass credentials or protected values this way.
+
+`heartwood experiments list --json` returns the gateway's project collection schema.
+`heartwood experiments export` writes verified canonical JSON Lines to standard output; protect the exported file like other project metadata.
+For an abandoned script, `heartwood experiments recover RUN_ID` and `heartwood experiments cancel RUN_ID` follow the [recovery rules](#recover-an-interrupted-script) below without stopping processes or deleting files.
+Use `--run-id RUN_ID` when automating an initial command whose retries must retain one identity: reuse is rejected rather than repeating work.
 
 ## Record a Python Analysis
 

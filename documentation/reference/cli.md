@@ -101,6 +101,22 @@ See [Research Workflows](../use/research-workflows.md) for input requirements, s
 Workflows with unimplemented checks are marked unavailable.
 Specialists are selected by the parent OpenHands agent during a task; this command inspects the available roles rather than launching a separate agent session.
 
+## Experiment Records
+
+| Command | Purpose |
+|---|---|
+| `heartwood experiments record --input FILE --output NEW_FILE SCRIPT [ARGS...]` | Record an explicit user-run analysis using Heartwood's Python |
+| `heartwood experiments list [--json]` | Inspect project-wide workflow and script records without starting a model |
+| `heartwood experiments export` | Write verified scientific record JSONL to standard output |
+| `heartwood experiments recover RUN_ID` | Mark an abandoned script attempt interrupted without executing or stopping it |
+| `heartwood experiments cancel RUN_ID` | Close an abandoned script record without deleting outputs or stopping processes |
+
+Put recorder options before `SCRIPT`; following arguments belong to the script.
+Repeat `--input`, `--output`, and `--code` for dependencies and outputs.
+An alternative `--runner` requires a declared `--environment-sha256`.
+Script recording is not agent execution or a sandbox, and scientific records are not signed audit exports.
+See [Experiment Records](../architecture/experiments.md) for examples, evidence boundaries, and safe recovery.
+
 ## Session Automation
 
 | Command | Purpose |

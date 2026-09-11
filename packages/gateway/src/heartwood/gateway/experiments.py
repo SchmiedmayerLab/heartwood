@@ -11,6 +11,9 @@ from __future__ import annotations
 import hashlib
 import json
 import platform
+import shutil
+import subprocess
+import sys
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -126,6 +129,57 @@ class ExperimentRecorder:
             )
             return self._find_run(run.run_id)
 
+    def record_command(
+        self,
+        *,
+        actor_ref: str,
+        entry_point: str,
+        inputs: tuple[str, ...] = (),
+        outputs: tuple[str, ...] = (),
+        arguments: tuple[str, ...] = (),
+        code: tuple[str, ...] = (),
+        runner: str | None = None,
+        environment: ExperimentEnvironment | None = None,
+        run_id: UUID | None = None,
+    ) -> ExperimentRun:
+        """Record a user-requested script through the same Python recording boundary.
+
+        The default interpreter is Heartwood's Python. Other interpreters require
+        an explicit environment declaration. Arguments are passed literally;
+        shell expansion is not performed. Output goes to the caller's terminal,
+        never the scientific journal. This is not an agent tool or a sandbox.
+        """
+        if runner is not None and (environment is None or environment.source != "declared"):
+            raise ValueError("Another interpreter requires a declared environment fingerprint")
+        executable = sys.executable if runner is None else shutil.which(runner)
+        if executable is None:
+            raise ValueError("The requested interpreter is unavailable")
+        definition = self.describe(
+            actor_ref=actor_ref,
+            entry_point=entry_point,
+            inputs=inputs,
+            outputs=outputs,
+            parameters={"arguments": arguments},
+            code=code,
+            environment=environment,
+        )
+        definition = ExperimentDefinition.model_validate(
+            {
+                **definition.model_dump(),
+                "source": "shell",
+                "invocation_sha256": experiment_digest(
+                    {"runner": executable, "entry_point": entry_point, "arguments": arguments}
+                ),
+            }
+        )
+        with self.record(definition, run_id=run_id) as identity:
+            subprocess.run(
+                (executable, str(self.project.root / entry_point), *arguments),
+                cwd=self.project.root,
+                check=True,
+            )
+        return self._find_run(identity)
+
     def cancel(self, run_id: UUID) -> ExperimentRun:
         """Close an abandoned attempt without deleting files or claiming rollback."""
         with self._existing_run(run_id) as run:
@@ -214,6 +268,11 @@ class ExperimentRecorder:
                     at=datetime.now(UTC),
                     attempt=attempt,
                     status="cancelled" if isinstance(error, KeyboardInterrupt) else "failed",
+                    exit_code=(
+                        error.returncode
+                        if isinstance(error, subprocess.CalledProcessError)
+                        else None
+                    ),
                 )
             )
             raise
