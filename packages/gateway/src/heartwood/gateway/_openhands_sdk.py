@@ -113,6 +113,7 @@ from heartwood.gateway._openhands_models import (
 )
 from heartwood.gateway._openhands_persistence import ContentMinimizedLocalFileStore
 from heartwood.gateway._specialist_task import (
+    HeartwoodSpecialistObservation,
     HeartwoodSpecialistToolSet,
     SpecialistToolRole,
 )
@@ -784,7 +785,10 @@ class OpenHandsSdkBackend:
             return None
         return Tool(
             name=HeartwoodSpecialistToolSet.name,
-            params={"specialists": specialists},
+            params={
+                "specialists": specialists,
+                "structured_reviews": self._structured_task_outcomes,
+            },
         )
 
     def _register_specialized_agents(self) -> None:
@@ -1411,6 +1415,12 @@ class OpenHandsSdkBackend:
                             ),
                             parent_session_id=session_id,
                             parent_action_id=event.action_id,
+                            review_proposals=(
+                                event.observation.review_proposals
+                                if isinstance(event.observation, HeartwoodSpecialistObservation)
+                                and not event.observation.is_error
+                                else None
+                            ),
                         ),
                         source_event_id=f"{source}:subagent",
                     )

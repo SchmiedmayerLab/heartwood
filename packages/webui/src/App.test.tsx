@@ -2102,6 +2102,7 @@ describe("App", () => {
             statusLabel: "Working",
             taskSummary: "Plan the synthetic analysis",
             resultSummary: null,
+            reviewProposals: null,
             parentSessionId: "session-test",
             parentActionId: "task-action-1",
           },
@@ -2147,10 +2148,22 @@ describe("App", () => {
             taskId: "task-verification",
             agentName: "result-reviewer",
             roleLabel: "Result Reviewer",
-            status: "proposed",
-            statusLabel: "Proposed",
+            status: "completed",
+            statusLabel: "Complete",
             taskSummary: "Verify the result",
             resultSummary: null,
+            reviewProposals: {
+              candidates: [
+                {
+                  candidate_id: "syntax-1",
+                  condition: "python-source-invalid",
+                  category: "coding",
+                  severity: "high",
+                  summary: "Check the supplied <script>source</script>.",
+                  artifact_ids: ["program"],
+                },
+              ],
+            },
             parentSessionId: "session-test",
             parentActionId: "task-action-2",
           },
@@ -2159,6 +2172,11 @@ describe("App", () => {
     });
     await waitFor(() => expect(status).toHaveTextContent("$1.25"));
     expect(status).toHaveTextContent("2 specialists");
+    expect(status).toHaveTextContent("Unverified review proposals");
+    expect(status).toHaveTextContent(
+      "Check the supplied <script>source</script>.",
+    );
+    expect(status.querySelector("script")).toBeNull();
   });
 
   it("uses projection capabilities for paused work and resume commands", async () => {
@@ -2237,6 +2255,7 @@ describe("App", () => {
           statusLabel: "Work\u2066ing",
           taskSummary: "Review the analysis",
           resultSummary: null,
+          reviewProposals: null,
           parentSessionId: "session-test",
           parentActionId: "task-action",
         },

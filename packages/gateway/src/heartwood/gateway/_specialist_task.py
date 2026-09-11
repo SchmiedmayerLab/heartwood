@@ -14,20 +14,55 @@ from pathlib import Path
 from threading import RLock
 from typing import TypedDict, override
 
-from openhands.sdk import Agent, LocalConversation
+from openhands.sdk import Agent, ImageContent, LocalConversation, TextContent, Tool
+from openhands.sdk.context import AgentContext
 from openhands.sdk.conversation.state import ConversationState
 from openhands.sdk.hooks.config import HookConfig
 from openhands.sdk.observability.laminar import detached_delegate_context
 from openhands.sdk.tool import ToolDefinition, register_tool
+from openhands.sdk.tool.builtins.finish import FinishTool
 from openhands.tools.task import TaskAction, TaskObservation, TaskTool
 from openhands.tools.task.impl import TaskExecutor
 from openhands.tools.task.manager import (
     ConfirmationHandler,
     Task,
     TaskManager,
+    TaskStatus,
 )
+from pydantic import Field
 
+from heartwood.core_adapter.research_review import research_review_instructions
 from heartwood.gateway._openhands_persistence import ContentMinimizedLocalFileStore
+from heartwood.schemas.experiments import ExperimentRecord
+from heartwood.schemas.review import ReviewProposals
+
+
+class _ReviewTaskResult(ExperimentRecord):
+    """Typed envelope over the native Task result string, never parsed from model prose."""
+
+    message: str = Field(max_length=16_384)
+    proposals: ReviewProposals
+
+
+class HeartwoodSpecialistObservation(TaskObservation):
+    """Native task lineage and message plus optional advisory review proposals."""
+
+    review_proposals: ReviewProposals | None = None
+
+    @property
+    @override
+    def to_llm_content(self) -> Sequence[TextContent | ImageContent]:
+        content = list(super().to_llm_content)
+        if self.review_proposals is not None:
+            content.append(
+                TextContent(
+                    text=(
+                        "Unverified review proposals. Independent checks and normal "
+                        "action approval still apply.\n" + self.review_proposals.model_dump_json()
+                    )
+                )
+            )
+        return content
 
 
 class SpecialistToolRole(TypedDict):
@@ -46,9 +81,11 @@ class _CatalogTaskManager(TaskManager):
         *,
         allowed_specialist_ids: frozenset[str],
         confirmation_handler: ConfirmationHandler | None = None,
+        structured_reviews: bool = False,
     ) -> None:
         super().__init__(confirmation_handler=confirmation_handler)
         self._allowed_specialist_ids = allowed_specialist_ids
+        self._structured_reviews = structured_reviews
         self._active_child: LocalConversation | None = None
         self._active_child_lock = RLock()
 
@@ -95,6 +132,32 @@ class _CatalogTaskManager(TaskManager):
         max_budget_per_run: float | None = None,
     ) -> LocalConversation:
         parent = self.parent_conversation
+        if self._structured_reviews:
+            context = worker_agent.agent_context or AgentContext()
+            worker_agent = worker_agent.model_copy(
+                update={
+                    "agent_context": context.model_copy(
+                        update={
+                            "system_message_suffix": "\n\n".join(
+                                filter(
+                                    None,
+                                    (
+                                        context.system_message_suffix,
+                                        research_review_instructions(),
+                                    ),
+                                )
+                            ),
+                        }
+                    ),
+                    "include_default_tools": [
+                        name for name in worker_agent.include_default_tools if name != "FinishTool"
+                    ],
+                    "tools": [
+                        *[tool for tool in worker_agent.tools if tool.name != "FinishTool"],
+                        Tool(name="FinishTool", params={"response_schema": ReviewProposals}),
+                    ],
+                }
+            )
         parent_persistence_dir = parent.state.persistence_dir
         if parent_persistence_dir is None:
             raise RuntimeError("Specialist persistence is unavailable.")
@@ -145,6 +208,27 @@ class _CatalogTaskManager(TaskManager):
         if child is not None:
             child.interrupt()
 
+    @override
+    def _evict_task(self, task: Task) -> None:
+        # Native eviction closes the child and may remove its files. Capture the
+        # public structured response first; the parent observation persists it.
+        if self._structured_reviews and task.status == TaskStatus.COMPLETED:
+            try:
+                if task.conversation is None:
+                    raise ValueError("Review conversation is unavailable")
+                parser = FinishTool.create()[0].set_response_schema(ReviewProposals)
+                proposals = parser.parse_last_response(list(task.conversation.state.events))
+                if not isinstance(proposals, ReviewProposals):
+                    raise ValueError("Structured review proposals are unavailable")
+                task.set_result(
+                    _ReviewTaskResult(
+                        message=task.result or "", proposals=proposals
+                    ).model_dump_json()
+                )
+            except (ValueError, OSError):
+                task.set_error("The specialist did not return a valid structured review.")
+        super()._evict_task(task)
+
 
 class _CatalogTaskExecutor(TaskExecutor):
     """Add child interruption to OpenHands' blocking Task executor."""
@@ -157,6 +241,29 @@ class _CatalogTaskExecutor(TaskExecutor):
     def interrupt(self) -> None:
         self._catalog_manager.interrupt_active_child()
 
+    @override
+    def __call__(
+        self, action: TaskAction, conversation: LocalConversation | None = None
+    ) -> TaskObservation:
+        observation = super().__call__(action, conversation)
+        proposals = None
+        text = observation.text
+        failed = observation.is_error
+        if self._catalog_manager._structured_reviews and not failed:
+            try:
+                result = _ReviewTaskResult.model_validate_json(text)
+                text, proposals = result.message, result.proposals
+            except ValueError:
+                text, failed = "The specialist did not return a valid structured review.", True
+        return HeartwoodSpecialistObservation.from_text(
+            text=text,
+            task_id=observation.task_id,
+            subagent=observation.subagent,
+            status="error" if failed else observation.status,
+            is_error=failed,
+            review_proposals=proposals,
+        )
+
 
 class HeartwoodSpecialistToolSet(ToolDefinition[TaskAction, TaskObservation]):
     """Create one OpenHands Task tool restricted to catalog specialists."""
@@ -167,17 +274,21 @@ class HeartwoodSpecialistToolSet(ToolDefinition[TaskAction, TaskObservation]):
         conv_state: ConversationState,  # noqa: ARG003
         specialists: list[SpecialistToolRole],
         confirmation_handler: ConfirmationHandler | None = None,
+        structured_reviews: bool = False,
     ) -> Sequence[ToolDefinition[TaskAction, TaskObservation]]:
         normalized = _validated_roles(specialists)
         manager = _CatalogTaskManager(
             allowed_specialist_ids=frozenset(role["specialist_id"] for role in normalized),
             confirmation_handler=confirmation_handler,
+            structured_reviews=structured_reviews,
         )
         executor = _CatalogTaskExecutor(manager)
-        return TaskTool.create(
-            executor=executor,
-            description=_task_description(normalized),
-        )
+        return [
+            tool.model_copy(update={"observation_type": HeartwoodSpecialistObservation})
+            for tool in TaskTool.create(
+                executor=executor, description=_task_description(normalized)
+            )
+        ]
 
 
 def _validated_roles(roles: list[SpecialistToolRole]) -> tuple[SpecialistToolRole, ...]:

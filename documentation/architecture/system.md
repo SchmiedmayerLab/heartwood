@@ -106,6 +106,13 @@ These assessments are observations, not action permissions or proof that files r
 The service does not execute corrections, start a reviewer, persist session transitions, or authenticate a model-supplied reviewer identity.
 Its caller owns the association between a submission and the actual reviewer; detailed proposals belong to scientific review context, not the content-minimized security audit.
 
+Research workflow conversations configure their advisory specialists with the same structured proposal schema and supported-condition guidance.
+The existing Task adapter captures the public structured response before OpenHands closes the child and retains it in the parent's typed task observation.
+Missing or malformed structured results are task failures, even if the specialist's prose claims success.
+Ordinary conversations retain unstructured specialist summaries.
+The existing session event journal and shared projection preserve proposals and native task lineage across replay without repeating model work.
+Terminal, browser, and notebook presentations explicitly distinguish these unverified proposals from independently assessed findings.
+
 ### Journaled Stage Execution
 
 The gateway accepts explicit workflow start, run, evaluate, review, and cancel commands through the existing session command journal.

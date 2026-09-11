@@ -73,6 +73,9 @@ export type CommandKind =
   | "audit.export"
   | "workflow";
 export type WorkflowIdentifier = string;
+export type ReviewCategory = "coding" | "statistical" | "reproducibility";
+export type ReviewSeverity = "low" | "medium" | "high" | "critical";
+export type ResearchText = string;
 export type WorkflowInputValue = string;
 export type WorkflowText = string;
 
@@ -362,11 +365,36 @@ export interface ProjectionSubagent {
   parentActionId: string;
   parentSessionId: string;
   resultSummary: string | null;
+  reviewProposals: ReviewProposals | null;
   roleLabel: string;
   status: "proposed" | "running" | "completed" | "error" | "rejected";
   statusLabel: string;
   taskId: string | null;
   taskSummary: string | null;
+}
+/**
+ * Structured model output has no authority to select a reviewer or evidence snapshot.
+ */
+export interface ReviewProposals {
+  /**
+   * @maxItems 32
+   */
+  candidates: ReviewCandidate[];
+}
+/**
+ * A model proposal cannot assign itself verification or a final disposition.
+ */
+export interface ReviewCandidate {
+  /**
+   * @minItems 1
+   * @maxItems 16
+   */
+  artifact_ids: WorkflowIdentifier[];
+  candidate_id: WorkflowIdentifier;
+  category: ReviewCategory;
+  condition: WorkflowIdentifier;
+  severity: ReviewSeverity;
+  summary: ResearchText;
 }
 /**
  * One bounded task suggestion derived from the authoritative session state.

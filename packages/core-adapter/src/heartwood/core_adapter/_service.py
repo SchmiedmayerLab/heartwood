@@ -747,6 +747,15 @@ class SessionService:
                                 "status": subagent.status.value,
                                 "parent_session_id": subagent.parent_session_id,
                                 "parent_action_id": subagent.parent_action_id,
+                                **(
+                                    {
+                                        "review_proposals": subagent.review_proposals.model_dump(
+                                            mode="json"
+                                        )
+                                    }
+                                    if subagent.review_proposals is not None
+                                    else {}
+                                ),
                             },
                             **source_payload,
                         },

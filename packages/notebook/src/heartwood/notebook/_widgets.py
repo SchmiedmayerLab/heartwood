@@ -221,6 +221,11 @@ def _specialist_item(agent: ProjectionSubagent) -> str:
         details.append(f"Task: {agent.task_summary}")
     if agent.result_summary is not None:
         details.append(f"Result: {agent.result_summary}")
+    if agent.review_proposals is not None:
+        details.extend(
+            f"Unverified review proposal: {candidate.summary}"
+            for candidate in agent.review_proposals.candidates
+        )
     return "\n".join(details)
 
 

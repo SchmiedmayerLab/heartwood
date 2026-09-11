@@ -28,6 +28,9 @@ from heartwood.core_adapter import (
     BackendEvent,
     BackendLifecycle,
     BackendLifecycleEvent,
+    BackendSubagent,
+    BackendSubagentEvent,
+    BackendSubagentStatus,
     DeterministicAgentBackend,
     PendingActionGroup,
     SessionResult,
@@ -53,7 +56,75 @@ from heartwood.gateway import (
     SessionGateway,
     SkillSettingsError,
 )
+from heartwood.schemas.review import ReviewCandidate, ReviewProposals
 from heartwood.session import CommandKind, EventKind, JsonValue, SessionCommand, SessionEvent
+
+
+def test_specialist_review_proposals_replay_without_entering_the_security_audit(
+    tmp_path: Path,
+) -> None:
+    proposals = ReviewProposals(
+        candidates=(
+            ReviewCandidate(
+                candidate_id="syntax-1",
+                condition="python-source-invalid",
+                category="coding",
+                severity="high",
+                summary="synthetic-private-review-detail",
+                artifact_ids=("program",),
+            ),
+        )
+    )
+
+    class ReviewBackend(DeterministicAgentBackend):
+        calls = 0
+
+        def submit_turn(self, *, session_id: str, prompt: str) -> tuple[BackendEvent, ...]:
+            del prompt
+            self.calls += 1
+            return (
+                BackendSubagentEvent(
+                    subagent=BackendSubagent(
+                        invocation_id="review-call",
+                        task_id="review-task",
+                        agent_name="reviewer",
+                        role_label="Reviewer",
+                        status=BackendSubagentStatus.COMPLETED,
+                        parent_session_id=session_id,
+                        parent_action_id="task-action",
+                        review_proposals=proposals,
+                    ),
+                    source_event_id="native-review-1",
+                ),
+                BackendLifecycleEvent(lifecycle=BackendLifecycle.FINISHED),
+            )
+
+    backend = ReviewBackend()
+    gateway = SessionGateway(
+        project=ProjectContext(tmp_path),
+        env={},
+        service_factory=lambda root, session_id: SessionService.local_default(
+            root,
+            session_id=session_id,
+            backend=backend,
+            env={},
+        ),
+    )
+    command = SessionCommand.model_validate_json(_command(CommandKind.CHAT, prompt="Review"))
+    gateway.handle(command)
+    gateway.handle(command)
+    projection = gateway.session_projection(session_id="session-1")
+    assert projection.subagents[0].review_proposals == proposals
+    assert backend.calls == 1
+    gateway.handle(SessionCommand.model_validate_json(_command(CommandKind.AUDIT_EXPORT)))
+    exported = gateway.audit_export("session-1")
+    assert "synthetic-private-review-detail" not in json.dumps(exported)
+    gateway.stop()
+    reopened = SessionGateway(project=ProjectContext(tmp_path), env={}, backend_id="deterministic")
+    restored = reopened.persisted_session_projection(session_id="session-1")
+    assert restored.subagents == projection.subagents
+    assert backend.calls == 1
+    reopened.stop()
 
 
 def _command(

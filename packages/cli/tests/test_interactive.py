@@ -68,6 +68,7 @@ from heartwood.schemas import (
     ActionSettingsResponse,
     WorkspaceTreeResponse,
 )
+from heartwood.schemas.review import ReviewCandidate, ReviewProposals
 from heartwood.session import EventKind, JsonValue
 
 
@@ -1156,6 +1157,18 @@ def test_line_formatter_renders_the_gateway_owned_atomic_action_set() -> None:
                 parent_action_id="action-1",
                 task_summary="Review the synthetic analysis plan",
                 result_summary="Plan review completed",
+                review_proposals=ReviewProposals(
+                    candidates=(
+                        ReviewCandidate(
+                            candidate_id="syntax-1",
+                            condition="python-source-invalid",
+                            category="coding",
+                            severity="high",
+                            summary="Inspect source\u202e",
+                            artifact_ids=("program",),
+                        ),
+                    )
+                ),
             ),
         ),
     )
@@ -1176,6 +1189,8 @@ def test_line_formatter_renders_the_gateway_owned_atomic_action_set() -> None:
     assert "Research Planner: Complete" in rendered
     assert "Task: Review the synthetic analysis plan" in rendered
     assert "Result: Plan review completed" in rendered
+    assert "Unverified review proposal: Inspect source\\u202e" in rendered
+    assert "\u202e" not in rendered
     assert "task-call-1" not in rendered
     assert lines[-2:] == (
         "Allow the complete set once: /allow",

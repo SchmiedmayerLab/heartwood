@@ -17,10 +17,12 @@ from uuid import uuid4
 import pytest
 from openhands.sdk import Agent, LocalConversation
 from openhands.tools.task import TaskAction
+from openhands.tools.task.manager import Task, TaskStatus
 
 import heartwood.gateway._specialist_task as specialist_task_module
 from heartwood.gateway._openhands_persistence import ContentMinimizedLocalFileStore
 from heartwood.gateway._specialist_task import (
+    HeartwoodSpecialistObservation,
     _CatalogTaskExecutor,
     _CatalogTaskManager,
 )
@@ -132,3 +134,35 @@ def test_task_action_resume_remains_typed_for_fail_closed_validation() -> None:
     )
 
     assert action.resume == "task_00000001"
+
+
+def test_missing_child_evidence_and_malformed_task_envelopes_fail_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = _CatalogTaskManager(
+        allowed_specialist_ids=frozenset({"research-planner"}),
+        structured_reviews=True,
+    )
+    missing = Task(
+        id="task-missing",
+        status=TaskStatus.COMPLETED,
+        conversation_id=uuid4(),
+        result="Do not accept this unsupported success claim",
+    )
+    manager._evict_task(missing)
+    assert missing.status == TaskStatus.ERROR
+    assert missing.result is None
+    malformed = Task(
+        id="task-malformed",
+        status=TaskStatus.COMPLETED,
+        conversation_id=uuid4(),
+        result="private-invalid-result",
+    )
+    monkeypatch.setattr(manager, "start_task", lambda **_kwargs: malformed)
+    result = _CatalogTaskExecutor(manager)(
+        TaskAction(prompt="Review", subagent_type="research-planner")
+    )
+    assert isinstance(result, HeartwoodSpecialistObservation)
+    assert result.is_error
+    assert result.review_proposals is None
+    assert "private-invalid-result" not in result.text

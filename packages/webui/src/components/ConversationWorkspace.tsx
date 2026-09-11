@@ -682,6 +682,18 @@ const RuntimeStatus = ({
                     Result: {displaySafeText(subagent.resultSummary)}
                   </small>
                 : null}
+                {subagent.reviewProposals?.candidates.length ?
+                  <details>
+                    <summary>Unverified review proposals</summary>
+                    <ul>
+                      {subagent.reviewProposals.candidates.map((candidate) => (
+                        <li key={candidate.candidate_id}>
+                          {displaySafeText(candidate.summary)}
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                : null}
                 <details className="trace-details">
                   <summary>Technical details</summary>
                   <pre tabIndex={0}>

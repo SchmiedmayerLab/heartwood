@@ -40,6 +40,12 @@ After the specialist finishes, its result returns to the parent agent, which dec
 Specialist output is model-generated review, not independent scientific validation.
 Inspect the evidence and apply the same domain, statistical, and reproducibility review required for manually produced work.
 
+In a research workflow, specialists can return structured review proposals alongside their summary.
+These appear as **Unverified review proposals** in the browser, terminal status, and notebook view.
+A proposal identifies something to check; it does not establish a defect or authorize a correction.
+No proposals is also not proof that the analysis is correct.
+If a specialist cannot supply its required structured result, Heartwood reports the task as failed rather than accepting a success claim from its summary.
+
 ## Inspect the Catalog
 
 In the terminal, run `heartwood specialists` before opening a session or enter `/specialists` inside one.

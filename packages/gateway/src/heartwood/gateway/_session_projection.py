@@ -19,6 +19,7 @@ from heartwood.core_adapter.workflow_runtime import workflow_controls, workflow_
 from heartwood.schemas.execution import ExecutionUsage
 from heartwood.schemas.experiments import ExperimentRun, reduce_experiment_events
 from heartwood.schemas.project_paths import ProjectPathError, project_relative_path
+from heartwood.schemas.review import ReviewProposals
 from heartwood.schemas.workflows import WorkflowControl, WorkflowRun
 from heartwood.session import CommandKind, EventKind, JsonValue, SessionEvent
 
@@ -250,6 +251,9 @@ class ProjectionSubagent(_ProjectionRecord):
     result_summary: str | None = Field(default=None, serialization_alias="resultSummary")
     parent_session_id: str = Field(serialization_alias="parentSessionId")
     parent_action_id: str = Field(serialization_alias="parentActionId")
+    review_proposals: ReviewProposals | None = Field(
+        default=None, serialization_alias="reviewProposals"
+    )
 
 
 class ProjectionSuggestion(_ProjectionRecord):
@@ -1255,6 +1259,11 @@ def _subagent(value: dict[str, JsonValue]) -> ProjectionSubagent:
         }[status],
         parent_session_id=_string(value.get("parent_session_id")),
         parent_action_id=_string(value.get("parent_action_id")),
+        review_proposals=(
+            ReviewProposals.model_validate(value["review_proposals"])
+            if value.get("review_proposals") is not None
+            else None
+        ),
     )
 
 

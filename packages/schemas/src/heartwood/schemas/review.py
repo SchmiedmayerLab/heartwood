@@ -80,7 +80,7 @@ class ReviewCandidate(ExperimentRecord):
 class ReviewProposals(ExperimentRecord):
     """Structured model output has no authority to select a reviewer or evidence snapshot."""
 
-    candidates: tuple[ReviewCandidate, ...] = Field(default=(), max_length=32)
+    candidates: tuple[ReviewCandidate, ...] = Field(max_length=32)
 
     @model_validator(mode="after")
     def unique_candidates(self) -> Self:

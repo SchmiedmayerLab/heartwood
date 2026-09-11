@@ -504,6 +504,9 @@ export const sessionProjectionJsonSchema = {
         parentActionId: { type: "string" },
         parentSessionId: { type: "string" },
         resultSummary: { anyOf: [{ type: "string" }, { type: "null" }] },
+        reviewProposals: {
+          anyOf: [{ $ref: "#/$defs/ReviewProposals" }, { type: "null" }],
+        },
         roleLabel: { type: "string" },
         status: {
           enum: ["proposed", "running", "completed", "error", "rejected"],
@@ -524,6 +527,7 @@ export const sessionProjectionJsonSchema = {
         "resultSummary",
         "parentSessionId",
         "parentActionId",
+        "reviewProposals",
       ],
       type: "object",
     },
@@ -632,6 +636,52 @@ export const sessionProjectionJsonSchema = {
     },
     Reference: {
       pattern: "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+      type: "string",
+    },
+    ResearchText: { maxLength: 4000, minLength: 1, type: "string" },
+    ReviewCandidate: {
+      additionalProperties: false,
+      properties: {
+        artifact_ids: {
+          items: { $ref: "#/$defs/WorkflowIdentifier" },
+          maxItems: 16,
+          minItems: 1,
+          type: "array",
+        },
+        candidate_id: { $ref: "#/$defs/WorkflowIdentifier" },
+        category: { $ref: "#/$defs/ReviewCategory" },
+        condition: { $ref: "#/$defs/WorkflowIdentifier" },
+        severity: { $ref: "#/$defs/ReviewSeverity" },
+        summary: { $ref: "#/$defs/ResearchText" },
+      },
+      required: [
+        "candidate_id",
+        "condition",
+        "category",
+        "severity",
+        "summary",
+        "artifact_ids",
+      ],
+      type: "object",
+    },
+    ReviewCategory: {
+      enum: ["coding", "statistical", "reproducibility"],
+      type: "string",
+    },
+    ReviewProposals: {
+      additionalProperties: false,
+      properties: {
+        candidates: {
+          items: { $ref: "#/$defs/ReviewCandidate" },
+          maxItems: 32,
+          type: "array",
+        },
+      },
+      required: ["candidates"],
+      type: "object",
+    },
+    ReviewSeverity: {
+      enum: ["low", "medium", "high", "critical"],
       type: "string",
     },
     SessionLifecycle: {

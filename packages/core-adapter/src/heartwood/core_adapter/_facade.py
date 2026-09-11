@@ -18,6 +18,7 @@ from typing import Literal, Protocol, cast
 
 from heartwood.core_adapter._state import _write_private_json_atomic
 from heartwood.schemas import JsonValue
+from heartwood.schemas.review import ReviewProposals
 from heartwood.schemas.workflows import WorkflowOutcomeStatus
 
 
@@ -221,6 +222,7 @@ class BackendSubagent:
     status: BackendSubagentStatus
     parent_session_id: str
     parent_action_id: str
+    review_proposals: ReviewProposals | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

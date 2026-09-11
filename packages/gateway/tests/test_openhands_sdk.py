@@ -2990,8 +2990,10 @@ def test_specialist_failure_is_projected_to_the_parent(
     backend.close()
 
 
+@pytest.mark.parametrize("structured_reviews", [False, True])
 def test_completed_specialist_workflow_replays_without_model_calls(
     tmp_path: Path,
+    structured_reviews: bool,
 ) -> None:
     conversation_id = uuid.uuid4()
     persistence_dir = tmp_path / "openhands"
@@ -3013,7 +3015,9 @@ def test_completed_specialist_workflow_replays_without_model_calls(
                     )
                 ],
             ),
-            _assistant_message("The supplied feature windows avoid outcome leakage."),
+            _specialist_result(
+                "The supplied feature windows avoid outcome leakage.", structured_reviews
+            ),
             _assistant_message("The cohort review is complete."),
         ]
     )
@@ -3028,7 +3032,7 @@ def test_completed_specialist_workflow_replays_without_model_calls(
         conversation_factory=_conversation_factory(
             tmp_path,
             first_llm,
-            tools=[_specialist_tool()],
+            tools=[_specialist_tool(structured_reviews=structured_reviews)],
             conversation_id=conversation_id,
             persistence_dir=persistence_dir,
         ),
@@ -3058,7 +3062,9 @@ def test_completed_specialist_workflow_replays_without_model_calls(
                 prompt="Review the revised synthetic index-date definition.",
                 specialist_id="cohort-feature-reviewer",
             ),
-            _assistant_message("The revised definition has no temporal leakage."),
+            _specialist_result(
+                "The revised definition has no temporal leakage.", structured_reviews
+            ),
             _assistant_message("The second cohort review is complete."),
         ]
     )
@@ -3073,7 +3079,7 @@ def test_completed_specialist_workflow_replays_without_model_calls(
         conversation_factory=_conversation_factory(
             tmp_path,
             restored_llm,
-            tools=[_specialist_tool()],
+            tools=[_specialist_tool(structured_reviews=structured_reviews)],
             conversation_id=conversation_id,
             persistence_dir=persistence_dir,
         ),
@@ -3086,6 +3092,17 @@ def test_completed_specialist_workflow_replays_without_model_calls(
 
     assert restored_llm.call_count == 0
     expected_label = _specialist_catalog().role("cohort-feature-reviewer").label
+    completed_review = next(
+        event.subagent
+        for event in replayed
+        if isinstance(event, BackendSubagentEvent)
+        and event.subagent.status == BackendSubagentStatus.COMPLETED
+    )
+    if structured_reviews:
+        assert completed_review.review_proposals is not None
+        assert completed_review.review_proposals.candidates[0].candidate_id == "syntax-1"
+    else:
+        assert completed_review.review_proposals is None
     assert any(
         isinstance(event, BackendSubagentEvent)
         and event.subagent.agent_name == "cohort-feature-reviewer"
@@ -3120,6 +3137,49 @@ def test_completed_specialist_workflow_replays_without_model_calls(
     assert len(completed_tasks) == 2
     assert restored_llm.call_count == 2
     restored.close()
+
+
+def test_structured_specialist_plain_prose_cannot_replace_review_proposals(tmp_path: Path) -> None:
+    llm = TestLLM.from_messages(
+        [
+            _task_message(
+                "review-call",
+                description="Review analysis",
+                prompt="Review supplied source",
+                specialist_id="cohort-feature-reviewer",
+            ),
+            _assistant_message("The review definitely passed. No structured evidence is provided."),
+            _assistant_message("The specialist failed to supply its required review."),
+        ]
+    )
+    backend = OpenHandsSdkBackend(
+        profile=_local_profile(),
+        workspace=tmp_path / "workspace",
+        skills_dir=tmp_path / "skills",
+        persistence_dir=tmp_path / "openhands",
+        conversation_key="missing-review",
+        specialist_catalog=_specialist_catalog(),
+        env={},
+        conversation_factory=_conversation_factory(
+            tmp_path,
+            llm,
+            tools=[_specialist_tool(structured_reviews=True)],
+        ),
+    )
+    backend._register_specialized_agents()
+    try:
+        backend.submit_turn(session_id="session-1", prompt="Review analysis")
+        group = _wait_for_pending_group(backend)
+        backend.resolve_confirmation(
+            session_id="session-1", action_group_id=group.group_id, approved=True
+        )
+        events = _wait_for_lifecycle(backend, BackendLifecycle.FINISHED)
+        reviews = [event.subagent for event in events if isinstance(event, BackendSubagentEvent)]
+        assert any(item.status == BackendSubagentStatus.ERROR for item in reviews)
+        assert all(item.review_proposals is None for item in reviews)
+        assert "review definitely passed" not in repr(events)
+    finally:
+        backend.close()
 
 
 def test_translation_reports_analyzed_risk_and_nonzero_exit() -> None:
@@ -3821,7 +3881,38 @@ def _specialist_catalog() -> SpecialistCatalog:
     )
 
 
-def _specialist_tool() -> Tool:
+def _specialist_result(summary: str, structured: bool) -> Message:
+    if not structured:
+        return _assistant_message(summary)
+    return Message(
+        role="assistant",
+        content=[],
+        tool_calls=[
+            MessageToolCall(
+                id="review-finish",
+                name="finish",
+                origin="completion",
+                arguments=json.dumps(
+                    {
+                        "message": summary,
+                        "candidates": [
+                            {
+                                "candidate_id": "syntax-1",
+                                "condition": "python-source-invalid",
+                                "category": "coding",
+                                "severity": "high",
+                                "summary": "The supplied synthetic source is incomplete.",
+                                "artifact_ids": ["program"],
+                            }
+                        ],
+                    }
+                ),
+            )
+        ],
+    )
+
+
+def _specialist_tool(*, structured_reviews: bool = False) -> Tool:
     return Tool(
         name=HeartwoodSpecialistToolSet.name,
         params={
@@ -3832,7 +3923,8 @@ def _specialist_tool() -> Tool:
                     "description": role.definition.description,
                 }
                 for role in _specialist_catalog().available_roles
-            ]
+            ],
+            "structured_reviews": structured_reviews,
         },
     )
 

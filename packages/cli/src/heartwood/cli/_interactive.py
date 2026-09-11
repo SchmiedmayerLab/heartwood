@@ -637,6 +637,11 @@ def format_runtime_lines(projection: SessionProjection) -> tuple[str, ...]:
                 lines.append(f"    Task: {terminal_safe_text(item.task_summary)}")
             if item.result_summary is not None:
                 lines.append(f"    Result: {terminal_safe_text(item.result_summary)}")
+            if item.review_proposals is not None:
+                lines.extend(
+                    f"    Unverified review proposal: {terminal_safe_text(candidate.summary)}"
+                    for candidate in item.review_proposals.candidates
+                )
     if projection.suggestions:
         lines.append("Suggested next steps:")
         lines.extend(
