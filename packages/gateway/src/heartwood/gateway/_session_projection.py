@@ -277,6 +277,7 @@ class ProjectionReviewExecution(_ProjectionRecord):
     """One shared description of requested versus admitted advisory concurrency."""
 
     status: Literal["preview", "authorized", "admitted", "assessed", "unavailable", "cancelled"]
+    purpose: Literal["qualified-review", "qualification-trial"]
     workers: int = Field(ge=2)
     reviewers: tuple[str, ...]
     budget: ExecutionBudget
@@ -301,13 +302,19 @@ def _review_execution(run: WorkflowRun | None) -> ProjectionReviewExecution | No
         status = "authorized"
     scope = plan.scope
     budget = scope.budget
+    label = (
+        "Experimental parallel review"
+        if plan.purpose == "qualification-trial"
+        else "Parallel review"
+    )
     return ProjectionReviewExecution(
         status=status,
+        purpose=plan.purpose,
         workers=scope.workers,
         reviewers=scope.reviewer_ids,
         budget=budget,
         summary=(
-            f"Parallel review ({status}): {scope.workers} workers; "
+            f"{label} ({status}): {scope.workers} workers; "
             f"up to {budget.maximum_seconds:g}s, {budget.maximum_model_calls} model calls, "
             f"{budget.maximum_tokens:,} tokens, {budget.maximum_actions} actions, "
             f"${budget.maximum_reported_cost_usd:g} reported cost. "

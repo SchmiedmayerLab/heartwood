@@ -61,7 +61,7 @@ from heartwood.core_adapter.workflow_runtime import (
 from heartwood.model_policy import ModelPolicyEngine
 from heartwood.schemas import ConfirmationRequest, JsonValue, PolicyProfile
 from heartwood.schemas.experiments import ExperimentExportBinding
-from heartwood.schemas.parallel_reviews import ParallelReviewPlan, ReviewDispatchAction
+from heartwood.schemas.parallel_reviews import ReviewDispatchAction, ReviewExecutionPlan
 from heartwood.schemas.workflows import WorkflowRun
 from heartwood.session import (
     CommandKind,
@@ -387,7 +387,7 @@ class SessionService:
 
     def admit_parallel_review(
         self, actions: tuple[ReviewDispatchAction, ...], *, cancelled: Callable[[], bool]
-    ) -> ParallelReviewPlan | None:
+    ) -> ReviewExecutionPlan | None:
         """Recheck a consented review without holding session locks during qualification I/O."""
         with self._command_lock:
             self._require_review_owner(cancelled)

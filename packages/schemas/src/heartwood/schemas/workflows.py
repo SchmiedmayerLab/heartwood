@@ -27,7 +27,7 @@ from pydantic import (
 from heartwood.schemas.artifacts import ResearchArtifactPath
 from heartwood.schemas.execution import ExecutionBudget, ExecutionUsage
 from heartwood.schemas.identifiers import WorkflowIdentifier as WorkflowIdentifier
-from heartwood.schemas.parallel_reviews import ParallelReviewPlan
+from heartwood.schemas.parallel_reviews import ReviewExecutionPlan
 from heartwood.schemas.project_paths import project_relative_path
 from heartwood.schemas.review import ResearchCorrectionRun, ResearchReviewRun
 
@@ -382,7 +382,7 @@ class WorkflowRun(WorkflowRecord):
     stage_started_at: AwareDatetime | None = None
     stage_usage_baseline: ExecutionUsage | None = None
     research_review: ResearchReviewRun | None = None
-    parallel_review_plan: ParallelReviewPlan | None = None
+    parallel_review_plan: ReviewExecutionPlan | None = None
     corrections: tuple[ResearchCorrectionRun, ...] = Field(default=(), max_length=32)
 
     @model_validator(mode="after")

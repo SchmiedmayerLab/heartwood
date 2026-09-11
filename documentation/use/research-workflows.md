@@ -123,6 +123,10 @@ If the files, model route, workflow, or qualification evidence change, refresh t
 Expired or changed authorization cannot start parallel work.
 After interruption, Heartwood retains the review record and does not automatically repeat an admitted batch.
 
+A benchmark environment may instead display **Experimental parallel review** and **Run Trial with ... Parallel Specialists**.
+This is a bounded test, not a recommendation that the model is faster or more reliable.
+The same explicit plan consent and action review still apply.
+
 ### Correct Verified Findings
 
 When a review verifies a supported defect, select **Correct Findings (Up to 2 Attempts)**.

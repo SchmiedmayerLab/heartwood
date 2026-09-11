@@ -19,9 +19,9 @@ from openhands.sdk.tool import ToolDefinition
 from openhands.tools.task import TaskAction, TaskTool
 
 from heartwood.gateway._specialist_task import supports_parallel_review
-from heartwood.schemas.parallel_reviews import ParallelReviewPlan
+from heartwood.schemas.parallel_reviews import ReviewExecutionPlan, parse_review_execution_plan
 
-type ReviewBatchAuthorizer = Callable[[Sequence[ActionEvent]], ParallelReviewPlan | None]
+type ReviewBatchAuthorizer = Callable[[Sequence[ActionEvent]], ReviewExecutionPlan | None]
 
 
 def bind_review_executor(agent: Agent, authorize: ReviewBatchAuthorizer) -> None:
@@ -34,6 +34,11 @@ def bind_review_executor(agent: Agent, authorize: ReviewBatchAuthorizer) -> None
     if agent.tool_concurrency_limit != 1:
         raise ValueError("Advisory concurrency requires a sequential parent agent")
     agent._parallel_executor = _ReviewBatchExecutor(authorize)
+
+
+def scoped_review_execution_enabled(agent: object) -> bool:
+    """Observe the installed native adapter, not a requested worker count or eligibility flag."""
+    return isinstance(agent, Agent) and isinstance(agent._parallel_executor, _ReviewBatchExecutor)
 
 
 class _ReviewBatchExecutor(ParallelToolExecutor):
@@ -62,7 +67,7 @@ class _ReviewBatchExecutor(ParallelToolExecutor):
         plan = self._authorize_review(actions)
         if plan is None:
             return None
-        plan = ParallelReviewPlan.model_validate(plan.model_dump())
+        plan = parse_review_execution_plan(plan.model_dump())
         roles = [
             action.action.subagent_type
             for action in actions

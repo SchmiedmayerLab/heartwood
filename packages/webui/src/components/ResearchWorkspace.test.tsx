@@ -505,6 +505,7 @@ describe("research workflow workspace", () => {
         workflow: run(),
         reviewExecution: {
           status: "preview",
+          purpose: "qualified-review",
           workers: 2,
           reviewers: ["research-planner", "statistical-reviewer"],
           budget: {

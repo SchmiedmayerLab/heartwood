@@ -183,7 +183,9 @@ def workflow_controls(
                 controls.append(
                     WorkflowControl(
                         control_id="request-parallel-review",
-                        label=f"Review with {plan.scope.workers} Parallel Specialists",
+                        label=f"Run Trial with {plan.scope.workers} Parallel Specialists"
+                        if plan.purpose == "qualification-trial"
+                        else f"Review with {plan.scope.workers} Parallel Specialists",
                         request=WorkflowReviewRequest(
                             action="request-review",
                             run_id=current.run_id,
@@ -617,11 +619,17 @@ def workflow_admission_reason(
         definition = research_workflow(current.binding.workflow_id)
         measurements = [(observed, current.created_at, definition.budget)]
         if current.stage_started_at is not None and current.stage_usage_baseline is not None:
+            review = current.research_review
+            review_plan = (
+                review.parallel_plan if review is not None and review.status == "pending" else None
+            )
             measurements.append(
                 (
                     observed.since(current.stage_usage_baseline),
                     current.stage_started_at,
-                    definition.stage(current.stage_id).budget,
+                    review_plan.scope.budget
+                    if review_plan is not None
+                    else definition.stage(current.stage_id).budget,
                 )
             )
         for usage, start, budget in measurements:

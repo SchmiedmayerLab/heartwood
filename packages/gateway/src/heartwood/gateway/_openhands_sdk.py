@@ -114,7 +114,11 @@ from heartwood.gateway._openhands_models import (
     request_endpoint_for_model,
 )
 from heartwood.gateway._openhands_persistence import ContentMinimizedLocalFileStore
-from heartwood.gateway._review_executor import ReviewBatchAuthorizer, bind_review_executor
+from heartwood.gateway._review_executor import (
+    ReviewBatchAuthorizer,
+    bind_review_executor,
+    scoped_review_execution_enabled,
+)
 from heartwood.gateway._specialist_task import (
     HeartwoodSpecialistObservation,
     HeartwoodSpecialistToolSet,
@@ -385,7 +389,8 @@ class OpenHandsSdkBackend:
             action_confirmation=self._action_confirmation_mode,
             max_input_tokens=llm.max_input_tokens,
             max_output_tokens=llm.max_output_tokens,
-            specialist_concurrency=state.agent.tool_concurrency_limit,
+            tool_concurrency=state.agent.tool_concurrency_limit,
+            scoped_advisory_reviews=scoped_review_execution_enabled(state.agent),
             specialist_catalog_fingerprint=(
                 self.specialist_catalog.fingerprint if self.specialist_catalog is not None else None
             ),

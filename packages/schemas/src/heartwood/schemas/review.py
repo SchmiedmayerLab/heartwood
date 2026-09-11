@@ -18,7 +18,7 @@ from pydantic import Field, model_validator
 from heartwood.schemas.artifacts import ResearchArtifactPath
 from heartwood.schemas.experiments import Digest, ExperimentFile, ExperimentRecord, Reference
 from heartwood.schemas.identifiers import WorkflowIdentifier
-from heartwood.schemas.parallel_reviews import ParallelReviewPlan, ReviewDispatchAction
+from heartwood.schemas.parallel_reviews import ReviewDispatchAction, ReviewExecutionPlan
 from heartwood.schemas.project_paths import project_relative_path
 from heartwood.schemas.research import ResearchText
 
@@ -173,7 +173,7 @@ class ResearchReviewRun(ExperimentRecord):
     status: Literal["pending", "assessed", "unavailable", "cancelled"] = "pending"
     submissions: tuple[ReviewSubmission, ...] = Field(default=(), max_length=16)
     assessment: ReviewAssessment | None = None
-    parallel_plan: ParallelReviewPlan | None = None
+    parallel_plan: ReviewExecutionPlan | None = None
     parallel_dispatch: tuple[ReviewDispatchAction, ...] = Field(default=(), max_length=16)
     unavailable_reason: (
         Literal["incomplete-review", "invalid-review", "no-structured-outcome"] | None

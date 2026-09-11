@@ -98,8 +98,10 @@ An assessment includes its policy, time, exact configuration and suite digests, 
 Pure qualification rules live in the policy package so runtime admission can reuse them without importing benchmark execution.
 Each case binds the exact advisory specialist identifiers; evidence does not qualify additional roles or a larger worker pool.
 Both configurations must pass the complete research checks and additional checks for reviewer scheduling, isolation, lineage, findings, and parent synthesis.
-The configurations differ only in specialist concurrency and the runtime fingerprint that records it; model, context, tools, Skills, specialist definitions, fixtures, seeds, and budgets remain matched.
-The gateway observes the actual OpenHands concurrency setting and a fingerprint of executable specialist definitions and supplied Skill metadata.
+The configurations differ only in requested specialist concurrency; model, context, tools, Skills, specialist definitions, fixtures, seeds, and budgets remain matched.
+The gateway observes the actual global OpenHands tool limit and whether its scoped advisory executor is installed, separately from the requested reviewer count.
+Both trials retain the same runtime observation and fingerprint; the reviewer scheduling check must establish actual sequential or overlapping execution.
+The gateway also records a fingerprint of executable specialist definitions and supplied Skill metadata.
 That fingerprint excludes installation paths and does not replace the separate Skill-tree digest for bundled resource bytes.
 
 The default comparison policy requires three recent trials per case, at least a 10% reduction in both median and total elapsed time, and no more than a 25% increase in total reported cost or tokens.
@@ -117,6 +119,20 @@ Evidence must come from the deployment's trusted evaluation process, not model o
 Native SDK tests exercise this plan through the workflow journal, grouped approval and rejection, concurrent child startup, assessment, replay, and reopening without new model calls.
 Failure-path tests cover changed evidence, expired consent, cancellation during qualification, lost ownership, duplicate admission, and interruption at each paired-append boundary.
 These deterministic tests establish protocol behavior, not capable-model quality, speed, or platform qualification.
+
+### Experimental Review Trials
+
+Qualification requires measurements, but a first benchmark cannot already be qualified.
+`ReservedReviewTrial` therefore prepares explicitly experimental work from one incomplete `EvaluationStore` record, with a closed `qualification-trial` plan type distinct from a qualified recommendation.
+The harness verifies pinned synthetic inputs before reserving the record and uses the owning workflow's clock for its start time.
+The plan binds the reserved trial, case, seed, session, configuration, observed runtime, reviewers, limits, and expiry.
+Each preview and dispatch rereads the reservation and observes the owning backend; missing, completed, corrupt, expired, or changed reservations cannot start work.
+The runtime observer must not acquire gateway or native agent-step locks while the parent is awaiting dispatch.
+
+Experimental trials use the same workflow consent, grouped tool approval, paired journal, cancellation, and restart rules as qualified reviews.
+The shared interfaces label them **Experimental parallel review**; no previous passing results are fabricated to obtain concurrency.
+Narrower consented limits apply to the stage's remaining work, not a fresh allowance for each specialist.
+Admission does not produce a passing evaluation result: the benchmark must separately record and independently assess execution, findings, synthesis, usage, latency, replay, and audit evidence.
 
 ### Synthetic Research Cases
 

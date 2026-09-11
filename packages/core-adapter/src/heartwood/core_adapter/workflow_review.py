@@ -13,7 +13,7 @@ from collections.abc import Sequence
 from datetime import datetime
 from typing import Protocol
 
-from heartwood.schemas.parallel_reviews import ParallelReviewPlan
+from heartwood.schemas.parallel_reviews import ReviewExecutionPlan, parse_review_execution_plan
 from heartwood.schemas.review import (
     ResearchReviewRun,
     ReviewAssessment,
@@ -39,22 +39,22 @@ class WorkflowReviewInspector(Protocol):
 
     def prepare_parallel_review(
         self, run: WorkflowRun, *, session_id: str, now: datetime
-    ) -> ParallelReviewPlan:
+    ) -> ReviewExecutionPlan:
         """Prepare from deployment-owned configuration and evidence, never model claims."""
 
 
 def validate_parallel_review_plan(
-    plan: ParallelReviewPlan,
+    plan: ReviewExecutionPlan,
     run: WorkflowRun,
     snapshot: ReviewSnapshot,
     *,
     session_id: str,
     now: datetime,
-) -> ParallelReviewPlan:
+) -> ReviewExecutionPlan:
     """Bind a trusted preparation to the exact journal revision and current file evidence."""
     from heartwood.core_adapter.research_workflows import research_workflow
 
-    plan = ParallelReviewPlan.model_validate(plan.model_dump())
+    plan = parse_review_execution_plan(plan.model_dump())
     stage = research_workflow(run.binding.workflow_id).stage(run.stage_id)
     scope = plan.scope
     if (

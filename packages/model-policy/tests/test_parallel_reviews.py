@@ -16,6 +16,7 @@ from heartwood.model_policy.parallel_reviews import (
     PARALLEL_REVIEW_CHECKS,
     assess_parallel_reviews,
     prepare_parallel_review,
+    prepare_parallel_review_trial,
 )
 from heartwood.schemas.evaluation import (
     EvaluationCase,
@@ -33,12 +34,13 @@ from heartwood.schemas.parallel_reviews import (
     ParallelReviewPlan,
     ParallelReviewPolicy,
     ReviewExecutionScope,
+    parse_review_execution_plan,
 )
 
 NOW = datetime(2026, 9, 11, tzinfo=UTC)
 
 
-def _runtime(workers: int) -> EvaluationRuntimeObservation:
+def _runtime() -> EvaluationRuntimeObservation:
     return EvaluationRuntimeObservation(
         backend="openhands-sdk",
         source="production",
@@ -50,7 +52,8 @@ def _runtime(workers: int) -> EvaluationRuntimeObservation:
         action_confirmation="always-confirm",
         max_input_tokens=32768,
         max_output_tokens=4096,
-        specialist_concurrency=workers,
+        tool_concurrency=1,
+        scoped_advisory_reviews=True,
         specialist_catalog_fingerprint="c" * 64,
     )
 
@@ -71,7 +74,7 @@ def _configuration(workers: int) -> EvaluationConfiguration:
         tool_parser="native",
         skill_tree_digest="e" * 64,
         harness_revision="f" * 64,
-        runtime_fingerprint=_runtime(workers).fingerprint,
+        runtime_fingerprint=_runtime().fingerprint,
         specialist_concurrency=workers,
         specialist_catalog_fingerprint="c" * 64,
     )
@@ -109,7 +112,7 @@ def _runs() -> list[EvaluationRun]:
             seed=seed,
             execution="live_model",
             configuration=_configuration(workers),
-            runtime_observation=_runtime(workers),
+            runtime_observation=_runtime(),
             started_at=NOW - timedelta(hours=1, minutes=seed * 3),
             finished_at=NOW
             - timedelta(hours=1, minutes=seed * 3)
@@ -219,7 +222,7 @@ def test_faster_trials_cannot_qualify_with_missing_or_regressed_evidence(damage:
     elif damage == "slow":
         updates["finished_at"] = item.started_at + timedelta(seconds=190)
     elif damage == "injected":
-        updates["runtime_observation"] = _runtime(2).model_copy(update={"source": "injected"})
+        updates["runtime_observation"] = _runtime().model_copy(update={"source": "injected"})
     elif damage == "deterministic":
         updates["execution"] = "deterministic"
     elif damage == "expired":
@@ -237,7 +240,7 @@ def test_faster_trials_cannot_qualify_with_missing_or_regressed_evidence(damage:
     elif damage == "incomplete":
         updates.update(status="incomplete", checks=())
     elif damage == "runtime":
-        updates["runtime_observation"] = _runtime(2).model_copy(
+        updates["runtime_observation"] = _runtime().model_copy(
             update={"model_options_fingerprint": "9" * 64}
         )
     runs[-1] = item.model_copy(update=updates)
@@ -310,9 +313,113 @@ def test_duplicate_trial_identity_is_rejected() -> None:
         _assess([*_runs(), _runs()[0]])
 
 
-def test_observed_concurrency_does_not_override_the_policy_limit() -> None:
+def _reserved_trial() -> EvaluationRun:
+    original = next(run for run in _runs() if run.configuration.specialist_concurrency == 2)
+    return EvaluationRun.model_validate(
+        {
+            **original.model_dump(),
+            "status": "incomplete",
+            "session_id": _scope().session_id,
+            "started_at": NOW,
+            "finished_at": NOW,
+            "checks": [{**check.model_dump(), "status": "not_run"} for check in original.checks],
+            "usage": ExecutionUsage(elapsed_seconds=0).model_dump(),
+        }
+    )
+
+
+def test_experimental_admission_does_not_fabricate_qualification() -> None:
+    reservation = _reserved_trial()
+    plan = prepare_parallel_review_trial(
+        scope=_scope(), suite=_suite(), trial=reservation, runtime=_runtime(), now=NOW
+    )
+    assert plan.purpose == "qualification-trial"
+    assert plan.trial_id == reservation.run_id
+    assert plan.reservation_fingerprint == reservation.fingerprint
+    assert plan.valid_until == NOW + timedelta(seconds=reservation.budget.maximum_seconds)
+    assert parse_review_execution_plan(plan.model_dump()) == plan
+    with pytest.raises(ValidationError):
+        parse_review_execution_plan({**plan.model_dump(), "purpose": "qualified-review"})
+    result = _assess([reservation])
+    assert not result.qualified
+
+
+def test_trial_consent_binds_the_whole_reservation_not_only_its_identifier() -> None:
+    reservation = _reserved_trial()
+    first = prepare_parallel_review_trial(
+        scope=_scope(), suite=_suite(), trial=reservation, runtime=_runtime(), now=NOW
+    )
+    changed = reservation.model_copy(update={"usage": ExecutionUsage(elapsed_seconds=1)})
+    second = prepare_parallel_review_trial(
+        scope=_scope(), suite=_suite(), trial=changed, runtime=_runtime(), now=NOW
+    )
+    assert first.trial_id == second.trial_id
+    assert first.fingerprint != second.fingerprint
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("suite_id", "another-suite"),
+        ("suite_fingerprint", "9" * 64),
+        ("fixture_digest", "9" * 64),
+        ("case_id", "another-case"),
+        ("session_id", "another-session"),
+        ("status", "completed"),
+        ("checks", ()),
+        ("started_at", NOW + timedelta(seconds=1)),
+    ],
+)
+def test_trial_admission_requires_the_current_reserved_scope(field: str, value: object) -> None:
+    values = {**_reserved_trial().model_dump(), field: value}
+    if field == "started_at":
+        values["finished_at"] = value
+    trial = EvaluationRun.model_validate(values)
+    with pytest.raises(ValueError, match="Experimental review"):
+        prepare_parallel_review_trial(
+            scope=_scope(), suite=_suite(), trial=trial, runtime=_runtime(), now=NOW
+        )
+
+
+@pytest.mark.parametrize("change", ["expired", "runtime", "workers", "budget", "source"])
+def test_trial_does_not_bypass_runtime_expiry_or_budget_checks(change: str) -> None:
+    trial = _reserved_trial()
+    scope = _scope()
+    runtime = _runtime()
+    now = NOW
+    if change == "expired":
+        now += timedelta(seconds=trial.budget.maximum_seconds)
+    elif change == "runtime":
+        runtime = runtime.model_copy(update={"model_options_fingerprint": "9" * 64})
+    elif change == "workers":
+        trial = trial.model_copy(
+            update={
+                "configuration": trial.configuration.model_copy(
+                    update={"specialist_concurrency": 3}
+                )
+            }
+        )
+    elif change == "budget":
+        scope = scope.model_copy(update={"budget": ExecutionBudget(maximum_model_calls=100)})
+    else:
+        runtime = runtime.model_copy(update={"source": "injected"})
+        trial = trial.model_copy(
+            update={
+                "runtime_observation": runtime,
+                "configuration": trial.configuration.model_copy(
+                    update={"runtime_fingerprint": runtime.fingerprint}
+                ),
+            }
+        )
+    with pytest.raises(ValueError, match="Experimental review"):
+        prepare_parallel_review_trial(
+            scope=scope, suite=_suite(), trial=trial, runtime=runtime, now=now
+        )
+
+
+def test_requested_concurrency_does_not_override_the_policy_limit() -> None:
     parallel = _configuration(16)
-    assert _runtime(16).specialist_concurrency == 16
+    assert _runtime().tool_concurrency == 1
     result = assess_parallel_reviews(
         suite=_suite(),
         sequential=_configuration(1),
@@ -400,7 +507,7 @@ def _prepare(
         suite=_suite(),
         sequential=_configuration(1),
         parallel=_configuration(2),
-        runtime=runtime or _runtime(1),
+        runtime=runtime or _runtime(),
         configuration=configuration or _configuration(1),
         runs=_runs() if runs is None else runs,
         policy=policy or ParallelReviewPolicy(),
@@ -466,13 +573,12 @@ def test_catalog_qualification_is_not_blanket_review_permission(field: str, valu
         ("specialist_catalog_fingerprint", "7" * 64),
         ("openhands_version", "1.47.0"),
         ("max_input_tokens", 65536),
-        ("specialist_concurrency", 2),
+        ("tool_concurrency", 2),
+        ("scoped_advisory_reviews", False),
     ],
 )
 def test_changed_live_runtime_requires_qualification(field: str, value: object) -> None:
-    runtime = EvaluationRuntimeObservation.model_validate(
-        {**_runtime(1).model_dump(), field: value}
-    )
+    runtime = EvaluationRuntimeObservation.model_validate({**_runtime().model_dump(), field: value})
     with pytest.raises(ValueError, match="current runtime differs"):
         _prepare(runtime=runtime)
 

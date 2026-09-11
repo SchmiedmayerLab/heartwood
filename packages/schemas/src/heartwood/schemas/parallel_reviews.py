@@ -6,10 +6,10 @@
 
 """Measured eligibility for concurrent advisory reviews, separate from researcher consent."""
 
-from typing import Self
+from typing import Annotated, Literal, Self
 from uuid import UUID
 
-from pydantic import AwareDatetime, Field, model_validator
+from pydantic import AwareDatetime, Field, TypeAdapter, model_validator
 
 from heartwood.schemas.evaluation import (
     EvaluationAssessment,
@@ -88,6 +88,7 @@ class ReviewQualificationEvidence(EvaluationRecord):
 class ParallelReviewPlan(EvaluationRecord):
     """Stable preview identity; the gateway still journals consent and rechecks dispatch."""
 
+    purpose: Literal["qualified-review"] = "qualified-review"
     scope: ReviewExecutionScope
     suite_fingerprint: Sha256
     case_id: EvaluationIdentifier
@@ -96,6 +97,32 @@ class ParallelReviewPlan(EvaluationRecord):
     policy: ParallelReviewPolicy
     evidence: tuple[ReviewQualificationEvidence, ...] = Field(min_length=6)
     valid_until: AwareDatetime
+
+
+class ParallelReviewTrialPlan(EvaluationRecord):
+    """One experimental benchmark admission, never evidence of a qualified route."""
+
+    purpose: Literal["qualification-trial"] = "qualification-trial"
+    scope: ReviewExecutionScope
+    suite_fingerprint: Sha256
+    case_id: EvaluationIdentifier
+    trial_id: UUID
+    reservation_fingerprint: Sha256
+    seed: int = Field(ge=0, strict=True)
+    configuration_fingerprint: Sha256
+    runtime_fingerprint: Sha256
+    valid_until: AwareDatetime
+
+
+type ReviewExecutionPlan = Annotated[
+    ParallelReviewPlan | ParallelReviewTrialPlan, Field(discriminator="purpose")
+]
+_REVIEW_EXECUTION_PLAN: TypeAdapter[ReviewExecutionPlan] = TypeAdapter(ReviewExecutionPlan)
+
+
+def parse_review_execution_plan(value: object) -> ReviewExecutionPlan:
+    """Revalidate the closed plan variants at persistence and native adapter boundaries."""
+    return _REVIEW_EXECUTION_PLAN.validate_python(value)
 
 
 class ReviewDispatchAction(EvaluationRecord):

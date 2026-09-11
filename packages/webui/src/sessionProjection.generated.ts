@@ -81,6 +81,7 @@ export type ReviewVerification =
   "verified" | "rejected" | "unsupported" | "stale" | "unavailable";
 export type Sha256 = string;
 export type EvaluationIdentifier = string;
+export type ReviewExecutionPlan = ParallelReviewPlan | ParallelReviewTrialPlan;
 export type WorkflowText = string;
 
 /**
@@ -370,6 +371,7 @@ export interface ProjectionResearcherStatus {
  */
 export interface ProjectionReviewExecution {
   budget: ExecutionBudget;
+  purpose: "qualified-review" | "qualification-trial";
   reviewers: string[];
   status:
     | "preview"
@@ -474,7 +476,7 @@ export interface WorkflowRun {
   corrections: ResearchCorrectionRun[];
   created_at: string;
   evaluation: WorkflowStageEvaluation | null;
-  parallel_review_plan: ParallelReviewPlan | null;
+  parallel_review_plan: ReviewExecutionPlan | null;
   phase: "ready" | "running" | "review" | "blocked" | "completed" | "cancelled";
   research_review: ResearchReviewRun | null;
   revision: number;
@@ -653,7 +655,7 @@ export interface ResearchReviewRun {
    * @maxItems 16
    */
   parallel_dispatch: ReviewDispatchAction[];
-  parallel_plan: ParallelReviewPlan | null;
+  parallel_plan: ReviewExecutionPlan | null;
   review_id: Reference;
   /**
    * @minItems 1
@@ -728,6 +730,7 @@ export interface ParallelReviewPlan {
   evidence: ReviewQualificationEvidence[];
   parallel_configuration_fingerprint: Sha256;
   policy: ParallelReviewPolicy;
+  purpose?: "qualified-review";
   scope: ReviewExecutionScope;
   sequential_configuration_fingerprint: Sha256;
   suite_fingerprint: Sha256;
@@ -769,6 +772,21 @@ export interface ReviewExecutionScope {
   workers: number;
   workflow_id: EvaluationIdentifier;
   workflow_run_id: EvaluationIdentifier;
+}
+/**
+ * One experimental benchmark admission, never evidence of a qualified route.
+ */
+export interface ParallelReviewTrialPlan {
+  case_id: EvaluationIdentifier;
+  configuration_fingerprint: Sha256;
+  purpose?: "qualification-trial";
+  reservation_fingerprint: Sha256;
+  runtime_fingerprint: Sha256;
+  scope: ReviewExecutionScope;
+  seed: number;
+  suite_fingerprint: Sha256;
+  trial_id: string;
+  valid_until: string;
 }
 /**
  * Gateway-associated reviewer output for one immutable review context.

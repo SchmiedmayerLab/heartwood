@@ -3360,7 +3360,8 @@ def test_native_specialist_task_concurrency_preserves_results_and_approval(
         assert calls == 0
         assert authorizations == []
         observed = backend.evaluation_observation(platform="generic", policy_fingerprint="a" * 64)
-        assert observed.specialist_concurrency == (1 if scoped else workers)
+        assert observed.tool_concurrency == (1 if scoped else workers)
+        assert observed.scoped_advisory_reviews == scoped
         assert observed.specialist_catalog_fingerprint == _specialist_catalog().fingerprint
         backend.resolve_confirmation(
             session_id="session-1", action_group_id=group.group_id, approved=True

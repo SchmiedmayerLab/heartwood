@@ -369,7 +369,7 @@ Available specialist types:
 Use this tool only when a focused second pass improves the research task. Include the exact
 question, supplied evidence, assumptions, and expected review output in `prompt`. Specialists
 cannot inspect files, run tools, access the network, or modify the project. Do not use `resume`;
-start a new sequential review when follow-up analysis is needed.
+start a fresh review when follow-up analysis is needed.
 """
 
 

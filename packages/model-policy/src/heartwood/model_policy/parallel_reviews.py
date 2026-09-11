@@ -26,6 +26,7 @@ from heartwood.schemas.parallel_reviews import (
     ParallelReviewComparison,
     ParallelReviewPlan,
     ParallelReviewPolicy,
+    ParallelReviewTrialPlan,
     ReviewExecutionScope,
     ReviewQualificationEvidence,
 )
@@ -111,13 +112,7 @@ def assess_parallel_reviews(
             if original.budget != concurrent.budget:
                 reasons.add(f"{case.case_id}:budget_changed")
             a, b = original.runtime_observation, concurrent.runtime_observation
-            if (
-                a is None
-                or b is None
-                or a.specialist_catalog_fingerprint is None
-                or a.model_dump(exclude={"specialist_concurrency"})
-                != b.model_dump(exclude={"specialist_concurrency"})
-            ):
+            if a is None or b is None or a.specialist_catalog_fingerprint is None or a != b:
                 reasons.add(f"{case.case_id}:runtime_changed")
         if any((run.finished_at - run.started_at).total_seconds() <= 0 for run in (*left, *right)):
             reasons.add(f"{case.case_id}:duration_unavailable")
@@ -218,12 +213,11 @@ def prepare_parallel_review(
         or parallel.specialist_concurrency != scope.workers
     ):
         raise ValueError("Parallel review evidence does not cover the requested work")
-    # The live parent remains sequential until this exact advisory batch is admitted.
-    # Only the measured worker setting may differ from its qualified runtime.
-    effective_runtime = runtime.model_copy(update={"specialist_concurrency": scope.workers})
     if (
-        runtime.specialist_concurrency != 1
-        or effective_runtime.fingerprint != parallel.runtime_fingerprint
+        runtime.tool_concurrency != 1
+        or not runtime.scoped_advisory_reviews
+        or runtime.fingerprint != parallel.runtime_fingerprint
+        or runtime.fingerprint != sequential.runtime_fingerprint
         or configuration.fingerprint != sequential.fingerprint
     ):
         raise ValueError("The current runtime differs from the qualified review route")
@@ -257,3 +251,71 @@ def prepare_parallel_review(
     if consent_fingerprint is not None and consent_fingerprint != plan.fingerprint:
         raise ValueError("Parallel review consent changed; refresh and confirm the current plan")
     return plan
+
+
+def prepare_parallel_review_trial(
+    *,
+    scope: ReviewExecutionScope,
+    suite: EvaluationSuite,
+    trial: EvaluationRun,
+    runtime: EvaluationRuntimeObservation,
+    now: datetime,
+) -> ParallelReviewTrialPlan:
+    """Preview one reserved synthetic trial without requiring prior qualification.
+
+    The evaluation harness owns the reserved incomplete record and must verify the
+    pinned fixtures in its isolated project. This pure check neither authenticates
+    arbitrary records nor approves actions. Re-read the reservation at dispatch.
+    """
+    scope = ReviewExecutionScope.model_validate(scope.model_dump())
+    suite = EvaluationSuite.model_validate(suite.model_dump())
+    trial = EvaluationRun.model_validate(trial.model_dump())
+    runtime = EvaluationRuntimeObservation.model_validate(runtime.model_dump())
+    case = next((item for item in suite.cases if item.case_id == trial.case_id), None)
+    if (
+        case is None
+        or trial.suite_id != suite.suite_id
+        or trial.suite_fingerprint != suite.fingerprint
+        or trial.fixture_digest != case.fixture_digest
+        or trial.status != "incomplete"
+        or trial.session_id != scope.session_id
+        or case.workflow_id != scope.workflow_id
+        or case.review_stage_id != scope.stage_id
+        or set(case.specialist_ids) != set(scope.reviewer_ids)
+        or trial.configuration.specialist_concurrency != scope.workers
+        or tuple((check.check_id, check.dimension) for check in trial.checks)
+        != tuple((check.check_id, check.dimension) for check in case.required_checks)
+    ):
+        raise ValueError("Experimental review requires its exact reserved case and session")
+    checks = {check.check_id: check.dimension for check in case.required_checks}
+    if any(checks.get(key) != dimension for key, dimension in PARALLEL_REVIEW_CHECKS.items()):
+        raise ValueError("Experimental review requires scheduling and independent review checks")
+    if (
+        runtime.backend != "openhands-sdk"
+        or runtime.tool_concurrency != 1
+        or not runtime.scoped_advisory_reviews
+        or runtime.specialist_catalog_fingerprint is None
+        or trial.runtime_observation != runtime
+        or trial.configuration.runtime_fingerprint != runtime.fingerprint
+        or runtime.declaration_mismatches(trial.configuration)
+        or (trial.execution == "live_model" and runtime.source != "production")
+    ):
+        raise ValueError("Experimental review runtime changed or cannot run scoped specialists")
+    valid_until = trial.started_at + timedelta(seconds=trial.budget.maximum_seconds)
+    if not trial.started_at <= now < valid_until:
+        raise ValueError("Experimental review reservation is not current")
+    if any(
+        value > trial.budget.model_dump()[name] for name, value in scope.budget.model_dump().items()
+    ):
+        raise ValueError("Experimental review exceeds its reserved work limits")
+    return ParallelReviewTrialPlan(
+        scope=scope,
+        suite_fingerprint=suite.fingerprint,
+        case_id=trial.case_id,
+        trial_id=trial.run_id,
+        reservation_fingerprint=trial.fingerprint,
+        seed=trial.seed,
+        configuration_fingerprint=trial.configuration.fingerprint,
+        runtime_fingerprint=runtime.fingerprint,
+        valid_until=valid_until,
+    )

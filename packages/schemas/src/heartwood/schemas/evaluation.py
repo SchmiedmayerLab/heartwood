@@ -92,7 +92,8 @@ class EvaluationRuntimeObservation(EvaluationRecord):
     action_confirmation: ActionConfirmationMode
     max_input_tokens: int | None = Field(default=None, gt=0)
     max_output_tokens: int | None = Field(default=None, gt=0)
-    specialist_concurrency: int = Field(default=1, ge=1, strict=True)
+    tool_concurrency: int = Field(default=1, ge=1, strict=True)
+    scoped_advisory_reviews: bool = Field(default=False, strict=True)
     specialist_catalog_fingerprint: Sha256 | None = None
 
     def declaration_mismatches(self, configuration: EvaluationConfiguration) -> tuple[str, ...]:
@@ -103,11 +104,6 @@ class EvaluationRuntimeObservation(EvaluationRecord):
             ("platform", self.platform, configuration.platform),
             ("context_tokens", self.max_input_tokens, configuration.context_tokens),
             ("output_tokens", self.max_output_tokens, configuration.output_tokens),
-            (
-                "specialist_concurrency",
-                self.specialist_concurrency,
-                configuration.specialist_concurrency,
-            ),
         )
         if configuration.specialist_catalog_fingerprint is not None:
             pairs += (
@@ -117,9 +113,14 @@ class EvaluationRuntimeObservation(EvaluationRecord):
                     configuration.specialist_catalog_fingerprint,
                 ),
             )
-        return tuple(
+        mismatches = tuple(
             name for name, actual, expected in pairs if actual is not None and actual != expected
         )
+        if configuration.specialist_concurrency > 1 and (
+            self.tool_concurrency != 1 or not self.scoped_advisory_reviews
+        ):
+            mismatches += ("scoped_advisory_reviews",)
+        return mismatches
 
 
 class EvaluationCheck(EvaluationRecord):

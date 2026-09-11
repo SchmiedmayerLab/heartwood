@@ -23,6 +23,7 @@ from openhands.sdk.llm import Message, MessageToolCall
 from openhands.sdk.testing import TestLLM
 
 from heartwood.compliance.research import research_tasks
+from heartwood.compliance.review_trials import ReservedReviewTrial
 from heartwood.core_adapter import (
     BackendAgentMessageEvent,
     BackendEvent,
@@ -43,12 +44,17 @@ from heartwood.gateway import ModelProfile, OpenHandsSdkBackend, ProjectContext,
 from heartwood.gateway import _openhands_sdk as sdk_module
 from heartwood.gateway._research_evaluation import ParallelReviewPreparer, ResearchStageEvaluator
 from heartwood.schemas import JsonValue
-from heartwood.schemas.parallel_reviews import ParallelReviewPlan, ReviewDispatchAction
+from heartwood.schemas.parallel_reviews import (
+    ParallelReviewPlan,
+    ReviewDispatchAction,
+    ReviewExecutionPlan,
+)
 from heartwood.schemas.review import (
     ResearchReviewRun,
     ReviewProposals,
     ReviewSnapshot,
     ReviewSubmission,
+    review_digest,
 )
 from heartwood.schemas.workflows import WorkflowOutcomeStatus, WorkflowRun
 from heartwood.session import CommandKind, EventKind, SessionCommand
@@ -2529,7 +2535,7 @@ def _parallel_preparer(root: Path, seed: ParallelReviewPlan) -> ParallelReviewPr
     return prepare
 
 
-def _review_actions(plan: ParallelReviewPlan) -> tuple[ReviewDispatchAction, ...]:
+def _review_actions(plan: ReviewExecutionPlan) -> tuple[ReviewDispatchAction, ...]:
     return tuple(
         ReviewDispatchAction(
             event_id=f"native-{index}",
@@ -2678,7 +2684,7 @@ def test_parallel_admission_rechecks_after_slow_preparation(
 
         def wait_prepare(
             run: WorkflowRun, snapshot: ReviewSnapshot, session_id: str, now: datetime
-        ) -> ParallelReviewPlan:
+        ) -> ReviewExecutionPlan:
             entered.set()
             assert release.wait(5)
             return preparer(run, snapshot, session_id, now)
@@ -2722,12 +2728,190 @@ def test_parallel_admission_rechecks_after_slow_preparation(
         gateway.stop()
 
 
+def test_parallel_review_enforces_the_narrower_consented_stage_budget(
+    tmp_path: Path, parallel_review_plan: ParallelReviewPlan
+) -> None:
+    from heartwood.schemas.execution import ExecutionBudget
+
+    backend = ReviewBackend()
+    prepare = _parallel_preparer(tmp_path, parallel_review_plan)
+
+    def limited(
+        run: WorkflowRun, snapshot: ReviewSnapshot, session_id: str, now: datetime
+    ) -> ReviewExecutionPlan:
+        plan = prepare(run, snapshot, session_id, now)
+        return plan.model_copy(
+            update={
+                "scope": plan.scope.model_copy(
+                    update={"budget": ExecutionBudget(maximum_model_calls=1)}
+                )
+            }
+        )
+
+    gateway = _gateway(tmp_path, backend, parallel_review_preparer=limited)
+    try:
+        _begin_baseline_plan(gateway, tmp_path)
+        gateway.handle(_projected_command(gateway, "prepare-parallel-review"))
+        preview = _state(gateway).parallel_review_plan
+        assert preview is not None
+        backend.model_calls = 1
+        gateway.handle(_projected_command(gateway, "request-parallel-review"))
+        with pytest.raises(ValueError, match="budget reached"):
+            gateway._services["research"].admit_parallel_review(
+                _review_actions(preview), cancelled=lambda: False
+            )
+        review = _state(gateway).research_review
+        assert review is not None
+        assert review.parallel_dispatch == ()
+    finally:
+        gateway.stop()
+
+
+def _reserve_parallel_trial(gateway: SessionGateway) -> ReservedReviewTrial:
+    from heartwood.compliance.evaluation_store import EvaluationStore
+    from heartwood.model_policy.parallel_reviews import PARALLEL_REVIEW_CHECKS
+    from heartwood.schemas.evaluation import (
+        EvaluationCase,
+        EvaluationCheck,
+        EvaluationConfiguration,
+        EvaluationDimension,
+        EvaluationRun,
+        EvaluationRuntimeObservation,
+        EvaluationSuite,
+        RequiredEvaluationCheck,
+    )
+    from heartwood.schemas.execution import ExecutionUsage
+
+    current = _state(gateway)
+    stage = research_workflow(current.binding.workflow_id).stage(current.stage_id)
+    backend = gateway._services["research"].backend
+    assert isinstance(backend, OpenHandsSdkBackend)
+
+    def observe(session_id: str) -> EvaluationRuntimeObservation:
+        assert session_id == "research"
+        return backend.evaluation_observation(
+            platform="generic", policy_fingerprint="synthetic-policy"
+        )
+
+    runtime = observe("research")
+    checks = {dimension.value: dimension for dimension in EvaluationDimension}
+    checks.update(PARALLEL_REVIEW_CHECKS)
+    suite = EvaluationSuite(
+        suite_id="synthetic-native-review",
+        cases=(
+            EvaluationCase(
+                case_id="baseline-review",
+                workflow_id=current.binding.workflow_id,
+                review_stage_id=current.stage_id,
+                fixture_digest=review_digest(current.binding.model_dump(mode="json")),
+                specialist_ids=stage.specialist_ids,
+                required_checks=tuple(
+                    RequiredEvaluationCheck(check_id=key, dimension=value)
+                    for key, value in checks.items()
+                ),
+            ),
+        ),
+    )
+    configuration = EvaluationConfiguration(
+        provider="synthetic",
+        model=runtime.request_model or "unknown",
+        request_model=runtime.request_model or "unknown",
+        model_revision=None,
+        platform="generic",
+        hardware=("test",),
+        runtime="test",
+        openhands_version=runtime.openhands_version or "unknown",
+        precision="test",
+        context_tokens=runtime.max_input_tokens or 32768,
+        output_tokens=runtime.max_output_tokens or 4096,
+        tool_parser="native",
+        skill_tree_digest="a" * 64,
+        harness_revision="b" * 64,
+        runtime_fingerprint=runtime.fingerprint,
+        specialist_concurrency=2,
+        specialist_catalog_fingerprint=runtime.specialist_catalog_fingerprint,
+    )
+    now = datetime.fromisoformat(gateway._services["research"].clock())
+    trial = EvaluationRun(
+        run_id=uuid4(),
+        suite_id=suite.suite_id,
+        suite_fingerprint=suite.fingerprint,
+        case_id=suite.cases[0].case_id,
+        fixture_digest=suite.cases[0].fixture_digest,
+        seed=0,
+        execution="deterministic",
+        configuration=configuration,
+        runtime_observation=runtime,
+        started_at=now,
+        finished_at=now,
+        budget=stage.budget,
+        status="incomplete",
+        session_id="research",
+        checks=tuple(
+            EvaluationCheck(**check.model_dump(), status="not_run")
+            for check in suite.cases[0].required_checks
+        ),
+        usage=ExecutionUsage(elapsed_seconds=0),
+    )
+    store = EvaluationStore(gateway.project.state_root / "evaluations")
+    store.begin(trial)
+    return ReservedReviewTrial(gateway.project, store, trial.run_id, suite, observe)
+
+
+@pytest.mark.parametrize("damage", ["completed", "missing", "corrupt", "runtime"])
+def test_reserved_trial_is_rechecked_before_model_work(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, damage: str
+) -> None:
+    source: ReservedReviewTrial | None = None
+
+    def prepare(
+        run: WorkflowRun, snapshot: ReviewSnapshot, session_id: str, now: datetime
+    ) -> ReviewExecutionPlan:
+        assert source is not None
+        return source(run, snapshot, session_id, now)
+
+    llm = TestLLM.from_messages(
+        [
+            _tool_message(
+                "finish", message="Plan prepared.", status="success", outcome_summary="Done."
+            )
+        ]
+    )
+    gateway = _sdk_gateway(
+        tmp_path, llm, monkeypatch, specialists=True, parallel_review_preparer=prepare
+    )
+    try:
+        _begin_baseline_plan(gateway, tmp_path)
+        assert gateway.wait_for_session_idle(session_id="research", timeout=30)
+        source = _reserve_parallel_trial(gateway)
+        gateway.handle(_projected_command(gateway, "prepare-parallel-review"))
+        command = _projected_command(gateway, "request-parallel-review")
+        record_path = source.store.root / f"{source.trial_id}.json"
+        if damage == "completed":
+            (record,) = source.store.records()
+            source.store.complete(record.model_copy(update={"status": "completed"}))
+        elif damage == "missing":
+            record_path.unlink()
+        elif damage == "corrupt":
+            record_path.write_text("{")
+        else:
+            llm.max_output_tokens = 1234
+        response = gateway.handle(command)
+        assert any(event.kind == EventKind.ERROR_RECORDED for event in response.events)
+        assert _state(gateway).research_review is None
+        assert llm.call_count == 1
+    finally:
+        gateway.stop()
+
+
 @pytest.mark.parametrize("approve", [False, True])
+@pytest.mark.parametrize("experimental", [False, True])
 def test_native_parallel_workflow_journals_before_children_and_replays_without_calls(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     parallel_review_plan: ParallelReviewPlan,
     approve: bool,
+    experimental: bool,
 ) -> None:
     from threading import Barrier, Lock
 
@@ -2765,7 +2949,17 @@ def test_native_parallel_workflow_journals_before_children_and_replays_without_c
             ),
         ]
     )
-    preparer = _parallel_preparer(tmp_path, parallel_review_plan)
+    qualified_preparer = _parallel_preparer(tmp_path, parallel_review_plan)
+    reservation: ReservedReviewTrial | None = None
+
+    def preparer(
+        run: WorkflowRun, snapshot: ReviewSnapshot, session_id: str, now: datetime
+    ) -> ReviewExecutionPlan:
+        if experimental:
+            assert reservation is not None
+            return reservation(run, snapshot, session_id, now)
+        return qualified_preparer(run, snapshot, session_id, now)
+
     gateway = _sdk_gateway(
         tmp_path,
         llm,
@@ -2797,7 +2991,12 @@ def test_native_parallel_workflow_journals_before_children_and_replays_without_c
     try:
         _begin_baseline_plan(gateway, tmp_path)
         assert gateway.wait_for_session_idle(session_id="research", timeout=30)
+        if experimental:
+            reservation = _reserve_parallel_trial(gateway)
         gateway.handle(_projected_command(gateway, "prepare-parallel-review"))
+        preview = _state(gateway).parallel_review_plan
+        assert preview is not None
+        assert preview.purpose == ("qualification-trial" if experimental else "qualified-review")
         request = _projected_command(gateway, "request-parallel-review")
         gateway.handle(request)
         assert gateway.wait_for_session_idle(session_id="research", timeout=30)

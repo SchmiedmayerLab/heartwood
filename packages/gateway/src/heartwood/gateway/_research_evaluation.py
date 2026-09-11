@@ -31,7 +31,7 @@ from heartwood.gateway._workspace import WorkspaceInspectionError, WorkspaceInsp
 from heartwood.gateway.experiments import experiment_digest, observed_python_environment
 from heartwood.schemas.execution import ExecutionUsage
 from heartwood.schemas.experiments import ExperimentDefinition, ExperimentFile, ExperimentStage
-from heartwood.schemas.parallel_reviews import ParallelReviewPlan
+from heartwood.schemas.parallel_reviews import ReviewExecutionPlan
 from heartwood.schemas.project_paths import project_relative_path
 from heartwood.schemas.review import (
     ResearchCorrectionRun,
@@ -59,7 +59,7 @@ from heartwood.session import EventKind, SessionEvent
 _REPRODUCTION_CHECKS = frozenset({"execution.reproduction", "execution.comparison"})
 
 type ParallelReviewPreparer = Callable[
-    [WorkflowRun, ReviewSnapshot, str, datetime], ParallelReviewPlan
+    [WorkflowRun, ReviewSnapshot, str, datetime], ReviewExecutionPlan
 ]
 
 
@@ -77,7 +77,7 @@ class ResearchStageEvaluator:
 
     def prepare_parallel_review(
         self, run: WorkflowRun, *, session_id: str, now: datetime
-    ) -> ParallelReviewPlan:
+    ) -> ReviewExecutionPlan:
         """Use an explicitly configured deployment preparer; no project-supplied claims."""
         if self._parallel_review_preparer is None:
             raise ValueError("Parallel review qualification is not configured")

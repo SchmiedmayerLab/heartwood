@@ -280,6 +280,7 @@ export const sessionProjectionJsonSchema = {
         },
         parallel_configuration_fingerprint: { $ref: "#/$defs/Sha256" },
         policy: { $ref: "#/$defs/ParallelReviewPolicy" },
+        purpose: { const: "qualified-review", type: "string" },
         scope: { $ref: "#/$defs/ReviewExecutionScope" },
         sequential_configuration_fingerprint: { $ref: "#/$defs/Sha256" },
         suite_fingerprint: { $ref: "#/$defs/Sha256" },
@@ -311,6 +312,33 @@ export const sessionProjectionJsonSchema = {
         },
         minimum_repeats: { minimum: 3, type: "integer" },
       },
+      type: "object",
+    },
+    ParallelReviewTrialPlan: {
+      additionalProperties: false,
+      properties: {
+        case_id: { $ref: "#/$defs/EvaluationIdentifier" },
+        configuration_fingerprint: { $ref: "#/$defs/Sha256" },
+        purpose: { const: "qualification-trial", type: "string" },
+        reservation_fingerprint: { $ref: "#/$defs/Sha256" },
+        runtime_fingerprint: { $ref: "#/$defs/Sha256" },
+        scope: { $ref: "#/$defs/ReviewExecutionScope" },
+        seed: { minimum: 0, type: "integer" },
+        suite_fingerprint: { $ref: "#/$defs/Sha256" },
+        trial_id: { format: "uuid", type: "string" },
+        valid_until: { format: "date-time", type: "string" },
+      },
+      required: [
+        "scope",
+        "suite_fingerprint",
+        "case_id",
+        "trial_id",
+        "reservation_fingerprint",
+        "seed",
+        "configuration_fingerprint",
+        "runtime_fingerprint",
+        "valid_until",
+      ],
       type: "object",
     },
     ProjectionActionDetails: {
@@ -574,6 +602,10 @@ export const sessionProjectionJsonSchema = {
       additionalProperties: false,
       properties: {
         budget: { $ref: "#/$defs/ExecutionBudget" },
+        purpose: {
+          enum: ["qualified-review", "qualification-trial"],
+          type: "string",
+        },
         reviewers: { items: { type: "string" }, type: "array" },
         status: {
           enum: [
@@ -589,7 +621,14 @@ export const sessionProjectionJsonSchema = {
         summary: { type: "string" },
         workers: { minimum: 2, type: "integer" },
       },
-      required: ["status", "workers", "reviewers", "budget", "summary"],
+      required: [
+        "status",
+        "purpose",
+        "workers",
+        "reviewers",
+        "budget",
+        "summary",
+      ],
       type: "object",
     },
     ProjectionSubagent: {
@@ -835,7 +874,7 @@ export const sessionProjectionJsonSchema = {
           type: "array",
         },
         parallel_plan: {
-          anyOf: [{ $ref: "#/$defs/ParallelReviewPlan" }, { type: "null" }],
+          anyOf: [{ $ref: "#/$defs/ReviewExecutionPlan" }, { type: "null" }],
         },
         review_id: { $ref: "#/$defs/Reference" },
         reviewer_ids: {
@@ -1012,6 +1051,19 @@ export const sessionProjectionJsonSchema = {
         "action_fingerprint",
       ],
       type: "object",
+    },
+    ReviewExecutionPlan: {
+      discriminator: {
+        mapping: {
+          "qualification-trial": "#/$defs/ParallelReviewTrialPlan",
+          "qualified-review": "#/$defs/ParallelReviewPlan",
+        },
+        propertyName: "purpose",
+      },
+      oneOf: [
+        { $ref: "#/$defs/ParallelReviewPlan" },
+        { $ref: "#/$defs/ParallelReviewTrialPlan" },
+      ],
     },
     ReviewExecutionScope: {
       additionalProperties: false,
@@ -1328,7 +1380,7 @@ export const sessionProjectionJsonSchema = {
           ],
         },
         parallel_review_plan: {
-          anyOf: [{ $ref: "#/$defs/ParallelReviewPlan" }, { type: "null" }],
+          anyOf: [{ $ref: "#/$defs/ReviewExecutionPlan" }, { type: "null" }],
         },
         phase: {
           enum: [

@@ -16,7 +16,7 @@ from openhands.sdk.event import ActionEvent
 from openhands.tools.task import TaskAction
 
 from heartwood.core_adapter import SessionService
-from heartwood.schemas.parallel_reviews import ParallelReviewPlan, ReviewDispatchAction
+from heartwood.schemas.parallel_reviews import ReviewDispatchAction, ReviewExecutionPlan
 from heartwood.schemas.review import review_digest
 
 if TYPE_CHECKING:
@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 def bind_workflow_review_execution(backend: OpenHandsSdkBackend, service: SessionService) -> None:
     """Keep native event objects at the adapter and session mutations at their owner."""
 
-    def authorize(actions: Sequence[ActionEvent]) -> ParallelReviewPlan | None:
+    def authorize(actions: Sequence[ActionEvent]) -> ReviewExecutionPlan | None:
         conversation = backend._conversation
         token = conversation.cancel_token if isinstance(conversation, LocalConversation) else None
         if any(not isinstance(event.action, TaskAction) for event in actions):
