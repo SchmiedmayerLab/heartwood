@@ -55,6 +55,7 @@ from heartwood.schemas import (
     WorkspaceFileResponse,
     WorkspaceTreeResponse,
 )
+from heartwood.schemas.workflows import WorkflowCatalog
 from heartwood.session import CommandKind, JsonValue, SessionCommand, new_command_id
 
 
@@ -188,6 +189,10 @@ class NotebookSession:
     def chat(self, prompt: str) -> NotebookViewModel:
         """Submit one message and return the current session projection."""
         return self._handle(CommandKind.CHAT, {"prompt": prompt})
+
+    def research_workflows(self) -> WorkflowCatalog:
+        """Return the gateway-owned workflow choices without starting model work."""
+        return self.gateway.research_workflows()
 
     def model_settings(self) -> ModelSettingsResponse:
         """Return non-secret model profiles and presets."""

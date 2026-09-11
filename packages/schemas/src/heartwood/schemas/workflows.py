@@ -18,6 +18,7 @@ from pydantic import (
     ConfigDict,
     Field,
     StringConstraints,
+    computed_field,
     field_validator,
     model_validator,
 )
@@ -159,6 +160,25 @@ class WorkflowDefinition(WorkflowRecord):
         if produced != set(artifacts):
             raise ValueError("Every workflow artifact requires a producing stage")
         return self
+
+
+class WorkflowCatalogEntry(WorkflowRecord):
+    """One maintained workflow and any checks missing from this runtime."""
+
+    definition: WorkflowDefinition
+    unavailable_checks: tuple[WorkflowIdentifier, ...] = ()
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def available(self) -> bool:
+        """Expose runtime support, not model qualification or execution permission."""
+        return not self.unavailable_checks
+
+
+class WorkflowCatalog(WorkflowRecord):
+    """Read-only workflow discovery shared by every interface."""
+
+    workflows: tuple[WorkflowCatalogEntry, ...]
 
 
 class WorkflowValueFingerprint(WorkflowRecord):

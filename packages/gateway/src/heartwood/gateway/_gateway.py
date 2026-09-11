@@ -196,6 +196,7 @@ from heartwood.schemas import (
 )
 from heartwood.schemas.evaluation import EvaluationRuntimeObservation
 from heartwood.schemas.workflows import (
+    WorkflowCatalog,
     WorkflowOutcomeStatus,
     WorkflowProjectBinding,
     WorkflowStageEvaluation,
@@ -966,6 +967,12 @@ class SessionGateway:
             policy_fingerprint=digest,
             action_confirmation=cast(ActionConfirmationMode, backend.action_confirmation_mode),
         )
+
+    def research_workflows(self) -> WorkflowCatalog:
+        """Return maintained workflow choices and runtime support without starting work."""
+        from heartwood.gateway._research_evaluation import ResearchStageEvaluator
+
+        return ResearchStageEvaluator.catalog()
 
     @_serialized_state
     def prepare_research_workflow(

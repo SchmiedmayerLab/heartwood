@@ -64,6 +64,7 @@ import type {
   SkillSettings,
   SkillSummary,
   SpecialistSettings,
+  WorkflowCatalog,
   StartupPlan,
   SubscriptionDeviceLogin,
   WorkspaceChanges,
@@ -1064,6 +1065,10 @@ class FakeClient implements HeartwoodClient {
 
   getSpecialistSettings(): Promise<SpecialistSettings> {
     return Promise.resolve(specialistSettings());
+  }
+
+  getResearchWorkflows(): Promise<WorkflowCatalog> {
+    return Promise.resolve({ workflows: [] });
   }
 
   inspectSkill(name: string, sourceId?: string): Promise<SkillSummary> {

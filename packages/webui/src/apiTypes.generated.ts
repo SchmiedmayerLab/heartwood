@@ -14,6 +14,7 @@
 
 export type HeartwoodApiContract =
   | ApiResponse
+  | WorkflowCatalog
   | ActionConfirmationRequest
   | CustomLocalModelDownloadRequest
   | LocalModelImportRequest
@@ -86,6 +87,8 @@ export type ModelSource =
   | "openai-subscription"
   | "stanford-ai-api-gateway";
 export type InterfaceKind = "terminal" | "web" | "notebook";
+export type WorkflowIdentifier = string;
+export type WorkflowText = string;
 
 /**
  * Shared action-confirmation settings.
@@ -769,6 +772,114 @@ export interface WorkspaceTreeEntryResponse {
   name: string;
   path: string;
   size_bytes: number | null;
+}
+/**
+ * Read-only workflow discovery shared by every interface.
+ */
+export interface WorkflowCatalog {
+  workflows: WorkflowCatalogEntry[];
+}
+/**
+ * One maintained workflow and any checks missing from this runtime.
+ */
+export interface WorkflowCatalogEntry {
+  /**
+   * Expose runtime support, not model qualification or execution permission.
+   */
+  available: boolean;
+  definition: WorkflowDefinition;
+  unavailable_checks?: WorkflowIdentifier[];
+}
+/**
+ * Pinned sequential task contract; advisory concurrency does not change its order.
+ */
+export interface WorkflowDefinition {
+  /**
+   * @minItems 1
+   * @maxItems 64
+   */
+  artifacts: WorkflowArtifact[];
+  budget: ExecutionBudget;
+  description: WorkflowText;
+  /**
+   * @minItems 1
+   * @maxItems 32
+   */
+  inputs: WorkflowInput[];
+  label: WorkflowText;
+  schema_version?: "heartwood.workflow-definition.v1";
+  /**
+   * @minItems 1
+   * @maxItems 32
+   */
+  stages: WorkflowStage[];
+  version: number;
+  workflow_id: WorkflowIdentifier;
+}
+/**
+ * A declared output beneath the workflow's project-relative output directory.
+ */
+export interface WorkflowArtifact {
+  artifact_id: WorkflowIdentifier;
+  label: WorkflowText;
+  media_type:
+    "text/markdown" | "text/csv" | "text/x-python" | "application/json";
+  relative_path: string;
+}
+/**
+ * Observed admission limits, not a provider-side spending or preemption cap.
+ */
+export interface ExecutionBudget {
+  maximum_actions?: number;
+  maximum_model_calls?: number;
+  maximum_reported_cost_usd?: number;
+  maximum_seconds?: number;
+  maximum_tokens?: number;
+}
+/**
+ * An explicit researcher-supplied file or research objective.
+ */
+export interface WorkflowInput {
+  description: WorkflowText;
+  input_id: WorkflowIdentifier;
+  kind: "file" | "text";
+  label: WorkflowText;
+}
+/**
+ * One ordered task with explicit context, outputs, and completion gates.
+ */
+export interface WorkflowStage {
+  budget?: ExecutionBudget;
+  /**
+   * @minItems 1
+   */
+  checks: WorkflowCheck[];
+  instruction: WorkflowText;
+  label: WorkflowText;
+  /**
+   * @minItems 1
+   */
+  reads: WorkflowIdentifier[];
+  reviewer_gate?: "none" | "researcher";
+  skill_ids?: WorkflowIdentifier[];
+  specialist_ids?: WorkflowIdentifier[];
+  stage_id: WorkflowIdentifier;
+  /**
+   * @minItems 1
+   */
+  writes: WorkflowIdentifier[];
+}
+/**
+ * A required deterministic check resolved by the gateway's evaluator registry.
+ */
+export interface WorkflowCheck {
+  /**
+   * @minItems 1
+   */
+  artifact_ids: WorkflowIdentifier[];
+  check_id: WorkflowIdentifier;
+  description: WorkflowText;
+  evaluator_id: WorkflowIdentifier;
 }
 /**
  * Select the shared action-confirmation policy.

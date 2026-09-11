@@ -45,6 +45,7 @@ from heartwood.schemas import (
     WorkspaceFileResponse,
     WorkspaceTreeResponse,
 )
+from heartwood.schemas.workflows import WorkflowCatalog
 from heartwood.session import (
     CommandKind,
     JsonValue,
@@ -206,6 +207,10 @@ class InteractiveSession:
         """Return the shared bounded research-specialist catalog."""
         return self.gateway.specialist_settings()
 
+    def research_workflows(self) -> WorkflowCatalog:
+        """Return gateway-owned workflow choices without creating a session."""
+        return self.gateway.research_workflows()
+
     def workspace_tree(
         self,
         path: str = ".",
@@ -306,6 +311,20 @@ class InteractiveSession:
                 )
         if directive == "/specialists" and len(parts) == 1:
             return InteractionResult(message=format_specialist_settings(self.specialist_settings()))
+        if directive == "/workflows" and len(parts) == 1:
+            lines = ["Research workflows", ""]
+            for entry in self.research_workflows().workflows:
+                definition = entry.definition
+                suffix = "" if entry.available else " (not yet available)"
+                lines.extend(
+                    (
+                        f"{terminal_safe_text(definition.label)}{suffix}",
+                        f"  {terminal_safe_text(definition.description)}",
+                        "  Inputs: "
+                        + ", ".join(terminal_safe_text(item.label) for item in definition.inputs),
+                    )
+                )
+            return InteractionResult(message="\n".join(lines))
         try:
             if directive == "/files" and len(parts) in {1, 2}:
                 tree = self.workspace_tree(parts[1] if len(parts) == 2 else ".")
@@ -367,7 +386,7 @@ def command_help() -> str:
     """Return the commands common to terminal clients."""
     return (
         "/allow  /reject  /permissions  /pause  /resume  /status  "
-        "/specialists  /files  /show  /changes  /replay  /audit-export  /help  /exit"
+        "/specialists  /workflows  /files  /show  /changes  /replay  /audit-export  /help  /exit"
     )
 
 

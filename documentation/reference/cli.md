@@ -92,6 +92,9 @@ For non-interactive use, add `--approve --expected-tree-sha256 sha256:DIGEST` wi
 | `heartwood specialists` | Show available advisory specialists and any disabled roles with their reason |
 
 Inside an interactive terminal session, `/specialists` presents the same gateway-owned catalog.
+
+`/workflows` lists research workflow descriptions and required inputs without starting an analysis.
+Workflows with unimplemented checks are marked unavailable.
 Specialists are selected by the parent OpenHands agent during a task; this command inspects the available roles rather than launching a separate agent session.
 
 ## Session Automation

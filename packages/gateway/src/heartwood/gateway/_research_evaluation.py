@@ -16,8 +16,13 @@ from heartwood.core_adapter.reproduction import ReproductionWitness
 from heartwood.core_adapter.research_checks import (
     compare_reproduction_artifacts,
     evaluate_research_check,
+    supported_research_checks,
 )
-from heartwood.core_adapter.research_workflows import research_workflow, workflow_reproduction_spec
+from heartwood.core_adapter.research_workflows import (
+    research_workflow,
+    research_workflows,
+    workflow_reproduction_spec,
+)
 from heartwood.core_adapter.workflow_evidence import assess_workflow_stage
 from heartwood.gateway._session_projection import project_session
 from heartwood.gateway._workspace import WorkspaceInspectionError, WorkspaceInspector
@@ -25,6 +30,8 @@ from heartwood.schemas.execution import ExecutionUsage
 from heartwood.schemas.project_paths import project_relative_path
 from heartwood.schemas.workflows import (
     WorkflowBoundInput,
+    WorkflowCatalog,
+    WorkflowCatalogEntry,
     WorkflowCheckResult,
     WorkflowDefinition,
     WorkflowOutcomeStatus,
@@ -34,12 +41,37 @@ from heartwood.schemas.workflows import (
 )
 from heartwood.session import EventKind, SessionEvent
 
+_REPRODUCTION_CHECKS = frozenset({"execution.reproduction", "execution.comparison"})
+
 
 class ResearchStageEvaluator:
     """Reuse workspace confinement and core checks without executing an agent or tool."""
 
     def __init__(self, workspace: WorkspaceInspector) -> None:
         self.workspace = workspace
+
+    @staticmethod
+    def catalog() -> WorkflowCatalog:
+        """Describe supported workflows without reading files or constructing a model."""
+        supported = supported_research_checks() | _REPRODUCTION_CHECKS
+        return WorkflowCatalog(
+            workflows=tuple(
+                WorkflowCatalogEntry(
+                    definition=definition,
+                    unavailable_checks=tuple(
+                        sorted(
+                            {
+                                check.evaluator_id
+                                for stage in definition.stages
+                                for check in stage.checks
+                                if check.evaluator_id not in supported
+                            }
+                        )
+                    ),
+                )
+                for definition in research_workflows()
+            )
+        )
 
     def prepare(
         self, workflow_id: str, *, inputs: Mapping[str, str], output_directory: str
@@ -125,7 +157,7 @@ class ResearchStageEvaluator:
                 if len(selected) == len(check.artifact_ids)
                 else "not_run"
             )
-            if check.evaluator_id in {"execution.reproduction", "execution.comparison"}:
+            if check.evaluator_id in _REPRODUCTION_CHECKS:
                 spec = workflow_reproduction_spec(binding, stage_id)
                 eligible = tuple(
                     witness

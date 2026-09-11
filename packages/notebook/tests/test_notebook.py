@@ -60,6 +60,17 @@ from heartwood.schemas import ModelTransferResponse
 from heartwood.session import JsonValue, SessionCommand
 
 
+def test_notebook_workflow_catalog_does_not_start_a_session(tmp_path: Path) -> None:
+    gateway = SessionGateway(project=ProjectContext(tmp_path), env={})
+    try:
+        notebook = NotebookSession(gateway=gateway, session_id="catalog")
+        assert notebook.research_workflows() == gateway.research_workflows()
+        assert not gateway._services
+        assert list(tmp_path.iterdir()) == []
+    finally:
+        gateway.stop()
+
+
 def _approval_action(
     tool_call_id: str,
     *,

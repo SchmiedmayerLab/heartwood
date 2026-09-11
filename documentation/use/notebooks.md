@@ -113,6 +113,16 @@ catalog = session.specialist_settings()
 [(role["label"], role["availability"]) for role in catalog["specialists"]]
 ```
 
+Inspect maintained research workflows without starting model work:
+
+```python
+catalog = session.research_workflows()
+[(entry.definition.label, entry.available) for entry in catalog.workflows]
+```
+
+Each definition includes its required inputs, stages, artifacts, and work budgets.
+Availability indicates implemented checks, not that the selected model has been qualified for the research question.
+
 Specialist delegation remains part of the parent OpenHands conversation; the notebook does not maintain a separate agent registry or task queue.
 
 ## Inspect Files and Changes

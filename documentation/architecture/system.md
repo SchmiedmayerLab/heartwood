@@ -62,6 +62,10 @@ Definitions reference existing Skills and advisory specialists; they contain no 
 Artifact paths use the same project-relative validation as workspace inspection.
 Each output has one producing stage and at least one required check, and a stage cannot depend on an output from a later stage.
 
+The gateway exposes these definitions through one read-only workflow catalog, including required inputs, stages, artifacts, and budgets.
+Availability derives from registered check implementations; a definition with a missing evaluator is not advertised as supported.
+Catalog discovery does not create project state, load a model, qualify a provider, or authorize execution.
+
 The evidence gate compares gateway-produced check results with the exact input and output digests they inspected.
 Missing, failed, unknown, or stale evidence cannot be replaced by a model-reported success.
 An assessment identifies its definition, stage, and evidence fingerprint and records whether researcher review is required.

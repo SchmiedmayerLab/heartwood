@@ -199,6 +199,23 @@ def _approval_action(
     )
 
 
+def test_terminal_workflow_catalog_preserves_shared_availability(tmp_path: Path) -> None:
+    gateway = SessionGateway(project=ProjectContext(tmp_path), env={})
+    try:
+        session = InteractiveSession(gateway, session_id="catalog")
+        assert session.research_workflows() == gateway.research_workflows()
+        result = session.submit("/workflows")
+        assert result.message is not None
+        for entry in gateway.research_workflows().workflows:
+            suffix = "" if entry.available else " (not yet available)"
+            assert entry.definition.label + suffix in result.message
+        assert not result.events
+        assert not gateway._services
+        assert list(tmp_path.iterdir()) == []
+    finally:
+        gateway.stop()
+
+
 def test_plain_terminal_marks_bounded_action_output_as_truncated() -> None:
     action = _approval_action(
         "tool-1",

@@ -1154,6 +1154,18 @@ describe("GatewayClient", () => {
     expect(fetch).toHaveBeenCalledWith("/proxy/8767/settings/specialists");
   });
 
+  it("loads research workflows through the deployment URL prefix", async () => {
+    const catalog = { workflows: [] };
+    const fetch = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify(catalog)));
+    vi.stubGlobal("fetch", fetch);
+    await expect(
+      new GatewayClient("/proxy/8767").getResearchWorkflows(),
+    ).resolves.toEqual(catalog);
+    expect(fetch).toHaveBeenCalledWith("/proxy/8767/research/workflows");
+  });
+
   it("reports gateway errors", async () => {
     vi.stubGlobal(
       "fetch",

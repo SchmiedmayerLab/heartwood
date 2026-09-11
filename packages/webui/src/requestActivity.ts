@@ -22,6 +22,11 @@ const taskActivity: RequestActivity = {
 
 const activities: Record<CommandKind, RequestActivity> = {
   chat: taskActivity,
+  workflow: {
+    label: "Updating the research workflow",
+    waitingLabel: "Still updating the research workflow",
+    guidance: "Heartwood is checking the current stage and its evidence.",
+  },
   approve: {
     label: "Continuing the approved action set",
     waitingLabel: "Still continuing the approved action set",

@@ -13,7 +13,7 @@ import csv
 import io
 import math
 from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from statistics import linear_regression, mean
 from typing import Literal
 
@@ -62,22 +62,10 @@ def evaluate_research_check(
     try:
         if any(len(text.encode("utf-8")) > MAX_RESEARCH_TEXT_BYTES for text in artifacts.values()):
             return "failed"
-        match evaluator_id:
-            case "artifact.nonempty":
-                passed = bool(artifacts) and all(text.strip() for text in artifacts.values())
-            case "python.syntax":
-                passed = bool(artifacts) and all(
-                    ast.parse(text).body for text in artifacts.values()
-                )
-            case "research.analysis-plan":
-                passed = _valid_plan(artifacts)
-            case "research.readiness":
-                passed = _valid_readiness(artifacts)
-            case "research.baseline":
-                passed = _valid_baseline(artifacts)
-            case _:
-                return "not_run"
-        return "passed" if passed else "failed"
+        evaluator = _EVALUATORS.get(evaluator_id)
+        if evaluator is None:
+            return "not_run"
+        return "passed" if evaluator(artifacts) else "failed"
     except (
         ValueError,
         KeyError,
@@ -88,6 +76,11 @@ def evaluate_research_check(
         RecursionError,
     ):
         return "failed"
+
+
+def supported_research_checks() -> frozenset[str]:
+    """Discover the registered pure check implementations without running them."""
+    return frozenset(_EVALUATORS)
 
 
 def _table(text: str) -> tuple[list[str], list[dict[str, str]]]:
@@ -314,3 +307,16 @@ def _valid_baseline(artifacts: Mapping[str, str]) -> bool:
     return actual_rows.keys() == expected_rows.keys() and all(
         _close(actual_rows[key], value) for key, value in expected_rows.items()
     )
+
+
+_EVALUATORS: dict[str, Callable[[Mapping[str, str]], bool]] = {
+    "artifact.nonempty": lambda artifacts: (
+        bool(artifacts) and all(text.strip() for text in artifacts.values())
+    ),
+    "python.syntax": lambda artifacts: (
+        bool(artifacts) and all(ast.parse(text).body for text in artifacts.values())
+    ),
+    "research.analysis-plan": _valid_plan,
+    "research.readiness": _valid_readiness,
+    "research.baseline": _valid_baseline,
+}
