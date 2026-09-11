@@ -233,6 +233,12 @@ Confirm the spelling and project permissions, then retry from the same project d
 Choose a positive depth no greater than the limit reported by the workspace response.
 Omit `--depth` to use the default bounded depth.
 
+### `HW-WORKSPACE-007` — File Fingerprint Is Unavailable
+
+Use a regular project file, not a symbolic link, and wait for any process writing it to finish.
+The file must fit within the capture operation's byte limit.
+Retry capture before relying on its digest as execution evidence.
+
 ## Managed Compute
 
 ### `HW-COMPUTE-001` — A Compute Allocation May Be Required

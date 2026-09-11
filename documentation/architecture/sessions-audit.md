@@ -118,6 +118,7 @@ The chain and signature cannot prove that an intact suffix was not deleted befor
 The retention declaration also does not implement storage lifecycle controls; the deployment records system remains responsible for authoritative storage and policy enforcement.
 
 Exact action arguments, commands, affected paths, file content, patches, tool output, and failure text stay out of the content-minimized audit payload.
+Scientific code, input, environment, and output declarations belong in separate [experiment records](experiments.md), not in the security audit payload.
 The log still cannot make every operational identifier, decision, classification, count, or timestamp non-sensitive.
 Deployments must define retention, access, export, and deletion policy.
 See [Audit Checkpoints and Retention](../operate/audit-checkpoints.md) for the operator contract.
