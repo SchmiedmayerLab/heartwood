@@ -127,6 +127,9 @@ OpenHands owns the agent loop, conversation persistence, coding tools, Task Trac
 The gateway supplies a catalog-scoped Task adapter that reuses OpenHands orchestration while rejecting agents outside the executable catalog, supervising child interruption, and applying the same content-minimized persistence policy to parent and child conversations.
 Heartwood translates that state into its stable event contract instead of maintaining a parallel agent loop or pending-action cache.
 Persisted non-token progress is reconciled while a run is active, while raw token deltas remain transient.
+The gateway's bounded idle wait includes final worker callbacks, not only the SDK's reported lifecycle or the availability of its execution slot.
+It releases gateway and session command locks while waiting, keeping pause and shutdown available, and invalidates its result if the owning service changes.
+An idle session may still need action approval or may have failed; callers must assess the reconciled lifecycle and evidence separately.
 Standard provider routes use OpenHands' LiteLLM-backed LLM interface.
 ChatGPT account access uses OpenHands' native subscription registry, OAuth credential store and refresh, and Codex Responses API transport without a Heartwood token implementation.
 

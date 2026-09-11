@@ -255,6 +255,8 @@ def run_research_trial(
                 and all(f"reproduced/{name}" in artifacts for name in _PRIMARY_OUTPUTS)
             )
 
+        if not gateway.wait_for_session_idle(session_id=session_id, timeout=30):
+            raise TimeoutError("Research trial did not reach a settled execution boundary")
         measured = _usage(gateway.session_projection(session_id=session_id), started)
         if measured.exceeded_limits(budget):
             stop = "budget-exceeded"
@@ -327,6 +329,18 @@ def _drive(
     reviewed: set[str] = set()
     while True:
         projection = session.gateway.session_projection(session_id=session.session_id)
+        if projection.pending_approval is not None or projection.lifecycle.status in (
+            "finished",
+            "error",
+            "paused",
+        ):
+            if not session.gateway.wait_for_session_idle(session_id=session.session_id):
+                if _usage(projection, started).exceeded_limits(budget):
+                    session.pause()
+                    return "budget-exceeded"
+                time.sleep(0.02)
+                continue
+            projection = session.gateway.session_projection(session_id=session.session_id)
         session.observe_reproductions(projection)
         if observe is not None and projection.revision != seen_revision:
             observe(projection)

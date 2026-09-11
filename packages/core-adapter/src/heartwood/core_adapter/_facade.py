@@ -414,6 +414,9 @@ class AgentBackend(Protocol):
     def close(self) -> None:
         """Release backend resources."""
 
+    def wait_for_idle(self, timeout: float) -> bool:
+        """Wait for workers and final callbacks without starting or approving work."""
+
 
 class DeterministicAgentBackend:
     """Deterministic conversation used by unit tests and replay fixtures."""
@@ -607,6 +610,10 @@ class DeterministicAgentBackend:
 
     def close(self) -> None:
         """Release deterministic backend resources."""
+
+    def wait_for_idle(self, timeout: float) -> bool:  # noqa: ARG002
+        """Synchronous deterministic actions have no background finalization."""
+        return True
 
     def _load_pending(self) -> ProposedToolCall | None:
         path = self._persistence_path

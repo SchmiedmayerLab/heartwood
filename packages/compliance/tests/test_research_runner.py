@@ -8,17 +8,21 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import sys
 import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Event as ThreadEvent
 from types import SimpleNamespace
 
 import pytest
 from openhands.sdk import LLMStreamChunk, LocalConversation, Tool
+from openhands.sdk.conversation import BaseConversation
 from openhands.sdk.event import Event
 from openhands.sdk.llm import LLMResponse, Message, MessageToolCall, TextContent
 from openhands.sdk.llm.llm import LLMCallContext
@@ -128,7 +132,12 @@ def _file_message(root: Path, artifacts: Mapping[str, str] | None = None) -> Mes
     )
 
 
-def _gateway(root: Path, llm: TestLLM) -> SessionGateway:
+def _gateway(
+    root: Path,
+    llm: TestLLM,
+    *,
+    backend_type: type[OpenHandsSdkBackend] = OpenHandsSdkBackend,
+) -> SessionGateway:
     def service_factory(sessions_root: Path, session_id: str) -> SessionService:
         persistence = sessions_root / session_id / "openhands"
 
@@ -162,7 +171,7 @@ def _gateway(root: Path, llm: TestLLM) -> SessionGateway:
                 conversation.llm_registry.add(llm)
             return conversation
 
-        backend = OpenHandsSdkBackend(
+        backend = backend_type(
             profile=ModelProfile(
                 profile_id="heartwood",
                 model="openai/local-model",
@@ -207,6 +216,97 @@ class _MeteredTestLLM(TestLLM):
         self.metrics.add_token_usage(80, 20, 0, 0, 32768, f"measured-{self.call_count}")
         self.metrics.add_cost(0.01)
         return response.model_copy(update={"metrics": self.metrics.get_snapshot()})
+
+
+@pytest.mark.parametrize("propose_action", [False, True])
+def test_trial_waits_for_sdk_finalization_before_completion_or_review(
+    tmp_path: Path, propose_action: bool
+) -> None:
+    finalizing = ThreadEvent()
+    release = ThreadEvent()
+
+    class DelayedFinalizationBackend(OpenHandsSdkBackend):
+        async def _run_until_stable(
+            self, *, session_id: str, conversation: BaseConversation
+        ) -> frozenset[str]:
+            result = await super()._run_until_stable(
+                session_id=session_id, conversation=conversation
+            )
+            finalizing.set()
+            if not await asyncio.to_thread(release.wait, 5):
+                raise TimeoutError("Synthetic SDK finalization was not released")
+            return result
+
+    task = _prepare(tmp_path, "dataset-readiness")
+    messages: list[Message | Exception] = (
+        [_file_message(tmp_path, {"readiness.md": "Synthetic review"}), _finish()]
+        if propose_action
+        else [_finish()]
+    )
+    llm = _MeteredTestLLM.from_messages(messages)
+    gateway = _gateway(tmp_path, llm, backend_type=DelayedFinalizationBackend)
+    reviewed: list[str] = []
+
+    def review(group: ProjectionApprovalGroup) -> ReviewDecision:
+        assert release.is_set()
+        reviewed.append(group.group_id)
+        return "approve"
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(
+            run_research_trial,
+            gateway,
+            task,
+            configuration=_configuration(),
+            execution="deterministic",
+            review=review,
+        )
+        try:
+            assert finalizing.wait(timeout=3)
+            assert not future.done()
+            assert not reviewed
+            assert not (tmp_path / "readiness.md").exists()
+            release.set()
+            trial = future.result(timeout=30)
+            assert trial.stop == "finished"
+            assert trial.record.usage.model_calls == (2 if propose_action else 1)
+            assert trial.record.usage.input_tokens == (160 if propose_action else 80)
+            assert len(reviewed) == int(propose_action)
+        finally:
+            release.set()
+            try:
+                future.result(timeout=30)
+            finally:
+                gateway.stop()
+
+
+def test_unsettled_final_boundary_leaves_an_incomplete_trial(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    task = _prepare(tmp_path, "dataset-readiness")
+    llm = TestLLM.from_messages([_finish()])
+    gateway = _gateway(tmp_path, llm)
+    wait = gateway.wait_for_session_idle
+
+    def unsettled(*, session_id: str, timeout: float = 0) -> bool:
+        return False if timeout == 30 else wait(session_id=session_id, timeout=timeout)
+
+    monkeypatch.setattr(gateway, "wait_for_session_idle", unsettled)
+    try:
+        with pytest.raises(TimeoutError, match="settled execution boundary"):
+            run_research_trial(
+                gateway,
+                task,
+                configuration=_configuration(),
+                execution="deterministic",
+                review=lambda _: pytest.fail("No tools expected"),
+            )
+        (record,) = EvaluationStore(gateway.project.state_root / "evaluations").records()
+        assert record.status == "incomplete"
+        assert all(check.status == "not_run" for check in record.checks)
+        assert llm.call_count == 1
+    finally:
+        gateway.stop()
 
 
 @pytest.mark.parametrize(

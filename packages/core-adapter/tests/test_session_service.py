@@ -75,6 +75,44 @@ def test_empty_replay_does_not_create_session_state(tmp_path: Path) -> None:
     assert not service.store.session_dir.exists()
 
 
+@pytest.mark.parametrize("timeout", [-1, 31, float("inf"), float("nan")])
+def test_idle_wait_rejects_unbounded_or_invalid_timeouts(tmp_path: Path, timeout: float) -> None:
+    service = SessionService.synthetic_default(tmp_path)
+    with pytest.raises(ValueError, match="idle timeout"):
+        service.wait_for_idle(timeout)
+    assert not service.store.session_dir.exists()
+
+
+def test_idle_wait_does_not_block_background_publication(tmp_path: Path) -> None:
+    class PublishingBackend(_RecordingBackend):
+        worker: threading.Thread | None = None
+
+        def wait_for_idle(self, timeout: float) -> bool:
+            if self.worker is None:
+                self.worker = threading.Thread(target=lambda: self.event_sink(self.response))
+                self.worker.start()
+            self.worker.join(timeout=timeout)
+            return not self.worker.is_alive()
+
+    event = BackendAgentMessageEvent(message="Synthetic completed task", source_event_id="finished")
+    backend = PublishingBackend(
+        endpoint="https://model.local.invalid/v1/chat/completions",
+        response=(event,),
+        reconciled=(event,),
+    )
+    service = SessionService.local_default(tmp_path, backend=backend)
+    try:
+        assert service.wait_for_idle(2)
+        assert service.wait_for_idle(0)
+        messages = [e for e in service.replay_events() if e.kind == EventKind.AGENT_MESSAGE_EMITTED]
+        assert len(messages) == 1
+        assert backend.prompts == []
+    finally:
+        if backend.worker is not None:
+            backend.worker.join(timeout=2)
+        service.close()
+
+
 def test_checked_in_session_and_audit_compatibility_fixture_replays(tmp_path: Path) -> None:
     store = FileSessionStore(tmp_path / "sessions", "session-1")
     store.session_dir.mkdir(mode=0o700, parents=True)
@@ -2383,6 +2421,9 @@ class _RecordingBackend:
 
     def close(self) -> None:
         return None
+
+    def wait_for_idle(self, timeout: float) -> bool:  # noqa: ARG002
+        return True
 
 
 class _InterruptBeforeResolutionBackend(_RecordingBackend):

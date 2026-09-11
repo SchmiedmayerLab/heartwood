@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -356,6 +357,16 @@ class SessionService:
         """Release backend resources."""
         self.backend.close()
         self.store.release_writer()
+
+    def wait_for_idle(self, timeout: float = 0) -> bool:
+        """Wait for final callbacks without taking the session command lock.
+
+        This is an observation, not an ownership lease or permission to advance.
+        A pending approval can be idle; lifecycle and evidence still decide next steps.
+        """
+        if not math.isfinite(timeout) or not 0 <= timeout <= 30:
+            raise ValueError("Session idle timeout must be between zero and 30 seconds")
+        return self.backend.wait_for_idle(timeout)
 
     def _handle_task(self, command: SessionCommand) -> tuple[SessionEvent, ...]:
         prompt_value = command.payload.get("prompt")

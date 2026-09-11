@@ -325,6 +325,10 @@ class _UnconfiguredAgentBackend:
     ) -> None:
         return None
 
+    def wait_for_idle(self, timeout: float) -> bool:  # noqa: ARG002
+        """An unconfigured backend cannot have background work."""
+        return True
+
     def reconcile(
         self,
         *,
@@ -891,6 +895,22 @@ class SessionGateway:
     def session_projection(self, *, session_id: str) -> SessionProjection:
         """Return the sole interface projection for one session."""
         return self._session_snapshot_locked(session_id=session_id).projection
+
+    def wait_for_session_idle(self, *, session_id: str, timeout: float = 0) -> bool:
+        """Observe a settled session before evaluating it or admitting a new stage.
+
+        Waiting holds neither gateway nor session command locks, so a concurrent
+        pause remains available. Replacing the service invalidates this observation.
+        """
+        with self._state_lock:
+            service = self._service(session_id)
+        if not service.wait_for_idle(timeout):
+            return False
+        with self._state_lock:
+            if self._services.get(session_id) is not service or not service.wait_for_idle(0):
+                return False
+            service.reconcile()
+            return True
 
     @_serialized_state
     def persisted_session_projection(self, *, session_id: str) -> SessionProjection:

@@ -1054,6 +1054,13 @@ class OpenHandsSdkBackend:
             time.sleep(0.01)
         return not self._run_active()
 
+    def wait_for_idle(self, timeout: float) -> bool:
+        """Include final publication, not only the SDK execution thread's run slot."""
+        with self._run_lock:
+            if current_thread() in self._worker_threads:
+                return False
+        return self._wait_for_workers_exit(timeout)
+
     def _wait_for_workers_exit(self, timeout: float) -> bool:
         deadline = time.monotonic() + timeout
         while True:
