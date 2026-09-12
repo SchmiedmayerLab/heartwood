@@ -20,6 +20,7 @@ import json
 import math
 from collections import Counter
 from collections.abc import Mapping
+from contextlib import suppress
 from dataclasses import dataclass
 from importlib.resources import files
 from statistics import linear_regression, mean
@@ -261,11 +262,9 @@ def _baseline_checks(task: ResearchTask, artifacts: Mapping[str, str]) -> dict[s
         "baseline-predictions": False,
         "baseline-sensitivity": False,
     }
-    try:
+    with suppress(SyntaxError, ValueError, RecursionError):
         source = artifacts.get("analysis.py", "")
         results["baseline-script-syntax"] = bool(source.strip()) and bool(ast.parse(source).body)
-    except (SyntaxError, ValueError, RecursionError):
-        pass
     try:
         report = BaselineResult.model_validate_json(artifacts.get("metrics.json", ""))
     except ValidationError:
