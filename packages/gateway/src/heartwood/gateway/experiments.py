@@ -302,6 +302,8 @@ class ExperimentRecorder:
         return self._store.export()
 
     def _verify_inputs(self, definition: ExperimentDefinition) -> None:
+        if definition.environment.source == "observed" and definition.environment.kind != "python":
+            raise ValueError("This recorder observes only Python environments")
         if (
             definition.environment.kind == "python"
             and definition.environment.source == "observed"

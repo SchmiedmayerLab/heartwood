@@ -198,11 +198,17 @@ def test_abrupt_command_loss_can_be_recovered_and_cancelled_without_rerun(
         [
             sys.executable,
             "-c",
-            "import os\nfrom heartwood.gateway import ProjectContext\n"
-            "from heartwood.gateway.experiments import ExperimentRecorder\n"
-            "r=ExperimentRecorder(ProjectContext.current())\n"
-            "d=r.describe(actor_ref='test',entry_point='analysis.py',inputs=(),outputs=(),parameters={})\n"
-            "with r.record(d): os._exit(23)\n",
+            "\n".join(
+                (
+                    "import os",
+                    "from heartwood.gateway import ProjectContext",
+                    "from heartwood.gateway.experiments import ExperimentRecorder",
+                    "r=ExperimentRecorder(ProjectContext.current())",
+                    "d=r.describe(actor_ref='test',entry_point='analysis.py',"
+                    "inputs=(),outputs=(),parameters={})",
+                    "with r.record(d): os._exit(23)",
+                )
+            ),
         ],
         cwd=tmp_path,
         check=False,
