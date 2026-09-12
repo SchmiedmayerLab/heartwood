@@ -28,6 +28,7 @@ Start in a new session with a configured model and project-local input files.
 ## Prepare the Inputs
 
 Keep original data unchanged and choose an unused output folder, such as `results`.
+A workflow does not start on an existing folder, so files from earlier work cannot count as this run's evidence.
 Paths are relative to your [project folder](../start/project.md), not your computer's root directory.
 The JSON dictionary names the data columns and their intended roles:
 
