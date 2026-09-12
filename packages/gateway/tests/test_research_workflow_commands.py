@@ -1312,7 +1312,6 @@ def test_native_independent_verification_records_environment_execution_and_repla
         "centered=''.join(f'{x-average}\\n' for x in values)\n"
         "(out/'predictions.csv').write_text('centered\\n'+centered)\n"
     )
-    (tmp_path / "results").mkdir()
     inputs = {
         name: f"{name}.{suffix}"
         for name, suffix in (
@@ -1380,6 +1379,7 @@ def test_native_independent_verification_records_environment_execution_and_repla
                 output_directory="results",
             )
         )
+        (tmp_path / "results").mkdir()
         for stage_id in ("environment", "reproduce", "report"):
             assert _state(gateway).stage_id == stage_id
             gateway.handle(_projected_command(gateway, "run"))
