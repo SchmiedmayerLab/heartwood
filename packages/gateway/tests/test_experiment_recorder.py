@@ -452,3 +452,18 @@ def test_interrupted_resume_never_automatically_reenters_user_code(
     assert executed == (0 if phase == "resume" else 1)
     with pytest.raises(ValueError, match="explicit recovery"), fresh.resume(event.run_id):
         pytest.fail("Recovering an append must never repeat caller work")
+
+
+def test_unobservable_environment_cannot_be_labelled_observed(tmp_path: Path) -> None:
+    recorder, _ = prepare(tmp_path)
+    forged = recorder.describe(
+        actor_ref="test-researcher",
+        entry_point="analysis.py",
+        inputs=("data.csv",),
+        outputs=("result.json",),
+        parameters={},
+        environment=ExperimentEnvironment(kind="container", source="observed", sha256="1" * 64),
+    )
+    with pytest.raises(ValueError, match="observes only Python"), recorder.record(forged):
+        raise AssertionError("user code must not run")
+    assert recorder.runs() == ()
