@@ -3601,3 +3601,53 @@ def test_workflow_start_requires_an_unused_output_directory(tmp_path: Path) -> N
         assert gateway.persisted_session_projection(session_id="research").workflow is None
     finally:
         gateway.stop()
+
+
+@pytest.mark.parametrize("terminal", ["completed", "cancelled"])
+def test_provenance_rejects_terminal_transitions_without_their_outcome(
+    tmp_path: Path, terminal: str
+) -> None:
+    from heartwood.core_adapter.workflow_provenance import workflow_experiment_events
+    from heartwood.session import SessionEvent
+
+    gateway = _gateway(tmp_path, FinishedBackend())
+    try:
+        _start(gateway, _inputs(tmp_path))
+        gateway.handle(_transition(gateway, "run"))
+        if terminal == "completed":
+            _readiness(tmp_path)
+            gateway.handle(_transition(gateway, "evaluate"))
+            gateway.handle(_transition(gateway, "run"))
+            (tmp_path / "results/readiness.md").write_text("# Readiness\nSynthetic data only.\n")
+            gateway.handle(_transition(gateway, "evaluate"))
+            evaluation = _state(gateway).evaluation
+            assert evaluation is not None
+            gateway.handle(
+                _transition(
+                    gateway,
+                    "review",
+                    approved=True,
+                    evidence_fingerprint=evaluation.assessment.evidence_fingerprint,
+                )
+            )
+        else:
+            gateway.handle(_transition(gateway, "cancel"))
+        assert _state(gateway).phase == terminal
+        events = list(gateway._services["research"].replay_events())
+        target = next(
+            index
+            for index, source in enumerate(events)
+            if source.kind == EventKind.WORKFLOW_UPDATED and source.payload.get("phase") == terminal
+        )
+        payload = {
+            key: value
+            for key, value in events[target].payload.items()
+            if key not in {"experiment", "experiment_fingerprint"}
+        }
+        events[target] = SessionEvent.model_validate(
+            {**events[target].model_dump(), "payload": payload}
+        )
+        with pytest.raises(ValueError, match="missing its experiment outcome"):
+            workflow_experiment_events(events)
+    finally:
+        gateway.stop()

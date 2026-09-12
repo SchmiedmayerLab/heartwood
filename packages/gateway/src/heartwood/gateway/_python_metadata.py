@@ -19,7 +19,13 @@ def python_metadata() -> dict[str, object]:
         "system": platform.system(),
         "machine": platform.machine(),
         "packages": tuple(
-            sorted((item.metadata["Name"], item.version) for item in distributions())
+            sorted(
+                (name, version)
+                for name, version in (
+                    (item.metadata.get("Name"), item.version) for item in distributions()
+                )
+                if isinstance(name, str) and isinstance(version, str)
+            )
         ),
     }
 

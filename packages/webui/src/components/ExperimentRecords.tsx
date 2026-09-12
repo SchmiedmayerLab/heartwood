@@ -40,9 +40,7 @@ export const ExperimentRunList = ({
         >
           <h4>{label ?? run.run_id}</h4>
           <p>
-            {run.status === "started" && run.definition.source === "heartwood" ?
-              "Awaiting stage acceptance"
-            : run.status === "started" || run.status === "resumed" ?
+            {run.status === "started" || run.status === "resumed" ?
               "Outcome not recorded"
             : run.status}
           </p>
