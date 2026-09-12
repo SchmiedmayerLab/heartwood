@@ -1748,17 +1748,19 @@ def test_failed_backend_decision_records_a_fatal_unknown_action_outcome(
     assert backend.resolutions == [(_action_group_id(action.tool_call_id), True)]
 
 
+@pytest.mark.parametrize(
+    ("code", "reason"),
+    [
+        (BackendErrorCode.ACTION_OUTCOME_UNKNOWN, "unknown execution outcome"),
+        (BackendErrorCode.SESSION_RUNTIME_INCOMPATIBLE, "original agent runtime"),
+    ],
+)
 def test_reconciled_fatal_outcome_blocks_a_new_command_before_backend_work(
-    tmp_path: Path,
+    tmp_path: Path, code: BackendErrorCode, reason: str
 ) -> None:
     backend = _RecordingBackend(
         endpoint="https://model.local.invalid/v1/chat/completions",
-        reconciled=(
-            BackendErrorEvent(
-                error_code=BackendErrorCode.ACTION_OUTCOME_UNKNOWN,
-                source_event_id="recording:unknown-action-outcome",
-            ),
-        ),
+        reconciled=(BackendErrorEvent(error_code=code, source_event_id="recording:fatal"),),
     )
     service = SessionService.local_default(
         tmp_path,
@@ -1780,7 +1782,7 @@ def test_reconciled_fatal_outcome_blocks_a_new_command_before_backend_work(
         EventKind.ERROR_RECORDED.value,
     ]
     assert result.events[-1].payload["affects_lifecycle"] is False
-    assert "unknown execution outcome" in str(result.events[-1].payload["reason"])
+    assert reason in str(result.events[-1].payload["reason"])
 
 
 def test_fatal_approval_outcome_finishes_an_interrupted_receipt_without_retry(
