@@ -410,3 +410,16 @@ def test_store_normalizes_filesystem_failures(
 
     with pytest.raises(OpenHandsPersistenceError, match="entry is unavailable"):
         ContentMinimizedLocalFileStore(str(root))
+
+
+def test_reopened_store_rejects_symbolic_links_under_a_current_marker(tmp_path: Path) -> None:
+    root = tmp_path / "openhands"
+    ContentMinimizedLocalFileStore(str(root))
+    events = root / "events"
+    events.mkdir(exist_ok=True)
+    outside = tmp_path / "outside.json"
+    outside.write_text("{}", encoding="utf-8")
+    (events / "event-00000-12345678.json").symlink_to(outside)
+
+    with pytest.raises(OpenHandsPersistenceError, match="symbolic link or special file"):
+        ContentMinimizedLocalFileStore(str(root))
