@@ -176,6 +176,8 @@ def handle_workflow_command(
             return (
                 _error(service, "Workflow inputs or output location are unavailable or invalid"),
             )
+        if not evaluator.is_absent(binding.output_directory):
+            return (_error(service, "Choose an unused output directory for a new workflow"),)
         definition = research_workflow(binding.workflow_id)
         return (
             _record(

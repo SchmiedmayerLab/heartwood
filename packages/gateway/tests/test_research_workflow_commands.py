@@ -862,3 +862,23 @@ def test_review_does_not_coerce_ambiguous_permission_values(
         assert _state(gateway) == state
     finally:
         gateway.stop()
+
+
+def test_workflow_start_requires_an_unused_output_directory(tmp_path: Path) -> None:
+    gateway = _gateway(tmp_path, FinishedBackend())
+    try:
+        inputs = _inputs(tmp_path)
+        (tmp_path / "results").mkdir()
+        (tmp_path / "results/readiness.json").write_text("{}")
+        result = gateway.handle(
+            _command(
+                action="start",
+                workflow_id="dataset-readiness",
+                inputs=inputs,
+                output_directory="results",
+            )
+        )
+        assert any(event.kind == EventKind.ERROR_RECORDED for event in result.events)
+        assert gateway.persisted_session_projection(session_id="research").workflow is None
+    finally:
+        gateway.stop()
