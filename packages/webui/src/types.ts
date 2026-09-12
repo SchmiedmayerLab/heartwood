@@ -16,11 +16,16 @@ export type JsonValue =
 export type CommandKind = Projection.CommandKind;
 export type EventKind = Projection.EventKind;
 export type WorkflowCatalog = Api.WorkflowCatalog;
+export type PythonEnvironmentSnapshot = Api.PythonEnvironmentSnapshot;
 export type ExperimentCollection = Api.ExperimentCollection;
 export type ExperimentExport = Api.ExperimentExport;
 export type ExperimentRun = Api.ExperimentRun;
 export type WorkflowRequest =
-  Api.WorkflowStart | Api.WorkflowTransition | Api.WorkflowReview;
+  | Api.WorkflowStart
+  | Api.WorkflowTransition
+  | Api.WorkflowReviewRequest
+  | Api.WorkflowReview
+  | Api.WorkflowCorrectionRequest;
 
 export interface SessionCommand {
   schema_version: "heartwood.session-command.v1";

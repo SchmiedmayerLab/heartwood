@@ -30,6 +30,8 @@ Heartwood reuses OpenHands for the agent loop and coding tools, then adds projec
 - Qualified model recommendations, best-effort planning for other public Hugging Face models, and verified offline model transfer.
 - Repository-reviewed research Skills, signed extension catalogs, and explicitly approved project installations.
 - Bounded research-planning, data-quality, cohort, statistical, and reproducibility specialists delegated through OpenHands.
+- Staged dataset-readiness, baseline-analysis, and independent-verification workflows with bounded checks, researcher review, and correction of supported findings.
+- Experiment records linking workflow stages and explicitly recorded scripts to inputs, code, environments, outputs, and deterministic provenance exports.
 - Persistent sessions, deterministic replay, scrubbed audit export, and provider-neutral signed audit checkpoints.
 - Versioned multi-architecture workstation containers, NVIDIA GPU images, Terra images, and native Linux releases for environments such as Stanford Carina.
 
@@ -51,7 +53,7 @@ docker run --rm -it \
   --env HOME=/tmp \
   -p 127.0.0.1:8767:8767 \
   -v "$PWD:/workspace" \
-  ghcr.io/schmiedmayerlab/heartwood:0.3.0 \
+  ghcr.io/schmiedmayerlab/heartwood:0.4.0 \
   heartwood --interface web --host 0.0.0.0 --host-loopback-publication
 ```
 
@@ -72,7 +74,8 @@ Heartwood shows the complete action set, its affected paths and risk information
 
 ## Research Skills and Focused Review
 
-The parent agent can ask one bounded specialist at a time to plan an analysis or review supplied evidence for data-quality, cohort, statistical, or reproducibility concerns.
+The parent agent can ask bounded specialists to plan an analysis or review supplied evidence for data-quality, cohort, statistical, or reproducibility concerns.
+Specialists run one at a time by default; deployments with qualified parallel reviews can offer explicitly authorized concurrent review for supported workflow stages.
 Specialists use the active model and verified Skills, remain advisory without project tools, and return their result to the parent conversation.
 
 <picture>

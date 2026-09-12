@@ -108,6 +108,7 @@ Specialists are selected by the parent OpenHands agent during a task; this comma
 | `heartwood experiments record --input FILE --output NEW_FILE SCRIPT [ARGS...]` | Record an explicit user-run analysis using Heartwood's Python |
 | `heartwood experiments list [--json]` | Inspect project-wide workflow and script records without starting a model |
 | `heartwood experiments export` | Write verified scientific record JSONL to standard output |
+| `heartwood experiments environment [--python EXECUTABLE]` | Export Python version metadata; defaults to Heartwood's interpreter, not an unrelated analysis environment |
 | `heartwood experiments recover RUN_ID` | Mark an abandoned script attempt interrupted without executing or stopping it |
 | `heartwood experiments cancel RUN_ID` | Close an abandoned script record without deleting outputs or stopping processes |
 

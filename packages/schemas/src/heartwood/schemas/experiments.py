@@ -94,6 +94,7 @@ class ExperimentStage(ExperimentRecord):
     stage_id: Reference
     workflow_sha256: Digest
     tool_call_id: Reference | None = None
+    correction_id: Reference | None = None
 
 
 class ExperimentDefinition(ExperimentRecord):

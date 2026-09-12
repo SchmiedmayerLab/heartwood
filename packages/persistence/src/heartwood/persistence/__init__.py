@@ -103,4 +103,4 @@ __all__ = [
     "write_private_text_atomic",
 ]
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"

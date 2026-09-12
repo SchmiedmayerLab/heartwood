@@ -35,7 +35,8 @@ import {
   ExperimentRunList,
   ProjectExperimentRecords,
 } from "./ExperimentRecords";
-import { SafeMarkdown } from "./SafeMarkdown";
+import { displaySafeText, SafeMarkdown } from "./SafeMarkdown";
+import { VerificationEnvironment } from "./VerificationEnvironment";
 
 interface ResearchWorkspaceProps {
   client: Pick<
@@ -44,6 +45,7 @@ interface ResearchWorkspaceProps {
     | "getWorkspaceFile"
     | "getExperimentRecords"
     | "getExperimentExport"
+    | "getVerificationEnvironment"
   >;
   sessionId: string;
   projection: SessionProjection;
@@ -282,6 +284,9 @@ const WorkflowWorkspace = ({
               <small id={`research-description-${input.input_id}`}>
                 {input.description}
               </small>
+              {input.input_id === "environment" && (
+                <VerificationEnvironment client={client} />
+              )}
             </div>
           ))}
           <label htmlFor="research-output">
@@ -394,6 +399,75 @@ const WorkflowWorkspace = ({
               : "Open Conversation"}
             </Button>
           </div>
+          {projection.reviewExecution ?
+            <p role="status">{projection.reviewExecution.summary}</p>
+          : null}
+          {run.research_review ?
+            <details className="research-provenance">
+              <summary>Research Review: {run.research_review.status}</summary>
+              {run.research_review.unavailable_reason ?
+                <p>
+                  {run.research_review.unavailable_reason.replaceAll("-", " ")}
+                </p>
+              : null}
+              {run.research_review.assessment ?
+                <ul
+                  className="research-checks"
+                  aria-label="Research review findings"
+                >
+                  {run.research_review.assessment.findings.map((finding) => (
+                    <li key={finding.finding_id}>
+                      {displaySafeText(
+                        finding.verified_claim ?? finding.reason,
+                      )}
+                      <strong>{finding.verification}</strong>
+                    </li>
+                  ))}
+                </ul>
+              : null}
+              <p>
+                Review findings do not authorize changes or establish scientific
+                correctness.
+              </p>
+            </details>
+          : null}
+          {run.corrections.map((series) => (
+            <details className="research-provenance" key={series.correction_id}>
+              <summary>
+                Corrections:{" "}
+                {(series.stop_reason ?? "running").replaceAll("-", " ")}
+              </summary>
+              {series.attempts.map((attempt, index) => (
+                <div key={attempt.attempt_id}>
+                  <h4>
+                    Attempt {index + 1}/{series.maximum_attempts}:{" "}
+                    {attempt.status}
+                  </h4>
+                  {attempt.unavailable_reason ?
+                    <p>{attempt.unavailable_reason.replaceAll("-", " ")}</p>
+                  : null}
+                  <ul className="research-checks">
+                    {attempt.assessment?.checks.map((check) => (
+                      <li key={check.finding_id}>
+                        {displaySafeText(check.reason.replaceAll("-", " "))}
+                        <strong>{check.status.replaceAll("_", " ")}</strong>
+                      </li>
+                    ))}
+                  </ul>
+                  {attempt.plan.outputs.map((output) => (
+                    <Button
+                      key={output.artifact_id}
+                      variant="ghost"
+                      onClick={() => setArtifact(output.path)}
+                    >
+                      <FileText size={16} />
+                      {displaySafeText(output.path)}
+                    </Button>
+                  ))}
+                </div>
+              ))}
+            </details>
+          ))}
           <h3>Analysis Artifacts</h3>
           {projection.experiments.length > 0 ?
             <details className="research-provenance">
@@ -410,18 +484,16 @@ const WorkflowWorkspace = ({
             </details>
           : null}
           <div className="research-artifacts">
-            {definition.artifacts.map((item) => (
+            {run.binding.artifacts.map((item) => (
               <Button
                 key={item.artifact_id}
                 variant="ghost"
-                onClick={() =>
-                  setArtifact(
-                    `${run.binding.output_directory}/${item.relative_path}`,
-                  )
-                }
+                onClick={() => setArtifact(item.path)}
               >
                 <FileText size={16} />
-                {item.label}
+                {definition.artifacts.find(
+                  (definition) => definition.artifact_id === item.artifact_id,
+                )?.label ?? item.artifact_id}
               </Button>
             ))}
           </div>

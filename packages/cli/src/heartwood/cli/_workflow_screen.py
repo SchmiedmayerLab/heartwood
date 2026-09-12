@@ -14,6 +14,11 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, OptionList, Select, Static
 from textual.widgets.option_list import Option
 
+from heartwood.cli._interactive import (
+    format_research_correction_lines,
+    format_research_review_lines,
+    format_workflow_artifact_lines,
+)
 from heartwood.gateway import SessionProjection, display_safe_text
 from heartwood.schemas.workflows import (
     WorkflowCatalog,
@@ -71,9 +76,11 @@ class WorkflowScreen(ModalScreen[WorkflowRequest | None]):
                         ),
                         markup=False,
                     )
-                yield Static(
-                    "Artifacts: " + display_safe_text(run.binding.output_directory), markup=False
-                )
+                yield Static("\n".join(format_workflow_artifact_lines(run.binding)), markup=False)
+                if correction_lines := format_research_correction_lines(run.corrections):
+                    yield Static("\n".join(correction_lines), markup=False)
+                if review_lines := format_research_review_lines(run.research_review):
+                    yield Static("\n".join(review_lines), markup=False)
                 if run.phase == "review":
                     yield Static(
                         "Inspect the stage artifacts before accepting. "

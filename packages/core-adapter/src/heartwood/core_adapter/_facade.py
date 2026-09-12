@@ -18,6 +18,8 @@ from typing import Literal, Protocol, cast
 
 from heartwood.core_adapter._state import _write_private_json_atomic
 from heartwood.schemas import JsonValue
+from heartwood.schemas.execution import NativeTaskExecution
+from heartwood.schemas.review import ReviewProposals
 from heartwood.schemas.workflows import WorkflowOutcomeStatus
 
 
@@ -30,6 +32,7 @@ class BackendEventKind(StrEnum):
     CONFIRMATION_RESOLVED = "confirmation_resolved"
     TOOL_EXECUTION = "tool_execution"
     LIFECYCLE = "lifecycle"
+    EXECUTION_SETTLED = "execution_settled"
     TASK_PLAN = "task_plan"
     USAGE = "usage"
     SUBAGENT = "subagent"
@@ -213,7 +216,7 @@ class BackendUsage:
 
 @dataclass(frozen=True, slots=True)
 class BackendSubagent:
-    """One sequential specialized-agent task."""
+    """One specialized-agent task observed through its native lifecycle."""
 
     invocation_id: str
     task_id: str | None
@@ -222,6 +225,8 @@ class BackendSubagent:
     status: BackendSubagentStatus
     parent_session_id: str
     parent_action_id: str
+    review_proposals: ReviewProposals | None = None
+    native_execution: NativeTaskExecution | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -290,6 +295,21 @@ class BackendLifecycleEvent(_BackendEvent):
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class BackendExecutionSettledEvent(_BackendEvent):
+    """Transient worker boundary after final reconciliation, not permission to continue.
+
+    Lifecycle events can arrive during progress publication. This signal is emitted
+    only after native execution releases its run slot; it is never replayed as work.
+    """
+
+    source_event_id: None = field(default=None, init=False)
+    kind: Literal[BackendEventKind.EXECUTION_SETTLED] = field(
+        default=BackendEventKind.EXECUTION_SETTLED,
+        init=False,
+    )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class BackendTaskPlanEvent(_BackendEvent):
     tasks: tuple[BackendTask, ...]
     kind: Literal[BackendEventKind.TASK_PLAN] = field(
@@ -332,6 +352,7 @@ type BackendEvent = (
     | BackendConfirmationResolutionEvent
     | BackendToolExecutionEvent
     | BackendLifecycleEvent
+    | BackendExecutionSettledEvent
     | BackendTaskPlanEvent
     | BackendUsageEvent
     | BackendSubagentEvent

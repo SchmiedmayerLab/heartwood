@@ -27,12 +27,13 @@ os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 os.environ.setdefault("LOG_LEVEL", "ERROR")
 os.environ.setdefault("OPENHANDS_SUPPRESS_BANNER", "1")
 
-from openhands.sdk import LLM, AgentContext, LLMStreamChunk, LocalConversation, Tool
+from openhands.sdk import LLM, Agent, AgentContext, LLMStreamChunk, LocalConversation, Tool
 from openhands.sdk.conversation import (
     BaseConversation,
     ConversationExecutionStatus,
     ConversationState,
 )
+from openhands.sdk.conversation.conversation_stats import ConversationStats
 from openhands.sdk.event import (
     ActionEvent,
     AgentErrorEvent,
@@ -79,6 +80,7 @@ from heartwood.core_adapter import (
     BackendErrorEvent,
     BackendEvent,
     BackendEventSink,
+    BackendExecutionSettledEvent,
     BackendLifecycle,
     BackendLifecycleEvent,
     BackendSubagent,
@@ -112,7 +114,13 @@ from heartwood.gateway._openhands_models import (
     request_endpoint_for_model,
 )
 from heartwood.gateway._openhands_persistence import ContentMinimizedLocalFileStore
+from heartwood.gateway._review_executor import (
+    ReviewBatchAuthorizer,
+    bind_review_executor,
+    scoped_review_execution_enabled,
+)
 from heartwood.gateway._specialist_task import (
+    HeartwoodSpecialistObservation,
     HeartwoodSpecialistToolSet,
     SpecialistToolRole,
 )
@@ -209,6 +217,7 @@ class OpenHandsSdkBackend:
         native_tool_calling: bool | None = None,
         conversation_factory: ConversationFactory | None = None,
         structured_task_outcomes: bool = False,
+        review_batch_authorizer: ReviewBatchAuthorizer | None = None,
     ) -> None:
         profile.validate()
         if action_confirmation_mode not in {"always-confirm", "confirm-risky"}:
@@ -230,6 +239,7 @@ class OpenHandsSdkBackend:
         self._conversation_factory = conversation_factory or self._default_conversation_factory
         self._injected_conversation_factory = conversation_factory is not None
         self._structured_task_outcomes = structured_task_outcomes
+        self._review_batch_authorizer = review_batch_authorizer
         self._conversation: BaseConversation | None = None
         self._conversation_lock = RLock()
         self._conversation_closing = False
@@ -310,6 +320,15 @@ class OpenHandsSdkBackend:
         """Return true because OpenHands may call the model after continuing."""
         return True
 
+    def bind_review_authorizer(self, authorize: ReviewBatchAuthorizer) -> None:
+        """Bind deployment admission before creating or restoring the native conversation."""
+        with self._conversation_lock:
+            if self._conversation is not None or self._conversation_closing:
+                raise OpenHandsSdkError(
+                    "Review admission must be bound before conversation startup"
+                )
+            self._review_batch_authorizer = authorize
+
     def evaluation_observation(
         self, *, platform: str, policy_fingerprint: str
     ) -> EvaluationRuntimeObservation:
@@ -370,6 +389,11 @@ class OpenHandsSdkBackend:
             action_confirmation=self._action_confirmation_mode,
             max_input_tokens=llm.max_input_tokens,
             max_output_tokens=llm.max_output_tokens,
+            tool_concurrency=state.agent.tool_concurrency_limit,
+            scoped_advisory_reviews=scoped_review_execution_enabled(state.agent),
+            specialist_catalog_fingerprint=(
+                self.specialist_catalog.fingerprint if self.specialist_catalog is not None else None
+            ),
         )
 
     def bind_runtime(
@@ -665,6 +689,16 @@ class OpenHandsSdkBackend:
                     self._handle_sdk_event,
                     self._handle_token,
                 )
+                if self._review_batch_authorizer is not None:
+                    try:
+                        agent = conversation.state.agent
+                        if not isinstance(agent, Agent):
+                            raise OpenHandsSdkError("Advisory execution requires the native agent")
+                        bind_review_executor(agent, self._review_batch_authorizer)
+                    except Exception:
+                        with suppress(Exception):
+                            conversation.close()
+                        raise
                 self._conversation = conversation
             return conversation
 
@@ -784,7 +818,10 @@ class OpenHandsSdkBackend:
             return None
         return Tool(
             name=HeartwoodSpecialistToolSet.name,
-            params={"specialists": specialists},
+            params={
+                "specialists": specialists,
+                "structured_reviews": self._structured_task_outcomes,
+            },
         )
 
     def _register_specialized_agents(self) -> None:
@@ -970,7 +1007,7 @@ class OpenHandsSdkBackend:
                 if self._run_thread is worker:
                     self._run_thread = None
             try:
-                self._event_sink(final_events)
+                self._event_sink((*final_events, BackendExecutionSettledEvent()))
             finally:
                 with self._run_lock:
                     self._worker_threads.discard(worker)
@@ -1411,6 +1448,17 @@ class OpenHandsSdkBackend:
                             ),
                             parent_session_id=session_id,
                             parent_action_id=event.action_id,
+                            native_execution=(
+                                event.observation.native_execution
+                                if isinstance(event.observation, HeartwoodSpecialistObservation)
+                                else None
+                            ),
+                            review_proposals=(
+                                event.observation.review_proposals
+                                if isinstance(event.observation, HeartwoodSpecialistObservation)
+                                and not event.observation.is_error
+                                else None
+                            ),
                         ),
                         source_event_id=f"{source}:subagent",
                     )
@@ -1490,6 +1538,10 @@ class OpenHandsSdkBackend:
     ) -> tuple[BackendEvent, ...]:
         if conversation is None:
             conversation = self._get_conversation()
+        with self._run_lock:
+            run_failed = self._run_failed
+            execution_active = self._execution_active
+            run_cancelled = self._run_cancelled.is_set()
         state = _conversation_state(conversation)
         branch = state.active_branch()
         anchor = branch[-1].id if branch else str(conversation.id)
@@ -1499,10 +1551,6 @@ class OpenHandsSdkBackend:
         has_typed_conversation_error = any(
             isinstance(event, ConversationErrorEvent) for event in branch
         )
-        with self._run_lock:
-            run_failed = self._run_failed
-            execution_active = self._execution_active
-            run_cancelled = self._run_cancelled.is_set()
         if (
             execution_active
             and not run_cancelled
@@ -1511,6 +1559,7 @@ class OpenHandsSdkBackend:
                 in {
                     ConversationExecutionStatus.IDLE,
                     ConversationExecutionStatus.PAUSED,
+                    ConversationExecutionStatus.WAITING_FOR_CONFIRMATION,
                 }
                 or (
                     state.execution_status in _OPENHANDS_ERROR_STATUSES
@@ -1549,7 +1598,12 @@ class OpenHandsSdkBackend:
                     source_event_id=(f"openhands-state:{anchor}:conversation-stopped"),
                 )
             )
-        if state.execution_status == ConversationExecutionStatus.WAITING_FOR_CONFIRMATION:
+        # OpenHands can expose WAITING while the action batch is still being appended.
+        # Publish its complete approval identity only after the native run settles.
+        if (
+            state.execution_status == ConversationExecutionStatus.WAITING_FOR_CONFIRMATION
+            and not execution_active
+        ):
             if unmatched_group is None:  # pragma: no cover - SDK state contract
                 raise OpenHandsSdkError(
                     "OpenHands is waiting for confirmation without unmatched actions"
@@ -1807,13 +1861,21 @@ def _task_status(status: str) -> BackendTaskStatus:
 
 
 def _usage(state: ConversationState) -> tuple[BackendUsage, ...]:
+    # A child can register its final metrics during projection. Freeze the native
+    # values once so totals and per-purpose rows describe the same observation.
+    stats = ConversationStats(
+        usage_to_metrics={
+            usage_id: metrics.model_copy(deep=True)
+            for usage_id, metrics in state.stats.usage_to_metrics.copy().items()
+        }
+    )
     by_purpose = tuple(
         _usage_snapshot(usage_id, metrics)
-        for usage_id, metrics in sorted(state.stats.usage_to_metrics.items())
+        for usage_id, metrics in sorted(stats.usage_to_metrics.items())
     )
     if not by_purpose:
         return ()
-    combined = _usage_snapshot("total", state.stats.get_combined_metrics())
+    combined = _usage_snapshot("total", stats.get_combined_metrics())
     return (combined, *by_purpose)
 
 

@@ -23,6 +23,12 @@ from heartwood.schemas.experiments import ExperimentEnvironment
 def configure_experiments(parser: argparse.ArgumentParser) -> None:
     """Attach script recording and project-wide inspection commands."""
     commands = parser.add_subparsers(dest="experiment_command", required=True)
+    environment = commands.add_parser(
+        "environment", help="Print a Python environment's version metadata as JSON."
+    )
+    environment.add_argument(
+        "--python", help="Explicit analysis Python executable; defaults to Heartwood's Python."
+    )
     listing = commands.add_parser("list", help="Inspect this project's recorded experiments.")
     listing.add_argument(
         "--json", action="store_true", help="Print the shared project record schema."
@@ -65,10 +71,16 @@ def configure_experiments(parser: argparse.ArgumentParser) -> None:
 def handle_experiments(args: argparse.Namespace, *, project: ProjectContext) -> int:
     """Use shared gateway services without opening a model conversation."""
     try:
-        if args.experiment_command in {"list", "export"}:
+        if args.experiment_command in {"list", "export", "environment"}:
             gateway = SessionGateway(project=project)
             try:
-                if args.experiment_command == "export":
+                if args.experiment_command == "environment":
+                    print(
+                        gateway.verification_environment(python=args.python).model_dump_json(
+                            indent=2
+                        )
+                    )
+                elif args.experiment_command == "export":
                     sys.stdout.write(gateway.export_experiments().jsonl)
                 else:
                     records = gateway.experiment_records()

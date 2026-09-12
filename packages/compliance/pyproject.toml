@@ -6,7 +6,7 @@
 
 [project]
 name = "heartwood-compliance"
-version = "0.3.0"
+version = "0.4.0"
 description = "Synthetic-only reviewer packet and audit bundle generation for Heartwood."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -15,6 +15,7 @@ authors = [{ name = "Stanford University and the project authors" }]
 dependencies = [
     "heartwood-audit",
     "heartwood-gateway",
+    "heartwood-model-policy",
     "heartwood-persistence",
     "heartwood-schemas",
 ]
@@ -29,5 +30,6 @@ packages = ["src/heartwood"]
 [tool.uv.sources]
 heartwood-audit = { workspace = true }
 heartwood-gateway = { workspace = true }
+heartwood-model-policy = { workspace = true }
 heartwood-persistence = { workspace = true }
 heartwood-schemas = { workspace = true }

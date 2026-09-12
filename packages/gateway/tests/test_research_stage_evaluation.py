@@ -10,13 +10,25 @@ from __future__ import annotations
 
 import json
 import math
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
 from heartwood.core_adapter.research_checks import evaluate_research_check
+from heartwood.core_adapter.research_review import research_correction_roles
+from heartwood.core_adapter.research_workflows import workflow_reproduction_spec
+from heartwood.core_adapter.workflow_runtime import workflow_stage_prompt
 from heartwood.gateway import ProjectContext, SessionGateway
+from heartwood.gateway._research_evaluation import ResearchStageEvaluator
 from heartwood.schemas import WorkspaceFileResponse
+from heartwood.schemas.review import (
+    ResearchReviewRun,
+    ReviewCandidate,
+    ReviewProposals,
+    ReviewSubmission,
+)
+from heartwood.schemas.workflows import WorkflowRun
 
 
 def _values() -> dict[str, str]:
@@ -81,6 +93,153 @@ def _values() -> dict[str, str]:
         ),
         "report": "# Analysis\nSynthetic results require interpretation and independent review.\n",
     }
+
+
+@pytest.mark.parametrize(
+    ("damage", "expected"),
+    [
+        ("none", "rejected"),
+        ("predictor", "verified"),
+        ("outcome", "verified"),
+        ("group", "verified"),
+        ("split", "verified"),
+        ("duplicate-feature", "verified"),
+        ("malformed-plan", "unavailable"),
+        ("malformed-dictionary", "unavailable"),
+        ("malformed-data", "unavailable"),
+        ("overlap", "unavailable"),
+        ("invalid-values", "unavailable"),
+        ("nonnumeric", "unavailable"),
+    ],
+)
+def test_plan_review_reuses_stage_rules_without_blame_for_invalid_inputs(
+    tmp_path: Path, damage: str, expected: str
+) -> None:
+    values = _values()
+    changes: dict[str, dict[str, object]] = {
+        "predictor": {"features": ["post_outcome"]},
+        "outcome": {"outcome": "signal"},
+        "group": {"group_column": "visit"},
+        "split": {"split_column": "person"},
+        "duplicate-feature": {"features": ["signal", "signal"]},
+    }
+    if damage in changes:
+        values["plan"] = json.dumps({**json.loads(values["plan"]), **changes[damage]})
+    elif damage.startswith("malformed-"):
+        values[damage.removeprefix("malformed-")] = "not structured data"
+    elif damage == "overlap":
+        values["data"] = values["data"].replace("c,1,5,11", "a,3,5,11")
+    elif damage == "invalid-values":
+        values["data"] = values["data"].replace("a,1,1,3", "a,1,-1,3")
+    elif damage == "nonnumeric":
+        values["data"] = values["data"].replace("a,1,1,3", "a,1,1,NaN")
+    paths = {name: f"{name}.txt" for name in ("data", "dictionary", "plan")}
+    for name, path in paths.items():
+        (tmp_path / path).write_text(values[name])
+    gateway = SessionGateway(project=ProjectContext(tmp_path))
+    snapshot = gateway.prepare_research_review(paths)
+    submissions = tuple(
+        ReviewSubmission.associate(
+            ReviewProposals(
+                candidates=(
+                    ReviewCandidate(
+                        candidate_id="plan-claim",
+                        condition="analysis-plan-incompatible",
+                        category="statistical",
+                        severity="critical",
+                        summary="Untrusted claim about the plan.",
+                        artifact_ids=("plan",),
+                    ),
+                )
+            ),
+            review_id=f"task-{index}",
+            reviewer_id=reviewer,
+            snapshot=snapshot,
+        )
+        for index, reviewer in enumerate(("research-planner", "statistical-reviewer"))
+    )
+    assessment = gateway.assess_research_review(snapshot, submissions)
+    assert len(assessment.findings) == 1
+    finding = assessment.findings[0]
+    assert finding.verification == expected
+    assert len(finding.sources) == 2
+    assert finding.severity == "high"
+    assert research_correction_roles(assessment) == (
+        frozenset({"plan"}) if expected == "verified" else frozenset()
+    )
+    assert {name: (tmp_path / path).read_text() for name, path in paths.items()} == {
+        name: values[name] for name in paths
+    }
+
+
+@pytest.mark.parametrize(
+    ("damage", "expected"),
+    [
+        ("none", "rejected"),
+        ("metric", "verified"),
+        ("prediction", "verified"),
+        ("malformed-metrics", "unavailable"),
+        ("malformed-data", "unavailable"),
+        ("unsupported-plan", "unavailable"),
+        ("constant-predictor", "unavailable"),
+        ("overlapping-groups", "unavailable"),
+    ],
+)
+def test_statistical_review_separates_inconsistent_outputs_from_unavailable_checks(
+    tmp_path: Path, damage: str, expected: str
+) -> None:
+    values = _values()
+    if damage == "metric":
+        values["metrics"] = json.dumps({**json.loads(values["metrics"]), "test_rmse": 100})
+    elif damage == "prediction":
+        values["predictions"] = values["predictions"].replace("c,1,11", "c,1,12")
+    elif damage == "malformed-metrics":
+        values["metrics"] = "not JSON"
+    elif damage == "malformed-data":
+        values["data"] = "a,b\nwrong-shape\n"
+    elif damage == "unsupported-plan":
+        values["plan"] = json.dumps({**json.loads(values["plan"]), "features": ["post_outcome"]})
+    elif damage == "constant-predictor":
+        values["data"] = (
+            values["data"]
+            .replace("a,2,2", "a,2,1")
+            .replace("b,1,3", "b,1,1")
+            .replace("b,2,4", "b,2,1")
+        )
+    elif damage == "overlapping-groups":
+        values["data"] = values["data"].replace("c,1,5,11", "a,3,5,11")
+    artifacts = {
+        name: f"{name}.txt" for name in ("data", "dictionary", "plan", "metrics", "predictions")
+    }
+    for name, path in artifacts.items():
+        (tmp_path / path).write_text(values[name])
+    gateway = SessionGateway(project=ProjectContext(tmp_path))
+    snapshot = gateway.prepare_research_review(artifacts)
+    submission = ReviewSubmission(
+        review_id="statistical-review-1",
+        reviewer_id="statistical-reviewer",
+        snapshot_sha256=snapshot.fingerprint,
+        candidates=(
+            ReviewCandidate(
+                candidate_id="metrics-wrong",
+                condition="baseline-result-inconsistent",
+                category="statistical",
+                severity="critical",
+                summary="There is definitely data leakage.",
+                artifact_ids=("metrics", "predictions"),
+            ),
+        ),
+    )
+    finding = gateway.assess_research_review(snapshot, [submission]).findings[0]
+    assert finding.verification == expected
+    assert finding.verified_claim == (
+        "The baseline results disagree with the independently recomputed analysis."
+        if expected == "verified"
+        else None
+    )
+    assert finding.disposition == ("open" if expected == "verified" else "not_actionable")
+    assert {item.artifact_id for item in finding.evidence} == artifacts.keys()
+    assert not (tmp_path / ".heartwood").exists()
 
 
 @pytest.mark.parametrize(
@@ -286,6 +445,168 @@ def test_gateway_binds_inputs_and_checks_plan_and_execution_without_a_model(tmp_
         assert "Synthetic results" not in executed.model_dump_json()
         assert "Does signal" not in executed.model_dump_json()
         assert not gateway._services
+    finally:
+        gateway.stop()
+
+
+@pytest.mark.parametrize("change", [None, "accepted-stage", "corrected-output", "original-output"])
+def test_corrected_bindings_preserve_dependencies_and_drive_the_same_checks(
+    tmp_path: Path, change: str | None
+) -> None:
+    gateway, inputs = _prepare(tmp_path)
+    try:
+        binding = gateway.prepare_research_workflow(
+            "baseline-analysis", inputs=inputs, output_directory="results"
+        )
+        accepted = gateway.evaluate_research_stage(binding, "plan", model_status="success")
+        source = tmp_path / binding.artifact_path("program")
+        valid = source.read_text()
+        source.write_text("def broken(\n")
+        evaluator = ResearchStageEvaluator(gateway.workspace_inspector)
+        snapshot = evaluator.prepare_review(binding, "execute")
+        submission = ReviewSubmission.associate(
+            ReviewProposals(
+                candidates=(
+                    ReviewCandidate(
+                        candidate_id="syntax",
+                        condition="python-source-invalid",
+                        category="coding",
+                        severity="high",
+                        summary="Source does not parse.",
+                        artifact_ids=("program",),
+                    ),
+                )
+            ),
+            review_id="native-review",
+            reviewer_id="statistical-reviewer",
+            snapshot=snapshot,
+        )
+        review = ResearchReviewRun(
+            review_id="review-one",
+            snapshot=snapshot,
+            reviewer_ids=("statistical-reviewer",),
+            started_sequence=2,
+            status="assessed",
+            submissions=(submission,),
+            assessment=gateway.assess_research_review(snapshot, (submission,)),
+        )
+        run = WorkflowRun(
+            run_id="run",
+            revision=3,
+            binding=binding,
+            stage_id="execute",
+            phase="blocked",
+            completed=(accepted,),
+            created_at=datetime.now(UTC),
+            research_review=review,
+        )
+        correction = gateway.prepare_research_correction(review, output_directory="correction-one")
+        destination = tmp_path / correction.outputs[0].path
+        destination.parent.mkdir()
+        destination.write_text(valid)
+        assessment = gateway.assess_research_correction(review, correction)
+        if change == "accepted-stage":
+            run = run.model_copy(
+                update={
+                    "completed": (
+                        *run.completed,
+                        gateway.evaluate_research_stage(binding, "execute", model_status="success"),
+                    )
+                }
+            )
+        elif change == "corrected-output":
+            destination.write_text("different(\n")
+        elif change == "original-output":
+            source.write_text(valid)
+        if change is not None:
+            with pytest.raises(ValueError, match=r"accepted|changed|evidence"):
+                evaluator.correction_binding(run, correction, assessment)
+            return
+        corrected = evaluator.correction_binding(run, correction, assessment)
+        assert corrected.artifact_path("program") == correction.outputs[0].path
+        assert corrected.inputs == binding.inputs
+        assert {
+            item.artifact_id: item.path
+            for item in corrected.artifacts
+            if item.artifact_id != "program"
+        } == {
+            item.artifact_id: item.path
+            for item in binding.artifacts
+            if item.artifact_id != "program"
+        }
+        assert run.binding == binding
+        assert source.read_text() == "def broken(\n"
+        assert evaluator.evaluate(corrected, "plan", model_status="success") == accepted
+        assert evaluator.evaluate(
+            corrected, "execute", model_status="success"
+        ).assessment.evidence_satisfied
+        assert not evaluator.evaluate(
+            binding, "execute", model_status="success"
+        ).assessment.evidence_satisfied
+        candidate_run = run.model_copy(update={"binding": corrected})
+        assert corrected.artifact_path("program") in workflow_stage_prompt(candidate_run)
+        reproduction = workflow_reproduction_spec(corrected, "verify")
+        assert reproduction is not None
+        assert reproduction.program == corrected.artifact_path("program")
+        definition = evaluator.experiment_definition(
+            candidate_run,
+            session_id="research",
+            actor_id="researcher",
+            invocation="Synthetic stage",
+        )
+        assert definition.code_output_paths == (corrected.artifact_path("program"),)
+        from heartwood.cli._interactive import format_workflow_artifact_lines
+        from heartwood.gateway._session_projection import project_session
+        from heartwood.notebook import build_view_model, build_widget_spec
+
+        assert any(
+            corrected.artifact_path("program") in line
+            for line in format_workflow_artifact_lines(corrected)
+        )
+        view = project_session((), session_id="research").model_copy(
+            update={"workflow": candidate_run}
+        )
+        artifacts = next(
+            item
+            for item in build_widget_spec(build_view_model(view))
+            if item.title == "Analysis Artifacts"
+        )
+        assert f"program: {corrected.artifact_path('program')}" in artifacts.items
+    finally:
+        gateway.stop()
+
+
+@pytest.mark.parametrize(
+    "damage", ["missing", "unknown", "duplicate", "input", "private", "parent"]
+)
+def test_invalid_bound_paths_are_rejected_before_inspection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, damage: str
+) -> None:
+    gateway, inputs = _prepare(tmp_path)
+    try:
+        binding = gateway.prepare_research_workflow(
+            "baseline-analysis", inputs=inputs, output_directory="results"
+        )
+        artifacts = list(binding.artifacts)
+        if damage == "missing":
+            artifacts.pop()
+        elif damage == "unknown":
+            artifacts[0] = artifacts[0].model_copy(update={"artifact_id": "not-declared"})
+        elif damage == "duplicate":
+            artifacts.append(artifacts[0])
+        else:
+            path = {"input": "data.csv", "private": ".heartwood/secrets", "parent": "results"}[
+                damage
+            ]
+            artifacts[0] = artifacts[0].model_copy(update={"path": path})
+        binding = binding.model_copy(update={"artifacts": tuple(artifacts)})
+
+        def unexpected_read(*_args: object, **_kwargs: object) -> object:
+            pytest.fail("Invalid artifact bindings must fail before reading files")
+
+        monkeypatch.setattr(gateway.workspace_inspector, "file", unexpected_read)
+        with pytest.raises(ValueError, match=r"artifacts|unique|overlap|private"):
+            gateway.evaluate_research_stage(binding, "execute", model_status="success")
     finally:
         gateway.stop()
 

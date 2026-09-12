@@ -22,6 +22,7 @@ from heartwood.core_adapter.research_workflows import (
 )
 from heartwood.core_adapter.workflow_evidence import assess_workflow_stage
 from heartwood.core_adapter.workflow_runtime import workflow_stage_prompt
+from heartwood.schemas.execution import ExecutionUsage
 from heartwood.schemas.workflows import (
     WorkflowBoundInput,
     WorkflowCheckResult,
@@ -33,12 +34,43 @@ from heartwood.schemas.workflows import (
 )
 
 
+@pytest.mark.parametrize("definition", research_workflows(), ids=lambda item: item.workflow_id)
+def test_stage_budgets_allow_repeated_context_but_preserve_admission_limits(
+    definition: WorkflowDefinition,
+) -> None:
+    planning_and_review = ExecutionUsage(
+        input_tokens=413_780,
+        output_tokens=16_008,
+        model_calls=28,
+        reported_cost_usd=0.487754,
+        proposed_actions=29,
+        elapsed_seconds=500,
+    )
+    for stage in definition.stages:
+        assert planning_and_review.exhausted_limits(stage.budget) == ()
+        for field, limit in (
+            ("input_tokens", "tokens"),
+            ("model_calls", "model_calls"),
+            ("reported_cost_usd", "reported_cost_usd"),
+            ("proposed_actions", "actions"),
+            ("elapsed_seconds", "seconds"),
+        ):
+            maximum = getattr(stage.budget, f"maximum_{limit}")
+            usage = ExecutionUsage(elapsed_seconds=0).model_copy(update={field: maximum})
+            assert usage.exhausted_limits(stage.budget) == (limit,)
+        assert stage.budget.maximum_reported_cost_usd <= definition.budget.maximum_reported_cost_usd
+
+
 def _binding(workflow_id: str) -> WorkflowProjectBinding:
     definition = research_workflow(workflow_id)
     return WorkflowProjectBinding(
         workflow_id=workflow_id,
         workflow_fingerprint=definition.fingerprint,
         output_directory="research results",
+        python_executable="/opt/heartwood/bin/python"
+        if workflow_id == "result-verification"
+        else None,
+        artifacts=definition.bind_artifacts("research results"),
         inputs=tuple(
             WorkflowBoundInput(
                 input_id=item.input_id,
@@ -81,7 +113,8 @@ def test_reproduction_uses_bound_inputs_and_the_same_exact_prompt_command(
         assert "research results/plan.json" in spec.protected_paths
         assert "research results/metrics.json" in spec.protected_paths
     else:
-        assert "research results/environment-check.json" in spec.protected_paths
+        assert "research results/environment/environment.json" in spec.protected_paths
+        assert spec.command.startswith("/opt/heartwood/bin/python -I ")
     run = WorkflowRun(
         run_id="research-run",
         revision=0,
@@ -102,7 +135,6 @@ def test_reproduction_uses_bound_inputs_and_the_same_exact_prompt_command(
         ("dataset-readiness", "inspect"),
         ("baseline-analysis", "plan"),
         ("baseline-analysis", "execute"),
-        ("result-verification", "environment"),
     ],
 )
 def test_non_reproduction_stages_do_not_acquire_an_execution_recipe(

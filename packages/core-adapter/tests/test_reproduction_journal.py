@@ -139,6 +139,7 @@ def _run() -> WorkflowRun:
                 for item in definition.inputs
             ),
             output_directory="results",
+            artifacts=definition.bind_artifacts("results"),
         ),
     )
 

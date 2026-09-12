@@ -54,8 +54,71 @@ def build_widget_spec(view_model: NotebookViewModel) -> tuple[WidgetSpec, ...]:
                 (
                     f"{run.binding.workflow_id}: {run.stage_id} ({run.phase})",
                     *checks,
+                    *(
+                        (view_model.projection.review_execution.summary,)
+                        if view_model.projection.review_execution is not None
+                        else ()
+                    ),
+                    *(
+                        (
+                            "Review limitation: "
+                            + run.research_review.unavailable_reason.replace("-", " "),
+                        )
+                        if run.research_review is not None
+                        and run.research_review.unavailable_reason
+                        else ()
+                    ),
+                    *(
+                        (f"Research review: {run.research_review.status}",)
+                        if run.research_review is not None
+                        else ()
+                    ),
+                    *(
+                        tuple(
+                            f"{item.verification}: {item.verified_claim or item.reason}"
+                            for item in run.research_review.assessment.findings
+                        )
+                        if run.research_review is not None
+                        and run.research_review.assessment is not None
+                        else ()
+                    ),
                     *(control.label for control in view_model.workflow_controls),
                 ),
+            ),
+            WidgetSpec(
+                "Analysis Artifacts",
+                tuple(f"{item.artifact_id}: {item.path}" for item in run.binding.artifacts),
+            ),
+            *(
+                WidgetSpec(
+                    f"Corrections: {series.stage_id}",
+                    (
+                        (series.stop_reason or "running").replace("-", " "),
+                        *(
+                            "\n".join(
+                                (
+                                    f"Attempt {index}/{series.maximum_attempts}: {attempt.status}",
+                                    *(
+                                        (attempt.unavailable_reason.replace("-", " "),)
+                                        if attempt.unavailable_reason
+                                        else ()
+                                    ),
+                                    *(
+                                        tuple(
+                                            f"{check.status.replace('_', ' ')}: {check.reason}"
+                                            for check in attempt.assessment.checks
+                                        )
+                                        if attempt.assessment is not None
+                                        else ()
+                                    ),
+                                    *(item.path for item in attempt.plan.outputs),
+                                )
+                            )
+                            for index, attempt in enumerate(series.attempts, start=1)
+                        ),
+                    ),
+                )
+                for series in run.corrections
             ),
         )
     if view_model.experiments:
@@ -221,6 +284,11 @@ def _specialist_item(agent: ProjectionSubagent) -> str:
         details.append(f"Task: {agent.task_summary}")
     if agent.result_summary is not None:
         details.append(f"Result: {agent.result_summary}")
+    if agent.review_proposals is not None:
+        details.extend(
+            f"Unverified review proposal: {candidate.summary}"
+            for candidate in agent.review_proposals.candidates
+        )
     return "\n".join(details)
 
 

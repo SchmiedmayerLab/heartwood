@@ -55,6 +55,9 @@ See [Security and Controlled Data](security.md#model-credential-isolation) for t
 
 ## Validate the Deployment
 
+Concurrent advisory reviews are optional and require retained quality and performance evidence for the configured route.
+See [Qualify Parallel Reviews](parallel-reviews.md); deployments without evidence retain sequential review.
+
 Before real data, use a synthetic project to verify:
 
 1. exact artifact digest and platform capability response;

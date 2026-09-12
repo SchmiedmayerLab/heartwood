@@ -20,6 +20,24 @@ The outcome links to the recorded tool proposals, action decisions, tool results
 It does not invent a process exit code: stage acceptance and an individual command's exit status are different observations.
 Cancelling a started stage records cancellation; cancelling before a stage starts does not imply execution occurred.
 
+### Correction Lineage
+
+Corrective work preserves the original stage execution as failed and records each new attempt separately.
+Its definition contains the correction attempt identity, original reviewed inputs and code, and fresh output paths.
+The workflow retains the verified findings, exact source snapshot, permitted attempt count, and each independent recheck.
+It shares the original stage's usage and deadline; starting another attempt does not reset either limit.
+
+A correction experiment succeeds only when its declared replacement files pass the supported defect rechecks.
+This narrower outcome does not mean the complete workflow stage passed: the normal stage checks and researcher gate still apply.
+Only independently checked replacement paths enter the current stage's artifact binding, and previously accepted stages are unchanged.
+The original failed record is never rewritten as a successful execution.
+
+Attempt intent and experiment start are journaled before model dispatch.
+Recovery can finish an interrupted assessment from recorded evidence but cannot silently repeat execution or begin the next attempt.
+Tool proposals still use the existing action-review policy; correction consent is not approval of a command or file modification.
+
+### Inspect and Export
+
 Inspect **Experiment Records** in the browser's Research tab, enter `/experiments` in the terminal, or read `NotebookViewModel.experiments` in a notebook.
 All three use the same gateway-owned session projection.
 The notebook widget also includes an Experiment Records section.
@@ -139,6 +157,15 @@ The default Python environment digest covers interpreter identity, operating-sys
 It excludes installation paths, package source URLs, credentials, and environment-variable values.
 It does not capture external executables, native libraries, a GPU driver, or the complete contents of an installed package.
 For research stages, it describes the gateway's Python environment, not a remote model server or an independently attested execution environment.
+Independent Result Verification separately captures an isolated Python process through a reviewed probe and rechecks its versions immediately before the reviewed analysis command.
+That execution witness supplements the stage record; it does not turn package metadata into binary or platform attestation.
+The gateway, `heartwood experiments environment`, browser export, and `NotebookSession.verification_environment()` share the same metadata capture.
+The terminal and notebook accept an explicitly selected analysis interpreter; the browser export describes server Python and does not execute arbitrary client-supplied executables.
+Independent Result Verification separately reconstructs a wheel-only `pylock.toml` with uv in a fresh `.heartwood/runtime/` environment through a reviewed tool action.
+Its execution witness binds the original lock and inputs to the observed environment artifact, then guards that artifact before analysis execution.
+Package installation uses a private lock snapshot and cache without inherited credentials, installer overrides, source builds, or automatic interpreter downloads.
+Metadata probing and analysis execution also exclude inherited environment variables so Python startup hooks do not receive provider credentials.
+This isolates dependencies; it is not an operating-system sandbox or an attestation of dependency safety.
 An explicit `ExperimentEnvironment` can instead identify a declared container or environment description.
 
 ## Persistence and Recovery

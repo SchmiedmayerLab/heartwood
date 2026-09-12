@@ -103,7 +103,7 @@ Each record includes its OpenHands identifiers, grouped decision, typed details,
 
 Task progress is available through `view.task_plan`.
 Combined model usage is available through `view.usage`, and agent and condenser usage are separated in `view.usage_by_purpose`.
-Sequential specialist work and parent lineage are available through `view.subagents`.
+Specialist work and parent lineage are available through `view.subagents`.
 The small gateway-owned set in `view.suggestions` provides the same editable next-step prompts shown in the terminal and browser.
 
 Inspect the same specialist catalog used by the terminal and browser:

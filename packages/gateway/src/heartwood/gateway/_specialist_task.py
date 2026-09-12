@@ -8,26 +8,71 @@
 
 from __future__ import annotations
 
+import asyncio
+import time
 import uuid
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
+from contextvars import ContextVar
 from pathlib import Path
-from threading import RLock
-from typing import TypedDict, override
+from typing import Any, TypedDict, cast, override
 
-from openhands.sdk import Agent, LocalConversation
+from openhands.sdk import Agent, ImageContent, LocalConversation, TextContent, Tool
+from openhands.sdk.context import AgentContext
+from openhands.sdk.conversation.cancellation import CancellationToken
 from openhands.sdk.conversation.state import ConversationState
 from openhands.sdk.hooks.config import HookConfig
 from openhands.sdk.observability.laminar import detached_delegate_context
 from openhands.sdk.tool import ToolDefinition, register_tool
+from openhands.sdk.tool.builtins.finish import FinishTool
 from openhands.tools.task import TaskAction, TaskObservation, TaskTool
 from openhands.tools.task.impl import TaskExecutor
 from openhands.tools.task.manager import (
     ConfirmationHandler,
     Task,
     TaskManager,
+    TaskStatus,
+)
+from pydantic import Field
+
+from heartwood.core_adapter.research_review import research_review_instructions
+from heartwood.gateway._openhands_persistence import ContentMinimizedLocalFileStore
+from heartwood.schemas.execution import NativeTaskExecution
+from heartwood.schemas.experiments import ExperimentRecord
+from heartwood.schemas.review import ReviewProposals
+
+_EXECUTION_CLOCK_ID = uuid.uuid4()
+_task_execution: ContextVar[NativeTaskExecution | None] = ContextVar(
+    "heartwood_native_task_execution", default=None
 )
 
-from heartwood.gateway._openhands_persistence import ContentMinimizedLocalFileStore
+
+class _ReviewTaskResult(ExperimentRecord):
+    """Typed envelope over the native Task result string, never parsed from model prose."""
+
+    message: str = Field(max_length=16_384)
+    proposals: ReviewProposals
+
+
+class HeartwoodSpecialistObservation(TaskObservation):
+    """Native task lineage and message plus optional advisory review proposals."""
+
+    review_proposals: ReviewProposals | None = None
+    native_execution: NativeTaskExecution | None = None
+
+    @property
+    @override
+    def to_llm_content(self) -> Sequence[TextContent | ImageContent]:
+        content = list(super().to_llm_content)
+        if self.review_proposals is not None:
+            content.append(
+                TextContent(
+                    text=(
+                        "Unverified review proposals. Independent checks and normal "
+                        "action approval still apply.\n" + self.review_proposals.model_dump_json()
+                    )
+                )
+            )
+        return content
 
 
 class SpecialistToolRole(TypedDict):
@@ -38,6 +83,36 @@ class SpecialistToolRole(TypedDict):
     description: str
 
 
+class _InterruptibleSpecialistConversation(LocalConversation):
+    """Use native cancellable I/O inside the Task manager's blocking worker contract."""
+
+    _parent_cancel_token: CancellationToken | None = None
+
+    @override
+    def run(self) -> None:  # type: ignore[override]  # Upstream tracing types this method as Never.
+        asyncio.run(self.arun())
+
+    @override
+    async def arun(self) -> None:  # type: ignore[override]  # Upstream tracing types this as Never.
+        # Publish the native task before checking cancellation so an interrupt racing
+        # with startup targets this task, not the idle child's resumable pause state.
+        self._arun_task = asyncio.current_task()
+        try:
+            if self._parent_cancel_token is not None and self._parent_cancel_token.is_cancelled:
+                self.pause()
+                return
+            # Upstream tracing erases this public method's callable signature.
+            native_run = cast(
+                Callable[[LocalConversation], Awaitable[None]], LocalConversation.arun
+            )
+            await native_run(self)
+        except asyncio.CancelledError:
+            # Native arun's cancellation handler starts after lazy initialization.
+            self.pause()
+        finally:
+            self._arun_task = None
+
+
 class _CatalogTaskManager(TaskManager):
     """Reuse OpenHands task orchestration behind a strict Heartwood allowlist."""
 
@@ -46,11 +121,11 @@ class _CatalogTaskManager(TaskManager):
         *,
         allowed_specialist_ids: frozenset[str],
         confirmation_handler: ConfirmationHandler | None = None,
+        structured_reviews: bool = False,
     ) -> None:
         super().__init__(confirmation_handler=confirmation_handler)
         self._allowed_specialist_ids = allowed_specialist_ids
-        self._active_child: LocalConversation | None = None
-        self._active_child_lock = RLock()
+        self._structured_reviews = structured_reviews
 
     @override
     def _generate_ids(self) -> tuple[str, uuid.UUID]:
@@ -95,6 +170,32 @@ class _CatalogTaskManager(TaskManager):
         max_budget_per_run: float | None = None,
     ) -> LocalConversation:
         parent = self.parent_conversation
+        if self._structured_reviews:
+            context = worker_agent.agent_context or AgentContext()
+            worker_agent = worker_agent.model_copy(
+                update={
+                    "agent_context": context.model_copy(
+                        update={
+                            "system_message_suffix": "\n\n".join(
+                                filter(
+                                    None,
+                                    (
+                                        context.system_message_suffix,
+                                        research_review_instructions(),
+                                    ),
+                                )
+                            ),
+                        }
+                    ),
+                    "include_default_tools": [
+                        name for name in worker_agent.include_default_tools if name != "FinishTool"
+                    ],
+                    "tools": [
+                        *[tool for tool in worker_agent.tools if tool.name != "FinishTool"],
+                        Tool(name="FinishTool", params={"response_schema": ReviewProposals}),
+                    ],
+                }
+            )
         parent_persistence_dir = parent.state.persistence_dir
         if parent_persistence_dir is None:
             raise RuntimeError("Specialist persistence is unavailable.")
@@ -105,7 +206,7 @@ class _CatalogTaskManager(TaskManager):
             cache_limit_size=max_iteration_per_run,
         )
         with detached_delegate_context() as link:
-            return LocalConversation(
+            conversation = _InterruptibleSpecialistConversation(
                 agent=worker_agent,
                 workspace=parent.state.workspace.working_dir,
                 persistence_dir=persistence_dir,
@@ -125,25 +226,65 @@ class _CatalogTaskManager(TaskManager):
                 ),
                 observability_tags=["delegate"],
             )
+            conversation._parent_cancel_token = parent.cancel_token
+            return conversation
 
     @override
     def _run_task(self, task: Task, prompt: str) -> Task:
-        child = task.conversation
-        with self._active_child_lock:
-            self._active_child = child
+        token = self.parent_conversation.cancel_token
+        if token is not None and token.is_cancelled:
+            task.set_error("The parent cancelled the specialist before execution.")
+            self._evict_task(task)
+            return task
+        started = time.monotonic()
         try:
             return super()._run_task(task, prompt)
         finally:
-            with self._active_child_lock:
-                if self._active_child is child:
-                    self._active_child = None
+            _task_execution.set(
+                NativeTaskExecution(
+                    clock_id=_EXECUTION_CLOCK_ID,
+                    started_seconds=started,
+                    finished_seconds=time.monotonic(),
+                )
+            )
 
-    def interrupt_active_child(self) -> None:
-        """Propagate parent interruption to the currently running child."""
-        with self._active_child_lock:
-            child = self._active_child
-        if child is not None:
-            child.interrupt()
+    def interrupt_active_children(self) -> None:
+        """Interrupt native running tasks without maintaining another active-task registry."""
+        with self._tasks_lock:
+            children = tuple(
+                task.conversation
+                for task in self._tasks.values()
+                if task.status == TaskStatus.RUNNING and task.conversation is not None
+            )
+        errors: list[Exception] = []
+        for child in children:
+            try:
+                child.interrupt()
+            except Exception as error:
+                errors.append(error)
+        if errors:
+            raise ExceptionGroup("Specialist interruption failed", errors)
+
+    @override
+    def _evict_task(self, task: Task) -> None:
+        # Native eviction closes the child and may remove its files. Capture the
+        # public structured response first; the parent observation persists it.
+        if self._structured_reviews and task.status == TaskStatus.COMPLETED:
+            try:
+                if task.conversation is None:
+                    raise ValueError("Review conversation is unavailable")
+                parser = FinishTool.create()[0].set_response_schema(ReviewProposals)
+                proposals = parser.parse_last_response(list(task.conversation.state.events))
+                if not isinstance(proposals, ReviewProposals):
+                    raise ValueError("Structured review proposals are unavailable")
+                task.set_result(
+                    _ReviewTaskResult(
+                        message=task.result or "", proposals=proposals
+                    ).model_dump_json()
+                )
+            except (ValueError, OSError):
+                task.set_error("The specialist did not return a valid structured review.")
+        super()._evict_task(task)
 
 
 class _CatalogTaskExecutor(TaskExecutor):
@@ -155,7 +296,46 @@ class _CatalogTaskExecutor(TaskExecutor):
 
     @override
     def interrupt(self) -> None:
-        self._catalog_manager.interrupt_active_child()
+        self._catalog_manager.interrupt_active_children()
+
+    @override
+    def __call__(
+        self, action: TaskAction, conversation: LocalConversation | None = None
+    ) -> TaskObservation:
+        # Native TaskExecutor calls its manager synchronously on the same worker.
+        # A call-local context retains timing without another task registry.
+        timing_token = _task_execution.set(None)
+        try:
+            observation = super().__call__(action, conversation)
+            native_execution = _task_execution.get()
+        finally:
+            _task_execution.reset(timing_token)
+        proposals = None
+        text = observation.text
+        failed = observation.is_error
+        if self._catalog_manager._structured_reviews and not failed:
+            try:
+                result = _ReviewTaskResult.model_validate_json(text)
+                text, proposals = result.message, result.proposals
+            except ValueError:
+                text, failed = "The specialist did not return a valid structured review.", True
+        return HeartwoodSpecialistObservation.from_text(
+            text=text,
+            task_id=observation.task_id,
+            subagent=observation.subagent,
+            status="error" if failed else observation.status,
+            is_error=failed,
+            review_proposals=proposals,
+            native_execution=native_execution,
+        )
+
+
+def supports_parallel_review(tool: ToolDefinition[Any, Any]) -> bool:
+    """Only the catalog's structured advisory executor may use scoped concurrency."""
+    return (
+        isinstance(tool.executor, _CatalogTaskExecutor)
+        and tool.executor._catalog_manager._structured_reviews
+    )
 
 
 class HeartwoodSpecialistToolSet(ToolDefinition[TaskAction, TaskObservation]):
@@ -167,17 +347,21 @@ class HeartwoodSpecialistToolSet(ToolDefinition[TaskAction, TaskObservation]):
         conv_state: ConversationState,  # noqa: ARG003
         specialists: list[SpecialistToolRole],
         confirmation_handler: ConfirmationHandler | None = None,
+        structured_reviews: bool = False,
     ) -> Sequence[ToolDefinition[TaskAction, TaskObservation]]:
         normalized = _validated_roles(specialists)
         manager = _CatalogTaskManager(
             allowed_specialist_ids=frozenset(role["specialist_id"] for role in normalized),
             confirmation_handler=confirmation_handler,
+            structured_reviews=structured_reviews,
         )
         executor = _CatalogTaskExecutor(manager)
-        return TaskTool.create(
-            executor=executor,
-            description=_task_description(normalized),
-        )
+        return [
+            tool.model_copy(update={"observation_type": HeartwoodSpecialistObservation})
+            for tool in TaskTool.create(
+                executor=executor, description=_task_description(normalized)
+            )
+        ]
 
 
 def _validated_roles(roles: list[SpecialistToolRole]) -> tuple[SpecialistToolRole, ...]:
@@ -216,7 +400,7 @@ Available specialist types:
 Use this tool only when a focused second pass improves the research task. Include the exact
 question, supplied evidence, assumptions, and expected review output in `prompt`. Specialists
 cannot inspect files, run tools, access the network, or modify the project. Do not use `resume`;
-start a new sequential review when follow-up analysis is needed.
+start a fresh review when follow-up analysis is needed.
 """
 
 

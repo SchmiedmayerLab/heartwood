@@ -9,14 +9,17 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from pathlib import PurePosixPath
 from typing import Protocol, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from heartwood.core_adapter._facade import PendingActionGroup
 from heartwood.core_adapter.reproduction import ReproductionWitness
-from heartwood.core_adapter.research_workflows import research_workflow, workflow_reproduction_spec
+from heartwood.core_adapter.research_workflows import workflow_reproduction_spec
+from heartwood.core_adapter.workflow_corrections import (
+    correction_artifact_binding,
+    current_correction,
+)
 from heartwood.schemas.workflows import WorkflowRun
 from heartwood.session import EventKind, SessionEvent
 
@@ -69,7 +72,15 @@ def prepare_reproduction(
     """Capture a separate exact proposal while protecting bound and accepted artifacts."""
     if run.phase != "running" or len(group.actions) != 1:
         return None
-    spec = workflow_reproduction_spec(run.binding, run.stage_id)
+    correction = current_correction(run)
+    binding = (
+        correction_artifact_binding(run.binding, correction.attempts[-1].plan)
+        if correction is not None
+        and correction.stop_reason is None
+        and correction.attempts[-1].status == "pending"
+        else run.binding
+    )
+    spec = workflow_reproduction_spec(binding, run.stage_id)
     action = group.actions[0]
     arguments = action.arguments
     command = arguments.get("command")
@@ -98,12 +109,7 @@ def prepare_reproduction(
     if witness is None:
         return None
     expected = {item.value: item.sha256 for item in run.binding.inputs if item.kind == "file"}
-    paths = {
-        artifact.artifact_id: str(
-            PurePosixPath(run.binding.output_directory) / artifact.relative_path
-        )
-        for artifact in research_workflow(run.binding.workflow_id).artifacts
-    }
+    paths = {artifact.artifact_id: artifact.path for artifact in run.binding.artifacts}
     for accepted in run.completed:
         for artifact in accepted.artifacts:
             if artifact.artifact_id in paths:

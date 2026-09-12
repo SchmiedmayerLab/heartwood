@@ -23,6 +23,7 @@ from pydantic import (
 
 from heartwood.schemas._records import ActionConfirmationMode, CapabilityTier
 from heartwood.schemas.experiments import ExperimentCollection, ExperimentExport
+from heartwood.schemas.python_environment import PythonEnvironmentSnapshot
 from heartwood.schemas.workflows import WorkflowCatalog, WorkflowRequest
 
 __all__ = [
@@ -1011,6 +1012,7 @@ type ApiResponse = (
 type PublicApiContract = (
     ApiResponse
     | ExperimentCollection
+    | PythonEnvironmentSnapshot
     | ExperimentExport
     | WorkflowCatalog
     | WorkflowRequest

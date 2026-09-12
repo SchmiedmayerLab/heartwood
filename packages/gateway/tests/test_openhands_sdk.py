@@ -16,7 +16,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import replace
 from functools import cache
 from pathlib import Path
-from threading import Event, Thread
+from threading import Barrier, Event, Lock, Thread
 from types import SimpleNamespace
 from typing import Literal, cast
 
@@ -45,7 +45,7 @@ from openhands.sdk.event.conversation_error import ConversationErrorEvent
 from openhands.sdk.event.error_classification import ErrorClassification, FailureKind
 from openhands.sdk.llm import LLMResponse, Message, MessageToolCall, Metrics, TextContent
 from openhands.sdk.llm.llm import LLMCallContext
-from openhands.sdk.llm.streaming import TokenCallbackType
+from openhands.sdk.llm.streaming import AnyTokenCallbackType, TokenCallbackType
 from openhands.sdk.security import (
     AlwaysConfirm,
     ConfirmRisky,
@@ -77,11 +77,13 @@ from openhands.tools.terminal import TerminalAction, TerminalObservation
 import heartwood.gateway._openhands_sdk as openhands_sdk_module
 from heartwood.core_adapter import (
     BackendAgentMessageEvent,
+    BackendConfirmationRequestEvent,
     BackendConfirmationResolutionEvent,
     BackendErrorCode,
     BackendErrorEvent,
     BackendEvent,
     BackendEventKind,
+    BackendExecutionSettledEvent,
     BackendLifecycle,
     BackendLifecycleEvent,
     BackendSubagentEvent,
@@ -133,6 +135,7 @@ from heartwood.gateway._specialists import (
     SpecialistCatalogError,
     load_specialist_catalog,
 )
+from heartwood.schemas.parallel_reviews import ParallelReviewPlan
 from heartwood.session import CommandKind, EventKind, JsonValue, SessionCommand
 
 
@@ -992,6 +995,48 @@ def test_persisted_user_rejection_reconstructs_denied_confirmation(
     backend.close()
 
 
+def test_confirmation_groups_are_published_only_after_native_execution_settles(
+    tmp_path: Path,
+) -> None:
+    conversation = _ControlledConversation()
+    state = _BranchState(conversation.id)
+    conversation.state = state
+    state.execution_status = ConversationExecutionStatus.WAITING_FOR_CONFIRMATION
+    first = _terminal_action_event("action-1", "call-1", "printf first")
+    second = _terminal_action_event("action-2", "call-2", "printf second")
+    backend = _backend(
+        tmp_path,
+        cast(ConversationFactory, lambda _event_callback, _token_callback: conversation),
+    )
+    seen: set[str] = set()
+    try:
+        backend._execution_active = True
+        for branch in ((first,), (first, second)):
+            state.events = branch
+            events = backend.reconcile(
+                session_id="session-1", known_source_event_ids=frozenset(seen)
+            )
+            assert not any(isinstance(event, BackendConfirmationRequestEvent) for event in events)
+            assert all(
+                event.lifecycle == BackendLifecycle.RUNNING
+                for event in events
+                if isinstance(event, BackendLifecycleEvent)
+            )
+            seen.update(event.source_event_id for event in events if event.source_event_id)
+        backend._execution_active = False
+        events = backend.reconcile(session_id="session-1", known_source_event_ids=frozenset(seen))
+        requests = [event for event in events if isinstance(event, BackendConfirmationRequestEvent)]
+        assert len(requests) == 2
+        assert len({event.action_group_id for event in requests}) == 1
+        assert {event.tool_call.tool_call_id for event in requests} == {
+            first.tool_call_id,
+            second.tool_call_id,
+        }
+    finally:
+        backend._execution_active = False
+        backend.close()
+
+
 def test_openhands_adapter_uses_typed_public_state_only() -> None:
     source = inspect.getsource(openhands_sdk_module)
 
@@ -1226,6 +1271,32 @@ def test_real_sdk_test_llm_turn_runs_in_background_and_reconciles_once(
         == ()
     )
     backend.close()
+
+
+def test_child_completion_during_usage_projection_uses_one_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    agent = Metrics(model_name="agent")
+    agent.add_token_usage(100, 20, 0, 0, 32_768, "agent-response")
+    child = Metrics(model_name="child")
+    child.add_token_usage(11, 7, 0, 0, 32_768, "child-response")
+    stats = ConversationStats(usage_to_metrics={"agent": agent})
+    state = cast(ConversationState, SimpleNamespace(stats=stats))
+    merge = Metrics.merge
+
+    def complete_child(total: Metrics, other: Metrics) -> None:
+        stats.usage_to_metrics["task:child"] = child
+        merge(total, other)
+
+    monkeypatch.setattr(Metrics, "merge", complete_child)
+    first = {usage.usage_id: usage for usage in _usage(state)}
+    assert set(first) == {"total", "agent"}
+    assert first["total"].prompt_tokens == first["agent"].prompt_tokens == 100
+    second = {usage.usage_id: usage for usage in _usage(state)}
+    assert set(second) == {"total", "agent", "task:child"}
+    assert second["total"].prompt_tokens == 111
+    assert second["total"].completion_tokens == 27
+    assert second["total"].call_count == 2
 
 
 def test_usage_is_reported_as_total_agent_and_condenser_metrics() -> None:
@@ -2300,6 +2371,7 @@ def test_persisted_progress_is_published_before_the_run_finishes(tmp_path: Path)
     assert progress_published.wait(timeout=2)
 
     assert not conversation.finished.is_set()
+    assert not any(isinstance(event, BackendExecutionSettledEvent) for event in emitted)
     conversation.release.set()
     assert conversation.finished.wait(timeout=2)
     backend.close()
@@ -2349,8 +2421,8 @@ def test_idle_wait_includes_final_publication_and_never_joins_its_own_worker(
     )
     callback_idle: list[bool] = []
 
-    def publish(_events: tuple[BackendEvent, ...]) -> None:
-        if not backend._execution_in_flight():
+    def publish(events: tuple[BackendEvent, ...]) -> None:
+        if isinstance(events[-1], BackendExecutionSettledEvent):
             callback_idle.append(backend.wait_for_idle(0))
             publishing.set()
             if not release_publication.wait(timeout=3):
@@ -2374,6 +2446,60 @@ def test_idle_wait_includes_final_publication_and_never_joins_its_own_worker(
     finally:
         conversation.release.set()
         release_publication.set()
+        backend.close()
+
+
+def test_real_sdk_continues_at_settled_boundary_without_overlapping_native_runs(
+    tmp_path: Path,
+) -> None:
+    llm = TestLLM.from_messages(
+        [_assistant_message("First inspection."), _assistant_message("Second inspection.")]
+    )
+    backend = _backend(tmp_path, _conversation_factory(tmp_path, llm, tools=[]))
+    boundaries: list[tuple[bool, bool]] = []
+    emitted: list[BackendEvent] = []
+    continuations: list[tuple[BackendEvent, ...]] = []
+    finished = Event()
+
+    def publish(events: tuple[BackendEvent, ...]) -> None:
+        emitted.extend(events)
+        if isinstance(events[-1], BackendExecutionSettledEvent):
+            boundaries.append((backend._execution_in_flight(), backend.wait_for_idle(0)))
+            if len(boundaries) == 1:
+                continuations.append(
+                    backend.submit_turn(session_id="session-1", prompt="Second authorized turn")
+                )
+            else:
+                finished.set()
+
+    backend.bind_runtime(event_sink=publish, token_sink=lambda _delta: None)
+    try:
+        backend.submit_turn(session_id="session-1", prompt="First authorized turn")
+        assert finished.wait(5)
+        assert backend.wait_for_idle(5)
+        assert boundaries == [(False, False), (False, False)]
+        assert len(continuations) == 1
+        assert any(
+            isinstance(event, BackendLifecycleEvent) and event.lifecycle == BackendLifecycle.RUNNING
+            for event in continuations[0]
+        )
+        assert llm.call_count == 2
+        assert not any(isinstance(event, BackendErrorEvent) for event in emitted)
+        messages: dict[str, BackendAgentMessageEvent] = {}
+        for event in emitted:
+            if isinstance(event, BackendAgentMessageEvent):
+                assert event.source_event_id is not None
+                if event.source_event_id in messages:
+                    assert messages[event.source_event_id] == event
+                messages[event.source_event_id] = event
+        assert [event.message for event in messages.values()] == [
+            "First inspection.",
+            "Second inspection.",
+        ]
+        replayed = backend.reconcile(session_id="session-1", known_source_event_ids=frozenset())
+        assert not any(isinstance(event, BackendExecutionSettledEvent) for event in replayed)
+        assert llm.call_count == 2
+    finally:
         backend.close()
 
 
@@ -2990,8 +3116,10 @@ def test_specialist_failure_is_projected_to_the_parent(
     backend.close()
 
 
+@pytest.mark.parametrize("structured_reviews", [False, True])
 def test_completed_specialist_workflow_replays_without_model_calls(
     tmp_path: Path,
+    structured_reviews: bool,
 ) -> None:
     conversation_id = uuid.uuid4()
     persistence_dir = tmp_path / "openhands"
@@ -3013,7 +3141,9 @@ def test_completed_specialist_workflow_replays_without_model_calls(
                     )
                 ],
             ),
-            _assistant_message("The supplied feature windows avoid outcome leakage."),
+            _specialist_result(
+                "The supplied feature windows avoid outcome leakage.", structured_reviews
+            ),
             _assistant_message("The cohort review is complete."),
         ]
     )
@@ -3028,12 +3158,19 @@ def test_completed_specialist_workflow_replays_without_model_calls(
         conversation_factory=_conversation_factory(
             tmp_path,
             first_llm,
-            tools=[_specialist_tool()],
+            tools=[_specialist_tool(structured_reviews=structured_reviews)],
             conversation_id=conversation_id,
             persistence_dir=persistence_dir,
         ),
     )
     first._register_specialized_agents()
+    if structured_reviews:
+        from heartwood.gateway import ProjectContext, SessionGateway
+
+        (tmp_path / "workspace").mkdir(exist_ok=True)
+        review_gateway = SessionGateway(project=ProjectContext(tmp_path / "workspace"), env={})
+        (tmp_path / "workspace/analysis.py").write_text("def incomplete(\n")
+        review_snapshot = review_gateway.prepare_research_review({"program": "analysis.py"})
     first.submit_turn(session_id="session-1", prompt="Review cohort timing")
     group = _wait_for_pending_group(first)
     first.resolve_confirmation(
@@ -3058,7 +3195,9 @@ def test_completed_specialist_workflow_replays_without_model_calls(
                 prompt="Review the revised synthetic index-date definition.",
                 specialist_id="cohort-feature-reviewer",
             ),
-            _assistant_message("The revised definition has no temporal leakage."),
+            _specialist_result(
+                "The revised definition has no temporal leakage.", structured_reviews
+            ),
             _assistant_message("The second cohort review is complete."),
         ]
     )
@@ -3073,7 +3212,7 @@ def test_completed_specialist_workflow_replays_without_model_calls(
         conversation_factory=_conversation_factory(
             tmp_path,
             restored_llm,
-            tools=[_specialist_tool()],
+            tools=[_specialist_tool(structured_reviews=structured_reviews)],
             conversation_id=conversation_id,
             persistence_dir=persistence_dir,
         ),
@@ -3086,6 +3225,49 @@ def test_completed_specialist_workflow_replays_without_model_calls(
 
     assert restored_llm.call_count == 0
     expected_label = _specialist_catalog().role("cohort-feature-reviewer").label
+    completed_review = next(
+        event.subagent
+        for event in replayed
+        if isinstance(event, BackendSubagentEvent)
+        and event.subagent.status == BackendSubagentStatus.COMPLETED
+    )
+    if structured_reviews:
+        assert completed_review.review_proposals is not None
+        assert completed_review.review_proposals.candidates[0].candidate_id == "syntax-1"
+        from heartwood.core_adapter import DeterministicAgentBackend, SessionService
+        from heartwood.core_adapter.workflow_review import assess_workflow_review
+        from heartwood.gateway._research_evaluation import ResearchStageEvaluator
+        from heartwood.schemas.review import ResearchReviewRun
+
+        journal = SessionService.local_default(
+            tmp_path / "review-journal",
+            session_id="session-1",
+            backend=DeterministicAgentBackend(),
+            env={},
+        )
+        try:
+            journal.reconcile()
+            record = ResearchReviewRun(
+                review_id="native-review",
+                snapshot=review_snapshot,
+                reviewer_ids=("cohort-feature-reviewer",),
+                started_sequence=0,
+            )
+            journal._translate_backend_events(replayed)
+            assessed = assess_workflow_review(
+                record,
+                journal.replay_events(),
+                ResearchStageEvaluator(review_gateway.workspace_inspector),
+            )
+            assert assessed.status == "assessed"
+            assert assessed.assessment is not None
+            assert assessed.assessment.findings[0].verification == "verified"
+            assert restored_llm.call_count == 0
+        finally:
+            journal.close()
+            review_gateway.stop()
+    else:
+        assert completed_review.review_proposals is None
     assert any(
         isinstance(event, BackendSubagentEvent)
         and event.subagent.agent_name == "cohort-feature-reviewer"
@@ -3120,6 +3302,493 @@ def test_completed_specialist_workflow_replays_without_model_calls(
     assert len(completed_tasks) == 2
     assert restored_llm.call_count == 2
     restored.close()
+
+
+@pytest.mark.parametrize("workers", [1, 2])
+@pytest.mark.parametrize("partial_failure", [False, True])
+@pytest.mark.parametrize("scoped", [False, True])
+def test_native_specialist_task_concurrency_preserves_results_and_approval(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    workers: int,
+    partial_failure: bool,
+    scoped: bool,
+    parallel_review_plan: ParallelReviewPlan,
+) -> None:
+    from openhands.sdk.llm.llm_registry import RegistryEvent
+    from openhands.tools.task.manager import TaskManager
+
+    active = 0
+    maximum_active = 0
+    calls = 0
+    authorizations: list[tuple[str, ...]] = []
+    lock = Lock()
+    barrier = Barrier(workers)
+    run = TaskManager._run_until_finished
+
+    def authorize(actions: Sequence[ActionEvent]) -> ParallelReviewPlan | None:
+        authorizations.append(tuple(action.tool_call_id for action in actions))
+        return parallel_review_plan if workers == 2 else None
+
+    def inspect_overlap(
+        manager: TaskManager, task_id: str, conversation: LocalConversation
+    ) -> None:
+        nonlocal active, maximum_active, calls
+        with lock:
+            active += 1
+            calls += 1
+            maximum_active = max(maximum_active, active)
+        try:
+            barrier.wait(timeout=10)
+            run(manager, task_id, conversation)
+        finally:
+            with lock:
+                active -= 1
+            # TestLLM has no provider accounting; supply a known native usage report.
+            conversation.conversation_stats.register_llm(RegistryEvent(llm=conversation.agent.llm))
+            metrics = conversation.conversation_stats.get_metrics_for_usage(
+                conversation.agent.llm.usage_id
+            )
+            metrics.add_token_usage(11, 7, 0, 0, 32_768, task_id)
+            metrics.add_cost(0.01)
+
+    monkeypatch.setattr(TaskManager, "_run_until_finished", inspect_overlap)
+    reviewers = ("data-quality-reviewer", "statistical-reviewer")
+    messages = [
+        _task_message(
+            f"review-{index}",
+            description="Review supplied evidence",
+            prompt="Review only the supplied synthetic aggregate evidence.",
+            specialist_id=reviewer,
+        )
+        for index, reviewer in enumerate(reviewers)
+    ]
+    llm = TestLLM.from_messages(
+        [
+            Message(
+                role="assistant",
+                content=[],
+                tool_calls=[call for message in messages for call in (message.tool_calls or [])],
+            ),
+            RuntimeError("Synthetic private review failure")
+            if partial_failure
+            else _specialist_result("Review of supplied evidence complete.", True),
+            _specialist_result("Review of supplied evidence complete.", True),
+            _assistant_message("Both advisory results are ready for independent checks."),
+        ]
+    )
+    conversation_id = uuid.uuid4()
+    backend = OpenHandsSdkBackend(
+        profile=_local_profile(),
+        workspace=tmp_path / "workspace",
+        skills_dir=tmp_path / "skills",
+        persistence_dir=tmp_path / "openhands",
+        conversation_key="parallel-conformance",
+        specialist_catalog=_specialist_catalog(),
+        review_batch_authorizer=authorize if scoped else None,
+        env={},
+        conversation_factory=_conversation_factory(
+            tmp_path,
+            llm,
+            tools=[_specialist_tool(structured_reviews=True)],
+            tool_concurrency_limit=1 if scoped else workers,
+            conversation_id=conversation_id,
+        ),
+    )
+    try:
+        backend._register_specialized_agents()
+        backend.submit_turn(session_id="session-1", prompt="Review the synthetic evidence.")
+        group = _wait_for_pending_group(backend)
+        assert len(group.actions) == 2
+        assert calls == 0
+        assert authorizations == []
+        observed = backend.evaluation_observation(platform="generic", policy_fingerprint="a" * 64)
+        assert observed.tool_concurrency == (1 if scoped else workers)
+        assert observed.scoped_advisory_reviews == scoped
+        assert observed.specialist_catalog_fingerprint == _specialist_catalog().fingerprint
+        backend.resolve_confirmation(
+            session_id="session-1", action_group_id=group.group_id, approved=True
+        )
+        _wait_for_lifecycle(backend, BackendLifecycle.FINISHED)
+        events = backend.reconcile(session_id="session-1", known_source_event_ids=frozenset())
+        completed = [
+            event.subagent
+            for event in events
+            if isinstance(event, BackendSubagentEvent)
+            and event.subagent.status == BackendSubagentStatus.COMPLETED
+        ]
+        assert maximum_active == workers
+        assert calls == 2
+        assert authorizations == ([("review-0", "review-1")] if scoped else [])
+        terminal = [
+            event.subagent
+            for event in events
+            if isinstance(event, BackendSubagentEvent)
+            and event.subagent.status
+            in {BackendSubagentStatus.COMPLETED, BackendSubagentStatus.ERROR}
+        ]
+        assert {item.agent_name for item in terminal} == set(reviewers)
+        assert len({item.task_id for item in terminal}) == 2
+        assert len(completed) == (1 if partial_failure else 2)
+        intervals = [item.native_execution for item in terminal]
+        assert len(intervals) == 2
+        first_interval, second_interval = intervals
+        assert first_interval is not None
+        assert second_interval is not None
+        assert (first_interval.overlap_seconds(second_interval) > 0) == (workers == 2)
+        assert all(item.review_proposals is not None for item in completed)
+        assert "Synthetic private review failure" not in repr(events)
+        assert (
+            len(
+                [
+                    key
+                    for key in backend._get_conversation().conversation_stats.usage_to_metrics
+                    if key.startswith("task:")
+                ]
+            )
+            == 2
+        )
+        assert active == 0
+        usage = backend._get_conversation().conversation_stats.get_combined_metrics().get_snapshot()
+        assert usage.accumulated_token_usage is not None
+        assert usage.accumulated_token_usage.prompt_tokens == 22
+        assert usage.accumulated_token_usage.completion_tokens == 14
+        assert usage.accumulated_cost == pytest.approx(0.02)
+    finally:
+        barrier.abort()
+        backend.close()
+    empty = TestLLM.from_messages([])
+    restored = OpenHandsSdkBackend(
+        profile=_local_profile(),
+        workspace=tmp_path / "workspace",
+        skills_dir=tmp_path / "skills",
+        persistence_dir=tmp_path / "openhands",
+        conversation_key="parallel-conformance",
+        specialist_catalog=_specialist_catalog(),
+        review_batch_authorizer=authorize if scoped else None,
+        env={},
+        conversation_factory=_conversation_factory(
+            tmp_path,
+            empty,
+            tools=[_specialist_tool(structured_reviews=True)],
+            tool_concurrency_limit=1 if scoped else workers,
+            conversation_id=conversation_id,
+        ),
+    )
+    try:
+        replayed = restored.reconcile(session_id="session-1", known_source_event_ids=frozenset())
+        assert [
+            event.subagent
+            for event in replayed
+            if isinstance(event, BackendSubagentEvent)
+            and event.subagent.status
+            in {BackendSubagentStatus.COMPLETED, BackendSubagentStatus.ERROR}
+        ] == terminal
+        assert empty.call_count == 0
+        assert authorizations == ([("review-0", "review-1")] if scoped else [])
+        assert calls == 2
+        restored_usage = (
+            restored._get_conversation().conversation_stats.get_combined_metrics().get_snapshot()
+        )
+        assert restored_usage.accumulated_token_usage == usage.accumulated_token_usage
+        assert restored_usage.accumulated_cost == usage.accumulated_cost
+    finally:
+        restored.close()
+
+
+@pytest.mark.parametrize("decision", ["reject", "revoked"])
+def test_scoped_review_denial_never_starts_a_child(tmp_path: Path, decision: str) -> None:
+    messages = [
+        _task_message(
+            f"denied-{index}",
+            description="Review evidence",
+            prompt="Review the supplied synthetic evidence.",
+            specialist_id=reviewer,
+        )
+        for index, reviewer in enumerate(("data-quality-reviewer", "statistical-reviewer"))
+    ]
+    llm = TestLLM.from_messages(
+        [
+            Message(
+                role="assistant",
+                content=[],
+                tool_calls=[call for message in messages for call in message.tool_calls or []],
+            )
+        ]
+    )
+    checks: list[tuple[str, ...]] = []
+
+    def authorize(actions: Sequence[ActionEvent]) -> ParallelReviewPlan | None:
+        checks.append(tuple(action.tool_call_id for action in actions))
+        raise ValueError("The scoped review authorization expired")
+
+    backend = OpenHandsSdkBackend(
+        profile=_local_profile(),
+        workspace=tmp_path / "workspace",
+        skills_dir=tmp_path / "skills",
+        persistence_dir=tmp_path / "openhands",
+        conversation_key="denied-parallel-review",
+        specialist_catalog=_specialist_catalog(),
+        review_batch_authorizer=authorize,
+        env={},
+        conversation_factory=_conversation_factory(
+            tmp_path, llm, tools=[_specialist_tool(structured_reviews=True)]
+        ),
+    )
+    try:
+        backend._register_specialized_agents()
+        backend.submit_turn(session_id="session-1", prompt="Review synthetic evidence")
+        group = _wait_for_pending_group(backend)
+        assert len(group.actions) == 2
+        assert checks == []
+        backend.resolve_confirmation(
+            session_id="session-1", action_group_id=group.group_id, approved=decision == "revoked"
+        )
+        if decision == "revoked":
+            _wait_for_lifecycle(backend, BackendLifecycle.ERROR)
+        assert checks == ([("denied-0", "denied-1")] if decision == "revoked" else [])
+        assert llm.call_count == 1
+        events = backend.reconcile(session_id="session-1", known_source_event_ids=frozenset())
+        assert not any(
+            isinstance(event, BackendSubagentEvent)
+            and event.subagent.status
+            in {BackendSubagentStatus.RUNNING, BackendSubagentStatus.COMPLETED}
+            for event in events
+        )
+    finally:
+        backend.close()
+
+
+@pytest.mark.parametrize("task_count", [2, 3])
+@pytest.mark.parametrize("scoped", [False, True])
+def test_parent_pause_interrupts_both_native_specialist_model_calls(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    task_count: int,
+    scoped: bool,
+    parallel_review_plan: ParallelReviewPlan,
+) -> None:
+    started = 0
+    stopped = 0
+    lock = Lock()
+    both_started = Event()
+    both_stopped = Event()
+    complete = TestLLM.acompletion
+    reviewers = ("data-quality-reviewer", "statistical-reviewer", "reproducibility-reviewer")[
+        :task_count
+    ]
+    plan = parallel_review_plan.model_copy(
+        update={"scope": parallel_review_plan.scope.model_copy(update={"reviewer_ids": reviewers})}
+    )
+
+    async def wait_for_interrupt(
+        llm: TestLLM,
+        messages: list[Message],
+        tools: Sequence[ToolDefinition[Action, Observation]] | None = None,
+        add_security_risk_prediction: bool = False,
+        on_token: AnyTokenCallbackType | None = None,
+        call_context: LLMCallContext | None = None,
+        **kwargs: object,
+    ) -> LLMResponse:
+        nonlocal started, stopped
+        if any(tool.name == "task" for tool in tools or []):
+            return await complete(
+                llm,
+                messages=messages,
+                tools=tools,
+                add_security_risk_prediction=add_security_risk_prediction,
+                on_token=on_token,
+                call_context=call_context,
+                **kwargs,
+            )
+        with lock:
+            started += 1
+            if started == 2:
+                both_started.set()
+        try:
+            await asyncio.sleep(30)
+            raise AssertionError("Specialist model request was not cancelled")
+        finally:
+            with lock:
+                stopped += 1
+                if stopped == 2:
+                    both_stopped.set()
+
+    monkeypatch.setattr(TestLLM, "acompletion", wait_for_interrupt)
+    messages = [
+        _task_message(
+            f"pause-{index}",
+            description="Review evidence",
+            prompt="Synthetic review",
+            specialist_id=reviewer,
+        )
+        for index, reviewer in enumerate(reviewers)
+    ]
+    llm = TestLLM.from_messages(
+        [
+            Message(
+                role="assistant",
+                content=[],
+                tool_calls=[call for message in messages for call in (message.tool_calls or [])],
+            ),
+        ]
+    )
+    conversation_id = uuid.uuid4()
+    backend = OpenHandsSdkBackend(
+        profile=_local_profile(),
+        workspace=tmp_path / "workspace",
+        skills_dir=tmp_path / "skills",
+        persistence_dir=tmp_path / "openhands",
+        conversation_key="parallel-interrupt",
+        specialist_catalog=_specialist_catalog(),
+        review_batch_authorizer=(lambda _: plan) if scoped else None,
+        env={},
+        conversation_factory=_conversation_factory(
+            tmp_path,
+            llm,
+            tools=[_specialist_tool(structured_reviews=True)],
+            tool_concurrency_limit=1 if scoped else 2,
+            conversation_id=conversation_id,
+        ),
+    )
+    try:
+        backend._register_specialized_agents()
+        backend.submit_turn(session_id="session-1", prompt="Review the synthetic evidence.")
+        group = _wait_for_pending_group(backend)
+        backend.resolve_confirmation(
+            session_id="session-1", action_group_id=group.group_id, approved=True
+        )
+        assert both_started.wait(5)
+        events = backend.pause(session_id="session-1")
+        assert both_stopped.wait(5)
+        assert not backend._run_active()
+        assert any(
+            isinstance(event, BackendLifecycleEvent) and event.lifecycle == BackendLifecycle.PAUSED
+            for event in events
+        )
+        assert llm.call_count == 1
+        assert started == stopped == 2
+    finally:
+        backend.close()
+    empty = TestLLM.from_messages([])
+    restored = OpenHandsSdkBackend(
+        profile=_local_profile(),
+        workspace=tmp_path / "workspace",
+        skills_dir=tmp_path / "skills",
+        persistence_dir=tmp_path / "openhands",
+        conversation_key="parallel-interrupt",
+        specialist_catalog=_specialist_catalog(),
+        review_batch_authorizer=(lambda _: plan) if scoped else None,
+        env={},
+        conversation_factory=_conversation_factory(
+            tmp_path,
+            empty,
+            tools=[_specialist_tool(structured_reviews=True)],
+            tool_concurrency_limit=1 if scoped else 2,
+            conversation_id=conversation_id,
+        ),
+    )
+    try:
+        restored.reconcile(session_id="session-1", known_source_event_ids=frozenset())
+        assert empty.call_count == 0
+        assert started == stopped == 2
+    finally:
+        restored.close()
+
+
+@pytest.mark.parametrize("during_initialization", [False, True])
+def test_prepared_specialist_does_not_restart_after_parent_pause(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, during_initialization: bool
+) -> None:
+    from openhands.sdk.conversation.cancellation import CancellationToken
+
+    from heartwood.gateway._specialist_task import _InterruptibleSpecialistConversation
+
+    llm = TestLLM.from_messages([_assistant_message("This cancelled child must not run.")])
+    child = _InterruptibleSpecialistConversation(
+        agent=Agent(llm=llm, tools=[]),
+        workspace=tmp_path / "workspace",
+        persistence_dir=tmp_path / "openhands",
+        profile_store_dir=tmp_path / "profiles",
+        visualizer=None,
+    )
+    token = CancellationToken()
+    child._parent_cancel_token = token
+    try:
+        cast(BaseConversation, child).send_message("Review only the supplied synthetic evidence.")
+        if during_initialization:
+            started = Event()
+            release = Event()
+
+            def initialize() -> None:
+                started.set()
+                assert release.wait(5)
+
+            monkeypatch.setattr(child, "_ensure_agent_ready", initialize)
+
+            async def cancel_initialization() -> None:
+                task = asyncio.create_task(child.arun())
+                try:
+                    assert await asyncio.to_thread(started.wait, 2)
+                    token.cancel()
+                    child.interrupt()
+                    await asyncio.wait_for(task, timeout=2)
+                finally:
+                    release.set()
+
+            asyncio.run(cancel_initialization())
+        else:
+            token.cancel()
+            child.interrupt()
+            child.run()
+        assert llm.call_count == 0
+        assert child.state.execution_status == ConversationExecutionStatus.PAUSED
+        assert child._arun_task is None
+    finally:
+        child.close()
+
+
+def test_structured_specialist_plain_prose_cannot_replace_review_proposals(tmp_path: Path) -> None:
+    llm = TestLLM.from_messages(
+        [
+            _task_message(
+                "review-call",
+                description="Review analysis",
+                prompt="Review supplied source",
+                specialist_id="cohort-feature-reviewer",
+            ),
+            _assistant_message("The review definitely passed. No structured evidence is provided."),
+            _assistant_message("The specialist failed to supply its required review."),
+        ]
+    )
+    backend = OpenHandsSdkBackend(
+        profile=_local_profile(),
+        workspace=tmp_path / "workspace",
+        skills_dir=tmp_path / "skills",
+        persistence_dir=tmp_path / "openhands",
+        conversation_key="missing-review",
+        specialist_catalog=_specialist_catalog(),
+        env={},
+        conversation_factory=_conversation_factory(
+            tmp_path,
+            llm,
+            tools=[_specialist_tool(structured_reviews=True)],
+        ),
+    )
+    backend._register_specialized_agents()
+    try:
+        backend.submit_turn(session_id="session-1", prompt="Review analysis")
+        group = _wait_for_pending_group(backend)
+        backend.resolve_confirmation(
+            session_id="session-1", action_group_id=group.group_id, approved=True
+        )
+        events = _wait_for_lifecycle(backend, BackendLifecycle.FINISHED)
+        reviews = [event.subagent for event in events if isinstance(event, BackendSubagentEvent)]
+        assert any(item.status == BackendSubagentStatus.ERROR for item in reviews)
+        assert all(item.review_proposals is None for item in reviews)
+        assert "review definitely passed" not in repr(events)
+    finally:
+        backend.close()
 
 
 def test_translation_reports_analyzed_risk_and_nonzero_exit() -> None:
@@ -3509,6 +4178,7 @@ def _conversation_factory(
     persistence_dir: Path | None = None,
     workspace: Path | None = None,
     skills: list[Skill] | None = None,
+    tool_concurrency_limit: int = 1,
 ) -> ConversationFactory:
     def factory(
         callback: Callable[[OpenHandsEvent], None],
@@ -3521,7 +4191,7 @@ def _conversation_factory(
             tools=tools,
             agent_context=_agent_context([] if skills is None else skills),
             enable_switch_llm_tool=False,
-            tool_concurrency_limit=1,
+            tool_concurrency_limit=tool_concurrency_limit,
         )
         conversation = LocalConversation(
             agent=settings.create_agent(),
@@ -3821,7 +4491,38 @@ def _specialist_catalog() -> SpecialistCatalog:
     )
 
 
-def _specialist_tool() -> Tool:
+def _specialist_result(summary: str, structured: bool) -> Message:
+    if not structured:
+        return _assistant_message(summary)
+    return Message(
+        role="assistant",
+        content=[],
+        tool_calls=[
+            MessageToolCall(
+                id="review-finish",
+                name="finish",
+                origin="completion",
+                arguments=json.dumps(
+                    {
+                        "message": summary,
+                        "candidates": [
+                            {
+                                "candidate_id": "syntax-1",
+                                "condition": "python-source-invalid",
+                                "category": "coding",
+                                "severity": "high",
+                                "summary": "The supplied synthetic source is incomplete.",
+                                "artifact_ids": ["program"],
+                            }
+                        ],
+                    }
+                ),
+            )
+        ],
+    )
+
+
+def _specialist_tool(*, structured_reviews: bool = False) -> Tool:
     return Tool(
         name=HeartwoodSpecialistToolSet.name,
         params={
@@ -3832,7 +4533,8 @@ def _specialist_tool() -> Tool:
                     "description": role.definition.description,
                 }
                 for role in _specialist_catalog().available_roles
-            ]
+            ],
+            "structured_reviews": structured_reviews,
         },
     )
 

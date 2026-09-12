@@ -131,6 +131,7 @@ def test_readiness_reports_real_aggregate_problems_without_silently_cleaning() -
         ("missing_by_column", {}),
         ("invalid_by_column", {}),
         ("arm_counts", {"A": 6, "B": 6}),
+        ("arm_counts", {"A": 4, "B": 4}),
         ("row_count", True),
         ("missing_by_column", {"measurement": -1}),
     ],
@@ -144,7 +145,12 @@ def test_readiness_rejects_inaccurate_or_invalid_counts(field: str, value: objec
 
 
 @pytest.mark.parametrize(
-    ("field", "value"), [("leakage_columns", []), ("ready_for_analysis", True)]
+    ("field", "value"),
+    [
+        ("leakage_columns", []),
+        ("leakage_columns", ["future_response (measured after the outcome)"]),
+        ("ready_for_analysis", True),
+    ],
 )
 def test_readiness_rejects_unsupported_readiness_claim(field: str, value: object) -> None:
     artifacts = _readiness()

@@ -203,10 +203,21 @@ from heartwood.schemas.experiments import (
     ExperimentExport,
     ExperimentExportBinding,
 )
+from heartwood.schemas.parallel_reviews import ParallelReviewPlan
+from heartwood.schemas.python_environment import PythonEnvironmentSnapshot
+from heartwood.schemas.review import (
+    ResearchReviewRun,
+    ReviewAssessment,
+    ReviewCorrectionAssessment,
+    ReviewCorrectionPlan,
+    ReviewSnapshot,
+    ReviewSubmission,
+)
 from heartwood.schemas.workflows import (
     WorkflowCatalog,
     WorkflowOutcomeStatus,
     WorkflowProjectBinding,
+    WorkflowRun,
     WorkflowStageEvaluation,
 )
 from heartwood.session import CommandKind, EventKind, SessionCommand, SessionEvent
@@ -218,6 +229,7 @@ from heartwood.skills import (
 )
 
 if TYPE_CHECKING:
+    from heartwood.gateway._research_evaluation import ParallelReviewPreparer
     from heartwood.gateway._specialists import SpecialistCatalog
 
 _RESERVED_MODEL_PROFILE_IDS = {"heartwood"}
@@ -424,6 +436,7 @@ class SessionGateway:
         subscription_provider: SubscriptionProvider | None = None,
         workspace_inspector: WorkspaceInspector | None = None,
         skill_source_registry: SkillSourceRegistry | None = None,
+        parallel_review_preparer: ParallelReviewPreparer | None = None,
         backend_id: str = "auto",
     ) -> None:
         prepare_openhands_import()
@@ -431,6 +444,15 @@ class SessionGateway:
         self.sessions_root = self.project.sessions_dir
         self.env = dict(os.environ if env is None else env)
         self.backend_id = backend_id
+        from heartwood.gateway._review_qualification import QUALIFICATION_ENV
+
+        qualification_path = self.env.get(QUALIFICATION_ENV)
+        if parallel_review_preparer is not None and qualification_path is not None:
+            raise ValueError("Configure only one deployment review evidence source")
+        self._review_qualification_path = Path(qualification_path) if qualification_path else None
+        self._parallel_review_preparer = parallel_review_preparer or (
+            self._qualified_review_preparer if self._review_qualification_path is not None else None
+        )
         self._checkpoint_signer_registry_override = checkpoint_signer_registry
         self._checkpoint_signer_registry_cache: CheckpointSignerRegistry | None = None
         self._checkpoint_signer_factory = checkpoint_signer_factory
@@ -967,9 +989,76 @@ class SessionGateway:
     @_serialized_state
     def evaluation_observation(self, *, session_id: str) -> EvaluationRuntimeObservation:
         """Capture the session's client runtime, distinct from declared server metadata."""
+        return self._evaluation_observation(self._service(session_id))
+
+    @_serialized_state
+    def bind_evaluation_observer(
+        self, *, session_id: str
+    ) -> Callable[[str], EvaluationRuntimeObservation]:
+        """Bind a read-only observer for admission callbacks in an already owned session.
+
+        Calling the returned reader does not acquire gateway or session command
+        locks. Replacing or closing the service revokes it; observation neither
+        acquires ownership nor grants authority to execute work.
+        """
+        service = self._service(session_id)
+
+        return self._owned_evaluation_observer(session_id, service)
+
+    def _owned_evaluation_observer(
+        self, session_id: str, service: SessionService
+    ) -> Callable[[str], EvaluationRuntimeObservation]:
+        """Construct an observation capability without acquiring locks or session ownership."""
+
+        def owned() -> bool:
+            return self._services.get(session_id) is service and service.store.owns_writer
+
+        if not owned():
+            raise ValueError("Runtime observation requires an owned session")
+
+        def observe(requested_session_id: str) -> EvaluationRuntimeObservation:
+            if requested_session_id != session_id or not owned():
+                raise ValueError("Runtime observation no longer owns the requested session")
+            result = self._evaluation_observation(service)
+            if not owned():
+                raise ValueError("Session ownership changed during runtime observation")
+            return result
+
+        return observe
+
+    def _qualified_review_preparer(
+        self, run: WorkflowRun, snapshot: ReviewSnapshot, session_id: str, now: datetime
+    ) -> ParallelReviewPlan:
+        """Reassess deployment evidence without reentering gateway or native agent locks."""
+        from heartwood.gateway._review_qualification import (
+            load_review_qualifications,
+            qualified_review_plan,
+        )
+
+        service = self._services.get(session_id)
+        path = self._review_qualification_path
+        if service is None or path is None:
+            raise ValueError("Qualified review requires its owned runtime and deployment evidence")
+        observe = self._owned_evaluation_observer(session_id, service)
+        runtime = observe(session_id)
+        result = qualified_review_plan(
+            evidence=load_review_qualifications(path, project_root=self.project.root),
+            project_root=self.project.root,
+            run=run,
+            snapshot=snapshot,
+            session_id=session_id,
+            runtime=runtime,
+            now=now,
+        )
+        if observe(session_id) != runtime:
+            raise ValueError("Review runtime changed while reading deployment evidence")
+        return result
+
+    @staticmethod
+    def _evaluation_observation(service: SessionService) -> EvaluationRuntimeObservation:
+        """Read one service's actual configuration without entering gateway state machinery."""
         from heartwood.gateway._openhands_sdk import OpenHandsSdkBackend
 
-        service = self._service(session_id)
         policy = json.dumps(
             service.policy_profile.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
         )
@@ -1001,6 +1090,53 @@ class SessionGateway:
         from heartwood.gateway._research_evaluation import ResearchStageEvaluator
 
         return ResearchStageEvaluator.catalog()
+
+    def verification_environment(self, *, python: str | None = None) -> PythonEnvironmentSnapshot:
+        """Inspect server Python or an explicitly selected interpreter, without project writes."""
+        from heartwood.gateway.python_environment import inspect_verification_environment
+
+        if python is None:
+            return inspect_verification_environment()
+        executable = Path(python).expanduser()
+        if not executable.is_absolute():
+            executable = self.project.root / executable
+        return inspect_verification_environment(executable)
+
+    @_serialized_state
+    def prepare_research_review(self, artifacts: Mapping[str, str]) -> ReviewSnapshot:
+        """Capture explicitly selected review context without model work or state mutation."""
+        from heartwood.gateway._research_review import ResearchReviewEvaluator
+
+        return ResearchReviewEvaluator(self.workspace_inspector).prepare(artifacts)
+
+    @_serialized_state
+    def assess_research_review(
+        self, snapshot: ReviewSnapshot, submissions: Sequence[ReviewSubmission]
+    ) -> ReviewAssessment:
+        """Independently assess associated reviewer proposals without authorizing corrections."""
+        from heartwood.gateway._research_review import ResearchReviewEvaluator
+
+        return ResearchReviewEvaluator(self.workspace_inspector).assess(snapshot, submissions)
+
+    @_serialized_state
+    def prepare_research_correction(
+        self, review: ResearchReviewRun, *, output_directory: str
+    ) -> ReviewCorrectionPlan:
+        """Declare fresh outputs for verified defects; do not allocate or authorize execution."""
+        from heartwood.gateway._research_review import ResearchReviewEvaluator
+
+        return ResearchReviewEvaluator(self.workspace_inspector).prepare_correction(
+            review, output_directory=output_directory
+        )
+
+    @_serialized_state
+    def assess_research_correction(
+        self, review: ResearchReviewRun, plan: ReviewCorrectionPlan
+    ) -> ReviewCorrectionAssessment:
+        """Recheck declared correction bytes without attesting execution or scientific validity."""
+        from heartwood.gateway._research_review import ResearchReviewEvaluator
+
+        return ResearchReviewEvaluator(self.workspace_inspector).assess_correction(review, plan)
 
     @_serialized_state
     def experiment_records(self) -> ExperimentCollection:
@@ -1071,6 +1207,7 @@ class SessionGateway:
                 streaming_text=self._streaming_text.get(session_id, ""),
                 stream_epoch=self._stream_epoch,
                 stream_revision=self._stream_revisions.get(session_id, 0),
+                parallel_reviews_available=self._parallel_review_preparer is not None,
             )
 
     @_serialized_state
@@ -2171,13 +2308,16 @@ class SessionGateway:
             selected_model=configuration.local_model,
             session_id=session_id,
         )
-        return SessionService.local_default(
+        service = SessionService.local_default(
             self.sessions_root,
             session_id=session_id,
             backend=backend,
             policy_profile=configuration.policy_profile,
             env=self.env,
-            workflow_evaluator=ResearchStageEvaluator(self.workspace_inspector),
+            workflow_evaluator=ResearchStageEvaluator(
+                self.workspace_inspector,
+                parallel_review_preparer=self._parallel_review_preparer,
+            ),
             event_sink=lambda events: self._publish_background_events(
                 session_id=session_id,
                 events=events,
@@ -2187,6 +2327,13 @@ class SessionGateway:
                 delta=delta,
             ),
         )
+        if self._parallel_review_preparer is not None:
+            from heartwood.gateway._openhands_sdk import OpenHandsSdkBackend
+            from heartwood.gateway._workflow_review_execution import bind_workflow_review_execution
+
+            if isinstance(backend, OpenHandsSdkBackend):
+                bind_workflow_review_execution(backend, service)
+        return service
 
     def _storage_service(self, session_id: str) -> SessionService:
         """Build an uncached service for commands that only access durable state."""
@@ -2199,7 +2346,10 @@ class SessionGateway:
             backend=_UnconfiguredAgentBackend(configuration.action_settings.confirmation_mode),
             policy_profile=configuration.policy_profile,
             env=self.env,
-            workflow_evaluator=ResearchStageEvaluator(self.workspace_inspector),
+            workflow_evaluator=ResearchStageEvaluator(
+                self.workspace_inspector,
+                parallel_review_preparer=self._parallel_review_preparer,
+            ),
         )
 
     def _backend(
@@ -2384,6 +2534,7 @@ class SessionGateway:
                     streaming_text=self._streaming_text.get(session_id, ""),
                     stream_epoch=self._stream_epoch,
                     stream_revision=self._stream_revisions.get(session_id, 0),
+                    parallel_reviews_available=self._parallel_review_preparer is not None,
                 ),
             )
 

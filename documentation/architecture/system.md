@@ -42,6 +42,9 @@ Interfaces submit typed commands to the gateway.
 OpenHands work runs in a supervised background thread so an interface can send guidance, pause, resume, or review an action set while the task is active.
 Final messages, actions, lifecycle changes, task plans, usage snapshots, specialist lineage, and errors become typed durable events.
 Incremental token text is transient and is never appended to the session or audit log.
+Progress can expose a terminal lifecycle before native execution has released its worker slot.
+The adapter therefore emits a separate transient execution-settled signal after final reconciliation, and automatic review assessment waits for that boundary or an idle backend.
+This signal does not authorize a new turn, grant tool permission, or cause replay to resume execution.
 
 ### Interface Projections
 
@@ -87,6 +90,56 @@ Unsupported evaluators remain unverified rather than passing by default.
 The checks do not establish that an analysis is scientifically appropriate or replace researcher review.
 They neither launch an agent nor grant permission to advance stages or approve tools.
 Execution and recovery belong to the existing gateway and authoritative session command/event path, not a separate workflow persistence layer.
+
+### Independent Review Evidence
+
+Review proposals and independently verified findings have separate typed contracts.
+The proposal schema works with OpenHands' structured `FinishTool` and contains only advisory candidates.
+The caller attaches the review identity, reviewer, and evidence snapshot after parsing; these are not model-selected fields.
+The gateway binds explicitly selected project files to their exact content hashes and byte counts through the existing confined workspace reader.
+A submission references that snapshot; changed or unavailable context cannot support an actionable finding.
+Review identities reject conflicting retries, and equivalent conditions on the same evidence produce one finding with the original reviewer claims retained separately.
+
+The read-only verification service supports four bounded observations: analysis plans incompatible with the supported predictor, outcome, grouping, or split requirements; empty or syntactically invalid Python source; baseline results inconsistent with independent recomputation; and byte differences between declared original and reproduced artifacts.
+Unsupported conditions, invalid analysis prerequisites, and exhausted check limits remain unverified.
+Verified claims and their severity come from the maintained check, not from the model's explanation.
+A syntax check does not execute code, a byte comparison does not prove reproduction, and a matching numerical result does not establish scientific appropriateness.
+
+These assessments are observations, not action permissions or proof that files remain unchanged afterward.
+The service does not execute corrections, start a reviewer, persist session transitions, or authenticate a model-supplied reviewer identity.
+Its caller owns the association between a submission and the actual reviewer; detailed proposals belong to scientific review context, not the content-minimized security audit.
+
+Research workflow conversations configure their advisory specialists with the same structured proposal schema and supported-condition guidance.
+The existing Task adapter captures the public structured response before OpenHands closes the child and retains it in the parent's typed task observation.
+Missing or malformed structured results are task failures, even if the specialist's prose claims success.
+Ordinary conversations retain unstructured specialist summaries.
+The existing session event journal and shared projection preserve proposals and native task lineage across replay without repeating model work.
+Terminal, browser, and notebook presentations explicitly distinguish these unverified proposals from independently assessed findings.
+
+Explicit workflow review commands capture the declared stage files before model dispatch and record that intent through the existing command receipt and paired journal.
+The gateway associates completed proposals only with selected native tasks that were proposed within that review and belong to the same session.
+It re-reads the captured evidence for independent assessment; changed conversation context invalidates the association.
+Serialized backend event handling assesses a settled review automatically through the same paired journal, without another model call or an interface command.
+Reconciliation can finish an interrupted assessment from retained evidence without repeating reviewer work.
+The automatic result references the initiating review command and identifies the gateway as its actor.
+Assessment is read-only and runs even after the work budget expires, while further model work and stage acceptance remain budget-gated.
+The shared workflow projection retains the review state and findings, and the security audit retains a digest of the review record rather than its file paths or findings.
+An advisory review does not replace stage checks, authorize corrections, or turn the reviewer's finish status into the original stage's outcome.
+
+Correction evidence uses separate, explicitly declared output paths while preserving every file in the reviewed snapshot.
+The gateway's read-only correction planner recomputes the original assessment before selecting repairable outputs from the maintained verifier registry.
+It refuses stale reviews, unsupported findings, existing destinations, and destinations overlapping reviewed files.
+The rechecker applies the same independent validators to the new files and their unchanged dependencies.
+A `not_observed` result means only that the original bounded defect was not observed in those bytes; it does not establish execution, successful reproduction, or scientific correctness.
+For artifact comparisons, only the reproduced copy is replaceable, never the original reference.
+These planning and inspection APIs neither start model work nor grant approval or advance a workflow stage.
+They validate content and declared associations; authenticated task lineage still requires the owning session journal.
+
+Workflow bindings retain a resolved project-relative path for every declared artifact.
+Stage prompts, independent checks, reproduction instructions, provenance, and interface artifact links use that same map rather than reconstructing locations from the catalog.
+The initial output directory is a preparation default, not an alternative source of current file locations.
+A proposed correction binding may replace only the unaccepted stage's declared outputs after a fresh recheck; it preserves all input and earlier-stage bindings.
+Constructing that candidate binding does not mutate the run or bypass the stage's ordinary checks and researcher acceptance.
 
 ### Journaled Stage Execution
 
@@ -170,13 +223,16 @@ The selected platform adapter advertises supported ingress modes, while deployme
 ### OpenHands Adapter
 
 Gateway lifecycle startup imports the SDK before accepting concurrent browser requests, avoiding competing cold imports through the Skill and specialist catalogs.
+Approval requests are published only after native execution settles, so every interface receives the complete action group rather than a partially appended batch.
 This initializes modules only; model clients, conversations, and tool executors are created when agent work is requested.
 
 The adapter creates an OpenHands conversation with `OpenHandsAgentSettings`, the selected LiteLLM-compatible model profile, project workspace, Skills, persistence directory, and confirmation policy.
 It uses public typed OpenHands events and conversation state to derive lifecycle, unmatched actions, task progress, usage, and errors.
 OpenHands' privacy-safe failure classifications are translated into stable Heartwood diagnostics, and raw conversation-error detail is minimized at the OpenHands file-store boundary before persistence.
-OpenHands owns the agent loop, conversation persistence, coding tools, Task Tracker, and sequential specialist execution.
+OpenHands owns the agent loop, conversation persistence, coding tools, Task Tracker, and specialist execution.
 The gateway supplies a catalog-scoped Task adapter that reuses OpenHands orchestration while rejecting agents outside the executable catalog, supervising child interruption, and applying the same content-minimized persistence policy to parent and child conversations.
+Specialist conversations use OpenHands' asynchronous run API inside its blocking Task worker so interruption can cancel active model I/O.
+The adapter reads running children from the native task manager rather than maintaining a separate active-child registry, and attempts interruption of every running child even if one reports an error.
 Heartwood translates that state into its stable event contract instead of maintaining a parallel agent loop or pending-action cache.
 Persisted non-token progress is reconciled while a run is active, while raw token deltas remain transient.
 The gateway's bounded idle wait includes final worker callbacks, not only the SDK's reported lifecycle or the availability of its execution slot.
@@ -186,7 +242,28 @@ Standard provider routes use OpenHands' LiteLLM-backed LLM interface.
 ChatGPT account access uses OpenHands' native subscription registry, OAuth credential store and refresh, and Codex Responses API transport without a Heartwood token implementation.
 
 The default tool contract enables the OpenHands terminal, project file editor, Task Tracker, and sequential Task tool.
-Tool concurrency is one, model switching and Model Context Protocol servers are disabled, and critic refinement is disabled unless a future reviewed contract enables them.
+Global tool concurrency is one, model switching and Model Context Protocol servers are disabled, and critic refinement is disabled.
+
+The adapter can bind an optional gateway-owned authorizer for structured advisory Task batches.
+The authorizer must recheck qualification and record exact action identities before returning a scoped review plan; it is not exposed as model input or an interface eligibility flag.
+The adapter checks the native tool and executor types, selected roles, distinct action identities, and absence of task resumption before using OpenHands' bounded `ParallelToolExecutor`.
+Terminal, editor, mixed, unconfigured, and ordinary Task batches retain sequential execution.
+There is no separate worker pool, agent loop, pending-action cache, or usage ledger.
+Each usage projection takes one temporary snapshot of OpenHands metrics so a completing child cannot change the metric collection between per-purpose rows and totals.
+Slow authorization runs off the agent event loop so cancellation can prevent dispatch while shared storage is being checked.
+Prepared children retain the parent's native cancellation token and check it before asynchronous startup, preventing a pre-start pause from being mistaken for permission to resume.
+The normal grouped-action policy still applies before this execution boundary; qualification does not approve actions.
+
+`SessionGateway` accepts a deployment-owned parallel-review preparer and binds it to the existing workflow evaluator and native adapter.
+Without that preparer, the default factory does not enable parallel review controls or execution.
+Standard deployments can supply `HEARTWOOD_REVIEW_QUALIFICATIONS` to use the built-in preparer over an operator-owned retained-evidence file outside the project.
+The same gateway configuration serves terminal, browser, and notebook sessions; no interface can install qualification evidence.
+See [Qualify Parallel Reviews](../operate/parallel-reviews.md) for preparation and trust boundaries.
+The preparer must assess trusted evidence against the current route; it is not a project setting or a model-supplied eligibility claim.
+The workflow first journals a preview, then exact researcher consent, and finally native action admission through the same paired session and audit journal.
+Qualification I/O runs outside the session command lock; dispatch then rechecks cancellation, ownership, workflow state, expiry, files, and remaining work limits.
+This protects session transitions but does not provide a filesystem transaction against external programs changing project files.
+The gateway supplies one review-execution summary and exact revision-bound controls to the terminal, browser, and notebook.
 
 ### Research Specialist Catalog
 
@@ -195,7 +272,7 @@ Heartwood validates presentation metadata, model inheritance, confirmation mode,
 It injects verified OpenHands `Skill` objects directly and disables user, public, and project Skill discovery for child agents.
 
 The enabled planning and review roles are advisory and tool-free.
-They inherit the parent's model route, run sequentially through OpenHands, and receive only the evidence delegated by the parent agent.
+They inherit the parent's model route, run sequentially by default through OpenHands, and receive only the evidence delegated by the parent agent.
 Heartwood projects OpenHands Task lifecycle, lineage, result, failure, and combined usage into the same gateway-owned session view used by every interface.
 It does not add a scheduler, child-agent loop, conversation store, or role-specific interface reducer.
 

@@ -8,7 +8,7 @@ SPDX-License-Identifier: MIT
 
 Research specialists give the parent agent a focused second pass for one part of a research task.
 They run through OpenHands, use the active model connection, and return their result to the parent conversation.
-Heartwood runs one specialist at a time and keeps the lifecycle, lineage, usage, and final result in the same session used by every interface.
+Heartwood runs one specialist at a time by default and keeps the lifecycle, lineage, usage, and final result in the same session used by every interface.
 Each delegation is a fresh bounded review; ask the parent agent to start another review when the evidence changes.
 
 ## Available Reviews
@@ -36,11 +36,22 @@ Before changing files, ask the Research Planner to identify the inputs, assumpti
 When the parent agent delegates the task, Heartwood presents the OpenHands Task action in the complete pending action set.
 Review the specialist name and delegated objective before allowing the set.
 After the specialist finishes, its result returns to the parent agent, which decides how to continue.
+Use **Pause** to request cancellation of active specialist work.
+Cancellation does not undo completed actions or guarantee that the model provider stops processing or billing an already accepted request.
 
 Specialist output is model-generated review, not independent scientific validation.
 Inspect the evidence and apply the same domain, statistical, and reproducibility review required for manually produced work.
 
+In a research workflow, specialists can return structured review proposals alongside their summary.
+These appear as **Unverified review proposals** in the browser, terminal status, and notebook view.
+A proposal identifies something to check; it does not establish a defect or authorize a correction.
+No proposals is also not proof that the analysis is correct.
+If a specialist cannot supply its required structured result, Heartwood reports the task as failed rather than accepting a success claim from its summary.
+
 ## Inspect the Catalog
+
+For workflow stages with multiple reviewers, a deployment may offer a qualified [parallel review](research-workflows.md#parallel-reviews).
+This does not give specialists additional tools or permission to change files.
 
 In the terminal, run `heartwood specialists` before opening a session or enter `/specialists` inside one.
 

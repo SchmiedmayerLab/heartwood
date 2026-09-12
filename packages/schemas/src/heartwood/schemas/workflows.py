@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from pathlib import PurePosixPath
 from typing import Annotated, Literal, Self
 
 from pydantic import (
@@ -23,10 +24,14 @@ from pydantic import (
     model_validator,
 )
 
+from heartwood.schemas.artifacts import ResearchArtifactPath
 from heartwood.schemas.execution import ExecutionBudget, ExecutionUsage
+from heartwood.schemas.identifiers import WorkflowIdentifier as WorkflowIdentifier
+from heartwood.schemas.parallel_reviews import ReviewExecutionPlan
 from heartwood.schemas.project_paths import project_relative_path
+from heartwood.schemas.python_environment import PythonExecutable
+from heartwood.schemas.review import ResearchCorrectionRun, ResearchReviewRun
 
-type WorkflowIdentifier = Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9_.-]{0,127}$")]
 type WorkflowText = Annotated[
     str, StringConstraints(strip_whitespace=True, min_length=1, max_length=8000)
 ]
@@ -130,6 +135,17 @@ class WorkflowDefinition(WorkflowRecord):
             if stage.stage_id == stage_id:
                 return stage
         raise ValueError("Unknown workflow stage")
+
+    def bind_artifacts(self, output_directory: str) -> tuple[ResearchArtifactPath, ...]:
+        """Resolve initial locations once, before the workflow enters the session journal."""
+        project_relative_path(output_directory, allow_root=False)
+        return tuple(
+            ResearchArtifactPath(
+                artifact_id=item.artifact_id,
+                path=str(PurePosixPath(output_directory) / item.relative_path),
+            )
+            for item in self.artifacts
+        )
 
     @model_validator(mode="after")
     def coherent_data_flow(self) -> Self:
@@ -235,10 +251,21 @@ class WorkflowBoundInput(WorkflowRecord):
 class WorkflowProjectBinding(WorkflowRecord):
     """Project-relative inputs and output location; never an external workspace root."""
 
+    model_config = ConfigDict(revalidate_instances="always")
+
     workflow_id: WorkflowIdentifier
     workflow_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
     output_directory: str = Field(min_length=1, max_length=512)
+    python_executable: PythonExecutable | None = None
     inputs: tuple[WorkflowBoundInput, ...] = Field(min_length=1, max_length=32)
+    artifacts: tuple[ResearchArtifactPath, ...] = Field(min_length=1, max_length=64)
+
+    def artifact_path(self, artifact_id: str) -> str:
+        """Resolve a recorded artifact; never guess a path from its display metadata."""
+        for item in self.artifacts:
+            if item.artifact_id == artifact_id:
+                return item.path
+        raise ValueError("Unknown bound artifact")
 
     @model_validator(mode="after")
     def safe_binding(self) -> Self:
@@ -246,6 +273,18 @@ class WorkflowProjectBinding(WorkflowRecord):
         project_relative_path(self.output_directory, allow_root=False)
         if len({item.input_id for item in self.inputs}) != len(self.inputs):
             raise ValueError("Workflow input bindings must be unique")
+        if len({item.artifact_id for item in self.artifacts}) != len(self.artifacts):
+            raise ValueError("Workflow artifact bindings must be unique")
+        outputs = [PurePosixPath(item.path.casefold()) for item in self.artifacts]
+        inputs = [
+            PurePosixPath(item.value.casefold()) for item in self.inputs if item.kind == "file"
+        ]
+        for index, path in enumerate(outputs):
+            if any(
+                path == other or path in other.parents or other in path.parents
+                for other in (*outputs[index + 1 :], *inputs)
+            ):
+                raise ValueError("Workflow output paths must not overlap outputs or inputs")
         return self
 
 
@@ -269,9 +308,18 @@ class WorkflowStart(WorkflowRecord):
 class WorkflowTransition(WorkflowRecord):
     """Apply a transition only to the exact run and revision the researcher saw."""
 
-    action: Literal["run", "evaluate", "cancel"]
+    action: Literal["run", "evaluate", "cancel", "prepare-parallel-review"]
     run_id: str = Field(min_length=1)
     revision: int = Field(ge=0, strict=True)
+
+
+class WorkflowReviewRequest(WorkflowRecord):
+    """Request advisory review; parallel work requires the exact journaled preview."""
+
+    action: Literal["request-review"]
+    run_id: str = Field(min_length=1)
+    revision: int = Field(ge=0, strict=True)
+    parallel_review_fingerprint: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
 class WorkflowReview(WorkflowRecord):
@@ -284,17 +332,41 @@ class WorkflowReview(WorkflowRecord):
     approved: bool = Field(strict=True)
 
 
+class WorkflowCorrectionRequest(WorkflowRecord):
+    """Authorize bounded parent-agent corrections without approving their tool actions."""
+
+    action: Literal["correct"]
+    run_id: str = Field(min_length=1)
+    revision: int = Field(ge=0, strict=True)
+    maximum_attempts: int = Field(default=2, ge=1, le=3, strict=True)
+
+
 type WorkflowRequest = Annotated[
-    WorkflowStart | WorkflowTransition | WorkflowReview, Field(discriminator="action")
+    WorkflowStart
+    | WorkflowTransition
+    | WorkflowReviewRequest
+    | WorkflowReview
+    | WorkflowCorrectionRequest,
+    Field(discriminator="action"),
 ]
 
 
 class WorkflowControl(WorkflowRecord):
     """A presentation affordance carrying the exact revision-bound command to submit."""
 
-    control_id: Literal["run", "evaluate", "accept", "decline", "cancel"]
+    control_id: Literal[
+        "run",
+        "evaluate",
+        "accept",
+        "decline",
+        "cancel",
+        "request-review",
+        "correct",
+        "prepare-parallel-review",
+        "request-parallel-review",
+    ]
     label: WorkflowText
-    request: WorkflowTransition | WorkflowReview
+    request: WorkflowTransition | WorkflowReviewRequest | WorkflowReview | WorkflowCorrectionRequest
 
 
 class WorkflowRun(WorkflowRecord):
@@ -311,3 +383,32 @@ class WorkflowRun(WorkflowRecord):
     created_at: AwareDatetime
     stage_started_at: AwareDatetime | None = None
     stage_usage_baseline: ExecutionUsage | None = None
+    research_review: ResearchReviewRun | None = None
+    parallel_review_plan: ReviewExecutionPlan | None = None
+    corrections: tuple[ResearchCorrectionRun, ...] = Field(default=(), max_length=32)
+
+    @model_validator(mode="after")
+    def distinct_corrections(self) -> Self:
+        """Keep one explicitly authorized correction series per stage."""
+        if len({item.stage_id for item in self.corrections}) != len(self.corrections) or len(
+            {item.correction_id for item in self.corrections}
+        ) != len(self.corrections):
+            raise ValueError("Workflow correction identities and stages must be distinct")
+        plans = (
+            self.parallel_review_plan,
+            self.research_review.parallel_plan if self.research_review is not None else None,
+        )
+        for plan in plans:
+            if plan is not None and (
+                plan.scope.workflow_run_id != self.run_id
+                or plan.scope.workflow_id != self.binding.workflow_id
+                or plan.scope.stage_id != self.stage_id
+            ):
+                raise ValueError("Parallel review plan belongs to different workflow work")
+        if self.parallel_review_plan is not None and (
+            self.parallel_review_plan.scope.revision != self.revision
+            or self.research_review is not None
+            or self.phase not in {"running", "review", "blocked"}
+        ):
+            raise ValueError("Parallel preview must match the current unsubmitted stage revision")
+        return self

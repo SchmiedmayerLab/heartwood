@@ -73,7 +73,16 @@ export type CommandKind =
   | "audit.export"
   | "workflow";
 export type WorkflowIdentifier = string;
+export type ReviewCategory = "coding" | "statistical" | "reproducibility";
+export type ReviewSeverity = "low" | "medium" | "high" | "critical";
+export type ResearchText = string;
 export type WorkflowInputValue = string;
+export type PythonExecutable = string;
+export type ReviewVerification =
+  "verified" | "rejected" | "unsupported" | "stale" | "unavailable";
+export type Sha256 = string;
+export type EvaluationIdentifier = string;
+export type ReviewExecutionPlan = ParallelReviewPlan | ParallelReviewTrialPlan;
 export type WorkflowText = string;
 
 /**
@@ -96,6 +105,7 @@ export interface SessionProjection {
   pendingApproval: ProjectionApprovalGroup | null;
   researcherNotice: ProjectionResearcherNotice | null;
   researcherStatus: ProjectionResearcherStatus;
+  reviewExecution: ProjectionReviewExecution | null;
   revision: number;
   schema_version: "heartwood.session-projection.v1";
   sessionId: string;
@@ -280,6 +290,7 @@ export interface ExperimentEnvironment {
  * Association with the owning Heartwood session and research stage.
  */
 export interface ExperimentStage {
+  correction_id: Reference | null;
   session_id: Reference;
   stage_id: Reference;
   tool_call_id: Reference | null;
@@ -356,17 +367,78 @@ export interface ProjectionResearcherStatus {
   recoverable: boolean;
   tone: "neutral" | "progress" | "attention" | "success" | "danger";
 }
+/**
+ * One shared description of requested versus admitted advisory concurrency.
+ */
+export interface ProjectionReviewExecution {
+  budget: ExecutionBudget;
+  purpose: "qualified-review" | "qualification-trial";
+  reviewers: string[];
+  status:
+    | "preview"
+    | "authorized"
+    | "admitted"
+    | "assessed"
+    | "unavailable"
+    | "cancelled";
+  summary: string;
+  workers: number;
+}
+/**
+ * Observed admission limits, not a provider-side spending or preemption cap.
+ */
+export interface ExecutionBudget {
+  maximum_actions: number;
+  maximum_model_calls: number;
+  maximum_reported_cost_usd: number;
+  maximum_seconds: number;
+  maximum_tokens: number;
+}
 export interface ProjectionSubagent {
   agentName: string;
   invocationId: string;
+  nativeExecution: NativeTaskExecution | null;
   parentActionId: string;
   parentSessionId: string;
   resultSummary: string | null;
+  reviewProposals: ReviewProposals | null;
   roleLabel: string;
   status: "proposed" | "running" | "completed" | "error" | "rejected";
   statusLabel: string;
   taskId: string | null;
   taskSummary: string | null;
+}
+/**
+ * Observed native task lifetime, not queue time or provider request concurrency.
+ */
+export interface NativeTaskExecution {
+  clock_id: string;
+  finished_seconds: number;
+  started_seconds: number;
+}
+/**
+ * Structured model output has no authority to select a reviewer or evidence snapshot.
+ */
+export interface ReviewProposals {
+  /**
+   * @maxItems 32
+   */
+  candidates: ReviewCandidate[];
+}
+/**
+ * A model proposal cannot assign itself verification or a final disposition.
+ */
+export interface ReviewCandidate {
+  /**
+   * @minItems 1
+   * @maxItems 16
+   */
+  artifact_ids: WorkflowIdentifier[];
+  candidate_id: WorkflowIdentifier;
+  category: ReviewCategory;
+  condition: WorkflowIdentifier;
+  severity: ReviewSeverity;
+  summary: ResearchText;
 }
 /**
  * One bounded task suggestion derived from the authoritative session state.
@@ -408,9 +480,15 @@ export interface ProjectionUsage {
 export interface WorkflowRun {
   binding: WorkflowProjectBinding;
   completed: WorkflowStageEvaluation[];
+  /**
+   * @maxItems 32
+   */
+  corrections: ResearchCorrectionRun[];
   created_at: string;
   evaluation: WorkflowStageEvaluation | null;
+  parallel_review_plan: ReviewExecutionPlan | null;
   phase: "ready" | "running" | "review" | "blocked" | "completed" | "cancelled";
+  research_review: ResearchReviewRun | null;
   revision: number;
   run_id: string;
   stage_id: WorkflowIdentifier;
@@ -424,12 +502,25 @@ export interface WorkflowRun {
 export interface WorkflowProjectBinding {
   /**
    * @minItems 1
+   * @maxItems 64
+   */
+  artifacts: ResearchArtifactPath[];
+  /**
+   * @minItems 1
    * @maxItems 32
    */
   inputs: WorkflowBoundInput[];
   output_directory: string;
+  python_executable: PythonExecutable | null;
   workflow_fingerprint: string;
   workflow_id: WorkflowIdentifier;
+}
+/**
+ * A resolved file location for a workflow or a proposed correction output.
+ */
+export interface ResearchArtifactPath {
+  artifact_id: WorkflowIdentifier;
+  path: ExperimentPath;
 }
 /**
  * Private researcher input, bound to the bytes accepted at preparation.
@@ -476,6 +567,252 @@ export interface WorkflowCheckResult {
   status: "passed" | "failed" | "not_run";
 }
 /**
+ * Explicit bounded correction consent, using the existing stage's cumulative budget.
+ */
+export interface ResearchCorrectionRun {
+  /**
+   * @minItems 1
+   * @maxItems 3
+   */
+  attempts: ResearchCorrectionAttempt[];
+  correction_id: Reference;
+  maximum_attempts: number;
+  review: ResearchReviewRun;
+  stage_id: WorkflowIdentifier;
+  stop_reason:
+    | ("corrected" | "attempt-limit" | "budget" | "unavailable" | "cancelled")
+    | null;
+}
+/**
+ * One journaled parent-agent attempt and its independently observed result.
+ */
+export interface ResearchCorrectionAttempt {
+  assessment: ReviewCorrectionAssessment | null;
+  attempt_id: Reference;
+  plan: ReviewCorrectionPlan;
+  started_sequence: number;
+  status: "pending" | "assessed" | "unavailable" | "cancelled";
+  unavailable_reason:
+    | (
+        | "no-structured-outcome"
+        | "changed-context"
+        | "invalid-evidence"
+        | "admission-denied"
+      )
+    | null;
+}
+/**
+ * Independently observed corrected bytes and checks bound to their proposal.
+ */
+export interface ReviewCorrectionAssessment {
+  /**
+   * @minItems 1
+   * @maxItems 512
+   */
+  checks: ReviewCorrectionCheck[];
+  plan_sha256: Digest;
+  snapshot: ReviewSnapshot | null;
+}
+/**
+ * A narrow defect recheck, not execution evidence or scientific acceptance.
+ */
+export interface ReviewCorrectionCheck {
+  finding_id: Digest;
+  reason: WorkflowIdentifier;
+  status: "not_observed" | "still_observed" | "unavailable" | "stale";
+}
+/**
+ * Exact file context authorized for a review, without its contents.
+ */
+export interface ReviewSnapshot {
+  /**
+   * @minItems 1
+   * @maxItems 32
+   */
+  artifacts: ReviewArtifact[];
+  schema_version: "heartwood.review-snapshot.v1";
+}
+/**
+ * A named evidence role bound to one observed project file.
+ */
+export interface ReviewArtifact {
+  artifact_id: WorkflowIdentifier;
+  file: ExperimentFile;
+}
+/**
+ * Gateway-selected findings and fresh output locations for one correction attempt.
+ */
+export interface ReviewCorrectionPlan {
+  /**
+   * @minItems 1
+   * @maxItems 512
+   */
+  finding_ids: Digest[];
+  output_directory: string;
+  /**
+   * @minItems 1
+   * @maxItems 32
+   */
+  outputs: ResearchArtifactPath[];
+  review_id: Reference;
+  snapshot_sha256: Digest;
+}
+/**
+ * Pre-dispatch evidence and native reviewer results retained by the workflow journal.
+ */
+export interface ResearchReviewRun {
+  assessment: ReviewAssessment | null;
+  /**
+   * @maxItems 16
+   */
+  parallel_dispatch: ReviewDispatchAction[];
+  parallel_plan: ReviewExecutionPlan | null;
+  review_id: Reference;
+  /**
+   * @minItems 1
+   * @maxItems 16
+   */
+  reviewer_ids: WorkflowIdentifier[];
+  snapshot: ReviewSnapshot;
+  started_sequence: number;
+  status: "pending" | "assessed" | "unavailable" | "cancelled";
+  /**
+   * @maxItems 16
+   */
+  submissions: ReviewSubmission[];
+  unavailable_reason:
+    ("incomplete-review" | "invalid-review" | "no-structured-outcome") | null;
+}
+/**
+ * A deterministic evidence projection, not an approval or a quality benchmark.
+ */
+export interface ReviewAssessment {
+  /**
+   * @maxItems 512
+   */
+  findings: ReviewFinding[];
+  schema_version: "heartwood.review-assessment.v1";
+  snapshot_sha256: Digest;
+}
+/**
+ * One deduplicated observation; verification never grants action permission.
+ */
+export interface ReviewFinding {
+  category: ReviewCategory;
+  condition: WorkflowIdentifier;
+  disposition: "open" | "not_actionable";
+  evidence: ReviewArtifact[];
+  finding_id: Digest;
+  reason: WorkflowIdentifier;
+  severity: ReviewSeverity;
+  /**
+   * @minItems 1
+   * @maxItems 512
+   */
+  sources: ReviewSource[];
+  verification: ReviewVerification;
+  verified_claim: ResearchText | null;
+}
+/**
+ * Retain each advisory claim without confusing it with verified evidence.
+ */
+export interface ReviewSource {
+  candidate: ReviewCandidate;
+  review_id: Reference;
+  reviewer_id: Reference;
+}
+/**
+ * Native action identity and content digest recorded before advisory dispatch.
+ */
+export interface ReviewDispatchAction {
+  action_fingerprint: Sha256;
+  event_id: string;
+  reviewer_id: EvaluationIdentifier;
+  tool_call_id: string;
+}
+/**
+ * Stable preview identity; the gateway still journals consent and rechecks dispatch.
+ */
+export interface ParallelReviewPlan {
+  case_id: EvaluationIdentifier;
+  /**
+   * @minItems 6
+   */
+  evidence: ReviewQualificationEvidence[];
+  parallel_configuration_fingerprint: Sha256;
+  policy: ParallelReviewPolicy;
+  purpose?: "qualified-review";
+  scope: ReviewExecutionScope;
+  sequential_configuration_fingerprint: Sha256;
+  suite_fingerprint: Sha256;
+  valid_until: string;
+}
+/**
+ * Bind each retained result's content, not just its mutable filename or identity.
+ */
+export interface ReviewQualificationEvidence {
+  record_fingerprint: Sha256;
+  run_id: string;
+}
+/**
+ * A non-regression gate with an explicit latency benefit and consumption allowance.
+ */
+export interface ParallelReviewPolicy {
+  maximum_age_days?: number;
+  maximum_cost_ratio?: number;
+  maximum_token_ratio?: number;
+  maximum_workers?: number;
+  minimum_latency_reduction?: number;
+  minimum_repeats?: number;
+}
+/**
+ * The exact session work a researcher may authorize, not a standing permission.
+ */
+export interface ReviewExecutionScope {
+  budget: ExecutionBudget;
+  project_fingerprint: Sha256;
+  /**
+   * @minItems 2
+   * @maxItems 16
+   */
+  reviewer_ids: EvaluationIdentifier[];
+  revision: number;
+  session_id: EvaluationIdentifier;
+  snapshot_fingerprint: Sha256;
+  stage_id: EvaluationIdentifier;
+  workers: number;
+  workflow_id: EvaluationIdentifier;
+  workflow_run_id: EvaluationIdentifier;
+}
+/**
+ * One experimental benchmark admission, never evidence of a qualified route.
+ */
+export interface ParallelReviewTrialPlan {
+  case_id: EvaluationIdentifier;
+  configuration_fingerprint: Sha256;
+  purpose?: "qualification-trial";
+  reservation_fingerprint: Sha256;
+  runtime_fingerprint: Sha256;
+  scope: ReviewExecutionScope;
+  seed: number;
+  suite_fingerprint: Sha256;
+  trial_id: string;
+  valid_until: string;
+}
+/**
+ * Gateway-associated reviewer output for one immutable review context.
+ */
+export interface ReviewSubmission {
+  /**
+   * @maxItems 32
+   */
+  candidates: ReviewCandidate[];
+  review_id: Reference;
+  reviewer_id: Reference;
+  schema_version: "heartwood.review-submission.v1";
+  snapshot_sha256: Digest;
+}
+/**
  * Observed consumption; unavailable provider measurements remain unknown.
  */
 export interface ExecutionUsage {
@@ -490,15 +827,37 @@ export interface ExecutionUsage {
  * A presentation affordance carrying the exact revision-bound command to submit.
  */
 export interface WorkflowControl {
-  control_id: "run" | "evaluate" | "accept" | "decline" | "cancel";
+  control_id:
+    | "run"
+    | "evaluate"
+    | "accept"
+    | "decline"
+    | "cancel"
+    | "request-review"
+    | "correct"
+    | "prepare-parallel-review"
+    | "request-parallel-review";
   label: WorkflowText;
-  request: WorkflowTransition | WorkflowReview;
+  request:
+    | WorkflowTransition
+    | WorkflowReviewRequest
+    | WorkflowReview
+    | WorkflowCorrectionRequest;
 }
 /**
  * Apply a transition only to the exact run and revision the researcher saw.
  */
 export interface WorkflowTransition {
-  action: "run" | "evaluate" | "cancel";
+  action: "run" | "evaluate" | "cancel" | "prepare-parallel-review";
+  revision: number;
+  run_id: string;
+}
+/**
+ * Request advisory review; parallel work requires the exact journaled preview.
+ */
+export interface WorkflowReviewRequest {
+  action: "request-review";
+  parallel_review_fingerprint: string | null;
   revision: number;
   run_id: string;
 }
@@ -509,6 +868,15 @@ export interface WorkflowReview {
   action: "review";
   approved: boolean;
   evidence_fingerprint: string;
+  revision: number;
+  run_id: string;
+}
+/**
+ * Authorize bounded parent-agent corrections without approving their tool actions.
+ */
+export interface WorkflowCorrectionRequest {
+  action: "correct";
+  maximum_attempts: number;
   revision: number;
   run_id: string;
 }

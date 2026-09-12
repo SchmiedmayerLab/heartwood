@@ -90,13 +90,29 @@ class ResearchDictionary(ResearchArtifact):
 class ReadinessResult(ResearchArtifact):
     """Aggregate evidence for deciding whether a dataset is ready for analysis."""
 
-    row_count: Count
-    subject_count: Count
-    duplicate_rows: Count
-    missing_by_column: dict[str, Count]
-    invalid_by_column: dict[str, Count]
-    arm_counts: dict[str, Count]
-    leakage_columns: list[ResearchText]
+    row_count: Count = Field(description="All input data rows, including duplicate rows.")
+    subject_count: Count = Field(description="Distinct values of the dictionary's grouping key.")
+    duplicate_rows: Count = Field(
+        description="Exact duplicate rows beyond the first occurrence; do not remove them."
+    )
+    missing_by_column: dict[str, Count] = Field(
+        description="Missing cells per exact column name, counting all input rows."
+    )
+    invalid_by_column: dict[str, Count] = Field(
+        description="Non-missing cells violating declared validity rules, per exact column name."
+    )
+    arm_counts: dict[str, Count] = Field(
+        description=(
+            "Input row counts per arm value, including duplicates and repeated observations; "
+            "not distinct participant counts. Use an empty object if no arm column is defined."
+        )
+    )
+    leakage_columns: list[ResearchText] = Field(
+        description=(
+            "Exact dataset column names that introduce leakage, without prose or explanations. "
+            "Put explanations in the accompanying readiness report."
+        )
+    )
     ready_for_analysis: bool
 
 
@@ -105,10 +121,17 @@ class AnalysisPlan(ResearchArtifact):
 
     question: ResearchText
     estimand: ResearchText
-    outcome: ResearchText
-    features: list[ResearchText] = Field(min_length=1)
-    group_column: ResearchText
-    split_column: ResearchText
+    outcome: ResearchText = Field(description="Exact outcome column name from the data dictionary.")
+    features: list[ResearchText] = Field(
+        min_length=1,
+        description="Exact predictor column names only, without prose, backticks, or explanations.",
+    )
+    group_column: ResearchText = Field(
+        description="Exact grouping column name from the dictionary."
+    )
+    split_column: ResearchText = Field(
+        description="Exact partition column name from the dictionary."
+    )
     assumptions: list[ResearchText] = Field(min_length=1)
     limitations: list[ResearchText] = Field(min_length=1)
 
@@ -116,8 +139,11 @@ class AnalysisPlan(ResearchArtifact):
 class BaselineResult(ResearchArtifact):
     """Held-out univariate linear baseline metrics and group-omission sensitivity."""
 
-    outcome: ResearchText
-    features: list[ResearchText] = Field(min_length=1)
+    outcome: ResearchText = Field(description="Exact outcome column name used by the fitted model.")
+    features: list[ResearchText] = Field(
+        min_length=1,
+        description="Exact predictor column names used by the fitted model, without explanations.",
+    )
     n_train: int = Field(gt=0)
     n_test: int = Field(gt=0)
     train_subjects: int = Field(gt=0)

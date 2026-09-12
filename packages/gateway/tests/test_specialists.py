@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -22,6 +23,39 @@ from heartwood.gateway._specialists import (
     load_specialist_catalog,
     specialist_agent_factory,
 )
+
+
+def test_specialist_fingerprint_tracks_behavior_but_not_installation_paths() -> None:
+    catalog = _catalog()
+    relocated = SpecialistCatalog(
+        roles=tuple(
+            replace(
+                role,
+                definition=role.definition.model_copy(update={"source": "/different/agent.md"}),
+                verified_skills=tuple(
+                    skill.model_copy(update={"source": "/different/SKILL.md"})
+                    for skill in role.verified_skills
+                ),
+            )
+            for role in catalog.roles
+        )
+    )
+    assert catalog.fingerprint == relocated.fingerprint
+    changed = SpecialistCatalog(
+        roles=(
+            replace(
+                catalog.roles[0],
+                definition=catalog.roles[0].definition.model_copy(
+                    update={"system_prompt": "A different review contract"}
+                ),
+            ),
+            *catalog.roles[1:],
+        )
+    )
+    assert changed.fingerprint != catalog.fingerprint
+    assert (
+        SpecialistCatalog(roles=tuple(reversed(catalog.roles))).fingerprint == catalog.fingerprint
+    )
 
 
 def test_bundled_specialist_catalog_is_ordered_and_bounded() -> None:

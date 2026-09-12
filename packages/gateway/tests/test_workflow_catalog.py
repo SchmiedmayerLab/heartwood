@@ -20,8 +20,8 @@ def test_workflow_discovery_is_shared_read_only_and_reports_missing_checks(tmp_p
         choices = {entry.definition.workflow_id: entry for entry in catalog.workflows}
         assert choices["baseline-analysis"].available
         assert choices["dataset-readiness"].available
-        assert not choices["result-verification"].available
-        assert choices["result-verification"].unavailable_checks == ("execution.environment",)
+        assert choices["result-verification"].available
+        assert choices["result-verification"].unavailable_checks == ()
         assert choices["baseline-analysis"].definition == research_workflow("baseline-analysis")
         response = RestGateway(gateway).handle(RestRequest("GET", "/research/workflows"))
         assert response.status_code == 200

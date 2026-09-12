@@ -75,6 +75,8 @@ class EvaluationConfiguration(EvaluationRecord):
     skill_tree_digest: Sha256
     harness_revision: Sha256
     runtime_fingerprint: Sha256 | None = None
+    specialist_concurrency: int = Field(default=1, ge=1, strict=True)
+    specialist_catalog_fingerprint: Sha256 | None = None
 
 
 class EvaluationRuntimeObservation(EvaluationRecord):
@@ -90,19 +92,35 @@ class EvaluationRuntimeObservation(EvaluationRecord):
     action_confirmation: ActionConfirmationMode
     max_input_tokens: int | None = Field(default=None, gt=0)
     max_output_tokens: int | None = Field(default=None, gt=0)
+    tool_concurrency: int = Field(default=1, ge=1, strict=True)
+    scoped_advisory_reviews: bool = Field(default=False, strict=True)
+    specialist_catalog_fingerprint: Sha256 | None = None
 
     def declaration_mismatches(self, configuration: EvaluationConfiguration) -> tuple[str, ...]:
         """Compare only observed client fields, not remote-server declarations."""
-        pairs = (
+        pairs: tuple[tuple[str, object, object], ...] = (
             ("request_model", self.request_model, configuration.request_model),
             ("openhands_version", self.openhands_version, configuration.openhands_version),
             ("platform", self.platform, configuration.platform),
             ("context_tokens", self.max_input_tokens, configuration.context_tokens),
             ("output_tokens", self.max_output_tokens, configuration.output_tokens),
         )
-        return tuple(
+        if configuration.specialist_catalog_fingerprint is not None:
+            pairs += (
+                (
+                    "specialist_catalog_fingerprint",
+                    self.specialist_catalog_fingerprint,
+                    configuration.specialist_catalog_fingerprint,
+                ),
+            )
+        mismatches = tuple(
             name for name, actual, expected in pairs if actual is not None and actual != expected
         )
+        if configuration.specialist_concurrency > 1 and (
+            self.tool_concurrency != 1 or not self.scoped_advisory_reviews
+        ):
+            mismatches += ("scoped_advisory_reviews",)
+        return mismatches
 
 
 class EvaluationCheck(EvaluationRecord):
@@ -127,6 +145,8 @@ class EvaluationCase(EvaluationRecord):
     workflow_id: EvaluationIdentifier
     fixture_digest: Sha256
     required_checks: tuple[RequiredEvaluationCheck, ...] = Field(min_length=1)
+    specialist_ids: tuple[EvaluationIdentifier, ...] = Field(default=(), max_length=16)
+    review_stage_id: EvaluationIdentifier | None = None
 
     @model_validator(mode="after")
     def unique_checks(self) -> Self:
@@ -134,6 +154,8 @@ class EvaluationCase(EvaluationRecord):
         identifiers = [check.check_id for check in self.required_checks]
         if len(identifiers) != len(set(identifiers)):
             raise ValueError("Evaluation check identifiers must be unique")
+        if len(self.specialist_ids) != len(set(self.specialist_ids)):
+            raise ValueError("Evaluation specialist identifiers must be unique")
         return self
 
 

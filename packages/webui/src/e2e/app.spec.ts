@@ -17,9 +17,11 @@ import {
   syntheticProjection,
 } from "../test/fixtures";
 import type {
+  ExperimentCollection,
   PlatformCapabilities,
   SessionSummary,
   StartupPlan,
+  WorkflowCatalog,
 } from "../types";
 
 test.beforeEach(async ({ page }) => installGatewayRoutes(page));
@@ -107,7 +109,12 @@ test("supports the researcher conversation and session workflow", async ({
   const inactiveWorkspacePanels = page.locator(
     '.workspace-tab-panel[data-state="inactive"]',
   );
-  await expect(inactiveWorkspacePanels).toHaveCount(3);
+  await expect(inactiveWorkspacePanels).toHaveCount(
+    (await page
+      .getByRole("tablist", { name: "Project view" })
+      .getByRole("tab")
+      .count()) - 1,
+  );
   for (const panel of await inactiveWorkspacePanels.all()) {
     await expect(panel).toBeHidden();
   }
@@ -300,9 +307,20 @@ test("keeps session navigation usable on a narrow notebook viewport", async ({
   const filesTab = page.getByRole("tab", { name: "Files" });
   await filesTab.focus();
   await filesTab.press("ArrowRight");
-  const researchTab = page.getByRole("tab", { name: "Research" });
+  const researchTab = page.getByRole("tab", { name: "Research", exact: true });
   await expect(researchTab).toBeFocused();
   await expect(researchTab).toHaveAttribute("aria-selected", "true");
+  await expect(
+    page.getByRole("tabpanel", { name: "Research", exact: true }),
+  ).toContainText("No research workflows are available.");
+  await page.getByText("Project Experiment Records", { exact: true }).click();
+  await expect(
+    page.getByText("No experiments recorded in this project.", {
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expectNoAccessibilityViolations(page);
+  await researchTab.focus();
   await researchTab.press("ArrowRight");
   const changes = page.getByRole("region", { name: "Project changes" });
   await expect(changes).toBeVisible();
@@ -634,6 +652,17 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
 
   await page.route("**/project/readiness", (route) =>
     json(route, startupPlan().readiness),
+  );
+
+  await page.route("**/research/workflows", (route) =>
+    json(route, { workflows: [] } satisfies WorkflowCatalog),
+  );
+  await page.route("**/research/experiments", (route) =>
+    json(route, {
+      schema_version: "heartwood.experiment-collection.v1",
+      retention: "project-local",
+      runs: [],
+    } satisfies ExperimentCollection),
   );
 
   await page.route("**/sessions", async (route) => {

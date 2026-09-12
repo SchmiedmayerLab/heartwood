@@ -85,12 +85,17 @@ const catalog: WorkflowCatalog = {
 };
 
 const run = (): NonNullable<SessionProjection["workflow"]> => ({
+  research_review: null,
+  parallel_review_plan: null,
+  corrections: [],
   run_id: "run",
   revision: 3,
   binding: {
+    python_executable: null,
     workflow_id: "synthetic-analysis",
     workflow_fingerprint: "a".repeat(64),
     output_directory: "results",
+    artifacts: [{ artifact_id: "report", path: "results/report.md" }],
     inputs: [
       {
         input_id: "data",
@@ -141,6 +146,7 @@ const setup = (
         runs: [],
       }),
       getExperimentExport: vi.fn(),
+      getVerificationEnvironment: vi.fn(),
     },
     sessionId: "session-test",
     projection,
@@ -155,6 +161,141 @@ const setup = (
 };
 
 describe("research workflow workspace", () => {
+  it("submits bounded correction consent and inspects recorded attempt outputs", async () => {
+    const state = run();
+    const snapshot = {
+      schema_version: "heartwood.review-snapshot.v1" as const,
+      artifacts: [
+        {
+          artifact_id: "report",
+          file: {
+            path: "results/report.md",
+            sha256: "a".repeat(64),
+            size_bytes: 20,
+          },
+        },
+      ],
+    };
+    state.corrections = [
+      {
+        correction_id: "correction-one",
+        stage_id: "inspect",
+        maximum_attempts: 2,
+        stop_reason: "unavailable",
+        review: {
+          review_id: "review-one",
+          parallel_plan: null,
+          parallel_dispatch: [],
+          reviewer_ids: ["statistical-reviewer"],
+          started_sequence: 8,
+          status: "assessed",
+          submissions: [],
+          unavailable_reason: null,
+          snapshot,
+          assessment: {
+            schema_version: "heartwood.review-assessment.v1",
+            snapshot_sha256: "b".repeat(64),
+            findings: [],
+          },
+        },
+        attempts: [
+          {
+            attempt_id: "attempt-one",
+            started_sequence: 12,
+            status: "assessed",
+            unavailable_reason: null,
+            plan: {
+              review_id: "review-one",
+              snapshot_sha256: "b".repeat(64),
+              finding_ids: ["c".repeat(64)],
+              output_directory: "correction-one",
+              outputs: [
+                { artifact_id: "report", path: "correction-one/report.md" },
+              ],
+            },
+            assessment: {
+              plan_sha256: "d".repeat(64),
+              snapshot,
+              checks: [
+                {
+                  finding_id: "c".repeat(64),
+                  status: "still_observed",
+                  reason: "artifact-byte-mismatch",
+                },
+              ],
+            },
+          },
+          {
+            attempt_id: "attempt-two",
+            started_sequence: 20,
+            status: "unavailable",
+            unavailable_reason: "changed-context",
+            plan: {
+              review_id: "review-one",
+              snapshot_sha256: "b".repeat(64),
+              finding_ids: ["c".repeat(64)],
+              output_directory: "correction-two",
+              outputs: [
+                { artifact_id: "report", path: "correction-two/report.md" },
+              ],
+            },
+            assessment: null,
+          },
+        ],
+      },
+    ];
+    const view = setup(
+      syntheticProjection({ workflow: state, workflowControls: [] }),
+    );
+    fireEvent.click(await screen.findByText("Corrections: unavailable"));
+    expect(screen.getByText("Attempt 1/2: assessed")).toBeVisible();
+    expect(screen.getByText("still observed")).toBeVisible();
+    expect(screen.getByText("changed context")).toBeVisible();
+    view.client.getWorkspaceFile.mockResolvedValue({
+      status: "available",
+      content: "# Preserved Attempt",
+      message: null,
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "correction-one/report.md" }),
+    );
+    await screen.findByRole("heading", { name: "Preserved Attempt" });
+    expect(view.client.getWorkspaceFile).toHaveBeenCalledWith(
+      "session-test",
+      "correction-one/report.md",
+    );
+    expect(view.onSubmit).not.toHaveBeenCalled();
+
+    const request = {
+      action: "correct" as const,
+      run_id: "run",
+      revision: 4,
+      maximum_attempts: 2,
+    };
+    view.rerender(
+      <ResearchWorkspace
+        {...view}
+        projection={{
+          ...view.projection,
+          workflow: run(),
+          workflowControls: [
+            {
+              control_id: "correct",
+              label: "Correct Findings (Up to 2 Attempts)",
+              request,
+            },
+          ],
+        }}
+      />,
+    );
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Correct Findings (Up to 2 Attempts)",
+      }),
+    );
+    expect(view.onSubmit).toHaveBeenCalledExactlyOnceWith(request);
+  });
+
   it("does not reload project provenance for unrelated session events", async () => {
     const view = setup();
     fireEvent.click(screen.getByText("Project Experiment Records"));
@@ -208,6 +349,7 @@ describe("research workflow workspace", () => {
                 stage_id: "inspect",
                 workflow_sha256: "a".repeat(64),
                 tool_call_id: null,
+                correction_id: null,
               },
             },
             started_at: "2026-09-11T00:00:00Z",
@@ -231,6 +373,54 @@ describe("research workflow workspace", () => {
     expect(record).not.toHaveTextContent("succeeded");
   });
 
+  it.each(["pending", "unavailable", "cancelled"] as const)(
+    "renders %s review without requiring another assessment request",
+    async (status) => {
+      const state = run();
+      state.research_review = {
+        review_id: "review-one",
+        parallel_plan: null,
+        parallel_dispatch: [],
+        reviewer_ids: ["statistical-reviewer"],
+        started_sequence: 8,
+        status,
+        submissions: [],
+        assessment: null,
+        unavailable_reason:
+          status === "unavailable" ? "no-structured-outcome" : null,
+        snapshot: {
+          schema_version: "heartwood.review-snapshot.v1",
+          artifacts: [
+            {
+              artifact_id: "program",
+              file: {
+                path: "analysis.py",
+                sha256: "a".repeat(64),
+                size_bytes: 20,
+              },
+            },
+          ],
+        },
+      };
+      const view = setup(
+        syntheticProjection({
+          workflow: state,
+          workflowControls: [],
+        }),
+      );
+      const review = await screen.findByText(`Research Review: ${status}`);
+      expect(review).toBeVisible();
+      fireEvent.click(review);
+      if (status === "unavailable") {
+        expect(screen.getByText("no structured outcome")).toBeVisible();
+      }
+      expect(
+        screen.queryByRole("button", { name: "Check Review Findings" }),
+      ).not.toBeInTheDocument();
+      expect(view.onSubmit).not.toHaveBeenCalled();
+    },
+  );
+
   it("collects catalog-declared inputs without starting an agent implicitly", async () => {
     const view = setup();
     expect(screen.getByRole("status")).toHaveTextContent(
@@ -252,41 +442,48 @@ describe("research workflow workspace", () => {
     });
   });
 
-  it("submits the exact displayed review request and inspects actual artifacts", async () => {
-    const request = {
-      action: "review" as const,
-      run_id: "run",
-      revision: 3,
-      approved: true,
-      evidence_fingerprint: "c".repeat(64),
-    };
-    const view = setup(
-      syntheticProjection({
-        workflow: run(),
-        pendingApproval: null,
-        workflowControls: [
-          { control_id: "accept", label: "Accept Stage", request },
-        ],
-      }),
-    );
-    view.client.getWorkspaceFile.mockResolvedValue({
-      status: "available",
-      content: "# Synthetic Report\nMeasured findings",
-      message: null,
-    });
-    fireEvent.click(await screen.findByRole("button", { name: "Report" }));
-    expect(
-      await screen.findByRole("heading", { name: "Synthetic Report" }),
-    ).toBeVisible();
-    expect(view.client.getWorkspaceFile).toHaveBeenCalledWith(
-      "session-test",
-      "results/report.md",
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Accept Stage" }));
-    expect(view.onSubmit).toHaveBeenCalledWith(request);
-    fireEvent.click(screen.getByRole("button", { name: "Open Conversation" }));
-    expect(view.onConversation).toHaveBeenCalledOnce();
-  });
+  it.each(["results/report.md", "correction-one/report.md"])(
+    "submits the displayed review and inspects the bound artifact %s",
+    async (path) => {
+      const request = {
+        action: "review" as const,
+        run_id: "run",
+        revision: 3,
+        approved: true,
+        evidence_fingerprint: "c".repeat(64),
+      };
+      const state = run();
+      state.binding.artifacts = [{ artifact_id: "report", path }];
+      const view = setup(
+        syntheticProjection({
+          workflow: state,
+          pendingApproval: null,
+          workflowControls: [
+            { control_id: "accept", label: "Accept Stage", request },
+          ],
+        }),
+      );
+      view.client.getWorkspaceFile.mockResolvedValue({
+        status: "available",
+        content: "# Synthetic Report\nMeasured findings",
+        message: null,
+      });
+      fireEvent.click(await screen.findByRole("button", { name: "Report" }));
+      expect(
+        await screen.findByRole("heading", { name: "Synthetic Report" }),
+      ).toBeVisible();
+      expect(view.client.getWorkspaceFile).toHaveBeenCalledWith(
+        "session-test",
+        path,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Accept Stage" }));
+      expect(view.onSubmit).toHaveBeenCalledWith(request);
+      fireEvent.click(
+        screen.getByRole("button", { name: "Open Conversation" }),
+      );
+      expect(view.onConversation).toHaveBeenCalledOnce();
+    },
+  );
 
   it("does not infer stage controls from model messages or lifecycle", async () => {
     setup(syntheticProjection({ workflow: run(), workflowControls: [] }));
@@ -294,6 +491,50 @@ describe("research workflow workspace", () => {
     expect(
       screen.queryByRole("button", { name: "Accept Stage" }),
     ).not.toBeInTheDocument();
+  });
+
+  it("shows gateway review limits and submits the exact parallel consent", async () => {
+    const request = {
+      action: "request-review" as const,
+      run_id: "run",
+      revision: 3,
+      parallel_review_fingerprint: "b".repeat(64),
+    };
+    const summary =
+      "Parallel review (preview): 2 workers; up to 300s. Action confirmation still applies.";
+    const view = setup(
+      syntheticProjection({
+        workflow: run(),
+        reviewExecution: {
+          status: "preview",
+          purpose: "qualified-review",
+          workers: 2,
+          reviewers: ["research-planner", "statistical-reviewer"],
+          budget: {
+            maximum_seconds: 300,
+            maximum_model_calls: 20,
+            maximum_tokens: 100000,
+            maximum_actions: 30,
+            maximum_reported_cost_usd: 1,
+          },
+          summary,
+        },
+        workflowControls: [
+          {
+            control_id: "request-parallel-review",
+            label: "Review with 2 Parallel Specialists",
+            request,
+          },
+        ],
+      }),
+    );
+    expect(await screen.findByText(summary)).toBeVisible();
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Review with 2 Parallel Specialists",
+      }),
+    );
+    expect(view.onSubmit).toHaveBeenCalledWith(request);
   });
 
   it("reports catalog failure and permits an explicit retry", async () => {

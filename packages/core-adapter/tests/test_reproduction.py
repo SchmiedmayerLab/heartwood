@@ -92,6 +92,26 @@ def test_preparation_is_not_execution_or_authorization() -> None:
     assert not witness.verifies(protected=_INPUTS, outputs=_OUTPUTS)
 
 
+@pytest.mark.parametrize("python", ["python", "../python", "", "/bin/python\n"])
+def test_bound_python_must_be_an_absolute_safe_argument(python: str) -> None:
+    with pytest.raises(ValidationError):
+        _spec(python_executable=python)
+
+
+def test_environment_guard_requires_a_protected_record_and_bound_python() -> None:
+    with pytest.raises(ValidationError):
+        _spec(required_environment="data.csv")
+    with pytest.raises(ValidationError):
+        _spec(python_executable="/opt/runtime/bin/python", required_environment="unbound.json")
+    spec = _spec(python_executable="/opt/runtime/bin/python", required_environment="data.csv")
+    assert spec.command == (
+        "/opt/runtime/bin/python -I -m heartwood.gateway._environment_probe --require data.csv"
+        " && /opt/runtime/bin/python -I results/analysis.py --data data.csv"
+        " --output-dir results/reproduced"
+    )
+    assert not spec.matches_command(spec.command.replace(" && ", " ; "))
+
+
 def test_success_round_trips_without_contents_and_requires_current_files() -> None:
     prepared = _prepared()
     assert prepared is not None
@@ -247,3 +267,40 @@ def test_malformed_serialized_evidence_is_rejected(change: str) -> None:
         value["status"] = "prepared"
     with pytest.raises(ValidationError):
         ReproductionWitness.model_validate(value)
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"analysis_environment": "a" * 64},
+        {"lockfile": "dictionary.json"},
+        {"analysis_environment": "a" * 64, "python_executable": "/opt/runtime/bin/python"},
+        {
+            "purpose": "python-environment",
+            "python_executable": "/opt/runtime/bin/python",
+            "analysis_environment": "a" * 64,
+            "lockfile": "dictionary.json",
+        },
+        {
+            "purpose": "python-environment",
+            "python_executable": "/opt/runtime/bin/python",
+            "output_names": ("environment.json",),
+            "required_environment": "data.csv",
+        },
+    ],
+)
+def test_environment_reconstruction_requires_a_complete_binding(changes: dict[str, object]) -> None:
+    with pytest.raises(ValidationError):
+        _spec(**changes)
+
+
+def test_environment_capture_without_reconstruction_binds_the_control_python() -> None:
+    spec = _spec(
+        purpose="python-environment",
+        python_executable="/opt/runtime/bin/python",
+        output_names=("environment.json",),
+    )
+    assert spec.command == (
+        "/opt/runtime/bin/python -I -m heartwood.gateway._environment_probe "
+        "--output-dir results/reproduced"
+    )

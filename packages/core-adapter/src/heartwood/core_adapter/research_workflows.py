@@ -6,6 +6,7 @@
 
 """First-party research task definitions, independent of model and platform routing."""
 
+import hashlib
 from pathlib import PurePosixPath
 
 from heartwood.core_adapter.reproduction import ReproductionSpec
@@ -36,9 +37,16 @@ _DATA = (
 _BUDGET = ExecutionBudget(
     maximum_seconds=1800,
     maximum_model_calls=80,
-    maximum_tokens=400_000,
+    maximum_tokens=1_600_000,
     maximum_reported_cost_usd=4,
     maximum_actions=100,
+)
+_STAGE_BUDGET = ExecutionBudget(
+    maximum_seconds=900,
+    maximum_model_calls=40,
+    maximum_tokens=600_000,
+    maximum_reported_cost_usd=1,
+    maximum_actions=45,
 )
 _REPRODUCTION_ARTIFACTS = (
     WorkflowArtifact(
@@ -84,7 +92,8 @@ def workflow_reproduction_spec(
         raise ValueError("Workflow definition changed; prepare a new binding")
     stage = definition.stage(stage_id)
     if not any(
-        check.evaluator_id in {"execution.reproduction", "execution.comparison"}
+        check.evaluator_id
+        in {"execution.reproduction", "execution.comparison", "execution.environment"}
         for check in stage.checks
     ):
         return None
@@ -92,9 +101,7 @@ def workflow_reproduction_spec(
     paths = {
         **files,
         **{
-            artifact.artifact_id: str(
-                PurePosixPath(binding.output_directory) / artifact.relative_path
-            )
+            artifact.artifact_id: binding.artifact_path(artifact.artifact_id)
             for artifact in definition.artifacts
         },
     }
@@ -103,14 +110,35 @@ def workflow_reproduction_spec(
         if previous.stage_id == stage_id:
             break
         protected.update(paths[name] for name in previous.writes)
+    environment = any(check.evaluator_id == "execution.environment" for check in stage.checks)
+    if binding.workflow_id == "result-verification" and binding.python_executable is None:
+        raise ValueError("Result verification requires its bound Python interpreter")
     outputs = tuple(
-        PurePosixPath(paths[name]) for name in ("reproduced-metrics", "reproduced-predictions")
+        PurePosixPath(paths[name])
+        for name in (
+            ("environment-check",)
+            if environment
+            else ("reproduced-metrics", "reproduced-predictions")
+        )
     )
-    if outputs[0].parent != outputs[1].parent:
+    if any(path.parent != outputs[0].parent for path in outputs):
         raise ValueError("Reproduction outputs require one dedicated directory")
     return ReproductionSpec(
         program=paths["program"],
-        data=paths["data"],
+        data=paths["environment"] if environment else paths["data"],
+        purpose="python-environment" if environment else "analysis",
+        python_executable=binding.python_executable,
+        analysis_environment=(
+            hashlib.sha256(paths["environment-check"].encode()).hexdigest()
+            if binding.workflow_id == "result-verification"
+            else None
+        ),
+        lockfile=paths["lockfile"] if environment else None,
+        required_environment=(
+            paths["environment-check"]
+            if binding.workflow_id == "result-verification" and not environment
+            else None
+        ),
         directory=str(outputs[0].parent),
         protected_paths=tuple(sorted(protected)),
         output_names=tuple(path.name for path in outputs),
@@ -142,7 +170,9 @@ def _readiness() -> WorkflowDefinition:
         stages=(
             WorkflowStage(
                 stage_id="inspect",
+                budget=_STAGE_BUDGET,
                 label="Inspect Data",
+                specialist_ids=("statistical-reviewer",),
                 reads=("data", "dictionary"),
                 writes=("readiness",),
                 reviewer_gate="none",
@@ -160,6 +190,7 @@ def _readiness() -> WorkflowDefinition:
             ),
             WorkflowStage(
                 stage_id="report",
+                budget=_STAGE_BUDGET,
                 label="Review Findings",
                 reads=("readiness",),
                 writes=("report",),
@@ -233,6 +264,7 @@ def _baseline() -> WorkflowDefinition:
         stages=(
             WorkflowStage(
                 stage_id="plan",
+                budget=_STAGE_BUDGET,
                 label="Plan Analysis",
                 reads=("data", "dictionary", "question"),
                 writes=("plan",),
@@ -253,7 +285,9 @@ def _baseline() -> WorkflowDefinition:
             ),
             WorkflowStage(
                 stage_id="execute",
+                budget=_STAGE_BUDGET,
                 label="Run Baseline",
+                specialist_ids=("statistical-reviewer",),
                 reads=("data", "dictionary", "plan"),
                 writes=("program", "metrics", "predictions"),
                 reviewer_gate="none",
@@ -278,6 +312,7 @@ def _baseline() -> WorkflowDefinition:
             ),
             WorkflowStage(
                 stage_id="verify",
+                budget=_STAGE_BUDGET,
                 label="Verify Reproduction",
                 reads=("data", "program", "metrics", "predictions"),
                 writes=("verification", "reproduced-metrics", "reproduced-predictions"),
@@ -305,6 +340,7 @@ def _baseline() -> WorkflowDefinition:
             ),
             WorkflowStage(
                 stage_id="report",
+                budget=_STAGE_BUDGET,
                 label="Review Analysis",
                 reads=("plan", "metrics", "verification"),
                 writes=("report",),
@@ -329,7 +365,7 @@ def _verification() -> WorkflowDefinition:
         workflow_id="result-verification",
         version=1,
         label="Independent Result Verification",
-        description="Reconstruct an analysis environment and report whether its outputs reproduce.",
+        description="Rebuild a Python environment, rerun an analysis, and compare outputs.",
         inputs=(
             WorkflowInput(
                 input_id="data",
@@ -359,7 +395,13 @@ def _verification() -> WorkflowDefinition:
                 input_id="environment",
                 label="Environment Record",
                 kind="file",
-                description="Recorded runtime, dependencies, parameters, and seeds.",
+                description="Required Python interpreter and package versions.",
+            ),
+            WorkflowInput(
+                input_id="lockfile",
+                label="Dependency Lock",
+                kind="file",
+                description="A pylock.toml file with hash-pinned wheels for the analysis.",
             ),
         ),
         budget=_BUDGET,
@@ -367,7 +409,7 @@ def _verification() -> WorkflowDefinition:
             WorkflowArtifact(
                 artifact_id="environment-check",
                 label="Environment Comparison",
-                relative_path="environment-check.json",
+                relative_path="environment/environment.json",
                 media_type="application/json",
             ),
             *_REPRODUCTION_ARTIFACTS,
@@ -381,12 +423,17 @@ def _verification() -> WorkflowDefinition:
         stages=(
             WorkflowStage(
                 stage_id="environment",
-                label="Check Environment",
-                reads=("environment", "program"),
+                budget=_STAGE_BUDGET,
+                label="Rebuild Environment",
+                reads=("environment", "program", "lockfile"),
                 writes=("environment-check",),
-                instruction="Compare the available runtime and dependencies to the supplied "
-                "environment record. Propose any required setup through normal action review. "
-                "Report missing dependencies instead of silently changing the analysis.",
+                instruction=(
+                    "Propose the supplied environment setup as one separate terminal action. "
+                    "Explain that approval permits downloading the lock's package wheels into a "
+                    "fresh project-private environment, without changing Heartwood or vLLM. "
+                    "Do not write its output yourself. Compare required and observed versions "
+                    "and report differences. Never replace the lock or bypass a failed setup."
+                ),
                 checks=(
                     WorkflowCheck(
                         check_id="verification-environment",
@@ -398,6 +445,7 @@ def _verification() -> WorkflowDefinition:
             ),
             WorkflowStage(
                 stage_id="reproduce",
+                budget=_STAGE_BUDGET,
                 label="Re-execute Analysis",
                 reads=("data", "program", "metrics", "predictions", "environment-check"),
                 writes=("verification", "reproduced-metrics", "reproduced-predictions"),
@@ -424,6 +472,7 @@ def _verification() -> WorkflowDefinition:
             ),
             WorkflowStage(
                 stage_id="report",
+                budget=_STAGE_BUDGET,
                 label="Review Reproduction",
                 reads=("environment-check", "verification"),
                 writes=("report",),

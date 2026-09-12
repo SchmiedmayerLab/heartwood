@@ -92,6 +92,67 @@ Changed configurations, changed suite definitions, unknown model revisions, expi
 Three trials are a functional regression gate, not a statistical estimate of clinical or scientific reliability.
 An assessment includes its policy, time, exact configuration and suite digests, and source run identifiers; it does not automatically change model recommendations or action-approval policy.
 
+### Parallel Review Comparison
+
+`heartwood.model_policy.parallel_reviews.assess_parallel_reviews` compares matched sequential and parallel trials through the same evidence assessor.
+Pure qualification rules live in the policy package so runtime admission can reuse them without importing benchmark execution.
+Each case binds the exact advisory specialist identifiers; evidence does not qualify additional roles or a larger worker pool.
+Both configurations must pass the complete research checks and additional checks for reviewer scheduling, isolation, lineage, findings, and parent synthesis.
+The configurations differ only in requested specialist concurrency; model, context, tools, Skills, specialist definitions, fixtures, seeds, and budgets remain matched.
+The gateway observes the actual global OpenHands tool limit and whether its scoped advisory executor is installed, separately from the requested reviewer count.
+Both trials retain the same runtime observation and fingerprint; the reviewer scheduling check must establish actual sequential or overlapping execution.
+The maintained plan-review suite pairs a prohibited outcome-derived predictor with a valid-plan control over the same pinned synthetic data.
+Its finding scorer reuses the workflow's independent baseline-plan checks, requires the exact fixture snapshot and selected reviewers, and rejects missed defects and false accusations.
+This finding check alone does not establish scheduling, provider execution, isolation, parent synthesis, recovery, or route qualification.
+Completed and failed native specialist observations retain a monotonic execution interval through the session journal and shared projection.
+The interval covers the native task's execution and cleanup, excluding approval, queuing, and child creation; cancellation before execution has no interval.
+Only intervals with the same process-local clock identity can establish overlap.
+Task overlap does not establish simultaneous provider requests, useful findings, or successful completion, and interrupted work without a final observation supplies no completed interval.
+The gateway also records a fingerprint of executable specialist definitions and supplied Skill metadata.
+That fingerprint excludes installation paths and does not replace the separate Skill-tree digest for bundled resource bytes.
+
+The default comparison policy requires three recent trials per case, at least a 10% reduction in both median and total elapsed time, and no more than a 25% increase in total reported cost or tokens.
+Unknown usage, missing reviewer checks, changed configurations, and failed trials prevent qualification.
+These thresholds are explicit policy parameters, not statistical evidence of general model superiority.
+The assessment preserves both source assessments and per-case measurements; it neither authenticates arbitrary evidence files nor grants permission to launch parallel tasks.
+
+`prepare_parallel_review` validates the current route and exact workflow stage against retained qualification evidence.
+Its preview binds the project, session, workflow revision, artifact snapshot, reviewers, worker count, and requested budget to the source trial digests and qualification policy.
+Requested limits cannot exceed the tested workload's budget; smaller limits remain admission controls, not guaranteed completion or provider-side billing caps.
+The preview remains stable while that evidence is unchanged and fresh; a changed route, replaced trial, new failed trial, or expired evidence requires reevaluation.
+Supplying its fingerprint checks an exact consent match but does not itself record consent or approve a tool action.
+Evidence must come from the deployment's trusted evaluation process, not model output or a researcher-supplied success flag.
+
+Native SDK tests exercise this plan through the workflow journal, grouped approval and rejection, concurrent child startup, assessment, replay, and reopening without new model calls.
+Failure-path tests cover changed evidence, expired consent, cancellation during qualification, lost ownership, duplicate admission, and interruption at each paired-append boundary.
+These deterministic tests establish protocol behavior, not capable-model quality, speed, or platform qualification.
+
+### Experimental Review Trials
+
+Qualification requires measurements, but a first benchmark cannot already be qualified.
+`ReservedReviewTrial` therefore prepares explicitly experimental work from one incomplete `EvaluationStore` record, with a closed `qualification-trial` plan type distinct from a qualified recommendation.
+The harness verifies pinned synthetic inputs before reserving the record and uses UTC timestamps at the same second precision as workflow admission.
+The plan binds the reserved trial, case, seed, session, configuration, observed runtime, reviewers, limits, and expiry.
+Each preview and dispatch rereads the reservation and observes the owning backend; missing, completed, corrupt, expired, or changed reservations cannot start work.
+`SessionGateway.bind_evaluation_observer` binds a read-only observer to the current owned service without acquiring gateway or native agent-step locks during dispatch.
+Closing or replacing that service revokes the observer; reading runtime metadata never acquires ownership or authorizes work.
+
+Experimental trials use the same workflow consent, grouped tool approval, paired journal, cancellation, and restart rules as qualified reviews.
+The shared interfaces label them **Experimental parallel review**; no previous passing results are fabricated to obtain concurrency.
+Narrower consented limits apply to the stage's remaining work, not a fresh allowance for each specialist.
+Admission does not produce a passing evaluation result: the benchmark must separately record and independently assess execution, findings, synthesis, usage, latency, replay, and audit evidence.
+
+`reserve_planning_review_trial` and `run_planning_review_trial` run retained comparisons through the same gateway workflow controls and explicit approval callback as researcher interfaces.
+The caller prepares an isolated synthetic project with `data.csv`, `dictionary.json`, and a single output directory containing `plan.json`, and completes planning before reserving the review.
+The workflow question and files must match one maintained `planning_review_tasks()` case; unrelated files, substituted inputs, changed runtimes, and already reviewed stages are rejected.
+Planning work is excluded from review usage and latency.
+Reservation waiting consumes the execution deadline but is excluded from measured review latency; unavailable provider counters remain unknown.
+The runner records sequential or overlapping native task intervals, exact reviewer lineage, independent findings, unchanged input files, grouped authorization, a settled parent outcome, and fresh-process replay with audit verification.
+The isolation check covers the observed advisory tool scope and supplied files, not operating-system or network sandbox isolation.
+The synthesis check establishes a structured successful parent outcome after the reviewers settle, not the correctness of unrestricted narrative claims.
+Stopped or rejected trials retain failed checks; interrupted trials remain incomplete rather than being retried automatically.
+Neither a successful deterministic trial nor a completed record automatically qualifies or promotes a provider route.
+
 ### Synthetic Research Cases
 
 The maintained research fixtures cover dataset readiness, a held-out linear baseline, and independent result verification.
@@ -119,12 +180,18 @@ Workflow journal tests reject missing, repeated, reordered, cross-session, denie
 Interruption tests cover persisted tool completion without a reproduction observation and ensure duplicate callbacks, reconciliation, and restart cannot capture replacement evidence or repeat work.
 The baseline conformance test uses real OpenHands tools with deterministic `TestLLM` for plan review, analysis execution, separately approved reproduction, independent checks, reporting, restart, and content-minimized audit export.
 It establishes orchestration behavior, not capable-model research performance.
+Independent Result Verification reuses this execution witness for a fixed Python metadata probe and the subsequent analysis invocation.
+The gateway binds one absolute interpreter; both commands use isolated mode, and the analysis invocation first rechecks the protected environment record.
+The environment check compares required package identities and versions using the standard Python packaging rules.
+Matching model-written metadata without an approved probe remains unverified.
+Conformance tests cover real tool execution, incompatible versions, fresh-output confinement, preserved experiment fingerprints, interface capture, restart, and content-minimized audit export.
 These bounded observations are not a sandbox or proof against an adversarial process changing and restoring files between observations.
 Fresh-process checks compare the gateway's persisted projection, event-chain identity, and verified audit identity without creating a model client.
 
 The driver reserves a private result under `.heartwood/evaluations/` before starting model work.
 Before reviewing a pending group or assessing completion, it waits for the SDK worker's final publication and reconciles usage through the shared gateway.
 An early finished lifecycle cannot by itself trigger reproduction or finalize an evaluation.
+Workflow completion additionally requires passing artifact checks and, where required, independently witnessed reproduction; a final message alone is not evidence of completion.
 If finalization does not settle within the bounded wait, the trial remains incomplete.
 An interrupted evaluator leaves an incomplete trial with unverified checks, rather than silently removing an unsuccessful attempt from the evidence.
 Successful evaluation replaces that record atomically; completed evidence cannot be overwritten with different results.

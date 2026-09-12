@@ -46,9 +46,11 @@ from heartwood.schemas import (
     WorkspaceFileResponse,
     WorkspaceTreeResponse,
 )
+from heartwood.schemas.review import ResearchCorrectionRun, ResearchReviewRun
 from heartwood.schemas.workflows import (
     WorkflowCatalog,
     WorkflowControl,
+    WorkflowProjectBinding,
     WorkflowRequest,
     WorkflowStart,
 )
@@ -586,11 +588,70 @@ def format_workflow_lines(projection: SessionProjection) -> tuple[str, ...]:
             f"  {terminal_safe_text(check.check_id)}: {check.status}"
             for check in run.evaluation.checks
         )
+    lines.extend(format_research_review_lines(run.research_review))
+    if projection.review_execution is not None:
+        lines.append(terminal_safe_text(projection.review_execution.summary))
+    lines.extend(format_research_correction_lines(run.corrections))
+    lines.extend(format_workflow_artifact_lines(run.binding))
     lines.extend(
         f"  /workflow {control.control_id} - {terminal_safe_text(control.label)}"
         for control in projection.workflow_controls
     )
     return tuple(lines)
+
+
+def format_workflow_artifact_lines(binding: WorkflowProjectBinding) -> tuple[str, ...]:
+    """Use the recorded artifact locations in both terminal presentations."""
+    return (
+        "Analysis artifacts:",
+        *(
+            f"  {terminal_safe_text(item.artifact_id)}: {terminal_safe_text(item.path)}"
+            for item in binding.artifacts
+        ),
+    )
+
+
+def format_research_correction_lines(
+    corrections: tuple[ResearchCorrectionRun, ...],
+) -> tuple[str, ...]:
+    """Show retained attempts and their independent checks in both terminal views."""
+    lines: list[str] = []
+    for series in corrections:
+        state = (series.stop_reason or "running").replace("-", " ")
+        lines.append(f"Corrections for {terminal_safe_text(series.stage_id)}: {state}")
+        for index, attempt in enumerate(series.attempts, start=1):
+            lines.append(f"  Attempt {index}/{series.maximum_attempts}: {attempt.status}")
+            if attempt.unavailable_reason:
+                lines.append(f"    {attempt.unavailable_reason.replace('-', ' ')}")
+            if attempt.assessment:
+                lines.extend(
+                    f"    {check.status.replace('_', ' ')}: {terminal_safe_text(check.reason)}"
+                    for check in attempt.assessment.checks
+                )
+            lines.extend(f"    {terminal_safe_text(item.path)}" for item in attempt.plan.outputs)
+    return tuple(lines)
+
+
+def format_research_review_lines(review: ResearchReviewRun | None) -> tuple[str, ...]:
+    """Share review presentation between plain output and the keyboard workflow dialog."""
+    if review is None:
+        return ()
+    return (
+        f"Research review: {review.status}",
+        *(
+            (f"Review limitation: {review.unavailable_reason.replace('-', ' ')}",)
+            if review.unavailable_reason
+            else ()
+        ),
+        *(
+            tuple(
+                f"  {item.verification}: {terminal_safe_text(item.verified_claim or item.reason)}"
+                for item in review.assessment.findings
+            )
+            if review.assessment is not None
+            else ()
+        ),
+    )
 
 
 def format_runtime_lines(projection: SessionProjection) -> tuple[str, ...]:
@@ -637,6 +698,11 @@ def format_runtime_lines(projection: SessionProjection) -> tuple[str, ...]:
                 lines.append(f"    Task: {terminal_safe_text(item.task_summary)}")
             if item.result_summary is not None:
                 lines.append(f"    Result: {terminal_safe_text(item.result_summary)}")
+            if item.review_proposals is not None:
+                lines.extend(
+                    f"    Unverified review proposal: {terminal_safe_text(candidate.summary)}"
+                    for candidate in item.review_proposals.candidates
+                )
     if projection.suggestions:
         lines.append("Suggested next steps:")
         lines.extend(

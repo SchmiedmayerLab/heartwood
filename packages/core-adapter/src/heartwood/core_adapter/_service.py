@@ -30,6 +30,7 @@ from heartwood.core_adapter._facade import (
     BackendErrorCode,
     BackendErrorEvent,
     BackendEvent,
+    BackendExecutionSettledEvent,
     BackendLifecycleEvent,
     BackendSubagentEvent,
     BackendTaskPlanEvent,
@@ -47,15 +48,21 @@ from heartwood.core_adapter.reproduction_journal import (
     prepare_reproduction,
     reproduction_records,
 )
+from heartwood.core_adapter.workflow_review import validate_parallel_review_plan
 from heartwood.core_adapter.workflow_runtime import (
     WorkflowEvaluator,
     handle_workflow_command,
+    record_parallel_review_admission,
+    settle_workflow_correction,
+    settle_workflow_review,
     workflow_admission_reason,
     workflow_run,
 )
 from heartwood.model_policy import ModelPolicyEngine
 from heartwood.schemas import ConfirmationRequest, JsonValue, PolicyProfile
 from heartwood.schemas.experiments import ExperimentExportBinding
+from heartwood.schemas.parallel_reviews import ReviewDispatchAction, ReviewExecutionPlan
+from heartwood.schemas.workflows import WorkflowRun
 from heartwood.session import (
     CommandKind,
     EventKind,
@@ -377,7 +384,62 @@ class SessionService:
     def close(self) -> None:
         """Release backend resources."""
         self.backend.close()
-        self.store.release_writer()
+        with self._command_lock:
+            self.store.release_writer()
+
+    def admit_parallel_review(
+        self, actions: tuple[ReviewDispatchAction, ...], *, cancelled: Callable[[], bool]
+    ) -> ReviewExecutionPlan | None:
+        """Recheck a consented review without holding session locks during qualification I/O."""
+        with self._command_lock:
+            self._require_review_owner(cancelled)
+            self._recover_pending_commit_locked()
+            current = workflow_run(self.replay_events())
+            review = current.research_review if current is not None else None
+            if review is None or review.parallel_plan is None:
+                return None
+            if review.status != "pending" or review.parallel_dispatch:
+                raise ValueError("Parallel review was already admitted or has ended")
+            evaluator = self._workflow_evaluator
+            if evaluator is None or current is None:
+                raise ValueError("Parallel review evidence is unavailable")
+            plan = review.parallel_plan
+            prepared = WorkflowRun.model_validate(
+                {
+                    **current.model_dump(),
+                    "revision": plan.scope.revision,
+                    "research_review": None,
+                    "parallel_review_plan": plan,
+                }
+            )
+        now = datetime.fromisoformat(self.clock())
+        snapshot = evaluator.prepare_review(current.binding, current.stage_id)
+        refreshed = validate_parallel_review_plan(
+            evaluator.prepare_parallel_review(prepared, session_id=self.store.session_id, now=now),
+            prepared,
+            snapshot,
+            session_id=self.store.session_id,
+            now=now,
+        )
+        if refreshed.fingerprint != plan.fingerprint:
+            raise ValueError("Parallel review qualification changed before dispatch")
+        if evaluator.prepare_review(current.binding, current.stage_id) != snapshot:
+            raise ValueError("Parallel review files changed during qualification")
+        with self._command_lock:
+            self._require_review_owner(cancelled)
+            if workflow_run(
+                self.replay_events()
+            ) != current or refreshed.valid_until <= datetime.fromisoformat(self.clock()):
+                raise ValueError("Parallel review changed or was cancelled before dispatch")
+            if reason := workflow_admission_reason(self, evaluator, None):
+                raise ValueError(reason)
+            event = record_parallel_review_admission(self, current, actions)
+        self._event_sink((event,))
+        return refreshed
+
+    def _require_review_owner(self, cancelled: Callable[[], bool]) -> None:
+        if cancelled() or not self.store.owns_writer:
+            raise ValueError("Parallel review no longer owns an active session")
 
     def wait_for_idle(self, timeout: float = 0) -> bool:
         """Wait for final callbacks without taking the session command lock.
@@ -597,8 +659,12 @@ class SessionService:
         self, stream: tuple[BackendEvent, ...], *, live: bool = True
     ) -> list[SessionEvent]:
         translated: list[SessionEvent] = []
+        execution_settled = False
         known_source_event_ids = self._known_source_event_ids_locked()
         for event in stream:
+            if isinstance(event, BackendExecutionSettledEvent):
+                execution_settled = live
+                continue
             if (
                 event.source_event_id is not None
                 and event.source_event_id in known_source_event_ids
@@ -749,6 +815,24 @@ class SessionService:
                                 "status": subagent.status.value,
                                 "parent_session_id": subagent.parent_session_id,
                                 "parent_action_id": subagent.parent_action_id,
+                                **(
+                                    {
+                                        "native_execution": subagent.native_execution.model_dump(
+                                            mode="json"
+                                        )
+                                    }
+                                    if subagent.native_execution is not None
+                                    else {}
+                                ),
+                                **(
+                                    {
+                                        "review_proposals": subagent.review_proposals.model_dump(
+                                            mode="json"
+                                        )
+                                    }
+                                    if subagent.review_proposals is not None
+                                    else {}
+                                ),
                             },
                             **source_payload,
                         },
@@ -768,6 +852,19 @@ class SessionService:
                 )
             else:
                 assert_never(event)
+        translated.extend(
+            settle_workflow_review(
+                self, self._workflow_evaluator, execution_settled=execution_settled
+            )
+        )
+        translated.extend(
+            settle_workflow_correction(
+                self,
+                self._workflow_evaluator,
+                execution_settled=execution_settled,
+                live=live,
+            )
+        )
         return translated
 
     def _record_confirmation_request(
@@ -1020,6 +1117,8 @@ def _audit_payload(kind: EventKind, payload: dict[str, JsonValue]) -> dict[str, 
             "evidence_fingerprint",
             "assessed_stage_id",
             "experiment_fingerprint",
+            "research_review_fingerprint",
+            "research_correction_fingerprint",
         )
     if kind == EventKind.COMMAND_RECEIVED:
         return _selected_audit_fields(

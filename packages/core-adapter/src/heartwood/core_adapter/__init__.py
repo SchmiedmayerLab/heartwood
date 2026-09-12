@@ -18,6 +18,7 @@ from heartwood.core_adapter._facade import (
     BackendEvent,
     BackendEventKind,
     BackendEventSink,
+    BackendExecutionSettledEvent,
     BackendLifecycle,
     BackendLifecycleEvent,
     BackendSubagent,
@@ -59,6 +60,7 @@ __all__ = [
     "BackendEvent",
     "BackendEventKind",
     "BackendEventSink",
+    "BackendExecutionSettledEvent",
     "BackendLifecycle",
     "BackendLifecycleEvent",
     "BackendSubagent",
@@ -91,4 +93,4 @@ __all__ = [
     "pending_action_group",
 ]
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"

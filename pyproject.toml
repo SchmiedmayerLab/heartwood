@@ -132,6 +132,10 @@ paths = ["packages"]
 minversion = "8.0"
 addopts = "-ra --strict-markers --strict-config --import-mode=importlib --cov=heartwood --cov-report=term-missing"
 testpaths = ["packages"]
+filterwarnings = [
+    "error::pytest.PytestUnhandledThreadExceptionWarning",
+    "error::pytest.PytestUnraisableExceptionWarning",
+]
 
 [tool.coverage.run]
 branch = true

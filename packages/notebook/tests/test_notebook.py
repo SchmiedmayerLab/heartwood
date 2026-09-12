@@ -58,6 +58,7 @@ from heartwood.notebook import (
 )
 from heartwood.notebook._widgets import WidgetSpec, _section_html
 from heartwood.schemas import ModelTransferResponse
+from heartwood.schemas.review import ReviewCandidate, ReviewProposals
 from heartwood.schemas.workflows import WorkflowStart
 from heartwood.session import JsonValue, SessionCommand
 
@@ -69,6 +70,7 @@ def test_notebook_workflow_catalog_does_not_start_a_session(tmp_path: Path) -> N
         assert notebook.research_workflows() == gateway.research_workflows()
         assert notebook.experiment_records() == gateway.experiment_records()
         assert notebook.export_experiments() == gateway.export_experiments()
+        assert notebook.verification_environment() == gateway.verification_environment()
         assert not gateway._services
         assert list(tmp_path.iterdir()) == []
     finally:
@@ -808,6 +810,18 @@ def test_notebook_view_model_preserves_the_complete_gateway_projection() -> None
                 parent_action_id="action-1",
                 task_summary="Review the synthetic analysis plan",
                 result_summary="Plan review is in progress",
+                review_proposals=ReviewProposals(
+                    candidates=(
+                        ReviewCandidate(
+                            candidate_id="syntax-1",
+                            condition="python-source-invalid",
+                            category="coding",
+                            severity="high",
+                            summary="Inspect supplied source",
+                            artifact_ids=("program",),
+                        ),
+                    )
+                ),
             ),
         ),
         streaming_text="Checking column types",
@@ -828,7 +842,7 @@ def test_notebook_view_model_preserves_the_complete_gateway_projection() -> None
     assert sections["Specialists"] == (
         "Research Planner: Working\n"
         "Task: Review the synthetic analysis plan\n"
-        "Result: Plan review is in progress",
+        "Result: Plan review is in progress\nUnverified review proposal: Inspect supplied source",
     )
     assert sections["Runtime"][-1] == (
         "Usage: 128 input, 32 output tokens across 2 calls (synthetic-model)"

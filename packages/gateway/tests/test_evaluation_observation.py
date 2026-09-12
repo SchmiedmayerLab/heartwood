@@ -6,8 +6,10 @@
 
 """Evaluation identity comes from the owned runtime, not a caller's labels."""
 
+from concurrent.futures import ThreadPoolExecutor
 from importlib.metadata import version
 from pathlib import Path
+from threading import Event
 
 import pytest
 from openhands.sdk import LLM
@@ -16,6 +18,86 @@ from pydantic import SecretStr
 
 from heartwood.core_adapter import DeterministicAgentBackend, SessionService
 from heartwood.gateway import ModelProfile, OpenHandsSdkBackend, ProjectContext, SessionGateway
+from heartwood.schemas.evaluation import EvaluationRuntimeObservation
+from heartwood.session import CommandKind, SessionCommand
+
+
+def _owned_gateway(root: Path) -> tuple[SessionGateway, str]:
+    gateway = SessionGateway(
+        project=ProjectContext(root),
+        service_factory=lambda path, session_id: SessionService.local_default(
+            path, session_id=session_id, backend=DeterministicAgentBackend(), env={}
+        ),
+        env={},
+    )
+    session_id = gateway.create_session("Synthetic observation")["session_id"]
+    with pytest.raises(ValueError, match="owned session"):
+        gateway.bind_evaluation_observer(session_id=session_id)
+    gateway.handle(
+        SessionCommand(
+            command_id="initial-pause",
+            session_id=session_id,
+            kind=CommandKind.PAUSE,
+            created_at="2026-09-11T00:00:00Z",
+        )
+    )
+    return gateway, session_id
+
+
+def test_bound_runtime_observer_uses_owned_service_without_gateway_lock(tmp_path: Path) -> None:
+    gateway, session_id = _owned_gateway(tmp_path)
+    try:
+        observe = gateway.bind_evaluation_observer(session_id=session_id)
+        expected = gateway.evaluation_observation(session_id=session_id)
+        with ThreadPoolExecutor(max_workers=1) as executor, gateway._state_lock:
+            result = executor.submit(observe, session_id).result(timeout=5)
+        assert result == expected
+        with pytest.raises(ValueError, match="requested session"):
+            observe("different-session")
+        gateway.stop()
+        with pytest.raises(ValueError, match="requested session"):
+            observe(session_id)
+        # A new owner does not renew a callback bound to the old service.
+        gateway.handle(
+            SessionCommand(
+                command_id="renewed-pause",
+                session_id=session_id,
+                kind=CommandKind.PAUSE,
+                created_at="2026-09-11T00:00:00Z",
+            )
+        )
+        assert gateway.bind_evaluation_observer(session_id=session_id)(session_id) == expected
+        with pytest.raises(ValueError, match="requested session"):
+            observe(session_id)
+    finally:
+        gateway.stop()
+
+
+def test_bound_runtime_observer_rechecks_ownership_after_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    gateway, session_id = _owned_gateway(tmp_path)
+    observe = gateway.bind_evaluation_observer(session_id=session_id)
+    original = gateway._evaluation_observation
+    entered, released = Event(), Event()
+
+    def blocked(service: SessionService) -> EvaluationRuntimeObservation:
+        result = original(service)
+        entered.set()
+        assert released.wait(timeout=10)
+        return result
+
+    monkeypatch.setattr(gateway, "_evaluation_observation", blocked)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(observe, session_id)
+        try:
+            assert entered.wait(timeout=5)
+            gateway.stop()
+        finally:
+            released.set()
+            gateway.stop()
+        with pytest.raises(ValueError, match="ownership changed"):
+            future.result(timeout=5)
 
 
 def test_production_observation_needs_no_inference_and_omits_credentials(

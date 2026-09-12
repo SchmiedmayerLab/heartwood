@@ -26,6 +26,10 @@ export const sessionProjectionJsonSchema = {
       type: "string",
     },
     Digest: { pattern: "^[0-9a-f]{64}$", type: "string" },
+    EvaluationIdentifier: {
+      pattern: "^[A-Za-z0-9][A-Za-z0-9_.:/+-]{0,255}$",
+      type: "string",
+    },
     EventKind: {
       enum: [
         "command.received",
@@ -50,6 +54,28 @@ export const sessionProjectionJsonSchema = {
         "workflow.execution.recorded",
       ],
       type: "string",
+    },
+    ExecutionBudget: {
+      additionalProperties: false,
+      properties: {
+        maximum_actions: { exclusiveMinimum: 0, maximum: 100, type: "integer" },
+        maximum_model_calls: {
+          exclusiveMinimum: 0,
+          maximum: 100,
+          type: "integer",
+        },
+        maximum_reported_cost_usd: { exclusiveMinimum: 0, type: "number" },
+        maximum_seconds: { exclusiveMinimum: 0, maximum: 3600, type: "number" },
+        maximum_tokens: { exclusiveMinimum: 0, type: "integer" },
+      },
+      required: [
+        "maximum_seconds",
+        "maximum_model_calls",
+        "maximum_tokens",
+        "maximum_reported_cost_usd",
+        "maximum_actions",
+      ],
+      type: "object",
     },
     ExecutionUsage: {
       additionalProperties: false,
@@ -201,6 +227,9 @@ export const sessionProjectionJsonSchema = {
     ExperimentStage: {
       additionalProperties: false,
       properties: {
+        correction_id: {
+          anyOf: [{ $ref: "#/$defs/Reference" }, { type: "null" }],
+        },
         session_id: { $ref: "#/$defs/Reference" },
         stage_id: { $ref: "#/$defs/Reference" },
         tool_call_id: {
@@ -215,6 +244,7 @@ export const sessionProjectionJsonSchema = {
         "stage_id",
         "workflow_sha256",
         "tool_call_id",
+        "correction_id",
       ],
       type: "object",
     },
@@ -238,6 +268,88 @@ export const sessionProjectionJsonSchema = {
         { items: { $ref: "#/$defs/JsonValue" }, type: "array" },
         { additionalProperties: { $ref: "#/$defs/JsonValue" }, type: "object" },
       ],
+    },
+    NativeTaskExecution: {
+      additionalProperties: false,
+      properties: {
+        clock_id: { format: "uuid", type: "string" },
+        finished_seconds: { minimum: 0, type: "number" },
+        started_seconds: { minimum: 0, type: "number" },
+      },
+      required: ["clock_id", "started_seconds", "finished_seconds"],
+      type: "object",
+    },
+    ParallelReviewPlan: {
+      additionalProperties: false,
+      properties: {
+        case_id: { $ref: "#/$defs/EvaluationIdentifier" },
+        evidence: {
+          items: { $ref: "#/$defs/ReviewQualificationEvidence" },
+          minItems: 6,
+          type: "array",
+        },
+        parallel_configuration_fingerprint: { $ref: "#/$defs/Sha256" },
+        policy: { $ref: "#/$defs/ParallelReviewPolicy" },
+        purpose: { const: "qualified-review", type: "string" },
+        scope: { $ref: "#/$defs/ReviewExecutionScope" },
+        sequential_configuration_fingerprint: { $ref: "#/$defs/Sha256" },
+        suite_fingerprint: { $ref: "#/$defs/Sha256" },
+        valid_until: { format: "date-time", type: "string" },
+      },
+      required: [
+        "scope",
+        "suite_fingerprint",
+        "case_id",
+        "sequential_configuration_fingerprint",
+        "parallel_configuration_fingerprint",
+        "policy",
+        "evidence",
+        "valid_until",
+      ],
+      type: "object",
+    },
+    ParallelReviewPolicy: {
+      additionalProperties: false,
+      properties: {
+        maximum_age_days: { exclusiveMinimum: 0, type: "integer" },
+        maximum_cost_ratio: { minimum: 1, type: "number" },
+        maximum_token_ratio: { minimum: 1, type: "number" },
+        maximum_workers: { maximum: 16, minimum: 2, type: "integer" },
+        minimum_latency_reduction: {
+          exclusiveMaximum: 1,
+          exclusiveMinimum: 0,
+          type: "number",
+        },
+        minimum_repeats: { minimum: 3, type: "integer" },
+      },
+      type: "object",
+    },
+    ParallelReviewTrialPlan: {
+      additionalProperties: false,
+      properties: {
+        case_id: { $ref: "#/$defs/EvaluationIdentifier" },
+        configuration_fingerprint: { $ref: "#/$defs/Sha256" },
+        purpose: { const: "qualification-trial", type: "string" },
+        reservation_fingerprint: { $ref: "#/$defs/Sha256" },
+        runtime_fingerprint: { $ref: "#/$defs/Sha256" },
+        scope: { $ref: "#/$defs/ReviewExecutionScope" },
+        seed: { minimum: 0, type: "integer" },
+        suite_fingerprint: { $ref: "#/$defs/Sha256" },
+        trial_id: { format: "uuid", type: "string" },
+        valid_until: { format: "date-time", type: "string" },
+      },
+      required: [
+        "scope",
+        "suite_fingerprint",
+        "case_id",
+        "trial_id",
+        "reservation_fingerprint",
+        "seed",
+        "configuration_fingerprint",
+        "runtime_fingerprint",
+        "valid_until",
+      ],
+      type: "object",
     },
     ProjectionActionDetails: {
       discriminator: {
@@ -496,14 +608,53 @@ export const sessionProjectionJsonSchema = {
       required: ["code", "label", "detail", "tone", "recoverable"],
       type: "object",
     },
+    ProjectionReviewExecution: {
+      additionalProperties: false,
+      properties: {
+        budget: { $ref: "#/$defs/ExecutionBudget" },
+        purpose: {
+          enum: ["qualified-review", "qualification-trial"],
+          type: "string",
+        },
+        reviewers: { items: { type: "string" }, type: "array" },
+        status: {
+          enum: [
+            "preview",
+            "authorized",
+            "admitted",
+            "assessed",
+            "unavailable",
+            "cancelled",
+          ],
+          type: "string",
+        },
+        summary: { type: "string" },
+        workers: { minimum: 2, type: "integer" },
+      },
+      required: [
+        "status",
+        "purpose",
+        "workers",
+        "reviewers",
+        "budget",
+        "summary",
+      ],
+      type: "object",
+    },
     ProjectionSubagent: {
       additionalProperties: false,
       properties: {
         agentName: { type: "string" },
         invocationId: { type: "string" },
+        nativeExecution: {
+          anyOf: [{ $ref: "#/$defs/NativeTaskExecution" }, { type: "null" }],
+        },
         parentActionId: { type: "string" },
         parentSessionId: { type: "string" },
         resultSummary: { anyOf: [{ type: "string" }, { type: "null" }] },
+        reviewProposals: {
+          anyOf: [{ $ref: "#/$defs/ReviewProposals" }, { type: "null" }],
+        },
         roleLabel: { type: "string" },
         status: {
           enum: ["proposed", "running", "completed", "error", "rejected"],
@@ -524,6 +675,8 @@ export const sessionProjectionJsonSchema = {
         "resultSummary",
         "parentSessionId",
         "parentActionId",
+        "reviewProposals",
+        "nativeExecution",
       ],
       type: "object",
     },
@@ -630,8 +783,455 @@ export const sessionProjectionJsonSchema = {
       ],
       type: "object",
     },
+    PythonExecutable: {
+      maxLength: 4096,
+      minLength: 1,
+      pattern: "^[^\\x00-\\x1f\\x7f]+$",
+      type: "string",
+    },
     Reference: {
       pattern: "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+      type: "string",
+    },
+    ResearchArtifactPath: {
+      additionalProperties: false,
+      properties: {
+        artifact_id: { $ref: "#/$defs/WorkflowIdentifier" },
+        path: { $ref: "#/$defs/ExperimentPath" },
+      },
+      required: ["artifact_id", "path"],
+      type: "object",
+    },
+    ResearchCorrectionAttempt: {
+      additionalProperties: false,
+      properties: {
+        assessment: {
+          anyOf: [
+            { $ref: "#/$defs/ReviewCorrectionAssessment" },
+            { type: "null" },
+          ],
+        },
+        attempt_id: { $ref: "#/$defs/Reference" },
+        plan: { $ref: "#/$defs/ReviewCorrectionPlan" },
+        started_sequence: { minimum: 0, type: "integer" },
+        status: {
+          enum: ["pending", "assessed", "unavailable", "cancelled"],
+          type: "string",
+        },
+        unavailable_reason: {
+          anyOf: [
+            {
+              enum: [
+                "no-structured-outcome",
+                "changed-context",
+                "invalid-evidence",
+                "admission-denied",
+              ],
+              type: "string",
+            },
+            { type: "null" },
+          ],
+        },
+      },
+      required: [
+        "attempt_id",
+        "plan",
+        "started_sequence",
+        "status",
+        "assessment",
+        "unavailable_reason",
+      ],
+      type: "object",
+    },
+    ResearchCorrectionRun: {
+      additionalProperties: false,
+      properties: {
+        attempts: {
+          items: { $ref: "#/$defs/ResearchCorrectionAttempt" },
+          maxItems: 3,
+          minItems: 1,
+          type: "array",
+        },
+        correction_id: { $ref: "#/$defs/Reference" },
+        maximum_attempts: { maximum: 3, minimum: 1, type: "integer" },
+        review: { $ref: "#/$defs/ResearchReviewRun" },
+        stage_id: { $ref: "#/$defs/WorkflowIdentifier" },
+        stop_reason: {
+          anyOf: [
+            {
+              enum: [
+                "corrected",
+                "attempt-limit",
+                "budget",
+                "unavailable",
+                "cancelled",
+              ],
+              type: "string",
+            },
+            { type: "null" },
+          ],
+        },
+      },
+      required: [
+        "correction_id",
+        "stage_id",
+        "review",
+        "maximum_attempts",
+        "attempts",
+        "stop_reason",
+      ],
+      type: "object",
+    },
+    ResearchReviewRun: {
+      additionalProperties: false,
+      properties: {
+        assessment: {
+          anyOf: [{ $ref: "#/$defs/ReviewAssessment" }, { type: "null" }],
+        },
+        parallel_dispatch: {
+          items: { $ref: "#/$defs/ReviewDispatchAction" },
+          maxItems: 16,
+          type: "array",
+        },
+        parallel_plan: {
+          anyOf: [{ $ref: "#/$defs/ReviewExecutionPlan" }, { type: "null" }],
+        },
+        review_id: { $ref: "#/$defs/Reference" },
+        reviewer_ids: {
+          items: { $ref: "#/$defs/WorkflowIdentifier" },
+          maxItems: 16,
+          minItems: 1,
+          type: "array",
+        },
+        snapshot: { $ref: "#/$defs/ReviewSnapshot" },
+        started_sequence: { minimum: 0, type: "integer" },
+        status: {
+          enum: ["pending", "assessed", "unavailable", "cancelled"],
+          type: "string",
+        },
+        submissions: {
+          items: { $ref: "#/$defs/ReviewSubmission" },
+          maxItems: 16,
+          type: "array",
+        },
+        unavailable_reason: {
+          anyOf: [
+            {
+              enum: [
+                "incomplete-review",
+                "invalid-review",
+                "no-structured-outcome",
+              ],
+              type: "string",
+            },
+            { type: "null" },
+          ],
+        },
+      },
+      required: [
+        "review_id",
+        "snapshot",
+        "reviewer_ids",
+        "started_sequence",
+        "status",
+        "submissions",
+        "assessment",
+        "parallel_plan",
+        "parallel_dispatch",
+        "unavailable_reason",
+      ],
+      type: "object",
+    },
+    ResearchText: { maxLength: 4000, minLength: 1, type: "string" },
+    ReviewArtifact: {
+      additionalProperties: false,
+      properties: {
+        artifact_id: { $ref: "#/$defs/WorkflowIdentifier" },
+        file: { $ref: "#/$defs/ExperimentFile" },
+      },
+      required: ["artifact_id", "file"],
+      type: "object",
+    },
+    ReviewAssessment: {
+      additionalProperties: false,
+      properties: {
+        findings: {
+          items: { $ref: "#/$defs/ReviewFinding" },
+          maxItems: 512,
+          type: "array",
+        },
+        schema_version: {
+          const: "heartwood.review-assessment.v1",
+          type: "string",
+        },
+        snapshot_sha256: { $ref: "#/$defs/Digest" },
+      },
+      required: ["schema_version", "snapshot_sha256", "findings"],
+      type: "object",
+    },
+    ReviewCandidate: {
+      additionalProperties: false,
+      properties: {
+        artifact_ids: {
+          items: { $ref: "#/$defs/WorkflowIdentifier" },
+          maxItems: 16,
+          minItems: 1,
+          type: "array",
+        },
+        candidate_id: { $ref: "#/$defs/WorkflowIdentifier" },
+        category: { $ref: "#/$defs/ReviewCategory" },
+        condition: { $ref: "#/$defs/WorkflowIdentifier" },
+        severity: { $ref: "#/$defs/ReviewSeverity" },
+        summary: { $ref: "#/$defs/ResearchText" },
+      },
+      required: [
+        "candidate_id",
+        "condition",
+        "category",
+        "severity",
+        "summary",
+        "artifact_ids",
+      ],
+      type: "object",
+    },
+    ReviewCategory: {
+      enum: ["coding", "statistical", "reproducibility"],
+      type: "string",
+    },
+    ReviewCorrectionAssessment: {
+      additionalProperties: false,
+      properties: {
+        checks: {
+          items: { $ref: "#/$defs/ReviewCorrectionCheck" },
+          maxItems: 512,
+          minItems: 1,
+          type: "array",
+        },
+        plan_sha256: { $ref: "#/$defs/Digest" },
+        snapshot: {
+          anyOf: [{ $ref: "#/$defs/ReviewSnapshot" }, { type: "null" }],
+        },
+      },
+      required: ["plan_sha256", "snapshot", "checks"],
+      type: "object",
+    },
+    ReviewCorrectionCheck: {
+      additionalProperties: false,
+      properties: {
+        finding_id: { $ref: "#/$defs/Digest" },
+        reason: { $ref: "#/$defs/WorkflowIdentifier" },
+        status: {
+          enum: ["not_observed", "still_observed", "unavailable", "stale"],
+          type: "string",
+        },
+      },
+      required: ["finding_id", "status", "reason"],
+      type: "object",
+    },
+    ReviewCorrectionPlan: {
+      additionalProperties: false,
+      properties: {
+        finding_ids: {
+          items: { $ref: "#/$defs/Digest" },
+          maxItems: 512,
+          minItems: 1,
+          type: "array",
+        },
+        output_directory: { maxLength: 512, minLength: 1, type: "string" },
+        outputs: {
+          items: { $ref: "#/$defs/ResearchArtifactPath" },
+          maxItems: 32,
+          minItems: 1,
+          type: "array",
+        },
+        review_id: { $ref: "#/$defs/Reference" },
+        snapshot_sha256: { $ref: "#/$defs/Digest" },
+      },
+      required: [
+        "review_id",
+        "snapshot_sha256",
+        "finding_ids",
+        "output_directory",
+        "outputs",
+      ],
+      type: "object",
+    },
+    ReviewDispatchAction: {
+      additionalProperties: false,
+      properties: {
+        action_fingerprint: { $ref: "#/$defs/Sha256" },
+        event_id: { minLength: 1, type: "string" },
+        reviewer_id: { $ref: "#/$defs/EvaluationIdentifier" },
+        tool_call_id: { minLength: 1, type: "string" },
+      },
+      required: [
+        "event_id",
+        "tool_call_id",
+        "reviewer_id",
+        "action_fingerprint",
+      ],
+      type: "object",
+    },
+    ReviewExecutionPlan: {
+      discriminator: {
+        mapping: {
+          "qualification-trial": "#/$defs/ParallelReviewTrialPlan",
+          "qualified-review": "#/$defs/ParallelReviewPlan",
+        },
+        propertyName: "purpose",
+      },
+      oneOf: [
+        { $ref: "#/$defs/ParallelReviewPlan" },
+        { $ref: "#/$defs/ParallelReviewTrialPlan" },
+      ],
+    },
+    ReviewExecutionScope: {
+      additionalProperties: false,
+      properties: {
+        budget: { $ref: "#/$defs/ExecutionBudget" },
+        project_fingerprint: { $ref: "#/$defs/Sha256" },
+        reviewer_ids: {
+          items: { $ref: "#/$defs/EvaluationIdentifier" },
+          maxItems: 16,
+          minItems: 2,
+          type: "array",
+        },
+        revision: { minimum: 0, type: "integer" },
+        session_id: { $ref: "#/$defs/EvaluationIdentifier" },
+        snapshot_fingerprint: { $ref: "#/$defs/Sha256" },
+        stage_id: { $ref: "#/$defs/EvaluationIdentifier" },
+        workers: { maximum: 16, minimum: 2, type: "integer" },
+        workflow_id: { $ref: "#/$defs/EvaluationIdentifier" },
+        workflow_run_id: { $ref: "#/$defs/EvaluationIdentifier" },
+      },
+      required: [
+        "project_fingerprint",
+        "session_id",
+        "workflow_run_id",
+        "workflow_id",
+        "stage_id",
+        "revision",
+        "snapshot_fingerprint",
+        "reviewer_ids",
+        "workers",
+        "budget",
+      ],
+      type: "object",
+    },
+    ReviewFinding: {
+      additionalProperties: false,
+      properties: {
+        category: { $ref: "#/$defs/ReviewCategory" },
+        condition: { $ref: "#/$defs/WorkflowIdentifier" },
+        disposition: { enum: ["open", "not_actionable"], type: "string" },
+        evidence: { items: { $ref: "#/$defs/ReviewArtifact" }, type: "array" },
+        finding_id: { $ref: "#/$defs/Digest" },
+        reason: { $ref: "#/$defs/WorkflowIdentifier" },
+        severity: { $ref: "#/$defs/ReviewSeverity" },
+        sources: {
+          items: { $ref: "#/$defs/ReviewSource" },
+          maxItems: 512,
+          minItems: 1,
+          type: "array",
+        },
+        verification: { $ref: "#/$defs/ReviewVerification" },
+        verified_claim: {
+          anyOf: [{ $ref: "#/$defs/ResearchText" }, { type: "null" }],
+        },
+      },
+      required: [
+        "finding_id",
+        "condition",
+        "category",
+        "severity",
+        "verification",
+        "disposition",
+        "verified_claim",
+        "reason",
+        "evidence",
+        "sources",
+      ],
+      type: "object",
+    },
+    ReviewProposals: {
+      additionalProperties: false,
+      properties: {
+        candidates: {
+          items: { $ref: "#/$defs/ReviewCandidate" },
+          maxItems: 32,
+          type: "array",
+        },
+      },
+      required: ["candidates"],
+      type: "object",
+    },
+    ReviewQualificationEvidence: {
+      additionalProperties: false,
+      properties: {
+        record_fingerprint: { $ref: "#/$defs/Sha256" },
+        run_id: { format: "uuid", type: "string" },
+      },
+      required: ["run_id", "record_fingerprint"],
+      type: "object",
+    },
+    ReviewSeverity: {
+      enum: ["low", "medium", "high", "critical"],
+      type: "string",
+    },
+    ReviewSnapshot: {
+      additionalProperties: false,
+      properties: {
+        artifacts: {
+          items: { $ref: "#/$defs/ReviewArtifact" },
+          maxItems: 32,
+          minItems: 1,
+          type: "array",
+        },
+        schema_version: {
+          const: "heartwood.review-snapshot.v1",
+          type: "string",
+        },
+      },
+      required: ["schema_version", "artifacts"],
+      type: "object",
+    },
+    ReviewSource: {
+      additionalProperties: false,
+      properties: {
+        candidate: { $ref: "#/$defs/ReviewCandidate" },
+        review_id: { $ref: "#/$defs/Reference" },
+        reviewer_id: { $ref: "#/$defs/Reference" },
+      },
+      required: ["review_id", "reviewer_id", "candidate"],
+      type: "object",
+    },
+    ReviewSubmission: {
+      additionalProperties: false,
+      properties: {
+        candidates: {
+          items: { $ref: "#/$defs/ReviewCandidate" },
+          maxItems: 32,
+          type: "array",
+        },
+        review_id: { $ref: "#/$defs/Reference" },
+        reviewer_id: { $ref: "#/$defs/Reference" },
+        schema_version: {
+          const: "heartwood.review-submission.v1",
+          type: "string",
+        },
+        snapshot_sha256: { $ref: "#/$defs/Digest" },
+      },
+      required: [
+        "candidates",
+        "schema_version",
+        "review_id",
+        "reviewer_id",
+        "snapshot_sha256",
+      ],
+      type: "object",
+    },
+    ReviewVerification: {
+      enum: ["verified", "rejected", "unsupported", "stale", "unavailable"],
       type: "string",
     },
     SessionLifecycle: {
@@ -645,6 +1245,7 @@ export const sessionProjectionJsonSchema = {
       ],
       type: "string",
     },
+    Sha256: { pattern: "^[a-f0-9]{64}$", type: "string" },
     WorkflowBoundInput: {
       additionalProperties: false,
       properties: {
@@ -674,18 +1275,41 @@ export const sessionProjectionJsonSchema = {
       additionalProperties: false,
       properties: {
         control_id: {
-          enum: ["run", "evaluate", "accept", "decline", "cancel"],
+          enum: [
+            "run",
+            "evaluate",
+            "accept",
+            "decline",
+            "cancel",
+            "request-review",
+            "correct",
+            "prepare-parallel-review",
+            "request-parallel-review",
+          ],
           type: "string",
         },
         label: { $ref: "#/$defs/WorkflowText" },
         request: {
           anyOf: [
             { $ref: "#/$defs/WorkflowTransition" },
+            { $ref: "#/$defs/WorkflowReviewRequest" },
             { $ref: "#/$defs/WorkflowReview" },
+            { $ref: "#/$defs/WorkflowCorrectionRequest" },
           ],
         },
       },
       required: ["control_id", "label", "request"],
+      type: "object",
+    },
+    WorkflowCorrectionRequest: {
+      additionalProperties: false,
+      properties: {
+        action: { const: "correct", type: "string" },
+        maximum_attempts: { maximum: 3, minimum: 1, type: "integer" },
+        revision: { minimum: 0, type: "integer" },
+        run_id: { minLength: 1, type: "string" },
+      },
+      required: ["action", "run_id", "revision", "maximum_attempts"],
       type: "object",
     },
     WorkflowIdentifier: {
@@ -696,6 +1320,12 @@ export const sessionProjectionJsonSchema = {
     WorkflowProjectBinding: {
       additionalProperties: false,
       properties: {
+        artifacts: {
+          items: { $ref: "#/$defs/ResearchArtifactPath" },
+          maxItems: 64,
+          minItems: 1,
+          type: "array",
+        },
         inputs: {
           items: { $ref: "#/$defs/WorkflowBoundInput" },
           maxItems: 32,
@@ -703,6 +1333,9 @@ export const sessionProjectionJsonSchema = {
           type: "array",
         },
         output_directory: { maxLength: 512, minLength: 1, type: "string" },
+        python_executable: {
+          anyOf: [{ $ref: "#/$defs/PythonExecutable" }, { type: "null" }],
+        },
         workflow_fingerprint: { pattern: "^[0-9a-f]{64}$", type: "string" },
         workflow_id: { $ref: "#/$defs/WorkflowIdentifier" },
       },
@@ -710,7 +1343,9 @@ export const sessionProjectionJsonSchema = {
         "workflow_id",
         "workflow_fingerprint",
         "output_directory",
+        "python_executable",
         "inputs",
+        "artifacts",
       ],
       type: "object",
     },
@@ -732,6 +1367,22 @@ export const sessionProjectionJsonSchema = {
       ],
       type: "object",
     },
+    WorkflowReviewRequest: {
+      additionalProperties: false,
+      properties: {
+        action: { const: "request-review", type: "string" },
+        parallel_review_fingerprint: {
+          anyOf: [
+            { pattern: "^[0-9a-f]{64}$", type: "string" },
+            { type: "null" },
+          ],
+        },
+        revision: { minimum: 0, type: "integer" },
+        run_id: { minLength: 1, type: "string" },
+      },
+      required: ["action", "run_id", "revision", "parallel_review_fingerprint"],
+      type: "object",
+    },
     WorkflowRun: {
       additionalProperties: false,
       properties: {
@@ -740,12 +1391,20 @@ export const sessionProjectionJsonSchema = {
           items: { $ref: "#/$defs/WorkflowStageEvaluation" },
           type: "array",
         },
+        corrections: {
+          items: { $ref: "#/$defs/ResearchCorrectionRun" },
+          maxItems: 32,
+          type: "array",
+        },
         created_at: { format: "date-time", type: "string" },
         evaluation: {
           anyOf: [
             { $ref: "#/$defs/WorkflowStageEvaluation" },
             { type: "null" },
           ],
+        },
+        parallel_review_plan: {
+          anyOf: [{ $ref: "#/$defs/ReviewExecutionPlan" }, { type: "null" }],
         },
         phase: {
           enum: [
@@ -757,6 +1416,9 @@ export const sessionProjectionJsonSchema = {
             "cancelled",
           ],
           type: "string",
+        },
+        research_review: {
+          anyOf: [{ $ref: "#/$defs/ResearchReviewRun" }, { type: "null" }],
         },
         revision: { minimum: 0, type: "integer" },
         run_id: { minLength: 1, type: "string" },
@@ -783,6 +1445,9 @@ export const sessionProjectionJsonSchema = {
         "created_at",
         "stage_started_at",
         "stage_usage_baseline",
+        "research_review",
+        "parallel_review_plan",
+        "corrections",
       ],
       type: "object",
     },
@@ -826,7 +1491,10 @@ export const sessionProjectionJsonSchema = {
     WorkflowTransition: {
       additionalProperties: false,
       properties: {
-        action: { enum: ["run", "evaluate", "cancel"], type: "string" },
+        action: {
+          enum: ["run", "evaluate", "cancel", "prepare-parallel-review"],
+          type: "string",
+        },
         revision: { minimum: 0, type: "integer" },
         run_id: { minLength: 1, type: "string" },
       },
@@ -876,6 +1544,9 @@ export const sessionProjectionJsonSchema = {
       anyOf: [{ $ref: "#/$defs/ProjectionResearcherNotice" }, { type: "null" }],
     },
     researcherStatus: { $ref: "#/$defs/ProjectionResearcherStatus" },
+    reviewExecution: {
+      anyOf: [{ $ref: "#/$defs/ProjectionReviewExecution" }, { type: "null" }],
+    },
     revision: { minimum: -1, type: "integer" },
     schema_version: {
       const: "heartwood.session-projection.v1",
@@ -907,6 +1578,7 @@ export const sessionProjectionJsonSchema = {
     "schema_version",
     "sessionId",
     "workflow",
+    "reviewExecution",
     "experiments",
     "workflowControls",
     "eventCount",

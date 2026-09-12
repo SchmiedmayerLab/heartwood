@@ -19,6 +19,24 @@ from heartwood.cli import main
 from heartwood.gateway import ProjectContext, SessionGateway
 from heartwood.gateway.experiments import ExperimentRecorder
 from heartwood.schemas.experiments import ExperimentCollection
+from heartwood.schemas.python_environment import PythonEnvironmentSnapshot
+
+
+@pytest.mark.parametrize("explicit", [False, True])
+def test_environment_command_is_read_only_json(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    explicit: bool,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    arguments = ["--python", sys.executable] if explicit else []
+    assert main(["experiments", "environment", *arguments]) == 0
+    captured = capsys.readouterr()
+    value = PythonEnvironmentSnapshot.model_validate_json(captured.out)
+    assert value.implementation == "CPython"
+    assert captured.err == ""
+    assert list(tmp_path.iterdir()) == []
 
 
 def script(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, text: str | None = None) -> None:

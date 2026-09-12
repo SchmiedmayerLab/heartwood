@@ -138,10 +138,18 @@ The shared projection reports each purpose and a combined total without storing 
 OpenHands Task Tracker updates supply the title and status of each plan item.
 Free-form task notes are not copied into Heartwood session or audit events.
 
-Sequential specialist work is represented with its specialist name, task identifier, status, parent session, and parent action.
+Specialist work is represented with its specialist name, task identifier, status, parent session, and parent action.
 The parent OpenHands conversation remains authoritative and receives the specialist result before continuing.
 Each invocation uses its child conversation UUID for task identity, preventing usage and lineage collisions after the parent restarts.
-Parallel delegation is not part of the current runtime contract.
+Sequential execution is the default.
+Qualified parallel advisory reviews use the same workflow journal and grouped action policy.
+The journal binds consent to the workflow revision, artifact snapshot, reviewers, budget, and qualification evidence.
+Before dispatch, the gateway rechecks that binding and records the exact native event and tool-call identities with action fingerprints.
+The security audit contains the review record's digest, not delegated instructions or returned prose.
+
+Admission uses the existing paired event and audit append recovery protocol.
+An interrupted admission can be recovered as a durable record, but is never permission to dispatch the same batch again.
+Late callbacks must still own the active session lease and must not be cancelled; they cannot reacquire a released lease.
 
 ## Move Between Interfaces
 

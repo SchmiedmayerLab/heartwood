@@ -16,11 +16,14 @@ from uuid import uuid4
 
 import pytest
 from openhands.sdk import Agent, LocalConversation
+from openhands.sdk.conversation.cancellation import CancellationToken
 from openhands.tools.task import TaskAction
+from openhands.tools.task.manager import Task, TaskManager, TaskStatus
 
 import heartwood.gateway._specialist_task as specialist_task_module
 from heartwood.gateway._openhands_persistence import ContentMinimizedLocalFileStore
 from heartwood.gateway._specialist_task import (
+    HeartwoodSpecialistObservation,
     _CatalogTaskExecutor,
     _CatalogTaskManager,
 )
@@ -50,15 +53,64 @@ def test_catalog_task_manager_rejects_non_durable_resume() -> None:
         )
 
 
-def test_task_executor_propagates_interrupt_to_the_active_child() -> None:
+@pytest.mark.parametrize("failed", [False, True])
+def test_native_timing_is_call_local_and_absent_for_unstarted_tasks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failed: bool
+) -> None:
     manager = _CatalogTaskManager(allowed_specialist_ids=frozenset({"research-planner"}))
-    child = Mock(spec=LocalConversation)
-    manager._active_child = cast(LocalConversation, child)
+    parent = Mock(spec=LocalConversation)
+    parent.cancel_token = CancellationToken()
+    parent.state.persistence_dir = tmp_path
+    manager.attach_parent(cast(LocalConversation, parent))
+    task = Task(id="timed-task", conversation_id=uuid4(), status=TaskStatus.RUNNING)
+
+    def run(_manager: TaskManager, current: Task, _prompt: str) -> Task:
+        if failed:
+            raise RuntimeError("Synthetic task failure")
+        current.set_result("Synthetic result")
+        return current
+
+    monkeypatch.setattr(TaskManager, "_run_task", run)
+    monkeypatch.setattr(manager, "start_task", lambda **_kwargs: manager._run_task(task, "Review"))
+    executor = _CatalogTaskExecutor(manager)
+    result = executor(TaskAction(prompt="Review", subagent_type="research-planner"))
+    assert isinstance(result, HeartwoodSpecialistObservation)
+    assert result.is_error == failed
+    assert result.native_execution is not None
+    assert result.native_execution.finished_seconds >= result.native_execution.started_seconds
+    assert "clock_id" not in repr(result.to_llm_content)
+    assert specialist_task_module._task_execution.get() is None
+
+    parent.cancel_token.cancel()
+    cancelled = executor(TaskAction(prompt="Review", subagent_type="research-planner"))
+    assert isinstance(cancelled, HeartwoodSpecialistObservation)
+    assert cancelled.is_error
+    assert cancelled.native_execution is None
+    assert specialist_task_module._task_execution.get() is None
+
+
+@pytest.mark.parametrize("failed_interrupt", [False, True])
+def test_task_executor_interrupts_all_native_running_children(failed_interrupt: bool) -> None:
+    manager = _CatalogTaskManager(allowed_specialist_ids=frozenset({"research-planner"}))
+    children = [Mock(spec=LocalConversation) for _ in range(3)]
+    for index, child in enumerate(children):
+        task = Task(
+            id=f"task-{index}",
+            conversation_id=uuid4(),
+            conversation=cast(LocalConversation, child),
+            status=TaskStatus.COMPLETED if index == 2 else TaskStatus.RUNNING,
+        )
+        manager._tasks[task.id] = task
+    if failed_interrupt:
+        children[0].interrupt.side_effect = RuntimeError("Synthetic interruption failure")
     executor = _CatalogTaskExecutor(manager)
 
-    executor.interrupt()
+    with pytest.raises(ExceptionGroup) if failed_interrupt else nullcontext():
+        executor.interrupt()
 
-    child.interrupt.assert_called_once_with()
+    children[0].interrupt.assert_called_once_with()
+    children[1].interrupt.assert_called_once_with()
+    children[2].interrupt.assert_not_called()
 
 
 def test_catalog_task_manager_preserves_delegate_observability_metadata(
@@ -70,6 +122,7 @@ def test_catalog_task_manager_preserves_delegate_observability_metadata(
     parent.state.persistence_dir = tmp_path / "openhands"
     parent.state.workspace.working_dir = tmp_path / "project"
     parent.state.id = uuid4()
+    parent.cancel_token = CancellationToken()
     manager._parent_conversation = cast(LocalConversation, parent)
 
     link = {
@@ -87,6 +140,9 @@ def test_catalog_task_manager_preserves_delegate_observability_metadata(
     child = Mock(spec=LocalConversation)
     conversation_type.return_value = child
     monkeypatch.setattr(specialist_task_module, "LocalConversation", conversation_type)
+    monkeypatch.setattr(
+        specialist_task_module, "_InterruptibleSpecialistConversation", conversation_type
+    )
 
     created = manager._get_conversation(
         description="Review the analysis plan",
@@ -98,6 +154,7 @@ def test_catalog_task_manager_preserves_delegate_observability_metadata(
     )
 
     assert created is child
+    assert child._parent_cancel_token is parent.cancel_token
     options = conversation_type.call_args.kwargs
     assert options["observability_metadata"] == {
         "is_delegate": True,
@@ -109,6 +166,31 @@ def test_catalog_task_manager_preserves_delegate_observability_metadata(
     assert options["observability_tags"] == ["delegate"]
     assert isinstance(options["file_store"], ContentMinimizedLocalFileStore)
     assert options["profile_store_dir"] == tmp_path / "subagent" / "profiles"
+
+
+def test_cancelled_parent_cannot_start_an_already_created_specialist(tmp_path: Path) -> None:
+    manager = _CatalogTaskManager(allowed_specialist_ids=frozenset({"research-planner"}))
+    parent = Mock(spec=LocalConversation)
+    parent.cancel_token = CancellationToken()
+    parent.state.persistence_dir = tmp_path
+    manager.attach_parent(cast(LocalConversation, parent))
+    child = Mock(spec=LocalConversation)
+    task = Task(
+        id="prepared-task",
+        conversation_id=uuid4(),
+        conversation=cast(LocalConversation, child),
+        status=TaskStatus.RUNNING,
+    )
+    manager._tasks[task.id] = task
+    parent.cancel_token.cancel()
+
+    result = manager._run_task(task, "This request must not reach a model.")
+
+    assert result.status == TaskStatus.ERROR
+    child.send_message.assert_not_called()
+    child.run.assert_not_called()
+    child.close.assert_called_once_with()
+    assert manager._tasks[task.id].conversation is None
 
 
 def test_task_identity_does_not_restart_with_the_manager() -> None:
@@ -132,3 +214,35 @@ def test_task_action_resume_remains_typed_for_fail_closed_validation() -> None:
     )
 
     assert action.resume == "task_00000001"
+
+
+def test_missing_child_evidence_and_malformed_task_envelopes_fail_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = _CatalogTaskManager(
+        allowed_specialist_ids=frozenset({"research-planner"}),
+        structured_reviews=True,
+    )
+    missing = Task(
+        id="task-missing",
+        status=TaskStatus.COMPLETED,
+        conversation_id=uuid4(),
+        result="Do not accept this unsupported success claim",
+    )
+    manager._evict_task(missing)
+    assert missing.status == TaskStatus.ERROR
+    assert missing.result is None
+    malformed = Task(
+        id="task-malformed",
+        status=TaskStatus.COMPLETED,
+        conversation_id=uuid4(),
+        result="private-invalid-result",
+    )
+    monkeypatch.setattr(manager, "start_task", lambda **_kwargs: malformed)
+    result = _CatalogTaskExecutor(manager)(
+        TaskAction(prompt="Review", subagent_type="research-planner")
+    )
+    assert isinstance(result, HeartwoodSpecialistObservation)
+    assert result.is_error
+    assert result.review_proposals is None
+    assert "private-invalid-result" not in result.text

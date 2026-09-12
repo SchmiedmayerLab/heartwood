@@ -1071,6 +1071,12 @@ class FakeClient implements HeartwoodClient {
     return Promise.resolve({ workflows: [] });
   }
 
+  getVerificationEnvironment(): ReturnType<
+    HeartwoodClient["getVerificationEnvironment"]
+  > {
+    return Promise.reject(new Error("No environment fixture requested"));
+  }
+
   getExperimentRecords(): ReturnType<HeartwoodClient["getExperimentRecords"]> {
     return Promise.resolve({
       schema_version: "heartwood.experiment-collection.v1",
@@ -2102,6 +2108,8 @@ describe("App", () => {
             statusLabel: "Working",
             taskSummary: "Plan the synthetic analysis",
             resultSummary: null,
+            reviewProposals: null,
+            nativeExecution: null,
             parentSessionId: "session-test",
             parentActionId: "task-action-1",
           },
@@ -2147,10 +2155,27 @@ describe("App", () => {
             taskId: "task-verification",
             agentName: "result-reviewer",
             roleLabel: "Result Reviewer",
-            status: "proposed",
-            statusLabel: "Proposed",
+            status: "completed",
+            statusLabel: "Complete",
             taskSummary: "Verify the result",
             resultSummary: null,
+            reviewProposals: {
+              candidates: [
+                {
+                  candidate_id: "syntax-1",
+                  condition: "python-source-invalid",
+                  category: "coding",
+                  severity: "high",
+                  summary: "Check the supplied <script>source</script>.",
+                  artifact_ids: ["program"],
+                },
+              ],
+            },
+            nativeExecution: {
+              clock_id: "025c5e8f-b5dd-4c1e-a86e-85f122abfbc6",
+              started_seconds: 1,
+              finished_seconds: 2,
+            },
             parentSessionId: "session-test",
             parentActionId: "task-action-2",
           },
@@ -2159,6 +2184,11 @@ describe("App", () => {
     });
     await waitFor(() => expect(status).toHaveTextContent("$1.25"));
     expect(status).toHaveTextContent("2 specialists");
+    expect(status).toHaveTextContent("Unverified review proposals");
+    expect(status).toHaveTextContent(
+      "Check the supplied <script>source</script>.",
+    );
+    expect(status.querySelector("script")).toBeNull();
   });
 
   it("uses projection capabilities for paused work and resume commands", async () => {
@@ -2237,6 +2267,8 @@ describe("App", () => {
           statusLabel: "Work\u2066ing",
           taskSummary: "Review the analysis",
           resultSummary: null,
+          reviewProposals: null,
+          nativeExecution: null,
           parentSessionId: "session-test",
           parentActionId: "task-action",
         },

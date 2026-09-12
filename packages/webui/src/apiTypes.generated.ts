@@ -15,6 +15,7 @@
 export type HeartwoodApiContract =
   | ApiResponse
   | ExperimentCollection
+  | PythonEnvironmentSnapshot
   | ExperimentExport
   | WorkflowCatalog
   | WorkflowRequest
@@ -95,10 +96,15 @@ export type ExperimentPath = string;
 export type Digest = string;
 export type ExperimentStatus =
   "started" | "interrupted" | "resumed" | "succeeded" | "failed" | "cancelled";
+export type MetadataText = string;
 export type WorkflowIdentifier = string;
 export type WorkflowText = string;
 export type WorkflowRequest =
-  WorkflowStart | WorkflowTransition | WorkflowReview;
+  | WorkflowStart
+  | WorkflowTransition
+  | WorkflowReviewRequest
+  | WorkflowReview
+  | WorkflowCorrectionRequest;
 export type WorkflowInputValue = string;
 
 /**
@@ -857,6 +863,7 @@ export interface ExperimentEnvironment {
  * Association with the owning Heartwood session and research stage.
  */
 export interface ExperimentStage {
+  correction_id: Reference | null;
   session_id: Reference;
   stage_id: Reference;
   tool_call_id: Reference | null;
@@ -870,6 +877,20 @@ export interface ExperimentEvidence {
   event_id: string;
   event_sha256: Digest;
   kind: Reference;
+}
+/**
+ * Interpreter identity and declared installed versions without paths or secrets.
+ */
+export interface PythonEnvironmentSnapshot {
+  implementation: MetadataText;
+  machine: MetadataText;
+  /**
+   * @maxItems 10000
+   */
+  packages: any[][];
+  python: MetadataText;
+  schema_version?: "heartwood.python-environment.v1";
+  system: MetadataText;
 }
 /**
  * Canonical record bytes and their digest, not a signed checkpoint.
@@ -1002,7 +1023,16 @@ export interface WorkflowStart {
  * Apply a transition only to the exact run and revision the researcher saw.
  */
 export interface WorkflowTransition {
-  action: "run" | "evaluate" | "cancel";
+  action: "run" | "evaluate" | "cancel" | "prepare-parallel-review";
+  revision: number;
+  run_id: string;
+}
+/**
+ * Request advisory review; parallel work requires the exact journaled preview.
+ */
+export interface WorkflowReviewRequest {
+  action: "request-review";
+  parallel_review_fingerprint: string | null;
   revision: number;
   run_id: string;
 }
@@ -1013,6 +1043,15 @@ export interface WorkflowReview {
   action: "review";
   approved: boolean;
   evidence_fingerprint: string;
+  revision: number;
+  run_id: string;
+}
+/**
+ * Authorize bounded parent-agent corrections without approving their tool actions.
+ */
+export interface WorkflowCorrectionRequest {
+  action: "correct";
+  maximum_attempts: number;
   revision: number;
   run_id: string;
 }
