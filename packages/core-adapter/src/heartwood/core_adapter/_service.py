@@ -223,9 +223,11 @@ class SessionService:
                     None,
                 )
                 if fatal_error is not None:
-                    unavailable_reason = (
-                        f"{command_kind} is unavailable because this session has "
-                        "an unknown execution outcome"
+                    incompatible = BackendErrorCode.SESSION_RUNTIME_INCOMPATIBLE.value
+                    unavailable_reason = f"{command_kind} is unavailable because this session " + (
+                        "requires its original agent runtime"
+                        if fatal_error.payload.get("code") == incompatible
+                        else "has an unknown execution outcome"
                     )
             first_sequence = self.store.next_sequence()
             self.store.accept_command(

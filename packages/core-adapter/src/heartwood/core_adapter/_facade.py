@@ -58,6 +58,7 @@ _FATAL_BACKEND_ERROR_CODES = frozenset(
     {
         BackendErrorCode.ACTION_OUTCOME_UNKNOWN.value,
         BackendErrorCode.AGENT_OUTCOME_UNKNOWN.value,
+        BackendErrorCode.SESSION_RUNTIME_INCOMPATIBLE.value,
     }
 )
 
