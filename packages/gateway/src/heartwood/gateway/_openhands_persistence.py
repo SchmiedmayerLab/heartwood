@@ -113,8 +113,10 @@ class ContentMinimizedLocalFileStore(LocalFileStore):
                 ) from error
             marker = result.payload
             _validate_marker(marker, sdk_version=sdk_version)
+            _validate_and_minimize_existing_state(
+                root, marker_path=marker_path, minimize=bool(result.applied_versions)
+            )
             if result.applied_versions:
-                _validate_and_minimize_existing_state(root, marker_path=marker_path)
                 write_private_json_atomic(marker_path, marker)
         else:
             had_state = any(root.iterdir())
@@ -166,6 +168,7 @@ def _validate_and_minimize_existing_state(
     root: Path,
     *,
     marker_path: Path | None = None,
+    minimize: bool = True,
 ) -> None:
     replacements: list[tuple[Path, str]] = []
     event_indices: list[int] = []
@@ -199,6 +202,8 @@ def _validate_and_minimize_existing_state(
             if match is None:
                 raise OpenHandsPersistenceError("OpenHands event filename is unsupported")
             event_indices.append(int(match.group("index")))
+            if not minimize:
+                continue
             try:
                 persisted = read_private_text(path)
                 minimized = _minimize_event(persisted)
