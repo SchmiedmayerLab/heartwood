@@ -225,9 +225,15 @@ def test_environment_digest_does_not_capture_paths_urls_or_credentials(
         metadata: ClassVar = {"Name": "synthetic-package", "Home-page": "https://private.example"}
         version = "1.2.3"
 
-    monkeypatch.setattr(recording, "distributions", lambda: iter([Distribution()]))
+    class Incomplete:
+        metadata: ClassVar[dict[str, str]] = {}
+        version = None
+
+    monkeypatch.setattr(recording, "distributions", lambda: iter([Distribution(), Incomplete()]))
     monkeypatch.setenv("OPENAI_API_KEY", "synthetic-secret-do-not-export")
     environment = recording.observed_python_environment()
+    monkeypatch.setattr(recording, "distributions", lambda: iter([Distribution()]))
+    assert recording.observed_python_environment() == environment
     assert environment.source == "observed"
     assert len(environment.sha256) == 64
     assert "private.example" not in environment.model_dump_json()

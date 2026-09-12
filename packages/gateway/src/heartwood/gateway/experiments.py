@@ -331,7 +331,11 @@ def experiment_digest(value: object) -> str:
 
 def observed_python_environment() -> ExperimentEnvironment:
     """Hash interpreter and package versions without paths, URLs, or environment values."""
-    packages = sorted((item.metadata["Name"], item.version) for item in distributions())
+    packages = sorted(
+        (name, version)
+        for name, version in ((item.metadata.get("Name"), item.version) for item in distributions())
+        if isinstance(name, str) and isinstance(version, str)
+    )
     return ExperimentEnvironment(
         kind="python",
         source="observed",
