@@ -225,7 +225,7 @@ describe("research workflow workspace", () => {
     const record = screen.getByRole("region", {
       name: "Experiment Inspect Data",
     });
-    expect(record).toHaveTextContent("Awaiting stage acceptance");
+    expect(record).toHaveTextContent("Outcome not recorded");
     expect(record).toHaveTextContent("3064c9dc-826f-4793-9203-e381dbf26303");
     expect(record).toHaveTextContent("b".repeat(64));
     expect(record).not.toHaveTextContent("succeeded");
