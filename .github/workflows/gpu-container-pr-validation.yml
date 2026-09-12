@@ -132,6 +132,7 @@ jobs:
     name: Build GPU candidate ${{ matrix.target }}
     needs: contract
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -139,13 +140,15 @@ jobs:
           - target: runtime-gpu-nvidia
             runner: ubuntu-24.04
           - target: terra-runtime-gpu-nvidia
-            runner: blacksmith-16vcpu-ubuntu-2404
+            runner: ubuntu-24.04
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
         with:
           persist-credentials: false
           submodules: true
+      - name: Reclaim runner disk
+        uses: ./.github/actions/reclaim-runner-disk
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
       - name: Build and validate candidate without image export

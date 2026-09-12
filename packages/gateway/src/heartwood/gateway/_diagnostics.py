@@ -163,6 +163,12 @@ _DIAGNOSTICS: dict[str, DiagnosticDefinition] = {
         "Check the connection and provider status, then retry the task.",
         "/reference/troubleshooting/#hw-agent-012-model-provider-is-unavailable",
     ),
+    "agent-session-runtime-incompatible": DiagnosticDefinition(
+        "HW-AGENT-013",
+        "The session requires its original agent runtime",
+        "Keep the session history and start a new session, or use the original Heartwood version.",
+        "/reference/troubleshooting/#hw-agent-013-session-runtime-is-incompatible",
+    ),
     "agent-unknown": DiagnosticDefinition(
         "HW-AGENT-999",
         "The agent runtime reported an error",

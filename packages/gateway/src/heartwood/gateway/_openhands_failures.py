@@ -21,6 +21,7 @@ from heartwood.core_adapter import (
     BackendErrorEvent,
     BackendEvent,
 )
+from heartwood.gateway._openhands_persistence import OpenHandsSdkVersionError
 
 
 class _PrivacySafeRetryLogFilter(logging.Filter):
@@ -65,6 +66,11 @@ def backend_error(
     source_event_id: str | None = None,
 ) -> BackendEvent:
     """Translate a locally caught exception without retaining its text."""
+    if isinstance(error, OpenHandsSdkVersionError):
+        return BackendErrorEvent(
+            error_code=BackendErrorCode.SESSION_RUNTIME_INCOMPATIBLE,
+            source_event_id=source_event_id,
+        )
     return BackendErrorEvent(
         error_code=classified_error_code(
             classify_error(type(error).__name__, str(error)),

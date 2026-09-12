@@ -6,9 +6,5 @@
 
 self-hosted-runner:
   labels:
-    - blacksmith-4vcpu-ubuntu-2404
-    - blacksmith-8vcpu-ubuntu-2404
-    - blacksmith-8vcpu-ubuntu-2404-arm
-    - blacksmith-16vcpu-ubuntu-2404
-    - blacksmith-16vcpu-ubuntu-2404-arm
+    - heartwood-ubuntu-large
     - gpu

@@ -211,7 +211,14 @@ def test_openhands_sdk_is_the_only_agent_runtime_dependency() -> None:
         if Requirement(requirement).name.startswith("openhands-")
     )
 
-    assert pins == {"openhands-sdk": "1.41.0", "openhands-tools": "1.41.0"}
+    assert set(pins) == {"openhands-sdk", "openhands-tools"}
+    assert len(set(pins.values())) == 1
+    locked = {
+        package["name"]: package["version"]
+        for package in _toml("uv.lock")["package"]
+        if package["name"] in pins
+    }
+    assert locked == pins
     assert "optional-dependencies" not in gateway["project"]
     assert "openhands-agent-server" not in _read("packages/gateway/pyproject.toml")
     assert "openhands-agent-server" not in _read("uv.lock")
@@ -953,7 +960,7 @@ def test_gpu_publication_validates_main_and_manual_pr_candidates() -> None:
     assert "output=type=docker" not in pull_request_workflow
     assert "docker/setup-buildx-action@v4" in pull_request_workflow
     assert "runner: ubuntu-24.04" in pull_request_workflow
-    assert "runner: blacksmith-16vcpu-ubuntu-2404" in pull_request_workflow
+    assert "uses: ./.github/actions/reclaim-runner-disk" in pull_request_workflow
     assert "uses: docker/bake-action@v7" in pull_request_workflow
     assert "cache-from=type=gha" not in pull_request_workflow
     assert "cache-to=type=gha" not in pull_request_workflow
@@ -1610,8 +1617,8 @@ def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
     )
     assert "run_capable_model" not in smoke
     assert "qwen25-7b-instruct-q4_k_m" in capable_workflow
-    assert "runs-on: blacksmith-8vcpu-ubuntu-2404" in capable_workflow
-    assert "minimum_kib=$((24 * 1024 * 1024))" in capable_workflow
+    assert "runs-on: heartwood-ubuntu-large" in capable_workflow
+    assert "minimum_kib=$((30 * 1024 * 1024))" in capable_workflow
     assert "capable_model_e2e.sh" in capable_workflow
     assert "--network none --read-only" in capable_workflow
     assert "docker run --rm --platform linux/amd64 --network none" in capable_workflow

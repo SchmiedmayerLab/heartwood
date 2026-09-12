@@ -50,6 +50,7 @@ class BackendErrorCode(StrEnum):
     PROVIDER_RATE_LIMITED = "HW-AGENT-010"
     MODEL_CONFIGURATION_INVALID = "HW-AGENT-011"
     PROVIDER_UNAVAILABLE = "HW-AGENT-012"
+    SESSION_RUNTIME_INCOMPATIBLE = "HW-AGENT-013"
     UNKNOWN = "HW-AGENT-999"
 
 
@@ -57,6 +58,7 @@ _FATAL_BACKEND_ERROR_CODES = frozenset(
     {
         BackendErrorCode.ACTION_OUTCOME_UNKNOWN.value,
         BackendErrorCode.AGENT_OUTCOME_UNKNOWN.value,
+        BackendErrorCode.SESSION_RUNTIME_INCOMPATIBLE.value,
     }
 )
 
@@ -95,6 +97,10 @@ def backend_error_message(code: BackendErrorCode) -> str:
             "The selected model connection is not configured correctly"
         ),
         BackendErrorCode.PROVIDER_UNAVAILABLE: ("The model provider is temporarily unavailable"),
+        BackendErrorCode.SESSION_RUNTIME_INCOMPATIBLE: (
+            "This session was saved by a different agent runtime; keep its history "
+            "and start a new session, or reopen it with the original Heartwood version"
+        ),
         BackendErrorCode.UNKNOWN: "The agent runtime reported an error",
     }[code]
 
