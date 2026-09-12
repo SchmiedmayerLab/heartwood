@@ -198,8 +198,9 @@ def native_file_lock(
     *,
     timeout: float = -1,
     secure_parent: bool = True,
+    reentrant: bool = True,
 ) -> Iterator[None]:
-    """Hold a process-shared native advisory lock without existence-lock fallback."""
+    """Hold a native advisory lock, optionally rejecting same-thread reentry."""
     _prepare_parent(path, secure=secure_parent)
     _reject_non_regular_target(path)
     lock = FileLock(
@@ -209,6 +210,8 @@ def native_file_lock(
         is_singleton=True,
         thread_local=True,
     )
+    if not reentrant and lock.is_locked:
+        raise NativeLockUnavailableError(f"persistence lock is already held: {path}")
     try:
         lock.acquire(timeout=timeout)
     except FileLockTimeout as error:

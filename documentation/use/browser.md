@@ -62,6 +62,7 @@ These suggestions come from the gateway and are the same ones shown by the termi
 - Use **Files** to inspect the bounded project tree with read-only syntax highlighting.
 - Use **Changes** to inspect Git changes or session-attributed non-Git changes with read-only per-file diffs.
 - Open **Research** to set up a [research workflow](research-workflows.md), inspect stage evidence, and review its artifacts.
+- Expand **Project Experiment Records** in Research to inspect recorded workflow stages and scripts across the project, refresh their status, or export their provenance.
 - Inspect task progress, model-call totals, and sequential specialist status below the conversation.
 - Open **Activity & audit** to inspect route decisions, tool results, and errors.
 - Open **Skills** to inspect repository-verified and installed Skills.

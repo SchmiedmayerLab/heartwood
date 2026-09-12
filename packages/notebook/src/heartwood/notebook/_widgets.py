@@ -58,6 +58,23 @@ def build_widget_spec(view_model: NotebookViewModel) -> tuple[WidgetSpec, ...]:
                 ),
             ),
         )
+    if view_model.experiments:
+        workflow_sections += (
+            WidgetSpec(
+                "Experiment Records",
+                tuple(
+                    "\n".join(
+                        (
+                            f"{experiment.run_id}: {experiment.status}",
+                            f"Environment: {experiment.definition.environment.sha256}",
+                            f"Linked events: {len(experiment.evidence)}",
+                            *(f"{item.path}: {item.sha256}" for item in experiment.outputs),
+                        )
+                    )
+                    for experiment in view_model.experiments
+                ),
+            ),
+        )
     return (
         WidgetSpec(
             "Conversation",

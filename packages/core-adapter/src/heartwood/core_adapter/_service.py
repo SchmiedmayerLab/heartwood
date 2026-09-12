@@ -55,6 +55,7 @@ from heartwood.core_adapter.workflow_runtime import (
 )
 from heartwood.model_policy import ModelPolicyEngine
 from heartwood.schemas import ConfirmationRequest, JsonValue, PolicyProfile
+from heartwood.schemas.experiments import ExperimentExportBinding
 from heartwood.session import (
     CommandKind,
     EventKind,
@@ -343,7 +344,7 @@ class SessionService:
                         )
                     events.extend(self._translate_backend_events(backend_events))
         elif command_kind == CommandKind.AUDIT_EXPORT.value:
-            events.append(self._handle_audit_export())
+            events.append(self._handle_audit_export(command))
         else:
             events.append(
                 self._record_event(
@@ -909,13 +910,21 @@ class SessionService:
             },
         )
 
-    def _handle_audit_export(self) -> SessionEvent:
+    def _handle_audit_export(self, command: SessionCommand) -> SessionEvent:
+        binding = command.payload.get("experiment_export")
+        metadata: dict[str, JsonValue] = {}
+        if binding is not None:
+            parsed = ExperimentExportBinding.model_validate(binding)
+            metadata["experiment_export"] = cast(
+                dict[str, JsonValue], parsed.model_dump(mode="json")
+            )
         event = self._record_event(
             EventKind.AUDIT_EXPORT_RECORDED,
             {
                 "path": str(self.store.audit_export_path),
                 "event_count": self.store.next_sequence() + 1,
                 "scrubbed": True,
+                **metadata,
             },
         )
         content, _verification = self.store.verified_audit_export()
@@ -1010,6 +1019,7 @@ def _audit_payload(kind: EventKind, payload: dict[str, JsonValue]) -> dict[str, 
             "workflow_fingerprint",
             "evidence_fingerprint",
             "assessed_stage_id",
+            "experiment_fingerprint",
         )
     if kind == EventKind.COMMAND_RECEIVED:
         return _selected_audit_fields(
@@ -1174,7 +1184,7 @@ def _audit_payload(kind: EventKind, payload: dict[str, JsonValue]) -> dict[str, 
             minimized["reason"] = "[scrubbed]"
         return minimized
     if kind == EventKind.AUDIT_EXPORT_RECORDED:
-        return _selected_audit_fields(payload, "event_count", "scrubbed")
+        return _selected_audit_fields(payload, "event_count", "scrubbed", "experiment_export")
     return {"payload_omitted": True}
 
 

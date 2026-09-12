@@ -21,26 +21,9 @@ const jsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
   ]),
 );
 
-const eventKindSchema = z.enum([
-  "command.received",
-  "approval.recorded",
-  "policy.decision.recorded",
-  "model_call.decision.recorded",
-  "user_message.recorded",
-  "agent_message.emitted",
-  "tool_call.proposed",
-  "confirmation.requested",
-  "confirmation.resolved",
-  "tool.execution.recorded",
-  "session.paused",
-  "session.resumed",
-  "agent.lifecycle.updated",
-  "task.plan.updated",
-  "model.usage.updated",
-  "subagent.updated",
-  "audit.export.recorded",
-  "error.recorded",
-]);
+const eventKindSchema = z.enum(
+  sessionProjectionJsonSchema.$defs.EventKind.enum,
+);
 
 const sessionEventSchema: z.ZodType<SessionEvent> = z
   .object({

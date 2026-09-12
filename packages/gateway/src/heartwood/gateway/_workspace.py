@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import re
@@ -37,6 +38,7 @@ from heartwood.schemas import (
     WorkspaceTreeResponse,
     api_response,
 )
+from heartwood.schemas.experiments import ExperimentFile
 from heartwood.schemas.project_paths import (
     RESERVED_PROJECT_COMPONENTS,
     ProjectPathError,
@@ -270,6 +272,58 @@ class WorkspaceInspector:
         except (WorkspaceInspectionError, OSError):
             return False
         return False
+
+    def fingerprint(self, path: str, *, max_bytes: int) -> ExperimentFile:
+        """Hash one bounded regular file without exposing bytes or following symbolic links.
+
+        Before/after metadata catches ordinary concurrent changes, not adversarial
+        change-and-restore. A digest is an observation, not an immutable snapshot.
+        """
+        if type(max_bytes) is not int or max_bytes < 0:
+            raise ValueError("Fingerprint byte limit must be nonnegative")
+        relative = _relative_path(path)
+        try:
+            with self._open_parent(relative) as (parent, name):
+                descriptor = os.open(name, _file_open_flags(), dir_fd=parent)
+                try:
+                    before = os.fstat(descriptor)
+                    if not stat.S_ISREG(before.st_mode) or before.st_size > max_bytes:
+                        raise ValueError("Not a bounded regular file")
+                    digest = hashlib.sha256()
+                    count = 0
+                    while chunk := os.read(descriptor, min(1024 * 1024, max_bytes - count + 1)):
+                        count += len(chunk)
+                        if count > max_bytes:
+                            raise ValueError("File grew beyond its fingerprint limit")
+                        digest.update(chunk)
+                    after = os.fstat(descriptor)
+                    current = os.stat(name, dir_fd=parent, follow_symlinks=False)
+
+                    def identity(item: os.stat_result) -> tuple[int, ...]:
+                        return (
+                            item.st_dev,
+                            item.st_ino,
+                            item.st_size,
+                            item.st_mtime_ns,
+                            item.st_ctime_ns,
+                        )
+
+                    if (
+                        count != before.st_size
+                        or identity(before) != identity(after)
+                        or identity(after) != identity(current)
+                    ):
+                        raise ValueError("File changed during fingerprint capture")
+                    return ExperimentFile(
+                        path=relative.as_posix(), sha256=digest.hexdigest(), size_bytes=count
+                    )
+                finally:
+                    os.close(descriptor)
+        except (OSError, ValueError):
+            raise WorkspaceInspectionError(
+                "HW-WORKSPACE-007",
+                "file fingerprint is unavailable; use a stable regular file within the byte limit",
+            ) from None
 
     def file(self, path: str) -> WorkspaceFileResponse:
         """Return a bounded UTF-8 text file without following symbolic links."""

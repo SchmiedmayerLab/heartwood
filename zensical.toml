@@ -57,6 +57,7 @@ nav = [
         { "System Architecture" = "architecture/system.md" },
         { "Skill Trust and Distribution" = "architecture/skills.md" },
         { "Sessions and Audit" = "architecture/sessions-audit.md" },
+        { "Experiment Records" = "architecture/experiments.md" },
         { "Testing and Evidence" = "architecture/testing.md" },
     ] },
     { "Reference" = [

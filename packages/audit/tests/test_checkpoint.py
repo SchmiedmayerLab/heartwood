@@ -33,15 +33,18 @@ from heartwood.audit import (
     verify_audit_checkpoint,
 )
 from heartwood.persistence import write_private_json_atomic
-from heartwood.schemas import AuditCheckpointSignature, AuditCheckpointStatement
+from heartwood.schemas import AuditCheckpointSignature, AuditCheckpointStatement, JsonValue
+from heartwood.schemas.experiments import ExperimentExportBinding
 
 _CREATED_AT = "2026-08-02T12:00:00Z"
 
 
+@pytest.mark.parametrize("experiment_content", [None, "", '{"synthetic":"caf\u00e9"}\n'])
 def test_checkpoint_round_trip_binds_origin_retention_and_verified_export(
     tmp_path: Path,
+    experiment_content: str | None,
 ) -> None:
-    audit_content = _audit_content(tmp_path)
+    audit_content = _audit_content(tmp_path, experiment_content=experiment_content)
     private_key, public_key = _write_key_pair(tmp_path)
     bundle = tmp_path / "deployment" / "session-1-checkpoint"
 
@@ -54,14 +57,24 @@ def test_checkpoint_round_trip_binds_origin_retention_and_verified_export(
         retain_until="2033-08-02",
         signer=_signer(private_key),
         created_at=_CREATED_AT,
+        experiment_content=experiment_content,
     )
     verified = verify_audit_checkpoint(bundle=bundle, public_key=public_key)
 
     assert verified == created
-    assert {path.name for path in bundle.iterdir()} == {
+    expected_files = {
         AUDIT_FILENAME,
         CHECKPOINT_FILENAME,
     }
+    if experiment_content is not None:
+        expected_files.add("experiments.jsonl")
+        assert (bundle / "experiments.jsonl").read_bytes() == experiment_content.encode()
+        assert created.experiments == ExperimentExportBinding.from_content(
+            experiment_content.encode()
+        )
+    else:
+        assert created.experiments is None
+    assert {path.name for path in bundle.iterdir()} == expected_files
     assert stat.S_IMODE(bundle.stat().st_mode) == 0o700
     assert all(stat.S_IMODE(path.stat().st_mode) == 0o600 for path in bundle.iterdir())
     assert created.checkpoint.statement.deployment_id == "carina-research"
@@ -70,7 +83,10 @@ def test_checkpoint_round_trip_binds_origin_retention_and_verified_export(
     assert created.checkpoint.statement.audit_content_sha256 == created.audit.content_sha256
 
 
-def test_checkpoint_round_trip_supports_a_kms_compatible_p256_signer(tmp_path: Path) -> None:
+@pytest.mark.parametrize("experiment_content", [None, "synthetic\n"])
+def test_checkpoint_round_trip_supports_a_kms_compatible_p256_signer(
+    tmp_path: Path, experiment_content: str | None
+) -> None:
     private_key = ec.generate_private_key(ec.SECP256R1())
     public_key = tmp_path / "kms-public.pem"
     public_key.write_bytes(
@@ -83,7 +99,7 @@ def test_checkpoint_round_trip_supports_a_kms_compatible_p256_signer(tmp_path: P
     bundle = tmp_path / "deployment" / "p256-checkpoint"
 
     created = create_audit_checkpoint(
-        audit_content=_audit_content(tmp_path),
+        audit_content=_audit_content(tmp_path, experiment_content=experiment_content),
         session_id="session-1",
         output=bundle,
         deployment_id="managed-research",
@@ -91,6 +107,7 @@ def test_checkpoint_round_trip_supports_a_kms_compatible_p256_signer(tmp_path: P
         retain_until="2033-08-02",
         signer=_P256Signer(private_key),
         created_at=_CREATED_AT,
+        experiment_content=experiment_content,
     )
 
     assert created.checkpoint.signature.algorithm == "ecdsa-p256-sha256"
@@ -334,9 +351,11 @@ def test_checkpoint_verification_rejects_noncanonical_bundle_files(
         verify_audit_checkpoint(bundle=bundle, public_key=public_key)
 
 
+@pytest.mark.parametrize("experiment_content", [None, '{"synthetic":true}\n'])
 def test_interrupted_checkpoint_publish_leaves_no_partial_bundle(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    experiment_content: str | None,
 ) -> None:
     private_key, _public_key = _write_key_pair(tmp_path)
     bundle = tmp_path / "deployment" / "checkpoint"
@@ -353,7 +372,7 @@ def test_interrupted_checkpoint_publish_leaves_no_partial_bundle(
 
     with pytest.raises(AuditCheckpointError, match="unable to publish"):
         create_audit_checkpoint(
-            audit_content=_audit_content(tmp_path),
+            audit_content=_audit_content(tmp_path, experiment_content=experiment_content),
             session_id="session-1",
             output=bundle,
             deployment_id="generic-research",
@@ -361,6 +380,7 @@ def test_interrupted_checkpoint_publish_leaves_no_partial_bundle(
             retain_until="2033-08-02",
             signer=_signer(private_key),
             created_at=_CREATED_AT,
+            experiment_content=experiment_content,
         )
 
     assert not bundle.exists()
@@ -395,7 +415,7 @@ def test_concurrent_checkpoint_publish_has_one_verified_winner(tmp_path: Path) -
     assert verify_audit_checkpoint(bundle=bundle, public_key=public_key).audit.event_count == 1
 
 
-def _audit_content(tmp_path: Path) -> str:
+def _audit_content(tmp_path: Path, *, experiment_content: str | None = None) -> str:
     log = AuditLog(tmp_path / "source" / "audit.jsonl")
     log.append(
         session_id="session-1",
@@ -409,14 +429,24 @@ def _audit_content(tmp_path: Path) -> str:
             "command_id": "command-1",
         },
     )
+    if experiment_content is not None:
+        binding = ExperimentExportBinding.from_content(experiment_content.encode("utf-8"))
+        log.append(
+            session_id="session-1",
+            event_type="audit.export.recorded",
+            occurred_at=_CREATED_AT,
+            payload={"experiment_export": binding.model_dump(mode="json")},
+        )
     return log.export_jsonl()
 
 
-def _checkpoint_bundle(tmp_path: Path) -> tuple[Path, Path]:
+def _checkpoint_bundle(
+    tmp_path: Path, *, experiment_content: str | None = None
+) -> tuple[Path, Path]:
     private_key, public_key = _write_key_pair(tmp_path)
     bundle = tmp_path / "checkpoint"
     create_audit_checkpoint(
-        audit_content=_audit_content(tmp_path),
+        audit_content=_audit_content(tmp_path, experiment_content=experiment_content),
         session_id="session-1",
         output=bundle,
         deployment_id="generic-research",
@@ -424,8 +454,123 @@ def _checkpoint_bundle(tmp_path: Path) -> tuple[Path, Path]:
         retain_until="2033-08-02",
         signer=_signer(private_key),
         created_at=_CREATED_AT,
+        experiment_content=experiment_content,
     )
     return bundle, public_key
+
+
+@pytest.mark.parametrize("damage", ["missing", "append", "crlf", "symlink", "directory", "utf8"])
+def test_signed_experiment_export_rejects_altered_or_unsafe_files(
+    tmp_path: Path, damage: str
+) -> None:
+    content = '{"synthetic":true}\n'
+    bundle, key = _checkpoint_bundle(tmp_path, experiment_content=content)
+    path = bundle / "experiments.jsonl"
+    if damage in {"missing", "symlink", "directory"}:
+        path.unlink()
+    if damage == "symlink":
+        target = tmp_path / "external.jsonl"
+        target.write_text(content)
+        path.symlink_to(target)
+    elif damage == "directory":
+        path.mkdir()
+    elif damage == "append":
+        path.write_text(content + "\n")
+    elif damage == "crlf":
+        path.write_bytes(content.replace("\n", "\r\n").encode())
+    elif damage == "utf8":
+        path.write_bytes(b"\xff")
+    with pytest.raises(AuditCheckpointError):
+        verify_audit_checkpoint(bundle=bundle, public_key=key)
+
+
+def test_extra_experiment_export_requires_a_signed_terminal_binding(tmp_path: Path) -> None:
+    bundle, key = _checkpoint_bundle(tmp_path)
+    (bundle / "experiments.jsonl").write_text("")
+    with pytest.raises(AuditCheckpointError, match="not bound"):
+        verify_audit_checkpoint(bundle=bundle, public_key=key)
+
+
+@pytest.mark.parametrize("supplied", [None, "different\n"])
+def test_checkpoint_cannot_publish_a_missing_or_mismatched_export(
+    tmp_path: Path, supplied: str | None
+) -> None:
+    private_key, _ = _write_key_pair(tmp_path)
+    bundle = tmp_path / "invalid"
+    with pytest.raises(AuditCheckpointError, match=r"missing|does not match"):
+        create_audit_checkpoint(
+            audit_content=_audit_content(tmp_path, experiment_content="original\n"),
+            session_id="session-1",
+            output=bundle,
+            deployment_id="synthetic",
+            retention_policy_id="research-audit-7y",
+            retain_until="2033-08-02",
+            signer=_signer(private_key),
+            experiment_content=supplied,
+        )
+    assert not bundle.exists()
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"sha256": "invalid-private-value"},
+        {"filename": "../private.jsonl"},
+        {"schema_version": "heartwood.experiment-export-binding.v99"},
+        {"size_bytes": True},
+        {"unexpected": "private-value"},
+    ],
+)
+def test_checkpoint_rejects_invalid_binding_without_exposing_its_content(
+    tmp_path: Path, change: dict[str, JsonValue]
+) -> None:
+    private_key, _ = _write_key_pair(tmp_path)
+    content = "synthetic\n"
+    binding = ExperimentExportBinding.from_content(content.encode()).model_dump(mode="json")
+    _audit_content(tmp_path)
+    log = AuditLog(tmp_path / "source" / "audit.jsonl")
+    log.append(
+        session_id="session-1",
+        event_type="audit.export.recorded",
+        occurred_at=_CREATED_AT,
+        payload={"experiment_export": {**binding, **change}},
+    )
+    with pytest.raises(AuditCheckpointError, match="binding is invalid") as captured:
+        create_audit_checkpoint(
+            audit_content=log.export_jsonl(),
+            session_id="session-1",
+            output=tmp_path / "invalid",
+            deployment_id="synthetic",
+            retention_policy_id="research-audit-7y",
+            retain_until="2033-08-02",
+            signer=_signer(private_key),
+            experiment_content=content,
+        )
+    assert "private" not in str(captured.value)
+
+
+def test_an_earlier_binding_cannot_authorize_a_later_unbound_checkpoint(tmp_path: Path) -> None:
+    private_key, _ = _write_key_pair(tmp_path)
+    content = "synthetic\n"
+    _audit_content(tmp_path, experiment_content=content)
+    log = AuditLog(tmp_path / "source" / "audit.jsonl")
+    log.append(
+        session_id="session-1",
+        event_type="audit.export.recorded",
+        occurred_at=_CREATED_AT,
+        payload={},
+    )
+    with pytest.raises(AuditCheckpointError, match="not bound"):
+        create_audit_checkpoint(
+            audit_content=log.export_jsonl(),
+            session_id="session-1",
+            output=tmp_path / "unbound",
+            deployment_id="synthetic",
+            retention_policy_id="research-audit-7y",
+            retain_until="2033-08-02",
+            signer=_signer(private_key),
+            experiment_content=content,
+        )
 
 
 def _write_key_pair(root: Path) -> tuple[Path, Path]:

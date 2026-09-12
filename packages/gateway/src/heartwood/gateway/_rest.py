@@ -197,6 +197,21 @@ class RestGateway:
                 status_code=200,
                 body=_json_object(self.gateway.research_workflows().model_dump(mode="json")),
             )
+        if (
+            parts in {("research", "experiments"), ("research", "experiments", "export")}
+            and request.method == "GET"
+        ):
+            try:
+                result = (
+                    self.gateway.export_experiments()
+                    if parts[-1] == "export"
+                    else self.gateway.experiment_records()
+                )
+                return RestResponse(
+                    status_code=200, body=_json_object(result.model_dump(mode="json"))
+                )
+            except ValueError:
+                return _error(409, "Experiment records require integrity recovery")
         if parts == ("settings", "specialists") and request.method == "GET":
             return RestResponse(
                 status_code=200,

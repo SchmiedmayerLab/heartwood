@@ -31,10 +31,20 @@ import type {
   WorkflowRequest,
   WorkspaceFile,
 } from "../types";
+import {
+  ExperimentRunList,
+  ProjectExperimentRecords,
+} from "./ExperimentRecords";
 import { SafeMarkdown } from "./SafeMarkdown";
 
 interface ResearchWorkspaceProps {
-  client: Pick<HeartwoodClient, "getResearchWorkflows" | "getWorkspaceFile">;
+  client: Pick<
+    HeartwoodClient,
+    | "getResearchWorkflows"
+    | "getWorkspaceFile"
+    | "getExperimentRecords"
+    | "getExperimentExport"
+  >;
   sessionId: string;
   projection: SessionProjection;
   busy: boolean;
@@ -44,7 +54,25 @@ interface ResearchWorkspaceProps {
   onNewSession: () => void;
 }
 
-export const ResearchWorkspace = ({
+export const ResearchWorkspace = (props: ResearchWorkspaceProps) => (
+  <>
+    <WorkflowWorkspace {...props} />
+    <ProjectExperimentRecords
+      client={props.client}
+      revision={JSON.stringify([
+        props.sessionId,
+        props.projection.experiments.map((run) => [
+          run.run_id,
+          run.attempt,
+          run.status,
+          run.updated_at,
+        ]),
+      ])}
+    />
+  </>
+);
+
+const WorkflowWorkspace = ({
   client,
   sessionId,
   projection,
@@ -367,6 +395,20 @@ export const ResearchWorkspace = ({
             </Button>
           </div>
           <h3>Analysis Artifacts</h3>
+          {projection.experiments.length > 0 ?
+            <details className="research-provenance">
+              <summary>Experiment Records</summary>
+              <ExperimentRunList
+                runs={projection.experiments}
+                stageLabels={Object.fromEntries(
+                  definition.stages.map((stage) => [
+                    stage.stage_id,
+                    stage.label,
+                  ]),
+                )}
+              />
+            </details>
+          : null}
           <div className="research-artifacts">
             {definition.artifacts.map((item) => (
               <Button

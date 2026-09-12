@@ -13,6 +13,7 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Literal, Protocol, cast
+from uuid import uuid5
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
@@ -25,8 +26,15 @@ from heartwood.core_adapter.research_workflows import (
     research_workflow,
     workflow_reproduction_spec,
 )
+from heartwood.core_adapter.workflow_provenance import (
+    WorkflowProvenanceInspector,
+    experiment_event_fingerprint,
+    stage_experiment_id,
+    stage_experiment_outcome,
+)
 from heartwood.schemas import JsonValue
 from heartwood.schemas.execution import ExecutionUsage
+from heartwood.schemas.experiments import ExperimentEvent
 from heartwood.schemas.research import (
     AnalysisPlan,
     BaselineResult,
@@ -112,7 +120,7 @@ def workflow_controls(
     return tuple(controls)
 
 
-class WorkflowEvaluator(ReproductionInspector, Protocol):
+class WorkflowEvaluator(ReproductionInspector, WorkflowProvenanceInspector, Protocol):
     """Project inspection supplied by the gateway, without a second tool executor."""
 
     def prepare(
@@ -204,7 +212,10 @@ def handle_workflow_command(
             _error(service, "Resolve the pending tool actions before changing workflow stages"),
         )
     if request.action == "cancel":
-        return (_record(service, command, _replace(current, phase="cancelled")),)
+        experiment = stage_experiment_outcome(events, current, status="cancelled", at=_now(service))
+        return (
+            _record(service, command, _replace(current, phase="cancelled"), experiment=experiment),
+        )
     if isinstance(request, WorkflowReview):
         if current.phase != "review" or current.evaluation is None:
             return (_error(service, "There is no stage awaiting researcher review"),)
@@ -228,6 +239,24 @@ def handle_workflow_command(
             return (
                 _error(service, "This stage was already submitted; inspect or evaluate its result"),
             )
+        prompt = workflow_stage_prompt(current)
+        try:
+            experiment_definition = evaluator.experiment_definition(
+                current, session_id=command.session_id, actor_id=command.actor_id, invocation=prompt
+            )
+        except ValueError:
+            return (
+                _error(service, "Stage provenance inputs are unavailable; no work was started"),
+            )
+        identity = stage_experiment_id(command.session_id, current.run_id, current.stage_id)
+        experiment = ExperimentEvent(
+            event_id=uuid5(identity, "started"),
+            run_id=identity,
+            status="started",
+            at=_now(service),
+            attempt=1,
+            definition=experiment_definition,
+        )
         # Record intent before dispatch. An interrupted command is recovered by the
         # existing command journal, never by resubmitting an uncertain model call.
         updated = _record(
@@ -240,11 +269,12 @@ def handle_workflow_command(
                 stage_started_at=_now(service),
                 stage_usage_baseline=evaluator.usage(events),
             ),
+            experiment=experiment,
         )
         stage_command = command.model_copy(
             update={
                 "kind": CommandKind.CHAT,
-                "payload": {"prompt": workflow_stage_prompt(current)},
+                "payload": {"prompt": prompt},
             }
         )
         return (updated, *service._handle_task(stage_command))
@@ -261,6 +291,7 @@ def handle_workflow_command(
     )
     if isinstance(request, WorkflowReview) and evaluation != current.evaluation:
         return (_error(service, "Stage evidence changed; evaluate it again before reviewing"),)
+    experiment = None
     if not evaluation.assessment.evidence_satisfied:
         next_state = _replace(current, phase="blocked", evaluation=evaluation)
     elif evaluation.assessment.researcher_review_required and not isinstance(
@@ -268,6 +299,15 @@ def handle_workflow_command(
     ):
         next_state = _replace(current, phase="review", evaluation=evaluation)
     else:
+        try:
+            outputs = evaluator.experiment_outputs(current, evaluation)
+            experiment = stage_experiment_outcome(
+                events, current, status="succeeded", at=_now(service), outputs=outputs
+            )
+        except ValueError:
+            return (
+                _error(service, "Stage provenance changed; inspect and evaluate the results again"),
+            )
         completed = (*current.completed, evaluation)
         definition = research_workflow(current.binding.workflow_id)
         finished = len(completed) == len(definition.stages)
@@ -281,7 +321,7 @@ def handle_workflow_command(
             phase="completed" if finished else "ready",
             stage_id=current.stage_id if finished else definition.stages[len(completed)].stage_id,
         )
-    return (_record(service, command, next_state),)
+    return (_record(service, command, next_state, experiment=experiment),)
 
 
 def _now(service: SessionService) -> datetime:
@@ -352,7 +392,13 @@ def _replace(current: WorkflowRun, **changes: object) -> WorkflowRun:
     )
 
 
-def _record(service: SessionService, command: SessionCommand, run: WorkflowRun) -> SessionEvent:
+def _record(
+    service: SessionService,
+    command: SessionCommand,
+    run: WorkflowRun,
+    *,
+    experiment: ExperimentEvent | None = None,
+) -> SessionEvent:
     evaluation = run.evaluation or (run.completed[-1] if run.completed else None)
     return service._record_event(
         EventKind.WORKFLOW_UPDATED,
@@ -370,6 +416,14 @@ def _record(service: SessionService, command: SessionCommand, run: WorkflowRun) 
             or (evaluation.assessment.evidence_fingerprint if evaluation else None),
             "assessed_stage_id": evaluation.assessment.stage_id if evaluation else None,
             "run": cast(dict[str, JsonValue], run.model_dump(mode="json")),
+            **(
+                {
+                    "experiment": cast(dict[str, JsonValue], experiment.model_dump(mode="json")),
+                    "experiment_fingerprint": experiment_event_fingerprint(experiment),
+                }
+                if experiment is not None
+                else {}
+            ),
         },
     )
 

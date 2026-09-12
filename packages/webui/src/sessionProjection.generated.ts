@@ -55,6 +55,11 @@ export type EventKind =
   | "error.recorded"
   | "workflow.updated"
   | "workflow.execution.recorded";
+export type Reference = string;
+export type ExperimentPath = string;
+export type Digest = string;
+export type ExperimentStatus =
+  "started" | "interrupted" | "resumed" | "succeeded" | "failed" | "cancelled";
 /**
  * Commands accepted by a Heartwood session.
  */
@@ -81,6 +86,7 @@ export interface SessionProjection {
   context: ProjectionModelContext;
   conversation: ProjectionMessage[];
   eventCount: number;
+  experiments: ExperimentRun[];
   lastCommandOutcome: ProjectionCommandOutcome | null;
   lifecycle: ProjectionLifecycleState;
   /**
@@ -208,6 +214,85 @@ export interface ProjectionMessage {
   role: "user" | "agent" | "trace";
   sequence: number;
   technicalDetail: string | null;
+}
+/**
+ * One shared projection derived from the scientific execution journal.
+ */
+export interface ExperimentRun {
+  attempt: number;
+  definition: ExperimentDefinition;
+  evidence: ExperimentEvidence[];
+  exit_code: number | null;
+  outputs: ExperimentFile[];
+  run_id: string;
+  schema_version: "heartwood.experiment-run.v1";
+  started_at: string;
+  status: ExperimentStatus;
+  updated_at: string;
+}
+/**
+ * Immutable execution inputs; retries cannot silently change an experiment.
+ */
+export interface ExperimentDefinition {
+  actor_ref: Reference;
+  /**
+   * @maxItems 256
+   */
+  code: ExperimentFile[];
+  /**
+   * @maxItems 256
+   */
+  code_output_paths: ExperimentPath[];
+  entry_point: ExperimentPath | null;
+  environment: ExperimentEnvironment;
+  git_dirty: boolean | null;
+  git_revision: string | null;
+  /**
+   * @maxItems 256
+   */
+  inputs: ExperimentFile[];
+  invocation_sha256: Digest;
+  /**
+   * @maxItems 256
+   */
+  output_paths: ExperimentPath[];
+  parameters_sha256: Digest;
+  source: "python" | "shell" | "heartwood";
+  stage: ExperimentStage | null;
+}
+/**
+ * A declared project file observed at a boundary, without its contents.
+ */
+export interface ExperimentFile {
+  path: ExperimentPath;
+  sha256: Digest;
+  size_bytes: number;
+}
+/**
+ * Fingerprint of an environment description, not an environment attestation.
+ */
+export interface ExperimentEnvironment {
+  kind: "python" | "container" | "declared";
+  sha256: Digest;
+  source: "observed" | "declared";
+}
+/**
+ * Association with the owning Heartwood session and research stage.
+ */
+export interface ExperimentStage {
+  session_id: Reference;
+  stage_id: Reference;
+  tool_call_id: Reference | null;
+  workflow_run_id: Reference;
+  workflow_sha256: Digest;
+}
+/**
+ * A link to an existing session event, never a copy of its command or result.
+ */
+export interface ExperimentEvidence {
+  event_id: string;
+  event_sha256: Digest;
+  kind: Reference;
 }
 /**
  * Gateway-owned outcome of the most recently accepted command.

@@ -25,8 +25,10 @@ SESSION_COMMIT_KIND = "session-commit"
 SESSION_WRITER_KIND = "session-writer"
 AUDIT_EVENT_KIND = "audit-event"
 OPENHANDS_STATE_KIND = "openhands-state"
+EXPERIMENT_EVENT_KIND = "experiment-event"
+EXPERIMENT_ENTRY_KIND = "experiment-entry"
 
-PROJECT_STATE_VERSION = "heartwood.project-state.v2"
+PROJECT_STATE_VERSION = "heartwood.project-state.v3"
 PROJECT_CONFIG_VERSION = "heartwood.project-config.v1"
 SESSION_EVENT_VERSION = "heartwood.session-event.v1"
 SESSION_METADATA_VERSION = "heartwood.session-metadata.v1"
@@ -36,6 +38,20 @@ SESSION_WRITER_VERSION = "heartwood.session-writer.v1"
 AUDIT_EVENT_VERSION = "heartwood.audit-event.v1"
 OPENHANDS_STATE_VERSION = "heartwood.openhands-state.v1"
 SKILL_INSTALLATIONS_VERSION: Final = "heartwood.skill-installations.v1"
+EXPERIMENT_EVENT_VERSION: Final = "heartwood.experiment-event.v1"
+EXPERIMENT_ENTRY_VERSION: Final = "heartwood.experiment-entry.v1"
+
+_PROJECT_STATE_V2_FORMATS: dict[str, str] = {
+    "audit_event": "heartwood.audit-event.v1",
+    "project_config": "heartwood.project-config.v1",
+    "openhands_state": "heartwood.openhands-state.v1",
+    "session_command_receipt": "heartwood.session-command-receipt.v1",
+    "session_commit": "heartwood.session-commit.v1",
+    "session_event": "heartwood.session-event.v1",
+    "session_metadata": "heartwood.session-metadata.v1",
+    "session_writer": "heartwood.session-writer.v1",
+    "skill_installations": "heartwood.skill-installations.v1",
+}
 
 PROJECT_STATE_FORMATS: dict[str, str] = {
     "audit_event": AUDIT_EVENT_VERSION,
@@ -47,6 +63,8 @@ PROJECT_STATE_FORMATS: dict[str, str] = {
     "session_metadata": SESSION_METADATA_VERSION,
     "session_writer": SESSION_WRITER_VERSION,
     "skill_installations": SKILL_INSTALLATIONS_VERSION,
+    "experiment_event": EXPERIMENT_EVENT_VERSION,
+    "experiment_entry": EXPERIMENT_ENTRY_VERSION,
 }
 
 
@@ -184,9 +202,18 @@ def _project_state_v1_to_v2(payload: Mapping[str, object]) -> JsonObject:
     if set(payload) != {"schema_version"}:
         raise MigrationError("legacy project state contains unsupported fields")
     return {
-        "schema_version": PROJECT_STATE_VERSION,
-        "formats": dict(PROJECT_STATE_FORMATS),
+        "schema_version": "heartwood.project-state.v2",
+        "formats": dict(_PROJECT_STATE_V2_FORMATS),
     }
+
+
+def _project_state_v2_to_v3(payload: Mapping[str, object]) -> JsonObject:
+    if dict(payload) != {
+        "schema_version": "heartwood.project-state.v2",
+        "formats": _PROJECT_STATE_V2_FORMATS,
+    }:
+        raise MigrationError("project state contains unsupported format declarations")
+    return {"schema_version": PROJECT_STATE_VERSION, "formats": dict(PROJECT_STATE_FORMATS)}
 
 
 def _openhands_unversioned_to_v1(payload: Mapping[str, object]) -> JsonObject:
@@ -219,13 +246,21 @@ def _build_registry() -> MigrationRegistry:
         (SESSION_WRITER_KIND, SESSION_WRITER_VERSION),
         (AUDIT_EVENT_KIND, AUDIT_EVENT_VERSION),
         (OPENHANDS_STATE_KIND, OPENHANDS_STATE_VERSION),
+        (EXPERIMENT_EVENT_KIND, EXPERIMENT_EVENT_VERSION),
+        (EXPERIMENT_ENTRY_KIND, EXPERIMENT_ENTRY_VERSION),
     ):
         registry.register_kind(kind, current_version=version)
     registry.register(
         PROJECT_STATE_KIND,
         source_version="heartwood.project-state.v1",
-        target_version=PROJECT_STATE_VERSION,
+        target_version="heartwood.project-state.v2",
         migrate=_project_state_v1_to_v2,
+    )
+    registry.register(
+        PROJECT_STATE_KIND,
+        source_version="heartwood.project-state.v2",
+        target_version=PROJECT_STATE_VERSION,
+        migrate=_project_state_v2_to_v3,
     )
     registry.register(
         OPENHANDS_STATE_KIND,

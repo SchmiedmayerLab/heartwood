@@ -18,6 +18,10 @@ import pytest
 from heartwood.persistence import (
     AUDIT_EVENT_KIND,
     AUDIT_EVENT_VERSION,
+    EXPERIMENT_ENTRY_KIND,
+    EXPERIMENT_ENTRY_VERSION,
+    EXPERIMENT_EVENT_KIND,
+    EXPERIMENT_EVENT_VERSION,
     OPENHANDS_STATE_KIND,
     OPENHANDS_STATE_VERSION,
     PERSISTENCE_MIGRATIONS,
@@ -47,6 +51,7 @@ _FIXTURES = Path(__file__).parent / "fixtures"
     [
         (PROJECT_STATE_KIND, "project-state-v1.json", PROJECT_STATE_VERSION),
         (PROJECT_STATE_KIND, "project-state-v2.json", PROJECT_STATE_VERSION),
+        (PROJECT_STATE_KIND, "project-state-v3.json", PROJECT_STATE_VERSION),
         (PROJECT_CONFIG_KIND, "project-config-v1.json", PROJECT_CONFIG_VERSION),
         (SESSION_EVENT_KIND, "session-event-v1.json", SESSION_EVENT_VERSION),
         (
@@ -90,8 +95,48 @@ def test_project_state_migration_records_each_owned_persistence_format() -> None
     )
 
     assert result.source_version == "heartwood.project-state.v1"
-    assert result.applied_versions == (PROJECT_STATE_VERSION,)
-    assert result.payload == _fixture("project-state-v2.json")
+    assert result.applied_versions == ("heartwood.project-state.v2", PROJECT_STATE_VERSION)
+    assert result.payload == _fixture("project-state-v3.json")
+
+
+@pytest.mark.parametrize(
+    "change", ["unknown-format", "changed-format", "missing-format", "extra-field"]
+)
+def test_project_migration_never_relabels_unknown_format_declarations(change: str) -> None:
+    payload = _fixture("project-state-v2.json")
+    formats = payload["formats"]
+    assert isinstance(formats, dict)
+    if change == "extra-field":
+        payload["private"] = "must-not-appear"
+    elif change == "missing-format":
+        del formats["session_event"]
+    elif change == "changed-format":
+        formats["session_event"] = "heartwood.session-event.v99"
+    else:
+        formats["unknown"] = "must-not-appear"
+    before = deepcopy(payload)
+    with pytest.raises(MigrationError, match="unsupported format declarations") as caught:
+        PERSISTENCE_MIGRATIONS.migrate(PROJECT_STATE_KIND, payload)
+    assert payload == before
+    assert "must-not-appear" not in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    ("kind", "version"),
+    [
+        (EXPERIMENT_EVENT_KIND, EXPERIMENT_EVENT_VERSION),
+        (EXPERIMENT_ENTRY_KIND, EXPERIMENT_ENTRY_VERSION),
+    ],
+)
+def test_experiment_formats_are_registered_without_rewriting_records(
+    kind: str, version: str
+) -> None:
+    payload = {"schema_version": version, "content": "opaque-to-envelope-registry"}
+    result = PERSISTENCE_MIGRATIONS.migrate(kind, payload)
+    assert result.payload == payload
+    assert not result.applied_versions
+    with pytest.raises(MigrationError, match="unsupported persisted schema"):
+        PERSISTENCE_MIGRATIONS.migrate(kind, {"schema_version": version.replace(".v1", ".v99")})
 
 
 def test_registry_rejects_unsupported_version_without_exposing_payload() -> None:

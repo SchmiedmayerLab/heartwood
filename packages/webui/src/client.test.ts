@@ -8,6 +8,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GatewayClient, createCommand } from "./client";
+import { sessionProjectionJsonSchema } from "./sessionProjectionSchema.generated";
 import {
   emptyProjection,
   syntheticAction,
@@ -144,6 +145,38 @@ describe("createCommand", () => {
 });
 
 describe("GatewayClient", () => {
+  it.each(sessionProjectionJsonSchema.$defs.EventKind.enum)(
+    "accepts the gateway's %s event in a replay response",
+    async (kind) => {
+      const source = syntheticEvents()[0];
+      if (!source) throw new Error("Synthetic event fixture is empty");
+      const response = projectionResponse([{ ...source, kind }]);
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(new Response(JSON.stringify(response))),
+      );
+      await expect(
+        new GatewayClient("").replayEvents("session-test"),
+      ).resolves.toEqual(response);
+    },
+  );
+
+  it("rejects an unknown event kind without accepting a partial replay", async () => {
+    const response = {
+      ...projectionResponse(),
+      events: [{ ...syntheticEvents()[0], kind: "unknown.event" }],
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response(JSON.stringify(response))),
+    );
+    await expect(
+      new GatewayClient("").replayEvents("session-test"),
+    ).rejects.toThrow(
+      "Gateway response included an invalid session projection",
+    );
+  });
+
   it("ensures the shared first session through an idempotent operation", async () => {
     const session = {
       session_id: "session-main",
@@ -1187,6 +1220,34 @@ describe("GatewayClient", () => {
       client.replayEvents("session-test"),
     ).rejects.toThrowErrorMatchingInlineSnapshot(`[Error: denied]`);
   });
+
+  it.each(["getExperimentRecords", "getExperimentExport"] as const)(
+    "loads %s through the deployment prefix",
+    async (method) => {
+      const body =
+        method === "getExperimentRecords" ?
+          {
+            schema_version: "heartwood.experiment-collection.v1",
+            retention: "project-local",
+            runs: [],
+          }
+        : {
+            schema_version: "heartwood.experiment-export.v1",
+            sha256: "a".repeat(64),
+            jsonl: "",
+          };
+      const fetch = vi
+        .fn()
+        .mockResolvedValue(new Response(JSON.stringify(body)));
+      vi.stubGlobal("fetch", fetch);
+      await expect(new GatewayClient("/proxy/8767")[method]()).resolves.toEqual(
+        body,
+      );
+      expect(fetch).toHaveBeenCalledWith(
+        `/proxy/8767/research/experiments${method === "getExperimentExport" ? "/export" : ""}`,
+      );
+    },
+  );
 
   it("preserves gateway status for non-JSON error responses", async () => {
     vi.stubGlobal(

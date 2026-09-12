@@ -135,6 +135,12 @@ const setup = (
     client: {
       getResearchWorkflows: vi.fn().mockResolvedValue(catalog),
       getWorkspaceFile: vi.fn(),
+      getExperimentRecords: vi.fn().mockResolvedValue({
+        schema_version: "heartwood.experiment-collection.v1",
+        retention: "project-local",
+        runs: [],
+      }),
+      getExperimentExport: vi.fn(),
     },
     sessionId: "session-test",
     projection,
@@ -149,6 +155,82 @@ const setup = (
 };
 
 describe("research workflow workspace", () => {
+  it("does not reload project provenance for unrelated session events", async () => {
+    const view = setup();
+    fireEvent.click(screen.getByText("Project Experiment Records"));
+    await screen.findByText("No experiments recorded in this project.");
+    view.rerender(
+      <ResearchWorkspace
+        {...view}
+        projection={{
+          ...view.projection,
+          revision: view.projection.revision + 1,
+        }}
+      />,
+    );
+    expect(view.client.getExperimentRecords).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() =>
+      expect(view.client.getExperimentRecords).toHaveBeenCalledTimes(2),
+    );
+  });
+
+  it("shows recorded stage evidence without inferring successful execution", async () => {
+    setup(
+      syntheticProjection({
+        workflow: run(),
+        experiments: [
+          {
+            schema_version: "heartwood.experiment-run.v1",
+            run_id: "3064c9dc-826f-4793-9203-e381dbf26303",
+            definition: {
+              actor_ref: "researcher",
+              source: "heartwood",
+              entry_point: null,
+              code: [],
+              inputs: [
+                { path: "data.csv", sha256: "a".repeat(64), size_bytes: 42 },
+              ],
+              output_paths: ["results/report.md"],
+              code_output_paths: [],
+              environment: {
+                kind: "python",
+                source: "observed",
+                sha256: "b".repeat(64),
+              },
+              parameters_sha256: "c".repeat(64),
+              invocation_sha256: "d".repeat(64),
+              git_revision: null,
+              git_dirty: null,
+              stage: {
+                session_id: "session-test",
+                workflow_run_id: "run",
+                stage_id: "inspect",
+                workflow_sha256: "a".repeat(64),
+                tool_call_id: null,
+              },
+            },
+            started_at: "2026-09-11T00:00:00Z",
+            updated_at: "2026-09-11T00:00:00Z",
+            status: "started",
+            attempt: 1,
+            outputs: [],
+            exit_code: null,
+            evidence: [],
+          },
+        ],
+      }),
+    );
+    fireEvent.click(await screen.findByText("Experiment Records"));
+    const record = screen.getByRole("region", {
+      name: "Experiment Inspect Data",
+    });
+    expect(record).toHaveTextContent("Outcome not recorded");
+    expect(record).toHaveTextContent("3064c9dc-826f-4793-9203-e381dbf26303");
+    expect(record).toHaveTextContent("b".repeat(64));
+    expect(record).not.toHaveTextContent("succeeded");
+  });
+
   it("collects catalog-declared inputs without starting an agent implicitly", async () => {
     const view = setup();
     expect(screen.getByRole("status")).toHaveTextContent(

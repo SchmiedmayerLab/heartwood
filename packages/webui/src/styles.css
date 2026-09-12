@@ -6,6 +6,63 @@
  * SPDX-License-Identifier: MIT
  */
 
+.research-provenance code {
+  overflow-wrap: anywhere;
+}
+
+.project-experiments {
+  margin: 24px auto;
+  max-width: 960px;
+  width: calc(100% - 48px);
+}
+
+.research-provenance summary {
+  cursor: pointer;
+  padding-block: 8px;
+  font-weight: 600;
+}
+
+.research-provenance section {
+  padding-block: 16px;
+  border-top: 1px solid var(--color-border);
+}
+
+.research-provenance h4 {
+  font-weight: 600;
+}
+
+.research-provenance dl {
+  display: grid;
+  grid-template-columns: minmax(0, 140px) minmax(0, 1fr);
+  gap: 6px 12px;
+  margin-block: 12px;
+  font-size: 0.85rem;
+}
+
+.research-provenance dt {
+  color: var(--color-muted-foreground);
+}
+
+.research-provenance ul {
+  display: grid;
+  gap: 10px;
+  font-size: 0.85rem;
+}
+
+@media (max-width: 640px) {
+  .project-experiments {
+    width: calc(100% - 32px);
+  }
+  .research-provenance dl {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+  }
+
+  .research-provenance dd + dt {
+    margin-top: 6px;
+  }
+}
+
 .research-workspace {
   overflow: auto;
   min-height: 0;

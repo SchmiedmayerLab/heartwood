@@ -347,6 +347,25 @@ def test_native_lock_timeout_is_a_per_acquisition_setting(tmp_path: Path) -> Non
         assert singleton.is_locked
 
 
+def test_native_lock_can_reject_reentry_without_releasing_the_owner(tmp_path: Path) -> None:
+    lock_path = tmp_path / ".state.lock"
+    with _files.native_file_lock(lock_path, reentrant=False):
+        with _files.native_file_lock(lock_path):
+            pass
+        with (
+            pytest.raises(NativeLockUnavailableError, match="already held"),
+            _files.native_file_lock(lock_path, reentrant=False),
+        ):
+            pytest.fail("A non-reentrant lease cannot be acquired twice")
+        with (
+            pytest.raises(NativeLockUnavailableError, match="already held"),
+            _files.native_file_lock(lock_path, reentrant=False),
+        ):
+            pytest.fail("A rejected acquisition must not release the existing owner")
+    with _files.native_file_lock(lock_path, reentrant=False):
+        pass
+
+
 def test_native_lock_failure_is_explicit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     def unavailable(*_args: object, **_kwargs: object) -> None:
         raise OSError("unsupported filesystem")

@@ -39,6 +39,7 @@ from heartwood.core_adapter import (
     BackendErrorEvent,
     BackendEvent,
     BackendEventSink,
+    CommandConflictError,
     DeterministicAgentBackend,
     FileSessionStore,
     PendingActionGroup,
@@ -59,6 +60,7 @@ from heartwood.gateway._credential_isolation import (
     credential_isolation_unavailable_reason,
 )
 from heartwood.gateway._credentials import CredentialStore, CredentialStoreError
+from heartwood.gateway._experiment_store import ExperimentStore
 from heartwood.gateway._gpu_environment import (
     GpuEnvironment,
     inspect_gpu_environment,
@@ -169,6 +171,7 @@ from heartwood.schemas import (
     ActionSettingsResponse,
     AuditExportResponse,
     CredentialSettingsResponse,
+    JsonValue,
     LocalModelImportResponse,
     ModelArtifactsResponse,
     ModelCatalogResponse,
@@ -195,6 +198,11 @@ from heartwood.schemas import (
     api_response,
 )
 from heartwood.schemas.evaluation import EvaluationRuntimeObservation
+from heartwood.schemas.experiments import (
+    ExperimentCollection,
+    ExperimentExport,
+    ExperimentExportBinding,
+)
 from heartwood.schemas.workflows import (
     WorkflowCatalog,
     WorkflowOutcomeStatus,
@@ -565,9 +573,16 @@ class SessionGateway:
         finally:
             self.credential_store.clear_process_values()
 
-    @_serialized_state
     def handle(self, command: SessionCommand) -> SessionResult:
         """Handle one command and publish emitted events."""
+        if "experiment_export" in command.payload:
+            raise CommandConflictError(
+                "Experiment checkpoint bindings must be computed by the gateway"
+            )
+        return self._handle_command(command)
+
+    @_serialized_state
+    def _handle_command(self, command: SessionCommand) -> SessionResult:
         with self.config_store.locked():
             self.project.initialize()
             if command.session_id == DEFAULT_SESSION_ID:
@@ -750,6 +765,7 @@ class SessionGateway:
             raise ProjectStateError("unable to write the audit copy safely") from error
         return resolved
 
+    @_serialized_state
     def create_audit_checkpoint(
         self,
         *,
@@ -758,6 +774,7 @@ class SessionGateway:
         deployment_id: str,
         retention_policy_id: str,
         retain_until: str,
+        include_experiments: bool = False,
     ) -> AuditCheckpointVerification:
         """Generate and sign an authoritative export outside the agent project."""
         resolved_output = self._deployment_owned_path(output, label="checkpoint output")
@@ -769,7 +786,14 @@ class SessionGateway:
             if self._checkpoint_signer_factory is None
             else profile.validating_signer(self._checkpoint_signer_factory(profile))
         )
-        self.handle(
+        snapshot = self.export_experiments().jsonl if include_experiments else None
+        payload: dict[str, JsonValue] = {}
+        if snapshot is not None:
+            binding = ExperimentExportBinding.from_content(snapshot.encode("utf-8"))
+            payload["experiment_export"] = cast(
+                dict[str, JsonValue], binding.model_dump(mode="json")
+            )
+        self._handle_command(
             SessionCommand(
                 command_id=f"audit-checkpoint-{uuid4().hex}",
                 session_id=session_id,
@@ -778,7 +802,7 @@ class SessionGateway:
                 created_at=(
                     datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
                 ),
-                payload={},
+                payload=payload,
             )
         )
         content = self.audit_export(session_id)["content"]
@@ -790,6 +814,7 @@ class SessionGateway:
             retention_policy_id=retention_policy_id,
             retain_until=retain_until,
             signer=signer,
+            experiment_content=snapshot,
         )
 
     def checkpoint_signers(self) -> tuple[CheckpointSignerProfile, ...]:
@@ -976,6 +1001,37 @@ class SessionGateway:
         from heartwood.gateway._research_evaluation import ResearchStageEvaluator
 
         return ResearchStageEvaluator.catalog()
+
+    @_serialized_state
+    def experiment_records(self) -> ExperimentCollection:
+        """Synchronize committed stage records and query the shared project provenance store."""
+        store = self._experiment_store()
+        if store is None:
+            return ExperimentCollection()
+        return ExperimentCollection(runs=store.runs())
+
+    @_serialized_state
+    def export_experiments(self) -> ExperimentExport:
+        """Return a verified scientific export without model work or new observations."""
+        store = self._experiment_store()
+        content = store.export() if store is not None else b""
+        return ExperimentExport(sha256=hashlib.sha256(content).hexdigest(), jsonl=content.decode())
+
+    def _experiment_store(self) -> ExperimentStore | None:
+        from heartwood.core_adapter.workflow_provenance import workflow_experiment_events
+
+        if not self.project.state_exists():
+            return None
+        self.project.initialize()
+        store = ExperimentStore(self.project.state_root / "experiments.jsonl")
+        store.synchronize(
+            record
+            for summary in sorted(self.session_catalog.list(), key=lambda item: item.session_id)
+            for record in workflow_experiment_events(
+                FileSessionStore(self.sessions_root, summary.session_id).replay_events()
+            )
+        )
+        return store
 
     @_serialized_state
     def prepare_research_workflow(

@@ -375,6 +375,24 @@ class InteractiveSession:
                     message="Inspect /workflow first and select one of its available actions.",
                     error=True,
                 )
+        if directive == "/experiments" and len(parts) == 1:
+            projection = self.gateway.session_projection(session_id=self.session_id)
+            lines = ["Session experiment records"]
+            for experiment in projection.experiments:
+                stage = experiment.definition.stage
+                lines.append(
+                    f"{experiment.run_id}: {stage.stage_id if stage else 'script'} "
+                    f"({experiment.status})"
+                )
+                lines.append(f"  Environment: {experiment.definition.environment.sha256}")
+                lines.append(f"  Linked events: {len(experiment.evidence)}")
+                lines.extend(
+                    f"  {terminal_safe_text(item.path)}: {item.sha256}"
+                    for item in experiment.outputs
+                )
+            if not projection.experiments:
+                lines.append("No experiment records in this session.")
+            return InteractionResult(message="\n".join(lines))
         if directive == "/workflows" and len(parts) == 1:
             lines = ["Research workflows", ""]
             for entry in self.research_workflows().workflows:
@@ -450,7 +468,7 @@ def command_help() -> str:
     """Return the commands common to terminal clients."""
     return (
         "/allow  /reject  /permissions  /pause  /resume  /status  "
-        "/specialists  /workflows  /workflow  /files  /show  /changes  "
+        "/specialists  /workflows  /workflow  /experiments  /files  /show  /changes  "
         "/replay  /audit-export  /help  /exit"
     )
 

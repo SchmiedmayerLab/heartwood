@@ -2218,10 +2218,12 @@ def test_audit_export_uses_project_sessions(
     assert "Audit export" in capsys.readouterr().out
 
 
+@pytest.mark.parametrize("include_experiments", [False, True])
 def test_audit_verify_checkpoint_and_verification_are_operator_workflows(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
+    include_experiments: bool,
 ) -> None:
     project = tmp_path / "analysis"
     deployment = tmp_path / "deployment"
@@ -2251,6 +2253,7 @@ def test_audit_verify_checkpoint_and_verification_are_operator_workflows(
                 "research-audit-7y",
                 "--retain-until",
                 "2033-08-02",
+                *(["--include-experiments"] if include_experiments else []),
             ],
         )
         == 0
@@ -2277,6 +2280,8 @@ def test_audit_verify_checkpoint_and_verification_are_operator_workflows(
     assert "Audit checkpoint verified" in output
     assert "generic-research" in output
     assert "research-audit-7y through 2033-08-02" in output
+    assert ("Experiment export verified:" in output) == include_experiments
+    assert (bundle / "experiments.jsonl").exists() == include_experiments
 
 
 def test_audit_checkpoint_reports_project_boundary_without_traceback(

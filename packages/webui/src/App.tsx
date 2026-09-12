@@ -53,6 +53,7 @@ import {
 } from "./components/SessionRail";
 import { UtilitySheet } from "./components/UtilitySheet";
 import { WorkspaceHeader } from "./components/WorkspaceHeader";
+import { downloadTextFile } from "./downloads";
 import { modelProfileLabel } from "./modelPresentation";
 import {
   requestActivityForCommand,
@@ -1449,16 +1450,4 @@ const projectLabel = (root: string | undefined): string => {
   if (root === undefined) return "Checking project";
   const parts = root.split(/[\\/]/u).filter(Boolean);
   return parts.at(-1) ?? root;
-};
-
-const downloadTextFile = (filename: string, content: string): void => {
-  if (typeof URL.createObjectURL !== "function") return;
-  const url = URL.createObjectURL(
-    new Blob([content], { type: "application/x-ndjson" }),
-  );
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = filename;
-  anchor.click();
-  URL.revokeObjectURL(url);
 };

@@ -28,6 +28,8 @@ def test_project_context_initializes_private_state_layout(tmp_path: Path) -> Non
     assert json.loads(project.state_path.read_text(encoding="utf-8")) == {
         "formats": {
             "audit_event": "heartwood.audit-event.v1",
+            "experiment_entry": "heartwood.experiment-entry.v1",
+            "experiment_event": "heartwood.experiment-event.v1",
             "openhands_state": "heartwood.openhands-state.v1",
             "project_config": "heartwood.project-config.v1",
             "session_command_receipt": "heartwood.session-command-receipt.v1",
@@ -37,7 +39,7 @@ def test_project_context_initializes_private_state_layout(tmp_path: Path) -> Non
             "session_writer": "heartwood.session-writer.v1",
             "skill_installations": "heartwood.skill-installations.v1",
         },
-        "schema_version": "heartwood.project-state.v2",
+        "schema_version": "heartwood.project-state.v3",
     }
     assert project.config_path == tmp_path / ".heartwood" / "config.toml"
     for directory in (
@@ -169,7 +171,7 @@ def test_project_context_migrates_supported_state_only_during_initialization(
     project.initialize()
 
     state = json.loads(project.state_path.read_text(encoding="utf-8"))
-    assert state["schema_version"] == "heartwood.project-state.v2"
+    assert state["schema_version"] == "heartwood.project-state.v3"
     assert state["formats"]["openhands_state"] == "heartwood.openhands-state.v1"
 
 
@@ -185,6 +187,50 @@ def test_project_context_preserves_state_when_migration_fails(tmp_path: Path) ->
     assert "private" not in str(captured.value)
     assert "value" not in str(captured.value)
     assert project.state_path.read_text(encoding="utf-8") == unsupported
+
+
+@pytest.mark.parametrize("interrupt_publication", [False, True])
+def test_project_format_upgrade_preserves_records_and_retries_atomic_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, interrupt_publication: bool
+) -> None:
+    project = ProjectContext(tmp_path)
+    project.initialize()
+    fixtures = Path(__file__).parents[2] / "persistence" / "tests" / "fixtures"
+    legacy = (fixtures / "project-state-v2.json").read_bytes()
+    project.state_path.write_bytes(legacy)
+    session = project.sessions_dir / "synthetic"
+    session.mkdir(mode=0o700)
+    records = {
+        session / "events.jsonl": (fixtures / "session-event-v1.json").read_bytes(),
+        session / "audit.jsonl": (fixtures / "audit-event-v1.json").read_bytes(),
+    }
+    for path, content in records.items():
+        path.write_bytes(content)
+    assert project.state_exists()
+    assert project.state_path.read_bytes() == legacy
+
+    if interrupt_publication:
+        replace = Path.replace
+
+        def fail_marker_replace(source: Path, target: Path) -> Path:
+            if target == project.state_path:
+                raise OSError("synthetic interrupted marker publication")
+            return replace(source, target)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(Path, "replace", fail_marker_replace)
+            with pytest.raises(ProjectStateError, match="interrupted marker publication"):
+                project.initialize()
+        assert project.state_path.read_bytes() == legacy
+        assert not tuple(project.state_root.glob(".state.json-*"))
+        assert all(path.read_bytes() == content for path, content in records.items())
+
+    project.initialize()
+    upgraded = project.state_path.read_bytes()
+    assert json.loads(upgraded) == json.loads((fixtures / "project-state-v3.json").read_bytes())
+    assert all(path.read_bytes() == content for path, content in records.items())
+    project.initialize()
+    assert project.state_path.read_bytes() == upgraded
 
 
 def test_project_context_does_not_relabel_incompatible_current_formats(

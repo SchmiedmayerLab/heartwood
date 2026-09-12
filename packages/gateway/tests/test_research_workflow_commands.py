@@ -350,6 +350,10 @@ def test_interrupted_dispatch_is_never_automatically_repeated(tmp_path: Path) ->
         with pytest.raises(RuntimeError, match="Synthetic interruption"):
             gateway.handle(command)
         assert _state(gateway).phase == "running"
+        recorded = gateway.session_projection(session_id="research").experiments
+        assert len(recorded) == 1
+        assert recorded[0].status == "started"
+        assert recorded[0].outputs == ()
     finally:
         gateway.stop()
     replacement = FinishedBackend()
@@ -358,6 +362,7 @@ def test_interrupted_dispatch_is_never_automatically_repeated(tmp_path: Path) ->
         with pytest.raises(SessionRecoveryError):
             fresh.handle(command)
         assert not replacement.prompts
+        assert fresh.session_projection(session_id="research").experiments == recorded
     finally:
         fresh.stop()
 
@@ -499,14 +504,175 @@ def test_real_sdk_runs_reviewed_stages_and_restores_structured_outcome(
         )
         assert _state(restored).phase == "completed"
         assert unused.call_count == 0
+        experiments = restored.experiment_records().runs
+        assert len(experiments) == 2
+        assert [
+            item.definition.stage.stage_id for item in experiments if item.definition.stage
+        ] == ["inspect", "report"]
+        assert all(item.status == "succeeded" for item in experiments)
+        assert all(item.exit_code is None for item in experiments)
+        assert any(item.kind == "tool.execution.recorded" for item in experiments[0].evidence)
+        assert any(item.kind == "approval.recorded" for item in experiments[0].evidence)
+        assert experiments == restored.session_projection(session_id="research").experiments
+        export = restored.export_experiments()
+        assert restored.export_experiments() == export
+        assert "subject_id" not in export.jsonl
+        assert '"content"' not in export.jsonl
+        assert '"command"' not in export.jsonl
+        assert unused.call_count == 0
         assert (tmp_path / "results/readiness.md").read_text() == report
     finally:
         restored.stop()
 
 
+@pytest.mark.parametrize(
+    "tamper", ["fingerprint", "input", "output", "stage", "links", "missing-start"]
+)
+def test_provenance_rejects_changed_or_incomplete_source_records(
+    tmp_path: Path, tamper: str
+) -> None:
+    from heartwood.core_adapter.workflow_provenance import (
+        experiment_event_fingerprint,
+        workflow_experiment_events,
+    )
+    from heartwood.schemas.experiments import ExperimentEvent, ExperimentEvidence
+    from heartwood.session import SessionEvent
+
+    gateway = _gateway(tmp_path, FinishedBackend())
+    try:
+        _start(gateway, _inputs(tmp_path))
+        gateway.handle(_transition(gateway, "run"))
+        _readiness(tmp_path)
+        gateway.handle(_transition(gateway, "evaluate"))
+        events = list(gateway._services["research"].replay_events())
+        originals = workflow_experiment_events(events)
+        assert len(originals) == 2
+        target = next(
+            index
+            for index, source in enumerate(events)
+            if source.payload.get("experiment") is not None
+            and ExperimentEvent.model_validate(source.payload["experiment"]).status
+            == ("started" if tamper in {"input", "stage", "missing-start"} else "succeeded")
+        )
+        source = events[target]
+        payload = dict(source.payload)
+        event = ExperimentEvent.model_validate(payload["experiment"])
+        if tamper == "missing-start":
+            del payload["experiment"]
+        else:
+            data = event.model_dump(mode="json")
+            if tamper == "input":
+                data["definition"]["inputs"][0]["sha256"] = "0" * 64
+            elif tamper == "output":
+                data["outputs"][0]["sha256"] = "0" * 64
+            elif tamper == "stage":
+                data["definition"]["stage"]["stage_id"] = "report"
+            elif tamper == "links":
+                data["evidence"] = [
+                    ExperimentEvidence(
+                        event_id="fabricated", event_sha256="0" * 64, kind="tool.execution.recorded"
+                    ).model_dump(mode="json")
+                ]
+            changed = ExperimentEvent.model_validate(data)
+            payload["experiment"] = cast(dict[str, JsonValue], changed.model_dump(mode="json"))
+            payload["experiment_fingerprint"] = (
+                "0" * 64 if tamper == "fingerprint" else experiment_event_fingerprint(changed)
+            )
+        events[target] = SessionEvent.model_validate({**source.model_dump(), "payload": payload})
+        with pytest.raises(ValueError, match=r"[Ee]xperiment"):
+            workflow_experiment_events(events)
+        assert (
+            workflow_experiment_events(gateway._services["research"].replay_events()) == originals
+        )
+    finally:
+        gateway.stop()
+
+
+def test_project_provenance_rebuild_does_not_read_new_files_or_repeat_work(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from heartwood.gateway import RestGateway, RestRequest
+    from heartwood.gateway._experiment_store import ExperimentStore
+    from heartwood.schemas.experiments import ExperimentEvent
+
+    backend = FinishedBackend()
+    gateway = _gateway(tmp_path, backend)
+    try:
+        _start(gateway, _inputs(tmp_path))
+        gateway.handle(_transition(gateway, "run"))
+        _readiness(tmp_path)
+        gateway.handle(_transition(gateway, "evaluate"))
+        expected = gateway.session_projection(session_id="research").experiments
+        (tmp_path / "results/readiness.json").write_text("Changed after acceptance")
+        original = ExperimentStore.append
+        calls = 0
+
+        def fail_after_first(self: ExperimentStore, event: ExperimentEvent) -> None:
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise OSError("synthetic materialization failure")
+            original(self, event)
+
+        with monkeypatch.context() as patched:
+            patched.setattr(ExperimentStore, "append", fail_after_first)
+            with pytest.raises(OSError, match="synthetic materialization failure"):
+                gateway.experiment_records()
+        assert gateway.experiment_records().runs == expected
+        assert len(backend.prompts) == 1
+        response = RestGateway(gateway).handle(
+            RestRequest(method="GET", path="/research/experiments")
+        )
+        assert response.status_code == 200
+        assert response.body["retention"] == "project-local"
+        exported = RestGateway(gateway).handle(
+            RestRequest(method="GET", path="/research/experiments/export")
+        )
+        assert exported.body == gateway.export_experiments().model_dump(mode="json")
+        assert "Changed after acceptance" not in str(exported.body)
+    finally:
+        gateway.stop()
+
+
+def test_empty_project_provenance_queries_do_not_create_state(tmp_path: Path) -> None:
+    from heartwood.gateway import RestGateway, RestRequest
+
+    gateway = _gateway(tmp_path, FinishedBackend())
+    try:
+        assert gateway.experiment_records().runs == ()
+        assert gateway.export_experiments().jsonl == ""
+        for path in ("/research/experiments", "/research/experiments/export"):
+            assert (
+                RestGateway(gateway).handle(RestRequest(method="GET", path=path)).status_code == 200
+            )
+        assert list(tmp_path.iterdir()) == []
+    finally:
+        gateway.stop()
+
+
+def test_project_provenance_export_rejects_corrupt_records(tmp_path: Path) -> None:
+    from heartwood.gateway import RestGateway, RestRequest
+
+    backend = FinishedBackend()
+    gateway = _gateway(tmp_path, backend)
+    try:
+        gateway.project.initialize()
+        (gateway.project.state_root / "experiments.jsonl").write_text("private-corrupt-record\n")
+        for path in ("/research/experiments", "/research/experiments/export"):
+            result = RestGateway(gateway).handle(RestRequest(method="GET", path=path))
+            assert result.status_code == 409
+            assert "private-corrupt-record" not in str(result.body)
+        assert not backend.prompts
+    finally:
+        gateway.stop()
+
+
 @pytest.mark.parametrize("mutation", [None, "input", "program", "destination"])
 def test_real_sdk_baseline_reproduces_through_journaled_actions(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str | None
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str | None,
 ) -> None:
     monkeypatch.setenv("PATH", f"{Path(sys.executable).parent}{os.pathsep}{os.environ['PATH']}")
     task = next(task for task in research_tasks() if task.case.case_id == "baseline-analysis")
@@ -672,6 +838,36 @@ def test_real_sdk_baseline_reproduces_through_journaled_actions(
         )
         assert _state(restored).phase == "completed"
         assert unused.call_count == 0
+        experiments = restored.experiment_records().runs
+        assert len(experiments) == 4
+        assert [
+            item.definition.stage.stage_id for item in experiments if item.definition.stage
+        ] == ["plan", "execute", "verify", "report"]
+        assert all(item.status == "succeeded" for item in experiments)
+        execution, verification = experiments[1:3]
+        assert execution.definition.code_output_paths == ("results/analysis.py",)
+        program = next(item for item in execution.outputs if item.path == "results/analysis.py")
+        assert verification.definition.code == (program,)
+        assert any(item.kind == "workflow.execution.recorded" for item in verification.evidence)
+        assert any(item.kind == "approval.recorded" for item in verification.evidence)
+        assert experiments == restored.session_projection(session_id="research").experiments
+        assert restored.export_experiments() == restored.export_experiments()
+        assert unused.call_count == 0
+        from heartwood.cli._interactive import InteractiveSession
+        from heartwood.notebook import build_view_model, build_widget_spec
+
+        terminal = InteractiveSession(restored, session_id="research").submit("/experiments")
+        assert terminal.message is not None
+        assert str(verification.run_id) in terminal.message
+        assert program.sha256 in terminal.message
+        assert not terminal.events
+        notebook = build_view_model(restored.session_projection(session_id="research"))
+        assert notebook.experiments == experiments
+        section = next(
+            item for item in build_widget_spec(notebook) if item.title == "Experiment Records"
+        )
+        assert any(str(verification.run_id) in item for item in section.items)
+        assert unused.call_count == 0
         restored.handle(
             SessionCommand(
                 command_id="export",
@@ -688,6 +884,47 @@ def test_real_sdk_baseline_reproduces_through_journaled_actions(
         assert "subject_id" not in audit
     finally:
         restored.stop()
+    _checkpoint_research_project(tmp_path, tmp_path_factory.mktemp("research-checkpoint"))
+    assert unused.call_count == 0
+
+
+def _checkpoint_research_project(root: Path, deployment: Path) -> None:
+    from heartwood.audit import (
+        LocalEd25519CheckpointSigner,
+        initialize_local_checkpoint_signer,
+        load_checkpoint_signer_registry,
+    )
+
+    setup = initialize_local_checkpoint_signer(directory=deployment / "signer")
+    gateway = SessionGateway(
+        project=ProjectContext(root),
+        backend_id="deterministic",
+        checkpoint_signer_registry=load_checkpoint_signer_registry(setup.registry),
+        checkpoint_signer_factory=lambda profile: LocalEd25519CheckpointSigner(
+            private_key=setup.private_key,
+            signer_id=profile.signer_id,
+            key_id=profile.key_id,
+            key_version=profile.key_version,
+        ),
+    )
+    try:
+        snapshot = gateway.export_experiments()
+        assert len(gateway.experiment_records().runs) == 4
+        bundle = deployment / "baseline"
+        created = gateway.create_audit_checkpoint(
+            session_id="research",
+            output=bundle,
+            deployment_id="synthetic-research",
+            retention_policy_id="research-audit-7y",
+            retain_until="2033-08-02",
+            include_experiments=True,
+        )
+        assert gateway.verify_audit_checkpoint(bundle=bundle) == created
+        assert created.experiments is not None
+        assert created.experiments.sha256 == snapshot.sha256
+        assert (bundle / "experiments.jsonl").read_bytes() == snapshot.jsonl.encode()
+    finally:
+        gateway.stop()
 
 
 @pytest.mark.parametrize("calls", [20, 21, 80])
@@ -754,6 +991,9 @@ def test_expired_workflow_can_be_cancelled_without_more_model_work(tmp_path: Pat
         )
         gateway.handle(_transition(gateway, "cancel"))
         assert _state(gateway).phase == "cancelled"
+        (record,) = gateway.session_projection(session_id="research").experiments
+        assert record.status == "cancelled"
+        assert record.outputs == ()
         assert len(backend.prompts) == 1
     finally:
         gateway.stop()
@@ -880,5 +1120,55 @@ def test_workflow_start_requires_an_unused_output_directory(tmp_path: Path) -> N
         )
         assert any(event.kind == EventKind.ERROR_RECORDED for event in result.events)
         assert gateway.persisted_session_projection(session_id="research").workflow is None
+    finally:
+        gateway.stop()
+
+
+@pytest.mark.parametrize("terminal", ["completed", "cancelled"])
+def test_provenance_rejects_terminal_transitions_without_their_outcome(
+    tmp_path: Path, terminal: str
+) -> None:
+    from heartwood.core_adapter.workflow_provenance import workflow_experiment_events
+    from heartwood.session import SessionEvent
+
+    gateway = _gateway(tmp_path, FinishedBackend())
+    try:
+        _start(gateway, _inputs(tmp_path))
+        gateway.handle(_transition(gateway, "run"))
+        if terminal == "completed":
+            _readiness(tmp_path)
+            gateway.handle(_transition(gateway, "evaluate"))
+            gateway.handle(_transition(gateway, "run"))
+            (tmp_path / "results/readiness.md").write_text("# Readiness\nSynthetic data only.\n")
+            gateway.handle(_transition(gateway, "evaluate"))
+            evaluation = _state(gateway).evaluation
+            assert evaluation is not None
+            gateway.handle(
+                _transition(
+                    gateway,
+                    "review",
+                    approved=True,
+                    evidence_fingerprint=evaluation.assessment.evidence_fingerprint,
+                )
+            )
+        else:
+            gateway.handle(_transition(gateway, "cancel"))
+        assert _state(gateway).phase == terminal
+        events = list(gateway._services["research"].replay_events())
+        target = next(
+            index
+            for index, source in enumerate(events)
+            if source.kind == EventKind.WORKFLOW_UPDATED and source.payload.get("phase") == terminal
+        )
+        payload = {
+            key: value
+            for key, value in events[target].payload.items()
+            if key not in {"experiment", "experiment_fingerprint"}
+        }
+        events[target] = SessionEvent.model_validate(
+            {**events[target].model_dump(), "payload": payload}
+        )
+        with pytest.raises(ValueError, match="missing its experiment outcome"):
+            workflow_experiment_events(events)
     finally:
         gateway.stop()

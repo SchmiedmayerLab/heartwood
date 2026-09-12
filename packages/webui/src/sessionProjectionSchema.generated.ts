@@ -25,6 +25,7 @@ export const sessionProjectionJsonSchema = {
       ],
       type: "string",
     },
+    Digest: { pattern: "^[0-9a-f]{64}$", type: "string" },
     EventKind: {
       enum: [
         "command.received",
@@ -72,6 +73,161 @@ export const sessionProjectionJsonSchema = {
       },
       required: ["elapsed_seconds"],
       type: "object",
+    },
+    ExperimentDefinition: {
+      additionalProperties: false,
+      properties: {
+        actor_ref: { $ref: "#/$defs/Reference" },
+        code: {
+          items: { $ref: "#/$defs/ExperimentFile" },
+          maxItems: 256,
+          type: "array",
+        },
+        code_output_paths: {
+          items: { $ref: "#/$defs/ExperimentPath" },
+          maxItems: 256,
+          type: "array",
+        },
+        entry_point: {
+          anyOf: [{ $ref: "#/$defs/ExperimentPath" }, { type: "null" }],
+        },
+        environment: { $ref: "#/$defs/ExperimentEnvironment" },
+        git_dirty: { anyOf: [{ type: "boolean" }, { type: "null" }] },
+        git_revision: {
+          anyOf: [
+            { pattern: "^(?:[0-9a-f]{40}|[0-9a-f]{64})$", type: "string" },
+            { type: "null" },
+          ],
+        },
+        inputs: {
+          items: { $ref: "#/$defs/ExperimentFile" },
+          maxItems: 256,
+          type: "array",
+        },
+        invocation_sha256: { $ref: "#/$defs/Digest" },
+        output_paths: {
+          items: { $ref: "#/$defs/ExperimentPath" },
+          maxItems: 256,
+          type: "array",
+        },
+        parameters_sha256: { $ref: "#/$defs/Digest" },
+        source: { enum: ["python", "shell", "heartwood"], type: "string" },
+        stage: {
+          anyOf: [{ $ref: "#/$defs/ExperimentStage" }, { type: "null" }],
+        },
+      },
+      required: [
+        "actor_ref",
+        "source",
+        "entry_point",
+        "code",
+        "inputs",
+        "output_paths",
+        "code_output_paths",
+        "environment",
+        "parameters_sha256",
+        "invocation_sha256",
+        "git_revision",
+        "git_dirty",
+        "stage",
+      ],
+      type: "object",
+    },
+    ExperimentEnvironment: {
+      additionalProperties: false,
+      properties: {
+        kind: { enum: ["python", "container", "declared"], type: "string" },
+        sha256: { $ref: "#/$defs/Digest" },
+        source: { enum: ["observed", "declared"], type: "string" },
+      },
+      required: ["kind", "sha256", "source"],
+      type: "object",
+    },
+    ExperimentEvidence: {
+      additionalProperties: false,
+      properties: {
+        event_id: { maxLength: 256, minLength: 1, type: "string" },
+        event_sha256: { $ref: "#/$defs/Digest" },
+        kind: { $ref: "#/$defs/Reference" },
+      },
+      required: ["event_id", "event_sha256", "kind"],
+      type: "object",
+    },
+    ExperimentFile: {
+      additionalProperties: false,
+      properties: {
+        path: { $ref: "#/$defs/ExperimentPath" },
+        sha256: { $ref: "#/$defs/Digest" },
+        size_bytes: { minimum: 0, type: "integer" },
+      },
+      required: ["path", "sha256", "size_bytes"],
+      type: "object",
+    },
+    ExperimentPath: { maxLength: 512, minLength: 1, type: "string" },
+    ExperimentRun: {
+      additionalProperties: false,
+      properties: {
+        attempt: { minimum: 1, type: "integer" },
+        definition: { $ref: "#/$defs/ExperimentDefinition" },
+        evidence: {
+          items: { $ref: "#/$defs/ExperimentEvidence" },
+          type: "array",
+        },
+        exit_code: { anyOf: [{ type: "integer" }, { type: "null" }] },
+        outputs: { items: { $ref: "#/$defs/ExperimentFile" }, type: "array" },
+        run_id: { format: "uuid", type: "string" },
+        schema_version: {
+          const: "heartwood.experiment-run.v1",
+          type: "string",
+        },
+        started_at: { format: "date-time", type: "string" },
+        status: { $ref: "#/$defs/ExperimentStatus" },
+        updated_at: { format: "date-time", type: "string" },
+      },
+      required: [
+        "schema_version",
+        "run_id",
+        "definition",
+        "started_at",
+        "updated_at",
+        "status",
+        "attempt",
+        "outputs",
+        "exit_code",
+        "evidence",
+      ],
+      type: "object",
+    },
+    ExperimentStage: {
+      additionalProperties: false,
+      properties: {
+        session_id: { $ref: "#/$defs/Reference" },
+        stage_id: { $ref: "#/$defs/Reference" },
+        tool_call_id: {
+          anyOf: [{ $ref: "#/$defs/Reference" }, { type: "null" }],
+        },
+        workflow_run_id: { $ref: "#/$defs/Reference" },
+        workflow_sha256: { $ref: "#/$defs/Digest" },
+      },
+      required: [
+        "session_id",
+        "workflow_run_id",
+        "stage_id",
+        "workflow_sha256",
+        "tool_call_id",
+      ],
+      type: "object",
+    },
+    ExperimentStatus: {
+      enum: [
+        "started",
+        "interrupted",
+        "resumed",
+        "succeeded",
+        "failed",
+        "cancelled",
+      ],
+      type: "string",
     },
     JsonValue: {
       anyOf: [
@@ -474,6 +630,10 @@ export const sessionProjectionJsonSchema = {
       ],
       type: "object",
     },
+    Reference: {
+      pattern: "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+      type: "string",
+    },
     SessionLifecycle: {
       enum: [
         "idle",
@@ -703,6 +863,7 @@ export const sessionProjectionJsonSchema = {
       type: "array",
     },
     eventCount: { minimum: 0, type: "integer" },
+    experiments: { items: { $ref: "#/$defs/ExperimentRun" }, type: "array" },
     lastCommandOutcome: {
       anyOf: [{ $ref: "#/$defs/ProjectionCommandOutcome" }, { type: "null" }],
     },
@@ -746,6 +907,7 @@ export const sessionProjectionJsonSchema = {
     "schema_version",
     "sessionId",
     "workflow",
+    "experiments",
     "workflowControls",
     "eventCount",
     "revision",
