@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from pathlib import PurePosixPath
 from typing import Literal, Protocol
@@ -112,8 +112,11 @@ def workflow_experiment_events(events: Sequence[SessionEvent]) -> tuple[Experime
     records: list[ExperimentEvent] = []
     sources: dict[str, SessionEvent] = {}
     starts: dict[UUID, tuple[SessionEvent, ExperimentDefinition]] = {}
+    outcomes: set[UUID] = set()
     for source in events:
         payload = source.payload.get("experiment")
+        if source.kind == EventKind.WORKFLOW_UPDATED and payload is None:
+            _require_terminal_outcome(source, starts, outcomes)
         if source.kind == EventKind.WORKFLOW_UPDATED and payload is not None:
             try:
                 event = ExperimentEvent.model_validate(payload)
@@ -177,11 +180,28 @@ def workflow_experiment_events(events: Sequence[SessionEvent]) -> tuple[Experime
                 )
                 if event.evidence != expected:
                     raise ValueError("Workflow experiment evidence links are incomplete or changed")
+                outcomes.add(event.run_id)
             _validate_artifacts(event, workflow, definition)
             records.append(event)
         sources[source.event_id] = source
     reduce_experiment_events(tuple(records))
     return tuple(records)
+
+
+def _require_terminal_outcome(
+    source: SessionEvent,
+    starts: Mapping[UUID, tuple[SessionEvent, ExperimentDefinition]],
+    outcomes: set[UUID],
+) -> None:
+    """A finished or cancelled stage with a recorded start must also record its outcome."""
+    if source.payload.get("phase") not in {"completed", "cancelled"}:
+        return
+    run_id, stage_id = source.payload.get("run_id"), source.payload.get("stage_id")
+    if not isinstance(run_id, str) or not isinstance(stage_id, str):
+        raise ValueError("Workflow experiment record is invalid")
+    experiment_id = stage_experiment_id(source.session_id, run_id, stage_id)
+    if experiment_id in starts and experiment_id not in outcomes:
+        raise ValueError("Workflow terminal transition is missing its experiment outcome")
 
 
 def _validate_artifacts(
