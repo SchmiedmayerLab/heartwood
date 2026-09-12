@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pytest
 
+import heartwood.core_adapter._service as session_service
 import heartwood.core_adapter._state as session_state
 from heartwood.audit import AuditIntegrityError, compute_event_hash
 from heartwood.core_adapter import (
@@ -67,12 +68,147 @@ _COMPATIBILITY_FIXTURES = (
 )
 
 
+@pytest.mark.parametrize("interrupted", [False, True])
+def test_reproduction_capture_is_live_and_never_retried_after_execution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, interrupted: bool
+) -> None:
+    execution = BackendToolExecutionEvent(
+        source_event_id="completed-terminal",
+        tool_execution=ToolExecution(
+            tool_call_id="reproduction-action",
+            action_id="reproduction-action",
+            tool_name="terminal",
+            exit_code=0,
+            summary="Synthetic reproduction completed",
+            working_directory=str(tmp_path),
+        ),
+    )
+    backend = _RecordingBackend(
+        endpoint="https://model.local.invalid/v1/chat/completions", reconciled=(execution,)
+    )
+    service = SessionService.local_default(tmp_path, backend=backend)
+    captures: list[str] = []
+
+    def observe(*_args: object, **_kwargs: object) -> None:
+        captures.append("observed")
+        if interrupted:
+            raise OSError("synthetic interruption after tool event, before observation")
+
+    monkeypatch.setattr(service, "_workflow_evaluator", object())
+    monkeypatch.setattr(session_service, "workflow_run", lambda _events: object())
+    monkeypatch.setattr(session_service, "observe_reproduction", observe)
+    try:
+        if interrupted:
+            with pytest.raises(OSError, match="synthetic interruption"):
+                backend.event_sink((execution,))
+        else:
+            backend.event_sink((execution,))
+        # A duplicate callback or reconciliation cannot recapture files after the action.
+        backend.event_sink((execution,))
+        service.reconcile()
+        assert captures == ["observed"]
+        assert (
+            sum(
+                event.kind == EventKind.TOOL_EXECUTION_RECORDED for event in service.replay_events()
+            )
+            == 1
+        )
+    finally:
+        service.close()
+
+    restored = SessionService.local_default(tmp_path, backend=backend)
+    monkeypatch.setattr(restored, "_workflow_evaluator", object())
+    try:
+        restored.reconcile()
+        backend.event_sink((execution,))
+        assert captures == ["observed"]
+        assert not any(
+            event.kind == EventKind.WORKFLOW_EXECUTION_RECORDED
+            for event in restored.replay_events()
+        )
+        assert backend.prompts == []
+        assert backend.resolutions == []
+    finally:
+        restored.close()
+
+
+def test_reconciled_tool_completion_cannot_create_reproduction_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    execution = BackendToolExecutionEvent(
+        source_event_id="recovered-terminal",
+        tool_execution=ToolExecution(
+            tool_call_id="action",
+            action_id="action",
+            tool_name="terminal",
+            exit_code=0,
+            summary="Recovered synthetic tool",
+            working_directory=str(tmp_path),
+        ),
+    )
+    backend = _RecordingBackend(
+        endpoint="https://model.local.invalid/v1/chat/completions", reconciled=(execution,)
+    )
+    service = SessionService.local_default(tmp_path, backend=backend)
+    monkeypatch.setattr(service, "_workflow_evaluator", object())
+
+    def unexpected(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("Reconciliation must not inspect files to create execution evidence")
+
+    monkeypatch.setattr(session_service, "workflow_run", unexpected)
+    monkeypatch.setattr(session_service, "observe_reproduction", unexpected)
+    try:
+        recovered = service.reconcile()
+        assert any(event.kind == EventKind.TOOL_EXECUTION_RECORDED for event in recovered)
+        assert not any(event.kind == EventKind.WORKFLOW_EXECUTION_RECORDED for event in recovered)
+    finally:
+        service.close()
+
+
 def test_empty_replay_does_not_create_session_state(tmp_path: Path) -> None:
     service = SessionService.synthetic_default(tmp_path)
 
     assert service.replay_events() == ()
     assert service.store.verified_head() == (0, None)
     assert not service.store.session_dir.exists()
+
+
+@pytest.mark.parametrize("timeout", [-1, 31, float("inf"), float("nan")])
+def test_idle_wait_rejects_unbounded_or_invalid_timeouts(tmp_path: Path, timeout: float) -> None:
+    service = SessionService.synthetic_default(tmp_path)
+    with pytest.raises(ValueError, match="idle timeout"):
+        service.wait_for_idle(timeout)
+    assert not service.store.session_dir.exists()
+
+
+def test_idle_wait_does_not_block_background_publication(tmp_path: Path) -> None:
+    class PublishingBackend(_RecordingBackend):
+        worker: threading.Thread | None = None
+
+        def wait_for_idle(self, timeout: float) -> bool:
+            if self.worker is None:
+                self.worker = threading.Thread(target=lambda: self.event_sink(self.response))
+                self.worker.start()
+            self.worker.join(timeout=timeout)
+            return not self.worker.is_alive()
+
+    event = BackendAgentMessageEvent(message="Synthetic completed task", source_event_id="finished")
+    backend = PublishingBackend(
+        endpoint="https://model.local.invalid/v1/chat/completions",
+        response=(event,),
+        reconciled=(event,),
+    )
+    service = SessionService.local_default(tmp_path, backend=backend)
+    try:
+        assert service.wait_for_idle(2)
+        assert service.wait_for_idle(0)
+        messages = [e for e in service.replay_events() if e.kind == EventKind.AGENT_MESSAGE_EMITTED]
+        assert len(messages) == 1
+        assert backend.prompts == []
+    finally:
+        if backend.worker is not None:
+            backend.worker.join(timeout=2)
+        service.close()
 
 
 def test_checked_in_session_and_audit_compatibility_fixture_replays(tmp_path: Path) -> None:
@@ -2385,6 +2521,9 @@ class _RecordingBackend:
 
     def close(self) -> None:
         return None
+
+    def wait_for_idle(self, timeout: float) -> bool:  # noqa: ARG002
+        return True
 
 
 class _InterruptBeforeResolutionBackend(_RecordingBackend):

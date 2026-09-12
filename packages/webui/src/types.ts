@@ -13,28 +13,11 @@ export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue =
   JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
 
-export type CommandKind =
-  "approve" | "deny" | "chat" | "pause" | "resume" | "replay" | "audit.export";
-
-export type EventKind =
-  | "command.received"
-  | "approval.recorded"
-  | "policy.decision.recorded"
-  | "model_call.decision.recorded"
-  | "user_message.recorded"
-  | "agent_message.emitted"
-  | "tool_call.proposed"
-  | "confirmation.requested"
-  | "confirmation.resolved"
-  | "tool.execution.recorded"
-  | "session.paused"
-  | "session.resumed"
-  | "agent.lifecycle.updated"
-  | "task.plan.updated"
-  | "model.usage.updated"
-  | "subagent.updated"
-  | "audit.export.recorded"
-  | "error.recorded";
+export type CommandKind = Projection.CommandKind;
+export type EventKind = Projection.EventKind;
+export type WorkflowCatalog = Api.WorkflowCatalog;
+export type WorkflowRequest =
+  Api.WorkflowStart | Api.WorkflowTransition | Api.WorkflowReview;
 
 export interface SessionCommand {
   schema_version: "heartwood.session-command.v1";

@@ -14,7 +14,10 @@ from typing import Annotated, ClassVar, Literal, cast
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 from heartwood.core_adapter import backend_error_is_fatal
-from heartwood.gateway._workspace_paths import ProjectPathError, project_relative_path
+from heartwood.core_adapter.workflow_runtime import workflow_controls, workflow_run
+from heartwood.schemas.execution import ExecutionUsage
+from heartwood.schemas.project_paths import ProjectPathError, project_relative_path
+from heartwood.schemas.workflows import WorkflowControl, WorkflowRun
 from heartwood.session import CommandKind, EventKind, JsonValue, SessionEvent
 
 
@@ -269,6 +272,10 @@ class SessionProjection(_ProjectionRecord):
 
     schema_version: Literal["heartwood.session-projection.v1"] = "heartwood.session-projection.v1"
     session_id: str = Field(serialization_alias="sessionId")
+    workflow: WorkflowRun | None = None
+    workflow_controls: tuple[WorkflowControl, ...] = Field(
+        default=(), serialization_alias="workflowControls"
+    )
     event_count: int = Field(ge=0, serialization_alias="eventCount")
     revision: int = Field(ge=-1)
     workspace_revision: int = Field(
@@ -326,6 +333,20 @@ class SessionProjection(_ProjectionRecord):
         """Return the complete interface-safe projection payload."""
         return cast(dict[str, object], self.model_dump(mode="json", by_alias=True))
 
+    def execution_usage(self, *, elapsed_seconds: float) -> ExecutionUsage:
+        """Share observed task consumption without treating unpriced calls as free."""
+        usage = self.usage
+        return ExecutionUsage(
+            input_tokens=usage.prompt_tokens if usage else None,
+            output_tokens=usage.completion_tokens if usage else None,
+            model_calls=usage.call_count if usage else None,
+            reported_cost_usd=usage.accumulated_cost
+            if usage and usage.accumulated_cost > 0
+            else None,
+            proposed_actions=len(self.actions),
+            elapsed_seconds=elapsed_seconds,
+        )
+
 
 def project_session(
     events: tuple[SessionEvent, ...],
@@ -339,6 +360,7 @@ def project_session(
     activity: list[ProjectionActivity] = []
     conversation: list[ProjectionMessage] = []
     actions: dict[str, ProjectionActionRecord] = {}
+    proposed_action_ids: set[str] = set()
     approval_group_actions: dict[str, list[str]] = {}
     approval_group_decisions: dict[str, Literal["approved", "denied"] | None] = {}
     approval_group_resolutions: dict[
@@ -388,25 +410,53 @@ def project_session(
             arguments = _mapping(event.payload.get("arguments"))
             tool_call_id = _string(event.payload.get("tool_call_id"))
             if tool_call_id:
-                if tool_call_id in actions:
+                prior = actions.get(tool_call_id)
+                # Reconciliation may capture a complete confirmation before its
+                # callback proposal. It is not a second proposal, but its action
+                # identity and reviewed arguments must remain unchanged.
+                if tool_call_id in proposed_action_ids or (
+                    prior is not None
+                    and (
+                        prior.tool_name != tool_name
+                        or prior.arguments != arguments
+                        or (
+                            prior.action_id is not None
+                            and prior.action_id != (_string(event.payload.get("action_id")) or None)
+                        )
+                        or tool_call_id in integrity_failed_action_ids
+                    )
+                ):
                     integrity_failed_action_ids.add(tool_call_id)
                     _mark_projection_integrity_failure(
                         actions,
                         conversation,
                         event,
                         tool_call_ids=(tool_call_id,),
-                        detail="An action identity was proposed more than once.",
+                        detail="An action proposal repeats or conflicts with its stable identity.",
                     )
                     lifecycle_status = SessionLifecycle.ERROR
                     lifecycle_sequence = event.sequence
                     lifecycle_error_recoverable = False
                     continue
-                actions[tool_call_id] = _action_record(
+                proposed_action_ids.add(tool_call_id)
+                proposal = _action_record(
                     event,
                     payload=event.payload,
                     tool_call_id=tool_call_id,
                     tool_name=tool_name,
                     arguments=arguments,
+                )
+                actions[tool_call_id] = (
+                    proposal
+                    if prior is None
+                    else proposal.model_copy(
+                        update={
+                            "group_id": prior.group_id,
+                            "state": prior.state,
+                            "decision": prior.decision,
+                            "outcome": prior.outcome,
+                        }
+                    )
                 )
         elif kind == EventKind.TOOL_EXECUTION_RECORDED.value:
             tool_name = _string(event.payload.get("tool_name"))
@@ -763,6 +813,12 @@ def project_session(
     )
     return SessionProjection(
         session_id=session_id,
+        workflow=workflow_run(events),
+        workflow_controls=workflow_controls(
+            events,
+            active=lifecycle_status == SessionLifecycle.RUNNING,
+            pending_actions=pending_approval is not None,
+        ),
         event_count=len(events),
         revision=events[-1].sequence if events else -1,
         workspace_revision=max(

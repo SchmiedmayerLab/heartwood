@@ -1,0 +1,12 @@
+{
+  "synthetic": true,
+  "unit_of_analysis": "visit",
+  "grouping_key": "subject_id",
+  "primary_key": ["subject_id", "visit"],
+  "outcome": "response",
+  "permitted_predictors": ["measurement"],
+  "excluded_predictors": {"future_response": "Recorded after the outcome; using it would leak the target."},
+  "split": {"column": "partition", "train": "train", "test": "test", "keep_subjects_together": true},
+  "validity": {"visit": {"minimum": 1}, "measurement": {"minimum": 0}},
+  "notes": "Small synthetic regression fixture for software acceptance, not a scientific performance estimate."
+}

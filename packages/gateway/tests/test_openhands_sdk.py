@@ -2337,6 +2337,46 @@ def test_synchronous_progress_sink_does_not_block_the_openhands_event_loop(
         backend.close()
 
 
+def test_idle_wait_includes_final_publication_and_never_joins_its_own_worker(
+    tmp_path: Path,
+) -> None:
+    conversation = _ControlledConversation()
+    publishing = Event()
+    release_publication = Event()
+    backend = _backend(
+        tmp_path,
+        cast(ConversationFactory, lambda _event_callback, _token_callback: conversation),
+    )
+    callback_idle: list[bool] = []
+
+    def publish(_events: tuple[BackendEvent, ...]) -> None:
+        if not backend._execution_in_flight():
+            callback_idle.append(backend.wait_for_idle(0))
+            publishing.set()
+            if not release_publication.wait(timeout=3):
+                raise TimeoutError("Final publication was not released")
+
+    backend.bind_runtime(event_sink=publish, token_sink=lambda _delta: None)
+    try:
+        assert backend.wait_for_idle(0)
+        backend.submit_turn(session_id="session-1", prompt="Start")
+        assert conversation.started.wait(timeout=2)
+        assert not backend.wait_for_idle(0)
+        assert not conversation.interrupted
+        conversation.release.set()
+        assert publishing.wait(timeout=2)
+        assert backend._run_thread is None
+        assert callback_idle == [False]
+        assert not backend.wait_for_idle(0.01)
+        release_publication.set()
+        assert backend.wait_for_idle(2)
+        assert conversation.messages == [("Start", "heartwood-user")]
+    finally:
+        conversation.release.set()
+        release_publication.set()
+        backend.close()
+
+
 def test_stale_running_model_turn_fails_closed_without_repeating_provider_work(
     tmp_path: Path,
 ) -> None:

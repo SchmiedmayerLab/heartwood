@@ -107,9 +107,10 @@ test("supports the researcher conversation and session workflow", async ({
   const inactiveWorkspacePanels = page.locator(
     '.workspace-tab-panel[data-state="inactive"]',
   );
-  await expect(inactiveWorkspacePanels).toHaveCount(2);
-  await expect(inactiveWorkspacePanels.first()).toBeHidden();
-  await expect(inactiveWorkspacePanels.last()).toBeHidden();
+  await expect(inactiveWorkspacePanels).toHaveCount(3);
+  for (const panel of await inactiveWorkspacePanels.all()) {
+    await expect(panel).toBeHidden();
+  }
   const task = page.getByRole("textbox", { name: "Task", exact: true });
   await expect(task).toBeDisabled();
   await expect(page.getByLabel("Pause agent")).toBeDisabled();
@@ -299,6 +300,10 @@ test("keeps session navigation usable on a narrow notebook viewport", async ({
   const filesTab = page.getByRole("tab", { name: "Files" });
   await filesTab.focus();
   await filesTab.press("ArrowRight");
+  const researchTab = page.getByRole("tab", { name: "Research" });
+  await expect(researchTab).toBeFocused();
+  await expect(researchTab).toHaveAttribute("aria-selected", "true");
+  await researchTab.press("ArrowRight");
   const changes = page.getByRole("region", { name: "Project changes" });
   await expect(changes).toBeVisible();
   const changeEntry = changes.getByRole("button", {

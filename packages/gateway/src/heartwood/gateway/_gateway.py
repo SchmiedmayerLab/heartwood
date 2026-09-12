@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import shutil
 from collections.abc import Callable, Mapping, Sequence
@@ -163,6 +165,7 @@ from heartwood.gateway._workspace import WorkspaceInspector
 from heartwood.model_policy import ModelPolicyEngine
 from heartwood.persistence import DurableFileError, write_private_text_atomic
 from heartwood.schemas import (
+    ActionConfirmationMode,
     ActionSettingsResponse,
     AuditExportResponse,
     CredentialSettingsResponse,
@@ -190,6 +193,13 @@ from heartwood.schemas import (
     WorkspaceFileResponse,
     WorkspaceTreeResponse,
     api_response,
+)
+from heartwood.schemas.evaluation import EvaluationRuntimeObservation
+from heartwood.schemas.workflows import (
+    WorkflowCatalog,
+    WorkflowOutcomeStatus,
+    WorkflowProjectBinding,
+    WorkflowStageEvaluation,
 )
 from heartwood.session import CommandKind, EventKind, SessionCommand, SessionEvent
 from heartwood.skills import (
@@ -324,6 +334,10 @@ class _UnconfiguredAgentBackend:
         token_sink: TokenDeltaSink,  # noqa: ARG002
     ) -> None:
         return None
+
+    def wait_for_idle(self, timeout: float) -> bool:  # noqa: ARG002
+        """An unconfigured backend cannot have background work."""
+        return True
 
     def reconcile(
         self,
@@ -532,7 +546,10 @@ class SessionGateway:
         self._pending_stream_events: dict[str, dict[int, SessionEvent]] = {}
 
     def start(self) -> None:
-        """Start the interface lifecycle without requiring an agent dependency import."""
+        """Initialize SDK modules before concurrent requests enter its import graph."""
+        from importlib import import_module
+
+        import_module("openhands.sdk")
 
     @_serialized_state
     def initialize_project(self, *, interface: InterfaceKind = "web") -> StartupPlanResponse:
@@ -558,7 +575,11 @@ class SessionGateway:
             else:
                 self.session_catalog.ensure(command.session_id)
             command_kind = str(command.kind)
-            storage_only = command_kind == CommandKind.AUDIT_EXPORT.value
+            starting_workflow = (
+                command_kind == CommandKind.WORKFLOW.value
+                and command.payload.get("action") == "start"
+            )
+            storage_only = command_kind == CommandKind.AUDIT_EXPORT.value or starting_workflow
             fatal_unavailable_reason: str | None = None
             if not storage_only and command_kind in _PROJECTED_COMMANDS:
                 persisted = FileSessionStore(
@@ -645,6 +666,16 @@ class SessionGateway:
                         session_id=command.session_id,
                         events=result.events,
                     )
+                if (
+                    starting_workflow
+                    and not result.replayed
+                    and any(event.kind == EventKind.WORKFLOW_UPDATED for event in result.events)
+                ):
+                    # The next service must construct its SDK with the persisted
+                    # workflow's structured finish contract, not a cached default.
+                    close_service = True
+                    self._services.pop(command.session_id, None)
+                    self._service_configurations.pop(command.session_id, None)
                 return result
             finally:
                 if close_service:
@@ -891,6 +922,86 @@ class SessionGateway:
     def session_projection(self, *, session_id: str) -> SessionProjection:
         """Return the sole interface projection for one session."""
         return self._session_snapshot_locked(session_id=session_id).projection
+
+    def wait_for_session_idle(self, *, session_id: str, timeout: float = 0) -> bool:
+        """Observe a settled session before evaluating it or admitting a new stage.
+
+        Waiting holds neither gateway nor session command locks, so a concurrent
+        pause remains available. Replacing the service invalidates this observation.
+        """
+        with self._state_lock:
+            service = self._service(session_id)
+        if not service.wait_for_idle(timeout):
+            return False
+        with self._state_lock:
+            if self._services.get(session_id) is not service or not service.wait_for_idle(0):
+                return False
+            service.reconcile()
+            return True
+
+    @_serialized_state
+    def evaluation_observation(self, *, session_id: str) -> EvaluationRuntimeObservation:
+        """Capture the session's client runtime, distinct from declared server metadata."""
+        from heartwood.gateway._openhands_sdk import OpenHandsSdkBackend
+
+        service = self._service(session_id)
+        policy = json.dumps(
+            service.policy_profile.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
+        )
+        digest = hashlib.sha256(policy.encode()).hexdigest()
+        backend = service.backend
+        if isinstance(backend, OpenHandsSdkBackend):
+            return backend.evaluation_observation(
+                platform=service.platform_adapter.adapter_id, policy_fingerprint=digest
+            )
+        return EvaluationRuntimeObservation(
+            backend=backend.backend_id,
+            source=(
+                "deterministic"
+                if isinstance(backend, DeterministicAgentBackend)
+                else "unconfigured"
+                if isinstance(backend, _UnconfiguredAgentBackend)
+                else "injected"
+            ),
+            request_model=None,
+            openhands_version=None,
+            model_options_fingerprint=None,
+            platform=service.platform_adapter.adapter_id,
+            policy_fingerprint=digest,
+            action_confirmation=cast(ActionConfirmationMode, backend.action_confirmation_mode),
+        )
+
+    def research_workflows(self) -> WorkflowCatalog:
+        """Return maintained workflow choices and runtime support without starting work."""
+        from heartwood.gateway._research_evaluation import ResearchStageEvaluator
+
+        return ResearchStageEvaluator.catalog()
+
+    @_serialized_state
+    def prepare_research_workflow(
+        self, workflow_id: str, *, inputs: Mapping[str, str], output_directory: str
+    ) -> WorkflowProjectBinding:
+        """Bind project-local workflow inputs without starting model or tool work."""
+        from heartwood.gateway._research_evaluation import ResearchStageEvaluator
+
+        return ResearchStageEvaluator(self.workspace_inspector).prepare(
+            workflow_id, inputs=inputs, output_directory=output_directory
+        )
+
+    @_serialized_state
+    def evaluate_research_stage(
+        self,
+        binding: WorkflowProjectBinding,
+        stage_id: str,
+        *,
+        model_status: WorkflowOutcomeStatus | None,
+    ) -> WorkflowStageEvaluation:
+        """Evaluate current artifacts without granting stage or tool approval."""
+        from heartwood.gateway._research_evaluation import ResearchStageEvaluator
+
+        return ResearchStageEvaluator(self.workspace_inspector).evaluate(
+            binding, stage_id, model_status=model_status
+        )
 
     @_serialized_state
     def persisted_session_projection(self, *, session_id: str) -> SessionProjection:
@@ -1996,6 +2107,8 @@ class SessionGateway:
         session_id: str,
         configuration: _ServiceConfiguration,
     ) -> SessionService:
+        from heartwood.gateway._research_evaluation import ResearchStageEvaluator
+
         backend = self._backend(
             model_settings=configuration.model_settings,
             action_settings=configuration.action_settings,
@@ -2008,6 +2121,7 @@ class SessionGateway:
             backend=backend,
             policy_profile=configuration.policy_profile,
             env=self.env,
+            workflow_evaluator=ResearchStageEvaluator(self.workspace_inspector),
             event_sink=lambda events: self._publish_background_events(
                 session_id=session_id,
                 events=events,
@@ -2020,6 +2134,8 @@ class SessionGateway:
 
     def _storage_service(self, session_id: str) -> SessionService:
         """Build an uncached service for commands that only access durable state."""
+        from heartwood.gateway._research_evaluation import ResearchStageEvaluator
+
         configuration = self._service_configuration()
         return SessionService.local_default(
             self.sessions_root,
@@ -2027,6 +2143,7 @@ class SessionGateway:
             backend=_UnconfiguredAgentBackend(configuration.action_settings.confirmation_mode),
             policy_profile=configuration.policy_profile,
             env=self.env,
+            workflow_evaluator=ResearchStageEvaluator(self.workspace_inspector),
         )
 
     def _backend(
@@ -2051,6 +2168,7 @@ class SessionGateway:
         except ModelSettingsError:
             return _UnconfiguredAgentBackend(action_settings.confirmation_mode)
         selected_model = selected_model if profile.is_local else None
+        from heartwood.core_adapter.workflow_runtime import workflow_run
         from heartwood.gateway._openhands_sdk import OpenHandsSdkBackend
 
         return OpenHandsSdkBackend(
@@ -2076,6 +2194,10 @@ class SessionGateway:
                 managed_model_native_tool_calling(selected_model.tool_call_parser)
                 if selected_model is not None
                 else None
+            ),
+            structured_task_outcomes=(
+                workflow_run(FileSessionStore(self.sessions_root, session_id).replay_events())
+                is not None
             ),
         )
 

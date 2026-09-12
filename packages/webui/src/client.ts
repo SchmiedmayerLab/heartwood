@@ -54,6 +54,7 @@ import type {
   SkillSettings,
   SkillSummary,
   SpecialistSettings,
+  WorkflowCatalog,
   SubscriptionDeviceLoginRequest,
   SubscriptionDeviceLogin,
   SubscriptionDevicePollRequest,
@@ -148,6 +149,7 @@ export interface HeartwoodClient {
   cancelModelTransfer(transferId: string): Promise<ModelTransfer>;
   getSkillSettings(): Promise<SkillSettings>;
   getSpecialistSettings(): Promise<SpecialistSettings>;
+  getResearchWorkflows(): Promise<WorkflowCatalog>;
   refreshSkills(sourceId?: string): Promise<SkillSettings>;
   inspectSkill(name: string, sourceId?: string): Promise<SkillSummary>;
   installSkill(
@@ -573,6 +575,12 @@ export class GatewayClient implements HeartwoodClient {
   async getSpecialistSettings(): Promise<SpecialistSettings> {
     return parseJsonResponse<SpecialistSettings>(
       await fetch(this.url("/settings/specialists")),
+    );
+  }
+
+  async getResearchWorkflows(): Promise<WorkflowCatalog> {
+    return parseJsonResponse<WorkflowCatalog>(
+      await fetch(this.url("/research/workflows")),
     );
   }
 

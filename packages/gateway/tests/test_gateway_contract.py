@@ -90,6 +90,59 @@ def _gateway(workspace: Path, *, env: dict[str, str] | None = None) -> SessionGa
     )
 
 
+@pytest.mark.parametrize("shutdown", [False, True])
+def test_idle_wait_allows_pause_and_invalidates_a_replaced_service(
+    tmp_path: Path, shutdown: bool
+) -> None:
+    waiting = Event()
+    released = Event()
+
+    class WaitingBackend(DeterministicAgentBackend):
+        def submit_turn(
+            self,
+            *,
+            session_id: str,  # noqa: ARG002
+            prompt: str,  # noqa: ARG002
+        ) -> tuple[BackendEvent, ...]:
+            return (BackendLifecycleEvent(lifecycle=BackendLifecycle.RUNNING),)
+
+        def wait_for_idle(self, timeout: float) -> bool:
+            if timeout:
+                waiting.set()
+            return released.wait(timeout)
+
+        def pause(self, *, session_id: str) -> tuple[BackendEvent, ...]:
+            released.set()
+            return super().pause(session_id=session_id)
+
+        def close(self) -> None:
+            released.set()
+
+    gateway = SessionGateway(
+        project=ProjectContext(tmp_path),
+        env={},
+        service_factory=lambda root, session_id: SessionService.local_default(
+            root, session_id=session_id, backend=WaitingBackend(), env={}
+        ),
+    )
+    gateway.handle(SessionCommand.model_validate_json(_command(CommandKind.CHAT, prompt="Plan")))
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(gateway.wait_for_session_idle, session_id="session-1", timeout=2)
+        try:
+            assert waiting.wait(timeout=1)
+            if shutdown:
+                gateway.stop()
+            else:
+                gateway.handle(SessionCommand.model_validate_json(_command(CommandKind.PAUSE)))
+            assert future.result(timeout=2) is not shutdown
+        finally:
+            released.set()
+            try:
+                future.result(timeout=2)
+            finally:
+                gateway.stop()
+
+
 class _FailingResolutionBackend(DeterministicAgentBackend):
     def resolve_confirmation(
         self,
@@ -105,7 +158,7 @@ class _FailingResolutionBackend(DeterministicAgentBackend):
         )
 
 
-def test_gateway_lifecycle_does_not_load_openhands_before_agent_use(
+def test_gateway_lifecycle_does_not_prepare_an_agent_before_use(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -123,6 +176,8 @@ def test_gateway_lifecycle_does_not_load_openhands_before_agent_use(
     gateway.start()
 
     assert prepared == []
+    assert not gateway._services
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_gateway_prepares_openhands_before_skill_loading(

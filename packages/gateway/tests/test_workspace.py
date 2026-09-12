@@ -154,6 +154,38 @@ class _ReconcilingWorkspaceService:
         return None
 
 
+def test_absence_requires_a_confined_existing_parent(tmp_path: Path) -> None:
+    inspector = WorkspaceInspector(ProjectContext(tmp_path))
+    (tmp_path / "results").mkdir()
+    assert inspector.is_absent("results/reproduced")
+    (tmp_path / "results/reproduced").mkdir()
+    assert not inspector.is_absent("results/reproduced")
+    (tmp_path / "results/file.txt").write_text("synthetic")
+    assert not inspector.is_absent("results/file.txt")
+    (tmp_path / "dangling").symlink_to(tmp_path / "missing")
+    assert not inspector.is_absent("dangling")
+    (tmp_path / "linked").symlink_to(tmp_path / "results", target_is_directory=True)
+    assert not inspector.is_absent("linked/missing")
+    assert not inspector.is_absent("missing/child")
+
+
+@pytest.mark.parametrize("path", [".", "../missing", "/missing", ".heartwood/missing"])
+def test_absence_rejects_paths_outside_public_project_files(tmp_path: Path, path: str) -> None:
+    assert not WorkspaceInspector(ProjectContext(tmp_path)).is_absent(path)
+
+
+def test_absence_does_not_treat_inspection_errors_as_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    inspector = WorkspaceInspector(ProjectContext(tmp_path))
+
+    def unavailable(*_args: object, **_kwargs: object) -> object:
+        raise PermissionError("synthetic inaccessible parent")
+
+    monkeypatch.setattr(inspector, "_open_parent", unavailable)
+    assert not inspector.is_absent("missing")
+
+
 def test_workspace_tree_is_bounded_and_excludes_private_state_at_every_depth(
     tmp_path: Path,
 ) -> None:

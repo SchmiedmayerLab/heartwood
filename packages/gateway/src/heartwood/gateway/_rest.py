@@ -192,6 +192,11 @@ class RestGateway:
             except SkillSettingsError as error:
                 return _error(422, error)
             return RestResponse(status_code=200, body=_json_object(skill_settings))
+        if parts == ("research", "workflows") and request.method == "GET":
+            return RestResponse(
+                status_code=200,
+                body=_json_object(self.gateway.research_workflows().model_dump(mode="json")),
+            )
         if parts == ("settings", "specialists") and request.method == "GET":
             return RestResponse(
                 status_code=200,

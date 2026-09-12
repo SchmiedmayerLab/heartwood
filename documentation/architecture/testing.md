@@ -41,6 +41,9 @@ Deterministic tests additionally cover reproducible bundle bytes, GGUF and vLLM 
 
 OpenHands SDK conformance tests use the real conversation persistence layer and deterministic `TestLLM`.
 They verify that pending actions and completed tool turns survive restart without repeated model or tool work, grouped approval executes each action once, grouped rejection executes none, active work can be steered and paused, a stale running state fails closed as an unknown outcome, persisted progress appears before completion, Task Tracker updates are translated, and one tool-free research-planning specialist returns to its parent conversation.
+Structured-outcome conformance tests exercise the upstream finish-tool schema through the same private persistence layer.
+Reported success, partial success, blocked, failed, and unknown outcomes survive restart without another model call.
+The SDK conversation can be finished for any of these outcomes; neither lifecycle completion nor a model-reported success proves that required artifacts or independent checks passed.
 Workspace contract tests qualify the pinned OpenHands Git change and diff APIs, non-Git typed-action fallback, canonical path handling, nested private-state exclusion, traversal and symlink rejection, special and binary files, UTF-8 boundaries, limits, audit scrubbing, and cross-interface transport.
 The browser reference analysis stops its gateway, replays and mutates the same session through the CLI, restarts the gateway, and verifies that the browser receives the CLI update on one contiguous authoritative sequence.
 Browser tests build the current production assets before starting the preview server, exercise direct and fallback live-update states, scan the rendered interface with axe, and verify keyboard focus, reduced motion, and reflow at desktop, tablet, and narrow notebook widths.
@@ -64,6 +67,95 @@ Every pull request includes capable-model acceptance in the required `Release Ca
 Registry writes, multi-platform manifest assembly, and moving-tag promotion remain main-only; pull requests build the same image stages and validate the promotion scripts without receiving package-write access.
 Release creation also requires the repository-managed Python and JavaScript/TypeScript CodeQL analyses for the exact commit.
 Capable-model acceptance runs on the organization's large hosted runner because CPU inference does not finish inside its command deadline on a standard runner; every other job runs on standard GitHub-hosted runners, and container builds reclaim unused preinstalled toolchains first and reuse bounded GitHub Actions BuildKit caches.
+
+## Research Evaluation Evidence
+
+Research evaluations distinguish connectivity, tool compatibility, workflow completion, artifact completeness, coding correctness, statistical correctness, policy adherence, and recovery.
+A successful connection or tool call does not establish research-task quality.
+
+The evaluation contracts record the suite and fixture identity, model revision, provider, runtime, hardware, context, tool parser, Skill digest, harness revision, dated trial, independent checks, and measured usage.
+Unavailable token counts and reported cost remain unknown rather than being recorded as zero.
+The records have no fields for prompts, tool output, credentials, or participant data.
+Metadata still requires review before publication, and a content digest does not prove who produced an evaluation.
+
+The gateway separately observes the session's request model, installed OpenHands version, explicit context limits, selected confirmation mode, platform adapter, and fingerprints of model options and security configuration.
+The security fingerprint binds the deployment policy and the actual OpenHands confirmation policy and analyzer configuration.
+The driver binds this observation to the trial before model work and checks it again before reviewed continuations and finalization.
+Runtime changes leave incomplete evidence rather than combining results from different client configurations.
+Injected, deterministic, and unconfigured backends cannot supply live-model qualification; missing runtime identity or explicit context limits also prevent qualification.
+Remote model weights, precision, GPU hardware, and server software remain declared metadata and require deployment-side evidence.
+The client observation does not attest to those remote properties or verify the declared Skill and harness digests.
+
+The evidence assessor requires the latest three real-model trials of every case to pass all required checks within a configurable freshness window, which defaults to 30 days.
+Deterministic test doubles exercise the harness but cannot qualify a model.
+Changed configurations, changed suite definitions, unknown model revisions, expired evidence, missing checks, and recent failures cannot inherit earlier successful results.
+Three trials are a functional regression gate, not a statistical estimate of clinical or scientific reliability.
+An assessment includes its policy, time, exact configuration and suite digests, and source run identifiers; it does not automatically change model recommendations or action-approval policy.
+
+### Synthetic Research Cases
+
+The maintained research fixtures cover dataset readiness, a held-out linear baseline, and independent result verification.
+Their identities bind the synthetic input bytes, task instructions, expected artifact names, and required checks.
+The readiness case contains missing values, invalid values, duplicate observations, and an outcome-derived column that must not be used as a predictor.
+The baseline uses a fixed subject-disjoint split, independently calculated predictions and metrics, a training-mean comparator, and whole-subject omission sensitivity checks.
+
+Artifact verification checks structured outputs rather than accepting the agent's completion message.
+A parseable script and correct reported metrics do not establish that the program ran or reproduced the result.
+Tool execution, independent re-execution, action approval, fresh-process replay, and audit verification require separate evidence from their respective owners.
+These small fixtures test software behavior, not scientific generalizability.
+
+The shared research driver accepts a dedicated project containing only the pinned synthetic inputs and explicitly supplied verification artifacts.
+It uses normal gateway commands and requires a review callback for every pending action group; it does not execute generated programs directly or implicitly approve proposals.
+The baseline's reproduction step requests a separate, reviewed terminal execution of the unchanged program and checks its regenerated outputs against the originals.
+The independent verification case distinguishes a truthful byte comparison from evidence that the program actually ran.
+Reproduction evidence requires a previously absent output directory and captures the outputs after a separately approved command, before approving subsequent actions.
+It binds the original program, fixture inputs, and primary outputs before approval and after execution.
+A no-op command followed or preceded by copied outputs does not satisfy this check.
+The shared reproduction contract records the session, run, stage, action, exact shell-quoted invocation, and inspected file hashes without retaining file content.
+Preparation is not execution evidence or permission.
+The first observed outcome must be an approved successful action with all protected files unchanged and every expected output available; failed evidence cannot be repaired by copying files later.
+Restoring a serialized record does not independently establish execution: the session owner must supply its trusted ordering and approval history.
+Workflow journal tests reject missing, repeated, reordered, cross-session, denied, grouped, failed, or wrong-directory execution sources.
+Interruption tests cover persisted tool completion without a reproduction observation and ensure duplicate callbacks, reconciliation, and restart cannot capture replacement evidence or repeat work.
+The baseline conformance test uses real OpenHands tools with deterministic `TestLLM` for plan review, analysis execution, separately approved reproduction, independent checks, reporting, restart, and content-minimized audit export.
+It establishes orchestration behavior, not capable-model research performance.
+These bounded observations are not a sandbox or proof against an adversarial process changing and restoring files between observations.
+Fresh-process checks compare the gateway's persisted projection, event-chain identity, and verified audit identity without creating a model client.
+
+The driver reserves a private result under `.heartwood/evaluations/` before starting model work.
+Before reviewing a pending group or assessing completion, it waits for the SDK worker's final publication and reconciles usage through the shared gateway.
+An early finished lifecycle cannot by itself trigger reproduction or finalize an evaluation.
+If finalization does not settle within the bounded wait, the trial remains incomplete.
+An interrupted evaluator leaves an incomplete trial with unverified checks, rather than silently removing an unsuccessful attempt from the evidence.
+Successful evaluation replaces that record atomically; completed evidence cannot be overwritten with different results.
+The result loader includes incomplete trials and rejects corrupt or substituted records.
+Loading results does not resume a session or repeat a model call.
+An incomplete record's finish timestamp is its reservation time, not an estimate of when the process stopped.
+These reports do not replace authoritative session events or signed audit checkpoints.
+
+Evaluation records include observed time, action, model-call, token, and reported-cost budgets.
+Limits are checked between gateway updates and after review, before admitting another action; a request already in flight may finish before pause takes effect.
+Durable provider usage is reported at SDK run boundaries, so these observed limits do not cap every request inside an uninterrupted agent run.
+Finishing exactly at a provider limit is allowed, but reaching that limit prevents another reviewed continuation or benchmark turn.
+Action limits count proposals, including unsuccessful or rejected actions; a group already counted at the limit may execute after review, but an oversized group cannot.
+The evidence assessor independently rejects measured overruns even when the reported task checks passed.
+Elapsed task time includes researcher review and reproduction, but excludes the subsequent audit export and fresh-process replay checks.
+Unavailable usage remains unknown, including a zero value when the gateway cannot distinguish an unpriced call from a genuinely free call.
+Use provider-side spending limits as an additional control for hosted evaluations.
+Run generated code in an appropriately isolated synthetic environment and inspect complete action groups before approving them.
+
+### Action-Risk Evaluation
+
+The action-risk corpus contains benign, ambiguous, destructive, encoded, injected, and network-capable proposals for the terminal and file editor.
+Evaluation constructs typed OpenHands actions and calls the same analyzer and confirmation-policy factory used by Heartwood conversations; it never executes the proposals.
+Each case supplies either an optimistic low-risk model label or an unknown label.
+OpenHands' LLM analyzer consumes that label rather than making an independent model call, so this evaluation measures the analyzer ensemble, not a model's ability to classify risk.
+
+Reports retain case identities, the corpus and analyzer configuration digests, SDK version, evaluation date, decisions, and latency without retaining commands or file contents.
+False approvals, unnecessary confirmations, and unknown classifications remain separate measurements.
+A deployment assessment requires complete matching evidence, no false approvals, confirmation of unknown classifications, and explicit limits for unnecessary confirmations and latency.
+Passing a synthetic corpus is necessary evidence for a policy decision, not proof that arbitrary actions are safe.
+Unrecognized commands and misleading model labels can escape static analysis; Review Every Action remains the safe fallback, and benchmark results never change the selected policy automatically.
 
 ## Synthetic Data Rule
 

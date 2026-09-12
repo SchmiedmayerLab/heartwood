@@ -18,6 +18,7 @@ from typing import Literal, Protocol, cast
 
 from heartwood.core_adapter._state import _write_private_json_atomic
 from heartwood.schemas import JsonValue
+from heartwood.schemas.workflows import WorkflowOutcomeStatus
 
 
 class BackendEventKind(StrEnum):
@@ -144,6 +145,7 @@ class ToolExecution:
     summary: str
     result: str | None = None
     result_truncated: bool = False
+    working_directory: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -232,6 +234,7 @@ class _BackendEvent:
 @dataclass(frozen=True, slots=True, kw_only=True)
 class BackendAgentMessageEvent(_BackendEvent):
     message: str
+    outcome_status: WorkflowOutcomeStatus | None = None
     kind: Literal[BackendEventKind.AGENT_MESSAGE] = field(
         default=BackendEventKind.AGENT_MESSAGE,
         init=False,
@@ -414,6 +417,9 @@ class AgentBackend(Protocol):
 
     def close(self) -> None:
         """Release backend resources."""
+
+    def wait_for_idle(self, timeout: float) -> bool:
+        """Wait for workers and final callbacks without starting or approving work."""
 
 
 class DeterministicAgentBackend:
@@ -608,6 +614,10 @@ class DeterministicAgentBackend:
 
     def close(self) -> None:
         """Release deterministic backend resources."""
+
+    def wait_for_idle(self, timeout: float) -> bool:  # noqa: ARG002
+        """Synchronous deterministic actions have no background finalization."""
+        return True
 
     def _load_pending(self) -> ProposedToolCall | None:
         path = self._persistence_path

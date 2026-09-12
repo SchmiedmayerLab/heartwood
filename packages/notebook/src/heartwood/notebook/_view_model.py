@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
 from heartwood.gateway import (
     DEFAULT_SESSION_ID,
@@ -55,6 +56,12 @@ from heartwood.schemas import (
     WorkspaceFileResponse,
     WorkspaceTreeResponse,
 )
+from heartwood.schemas.workflows import (
+    WorkflowCatalog,
+    WorkflowControl,
+    WorkflowRequest,
+    WorkflowRun,
+)
 from heartwood.session import CommandKind, JsonValue, SessionCommand, new_command_id
 
 
@@ -63,6 +70,16 @@ class NotebookViewModel:
     """Notebook presentation of one authoritative gateway projection."""
 
     projection: SessionProjection
+
+    @property
+    def workflow(self) -> WorkflowRun | None:
+        """Return the authoritative research run."""
+        return self.projection.workflow
+
+    @property
+    def workflow_controls(self) -> tuple[WorkflowControl, ...]:
+        """Return exact stage requests for explicit researcher selection."""
+        return self.projection.workflow_controls
 
     @property
     def session_id(self) -> str:
@@ -188,6 +205,16 @@ class NotebookSession:
     def chat(self, prompt: str) -> NotebookViewModel:
         """Submit one message and return the current session projection."""
         return self._handle(CommandKind.CHAT, {"prompt": prompt})
+
+    def research_workflows(self) -> WorkflowCatalog:
+        """Return the gateway-owned workflow choices without starting model work."""
+        return self.gateway.research_workflows()
+
+    def workflow(self, request: WorkflowRequest) -> NotebookViewModel:
+        """Submit a typed request, retaining the revision and evidence the researcher saw."""
+        return self._handle(
+            CommandKind.WORKFLOW, cast(dict[str, JsonValue], request.model_dump(mode="json"))
+        )
 
     def model_settings(self) -> ModelSettingsResponse:
         """Return non-secret model profiles and presets."""

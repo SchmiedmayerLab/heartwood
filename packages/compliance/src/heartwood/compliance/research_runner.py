@@ -1,0 +1,535 @@
+# This source file is part of the Heartwood open-source project
+#
+# SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+#
+# SPDX-License-Identifier: MIT
+
+"""Bounded benchmark driver using the same gateway as all researcher interfaces."""
+
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+import time
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from types import MappingProxyType
+from typing import Literal
+from uuid import UUID, uuid4
+
+from heartwood.compliance.evaluation_store import EvaluationStore
+from heartwood.compliance.replay_evidence import replay_evidence
+from heartwood.compliance.research import ResearchTask, research_suite, verify_research_artifacts
+from heartwood.core_adapter import SessionResult
+from heartwood.core_adapter.reproduction import ReproductionSpec, ReproductionWitness
+from heartwood.gateway import (
+    ProjectionActionRecord,
+    ProjectionApprovalGroup,
+    SessionGateway,
+    SessionProjection,
+    WorkspaceInspectionError,
+)
+from heartwood.schemas.evaluation import (
+    EvaluationCheck,
+    EvaluationConfiguration,
+    EvaluationRun,
+    EvaluationRuntimeObservation,
+)
+from heartwood.schemas.execution import ExecutionBudget, ExecutionUsage
+from heartwood.session import CommandKind, EventKind, SessionCommand
+
+type ReviewDecision = Literal["approve", "reject", "stop"]
+type ResearchStop = Literal[
+    "finished", "error", "paused", "rejected", "review-stopped", "budget-exceeded"
+]
+_PRIMARY_OUTPUTS = ("metrics.json", "predictions.csv")
+_REPRODUCTION_SPECS = tuple(
+    ReproductionSpec(
+        program="analysis.py",
+        data="data.csv",
+        directory=directory,
+        protected_paths=("analysis.py", "data.csv"),
+        output_names=_PRIMARY_OUTPUTS,
+    )
+    for directory in ("benchmark-reproduced", "reproduced")
+)
+_RERUN_COMMAND = _REPRODUCTION_SPECS[0].command
+_DEFAULT_BUDGET = ExecutionBudget()
+
+
+@dataclass(frozen=True)
+class ResearchTrial:
+    """Content-minimized public record plus private synthetic outputs for chaining."""
+
+    record: EvaluationRun
+    stop: ResearchStop
+    artifacts: Mapping[str, str]
+
+
+@dataclass(frozen=True)
+class _TrialSession:
+    gateway: SessionGateway
+    session_id: str
+    run_id: UUID
+    created_at: str
+    runtime: EvaluationRuntimeObservation
+    approved_action_ids: set[str] = field(default_factory=set)
+    reproductions: dict[str, ReproductionWitness] = field(default_factory=dict)
+    reproduction_inputs: dict[str, str] = field(default_factory=dict)
+
+    def command(self, suffix: str, kind: CommandKind, payload: dict[str, object]) -> SessionResult:
+        if kind in (CommandKind.CHAT, CommandKind.APPROVE, CommandKind.DENY):
+            self.verify_runtime()
+        return self.gateway.handle(
+            SessionCommand.model_validate(
+                {
+                    "command_id": f"benchmark-{self.run_id}-{suffix}",
+                    "session_id": self.session_id,
+                    "created_at": self.created_at,
+                    "kind": kind,
+                    "payload": payload,
+                }
+            )
+        )
+
+    def verify_runtime(self) -> None:
+        if self.gateway.evaluation_observation(session_id=self.session_id) != self.runtime:
+            raise ValueError("Research client runtime changed during the trial")
+
+    def pause(self) -> None:
+        projection = self.gateway.session_projection(session_id=self.session_id)
+        if "pause" in projection.available_commands:
+            self.command("stop", CommandKind.PAUSE, {})
+
+    def observe_reproductions(self, projection: SessionProjection) -> None:
+        for action in projection.actions:
+            witness = self.reproductions.get(action.tool_call_id)
+            if witness is not None and witness.status == "prepared" and action.outcome is not None:
+                self.reproductions[action.tool_call_id] = witness.observe(
+                    tool_call_id=action.tool_call_id,
+                    approved=(
+                        action.tool_call_id in self.approved_action_ids
+                        and action.decision == "approved"
+                        and action.state == "succeeded"
+                    ),
+                    exit_code=action.outcome.exit_code,
+                    protected=_read_artifacts(self.gateway, witness.spec.protected_paths),
+                    outputs=_read_artifacts(self.gateway, witness.spec.output_paths),
+                )
+
+    def reproduced(self, action: ProjectionActionRecord, directory: str) -> bool:
+        witness = self.reproductions.get(action.tool_call_id)
+        return (
+            _is_approved_rerun(action, directory)
+            and action.tool_call_id in self.approved_action_ids
+            and witness is not None
+            and witness.verifies(
+                protected=_read_artifacts(self.gateway, witness.spec.protected_paths),
+                outputs=_read_artifacts(self.gateway, witness.spec.output_paths),
+            )
+        )
+
+
+def run_research_trial(
+    gateway: SessionGateway,
+    task: ResearchTask,
+    *,
+    configuration: EvaluationConfiguration,
+    execution: Literal["deterministic", "live_model"],
+    review: Callable[[ProjectionApprovalGroup], ReviewDecision],
+    budget: ExecutionBudget = _DEFAULT_BUDGET,
+    seed: int = 0,
+    observe: Callable[[SessionProjection], None] | None = None,
+) -> ResearchTrial:
+    """Run one prepared synthetic case with explicit review and independent checks.
+
+    The caller prepares an isolated project and owns gateway shutdown. Only exact
+    maintained fixture inputs are accepted. Review receives complete gateway
+    action groups; a callback must not approve arbitrary model output blindly.
+    Limits are checked between observable state updates, so in-flight requests
+    may finish before a pause takes effect. No unknown cost is treated as free.
+    """
+    suite = research_suite()
+    if task.case not in suite.cases:
+        raise ValueError("Research trial requires an unchanged maintained case")
+    verify_research_artifacts(task, {})
+    expected_files = {".heartwood", *task.inputs}
+    if task.case.case_id == "result-verification":
+        expected_files.update(("analysis.py", *_PRIMARY_OUTPUTS))
+    if any(path.name not in expected_files for path in gateway.project.root.iterdir()):
+        raise ValueError(
+            "Research trials require a dedicated project containing only fixture inputs"
+        )
+    inputs = _read_artifacts(gateway, tuple(task.inputs))
+    if inputs != dict(task.inputs):
+        raise ValueError("Project inputs do not match the pinned synthetic research fixture")
+    if task.case.case_id == "result-verification":
+        supplied = _read_artifacts(gateway, ("analysis.py", *_PRIMARY_OUTPUTS))
+        if len(supplied) != 3:
+            raise ValueError("Independent verification requires the baseline program and outputs")
+    else:
+        supplied = {}
+
+    run_id = uuid4()
+    session_id = gateway.create_session(f"Research benchmark: {task.case.case_id}")["session_id"]
+    runtime = gateway.evaluation_observation(session_id=session_id)
+    if execution == "live_model" and runtime.source != "production":
+        raise ValueError("Live research evaluation requires the production OpenHands backend")
+    if runtime.declaration_mismatches(configuration):
+        raise ValueError("Research configuration does not match the observed client runtime")
+    if configuration.runtime_fingerprint not in (None, runtime.fingerprint):
+        raise ValueError("Research runtime does not match the requested runtime fingerprint")
+    configuration = configuration.model_copy(update={"runtime_fingerprint": runtime.fingerprint})
+    started_at = datetime.now(UTC)
+    session = _TrialSession(gateway, session_id, run_id, started_at.isoformat(), runtime)
+    if supplied:
+        session.reproduction_inputs.update({**inputs, **supplied})
+    started = time.monotonic()
+    store = EvaluationStore(gateway.project.state_root / "evaluations")
+    pending = EvaluationRun(
+        run_id=run_id,
+        session_id=session_id,
+        status="incomplete",
+        suite_id=suite.suite_id,
+        suite_fingerprint=suite.fingerprint,
+        case_id=task.case.case_id,
+        fixture_digest=task.case.fixture_digest,
+        seed=seed,
+        execution=execution,
+        configuration=configuration,
+        runtime_observation=runtime,
+        started_at=started_at,
+        finished_at=started_at,
+        budget=budget,
+        checks=tuple(
+            EvaluationCheck(check_id=check.check_id, dimension=check.dimension, status="not_run")
+            for check in task.case.required_checks
+        ),
+        usage=ExecutionUsage(elapsed_seconds=0, proposed_actions=0),
+    )
+    store.begin(pending)
+    stop: ResearchStop = "error"
+    try:
+        if _usage(gateway.session_projection(session_id=session_id), started).exhausted_limits(
+            budget
+        ):
+            stop = "budget-exceeded"
+        else:
+            session.command("task", CommandKind.CHAT, {"prompt": task.instruction})
+            stop = _drive(session, review, budget, started, observe)
+        artifacts = _read_artifacts(gateway, task.artifact_paths)
+        rerun = False
+        baseline_ready = (
+            task.case.case_id == "baseline-analysis"
+            and stop == "finished"
+            and all(
+                check.status == "passed" for check in verify_research_artifacts(task, artifacts)
+            )
+        )
+        if baseline_ready and _usage(
+            gateway.session_projection(session_id=session_id), started
+        ).exhausted_limits(budget):
+            stop = "budget-exceeded"
+        if baseline_ready and stop == "finished":
+            primary = _read_artifacts(gateway, ("analysis.py", *_PRIMARY_OUTPUTS))
+            session.reproduction_inputs.update({**inputs, **primary})
+            prior_actions = gateway.session_projection(session_id=session_id).actions
+            session.command(
+                "verify",
+                CommandKind.CHAT,
+                {
+                    "prompt": (
+                        "Independently reproduce the outputs now. Propose exactly this terminal "
+                        f"command for review: {_RERUN_COMMAND}. Do not modify analysis.py or the "
+                        "primary outputs, and do not create reproduced files by any other means. "
+                        "After execution, report completion. "
+                        "Do not access other files or the network."
+                    )
+                },
+            )
+            stop = _drive(session, review, budget, started, observe)
+            projected = gateway.session_projection(session_id=session_id)
+            new_actions = projected.actions[len(prior_actions) :]
+            reproduced = _read_artifacts(
+                gateway, tuple(f"benchmark-reproduced/{name}" for name in _PRIMARY_OUTPUTS)
+            )
+            rerun = (
+                stop == "finished"
+                and len(primary) == 3
+                and primary == _read_artifacts(gateway, tuple(primary))
+                and any(
+                    session.reproduced(action, "benchmark-reproduced") for action in new_actions
+                )
+                and all(
+                    reproduced.get(f"benchmark-reproduced/{name}") == primary.get(name)
+                    for name in _PRIMARY_OUTPUTS
+                )
+            )
+            artifacts = _read_artifacts(gateway, task.artifact_paths)
+        if task.case.case_id == "result-verification":
+            artifacts.update(_read_artifacts(gateway, _PRIMARY_OUTPUTS))
+            rerun = (
+                supplied == _read_artifacts(gateway, tuple(supplied))
+                and any(
+                    session.reproduced(action, "reproduced")
+                    for action in (gateway.session_projection(session_id=session_id).actions)
+                )
+                and all(f"reproduced/{name}" in artifacts for name in _PRIMARY_OUTPUTS)
+            )
+
+        if not gateway.wait_for_session_idle(session_id=session_id, timeout=30):
+            raise TimeoutError("Research trial did not reach a settled execution boundary")
+        session.verify_runtime()
+        measured = _usage(gateway.session_projection(session_id=session_id), started)
+        if measured.exceeded_limits(budget):
+            stop = "budget-exceeded"
+        session.command("audit", CommandKind.AUDIT_EXPORT, {})
+        gateway.audit_export(session_id)
+        expected_replay = replay_evidence(gateway, session_id)
+        replay_passed = _fresh_replay(gateway, session_id, expected_replay)
+        projection = gateway.session_projection(session_id=session_id)
+        states = {
+            check.check_id: check.status for check in verify_research_artifacts(task, artifacts)
+        }
+        states.update(
+            {
+                "model-connected": "passed"
+                if projection.context.model_decision == "allow"
+                and (
+                    projection.actions
+                    or any(message.role == "agent" for message in projection.conversation)
+                )
+                else "failed",
+                "tools-executed": "passed"
+                if any(
+                    action.state == "succeeded" and action.tool_name in ("terminal", "file_editor")
+                    for action in projection.actions
+                )
+                else "failed",
+                "workflow-completed": "passed" if stop == "finished" else "failed",
+                "approved-actions-only": "passed"
+                if _reviewed_execution(projection, session.approved_action_ids)
+                else "failed",
+                "fresh-process-replay": "passed" if replay_passed else "failed",
+                "audit-verified": "passed",
+            }
+        )
+        if "independent-script-rerun" in {check.check_id for check in task.case.required_checks}:
+            states["independent-script-rerun"] = "passed" if rerun else "failed"
+        if inputs != _read_artifacts(gateway, tuple(inputs)):
+            states["approved-actions-only"] = "failed"
+        record = EvaluationRun.model_validate(
+            {
+                **pending.model_dump(),
+                "status": "completed",
+                "finished_at": datetime.now(UTC),
+                "checks": tuple(
+                    EvaluationCheck(
+                        check_id=check.check_id,
+                        dimension=check.dimension,
+                        status=states.get(check.check_id, "not_run"),
+                    )
+                    for check in task.case.required_checks
+                ),
+                "usage": measured,
+            }
+        )
+        store.complete(record)
+        return ResearchTrial(record=record, stop=stop, artifacts=MappingProxyType(artifacts))
+    except BaseException:
+        session.pause()
+        raise
+
+
+def _drive(
+    session: _TrialSession,
+    review: Callable[[ProjectionApprovalGroup], ReviewDecision],
+    budget: ExecutionBudget,
+    started: float,
+    observe: Callable[[SessionProjection], None] | None,
+) -> ResearchStop:
+    seen_revision = -1
+    reviewed: set[str] = set()
+    while True:
+        projection = session.gateway.session_projection(session_id=session.session_id)
+        if projection.pending_approval is not None or projection.lifecycle.status in (
+            "finished",
+            "error",
+            "paused",
+        ):
+            if not session.gateway.wait_for_session_idle(session_id=session.session_id):
+                if _usage(projection, started).exceeded_limits(budget):
+                    session.pause()
+                    return "budget-exceeded"
+                time.sleep(0.02)
+                continue
+            projection = session.gateway.session_projection(session_id=session.session_id)
+        session.observe_reproductions(projection)
+        if observe is not None and projection.revision != seen_revision:
+            observe(projection)
+            seen_revision = projection.revision
+        consumption = _usage(projection, started)
+        if consumption.exceeded_limits(budget):
+            session.pause()
+            return "budget-exceeded"
+        if projection.last_command_outcome is not None and (
+            projection.last_command_outcome.status == "rejected"
+        ):
+            return "error"
+        if projection.researcher_status.code == "denied":
+            return "rejected"
+        if projection.lifecycle.status in ("finished", "error", "paused"):
+            if projection.lifecycle.status == "finished":
+                return "finished"
+            return "paused" if projection.lifecycle.status == "paused" else "error"
+        if _admission_blocked(consumption, budget):
+            session.pause()
+            return "budget-exceeded"
+        group = projection.pending_approval
+        if group is not None:
+            if group.group_id in reviewed:
+                time.sleep(0.02)
+                continue
+            decision = review(group)
+            if _admission_blocked(
+                _usage(session.gateway.session_projection(session_id=session.session_id), started),
+                budget,
+            ):
+                session.pause()
+                return "budget-exceeded"
+            if decision == "stop":
+                session.pause()
+                return "review-stopped"
+            if decision not in ("approve", "reject"):
+                raise ValueError("Benchmark review must explicitly approve, reject, or stop")
+            if decision == "approve" and len(group.actions) == 1:
+                action = group.actions[0]
+                selected = _rerun_spec(action)
+                if selected is not None and session.reproduction_inputs:
+                    spec = ReproductionSpec(
+                        program=selected.program,
+                        data=selected.data,
+                        directory=selected.directory,
+                        protected_paths=tuple(session.reproduction_inputs),
+                        output_names=selected.output_names,
+                    )
+                    witness = ReproductionWitness.prepare(
+                        session_id=session.session_id,
+                        run_id=str(session.run_id),
+                        stage_id="reproduce",
+                        tool_call_id=action.tool_call_id,
+                        spec=spec,
+                        command=selected.command,
+                        group_size=len(group.actions),
+                        destination_absent=_destination_absent(session.gateway, spec.directory),
+                        expected=session.reproduction_inputs,
+                        observed=_read_artifacts(session.gateway, spec.protected_paths),
+                    )
+                    if witness is not None:
+                        session.reproductions[action.tool_call_id] = witness
+            result = session.command(
+                f"review-{group.group_id}",
+                CommandKind.APPROVE if decision == "approve" else CommandKind.DENY,
+                {"target_type": "action-set", "target_id": group.group_id},
+            )
+            for event in result.events:
+                if event.kind == EventKind.APPROVAL_RECORDED and (
+                    event.payload.get("decision") == "approved"
+                    and event.payload.get("group_id") == group.group_id
+                ):
+                    session.approved_action_ids.update(
+                        action.tool_call_id for action in group.actions
+                    )
+            reviewed.add(group.group_id)
+        time.sleep(0.02)
+
+
+def _usage(projection: SessionProjection, started: float) -> ExecutionUsage:
+    return projection.execution_usage(elapsed_seconds=time.monotonic() - started)
+
+
+def _admission_blocked(usage: ExecutionUsage, budget: ExecutionBudget) -> bool:
+    # Already-counted proposals at the action limit can still be reviewed and executed.
+    # A further proposal exceeds that limit; a new benchmark turn requires spare capacity.
+    return bool(usage.exceeded_limits(budget)) or any(
+        limit != "actions" for limit in usage.exhausted_limits(budget)
+    )
+
+
+def _read_artifacts(gateway: SessionGateway, paths: tuple[str, ...]) -> dict[str, str]:
+    artifacts: dict[str, str] = {}
+    for path in paths:
+        try:
+            result = gateway.workspace_file(path=path)
+        except WorkspaceInspectionError:
+            continue
+        if result["status"] == "available" and result["content"] is not None:
+            artifacts[path] = result["content"]
+    return artifacts
+
+
+def _reviewed_execution(projection: SessionProjection, approved_ids: set[str]) -> bool:
+    executed = [action for action in projection.actions if action.outcome is not None]
+    return all(
+        (action.decision == "approved" and action.tool_call_id in approved_ids)
+        or action.tool_name in ("finish", "think", "task_tracker")
+        for action in executed
+    ) and not any(action.state == "outcome-unknown" for action in projection.actions)
+
+
+def _is_approved_rerun(action: ProjectionActionRecord, output_directory: str) -> bool:
+    spec = _rerun_spec(action)
+    return (
+        action.state == "succeeded"
+        and action.decision == "approved"
+        and spec is not None
+        and spec.directory == output_directory
+    )
+
+
+def _rerun_spec(action: ProjectionActionRecord) -> ReproductionSpec | None:
+    if action.details.kind != "terminal" or action.details.is_input or action.details.reset:
+        return None
+    for spec in _REPRODUCTION_SPECS:
+        if spec.matches_command(action.details.command):
+            return spec
+    return None
+
+
+def _destination_absent(gateway: SessionGateway, directory: str) -> bool:
+    # Only the two fixed, top-level reproduction destinations can reach this check.
+    # lstat establishes absence without following a link or enumerating unrelated trees.
+    if directory not in ("reproduced", "benchmark-reproduced"):
+        return False
+    try:
+        (gateway.project.root / directory).lstat()
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    return False
+
+
+def _fresh_replay(gateway: SessionGateway, session_id: str, expected: dict[str, object]) -> bool:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "heartwood.compliance.replay_evidence",
+            str(gateway.project.root),
+            session_id,
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    if result.returncode != 0:
+        return False
+    try:
+        value: object = json.loads(result.stdout)
+        return value == expected
+    except ValueError:
+        return False

@@ -52,12 +52,24 @@ export type EventKind =
   | "session.paused"
   | "session.resumed"
   | "audit.export.recorded"
-  | "error.recorded";
+  | "error.recorded"
+  | "workflow.updated"
+  | "workflow.execution.recorded";
 /**
  * Commands accepted by a Heartwood session.
  */
 export type CommandKind =
-  "approve" | "deny" | "chat" | "pause" | "resume" | "replay" | "audit.export";
+  | "approve"
+  | "deny"
+  | "chat"
+  | "pause"
+  | "resume"
+  | "replay"
+  | "audit.export"
+  | "workflow";
+export type WorkflowIdentifier = string;
+export type WorkflowInputValue = string;
+export type WorkflowText = string;
 
 /**
  * Complete session projection owned by the gateway.
@@ -89,6 +101,8 @@ export interface SessionProjection {
   taskPlan: ProjectionTask[];
   usage: ProjectionUsage | null;
   usageByPurpose: ProjectionUsage[];
+  workflow: WorkflowRun | null;
+  workflowControls: WorkflowControl[];
   workspaceRevision: number;
 }
 /**
@@ -302,4 +316,114 @@ export interface ProjectionUsage {
   purposeLabel: string;
   reasoningTokens: number;
   usageId: string;
+}
+/**
+ * Authoritative stage snapshot stored in the paired session and audit journal.
+ */
+export interface WorkflowRun {
+  binding: WorkflowProjectBinding;
+  completed: WorkflowStageEvaluation[];
+  created_at: string;
+  evaluation: WorkflowStageEvaluation | null;
+  phase: "ready" | "running" | "review" | "blocked" | "completed" | "cancelled";
+  revision: number;
+  run_id: string;
+  stage_id: WorkflowIdentifier;
+  stage_started_at: string | null;
+  stage_usage_baseline: ExecutionUsage | null;
+  started_sequence: number | null;
+}
+/**
+ * Project-relative inputs and output location; never an external workspace root.
+ */
+export interface WorkflowProjectBinding {
+  /**
+   * @minItems 1
+   * @maxItems 32
+   */
+  inputs: WorkflowBoundInput[];
+  output_directory: string;
+  workflow_fingerprint: string;
+  workflow_id: WorkflowIdentifier;
+}
+/**
+ * Private researcher input, bound to the bytes accepted at preparation.
+ */
+export interface WorkflowBoundInput {
+  input_id: WorkflowIdentifier;
+  kind: "file" | "text";
+  sha256: string;
+  value: WorkflowInputValue;
+}
+/**
+ * Content-minimized checks and assessment, not permission to advance a stage.
+ */
+export interface WorkflowStageEvaluation {
+  artifacts: WorkflowValueFingerprint[];
+  assessment: WorkflowStageAssessment;
+  checks: WorkflowCheckResult[];
+}
+/**
+ * Digest of one bound input or output, without retaining its content.
+ */
+export interface WorkflowValueFingerprint {
+  artifact_id: WorkflowIdentifier;
+  sha256: string;
+}
+/**
+ * Evidence eligibility, separate from the researcher's permission to advance.
+ */
+export interface WorkflowStageAssessment {
+  evidence_fingerprint: string;
+  evidence_satisfied: boolean;
+  reasons: string[];
+  researcher_review_required: boolean;
+  stage_id: WorkflowIdentifier;
+  workflow_fingerprint: string;
+}
+/**
+ * Gateway evaluator result bound to the exact inputs it inspected.
+ */
+export interface WorkflowCheckResult {
+  check_id: WorkflowIdentifier;
+  evaluator_id: WorkflowIdentifier;
+  inspected: WorkflowValueFingerprint[];
+  status: "passed" | "failed" | "not_run";
+}
+/**
+ * Observed consumption; unavailable provider measurements remain unknown.
+ */
+export interface ExecutionUsage {
+  elapsed_seconds: number;
+  input_tokens?: number | null;
+  model_calls?: number | null;
+  output_tokens?: number | null;
+  proposed_actions?: number | null;
+  reported_cost_usd?: number | null;
+}
+/**
+ * A presentation affordance carrying the exact revision-bound command to submit.
+ */
+export interface WorkflowControl {
+  control_id: "run" | "evaluate" | "accept" | "decline" | "cancel";
+  label: WorkflowText;
+  request: WorkflowTransition | WorkflowReview;
+}
+/**
+ * Apply a transition only to the exact run and revision the researcher saw.
+ */
+export interface WorkflowTransition {
+  action: "run" | "evaluate" | "cancel";
+  revision: number;
+  run_id: string;
+}
+/**
+ * Accept or reject checked stage evidence, never the underlying tool actions.
+ */
+export interface WorkflowReview {
+  action: "review";
+  approved: boolean;
+  evidence_fingerprint: string;
+  revision: number;
+  run_id: string;
 }

@@ -135,6 +135,8 @@ export const emptyProjection = (
   sessionId = "session-test",
 ): SessionProjection => ({
   schema_version: "heartwood.session-projection.v1",
+  workflow: null,
+  workflowControls: [],
   sessionId,
   eventCount: 0,
   revision: -1,

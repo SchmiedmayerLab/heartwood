@@ -23,6 +23,7 @@ nav = [
     ] },
     { "Work With Heartwood" = [
         { "Core Workflow" = "use/index.md" },
+        { "Research Workflows" = "use/research-workflows.md" },
         { "Terminal" = "use/terminal.md" },
         { "Browser" = "use/browser.md" },
         { "Notebooks" = "use/notebooks.md" },

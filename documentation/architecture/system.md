@@ -55,6 +55,71 @@ The gateway also owns researcher-facing setup choices, model-connection categori
 Interfaces may present these differently, but they do not infer separate labels, capabilities, or persistence behavior.
 Technical identifiers remain in the typed projection for diagnosis and correlation, while presentation adapters keep them out of the primary workflow.
 
+### Research Workflow Contracts
+
+A versioned workflow definition declares researcher inputs, ordered stages, expected artifacts, deterministic check identifiers, researcher gates, and bounded work budgets.
+Definitions reference existing Skills and advisory specialists; they contain no provider routes, credentials, tool implementations, or platform-specific execution logic.
+Artifact paths use the same project-relative validation as workspace inspection.
+Each output has one producing stage and at least one required check, and a stage cannot depend on an output from a later stage.
+
+The gateway exposes these definitions through one read-only workflow catalog, including required inputs, stages, artifacts, and budgets.
+Availability derives from registered check implementations; a definition with a missing evaluator is not advertised as supported.
+Catalog discovery does not create project state, load a model, qualify a provider, or authorize execution.
+
+The evidence gate compares gateway-produced check results with the exact input and output digests they inspected.
+Missing, failed, unknown, or stale evidence cannot be replaced by a model-reported success.
+An assessment identifies its definition, stage, and evidence fingerprint and records whether researcher review is required.
+Evidence eligibility does not grant permission to advance a workflow or execute a tool.
+The researcher decision must bind to the workflow run, stage, and exact assessment, while tool actions retain the normal session review policy.
+
+The gateway binds explicitly selected project-relative files and researcher text to their initial content digests.
+Its read-only stage evaluator reuses workspace inspection, excludes private state and symbolic links, rejects unavailable or truncated inputs, and detects observed changes during inspection.
+Changing an original input invalidates evidence even if a new artifact is internally consistent with the changed data.
+
+Maintained tabular checks use a declared data dictionary for column roles, primary keys, permitted predictors, held-out partitions, validity rules, and optional group balance.
+They verify aggregate readiness reports, analysis plans, group-disjoint splits, and univariate ordinary least-squares results, including held-out predictions, a training-mean comparator, and leave-one-group-out sensitivity.
+Python's standard statistical routines compute the reference results independently of generated code; benchmark-specific expected answers remain in the compliance suite.
+Static Python and nonempty-report checks establish syntax or presence, not execution or scientific correctness.
+Matching copied artifacts cannot satisfy reproduction, which requires separate evidence from reviewed execution.
+
+Evaluation accepts complete UTF-8 files within the workspace inspection limits, at most 10,000 table rows and 128 columns, and at most 128 training groups for omission sensitivity.
+Unsupported evaluators remain unverified rather than passing by default.
+The checks do not establish that an analysis is scientifically appropriate or replace researcher review.
+They neither launch an agent nor grant permission to advance stages or approve tools.
+Execution and recovery belong to the existing gateway and authoritative session command/event path, not a separate workflow persistence layer.
+
+### Journaled Stage Execution
+
+The gateway accepts explicit workflow start, run, evaluate, review, and cancel commands through the existing session command journal.
+A workflow starts in an unused session, before OpenHands creates its conversation, and enables the SDK's structured `FinishTool` outcome for that conversation only.
+Ordinary conversations retain their existing finish behavior.
+Each transition records a run identity and revision in the paired event and audit journal; command receipts prevent repeated submissions across retries and restarts.
+An interruption with an uncertain dispatch outcome requires the existing session recovery procedure rather than automatic resubmission.
+
+A stage runs as an ordinary OpenHands turn with the existing coding tools and action-confirmation policy.
+Advancement requires settled workers, resolved tool approvals, a structured outcome from the latest stage turn, and independent artifact checks.
+Previously accepted inputs and results are checked again before another stage starts.
+Researcher review binds the exact assessment to the observed run revision and does not approve future tool actions.
+The shared session projection includes the persisted workflow state; clients do not reconstruct it from model prose.
+
+The projection also supplies typed stage controls, including the exact run revision and evidence fingerprint for each decision.
+Clients submit the displayed request unchanged; they do not replace it with a newer revision when the researcher acts.
+Active work and unresolved tool approvals suppress stage controls, while command handling independently rechecks those boundaries.
+Browser artifact previews use the existing bounded workspace reader and invalidate displayed content when its workspace revision changes.
+
+Reproduction preparation and completion are recorded in the same session journal, not a separate execution cache.
+Before approving a separately proposed canonical rerun, the gateway checks the original inputs, accepted artifacts, and absence of the destination through confined workspace inspection.
+Completion links that preparation to the actual OpenHands terminal observation, its reported working directory, and the intervening single-action approval.
+The gateway captures protected-file and output hashes at live completion and rechecks them during stage assessment.
+Missing completion observations remain unverified after restart; replay never inspects later files to manufacture execution evidence.
+These observations establish the bounded reproduction contract, not an adversarial filesystem sandbox or scientific validity.
+
+Run and stage budgets use the same observed usage contract as research benchmarks.
+Known overruns prevent acceptance, and exhausted limits prevent further model continuations; already-counted tool proposals exactly at the action limit can still be approved.
+Elapsed-time limits include waiting for review, and unavailable provider measurements remain unknown.
+These are admission checks at observed boundaries, not hard spending caps or preemption within an uninterrupted model run.
+Cancellation requires settled work and no pending tool approvals; pausing and rejecting tools remain separate session controls.
+
 ### Model Artifact Lifecycle
 
 The gateway owns one local-model choice contract for catalog recommendations, inspected Hugging Face repositories, raw imports, downloads, and transferred bundles.
@@ -104,6 +169,9 @@ The selected platform adapter advertises supported ingress modes, while deployme
 
 ### OpenHands Adapter
 
+Gateway lifecycle startup imports the SDK before accepting concurrent browser requests, avoiding competing cold imports through the Skill and specialist catalogs.
+This initializes modules only; model clients, conversations, and tool executors are created when agent work is requested.
+
 The adapter creates an OpenHands conversation with `OpenHandsAgentSettings`, the selected LiteLLM-compatible model profile, project workspace, Skills, persistence directory, and confirmation policy.
 It uses public typed OpenHands events and conversation state to derive lifecycle, unmatched actions, task progress, usage, and errors.
 OpenHands' privacy-safe failure classifications are translated into stable Heartwood diagnostics, and raw conversation-error detail is minimized at the OpenHands file-store boundary before persistence.
@@ -111,6 +179,9 @@ OpenHands owns the agent loop, conversation persistence, coding tools, Task Trac
 The gateway supplies a catalog-scoped Task adapter that reuses OpenHands orchestration while rejecting agents outside the executable catalog, supervising child interruption, and applying the same content-minimized persistence policy to parent and child conversations.
 Heartwood translates that state into its stable event contract instead of maintaining a parallel agent loop or pending-action cache.
 Persisted non-token progress is reconciled while a run is active, while raw token deltas remain transient.
+The gateway's bounded idle wait includes final worker callbacks, not only the SDK's reported lifecycle or the availability of its execution slot.
+It releases gateway and session command locks while waiting, keeping pause and shutdown available, and invalidates its result if the owning service changes.
+An idle session may still need action approval or may have failed; callers must assess the reconciled lifecycle and evidence separately.
 Standard provider routes use OpenHands' LiteLLM-backed LLM interface.
 ChatGPT account access uses OpenHands' native subscription registry, OAuth credential store and refresh, and Codex Responses API transport without a Heartwood token implementation.
 

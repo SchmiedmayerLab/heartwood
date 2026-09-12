@@ -22,6 +22,9 @@ The normal workflow is the same in every supported interface.
 
 ## Write Effective Requests
 
+For a staged tabular analysis with explicit inputs and completion checks, use a [research workflow](research-workflows.md).
+For other tasks, describe the desired outcome in the conversation.
+
 A useful request names the desired artifact, relevant input paths, constraints, and verification.
 
 ```text

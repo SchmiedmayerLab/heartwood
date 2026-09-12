@@ -113,6 +113,51 @@ catalog = session.specialist_settings()
 [(role["label"], role["availability"]) for role in catalog["specialists"]]
 ```
 
+## Research Workflows
+
+Inspect maintained research workflows without starting model work:
+
+```python
+catalog = session.research_workflows()
+[(entry.definition.label, entry.available) for entry in catalog.workflows]
+```
+
+Each definition includes its required inputs, stages, artifacts, and work budgets.
+Availability indicates implemented checks, not that the selected model has been qualified for the research question.
+
+Start a [research workflow](research-workflows.md) in a new session:
+
+```python
+from heartwood.schemas.workflows import WorkflowStart
+
+view = session.workflow(
+    WorkflowStart(
+        action="start",
+        workflow_id="baseline-analysis",
+        inputs={
+            "data": "data.csv",
+            "dictionary": "dictionary.json",
+            "question": "Does baseline score predict the held-out outcome?",
+        },
+        output_directory="results",
+    )
+)
+[(control.control_id, control.label) for control in view.workflow_controls]
+```
+
+Setup does not start an agent call.
+Inspect the returned controls and explicitly submit the desired request:
+
+```python
+run_stage = next(control for control in view.workflow_controls if control.control_id == "run")
+view = session.workflow(run_stage.request)
+```
+
+Continue polling and reviewing tool actions as described above.
+After work settles, the projection offers result checking and any required stage review.
+Submit the request from the view you inspected, rather than constructing a decision against a newer revision.
+The gateway rejects stale requests and shares the resulting state with the terminal and browser.
+
 Specialist delegation remains part of the parent OpenHands conversation; the notebook does not maintain a separate agent registry or task queue.
 
 ## Inspect Files and Changes

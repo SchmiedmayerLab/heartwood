@@ -1,0 +1,13 @@
+subject_id,visit,measurement,response,future_response,partition,arm
+S001,1,1,4,4,train,A
+S001,2,2,9,9,train,A
+S002,1,3,10,10,train,B
+S002,2,4,15,15,train,B
+S003,1,5,16,16,train,A
+S003,2,6,21,21,train,A
+S004,1,7,22,22,train,B
+S004,2,8,27,27,train,B
+S005,1,9,28,28,test,A
+S005,2,10,33,33,test,A
+S006,1,11,34,34,test,B
+S006,2,12,39,39,test,B
