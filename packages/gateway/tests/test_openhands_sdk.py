@@ -446,12 +446,16 @@ def test_terminal_tool_masks_all_configured_provider_environment_keys() -> None:
     local_profile = _local_profile()
 
     assert _terminal_tool_params(environment_profile, ("ANTHROPIC_API_KEY",)) == {
-        "env": {"ANTHROPIC_API_KEY": "", "OPENAI_API_KEY": ""}
+        "env": {
+            "ANTHROPIC_API_KEY": "",
+            "HEARTWOOD_GATEWAY_CAPABILITY": "",
+            "OPENAI_API_KEY": "",
+        }
     }
     assert _terminal_tool_params(local_profile, ("OPENAI_API_KEY",)) == {
-        "env": {"OPENAI_API_KEY": ""}
+        "env": {"HEARTWOOD_GATEWAY_CAPABILITY": "", "OPENAI_API_KEY": ""}
     }
-    assert _terminal_tool_params(local_profile) == {}
+    assert _terminal_tool_params(local_profile) == {"env": {"HEARTWOOD_GATEWAY_CAPABILITY": ""}}
 
 
 def test_openhands_defaults_are_quiet_offline_and_allow_deployment_override(

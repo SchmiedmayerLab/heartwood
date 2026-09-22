@@ -34,6 +34,7 @@ from heartwood.core_adapter import (
     SessionRecoveryError,
     SessionStorageCapabilityError,
 )
+from heartwood.gateway._access import LaunchCapability
 from heartwood.gateway._action_presentation import (
     action_mode_label,
     action_risk_label,
@@ -270,6 +271,7 @@ __all__ = [
     "IngressRequest",
     "IngressRequestError",
     "InterfaceKind",
+    "LaunchCapability",
     "LocalCheckpointSignerApp",
     "LocalCheckpointSignerSetup",
     "LocalContextPlan",

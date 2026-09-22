@@ -301,13 +301,22 @@ If the route is operator-managed, verify the upstream source address, external h
 The proxy must remove forwarding and identity headers supplied by the client before adding its own values.
 Do not disable host, origin, or path validation to make the request pass.
 
+### `HW-INGRESS-003` — Gateway Request Is Missing the Launch Capability
+
+The request reached the gateway route but did not carry the capability that `heartwood gateway serve` issued at startup.
+Open the launch link printed by the terminal that started Heartwood; it works once and sets the cookie the page needs.
+If the link was already used or the gateway was restarted, stop Heartwood, start it again, and open the new link.
+
+Automation must send the value of `HEARTWOOD_GATEWAY_CAPABILITY` in the `X-Heartwood-Capability` header.
+Do not share the link or the secret with other users or processes.
+
 ## Browser Access
 
 If the browser page does not open:
 
 1. keep the launching terminal running;
 2. confirm `heartwood --interface web` reported ready;
-3. use the exact printed URL;
+3. use the printed launch link, and start Heartwood again when the link was already used;
 4. check whether port `8767` is already in use; and
 5. run `heartwood doctor` from the same directory.
 

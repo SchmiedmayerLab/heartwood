@@ -25,6 +25,7 @@ const workspace = fs.mkdtempSync(
   path.join(os.tmpdir(), "heartwood-web-gateway-"),
 );
 const logs = [];
+let capabilityCookie = "";
 
 main().catch((error) => {
   console.error(error);
@@ -85,6 +86,25 @@ async function main() {
 
   try {
     await Promise.race([waitForServer(proxiedBaseUrl, server), spawnError]);
+    const launchUrl = await waitForLaunchLink(server);
+    const anonymous = await fetch(`${origin}${basePath}sessions`);
+    if (anonymous.status !== 401) {
+      throw new Error(
+        `gateway served an API route without the capability: ${anonymous.status}`,
+      );
+    }
+    const launched = await fetch(launchUrl, { redirect: "manual" });
+    const setCookie = launched.headers.get("set-cookie") || "";
+    if (launched.status !== 303 || !setCookie.includes("HttpOnly")) {
+      throw new Error(
+        `launch link did not set the capability cookie: ${launched.status} ${setCookie}`,
+      );
+    }
+    capabilityCookie = setCookie.split(";")[0];
+    const replayed = await fetch(launchUrl, { redirect: "manual" });
+    if (replayed.status !== 403) {
+      throw new Error(`launch link was reusable: ${replayed.status}`);
+    }
     const html = await fetchText(proxiedBaseUrl);
     if (!html.includes('<div id="root"></div>')) {
       throw new Error(
@@ -220,6 +240,17 @@ async function inspectResearchSetup(url) {
     const context = await browser.newContext({
       viewport: { width: 1440, height: 1000 },
     });
+    const [name, value] = capabilityCookie.split("=");
+    await context.addCookies([
+      {
+        domain: new URL(url).hostname,
+        httpOnly: true,
+        name,
+        path: new URL(url).pathname.replace(/\/$/, "") || "/",
+        sameSite: "Strict",
+        value,
+      },
+    ]);
     const page = await context.newPage();
     page.on("response", (response) => {
       if (response.status() >= 500) {
@@ -373,8 +404,28 @@ async function fetchText(url) {
   return response.text();
 }
 
+async function waitForLaunchLink(server) {
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    const match = /(https?:\/\/\S+\/launch\?token=\S+)/.exec(logs.join(""));
+    if (match !== null) {
+      return match[1];
+    }
+    if (server.exitCode !== null) {
+      throw new Error(
+        `gateway exited before printing a launch link\n${logs.join("")}`,
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error(`gateway did not print a launch link\n${logs.join("")}`);
+}
+
 async function fetchJson(url, init) {
-  const response = await fetch(url, init);
+  const response = await fetch(url, {
+    ...init,
+    headers: { ...(init && init.headers), cookie: capabilityCookie },
+  });
   const payload = await response.json();
   if (!response.ok) {
     throw new Error(

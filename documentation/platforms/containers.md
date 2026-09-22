@@ -69,7 +69,7 @@ docker run --rm -it \
   heartwood --interface web --host 0.0.0.0 --host-loopback-publication
 ```
 
-Open `http://127.0.0.1:8767/` and keep the container running.
+Open the launch link printed by the container and keep it running; the page continues at `http://127.0.0.1:8767/`.
 The host publication is loopback-only even though the process must listen on the container interface.
 `--host-loopback-publication` is the operator's explicit assertion that the wildcard container bind is published only through the host loopback mapping shown above.
 Heartwood still validates the external loopback origin and accepts only loopback or private bridge sources.
