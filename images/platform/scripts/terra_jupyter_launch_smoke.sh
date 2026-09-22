@@ -76,8 +76,10 @@ if [ "${root_status}" != "404" ]; then
   exit 1
 fi
 
+capability="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
 docker exec "${container_name}" mkdir -p "${project_root}"
-docker exec --detach --workdir "${project_root}" "${container_name}" \
+docker exec --detach --workdir "${project_root}" \
+  --env "HEARTWOOD_GATEWAY_CAPABILITY=${capability}" "${container_name}" \
   sh -c "exec heartwood gateway serve --host 127.0.0.1 --port ${gateway_port} \
     --ingress-mode jupyter-proxy \
     --public-origin http://127.0.0.1:${host_port} \
@@ -101,7 +103,14 @@ if ! grep -q '<div id="root"></div>' <<<"${heartwood_html}"; then
   exit 1
 fi
 
-if ! readiness="$(curl --fail --silent --show-error "${heartwood_url}project/readiness")"; then
+anonymous_status="$(curl --silent --output /dev/null --write-out '%{http_code}' "${heartwood_url}project/readiness")"
+if [ "${anonymous_status}" != "401" ]; then
+  echo "Heartwood served an API route through the proxy without the capability: ${anonymous_status}" >&2
+  dump_logs
+  exit 1
+fi
+if ! readiness="$(curl --fail --silent --show-error \
+  --header "X-Heartwood-Capability: ${capability}" "${heartwood_url}project/readiness")"; then
   dump_logs
   exit 1
 fi

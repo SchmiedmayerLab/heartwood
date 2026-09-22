@@ -79,7 +79,7 @@ A separate service identity or platform proxy can enforce a technical credential
 Heartwood accepts browser and API traffic through one configured ingress mode:
 
 - **Direct loopback** binds to a loopback address by default and rejects forwarding headers.
-- **Jupyter proxy** binds to loopback, requires the exact external origin and stripped proxy prefix, accepts requests only from the local Jupyter proxy, and validates the bounded route metadata emitted by `jupyter-server-proxy`.
+- **Jupyter proxy** binds to loopback, requires the exact external origin and stripped proxy prefix, and validates the bounded route metadata emitted by `jupyter-server-proxy`.
 - **Trusted proxy** accepts traffic only from configured source ranges, requires one complete forwarded client, host, protocol, and prefix set, and can require an exact non-secret proxy identity assertion.
 
 All modes validate the request host, browser origin, WebSocket origin, path, query encoding, and external base path before routing.
@@ -91,6 +91,19 @@ The content security policy permits live updates only through the validated brow
 Heartwood does not authenticate end users or terminate public TLS.
 The platform proxy must authenticate users, authorize project access, remove untrusted forwarding and identity headers, set the validated values, and restrict network reachability to the configured gateway bind.
 A trusted identity assertion is an additional route marker, not a bearer secret or replacement for user authentication.
+
+### Launch Capability
+
+Ingress validation confirms the route, not the caller.
+A loopback bind is reachable by every process running as the same operating-system user, including the agent's own terminal, so the gateway additionally requires a process-lifetime launch capability on every API request, server-sent event stream, and WebSocket.
+`heartwood gateway serve` generates the secret at startup and prints one launch link.
+Opening the link exchanges its one-time token for an HttpOnly, `SameSite=Strict` cookie scoped to the browser-visible gateway path; the token cannot be reused and the secret never appears in page scripts or browser storage.
+Automation supplies the same secret through `HEARTWOOD_GATEWAY_CAPABILITY`, which the gateway removes from its environment before any agent tool can start, and presents it in the `X-Heartwood-Capability` header.
+A request without the capability receives `HW-INGRESS-003`; static browser assets need no capability because they contain no project data.
+
+Every command accepted through the gateway records the launching principal as its actor.
+A caller cannot claim another actor in the command body, and `approval.recorded` carries the actor that approved or denied the action set.
+The capability distinguishes the researcher's browser from other local processes; it does not separate two humans who share the same operating-system account, and it does not replace the platform's user authentication.
 
 ### Skills and Instructions
 

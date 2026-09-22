@@ -622,6 +622,7 @@ class SessionService:
                 EventKind.APPROVAL_RECORDED,
                 {
                     "command_id": command.command_id,
+                    "actor_id": command.actor_id,
                     "group_id": pending_group.group_id,
                     "decision": decision,
                     "tool_call_ids": [action.tool_call_id for action in pending_group.actions],

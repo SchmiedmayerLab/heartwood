@@ -763,7 +763,7 @@ def _interaction_command(
                 str(options.web_port),
                 *publication,
             ],
-            f"Open the web interface on {options.web_host}:{options.web_port}",
+            f"Open the launch link printed for {options.web_host}:{options.web_port}",
         )
     command = [
         sys.executable,

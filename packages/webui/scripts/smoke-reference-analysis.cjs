@@ -52,6 +52,8 @@ const delegatedSpecialistPrompt =
 const specialistResultMarker = "SPECIALIST REVIEW COMPLETE:";
 const processes = [];
 const logs = [];
+let launchLinksUsed = 0;
+let capabilityCookie = "";
 const runtimeEnvironment = Object.assign({}, process.env, {
   HEARTWOOD_MODEL_REQUEST_LOG: path.join(
     stateRoot,
@@ -122,7 +124,7 @@ async function main() {
       acceptDownloads: true,
       viewport: desktopViewport,
     });
-    await page.goto(origin);
+    await openLaunchLink(page);
 
     const task = page.getByRole("textbox", { name: "Task", exact: true });
     await expect(task).toBeEnabled({ timeout: 30_000 });
@@ -333,7 +335,8 @@ async function main() {
     const replay = runCli("--session-id", sessionId, "replay");
     if (
       !replay.includes("Action set approved") ||
-      replay.match(/\[succeeded\] \$/gu)?.length !== 5 ||
+      replay.match(/\[Succeeded\] \$/gu)?.length !== 4 ||
+      replay.match(/\[Failed\] \$/gu)?.length !== 1 ||
       replay.match(/terminal completed/gu)?.length !== 4 ||
       replay.match(/terminal failed/gu)?.length !== 1 ||
       !replay.includes("Research Planner: Complete") ||
@@ -368,7 +371,7 @@ async function main() {
       gatewayPort,
     ]);
     await waitForUrl(origin);
-    await page.reload();
+    await openLaunchLink(page);
     await expect(
       page.getByRole("heading", { name: "Synthetic Cohort Analysis" }),
     ).toBeVisible({ timeout: 30_000 });
@@ -670,8 +673,28 @@ function runCli(...args) {
   return result.stdout;
 }
 
+async function openLaunchLink(page) {
+  const deadline = Date.now() + 60_000;
+  let links = [];
+  while (links.length <= launchLinksUsed && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    links = logs.join("").match(/https?:\/\/\S+\/launch\?token=\S+/g) ?? [];
+  }
+  if (links.length <= launchLinksUsed) {
+    throw new Error("gateway did not print a new launch link");
+  }
+  await page.goto(links[launchLinksUsed++]);
+  const cookie = (await page.context().cookies()).find(
+    (candidate) => candidate.name === "heartwood-capability",
+  );
+  if (cookie === undefined) {
+    throw new Error("launch link did not set the capability cookie");
+  }
+  capabilityCookie = `${cookie.name}=${cookie.value}`;
+}
+
 async function fetchJson(url) {
-  const response = await fetch(url);
+  const response = await fetch(url, { headers: { cookie: capabilityCookie } });
   if (!response.ok) throw new Error(`${url} returned ${response.status}`);
   return response.json();
 }
@@ -702,7 +725,7 @@ function terminateProcessGroup(child) {
 }
 
 async function waitForExit(child) {
-  if (child.exitCode !== null) return;
+  if (child.exitCode !== null || child.signalCode !== null) return;
   await new Promise((resolve) => child.once("exit", resolve));
 }
 

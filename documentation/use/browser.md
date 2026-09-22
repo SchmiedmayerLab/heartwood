@@ -19,8 +19,9 @@ From the project directory, run:
 heartwood --interface web
 ```
 
-Keep the terminal process running and open the exact URL Heartwood prints.
-On a workstation the default is `http://127.0.0.1:8767/`.
+Keep the terminal process running and open the launch link Heartwood prints.
+The link works once: it sets a browser cookie that authorizes this page for the running gateway, then the page continues at `http://127.0.0.1:8767/` on a workstation.
+If the browser later reports **HW-INGRESS-003**, stop Heartwood with `Ctrl-C`, run it again, and open the new link.
 
 ![Heartwood browser interface showing a project conversation](../assets/screenshots/browser-conversation-light.png#gh-light-mode-only){ .theme-screenshot-light }
 ![Heartwood browser interface showing a project conversation](../assets/screenshots/browser-conversation-dark.png#gh-dark-mode-only){ .theme-screenshot-dark }
@@ -122,6 +123,7 @@ Terminal command text is not treated as authoritative file evidence.
 ## Keep the Interface Reachable
 
 Bind Heartwood to loopback unless a trusted authenticated proxy terminates access.
+The launch link authorizes one browser for the running gateway; other processes on the same machine cannot send commands or approve actions without it.
 The development server and generic container do not add user authentication by themselves.
 Platform operators must configure the typed ingress mode, exact origin, base path, and trusted source boundary rather than relying on forwarded headers implicitly.
 See [Security and Controlled Data](../operate/security.md#gateway-ingress).

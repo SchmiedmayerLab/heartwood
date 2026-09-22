@@ -167,6 +167,11 @@ Private signing keys are never command arguments or project state.
 It never replaces an existing output.
 See [Audit Checkpoints and Retention](../operate/audit-checkpoints.md) for the complete operator workflow and trust boundary.
 
+`heartwood gateway serve` prints one launch link at startup.
+Open that link once; it sets the capability cookie that every gateway API request, event stream, and WebSocket requires, and the link is invalid afterwards.
+Automation can instead set `HEARTWOOD_GATEWAY_CAPABILITY` to a random token of at least 32 printable ASCII characters, such as the output of `openssl rand -hex 32`, before starting the gateway and send it in the `X-Heartwood-Capability` header; the gateway then prints no launch link.
+Restart the gateway to obtain a new link.
+
 `heartwood gateway serve` uses the detected platform's declared default ingress mode.
 Workstations and Carina default to direct loopback and refuse a non-loopback bind.
 A generic container can use a wildcard bind only when the operator explicitly declares loopback-only host publication.

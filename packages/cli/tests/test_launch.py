@@ -1344,7 +1344,7 @@ def test_web_reentry_preserves_only_interface_options(tmp_path: Path) -> None:
         "9876",
         "--host-loopback-publication",
     ]
-    assert label == "Open the web interface on 0.0.0.0:9876"
+    assert label == "Open the launch link printed for 0.0.0.0:9876"
 
 
 def test_runtime_readiness_accepts_requested_model_and_stops_after_exit(

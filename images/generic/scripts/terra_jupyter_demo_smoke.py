@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import shutil
 import socket
 import subprocess
@@ -54,6 +55,7 @@ SERVICE_PREFIX = os.environ.get(
     "/proxy/heartwood-ci/saturn-smoke/jupyter/",
 )
 SESSION_ID = os.environ.get("HEARTWOOD_TERRA_DEMO_SESSION_ID", "terra-demo-smoke")
+CAPABILITY = secrets.token_urlsafe(32)
 PROJECT_ROOT = Path(
     os.environ.get("HEARTWOOD_TERRA_DEMO_PROJECT_ROOT", "/tmp/heartwood-terra-demo")
 )
@@ -149,6 +151,7 @@ def _start_gateway() -> subprocess.Popen[str]:
         stderr=subprocess.STDOUT,
         text=True,
         cwd=PROJECT_ROOT,
+        env={**os.environ, "HEARTWOOD_GATEWAY_CAPABILITY": CAPABILITY},
     )
 
 
@@ -502,7 +505,11 @@ def _request_json(
     request = urllib.request.Request(
         url,
         data=encoded,
-        headers={"Connection": "close", "Content-Type": "application/json"},
+        headers={
+            "Connection": "close",
+            "Content-Type": "application/json",
+            "X-Heartwood-Capability": CAPABILITY,
+        },
         method=method or ("POST" if encoded is not None else "GET"),
     )
     with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT) as response:
@@ -510,7 +517,9 @@ def _request_json(
 
 
 def _request_sse(url: str) -> str:
-    request = urllib.request.Request(url, headers={"Connection": "close"})
+    request = urllib.request.Request(
+        url, headers={"Connection": "close", "X-Heartwood-Capability": CAPABILITY}
+    )
     with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT) as response:
         buffer = ""
         while "\n\n" not in buffer and "\r\n\r\n" not in buffer:

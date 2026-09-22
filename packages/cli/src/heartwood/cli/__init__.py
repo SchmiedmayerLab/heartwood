@@ -63,6 +63,7 @@ from heartwood.gateway import (
     IngressConfigurationError,
     IngressPolicy,
     InterfaceKind,
+    LaunchCapability,
     LocalCheckpointSignerApp,
     LocalEd25519CheckpointSigner,
     ModelArtifactError,
@@ -2590,13 +2591,18 @@ def _handle_serve(
             trusted_identity=trusted_identity,
             host_loopback_publication=host_loopback_publication,
         )
+        access = LaunchCapability.from_environment(os.environ) or LaunchCapability.generate()
     except IngressConfigurationError as error:
         raise SystemExit(f"{diagnostic.code}: {error}") from error
     app = GatewayAsgiApp(
         SessionGateway(project=project),
         static_dir=web_root,
         ingress=ingress,
+        access=access,
     )
+    launch_url = access.launch_url(ingress)
+    if launch_url is not None:
+        print(f"Open Heartwood with this one-time link:\n  {launch_url}\n", flush=True)
     uvicorn.run(
         app,
         host=host,

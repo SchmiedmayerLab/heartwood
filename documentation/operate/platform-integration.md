@@ -60,6 +60,10 @@ A trusted proxy must remove inbound forwarding and identity headers before setti
 Restrict its upstream network route to the configured gateway bind.
 Heartwood validates that request metadata agrees with the declared route; the proxy remains responsible for end-user authentication, authorization, TLS, and network isolation.
 
+Every gateway API request also needs the launch capability.
+Let the researcher open the launch link that `heartwood gateway serve` prints, and forward the resulting cookie unchanged, or start the gateway with `HEARTWOOD_GATEWAY_CAPABILITY` and inject `X-Heartwood-Capability` from the proxy for callers the platform has already authenticated.
+Never expose the secret to the agent workspace or to other users of the platform.
+
 ## Model Credential Isolation
 
 Leave `platform_isolated_model_sources` empty unless an exact model source uses a transport separated from the operating-system identity that runs OpenHands tools.

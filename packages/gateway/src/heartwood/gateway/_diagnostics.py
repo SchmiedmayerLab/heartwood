@@ -219,6 +219,12 @@ _DIAGNOSTICS: dict[str, DiagnosticDefinition] = {
         "Use the exact gateway URL supplied by this deployment.",
         "/reference/troubleshooting/#hw-ingress-002-gateway-request-does-not-match-the-configured-route",
     ),
+    "gateway-capability": DiagnosticDefinition(
+        "HW-INGRESS-003",
+        "Gateway request is missing the launch capability",
+        "Open Heartwood through the launch link printed by the terminal that started it.",
+        "/reference/troubleshooting/#hw-ingress-003-gateway-request-is-missing-the-launch-capability",
+    ),
 }
 
 _FALLBACK_DIAGNOSTIC = DiagnosticDefinition(

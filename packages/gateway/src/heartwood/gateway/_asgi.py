@@ -19,9 +19,10 @@ from pathlib import Path
 from typing import Literal, cast
 from urllib.parse import parse_qs, urlsplit
 
+from heartwood.gateway._access import LaunchCapability
 from heartwood.gateway._diagnostics import diagnostic_for
 from heartwood.gateway._gateway import SessionGateway
-from heartwood.gateway._ingress import IngressPolicy, IngressRequestError
+from heartwood.gateway._ingress import IngressPolicy, IngressRequest, IngressRequestError
 from heartwood.gateway._rest import RestGateway, RestRequest
 from heartwood.session import JsonValue, SessionEvent, validate_session_id
 
@@ -46,12 +47,14 @@ class GatewayAsgiApp:
         *,
         static_dir: Path | None = None,
         ingress: IngressPolicy | None = None,
+        access: LaunchCapability | None = None,
     ) -> None:
-        """Create an app with safe direct-loopback ingress when no policy is supplied."""
+        """Create an app with safe loopback ingress and a fresh capability unless supplied."""
         self.gateway = gateway
         self.rest = RestGateway(gateway)
         self.static_dir = static_dir
         self.ingress = IngressPolicy.create() if ingress is None else ingress
+        self.access = LaunchCapability.generate() if access is None else access
 
     async def __call__(self, scope: AsgiScope, receive: AsgiReceive, send: AsgiSend) -> None:
         """Handle one ASGI connection."""
@@ -92,8 +95,16 @@ class GatewayAsgiApp:
                 },
             )
             return
+        method = _scope_string(scope, "method")
+        if request.path == "/launch":
+            await self._handle_launch(request, method=method, send=send)
+            return
+        requires_capability = _is_gateway_api_path(request.path)
+        if requires_capability and not self.access.authorizes(_scope_headers(scope)):
+            await _send_capability_required(send)
+            return
         route = _session_events_stream_route(request.path)
-        if route is not None and _scope_string(scope, "method") == "GET":
+        if route is not None and method == "GET":
             try:
                 route = validate_session_id(route)
             except ValueError as error:
@@ -127,22 +138,23 @@ class GatewayAsgiApp:
                 body={"error": "gateway request body must be UTF-8"},
             )
             return
-        response = await asyncio.to_thread(
-            self.rest.handle,
-            RestRequest(
-                method=_scope_string(scope, "method"),
-                path=_path_with_query(
-                    path=request.path,
-                    query_string=request.query_string,
+        if requires_capability:
+            response = await asyncio.to_thread(
+                self.rest.handle,
+                RestRequest(
+                    method=method,
+                    path=_path_with_query(
+                        path=request.path,
+                        query_string=request.query_string,
+                    ),
+                    body=decoded_body,
+                    actor_id=self.access.actor_id,
                 ),
-                body=decoded_body,
-            ),
-        )
-        if response.status_code != 404 or _is_gateway_api_path(request.path):
+            )
             await _send_json_response(send, status_code=response.status_code, body=response.body)
             return
 
-        if self.static_dir is not None and _scope_string(scope, "method") == "GET":
+        if self.static_dir is not None and method == "GET":
             await _send_static_response(
                 send,
                 static_dir=self.static_dir,
@@ -152,6 +164,25 @@ class GatewayAsgiApp:
             )
             return
         await _send_json_response(send, status_code=404, body={"error": "unknown gateway route"})
+
+    async def _handle_launch(self, request: IngressRequest, *, method: str, send: AsgiSend) -> None:
+        token = _query_values(request.query_string).get("token", [None])[0]
+        if method != "GET" or token is None or not self.access.consume_launch_token(token):
+            await _send_capability_required(send, status_code=403)
+            return
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 303,
+                "headers": [
+                    (b"location", f"{self.ingress.browser_base_path}/".encode("ascii")),
+                    (b"set-cookie", self.access.cookie_header(self.ingress).encode("ascii")),
+                    (b"cache-control", b"no-store"),
+                    (b"referrer-policy", b"no-referrer"),
+                ],
+            }
+        )
+        await send({"type": "http.response.body", "body": b""})
 
     async def _handle_sse(
         self,
@@ -223,7 +254,7 @@ class GatewayAsgiApp:
             await send({"type": "websocket.close", "code": 1008})
             return
         route = _session_events_route(request.path)
-        if route is None:
+        if route is None or not self.access.authorizes(_scope_headers(scope)):
             await send({"type": "websocket.close", "code": 1008})
             return
         try:
@@ -323,6 +354,22 @@ async def _send_sse_events(
         f"event: heartwood-session-events\ndata: {json.dumps(payload, separators=(',', ':'))}\n\n"
     ).encode()
     await send({"type": "http.response.body", "body": body, "more_body": True})
+
+
+async def _send_capability_required(send: AsgiSend, *, status_code: int = 401) -> None:
+    diagnostic = diagnostic_for("gateway-capability")
+    await _send_json_response(
+        send,
+        status_code=status_code,
+        body={"code": diagnostic.code, "error": diagnostic.next_action},
+    )
+
+
+def _scope_headers(scope: AsgiScope) -> dict[str, tuple[str, ...]]:
+    headers: dict[str, list[str]] = {}
+    for name, value in cast(list[tuple[bytes, bytes]], scope.get("headers", [])):
+        headers.setdefault(name.decode("latin-1").lower(), []).append(value.decode("latin-1"))
+    return {name: tuple(values) for name, values in headers.items()}
 
 
 async def _send_json_response(
@@ -481,8 +528,9 @@ def _static_file_path(
 
 
 def _is_gateway_api_path(path: str) -> bool:
-    return path.startswith(("/project/", "/sessions/", "/settings/")) or path in {
+    return path.startswith(("/project/", "/research/", "/sessions/", "/settings/")) or path in {
         "/project",
+        "/research",
         "/sessions",
         "/settings",
     }

@@ -75,6 +75,7 @@ class RestRequest:
     method: str
     path: str
     body: str = ""
+    actor_id: str = "human"
 
 
 @dataclass(frozen=True, slots=True)
@@ -384,7 +385,9 @@ class RestGateway:
                 return _error(404, error)
             return RestResponse(status_code=200, body=_json_object(export))
         if request.method == "POST" and resource == "commands":
-            return self._handle_command(session_id=session_id, body=request.body)
+            return self._handle_command(
+                session_id=session_id, body=request.body, actor_id=request.actor_id
+            )
         if request.method == "GET" and resource == "projection":
             try:
                 projection = self.gateway.session_projection(session_id=session_id)
@@ -438,9 +441,11 @@ class RestGateway:
             return _error(422, error)
         return RestResponse(status_code=200, body=_json_object(session))
 
-    def _handle_command(self, *, session_id: str, body: str) -> RestResponse:
+    def _handle_command(self, *, session_id: str, body: str, actor_id: str) -> RestResponse:
         try:
-            command = SessionCommand.model_validate_json(body)
+            command = SessionCommand.model_validate_json(body).model_copy(
+                update={"actor_id": actor_id}
+            )
         except ValidationError as error:
             if error.errors()[0]["type"] == "json_invalid":
                 return _error(400, "request body must be valid JSON")

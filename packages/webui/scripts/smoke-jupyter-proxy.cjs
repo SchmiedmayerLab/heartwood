@@ -35,6 +35,7 @@ const externalBaseUrl = `${externalOrigin}${externalBasePath}`;
 const gatewayOrigin = `http://127.0.0.1:${gatewayPort}`;
 const logs = [];
 const proxySockets = new Set();
+let capability;
 const verbose = process.env.HEARTWOOD_WEB_SMOKE_VERBOSE === "1";
 
 main().catch((error) => {
@@ -215,7 +216,8 @@ async function verifyWebAssets(baseUrl) {
 async function verifyBrowserRoute(baseUrl) {
   const browser = await chromium.launch({ headless: true });
   try {
-    const page = await browser.newPage();
+    const context = await browser.newContext();
+    const page = await context.newPage();
     const startupUrl = new URL(
       "project/startup?interface=web",
       baseUrl,
@@ -223,7 +225,9 @@ async function verifyBrowserRoute(baseUrl) {
     const startupResponse = page.waitForResponse(
       (response) => response.url() === startupUrl,
     );
-    await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
+    await page.goto(await waitForLaunchLink(), {
+      waitUntil: "domcontentloaded",
+    });
     const response = await startupResponse;
     if (!response.ok()) {
       throw new Error(
@@ -231,6 +235,18 @@ async function verifyBrowserRoute(baseUrl) {
       );
     }
     await page.locator("#root").waitFor({ state: "visible" });
+    capability = (await context.cookies()).find(
+      (cookie) => cookie.name === "heartwood-capability",
+    );
+    if (
+      capability === undefined ||
+      !capability.httpOnly ||
+      capability.path !== externalBasePath.slice(0, -1)
+    ) {
+      throw new Error(
+        `launch link did not set the scoped capability cookie: ${JSON.stringify(capability)}`,
+      );
+    }
   } finally {
     await browser.close();
   }
@@ -239,7 +255,7 @@ async function verifyBrowserRoute(baseUrl) {
 async function verifySessionRoutes(baseUrl) {
   const createdSession = await fetchJson(
     new URL("sessions", baseUrl).toString(),
-    withConnectionClose({
+    withGatewayHeaders({
       body: JSON.stringify({ title: "Jupyter proxy smoke" }),
       headers: { "Content-Type": "application/json" },
       method: "POST",
@@ -342,9 +358,11 @@ async function verifySessionRoutes(baseUrl) {
 async function verifyRenderedInterface(baseUrl) {
   const browser = await chromium.launch();
   try {
-    const page = await browser.newPage({
+    const context = await browser.newContext({
       viewport: { width: 390, height: 760 },
     });
+    await context.addCookies([capability]);
+    const page = await context.newPage();
     await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
     const setup = page.getByRole("heading", { name: "Set up Heartwood" });
     await setup.waitFor({ state: "visible" });
@@ -411,7 +429,7 @@ async function verifyWorkspaceRoutes(baseUrl, sessionId) {
 
   const traversalUrl = new URL(`sessions/${sessionId}/workspace/file`, baseUrl);
   traversalUrl.searchParams.set("path", "../outside.txt");
-  const traversal = await fetch(traversalUrl, withConnectionClose());
+  const traversal = await fetch(traversalUrl, withGatewayHeaders());
   const traversalBody = await traversal.json();
   if (
     traversal.status !== 422 ||
@@ -427,7 +445,7 @@ async function waitForServer(url) {
   let lastError;
   while (Date.now() < deadline) {
     try {
-      const response = await fetch(url, withConnectionClose());
+      const response = await fetch(url, withGatewayHeaders());
       if (response.ok) {
         await response.arrayBuffer();
         return;
@@ -444,8 +462,20 @@ async function waitForServer(url) {
   );
 }
 
+async function waitForLaunchLink() {
+  const deadline = Date.now() + 15000;
+  while (Date.now() < deadline) {
+    const match = /(https?:\/\/\S+\/launch\?token=\S+)/.exec(logs.join(""));
+    if (match !== null) {
+      return match[1];
+    }
+    await delay(100);
+  }
+  throw new Error(`gateway did not print a launch link\n${logs.join("")}`);
+}
+
 async function fetchText(url) {
-  const response = await fetch(url, withConnectionClose());
+  const response = await fetch(url, withGatewayHeaders());
   if (!response.ok) {
     throw new Error(`GET ${url} returned ${response.status}`);
   }
@@ -453,7 +483,7 @@ async function fetchText(url) {
 }
 
 async function fetchJson(url, init) {
-  const response = await fetch(url, withConnectionClose(init));
+  const response = await fetch(url, withGatewayHeaders(init));
   const payload = await response.json();
   if (!response.ok) {
     throw new Error(
@@ -464,7 +494,7 @@ async function fetchJson(url, init) {
 }
 
 async function fetchSseEvent(url) {
-  const response = await fetch(url, withConnectionClose());
+  const response = await fetch(url, withGatewayHeaders());
   if (!response.ok) {
     throw new Error(`SSE ${url} returned ${response.status}`);
   }
@@ -583,9 +613,13 @@ function hasSseFrame(buffer) {
   return buffer.includes("\n\n") || buffer.includes("\r\n\r\n");
 }
 
-function withConnectionClose(init = {}) {
+function withGatewayHeaders(init = {}) {
+  const headers = { Connection: "close" };
+  if (capability !== undefined) {
+    headers.Cookie = `${capability.name}=${capability.value}`;
+  }
   return Object.assign({}, init, {
-    headers: Object.assign({ Connection: "close" }, init.headers ?? {}),
+    headers: Object.assign(headers, init.headers ?? {}),
   });
 }
 

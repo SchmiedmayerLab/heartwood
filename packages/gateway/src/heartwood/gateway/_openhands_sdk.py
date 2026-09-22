@@ -99,6 +99,7 @@ from heartwood.core_adapter import (
     ToolExecution,
     pending_action_group,
 )
+from heartwood.gateway._access import CAPABILITY_ENVIRONMENT
 from heartwood.gateway._model_settings import ModelProfile, ModelSettingsError
 from heartwood.gateway._openhands_failures import (
     backend_error as _backend_error,
@@ -2047,12 +2048,10 @@ def _terminal_tool_params(
     profile: ModelProfile,
     credential_environment_names: Sequence[str] = (),
 ) -> dict[str, object]:
-    """Mask configured environment-referenced provider keys from agent subprocesses."""
-    names = set(credential_environment_names)
+    """Mask provider keys and the gateway capability from agent subprocesses."""
+    names = {CAPABILITY_ENVIRONMENT, *credential_environment_names}
     if profile.credential_kind == "environment" and profile.api_key_env is not None:
         names.add(profile.api_key_env)
-    if not names:
-        return {}
     return {"env": dict.fromkeys(sorted(names), "")}
 
 

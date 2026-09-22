@@ -1,0 +1,9 @@
+# This source file is part of the Heartwood open-source project
+#
+# SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+#
+# SPDX-License-Identifier: MIT
+
+# Synthetic launch-capability test fixtures committed before they were replaced with low-entropy values.
+8b17e9c7154daf4e8d6d2fc6779b5827035ae376:packages/gateway/tests/test_asgi_gateway.py:generic-api-key:48
+8b17e9c7154daf4e8d6d2fc6779b5827035ae376:packages/gateway/tests/test_access.py:generic-api-key:15
