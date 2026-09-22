@@ -12,7 +12,7 @@ import pytest
 
 from heartwood.gateway import IngressConfigurationError, IngressPolicy, LaunchCapability
 
-_SECRET = "operator-supplied-capability-0123456789"
+_SECRET = "operator" * 5
 
 
 def test_generated_capability_issues_one_launch_link() -> None:
@@ -23,6 +23,7 @@ def test_generated_capability_issues_one_launch_link() -> None:
     assert link.startswith("http://127.0.0.1:8767/launch?token=")
     token = link.rsplit("=", 1)[1]
     assert not capability.consume_launch_token("wrong")
+    assert not capability.consume_launch_token("\u00e9")
     assert capability.consume_launch_token(token)
     assert not capability.consume_launch_token(token)
     assert capability.launch_url(IngressPolicy.create()) is None
@@ -40,7 +41,10 @@ def test_environment_capability_is_consumed_and_prints_no_link() -> None:
     assert LaunchCapability.from_environment({}) is None
 
 
-@pytest.mark.parametrize("secret", ["short", "has space " + "x" * 30, "a;b" + "x" * 30])
+@pytest.mark.parametrize(
+    "secret",
+    ["short", "has space " + "x" * 30, "a;b" + "x" * 30, '"' + "x" * 32, "\u00e9" * 32],
+)
 def test_capability_rejects_unusable_secrets(secret: str) -> None:
     with pytest.raises(IngressConfigurationError):
         LaunchCapability(secret, launch_token=None)
@@ -53,6 +57,10 @@ def test_capability_reads_the_cookie_and_ignores_malformed_headers() -> None:
         {"cookie": ("_xsrf=abc; heartwood-capability=" + _SECRET + "; other=1",)}
     )
     assert not capability.authorizes({"cookie": ("heartwood-capability=" + _SECRET[:-1],)})
+    assert capability.authorizes(
+        {"cookie": ("heartwood-capability=stale; heartwood-capability=" + _SECRET,)}
+    )
+    assert not capability.authorizes({"x-heartwood-capability": ("\u00e9" * 40,)})
     assert not capability.authorizes(
         {"cookie": ("not a cookie;;;=",), "x-heartwood-capability": ()}
     )

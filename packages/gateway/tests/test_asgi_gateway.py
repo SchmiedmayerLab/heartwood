@@ -45,7 +45,7 @@ def _command(kind: CommandKind, *, session_id: str = "session-1", **payload: Jso
     return command.model_dump_json().encode("utf-8")
 
 
-_SECRET = "test-capability-secret-0123456789abcdef"
+_SECRET = "synthetic" * 5
 _LAUNCH_TOKEN = "test-launch-token"
 _CAPABILITY_COOKIE = (b"cookie", f"heartwood-capability={_SECRET}".encode("ascii"))
 

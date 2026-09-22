@@ -8,9 +8,9 @@
 
 from __future__ import annotations
 
+import re
 import secrets
 from collections.abc import Mapping, MutableMapping
-from http.cookies import CookieError, SimpleCookie
 from threading import Lock
 from urllib.parse import urlencode
 
@@ -21,6 +21,7 @@ CAPABILITY_HEADER = "x-heartwood-capability"
 CAPABILITY_ENVIRONMENT = "HEARTWOOD_GATEWAY_CAPABILITY"
 CAPABILITY_ACTOR = "human"
 _MINIMUM_SECRET_LENGTH = 32
+_COOKIE_OCTETS = re.compile(r"[\x21\x23-\x2B\x2D-\x3A\x3C-\x5B\x5D-\x7E]+")  # RFC 6265
 
 
 class LaunchCapability:
@@ -35,9 +36,12 @@ class LaunchCapability:
             raise IngressConfigurationError(
                 f"gateway capability must be at least {_MINIMUM_SECRET_LENGTH} characters"
             )
-        if any(character.isspace() or character in ";," for character in secret):
-            raise IngressConfigurationError("gateway capability must be one opaque token")
-        self._secret = secret
+        if _COOKIE_OCTETS.fullmatch(secret) is None:
+            raise IngressConfigurationError(
+                "gateway capability must be printable ASCII without spaces, quotes, commas, "
+                "semicolons, or backslashes"
+            )
+        self._secret = secret.encode("ascii")
         self._launch_token = launch_token
         self._lock = Lock()
 
@@ -70,7 +74,7 @@ class LaunchCapability:
         """Exchange the launch token exactly once."""
         with self._lock:
             expected = self._launch_token
-            if expected is None or not secrets.compare_digest(expected, token):
+            if expected is None or not secrets.compare_digest(expected.encode(), token.encode()):
                 return False
             self._launch_token = None
             return True
@@ -79,20 +83,16 @@ class LaunchCapability:
         """Return whether the request carries the secret as a header or cookie."""
         presented = [value.strip() for value in headers.get(CAPABILITY_HEADER, ())]
         for raw in headers.get("cookie", ()):
-            jar: SimpleCookie = SimpleCookie()
-            try:
-                jar.load(raw)
-            except CookieError:
-                continue
-            morsel = jar.get(CAPABILITY_COOKIE)
-            if morsel is not None:
-                presented.append(morsel.value)
-        return any(secrets.compare_digest(self._secret, value) for value in presented)
+            for pair in raw.split(";"):
+                name, separator, value = pair.strip().partition("=")
+                if separator and name == CAPABILITY_COOKIE:
+                    presented.append(value)
+        return any(secrets.compare_digest(self._secret, value.encode()) for value in presented)
 
     def cookie_header(self, ingress: IngressPolicy) -> str:
         """Return the Set-Cookie value scoping the secret to the browser-visible gateway path."""
         attributes = [
-            f"{CAPABILITY_COOKIE}={self._secret}",
+            f"{CAPABILITY_COOKIE}={self._secret.decode('ascii')}",
             f"Path={ingress.browser_base_path or '/'}",
             "HttpOnly",
             "SameSite=Strict",
