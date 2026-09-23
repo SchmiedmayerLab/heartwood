@@ -49,4 +49,13 @@ heartwood doctor
 Provider availability in the interface means the route is implemented and permitted by the active Heartwood policy.
 It does not establish that the provider, account, agreement, or deployment may receive a particular dataset.
 
+| Route | Destination of Project Content | Retention Governed By |
+|---|---|---|
+| **Run with Heartwood** | The inference server on the same compute | The deployment |
+| **Stanford AI API Gateway** | Stanford's gateway and its model providers | Stanford's agreements for the gateway |
+| **OpenAI API** or **Anthropic** | The provider's API | The provider's API terms and the account's data controls |
+| **Sign in with ChatGPT** | OpenAI through the subscription account | The subscription's terms |
+| **Other compatible service** | The configured service | The service operator |
+
+Heartwood also keeps session history in the project's private `.heartwood/` state; see [Projects and Private State](../start/project.md).
 Confirm institutional approval and data-use terms before sending controlled content to any model route.

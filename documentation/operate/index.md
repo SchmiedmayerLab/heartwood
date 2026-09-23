@@ -9,6 +9,7 @@ SPDX-License-Identifier: MIT
 This section is for platform operators and security reviewers.
 
 Read [Support and Compatibility](support.md) before selecting a release for a maintained deployment.
+For a group of researchers, [record a standard environment](#record-a-standard-environment) and [run a pilot evaluation](#run-a-pilot-evaluation) before a wider rollout.
 A Heartwood deployment combines a versioned application artifact with platform storage, identity, network, secret, compute, model-route, logging, and data-governance controls.
 
 ## Deployment Responsibilities
@@ -50,6 +51,7 @@ A platform adapter can advertise managed connections and credential backends.
 Operator-supplied model manifests define non-secret connection metadata, while platform policy defines allowed catalog and completion endpoints, credential references, capability tiers, and action-confirmation modes.
 
 Never add raw tokens to container layers, image labels, project configuration, command arguments, examples, or CI logs.
+The built-in Terra, Carina, and generic policies permit both action-review modes; a deployment that must forbid **Low-Risk Automation** needs a platform policy that omits it.
 Secret-backed routes require **Review Every Action** unless the active platform reports a live-qualified platform-isolated model credential boundary for that exact source.
 See [Security and Controlled Data](security.md#model-credential-isolation) for the distinction between application scrubbing and platform isolation.
 
@@ -75,3 +77,39 @@ Before real data, use a synthetic project to verify:
 13. signed checkpoint creation, external retention, independent verification, and synthetic restore.
 
 Record live validation evidence outside public user documentation and never include protected data in a fixture or transcript.
+
+## Record a Standard Environment
+
+When several researchers share one setup, keep one record of it with the deployment's operating documentation, outside every research project.
+Verify each researcher's environment against the record with the checks above before project data is added.
+
+| Record | Source |
+|---|---|
+| Release tag and verified digest | [Select an Artifact](#select-an-artifact) |
+| Platform image, compute shape, and storage | The platform guide, such as [Terra](../platforms/terra.md) |
+| Approved model routes | [Choose Where Models Run](../models/index.md#data-and-compliance-boundary) |
+| Action-review mode | [Actions and Audit History](../use/actions-audit.md) |
+| Signer profile and checkpoint retention | [Audit Checkpoints and Retention](audit-checkpoints.md) |
+| Analysis dependency lock | [Verify an Existing Analysis](../use/research-workflows.md#verify-an-existing-analysis) |
+| Owner and next update review | [Support and Compatibility](support.md#update-cadence) |
+
+## Run a Pilot Evaluation
+
+A pilot shows whether a small group of researchers can install, use, and trust one standard environment before a wider rollout.
+Use synthetic or approved non-sensitive data, keep the release pinned, and name a support contact.
+
+1. Agree on exit criteria before the first participant starts.
+2. Onboard each participant until they have made one action decision.
+3. Have every participant run the three [research workflows](../use/research-workflows.md) in order on the same synthetic inputs.
+4. Collect the evidence below, then list the changes a wider rollout or a second platform requires.
+
+| Question | Evidence |
+|---|---|
+| Could participants start? | Installation success and time to the first action decision |
+| Did the workflows complete and reproduce? | `heartwood experiments list --json` and the verification report |
+| Is the record intact? | `heartwood audit verify` |
+| What did support require? | Requests and time to resolution |
+| Would participants use it? | Structured feedback |
+
+Collect counts and outcomes, not prompts, project files, or session history.
+Report the results as live validation in that environment; see [Testing and Evidence](../architecture/testing.md#claims).

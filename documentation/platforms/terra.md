@@ -10,6 +10,7 @@ SPDX-License-Identifier: MIT
 The Heartwood Terra image extends Terra's Jupyter environment with the terminal agent, notebook bridge, verified Skills, and optional managed inference.
 
 Terra supports the Heartwood **terminal** and **notebook** interfaces.
+Operators preparing Terra for a group of researchers should also [record a standard environment](../operate/index.md#record-a-standard-environment).
 It does not currently expose a supported route to the Heartwood browser interface.
 
 This guide changes cloud compute and can incur charges.
@@ -92,6 +93,7 @@ The custom image already contains the tested command, notebook kernel, Skills, a
 ## Create a Project Directory
 
 Terra preserves files below `/home/jupyter` while the persistent disk is retained.
+Google Cloud encrypts persistent disks and workspace buckets at rest by default, and workspace sharing and Authorization Domains decide who can read workspace data.
 Create a dedicated child directory so the agent boundary does not include unrelated notebooks or files:
 
 ```bash
