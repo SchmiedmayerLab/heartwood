@@ -75,6 +75,10 @@ They are operator inputs rather than the normal researcher project-selection mec
 Heartwood otherwise checks `/etc/heartwood/checkpoint-signers.toml` and then the explicit workstation fallback at `~/.config/heartwood/checkpoint-signers.toml`.
 Registry scopes are not merged.
 
+`HEARTWOOD_GATEWAY_CAPABILITY` supplies the gateway's launch capability from a platform secret, for a proxy that sends it in the `X-Heartwood-Capability` header.
+The gateway keeps it out of the processes it starts and then prints no launch link.
+The gateway's initial environment remains readable by other processes of the same user, so use this route only when agent tools run under a different identity.
+
 Common examples include platform markers, `GOOGLE_PROJECT`, `CLUSTER_NAME`, Slurm variables, CUDA visibility, and provider credential bindings.
 Do not add these to shell history or documentation with real secret values.
 

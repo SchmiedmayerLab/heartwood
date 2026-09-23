@@ -47,6 +47,7 @@ nav = [
     ] },
     { "Operate Heartwood" = [
         { "Deployment Responsibilities" = "operate/index.md" },
+        { "Platform Contract" = "operate/platform-contract.md" },
         { "Audit Checkpoints and Retention" = "operate/audit-checkpoints.md" },
         { "Qualify Parallel Reviews" = "operate/parallel-reviews.md" },
         { "Support and Compatibility" = "operate/support.md" },
@@ -74,6 +75,7 @@ nav = [
         { "Development Guide" = "contribute/development.md" },
         { "Contribute Research Skills" = "contribute/skills.md" },
         { "Documentation Guide" = "contribute/documentation.md" },
+        { "Visual Identity" = "contribute/visual-identity.md" },
         { "Release Guide" = "contribute/releases.md" },
     ] },
 ]
@@ -89,6 +91,8 @@ provider = "mike"
 alias = true
 
 [project.theme]
+logo = "assets/brand/heartwood-mark.svg"
+favicon = "assets/brand/heartwood-favicon.svg"
 features = [
     "content.code.copy",
     "navigation.footer",
@@ -103,7 +107,6 @@ features = [
 ]
 
 [project.theme.icon]
-logo = "lucide/trees"
 repo = "fontawesome/brands/github"
 
 [[project.theme.palette]]

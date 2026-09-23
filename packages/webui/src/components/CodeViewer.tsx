@@ -6,9 +6,11 @@
  * SPDX-License-Identifier: MIT
  */
 
+import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { languages } from "@codemirror/language-data";
 import { MergeView } from "@codemirror/merge";
 import { EditorState, type Extension } from "@codemirror/state";
+import { tags } from "@lezer/highlight";
 import { EditorView, minimalSetup } from "codemirror";
 import { useEffect, useRef } from "react";
 
@@ -23,8 +25,38 @@ interface DiffViewerProps {
   path: string;
 }
 
+const themeHighlightStyle = HighlightStyle.define([
+  {
+    tag: [tags.propertyName, tags.attributeName],
+    color: "var(--code-property)",
+  },
+  {
+    tag: [tags.string, tags.special(tags.string)],
+    color: "var(--code-string)",
+  },
+  {
+    tag: [tags.number, tags.bool, tags.null, tags.atom],
+    color: "var(--code-constant)",
+  },
+  {
+    tag: [tags.keyword, tags.operatorKeyword, tags.definitionKeyword],
+    color: "var(--code-keyword)",
+  },
+  {
+    tag: [tags.function(tags.variableName), tags.typeName],
+    color: "var(--code-function)",
+  },
+  {
+    tag: [tags.comment, tags.meta],
+    color: "var(--color-muted-foreground)",
+    fontStyle: "italic",
+  },
+  { tag: [tags.punctuation, tags.bracket], color: "var(--code-punctuation)" },
+]);
+
 const readOnlyExtensions = (label: string): Extension[] => [
   minimalSetup,
+  syntaxHighlighting(themeHighlightStyle),
   EditorState.readOnly.of(true),
   EditorView.editable.of(false),
   EditorView.contentAttributes.of({ "aria-label": label }),
@@ -138,7 +170,12 @@ export const DiffViewer = ({ modified, original, path }: DiffViewerProps) => {
   return (
     <div
       aria-label={`Read-only change: ${path}`}
-      className="code-viewer diff-viewer"
+      className={
+        original.length === 0 ? "code-viewer diff-viewer added"
+        : modified.length === 0 ?
+          "code-viewer diff-viewer removed"
+        : "code-viewer diff-viewer"
+      }
       ref={parentRef}
       role="region"
     />

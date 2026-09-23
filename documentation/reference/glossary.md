@@ -60,6 +60,9 @@ SPDX-License-Identifier: MIT
 **Ed25519**
 : A public-key signature algorithm supported by Heartwood checkpoint signers and used by the explicit local fallback.
 
+**Global Alliance for Genomics and Health (GA4GH)**
+: A standards organization whose interfaces include the Task Execution Service, Workflow Execution Service, and Data Repository Service used by research platforms.
+
 **GGUF**
 : A single-file model format commonly used with llama.cpp and quantized CPU inference.
 
@@ -84,8 +87,14 @@ SPDX-License-Identifier: MIT
 **Key management service (KMS)**
 : A managed service that controls cryptographic keys and performs authorized operations such as checkpoint signing without exposing private key material to Heartwood.
 
+**Launch capability**
+: The process-lifetime secret that every Heartwood gateway API request, event stream, and WebSocket must carry, delivered through a one-time launch link or a platform proxy header.
+
 **Large language model (LLM)**
 : The model used by the agent to interpret requests, reason, produce text, and propose tools.
+
+**Model Context Protocol (MCP)**
+: An open protocol through which an agent discovers and calls tools that an external service provides.
 
 **Model credential boundary**
 : The technical separation, or documented lack of separation, between provider authentication used for model calls and the operating-system identity that runs agent tools.

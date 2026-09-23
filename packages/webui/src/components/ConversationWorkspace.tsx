@@ -11,8 +11,6 @@ import { Button } from "@schmiedmayerlab/grove-design-system/components/Button";
 import { Textarea } from "@schmiedmayerlab/grove-design-system/components/Textarea";
 import { Tooltip } from "@schmiedmayerlab/grove-design-system/components/Tooltip";
 import {
-  Ban,
-  Check,
   CircleCheck,
   CirclePause,
   CirclePlay,
@@ -23,7 +21,6 @@ import {
   MessageSquareText,
   Send,
   Settings,
-  ShieldAlert,
   TerminalSquare,
 } from "lucide-react";
 import { useEffect, useRef, useState, type RefObject } from "react";
@@ -50,7 +47,6 @@ import {
 
 interface ConversationWorkspaceProps {
   conversationEndRef: RefObject<HTMLDivElement | null>;
-  actionModeLabel: string | null;
   actionPresentation: ActionPresentation | null;
   modelConfigured: boolean;
   modelMessage: string;
@@ -70,7 +66,6 @@ interface ConversationWorkspaceProps {
 
 export const ConversationWorkspace = ({
   conversationEndRef,
-  actionModeLabel,
   actionPresentation,
   modelConfigured,
   modelMessage,
@@ -172,7 +167,6 @@ export const ConversationWorkspace = ({
       <div className="composer-area">
         {pendingApproval ?
           <ApprovalRequest
-            actionModeLabel={actionModeLabel}
             actionPresentation={actionPresentation}
             approval={pendingApproval}
             canApprove={availableCommands.includes("approve")}
@@ -443,76 +437,85 @@ const ActionHistory = ({
   if (actions.length === 0) return null;
   return (
     <section aria-label="Agent actions" className="action-history">
-      <h2>Agent actions</h2>
+      <h2>
+        Agent actions <span>{actions.length}</span>
+      </h2>
       <ol>
         {actions.map((action) => {
           const risk = actionRiskPresentation(action.risk, actionPresentation);
           const tool = actionToolLabel(action.toolName, actionPresentation);
           return (
-            <li key={action.toolCallId}>
-              <ActionStateIcon state={action.state} />
-              <div>
-                <div className="action-history-heading">
-                  <strong>{displaySafeText(actionHeading(action))}</strong>
-                  <Badge variant="secondary">
-                    {actionStateLabel(action.state, actionPresentation)}
-                  </Badge>
-                </div>
-                <div className="approval-action-meta">
-                  <span>{tool}</span>
+            <li key={action.toolCallId} data-state={action.state}>
+              <details
+                className="action-row"
+                open={action.state === "failed" || undefined}
+              >
+                <summary>
+                  <ActionStateIcon state={action.state} />
+                  <strong className="action-row-title">
+                    {displaySafeText(actionHeading(action))}
+                  </strong>
+                  <span className="action-row-tool">{tool}</span>
                   <Badge className={risk.className} variant="outline">
                     {risk.label}
                   </Badge>
-                  {action.outcome !== null ?
-                    <span>
-                      Exit {action.outcome.exitCode} ·{" "}
-                      {displaySafeText(action.outcome.summary)}
-                    </span>
-                  : null}
-                  {action.groupId !== null ?
-                    <span>
-                      Complete action set ·{" "}
-                      {action.decision ?? "decision pending"}
-                    </span>
-                  : action.decision !== null ?
-                    <span>{action.decision} by automatic policy</span>
-                  : null}
-                </div>
-                {action.affectedPaths.length > 0 ?
-                  <p>
-                    {displaySafeText(
-                      action.affectedPaths
-                        .map(
-                          (path) =>
-                            `${path.effect}: ${path.path} (${path.provenance})`,
-                        )
-                        .join(", "),
-                    )}
-                  </p>
-                : null}
-                {Object.keys(action.arguments).length > 0 ?
-                  <details className="trace-details">
-                    <summary>Exact arguments</summary>
-                    <pre tabIndex={0}>
+                  <Badge className="action-row-state" variant="secondary">
+                    {actionStateLabel(action.state, actionPresentation)}
+                  </Badge>
+                </summary>
+                <div className="action-row-details">
+                  <div className="approval-action-meta">
+                    {action.outcome !== null ?
+                      <span>
+                        Exit {action.outcome.exitCode} ·{" "}
+                        {displaySafeText(action.outcome.summary)}
+                      </span>
+                    : null}
+                    {action.groupId !== null ?
+                      <span>
+                        Complete action set ·{" "}
+                        {action.decision ?? "decision pending"}
+                      </span>
+                    : action.decision !== null ?
+                      <span>{action.decision} by automatic policy</span>
+                    : null}
+                  </div>
+                  {action.affectedPaths.length > 0 ?
+                    <p>
                       {displaySafeText(
-                        JSON.stringify(action.arguments, null, 2),
+                        action.affectedPaths
+                          .map(
+                            (path) =>
+                              `${path.effect}: ${path.path} (${path.provenance})`,
+                          )
+                          .join(", "),
                       )}
-                    </pre>
-                  </details>
-                : null}
-                {action.outcome?.result ?
-                  <details className="trace-details">
-                    <summary>
-                      Action output
-                      {action.outcome.resultTruncated ? " (truncated)" : ""}
-                    </summary>
-                    <pre tabIndex={0}>
-                      {displaySafeText(action.outcome.result)}
-                    </pre>
-                  </details>
-                : null}
-                <ActionTechnicalDetails action={action} />
-              </div>
+                    </p>
+                  : null}
+                  {Object.keys(action.arguments).length > 0 ?
+                    <details className="trace-details">
+                      <summary>Exact arguments</summary>
+                      <pre tabIndex={0}>
+                        {displaySafeText(
+                          JSON.stringify(action.arguments, null, 2),
+                        )}
+                      </pre>
+                    </details>
+                  : null}
+                  {action.outcome?.result ?
+                    <details className="trace-details">
+                      <summary>
+                        Action output
+                        {action.outcome.resultTruncated ? " (truncated)" : ""}
+                      </summary>
+                      <pre tabIndex={0}>
+                        {displaySafeText(action.outcome.result)}
+                      </pre>
+                    </details>
+                  : null}
+                  <ActionTechnicalDetails action={action} />
+                </div>
+              </details>
             </li>
           );
         })}
@@ -595,6 +598,21 @@ const RuntimeStatus = ({
   const totalTokens =
     (projection.usage?.promptTokens ?? 0) +
     (projection.usage?.completionTokens ?? 0);
+  const summary = [
+    ...(projection.taskPlan.length > 0 ?
+      [`Plan: ${completedTasks} of ${projection.taskPlan.length} complete`]
+    : []),
+    ...(projection.usage ? [`${totalTokens.toLocaleString()} tokens`]
+    : projection.usageByPurpose.length > 0 ? ["Model activity"]
+    : []),
+    ...(projection.subagents.length > 0 ?
+      [
+        `${projection.subagents.length} ${
+          projection.subagents.length === 1 ? "specialist" : "specialists"
+        }`,
+      ]
+    : []),
+  ];
   return (
     <section aria-label="Agent status" className="runtime-status" role="status">
       <div className="runtime-status-heading">
@@ -602,113 +620,117 @@ const RuntimeStatus = ({
           <LoaderCircle
             aria-hidden="true"
             className="request-activity-icon"
-            size={16}
+            size={15}
           />
-        : <ListChecks aria-hidden="true" size={16} />}
+        : <ListChecks aria-hidden="true" size={15} />}
         <strong>{displaySafeText(projection.researcherStatus.label)}</strong>
+        <p>{displaySafeText(projection.researcherStatus.detail)}</p>
       </div>
-      <p>{displaySafeText(projection.researcherStatus.detail)}</p>
-      {projection.taskPlan.length > 0 ?
-        <details>
-          <summary>
-            Plan: {completedTasks} of {projection.taskPlan.length} complete
-          </summary>
-          <ol>
-            {projection.taskPlan.map((task, index) => (
-              // OpenHands task projections do not expose a stable task identifier.
-              // eslint-disable-next-line @eslint-react/no-array-index-key
-              <li key={`${index}-${task.title}`}>
-                <span>{displaySafeText(task.title)}</span>
-                <small>{displaySafeText(task.statusLabel)}</small>
-              </li>
-            ))}
-          </ol>
-        </details>
-      : null}
-      <div className="runtime-status-metrics">
-        {projection.usage ?
-          <span>
-            {totalTokens.toLocaleString()} tokens ·{" "}
-            {displaySafeText(projection.usage.modelName)}
-            {projection.usage.contextWindow === null ?
-              ""
-            : ` · ${projection.usage.contextWindow.toLocaleString()} context limit`
-            }
-            {projection.usage.accumulatedCost <= 0 ?
-              ""
-            : ` · $${projection.usage.accumulatedCost.toFixed(2)} reported cost`
-            }
-            {` · ${projection.usage.callCount.toLocaleString()} calls`}
-          </span>
-        : null}
-      </div>
-      {projection.usageByPurpose.length > 0 ?
-        <details>
-          <summary>Model activity</summary>
-          <ul>
-            {projection.usageByPurpose.map((usage) => (
-              <li key={usage.usageId}>
-                <span>{displaySafeText(usage.purposeLabel)}</span>
-                <small>
-                  {usage.callCount.toLocaleString()} calls ·{" "}
-                  {(
-                    usage.promptTokens + usage.completionTokens
-                  ).toLocaleString()}{" "}
-                  tokens
-                </small>
-              </li>
-            ))}
-          </ul>
-        </details>
-      : null}
-      {projection.subagents.length > 0 ?
-        <details className="runtime-subagents">
-          <summary>
-            {projection.subagents.length}{" "}
-            {projection.subagents.length === 1 ? "specialist" : "specialists"}
-          </summary>
-          <ul>
-            {projection.subagents.map((subagent) => (
-              <li key={subagent.invocationId}>
-                <span>
-                  {displaySafeText(subagent.roleLabel)} (
-                  {displaySafeText(subagent.statusLabel)})
-                </span>
-                {subagent.taskSummary ?
-                  <small>Task: {displaySafeText(subagent.taskSummary)}</small>
-                : null}
-                {subagent.resultSummary ?
-                  <small>
-                    Result: {displaySafeText(subagent.resultSummary)}
-                  </small>
-                : null}
-                {subagent.reviewProposals?.candidates.length ?
-                  <details>
-                    <summary>Unverified review proposals</summary>
-                    <ul>
-                      {subagent.reviewProposals.candidates.map((candidate) => (
-                        <li key={candidate.candidate_id}>
-                          {displaySafeText(candidate.summary)}
-                        </li>
-                      ))}
-                    </ul>
-                  </details>
-                : null}
-                <details className="trace-details">
-                  <summary>Technical details</summary>
-                  <pre tabIndex={0}>
-                    {displaySafeText(
-                      [
-                        `Invocation: ${subagent.invocationId}`,
-                        `Parent session: ${subagent.parentSessionId}`,
-                        `Parent action: ${subagent.parentActionId}`,
-                      ].join("\n"),
-                    )}
-                  </pre>
-                </details>
-              </li>
-            ))}
-          </ul>
+      {summary.length > 0 ?
+        <details className="runtime-status-details">
+          <summary>{summary.join(" · ")}</summary>
+          {projection.taskPlan.length > 0 ?
+            <section aria-label="Plan">
+              <h3>Plan</h3>
+              <ol>
+                {projection.taskPlan.map((task, index) => (
+                  // OpenHands task projections do not expose a stable task identifier.
+                  // eslint-disable-next-line @eslint-react/no-array-index-key
+                  <li data-status={task.status} key={`${index}-${task.title}`}>
+                    <span>{displaySafeText(task.title)}</span>
+                    <small>{displaySafeText(task.statusLabel)}</small>
+                  </li>
+                ))}
+              </ol>
+            </section>
+          : null}
+          {projection.usage !== null || projection.usageByPurpose.length > 0 ?
+            <section aria-label="Model activity">
+              <h3>Model activity</h3>
+              {projection.usage ?
+                <p className="runtime-status-metrics">
+                  {totalTokens.toLocaleString()} tokens ·{" "}
+                  {displaySafeText(projection.usage.modelName)}
+                  {projection.usage.contextWindow === null ?
+                    ""
+                  : ` · ${projection.usage.contextWindow.toLocaleString()} context limit`
+                  }
+                  {projection.usage.accumulatedCost <= 0 ?
+                    ""
+                  : ` · $${projection.usage.accumulatedCost.toFixed(2)} reported cost`
+                  }
+                  {` · ${projection.usage.callCount.toLocaleString()} calls`}
+                </p>
+              : null}
+              {projection.usageByPurpose.length > 0 ?
+                <ul>
+                  {projection.usageByPurpose.map((usage) => (
+                    <li key={usage.usageId}>
+                      <span>{displaySafeText(usage.purposeLabel)}</span>
+                      <small>
+                        {usage.callCount.toLocaleString()} calls ·{" "}
+                        {(
+                          usage.promptTokens + usage.completionTokens
+                        ).toLocaleString()}{" "}
+                        tokens
+                      </small>
+                    </li>
+                  ))}
+                </ul>
+              : null}
+            </section>
+          : null}
+          {projection.subagents.length > 0 ?
+            <section aria-label="Specialists" className="runtime-subagents">
+              <h3>Specialists</h3>
+              <ul>
+                {projection.subagents.map((subagent) => (
+                  <li key={subagent.invocationId}>
+                    <span>
+                      {displaySafeText(subagent.roleLabel)} (
+                      {displaySafeText(subagent.statusLabel)})
+                    </span>
+                    {subagent.taskSummary ?
+                      <small>
+                        Task: {displaySafeText(subagent.taskSummary)}
+                      </small>
+                    : null}
+                    {subagent.resultSummary ?
+                      <small>
+                        Result: {displaySafeText(subagent.resultSummary)}
+                      </small>
+                    : null}
+                    {subagent.reviewProposals?.candidates.length ?
+                      <details className="trace-details">
+                        <summary>Unverified review proposals</summary>
+                        <ul>
+                          {subagent.reviewProposals.candidates.map(
+                            (candidate) => (
+                              <li key={candidate.candidate_id}>
+                                {displaySafeText(candidate.summary)}
+                              </li>
+                            ),
+                          )}
+                        </ul>
+                      </details>
+                    : null}
+                    <details className="trace-details">
+                      <summary>Technical details</summary>
+                      <pre tabIndex={0}>
+                        {displaySafeText(
+                          [
+                            `Invocation: ${subagent.invocationId}`,
+                            `Parent session: ${subagent.parentSessionId}`,
+                            `Parent action: ${subagent.parentActionId}`,
+                          ].join("\n"),
+                        )}
+                      </pre>
+                    </details>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          : null}
         </details>
       : null}
     </section>
@@ -716,7 +738,6 @@ const RuntimeStatus = ({
 };
 
 const ApprovalRequest = ({
-  actionModeLabel,
   actionPresentation,
   approval,
   busy,
@@ -724,7 +745,6 @@ const ApprovalRequest = ({
   canDeny,
   onDecision,
 }: {
-  actionModeLabel: string | null;
   actionPresentation: ActionPresentation | null;
   approval: ProjectionApprovalGroup;
   busy: boolean;
@@ -751,28 +771,17 @@ const ApprovalRequest = ({
     >
       <div className="approval-copy">
         <div className="approval-introduction">
-          <span className="approval-icon" aria-hidden="true">
-            <ShieldAlert size={18} />
-          </span>
-          <div>
-            <div className="approval-heading">
-              <small>Action Review</small>
-              <Badge variant="secondary">{countLabel}</Badge>
-              {actionModeLabel ?
-                <span>Paused by {actionModeLabel}</span>
-              : null}
-            </div>
-            <h2 id="action-review-heading" ref={headingRef} tabIndex={-1}>
-              One Decision for This Action Set
-            </h2>
-            <p>
-              These actions were proposed together. Allowing runs every action
-              once; rejecting runs none of them.
-            </p>
-          </div>
+          <h2 id="action-review-heading" ref={headingRef} tabIndex={-1}>
+            Review {countLabel}
+          </h2>
+          <p>
+            {approval.actions.length === 1 ?
+              "Allow runs it once. Reject skips it."
+            : "Allow runs all of them once. Reject runs none."}
+          </p>
         </div>
         <ol className="approval-batch-list" role="list">
-          {approval.actions.map((control, index) => {
+          {approval.actions.map((control) => {
             const risk = actionRiskPresentation(
               control.risk,
               actionPresentation,
@@ -782,54 +791,56 @@ const ApprovalRequest = ({
               control.details.kind === "task" ? control.details : null;
             return (
               <li key={control.toolCallId}>
-                <span className="approval-action-index" aria-hidden="true">
-                  {index + 1}
-                </span>
-                <div className="approval-action-content">
+                <div className="approval-action-heading">
                   <strong>
                     {displaySafeText(
                       specialist?.roleLabel ??
                         (control.summary.length > 0 ? control.summary : tool),
                     )}
                   </strong>
-                  <div className="approval-action-meta">
-                    <span>{tool}</span>
-                    {specialist?.capability ?
-                      <span>
-                        {specialist.capability === "advisory" ?
-                          "Advisory review"
-                        : "Project actions"}
-                      </span>
-                    : null}
-                    <Badge className={risk.className} variant="outline">
-                      {risk.label}
-                    </Badge>
-                  </div>
-                  {specialist?.prompt ?
-                    <p className="approval-action-objective">
-                      {displaySafeText(specialist.prompt)}
-                    </p>
-                  : null}
-                  {Object.keys(control.arguments).length > 0 ?
-                    <details className="approval-details">
-                      <summary>Review Exact Arguments</summary>
-                      <pre tabIndex={0} aria-label={`Arguments for ${tool}`}>
-                        {displaySafeText(
-                          JSON.stringify(control.arguments, null, 2),
-                        )}
-                      </pre>
-                    </details>
+                  <Badge className={risk.className} variant="outline">
+                    {risk.label}
+                  </Badge>
+                </div>
+                <div className="approval-action-meta">
+                  <span>{tool}</span>
+                  {specialist?.capability ?
+                    <span>
+                      {specialist.capability === "advisory" ?
+                        "Advisory review"
+                      : "Project actions"}
+                    </span>
                   : null}
                 </div>
+                {specialist?.prompt ?
+                  <p className="approval-action-objective">
+                    {displaySafeText(specialist.prompt)}
+                  </p>
+                : null}
+                {(
+                  control.details.kind === "terminal" ||
+                  control.details.kind === "file-editor"
+                ) ?
+                  <code className="approval-action-command">
+                    {displaySafeText(actionHeading(control))}
+                  </code>
+                : null}
+                {Object.keys(control.arguments).length > 0 ?
+                  <details className="approval-details">
+                    <summary>Exact arguments</summary>
+                    <pre tabIndex={0} aria-label={`Arguments for ${tool}`}>
+                      {displaySafeText(
+                        JSON.stringify(control.arguments, null, 2),
+                      )}
+                    </pre>
+                  </details>
+                : null}
               </li>
             );
           })}
         </ol>
       </div>
       <div className="approval-actions">
-        <span>
-          Your decision applies to all <strong>{countLabel}</strong>.
-        </span>
         <Button
           aria-label={`Reject ${countLabel}`}
           disabled={busy || !canDeny}
@@ -837,7 +848,6 @@ const ApprovalRequest = ({
           variant="outline"
           onClick={() => onDecision("deny", approval)}
         >
-          <Ban size={16} />
           {rejectLabel}
         </Button>
         <Button
@@ -846,7 +856,6 @@ const ApprovalRequest = ({
           size="sm"
           onClick={() => onDecision("approve", approval)}
         >
-          <Check size={16} />
           {allowLabel}
         </Button>
       </div>

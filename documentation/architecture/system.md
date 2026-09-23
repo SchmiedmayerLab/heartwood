@@ -22,7 +22,13 @@ flowchart LR
     Adapter --> Model["Research-environment, hosted, compatible-service, or Heartwood-managed model"]
     Adapter --> Tools["OpenHands coding tools"]
     Gateway --> Audit["Session events and audit chain"]
+    classDef heartwood fill:#0b694d26,stroke:#2b8268
+    classDef platform fill:#3f5b7426,stroke:#6f8fae
+    class CLI,Web,Ingress,Notebook,Gateway,Project,Policy,Skills,Adapter,Tools,Audit heartwood
+    class Model platform
 ```
+
+Green marks what Heartwood owns and blue marks what the research environment or model provider supplies, as in the [Platform Contract](../operate/platform-contract.md).
 
 ## Shared Contracts
 
@@ -215,6 +221,7 @@ The terminal, REST API, browser, and notebook bridge adapt this service without 
 `IngressPolicy` is the transport boundary for HTTP and WebSocket requests.
 It models direct loopback, a local Jupyter proxy, and an explicitly trusted proxy with one canonical external origin and base path.
 It rejects undeclared non-loopback exposure, untrusted forwarding metadata, origin and host mismatches, duplicate security headers, and ambiguous paths before the REST, streaming, or static-asset adapters see a route.
+Every REST, server-sent event, and WebSocket request must also carry the process-lifetime [launch capability](../operate/security.md#launch-capability), and the gateway derives the command actor from it rather than from the request.
 
 The browser reads its base path from server-injected non-secret metadata.
 It does not derive platform proxy paths or reduce gateway events itself.

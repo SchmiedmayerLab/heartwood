@@ -14,10 +14,10 @@ import {
   Download,
   Plus,
   Settings,
-  Sprout,
   UsersRound,
 } from "lucide-react";
 import type { SessionSummary } from "../types";
+import { HeartwoodMark } from "./HeartwoodMark";
 
 export type UtilityPanel =
   "action-review" | "activity" | "settings" | "skills" | "specialists" | null;
@@ -50,7 +50,7 @@ export const SessionRailContent = ({
   <div className="session-rail-content">
     <div className="brand-lockup">
       <span className="brand-mark" aria-hidden="true">
-        <Sprout size={18} />
+        <HeartwoodMark size={20} />
       </span>
       <strong>Heartwood</strong>
     </div>

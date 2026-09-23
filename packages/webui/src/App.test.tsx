@@ -3392,9 +3392,7 @@ describe("App", () => {
     const allow = await screen.findByLabelText("Allow 1 action once");
     const reject = screen.getByLabelText("Reject 1 action");
     expect(
-      screen.getByText(
-        "These actions were proposed together. Allowing runs every action once; rejecting runs none of them.",
-      ),
+      screen.getByText("Allow runs it once. Reject skips it."),
     ).toBeVisible();
 
     fireEvent.click(allow);
@@ -3417,24 +3415,24 @@ describe("App", () => {
     render(<App client={client} initialSessionId="session-test" />);
 
     const heading = await screen.findByRole("heading", {
-      name: "One Decision for This Action Set",
+      name: "Review 2 actions",
     });
     expect(heading).toBeVisible();
     expect(heading).toHaveFocus();
+    const approval = screen.getByRole("region", { name: "Review 2 actions" });
+    expect(within(approval).getByRole("list")).toBeVisible();
     expect(
-      within(
-        screen.getByRole("region", {
-          name: "One Decision for This Action Set",
-        }),
-      ).getByRole("list"),
+      within(approval).getByText(
+        "Allow runs all of them once. Reject runs none.",
+      ),
     ).toBeVisible();
-    expect(screen.getAllByText("2 actions", { exact: true })).toHaveLength(2);
     expect(screen.getByText("Not Classified")).toBeVisible();
     expect(
       screen.getByRole("button", { name: "Allow 2 actions once" }),
     ).toBeVisible();
 
-    const argumentDisclosure = screen.getAllByText("Review Exact Arguments")[0];
+    const argumentDisclosure =
+      within(approval).getAllByText("Exact arguments")[0];
     if (!argumentDisclosure)
       throw new Error("action argument disclosure is missing");
     argumentDisclosure.focus();

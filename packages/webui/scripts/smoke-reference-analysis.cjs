@@ -412,7 +412,7 @@ async function runApprovedTask(page, task, taskSpec) {
   const approvalSummaries = taskSpec.approvalSummaries ?? [taskSpec.summary];
   for (const [index, summary] of approvalSummaries.entries()) {
     const approval = page
-      .getByRole("region", { name: "One Decision for This Action Set" })
+      .getByRole("region", { name: /^Review \d+ actions?$/u })
       .last();
     await expect(approval).toBeVisible({ timeout: 60_000 });
     await expect(approval.getByText(summary, { exact: true })).toBeVisible();
@@ -568,7 +568,7 @@ async function inspectProjectEvidence(page) {
     page.getByRole("region", {
       name: "Read-only change: cohort-summary.json",
     }),
-  ).toContainText('"target_condition_concept_id": 201826');
+  ).toContainText('"target_condition_concept_id": 201826', { timeout: 30_000 });
   await captureDesktopScreenshots(
     page,
     "browser-changes.png",
@@ -592,12 +592,72 @@ async function captureDesktopScreenshots(page, filename, stateName) {
     await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
     const themedFilename = filename.replace(/\.png$/u, `-${theme}.png`);
     const screenshotPath = path.join(screenshotDirectory, themedFilename);
-    await page.screenshot({ animations: "disabled", path: screenshotPath });
+    const capture = await page.screenshot({ animations: "disabled" });
+    await writeBrowserFrame(page, capture, theme, screenshotPath);
     if (fs.statSync(screenshotPath).size < 1_000) {
       throw new Error(
         `reference screenshot is unexpectedly small: ${screenshotPath}`,
       );
     }
+  }
+}
+
+const browserFrameThemes = {
+  light: {
+    address: "#ffffff",
+    addressText: "#6e6e73",
+    border: "#d9d9de",
+    chrome: "#efeff1",
+    shadow: "0 24px 60px rgb(0 0 0 / 14%), 0 6px 18px rgb(0 0 0 / 8%)",
+  },
+  dark: {
+    address: "#0f0f10",
+    addressText: "#98989d",
+    border: "#2c2c2f",
+    chrome: "#1c1c1e",
+    shadow: "0 24px 60px rgb(0 0 0 / 55%), 0 6px 18px rgb(0 0 0 / 35%)",
+  },
+};
+
+async function writeBrowserFrame(page, capture, theme, screenshotPath) {
+  const colors = browserFrameThemes[theme];
+  const width = capture.readUInt32BE(16);
+  const height = capture.readUInt32BE(20);
+  const framePage = await page
+    .context()
+    .browser()
+    .newPage({ viewport: { width: width + 200, height: height + 300 } });
+  try {
+    await framePage.setContent(`<!doctype html><html><head><style>
+      html, body { margin: 0; background: transparent; }
+      .stage { display: inline-block; padding: 40px 48px 64px; }
+      .window { width: ${width}px; overflow: hidden; border: 1px solid ${colors.border};
+        border-radius: 12px; background: ${colors.chrome}; box-shadow: ${colors.shadow}; }
+      .bar { display: flex; height: 44px; align-items: center; gap: 16px; padding: 0 16px;
+        border-bottom: 1px solid ${colors.border}; }
+      .dots { display: flex; gap: 8px; }
+      .dots span { display: block; width: 12px; height: 12px; border-radius: 50%; }
+      .address { display: flex; flex: 1; max-width: 520px; height: 28px; margin: 0 auto;
+        align-items: center; justify-content: center; border-radius: 8px;
+        background: ${colors.address}; color: ${colors.addressText};
+        font: 13px -apple-system, "Segoe UI", Inter, sans-serif; }
+      .spacer { width: 52px; }
+      img { display: block; width: ${width}px; height: ${height}px; }
+    </style></head><body><div class="stage"><div class="window">
+      <div class="bar">
+        <div class="dots"><span style="background:#e0625a"></span><span style="background:#e5b447"></span><span style="background:#5fb562"></span></div>
+        <div class="address">heartwood</div>
+        <div class="spacer"></div>
+      </div>
+      <img alt="" src="data:image/png;base64,${capture.toString("base64")}">
+    </div></div></body></html>`);
+    await framePage.locator(".stage").screenshot({
+      animations: "disabled",
+      omitBackground: true,
+      path: screenshotPath,
+    });
+  } finally {
+    await framePage.close();
   }
 }
 

@@ -20,6 +20,7 @@ from textual import work
 from textual.app import App, ComposeResult, SystemCommand
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen, Screen
+from textual.theme import Theme
 from textual.timer import Timer
 from textual.widgets import (
     Footer,
@@ -35,6 +36,7 @@ from textual.widgets import (
 from textual.widgets.option_list import Option
 from textual.widgets.tree import TreeNode
 
+from heartwood.cli._brand import DARK, LIGHT, PROGRESS_FRAMES, progress_line
 from heartwood.cli._interactive import (
     InteractionActivity,
     InteractionResult,
@@ -70,6 +72,36 @@ from heartwood.schemas import (
     WorkspaceTreeResponse,
 )
 from heartwood.schemas.workflows import WorkflowRequest
+
+HEARTWOOD_DARK_THEME = Theme(
+    name="heartwood-dark",
+    primary=DARK.primary,
+    secondary=DARK.muted_foreground,
+    accent="#7ad8b0",
+    warning=DARK.warning,
+    error="#f27368",
+    success="#4dd29c",
+    foreground=DARK.foreground,
+    background=DARK.surface,
+    surface="#121213",
+    panel="#1c1c1e",
+    dark=True,
+)
+
+HEARTWOOD_LIGHT_THEME = Theme(
+    name="heartwood-light",
+    primary=LIGHT.primary,
+    secondary=LIGHT.muted_foreground,
+    accent="#0a5a42",
+    warning=LIGHT.warning,
+    error="#b42318",
+    success="#12805c",
+    foreground=LIGHT.foreground,
+    background="#ffffff",
+    surface=LIGHT.surface,
+    panel="#f5f5f7",
+    dark=False,
+)
 
 
 class ActionModeScreen(ModalScreen[str | None]):
@@ -257,6 +289,9 @@ class HeartwoodTerminalApp(App[None]):
         session: InteractiveSession,
     ) -> None:
         super().__init__()
+        for theme in (HEARTWOOD_DARK_THEME, HEARTWOOD_LIGHT_THEME):
+            self.register_theme(theme)
+        self.theme = HEARTWOOD_DARK_THEME.name
         self.session = session
         self._busy = False
         self._busy_started = 0.0
@@ -555,14 +590,14 @@ class HeartwoodTerminalApp(App[None]):
         )
         if not self._busy and not runtime_running:
             return
-        frames = (".  ", ".. ", "...") if self._animations_enabled else ("...",)
+        frames = PROGRESS_FRAMES if self._animations_enabled else ("...",)
         marker = frames[self._frame % len(frames)]
         self._frame += 1
         elapsed = int(time.monotonic() - self._busy_started)
         if elapsed < 10:
-            message = f"{self._activity.label}{marker}"
+            message = progress_line(self._activity.label, marker)
         else:
-            message = f"{self._activity.waiting_label}{marker} · {elapsed}s elapsed"
+            message = f"{progress_line(self._activity.waiting_label, marker)} · {elapsed}s elapsed"
             if not self._guidance_shown:
                 self._guidance_shown = True
                 self.notify(self._activity.guidance, title="Still working", timeout=6)

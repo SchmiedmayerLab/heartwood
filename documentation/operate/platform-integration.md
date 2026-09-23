@@ -10,6 +10,7 @@ A platform integration adapts storage, identity, scheduler, browser routing, mod
 Do not add a platform-specific agent loop or separate web/CLI state.
 
 The adapter implements `PlatformCapabilities`; `SessionGateway` remains the application boundary for every supported interface.
+Start from the [Platform Contract](platform-contract.md), which defines what Heartwood and the platform each own and what the platform provides.
 
 ## Define Capabilities
 

@@ -8,7 +8,12 @@ SPDX-License-Identifier: MIT
 
 -->
 
-# Heartwood
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="documentation/assets/brand/heartwood-hero-dark.svg">
+    <img alt="Heartwood" src="documentation/assets/brand/heartwood-hero-light.svg">
+  </picture>
+</h1>
 
 [![Build and Test](https://github.com/SchmiedmayerLab/heartwood/actions/workflows/main-validation.yml/badge.svg)](https://github.com/SchmiedmayerLab/heartwood/actions/workflows/main-validation.yml)
 [![REUSE status](https://api.reuse.software/badge/github.com/SchmiedmayerLab/heartwood)](https://api.reuse.software/info/github.com/SchmiedmayerLab/heartwood)

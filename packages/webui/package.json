@@ -27,9 +27,11 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@codemirror/language": "6.12.4",
     "@codemirror/language-data": "6.5.2",
     "@codemirror/merge": "6.12.2",
     "@codemirror/state": "6.7.1",
+    "@lezer/highlight": "1.2.3",
     "@schmiedmayerlab/grove-design-system": "0.1.1",
     "@tanstack/react-query": "5.101.4",
     "codemirror": "6.0.2",
