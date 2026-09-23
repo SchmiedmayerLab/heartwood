@@ -395,7 +395,7 @@ class WorkspaceInspector:
         """Return Git changes or explicit structured session-derived changes."""
         git_error, repository_error = _git_error_types()
         try:
-            with _openhands_git_context():
+            with _openhands_git_context(self.project.root):
                 git_changes = self._openhands_workspace().git_changes(".")
         except repository_error:
             return self._session_changes(projection)
@@ -557,7 +557,7 @@ class WorkspaceInspector:
             )
         git_error, _ = _git_error_types()
         try:
-            with _openhands_git_context():
+            with _openhands_git_context(self.project.root):
                 diff = self._openhands_workspace().git_diff(display_path)
         except (git_error, OSError):
             return self._diff_response(
@@ -618,7 +618,7 @@ class WorkspaceInspector:
 
         git_error, _ = _git_error_types()
         try:
-            with _openhands_git_context():
+            with _openhands_git_context(self.project.root):
                 reference = get_valid_ref(self.project.root, purpose="display")
         except (git_error, OSError):
             return _GitBaseline(status="unavailable")
@@ -966,8 +966,43 @@ def _run_anchored_git(project_descriptor: int, *arguments: str) -> bytes | None:
     return completed.stdout
 
 
+def _neutralized_git_configuration(root: Path) -> dict[str, str]:
+    """Disable commands that repository configuration makes Git run while comparing files."""
+    environment = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    environment.update(_SAFE_GIT_ENVIRONMENT)
+    try:
+        configured = subprocess.run(
+            [
+                "git",
+                "config",
+                "--null",
+                "--name-only",
+                "--get-regexp",
+                r"^filter\..*\.(clean|smudge|process)$",
+            ],
+            cwd=root,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=10,
+            env=environment,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise OSError("Git configuration inspection timed out") from error
+    overrides = {"core.fsmonitor": "false"}
+    if configured.returncode == 0:
+        names = configured.stdout.decode("utf-8", "surrogateescape").split("\0")
+        overrides.update(dict.fromkeys(filter(None, names), ""))
+    settings = {"GIT_CONFIG_COUNT": str(len(overrides))}
+    for index, (key, value) in enumerate(overrides.items()):
+        settings[f"GIT_CONFIG_KEY_{index}"] = key
+        settings[f"GIT_CONFIG_VALUE_{index}"] = value
+    return settings
+
+
 @contextmanager
-def _openhands_git_context() -> Iterator[None]:
+def _openhands_git_context(root: Path) -> Iterator[None]:
     """Scope process settings required by the public OpenHands Git API."""
     with _GIT_ENVIRONMENT_LOCK:
         # The pinned SDK has no per-call environment or logger arguments. Keep
@@ -977,9 +1012,10 @@ def _openhands_git_context() -> Iterator[None]:
         original_log_level = sdk_logger.level
         for key in tuple(original):
             os.environ.pop(key, None)
-        os.environ.update(_SAFE_GIT_ENVIRONMENT)
-        sdk_logger.setLevel(logging.CRITICAL)
         try:
+            os.environ.update(_SAFE_GIT_ENVIRONMENT)
+            os.environ.update(_neutralized_git_configuration(root))
+            sdk_logger.setLevel(logging.CRITICAL)
             yield
         finally:
             for key in tuple(os.environ):

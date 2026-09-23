@@ -63,6 +63,7 @@ Heartwood validates that request metadata agrees with the declared route; the pr
 Every gateway API request also needs the launch capability.
 Let the researcher open the launch link that `heartwood gateway serve` prints, and forward the resulting cookie unchanged, or start the gateway with `HEARTWOOD_GATEWAY_CAPABILITY` and inject `X-Heartwood-Capability` from the proxy for callers the platform has already authenticated.
 Never expose the secret to the agent workspace or to other users of the platform.
+The gateway's initial environment stays readable by processes running as the same user, so supply the secret through the environment only when agent tools run under a different identity.
 
 ## Model Credential Isolation
 

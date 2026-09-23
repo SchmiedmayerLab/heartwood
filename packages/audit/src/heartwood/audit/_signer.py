@@ -73,7 +73,7 @@ class CheckpointSignerTransport(Protocol):
 
 
 class LocalEd25519CheckpointSigner:
-    """Development signer that keeps an owner-only key in its own process."""
+    """Development signer backed by an owner-only private key file."""
 
     def __init__(
         self,

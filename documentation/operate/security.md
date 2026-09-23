@@ -14,7 +14,9 @@ It is not a security boundary on its own and does not confer institutional appro
 ### Project Files
 
 OpenHands tools execute with the permissions of the Heartwood process.
-Heartwood supplies the project directory as the agent workspace and rejects project-state paths in normal tool scope, but the operating system, container, or platform must enforce stronger isolation when required.
+Heartwood supplies the project directory as the agent workspace, and the file editor rejects paths outside the project and inside `.heartwood/`.
+Terminal commands are not confined: an approved command can read anything the user can read and can change `.heartwood/` state, including project settings, installed Skills, and session and audit files.
+Review commands that touch `.heartwood/` as changes to Heartwood's own controls, and let the operating system, container, or platform enforce stronger isolation when required.
 
 Use a dedicated project directory and least-privilege mounts.
 Do not run Heartwood as a privileged container or from a broad shared root.
@@ -62,12 +64,19 @@ Heartwood reports one of three effective boundaries for the active model route:
 Application scrubbing is not process isolation.
 OpenHands' local model client and coding tools run under the same Heartwood operating-system identity, so environment filtering cannot prevent every same-identity memory, process, or inherited-resource access path.
 The built-in workstation/container, Terra, and Carina adapters therefore do not claim platform-isolated model credentials.
+Only the selected model credential is scrubbed; other secrets in the Heartwood environment, credential files, and keyring entries remain readable by terminal commands.
+
+A Heartwood-managed local model server listens on a fixed loopback port without authentication.
+Other users on the same host can send it requests and, while it is not listening, can take the port and receive prompts in its place.
+Run it only on hosts or allocations that other users cannot reach.
 
 [OpenHands Agent Server](https://docs.openhands.dev/sdk/guides/agent-server/overview) and its [remote workspace](https://docs.openhands.dev/sdk/guides/agent-server/cloud-workspace) move the conversation, model client, and tools into a remote agent environment.
 That boundary isolates the caller from the agent workspace, but it does not by itself separate model authentication from tools running inside that agent environment.
 Heartwood uses the upstream OpenHands credential and model transports without treating a remote workspace as model-only credential isolation.
 
 Use **Review Every Action** for an API key, ChatGPT subscription, mounted secret, or managed identity unless the active platform explicitly reports a qualified platform-isolated boundary.
+**Low-Risk Automation** classifies actions from the model's own risk label and a small set of fixed command patterns, so a model that follows injected instructions can label an unsafe command low risk.
+Use it only when every file, dataset, and page the agent reads is trusted.
 Removing a saved provider credential revokes model access independently of the action policy.
 Changing the action policy never broadens model authorization.
 
@@ -98,12 +107,18 @@ Ingress validation confirms the route, not the caller.
 A loopback bind is reachable by every process running as the same operating-system user, including the agent's own terminal, so the gateway additionally requires a process-lifetime launch capability on every API request, server-sent event stream, and WebSocket.
 `heartwood gateway serve` generates the secret at startup and prints one launch link.
 Opening the link exchanges its one-time token for an HttpOnly, `SameSite=Strict` cookie scoped to the browser-visible gateway path; the token cannot be reused and the secret never appears in page scripts or browser storage.
-Automation supplies the same secret through `HEARTWOOD_GATEWAY_CAPABILITY`, which the gateway removes from its environment before any agent tool can start, and presents it in the `X-Heartwood-Capability` header.
+Automation supplies the same secret through `HEARTWOOD_GATEWAY_CAPABILITY` and presents it in the `X-Heartwood-Capability` header.
+The gateway keeps the variable out of the processes it starts, but the operating system still exposes a process's initial environment to other processes of the same user, so the launch link is the stronger route.
 A request without the capability receives `HW-INGRESS-003`; static browser assets need no capability because they contain no project data.
 
 Every command accepted through the gateway records the launching principal as its actor.
 A caller cannot claim another actor in the command body, and `approval.recorded` carries the actor that approved or denied the action set.
-The capability distinguishes the researcher's browser from other local processes; it does not separate two humans who share the same operating-system account, and it does not replace the platform's user authentication.
+
+The capability separates the researcher's browser from other operating-system users and from requests that do not carry it.
+It is not a boundary against processes running as the same user, including approved agent commands, which can read the gateway's initial environment, the browser profile, and project settings.
+Browsers send cookies to every port of a host, so with direct loopback any other local server the browser opens on the same address receives the capability; open only local links you trust while Heartwood runs.
+In Jupyter proxy mode, other content served from the notebook origin can use the cookie, as it can use the Jupyter server itself.
+The capability does not separate two people who share one operating-system account and does not replace the platform's user authentication.
 
 ### Skills and Instructions
 
