@@ -18,13 +18,14 @@ A Heartwood deployment combines a versioned application artifact with platform s
 |---|---|---|
 | Application | CLI, browser, notebook bridge, gateway, OpenHands adapter, Skills, policy, audit | Artifact approval and release selection |
 | Project | Current-directory boundary and private `.heartwood/` state | Durable storage, permissions, backup, retention, and deletion |
-| Identity | Credential-binding interfaces, content-safe status, and credential-boundary enforcement | User authentication, authorization, managed identity, secret delivery, and isolated model identities |
+| Identity | Launch capability on every gateway request, credential-binding interfaces, content-safe status, and credential-boundary enforcement | User authentication, authorization, launch capability delivery, managed identity, secret delivery, and isolated model identities |
 | Models | Provider catalogs, Heartwood-managed inference planning, route-policy evaluation | Approved endpoints, agreements, accounts, quotas, and data eligibility |
 | Compute | llama.cpp/vLLM launch contracts and Slurm/provisioned adapters | CPU/GPU capacity, drivers, scheduler, isolation, and cost controls |
 | Network | Deny-by-default model-route policy and strict declared ingress validation | Enforced egress, ingress authentication and authorization, proxy header sanitation, TLS, DNS, and segmentation |
 | Evidence | Session events, tamper-evident audit chain, scrubbed export, provider-neutral signed checkpoint format, CI artifacts | Signer service and key custody, authoritative storage, retention enforcement, central monitoring, incident response, and compliance evidence |
 
 Heartwood policy is defense in depth and does not replace network enforcement.
+The [Platform Contract](platform-contract.md) defines this boundary and each capability a platform supplies in detail.
 The browser service must remain on loopback or behind an authenticated platform proxy configured through the trusted ingress contract.
 
 ## Select an Artifact

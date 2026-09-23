@@ -47,6 +47,7 @@ nav = [
     ] },
     { "Operate Heartwood" = [
         { "Deployment Responsibilities" = "operate/index.md" },
+        { "Platform Contract" = "operate/platform-contract.md" },
         { "Audit Checkpoints and Retention" = "operate/audit-checkpoints.md" },
         { "Qualify Parallel Reviews" = "operate/parallel-reviews.md" },
         { "Support and Compatibility" = "operate/support.md" },

@@ -215,6 +215,7 @@ The terminal, REST API, browser, and notebook bridge adapt this service without 
 `IngressPolicy` is the transport boundary for HTTP and WebSocket requests.
 It models direct loopback, a local Jupyter proxy, and an explicitly trusted proxy with one canonical external origin and base path.
 It rejects undeclared non-loopback exposure, untrusted forwarding metadata, origin and host mismatches, duplicate security headers, and ambiguous paths before the REST, streaming, or static-asset adapters see a route.
+Every REST, server-sent event, and WebSocket request must also carry the process-lifetime [launch capability](../operate/security.md#launch-capability), and the gateway derives the command actor from it rather than from the request.
 
 The browser reads its base path from server-injected non-secret metadata.
 It does not derive platform proxy paths or reduce gateway events itself.
