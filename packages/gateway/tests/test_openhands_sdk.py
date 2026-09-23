@@ -803,7 +803,6 @@ def test_typed_event_translation_covers_messages_tools_tasks_and_errors(
             session_id="session-1",
             actions_by_id={action.id: action},
         ),
-        *backend._translate_event(PauseEvent(id="pause-1"), session_id="session-1"),
     )
 
     assert isinstance(translated[0], BackendAgentMessageEvent)
@@ -837,8 +836,7 @@ def test_typed_event_translation_covers_messages_tools_tasks_and_errors(
     assert failed.exit_code == 1
     assert failed.result == "provider-specific detail"
     assert failed.summary == "terminal failed"
-    assert isinstance(translated[-1], BackendLifecycleEvent)
-    assert translated[-1].lifecycle == BackendLifecycle.PAUSED
+    assert backend._translate_event(PauseEvent(id="pause-1"), session_id="session-1") == ()
 
 
 def test_persisted_observations_reconstruct_one_grouped_approval_without_duplicates(

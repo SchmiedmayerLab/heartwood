@@ -518,6 +518,50 @@ def test_responses_api_restart_preserves_matched_tool_history(
         restored.close()
 
 
+def test_cold_approval_never_records_the_internal_view_repair_pause(
+    tmp_path: Path,
+    mock_provider: _MockProviderServer,
+) -> None:
+    call_id = "call-cold-approval"
+    mock_provider.state.enqueue(
+        _responses_tool_stream(
+            ((call_id, "printf once > cold-approval.txt", "cold-approval.txt", "once"),)
+        ),
+        _responses_text_stream("The file was created once.", required_function_call_ids=(call_id,)),
+    )
+    first = _responses_service(tmp_path, mock_provider)
+    try:
+        first.handle(_responses_command(command_id="cold-approval-start"))
+        _wait_for_pending_action_group(first)
+    finally:
+        first.close()
+
+    restored = _responses_service(tmp_path, mock_provider)
+    try:
+        group = _wait_for_pending_action_group(restored)
+        restored.handle(
+            SessionCommand(
+                command_id="cold-approval-approve",
+                session_id=_SESSION_ID,
+                kind=CommandKind.APPROVE,
+                actor_id="synthetic-user",
+                created_at="2026-07-26T00:00:01Z",
+                payload={"target_type": "action-set", "target_id": group.group_id},
+            )
+        )
+        events = _wait_for_terminal_events(restored, expected_status="finished")
+    finally:
+        restored.close()
+
+    statuses = [
+        event.payload.get("status")
+        for event in events
+        if event.kind == EventKind.AGENT_LIFECYCLE_UPDATED
+    ]
+    assert "paused" not in statuses
+    assert _agent_messages(events) == ["The file was created once."]
+
+
 def _service(
     tmp_path: Path,
     provider: _MockProviderServer,
