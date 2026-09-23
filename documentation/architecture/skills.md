@@ -50,11 +50,11 @@ flowchart LR
     Gateway --> OpenHands["OpenHands active Skill directories"]
     classDef heartwood fill:#0b694d26,stroke:#2b8268
     classDef platform fill:#3f5b7426,stroke:#6f8fae
-    class Root,Metadata,Catalog,Archive,Verify,Review,Store,Gateway,Interfaces,OpenHands heartwood
-    class Registry platform
+    class Verify,Review,Store,Gateway,Interfaces,OpenHands heartwood
+    class Registry,Root,Metadata,Catalog,Archive platform
 ```
 
-The deployment supplies the source registry, shown in blue; Heartwood owns every step after it, shown in green.
+The deployment and the Skill source operator supply the registry, trusted root, signed metadata, and archives, shown in blue; Heartwood owns verification, review, installation, and activation, shown in green.
 
 Heartwood refreshes signed metadata again during installation and compares the current tree digest with the digest presented for approval.
 For a local unreviewed Skill, it reinspects the source after approval and verifies the same digest again after the atomic copy.

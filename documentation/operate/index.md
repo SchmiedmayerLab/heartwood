@@ -18,7 +18,7 @@ A Heartwood deployment combines a versioned application artifact with platform s
 |---|---|---|
 | Application | CLI, browser, notebook bridge, gateway, OpenHands adapter, Skills, policy, audit | Artifact approval and release selection |
 | Project | Current-directory boundary and private `.heartwood/` state | Durable storage, permissions, backup, retention, and deletion |
-| Identity | Launch capability on every gateway request, credential-binding interfaces, content-safe status, and credential-boundary enforcement | User authentication, authorization, launch capability delivery, managed identity, secret delivery, and isolated model identities |
+| Identity | Launch capability on every gateway API request, event stream, and WebSocket, credential-binding interfaces, content-safe status, and credential-boundary enforcement | User authentication, authorization, launch capability delivery, managed identity, secret delivery, and isolated model identities |
 | Models | Provider catalogs, Heartwood-managed inference planning, route-policy evaluation | Approved endpoints, agreements, accounts, quotas, and data eligibility |
 | Compute | llama.cpp/vLLM launch contracts and Slurm/provisioned adapters | CPU/GPU capacity, drivers, scheduler, isolation, and cost controls |
 | Network | Deny-by-default model-route policy and strict declared ingress validation | Enforced egress, ingress authentication and authorization, proxy header sanitation, TLS, DNS, and segmentation |

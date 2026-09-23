@@ -49,7 +49,7 @@ The browser interface sets these values on the Grove design system's color varia
 
 ## Accessibility
 
-- Every text pairing in the color table meets WCAG AA contrast of at least 4.5:1 on its surface; the mark's rings and core meet the 3:1 non-text contrast against its tile.
+- Every text pairing in the color table meets WCAG AA contrast of at least 4.5:1 on its surface; the mark's core and innermost rings meet 3:1 non-text contrast against its tile, and the outer rings fade below it as texture.
 - The mark is decorative next to the product name and hidden from assistive technology there; on its own it carries the text alternative "Heartwood".
 - The documentation and browser marks are static.
 - The terminal animates its progress glyphs only on an interactive terminal with color enabled, and falls back to static ASCII dots when `NO_COLOR` is set, output is redirected, or the terminal cannot show the glyphs.

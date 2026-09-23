@@ -302,7 +302,9 @@ stateDiagram-v2
     Submitted --> Running: platform accepts
     Submitted --> Unknown: response lost
     Unknown --> Running: status reconciled
+    Unknown --> Completed: status reconciled
     Unknown --> Failed: status reconciled
+    Unknown --> Cancelled: status reconciled
     Running --> Completed
     Running --> Failed
     Running --> Cancelled: cancellation observed

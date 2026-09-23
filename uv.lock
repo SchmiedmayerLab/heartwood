@@ -1657,6 +1657,7 @@ version = "0.4.0"
 source = { editable = "packages/compliance" }
 dependencies = [
     { name = "heartwood-audit" },
+    { name = "heartwood-cli" },
     { name = "heartwood-gateway" },
     { name = "heartwood-model-policy" },
     { name = "heartwood-persistence" },
@@ -1666,6 +1667,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "heartwood-audit", editable = "packages/audit" },
+    { name = "heartwood-cli", editable = "packages/cli" },
     { name = "heartwood-gateway", editable = "packages/gateway" },
     { name = "heartwood-model-policy", editable = "packages/model-policy" },
     { name = "heartwood-persistence", editable = "packages/persistence" },
