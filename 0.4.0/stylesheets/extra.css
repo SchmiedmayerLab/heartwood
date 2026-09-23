@@ -1,0 +1,138 @@
+/*
+ * This source file is part of the Heartwood open-source project
+ *
+ * SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+ *
+ * SPDX-License-Identifier: MIT
+ */
+
+:root > * {
+  --md-primary-fg-color: #0b694d;
+  --md-primary-fg-color--light: #2b8268;
+  --md-primary-fg-color--dark: #084d39;
+  --md-accent-fg-color: #2b8268;
+  --md-accent-fg-color--transparent: rgb(11 105 77 / 10%);
+  --md-typeset-mark-color: rgb(11 105 77 / 20%);
+  --md-code-hl-number-color: #16468a;
+  --md-code-hl-special-color: #3f5b74;
+}
+
+[data-md-color-scheme="slate"] {
+  --md-primary-fg-color: #4cc792;
+  --md-primary-fg-color--light: #7ad8b0;
+  --md-primary-fg-color--dark: #2f9e70;
+  --md-accent-fg-color: #7ad8b0;
+  --md-accent-fg-color--transparent: rgb(76 199 146 / 14%);
+  --md-typeset-mark-color: rgb(76 199 146 / 26%);
+  --md-code-hl-number-color: #8ec5ff;
+  --md-code-hl-special-color: #8fb1cf;
+  --md-default-fg-color: rgb(236 236 240 / 84%);
+  --md-default-fg-color--light: rgb(236 236 240 / 56%);
+  --md-default-fg-color--lighter: rgb(236 236 240 / 32%);
+  --md-default-fg-color--lightest: rgb(236 236 240 / 12%);
+  --md-default-bg-color: #0a0a0a;
+  --md-default-bg-color--light: rgb(10 10 10 / 54%);
+  --md-default-bg-color--lighter: rgb(10 10 10 / 26%);
+  --md-default-bg-color--lightest: rgb(10 10 10 / 7%);
+  --md-code-fg-color: #d4d4d8;
+  --md-code-bg-color: #161618;
+  --md-code-bg-color--light: rgb(22 22 24 / 90%);
+  --md-code-bg-color--lighter: rgb(22 22 24 / 54%);
+  --md-typeset-kbd-color: rgb(236 236 240 / 12%);
+  --md-typeset-kbd-accent-color: rgb(236 236 240 / 20%);
+  --md-typeset-kbd-border-color: #232326;
+  --md-typeset-table-color: rgb(242 242 245 / 12%);
+  --md-typeset-table-color--light: rgb(242 242 245 / 3.5%);
+  --md-footer-bg-color: rgb(22 22 24 / 87%);
+  --md-footer-bg-color--dark: #111112;
+}
+
+.md-typeset h1,
+.md-typeset h2 {
+  letter-spacing: 0;
+}
+
+.md-typeset h1 {
+  color: var(--md-default-fg-color);
+  font-weight: 700;
+}
+
+.md-typeset h2 {
+  margin-top: 2.25em;
+}
+
+.md-typeset .md-button {
+  border-radius: 6px;
+  margin-bottom: 0.5rem;
+  margin-right: 0.35rem;
+}
+
+.md-typeset img {
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 6px;
+  box-shadow: 0 12px 28px rgb(0 0 0 / 10%);
+}
+
+.md-typeset .theme-screenshot-dark,
+[data-md-color-scheme="slate"] .md-typeset .theme-screenshot-light {
+  display: none;
+}
+
+[data-md-color-scheme="slate"] .md-typeset .theme-screenshot-dark {
+  display: block;
+}
+
+.md-typeset code {
+  border-radius: 4px;
+}
+
+.md-typeset table:not([class]) {
+  border-radius: 6px;
+  box-shadow: none;
+}
+
+.md-typeset table:not([class]) th {
+  background: var(--md-default-fg-color--lightest);
+}
+
+.md-typeset .admonition,
+.md-typeset details {
+  border-radius: 6px;
+  box-shadow: none;
+}
+
+:root > * {
+  --md-mermaid-node-bg-color: var(--md-default-fg-color--lightest);
+  --md-mermaid-node-fg-color: var(--md-default-fg-color--light);
+}
+
+:root {
+  --heartwood-planned-color: #55555a;
+  --heartwood-planned-border: rgb(0 0 0 / 28%);
+  --heartwood-planned-tint: rgb(0 0 0 / 2.5%);
+  --md-admonition-icon--planned: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm0 2a8 8 0 1 1 0 16 8 8 0 0 1 0-16Zm-1 3v6.4l5 3 1-1.7-4-2.4V7Z"/></svg>');
+}
+
+[data-md-color-scheme="slate"] {
+  --heartwood-planned-color: rgb(236 236 240 / 72%);
+  --heartwood-planned-border: rgb(236 236 240 / 30%);
+  --heartwood-planned-tint: rgb(255 255 255 / 3%);
+}
+
+.md-typeset .admonition.planned,
+.md-typeset details.planned {
+  background-color: var(--heartwood-planned-tint);
+  border: 1px dashed var(--heartwood-planned-border);
+}
+
+.md-typeset .planned > .admonition-title,
+.md-typeset .planned > summary {
+  background-color: transparent;
+  color: var(--heartwood-planned-color);
+}
+
+.md-typeset .planned > .admonition-title::before,
+.md-typeset .planned > summary::before {
+  background-color: var(--heartwood-planned-color);
+  mask-image: var(--md-admonition-icon--planned);
+}
