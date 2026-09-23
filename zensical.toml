@@ -47,6 +47,9 @@ nav = [
     ] },
     { "Operate Heartwood" = [
         { "Deployment Responsibilities" = "operate/index.md" },
+        { "Define a Standard Environment" = "operate/standard-environment.md" },
+        { "Configure a Reviewed Assistant" = "operate/reviewed-assistant.md" },
+        { "Run a Pilot Evaluation" = "operate/pilot.md" },
         { "Audit Checkpoints and Retention" = "operate/audit-checkpoints.md" },
         { "Qualify Parallel Reviews" = "operate/parallel-reviews.md" },
         { "Support and Compatibility" = "operate/support.md" },

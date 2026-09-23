@@ -10,6 +10,7 @@ SPDX-License-Identifier: MIT
 The Heartwood Terra image extends Terra's Jupyter environment with the terminal agent, notebook bridge, verified Skills, and optional managed inference.
 
 Terra supports the Heartwood **terminal** and **notebook** interfaces.
+Operators preparing Terra for a group of researchers should also [define a standard research environment](../operate/standard-environment.md).
 It does not currently expose a supported route to the Heartwood browser interface.
 
 This guide changes cloud compute and can incur charges.

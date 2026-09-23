@@ -152,7 +152,9 @@ An owner-only bearer-token file remains accessible to other processes running as
 The bundled local signer is an authenticated loopback-only development and offline fallback; its owner-only file permissions protect against other operating-system users but not compromise of the same user account.
 See [Audit Checkpoints and Retention](audit-checkpoints.md).
 
-## Recommended Controls
+## Deployment Security Checklist
+
+Confirm each control before researchers add project data, and again after each update:
 
 - authenticate every user before they reach the execution environment;
 - isolate projects and users with platform permissions or containers;
@@ -161,7 +163,8 @@ See [Audit Checkpoints and Retention](audit-checkpoints.md).
 - mount controlled inputs read-only when feasible;
 - keep provider secrets in a keyring, mounted secret, or managed identity;
 - keep production checkpoint keys in an independently authorized KMS/HSM-backed signer service;
-- use **Review Every Action** until a deployment-specific risk policy is reviewed;
+- use **Review Every Action** until a deployment-specific risk policy is reviewed, and apply the [reviewed assistant](reviewed-assistant.md) controls;
+- keep the launch link and any supplied gateway capability private to the researcher who started Heartwood;
 - pin release artifacts, images, model revisions, and Skill versions;
 - collect content-minimized operational logs outside project outputs;
 - validate backup, retention, deletion, and incident-response procedures; and

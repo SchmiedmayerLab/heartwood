@@ -30,6 +30,7 @@ When project direction changes, update the relevant architecture or operations p
 | Project boundary, persistence, and `.heartwood/` layout | [documentation/start/project.md](documentation/start/project.md) |
 | Research-environment, hosted, compatible-service, and Heartwood-managed model workflows | [documentation/models/index.md](documentation/models/index.md) |
 | Deployment responsibilities and platform extension contract | [documentation/operate/index.md](documentation/operate/index.md) |
+| Standard research environments, reviewed assistant deployments, and pilot evaluations | [documentation/operate/standard-environment.md](documentation/operate/standard-environment.md), [documentation/operate/reviewed-assistant.md](documentation/operate/reviewed-assistant.md), and [documentation/operate/pilot.md](documentation/operate/pilot.md) |
 | Release support, compatibility, and deprecation policy | [documentation/operate/support.md](documentation/operate/support.md) |
 | Browser workflow | [documentation/use/browser.md](documentation/use/browser.md) |
 | Research specialist roles and boundaries | [documentation/use/specialists.md](documentation/use/specialists.md) |

@@ -9,6 +9,7 @@ SPDX-License-Identifier: MIT
 This section is for platform operators and security reviewers.
 
 Read [Support and Compatibility](support.md) before selecting a release for a maintained deployment.
+For a group of researchers, [define a standard research environment](standard-environment.md), [configure a reviewed assistant](reviewed-assistant.md), and [run a pilot evaluation](pilot.md) before a wider rollout.
 A Heartwood deployment combines a versioned application artifact with platform storage, identity, network, secret, compute, model-route, logging, and data-governance controls.
 
 ## Deployment Responsibilities

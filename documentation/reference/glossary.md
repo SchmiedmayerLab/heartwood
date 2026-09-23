@@ -21,6 +21,9 @@ SPDX-License-Identifier: MIT
 **Application programming interface (API)**
 : A structured way for software components to communicate.
 
+**Authorization Domain**
+: A Terra access restriction that limits a workspace and its data to members of named groups.
+
 **Audit checkpoint**
 : A canonical audit export whose metadata and signer identity are authenticated by a deployment-approved public-key signature and bound to its deployment identifier, session, creation time, and retention declaration.
 
@@ -102,6 +105,9 @@ SPDX-License-Identifier: MIT
 **OpenHands**
 : The upstream agent SDK and coding-tool platform used by Heartwood for conversations and tool execution.
 
+**Pilot evaluation**
+: A bounded trial in which a small group of researchers uses one standard research environment so the deployment can record installation, workflow, reproducibility, and support evidence before a wider rollout.
+
 **Protected health information (PHI)**
 : Individually identifiable health information protected under applicable policy or law.
 
@@ -123,6 +129,9 @@ SPDX-License-Identifier: MIT
 **Responses API**
 : OpenAI's current API shape for model responses, tool calls, and related agent interactions.
 
+**Reviewed assistant**
+: A Heartwood deployment in which every action set waits for a researcher's decision, model content goes only to approved routes, and decisions are retained as verifiable audit evidence.
+
 **safetensors**
 : A tensor-storage format designed to load model weights without executing serialized code.
 
@@ -131,6 +140,9 @@ SPDX-License-Identifier: MIT
 
 **Slurm**
 : A scheduler that allocates compute resources for jobs on platforms such as Stanford Carina.
+
+**Standard research environment**
+: One recorded combination of Heartwood release, platform base image, compute shape, model routes, storage layout, and update policy that a deployment supports for a group of researchers.
 
 **Tensor parallelism**
 : A runtime layout that divides one model across a fixed number of GPUs.
