@@ -189,7 +189,7 @@ heartwood gateway serve \
 ```
 
 The proxy then adds `X-Heartwood-Capability` with the same secret to each authenticated request.
-See the [serve options](../reference/cli.md#operator-commands) and [HW-INGRESS-003](../reference/troubleshooting.md#hw-ingress-003-gateway-request-is-missing-the-launch-capability).
+See the [serve options](../reference/cli.md#operator-commands) and [HW-INGRESS-003](../reference/troubleshooting.md#gateway-ingress).
 
 !!! planned "Not yet implemented: capability delivery without the environment"
     The gateway keeps `HEARTWOOD_GATEWAY_CAPABILITY` out of the processes it starts, but the operating system still exposes a process's initial environment to other processes of the same user, including approved agent commands.
@@ -454,8 +454,8 @@ A platform's failures must be distinguishable so every interface can show the sa
 | Condition | The platform returns | Heartwood shows |
 |---|---|---|
 | Capability not offered | No advertised support | The choice is hidden in every interface |
-| Missing or invalid launch capability | Not applicable | [HW-INGRESS-003](../reference/troubleshooting.md#hw-ingress-003-gateway-request-is-missing-the-launch-capability) |
-| Request does not match the declared route | Not applicable | [HW-INGRESS-002](../reference/troubleshooting.md#hw-ingress-002-gateway-request-does-not-match-the-configured-route) |
+| Missing or invalid launch capability | Not applicable | [HW-INGRESS-003](../reference/troubleshooting.md#gateway-ingress) |
+| Request does not match the declared route | Not applicable | [HW-INGRESS-002](../reference/troubleshooting.md#gateway-ingress) |
 | Expired or rejected model credential | An authentication error | HW-AGENT-008 |
 | Exhausted quota or budget | A quota error | HW-AGENT-009 |
 | Rate limit | A rate-limit error with a retry interval when known | HW-AGENT-010 |
