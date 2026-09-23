@@ -163,7 +163,7 @@ Confirm each control before researchers add project data, and again after each u
 - mount controlled inputs read-only when feasible;
 - keep provider secrets in a keyring, mounted secret, or managed identity;
 - keep production checkpoint keys in an independently authorized KMS/HSM-backed signer service;
-- use **Review Every Action** until a deployment-specific risk policy is reviewed, and apply the [reviewed assistant](reviewed-assistant.md) controls;
+- use **Review Every Action** until a deployment-specific risk policy is reviewed;
 - keep the launch link and any supplied gateway capability private to the researcher who started Heartwood;
 - pin release artifacts, images, model revisions, and Skill versions;
 - collect content-minimized operational logs outside project outputs;

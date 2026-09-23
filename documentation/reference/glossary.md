@@ -129,9 +129,6 @@ SPDX-License-Identifier: MIT
 **Responses API**
 : OpenAI's current API shape for model responses, tool calls, and related agent interactions.
 
-**Reviewed assistant**
-: A Heartwood deployment in which every action set waits for a researcher's decision, model content goes only to approved routes, and decisions are retained as verifiable audit evidence.
-
 **safetensors**
 : A tensor-storage format designed to load model weights without executing serialized code.
 

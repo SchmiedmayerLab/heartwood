@@ -29,7 +29,7 @@ Live-platform qualification is stated separately from continuous-integration val
 ## Update Cadence
 
 Maintained deployments should review the latest stable release at least once per quarter and apply a published security patch promptly.
-Before each update, read the release notes, back up `.heartwood/` when a rollback may be needed, and record the new artifact digest in the [standard research environment](standard-environment.md) record.
+Before each update, read the release notes, back up `.heartwood/` when a rollback may be needed, and record the new artifact digest in the [standard environment record](index.md#record-a-standard-environment).
 After the update, repeat the synthetic checks in [Validate the Deployment](index.md#validate-the-deployment).
 
 Project state migrates forward only, so an older release does not open state that a newer release has migrated.
