@@ -41,7 +41,6 @@ from openhands.sdk.event import (
     MessageEvent,
     ObservationBaseEvent,
     ObservationEvent,
-    PauseEvent,
     UserRejectObservation,
 )
 from openhands.sdk.event.conversation_error import ConversationErrorEvent
@@ -1514,16 +1513,6 @@ class OpenHandsSdkBackend:
                         fallback=BackendErrorCode.UNKNOWN,
                     ),
                     source_event_id=f"{source}:error",
-                ),
-            )
-        if isinstance(event, PauseEvent):
-            with self._view_repair_lock:
-                if self._view_repair_paused_internally:
-                    return ()
-            return (
-                BackendLifecycleEvent(
-                    lifecycle=BackendLifecycle.PAUSED,
-                    source_event_id=f"{source}:lifecycle",
                 ),
             )
         return ()
