@@ -496,6 +496,7 @@ A platform integration advances through the evidence levels in [Testing and Evid
 4. **Institution approved:** separate institutional evidence covers the deployment; it is never inferred from the previous levels.
 
 Follow [Validate Conformance](platform-integration.md#validate-conformance) and [Validate the Deployment](index.md#validate-the-deployment) for the exact checks.
+Before a wider rollout, [record a standard environment](index.md#record-a-standard-environment), confirm the [deployment security checklist](security.md#deployment-security-checklist), and [run a pilot evaluation](index.md#run-a-pilot-evaluation).
 
 !!! planned "Not yet implemented: expansion checklist"
     One maintained checklist for proposing a new platform, covering ownership, reuse of shared contracts, security and privacy review, and the evidence required before a support claim, is tracked in [#49](https://github.com/SchmiedmayerLab/heartwood/issues/49).
