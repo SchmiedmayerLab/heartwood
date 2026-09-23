@@ -22,7 +22,13 @@ flowchart LR
     Adapter --> Model["Research-environment, hosted, compatible-service, or Heartwood-managed model"]
     Adapter --> Tools["OpenHands coding tools"]
     Gateway --> Audit["Session events and audit chain"]
+    classDef heartwood fill:#0b694d26,stroke:#2b8268
+    classDef platform fill:#3f5b7426,stroke:#6f8fae
+    class CLI,Web,Ingress,Notebook,Gateway,Project,Policy,Skills,Adapter,Tools,Audit heartwood
+    class Model platform
 ```
+
+Green marks what Heartwood owns and blue marks what the research environment or model provider supplies, as in the [Platform Contract](../operate/platform-contract.md).
 
 ## Shared Contracts
 

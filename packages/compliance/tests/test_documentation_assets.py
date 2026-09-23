@@ -133,7 +133,11 @@ def test_web_documentation_uses_generated_theme_aware_desktop_screenshots() -> N
     screenshot_script = _read("packages/webui/scripts/smoke-reference-analysis.cjs")
     assets = _repo_root() / "documentation" / "assets" / "screenshots"
 
-    readme_pictures = re.findall(r"<picture>.*?</picture>", readme, flags=re.DOTALL)
+    readme_pictures = [
+        picture
+        for picture in re.findall(r"<picture>.*?</picture>", readme, flags=re.DOTALL)
+        if "assets/screenshots/" in picture
+    ]
     assert readme_pictures
     for picture in readme_pictures:
         assert '<source media="(prefers-color-scheme: dark)"' in picture

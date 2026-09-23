@@ -28,6 +28,7 @@ import uvicorn
 
 from heartwood.adapters import INGRESS_MODES
 from heartwood.adapters.platform import select_platform_adapter
+from heartwood.cli._brand import lockup, progress_frames, progress_line
 from heartwood.cli._experiments import configure_experiments, handle_experiments
 from heartwood.cli._interactive import (
     InteractionActivity,
@@ -901,7 +902,7 @@ def _format_startup_plan(startup: StartupPlan) -> str:
         raise TypeError("startup capabilities must be an object")
     return "\n".join(
         (
-            "Heartwood",
+            lockup(sys.stdout),
             f"Project: {plan['project_root']}",
             f"Environment: {capabilities['display_name']}",
             f"Interface: {plan['interface']}",
@@ -2202,7 +2203,7 @@ def _run_with_progress[Result](
     stopped = threading.Event()
     started = time.monotonic()
     animated = sys.stderr.isatty() and "NO_COLOR" not in os.environ
-    frames = (".  ", ".. ", "...")
+    frames = progress_frames(sys.stderr)
     frame = 0
 
     def report_progress() -> None:
@@ -2216,7 +2217,7 @@ def _run_with_progress[Result](
                 marker = frames[frame % len(frames)]
                 frame += 1
                 print(
-                    f"\r\033[2K{label}{marker}{suffix}",
+                    f"\r\033[2K{progress_line(label, marker)}{suffix}",
                     end="",
                     file=sys.stderr,
                     flush=True,
@@ -2229,7 +2230,7 @@ def _run_with_progress[Result](
                 )
 
     if animated:
-        print(f"{activity.label}{frames[0]}", end="", file=sys.stderr, flush=True)
+        print(progress_line(activity.label, frames[0]), end="", file=sys.stderr, flush=True)
     else:
         print(f"{activity.label}...", file=sys.stderr, flush=True)
     reporter = threading.Thread(

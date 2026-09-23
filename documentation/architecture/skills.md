@@ -48,7 +48,13 @@ flowchart LR
     Store --> Gateway["Gateway Skill projection"]
     Gateway --> Interfaces["CLI, browser, and notebook"]
     Gateway --> OpenHands["OpenHands active Skill directories"]
+    classDef heartwood fill:#0b694d26,stroke:#2b8268
+    classDef platform fill:#3f5b7426,stroke:#6f8fae
+    class Root,Metadata,Catalog,Archive,Verify,Review,Store,Gateway,Interfaces,OpenHands heartwood
+    class Registry platform
 ```
+
+The deployment supplies the source registry, shown in blue; Heartwood owns every step after it, shown in green.
 
 Heartwood refreshes signed metadata again during installation and compares the current tree digest with the digest presented for approval.
 For a local unreviewed Skill, it reinspects the source after approval and verifies the same digest again after the atomic copy.

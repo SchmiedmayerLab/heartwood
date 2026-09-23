@@ -137,13 +137,9 @@ test("supports the researcher conversation and session workflow", async ({
   await expect(page.getByText("Not configured", { exact: true })).toBeVisible();
   await expectNoAccessibilityViolations(page);
 
-  const approval = page.getByRole("region", {
-    name: "One Decision for This Action Set",
-  });
+  const approval = page.getByRole("region", { name: "Review 1 action" });
   await expect(
-    approval.getByText(
-      "These actions were proposed together. Allowing runs every action once; rejecting runs none of them.",
-    ),
+    approval.getByText("Allow runs it once. Reject skips it."),
   ).toBeVisible();
   await expect(approval.getByText("Low Risk")).toBeVisible();
   await expect(
@@ -284,7 +280,7 @@ test("keeps session navigation usable on a narrow notebook viewport", async ({
   ).toBeVisible();
   await page.keyboard.press("Escape");
   const approval = page.getByRole("region", {
-    name: "One Decision for This Action Set",
+    name: "Review 1 action",
   });
   await expect(approval).toBeVisible();
   await expect(page.getByLabel("Allow 1 action once")).toBeVisible();
@@ -347,7 +343,7 @@ test("keeps grouped action review usable on a tablet viewport", async ({
   await page.keyboard.press("Escape");
 
   const approval = page.getByRole("region", {
-    name: "One Decision for This Action Set",
+    name: "Review 1 action",
   });
   await expect(approval).toBeInViewport({ ratio: 1 });
   await expect(page.getByLabel("Reject 1 action")).toBeVisible();
@@ -365,13 +361,13 @@ test("supports keyboard review, reduced motion, and high-zoom reflow", async ({
   await page.keyboard.press("Escape");
 
   const approval = page.getByRole("region", {
-    name: "One Decision for This Action Set",
+    name: "Review 1 action",
   });
   const heading = approval.getByRole("heading", {
-    name: "One Decision for This Action Set",
+    name: "Review 1 action",
   });
   await expect(heading).toBeFocused();
-  const argumentsDisclosure = approval.getByText("Review Exact Arguments");
+  const argumentsDisclosure = approval.getByText("Exact arguments");
   await argumentsDisclosure.focus();
   await page.keyboard.press("Enter");
   await expect(argumentsDisclosure.locator("..")).toHaveAttribute("open", "");

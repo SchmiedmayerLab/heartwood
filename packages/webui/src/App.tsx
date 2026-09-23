@@ -1000,7 +1000,6 @@ export const App = ({ client, initialSessionId }: AppProps) => {
             </TabsList>
             <TabsContent className="workspace-tab-panel" value="conversation">
               <ConversationWorkspace
-                actionModeLabel={activeActionMode?.label ?? null}
                 actionPresentation={actionSettings?.presentation ?? null}
                 conversationEndRef={conversationEndRef}
                 modelConfigured={modelReady}
