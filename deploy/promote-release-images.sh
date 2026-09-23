@@ -59,18 +59,19 @@ digest() {
   imagetools_inspect "$1" | awk '$1 == "Digest:" {print $2; exit}'
 }
 
+declare -a digests=()
 for mapping in "${mappings[@]}"; do
-  IFS='|' read -r source_tag target_tag media_shape <<<"${mapping}"
+  IFS='|' read -r source_tag _ media_shape <<<"${mapping}"
   source_ref="${image_name}:${source_tag}"
-  target_ref="${image_name}:${target_tag}"
   echo "verifying release image candidate: ${source_ref}"
   source_digest="$(digest "${source_ref}")"
   if [[ ! "${source_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
     echo "release image candidate returned an invalid digest: ${source_ref} (${source_digest:-<empty>})" >&2
     exit 1
   fi
+  digests+=("${source_digest}")
 
-  raw="$(imagetools_inspect --raw "${source_ref}")"
+  raw="$(imagetools_inspect --raw "${image_name}@${source_digest}")"
   media_type="$(jq -r '.mediaType // "<missing>"' <<<"${raw}")"
   config_media_type="$(jq -r '.config.mediaType // "<missing>"' <<<"${raw}")"
   platforms="$(jq -r '[.manifests[]? | select(.platform.os == "linux") | "\(.platform.os)/\(.platform.architecture)"] | join(", ")' <<<"${raw}")"
@@ -103,9 +104,26 @@ for mapping in "${mappings[@]}"; do
     fi
   fi
 
-  if [[ "${mode}" == "verify" ]]; then
-    continue
+done
+
+verified_digests="$(IFS=,; printf '%s' "${digests[*]}")"
+if [[ "${mode}" == "verify" ]]; then
+  if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+    printf 'release_image_digests=%s\n' "${verified_digests}" >>"${GITHUB_OUTPUT}"
   fi
+  exit 0
+fi
+# Publish only the exact images the verify job checked, even if a candidate tag moved since.
+if [[ "${verified_digests}" != "${RELEASE_IMAGE_DIGESTS:-}" ]]; then
+  echo "release image candidates differ from the verified digests" >&2
+  exit 1
+fi
+
+for index in "${!mappings[@]}"; do
+  IFS='|' read -r _ target_tag media_shape <<<"${mappings[index]}"
+  source_digest="${digests[index]}"
+  candidate_ref="${image_name}@${source_digest}"
+  target_ref="${image_name}:${target_tag}"
   if target_digest="$(docker buildx imagetools inspect "${target_ref}" 2>/dev/null | awk '$1 == "Digest:" {print $2; exit}')"; then
     if [[ "${target_digest}" != "${source_digest}" ]]; then
       echo "release image tag already exists with a different digest: ${target_ref}" >&2
@@ -114,13 +132,13 @@ for mapping in "${mappings[@]}"; do
     continue
   fi
   if [[ "${media_shape}" == "single" ]]; then
-    imagetools_create --prefer-index=false --tag "${target_ref}" "${source_ref}"
+    imagetools_create --prefer-index=false --tag "${target_ref}" "${candidate_ref}"
   else
-    imagetools_create --tag "${target_ref}" "${source_ref}"
+    imagetools_create --tag "${target_ref}" "${candidate_ref}"
   fi
   target_digest="$(digest "${target_ref}")"
   if [[ "${target_digest}" != "${source_digest}" ]]; then
-    echo "promoted release image digest does not match ${source_ref}" >&2
+    echo "promoted release image digest does not match ${candidate_ref}" >&2
     exit 1
   fi
 done
