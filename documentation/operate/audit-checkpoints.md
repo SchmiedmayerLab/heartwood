@@ -121,6 +121,8 @@ heartwood audit signer select local-development
 ```
 
 The local service accepts authenticated loopback requests only.
+Its private key, token, and user registry live under your account, so processes running as your user, including approved agent commands, can read them or replace the registry; verification through that registry is not independent of the account.
+The client does not authenticate the loopback listener, so on a shared host another user who takes the signer port while the service is stopped can capture the authorization token.
 It is an explicit development and offline fallback, not the production default and not a substitute for KMS/HSM access controls or independent authorization.
 
 ## Verify and Checkpoint a Session

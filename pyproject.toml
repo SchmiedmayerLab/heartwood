@@ -7,6 +7,9 @@
 # Virtual workspace root: shared dev tooling and configuration for every member
 # package under packages/*. The root itself is not a distributable package.
 
+[tool.uv]
+exclude-newer = "7 days"
+
 [tool.uv.workspace]
 members = [
     "packages/adapters",

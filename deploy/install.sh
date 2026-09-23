@@ -39,6 +39,9 @@ download_release_asset() {
   local source="$1"
   local destination="$2"
   curl \
+    --proto '=https' \
+    --proto-redir '=https' \
+    --tlsv1.2 \
     --fail \
     --location \
     --show-error \
@@ -426,7 +429,7 @@ runtime_root="${generation_root}/runtime"
 generation_bin="${generation_root}/bin"
 mkdir -p "${source_root}" "${runtime_root}" "${generation_bin}"
 chmod 700 "${generation_root}" "${source_root}" "${runtime_root}" "${generation_bin}"
-tar -xzf "${workspace}/heartwood-native.tar.gz" -C "${source_root}" --strip-components=1
+tar -xzf "${workspace}/heartwood-native.tar.gz" -C "${source_root}" --strip-components=1 --no-same-owner
 
 stage "Install the locked application and inference runtimes; this can take several minutes"
 if [[ "${platform}" == "carina" ]]; then

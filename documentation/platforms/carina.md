@@ -40,13 +40,14 @@ Do not use a shared project root itself as the Heartwood project.
 
 ```bash
 cd heartwood-installation
-curl --fail --location --remote-name \
+curl --proto '=https' --tlsv1.2 --fail --location --remote-name \
   https://github.com/SchmiedmayerLab/heartwood/releases/download/0.4.0/heartwood-installer
 chmod 700 heartwood-installer
 ./heartwood-installer --platform carina
 export PATH="$PWD/bin:$PATH"
 ```
 
+Where the GitHub CLI is available, `gh attestation verify heartwood-installer --repo SchmiedmayerLab/heartwood` confirms that the Heartwood release workflow built the installer.
 The version-stamped installer downloads the matching native archive, GPU runtime, and checksum, verifies them, checks storage, prevents concurrent updates to the same installation, and assembles a private source-and-runtime generation before making it current.
 The GPU runtime is mirrored as an immutable Heartwood release asset because Carina blocks the upstream vLLM wheel host; its digest remains pinned to the upstream artifact.
 When started on a login node, it moves the dependency installation into a bounded CPU-only Slurm allocation on the `dev` partition before loading micromamba and creating the environments.

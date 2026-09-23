@@ -11,19 +11,27 @@ multi-ecosystem-groups:
   weekly-dependencies:
     schedule:
       interval: "weekly"
+# Version updates wait seven days after a release, matching uv's exclude-newer and npm's
+# min-release-age; security updates are not delayed.
 updates:
   - package-ecosystem: "github-actions"
     directory: "/"
     patterns: ["*"]
     multi-ecosystem-group: "weekly-dependencies"
+    cooldown:
+      default-days: 7
   - package-ecosystem: "uv"
     directory: "/"
     patterns: ["*"]
     multi-ecosystem-group: "weekly-dependencies"
+    cooldown:
+      default-days: 7
   - package-ecosystem: "npm"
     directory: "/packages/webui"
     patterns: ["*"]
     multi-ecosystem-group: "weekly-dependencies"
+    cooldown:
+      default-days: 7
     ignore:
       # The current TypeScript ESLint parser supports TypeScript below 6.1.
       - dependency-name: "typescript"
@@ -31,3 +39,13 @@ updates:
       # Heartwood targets the Node 24 runtime and its matching type definitions.
       - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
+  - package-ecosystem: "docker"
+    directories: ["/images", "/images/platform"]
+    patterns: ["*"]
+    multi-ecosystem-group: "weekly-dependencies"
+    cooldown:
+      default-days: 7
+    ignore:
+      # Base image tags change only with a reviewed platform or runtime migration.
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import re
 import subprocess
 import sys
 import tomllib
@@ -383,18 +384,19 @@ def test_pull_request_validation_has_no_optional_job_placeholders() -> None:
     assert "runner: ubuntu-24.04-arm" in smoke
     assert "cache_scope: runtime-amd64" in smoke
     assert "cache_scope: runtime-arm64" in smoke
-    assert "uses: docker/bake-action@v7" in smoke
+    assert "uses: docker/bake-action@" in smoke
     assert "runtime.cache-from=type=gha,scope=${{ matrix.cache_scope }}" in smoke
     assert "runtime.cache-to=type=gha,scope=${{ matrix.cache_scope }},mode=min" in smoke
     assert "docker compose -f images/generic/compose.yaml run --rm heartwood" in smoke
     assert "runner: ubuntu-24.04" in gpu
     assert "uses: ./.github/actions/reclaim-runner-disk" in gpu
     assert "runs-on: heartwood-ubuntu-large" in capable
-    assert "uses: docker/bake-action@v7" in capable
-    assert "uses: docker/bake-action@v7" in gpu
+    assert "uses: docker/bake-action@" in capable
+    assert "uses: docker/bake-action@" in gpu
     assert "cache-from=type=gha" not in gpu
     assert "cache-to=type=gha" not in gpu
-    assert dependabot.count('multi-ecosystem-group: "weekly-dependencies"') == 3
+    assert dependabot.count('multi-ecosystem-group: "weekly-dependencies"') == 4
+    assert dependabot.count("default-days: 7") == 4
 
 
 def test_only_capable_model_acceptance_uses_the_large_hosted_runner() -> None:
@@ -565,7 +567,7 @@ def test_release_checks_reject_failed_commit_status() -> None:
     assert verifier.check_status(checks, ["CodeQL"], statuses) == ([], ["CodeQL: failure"])
 
 
-def test_release_image_promotion_is_complete_and_idempotent(tmp_path: Path) -> None:
+def _fake_registry(tmp_path: Path) -> tuple[dict[str, str], Path, Path]:
     docker = tmp_path / "docker"
     state = tmp_path / "published"
     log = tmp_path / "commands"
@@ -573,15 +575,22 @@ def test_release_image_promotion_is_complete_and_idempotent(tmp_path: Path) -> N
         """#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\\n' "$*" >> "${FAKE_DOCKER_LOG}"
+ref="${@: -1}"
+digest_for() {
+  case "$1" in
+    *@sha256:*) printf '%s\\n' "${1##*@}" ;;
+    *-terra-gpu-nvidia) printf 'sha256:%064d\\n' 4 ;;
+    *-terra) printf 'sha256:%064d\\n' 2 ;;
+    *-gpu-nvidia) printf 'sha256:%064d\\n' 3 ;;
+    *) printf 'sha256:%064d\\n' 1 ;;
+  esac
+}
 if [[ "$*" == *" inspect --raw "* ]]; then
-  ref="${@: -1}"
-  if [[ "${ref}" == *terra* ]]; then
-    printf '%s\\n' '{"mediaType":"application/vnd.docker.distribution.manifest.v2+json","config":{"mediaType":"application/vnd.docker.container.image.v1+json"}}'
-  elif [[ "${ref}" == *gpu-nvidia* ]]; then
-    printf '%s\\n' '{"manifests":[{"platform":{"os":"linux","architecture":"amd64"}}]}'
-  else
-    printf '%s\\n' '{"manifests":[{"platform":{"os":"linux","architecture":"amd64"}},{"platform":{"os":"linux","architecture":"arm64"}}]}'
-  fi
+  case "$(digest_for "${ref}")" in
+    *[24]) printf '%s\\n' '{"mediaType":"application/vnd.docker.distribution.manifest.v2+json","config":{"mediaType":"application/vnd.docker.container.image.v1+json"}}' ;;
+    *3) printf '%s\\n' '{"manifests":[{"platform":{"os":"linux","architecture":"amd64"}}]}' ;;
+    *) printf '%s\\n' '{"manifests":[{"platform":{"os":"linux","architecture":"amd64"}},{"platform":{"os":"linux","architecture":"arm64"}}]}' ;;
+  esac
   exit 0
 fi
 if [[ "$*" == *" imagetools create "* ]]; then
@@ -595,11 +604,11 @@ if [[ "$*" == *" imagetools create "* ]]; then
   done
   exit 0
 fi
-ref="${@: -1}"
-if [[ "${ref}" != *":sha-"* ]] && ! grep --fixed-strings --line-regexp "${ref}" "${FAKE_DOCKER_STATE}" >/dev/null 2>&1; then
+if [[ "${ref}" != *":sha-"* && "${ref}" != *"@sha256:"* ]] \\
+  && ! grep --fixed-strings --line-regexp "${ref}" "${FAKE_DOCKER_STATE}" >/dev/null 2>&1; then
   exit 1
 fi
-printf '%s\\n' 'Name: fake' 'Digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+printf '%s\\n' 'Name: fake' "Digest: $(digest_for "${ref}")"
 """,
         encoding="utf-8",
     )
@@ -611,15 +620,30 @@ printf '%s\\n' 'Name: fake' 'Digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
         "FAKE_DOCKER_LOG": str(log),
         "FAKE_DOCKER_STATE": str(state),
     }
-    command = [
+    return env, state, log
+
+
+def _promotion(mode: str) -> list[str]:
+    return [
         "deploy/promote-release-images.sh",
-        "promote",
+        mode,
         "1.2.3+build.4",
         "a" * 40,
         "registry.example/heartwood",
     ]
-    subprocess.run(command, check=True, env=env)
-    subprocess.run(command, check=True, env=env)
+
+
+def test_release_image_promotion_is_complete_and_idempotent(tmp_path: Path) -> None:
+    env, state, log = _fake_registry(tmp_path)
+    output = tmp_path / "github-output"
+    subprocess.run(_promotion("verify"), check=True, env={**env, "GITHUB_OUTPUT": str(output)})
+    verified = output.read_text(encoding="utf-8").strip().removeprefix("release_image_digests=")
+    assert verified == ",".join(f"sha256:{index:064d}" for index in (1, 2, 3, 4))
+    assert state.read_text(encoding="utf-8") == ""
+
+    promote = {**env, "RELEASE_IMAGE_DIGESTS": verified}
+    subprocess.run(_promotion("promote"), check=True, env=promote)
+    subprocess.run(_promotion("promote"), check=True, env=promote)
 
     published = state.read_text(encoding="utf-8").splitlines()
     assert published == [
@@ -628,6 +652,47 @@ printf '%s\\n' 'Name: fake' 'Digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
         "registry.example/heartwood:1.2.3_build.4-gpu-nvidia",
         "registry.example/heartwood:1.2.3_build.4-terra-gpu-nvidia",
     ]
-    commands = log.read_text(encoding="utf-8")
-    assert commands.count("imagetools create") == 4
-    assert commands.count("--prefer-index=false") == 2
+    creates = [line for line in log.read_text(encoding="utf-8").splitlines() if " create " in line]
+    assert len(creates) == 4
+    assert sum("--prefer-index=false" in line for line in creates) == 2
+    assert all("registry.example/heartwood@sha256:" in line for line in creates)
+
+
+@pytest.mark.parametrize("verified", ["", "sha256:" + "9" * 64])
+def test_release_image_promotion_refuses_candidates_that_changed_after_verification(
+    tmp_path: Path, verified: str
+) -> None:
+    env, state, _ = _fake_registry(tmp_path)
+
+    result = subprocess.run(
+        _promotion("promote"),
+        check=False,
+        capture_output=True,
+        text=True,
+        env={**env, "RELEASE_IMAGE_DIGESTS": verified},
+    )
+
+    assert result.returncode == 1
+    assert "differ from the verified digests" in result.stderr
+    assert state.read_text(encoding="utf-8") == ""
+
+
+def test_third_party_actions_use_exact_release_versions() -> None:
+    trusted_owners = {"actions", "SchmiedmayerLab"}
+    unpinned: list[str] = []
+    paths = [
+        *sorted(Path(".github/workflows").glob("*.yml")),
+        *sorted(Path(".github/actions").glob("*/action.yml")),
+    ]
+    for path in paths:
+        document = _workflow(str(path))
+        jobs = document.get("jobs") or {"composite": document.get("runs", {})}
+        for job in jobs.values():
+            for step in job.get("steps", []):
+                uses = step.get("uses", "")
+                if not uses or uses.startswith("./") or uses.split("/")[0] in trusted_owners:
+                    continue
+                if re.fullmatch(r"v\d+\.\d+\.\d+", uses.rpartition("@")[2]) is None:
+                    unpinned.append(f"{path}: {uses}")
+
+    assert unpinned == []

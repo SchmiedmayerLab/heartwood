@@ -71,6 +71,7 @@ Review the model, immutable revision, license, runtime, file count, size, and pl
 Checksums establish that the imported files match this bundle; they do not establish who supplied it.
 Heartwood therefore does not accept bundle-supplied platform qualification for an unknown model.
 An exact match to the installed Heartwood catalog uses the catalog's trusted qualification metadata; every other imported model remains **Not tested**.
+For a vLLM model directory, the catalog pins the upstream revision but not the file contents, so a matching bundle is only as trustworthy as its source; import vLLM bundles only from a transfer path you control.
 
 ## 4. Approve and Import
 

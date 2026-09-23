@@ -123,7 +123,8 @@ Terminal command text is not treated as authoritative file evidence.
 ## Keep the Interface Reachable
 
 Bind Heartwood to loopback unless a trusted authenticated proxy terminates access.
-The launch link authorizes one browser for the running gateway; other processes on the same machine cannot send commands or approve actions without it.
+The launch link authorizes one browser for the running gateway; other users on the machine cannot send commands or approve actions without it.
+It does not separate the gateway from commands that run as your own user, including approved agent commands, and your browser also sends it to other local servers on the same address, so open only local links you trust.
 The development server and generic container do not add user authentication by themselves.
 Platform operators must configure the typed ingress mode, exact origin, base path, and trusted source boundary rather than relying on forwarded headers implicitly.
 See [Security and Controlled Data](../operate/security.md#gateway-ingress).

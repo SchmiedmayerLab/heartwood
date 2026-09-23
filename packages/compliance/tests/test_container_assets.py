@@ -35,7 +35,7 @@ def test_generic_image_packages_one_no_weight_runtime() -> None:
     profiles = _toml("images/generic/local-runtime/profiles.toml")
 
     assert dockerfile.startswith("# syntax=docker/dockerfile:")
-    assert "FROM --platform=$BUILDPLATFORM node:24-trixie-slim AS webui-build" in dockerfile
+    assert "FROM --platform=$BUILDPLATFORM node:24-trixie-slim@sha256:" in dockerfile
     assert "uv sync --locked --no-dev --all-extras" in dockerfile
     assert "USER ${HEARTWOOD_RUNTIME_USER}" in dockerfile
     assert 'CMD ["heartwood", "--help"]' in dockerfile
@@ -197,7 +197,7 @@ def test_container_smoke_uses_bake_as_the_heartwood_build_contract() -> None:
 
     assert workflow.count("docker buildx bake --file docker-bake.hcl --call=check") == 2
     assert "runtime.tags=heartwood-capable:local" in capable_workflow
-    assert "uses: docker/bake-action@v7" in capable_workflow
+    assert "uses: docker/bake-action@" in capable_workflow
     assert "--build-arg HEARTWOOD_" not in workflow
     assert "--file images/Dockerfile" not in workflow
 
@@ -858,7 +858,7 @@ def test_native_release_assets_are_verified_before_installation() -> None:
     assert "Prepare Editable Release Draft" in release_workflow
     assert "release draft assets differ from the verified candidate" in release_workflow
     assert "--source-root ." in release_workflow
-    assert "docker/login-action@v4" in release_workflow
+    assert "docker/login-action@" in release_workflow
     assert "--required-check 'Release Candidate Ready'" in release_workflow
     assert "environment: release" in release_workflow
     assert "verify_release_candidate.py" in release_workflow
@@ -958,13 +958,13 @@ def test_gpu_publication_validates_main_and_manual_pr_candidates() -> None:
     assert "workflow_call:" in pull_request_workflow
     assert "workflow_dispatch:" not in pull_request_workflow
     assert "output=type=docker" not in pull_request_workflow
-    assert "docker/setup-buildx-action@v4" in pull_request_workflow
+    assert "docker/setup-buildx-action@" in pull_request_workflow
     assert "runner: ubuntu-24.04" in pull_request_workflow
     assert "uses: ./.github/actions/reclaim-runner-disk" in pull_request_workflow
-    assert "uses: docker/bake-action@v7" in pull_request_workflow
+    assert "uses: docker/bake-action@" in pull_request_workflow
     assert "cache-from=type=gha" not in pull_request_workflow
     assert "cache-to=type=gha" not in pull_request_workflow
-    assert "uses: docker/bake-action@v7" in workflow
+    assert "uses: docker/bake-action@" in workflow
     assert "workflow_dispatch:" in manual_workflow
     assert "workflow_call:" not in manual_workflow
     assert "packages: write" in manual_workflow
@@ -1530,7 +1530,7 @@ def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
     assert "runner: ubuntu-24.04-arm" in publish
     assert "cache-from=type=gha" in publish
     assert "cache-to=type=gha" in publish
-    assert publish.count("uses: docker/bake-action@v7") == 2
+    assert publish.count("uses: docker/bake-action@") == 2
     assert "mode=max" not in publish
     assert publish.count("uses: ./.github/actions/create-immutable-image-tag") == 2
     assert "diagnostic-name: generic commit tag" in publish

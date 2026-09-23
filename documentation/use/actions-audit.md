@@ -16,6 +16,9 @@ OpenHands proposes tools, Heartwood applies the selected confirmation policy, an
 | **Review Every Action** | Pause before every OpenHands action set so you can inspect it before anything runs |
 | **Low-Risk Automation** | Continue only action sets made entirely of low-risk actions; pause the complete set when any action is medium risk, high risk, or unclassified |
 
+Risk levels come from the model's own assessment, checked only against a small set of fixed command patterns; they are not an independent analysis.
+Use **Low-Risk Automation** only when the files, datasets, and pages the agent reads are trusted, since injected instructions can make a model label an unsafe command low risk.
+
 The detected platform policy determines which modes are available.
 **Review Every Action** is the default and the recommended mode while learning the system or working with sensitive projects.
 It is required when the selected model uses a credential that the platform does not isolate from the OpenHands tool runtime.

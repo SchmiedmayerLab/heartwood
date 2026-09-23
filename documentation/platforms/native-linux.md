@@ -47,13 +47,14 @@ Open a new terminal if the `uv` installer requests it, then rerun `uv --version`
 mkdir -m 700 heartwood-installation
 cd heartwood-installation
 
-curl --fail --location --remote-name \
+curl --proto '=https' --tlsv1.2 --fail --location --remote-name \
   https://github.com/SchmiedmayerLab/heartwood/releases/download/0.4.0/heartwood-installer
 chmod 700 heartwood-installer
 ./heartwood-installer --platform generic
 export PATH="$PWD/bin:$PATH"
 ```
 
+Where the GitHub CLI is available, `gh attestation verify heartwood-installer --repo SchmiedmayerLab/heartwood` confirms that the Heartwood release workflow built the installer.
 The version-stamped installer downloads the matching native archive and checksum, verifies both, checks available storage, installs the locked Heartwood environment and CPU inference runtime, and publishes the `heartwood` command.
 It reports seven named stages; dependency installation can take several minutes.
 No model weights are included.

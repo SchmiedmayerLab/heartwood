@@ -5,10 +5,11 @@
 #
 # SPDX-License-Identifier: MIT
 
-ARG HEARTWOOD_BASE_IMAGE=ghcr.io/astral-sh/uv:python3.12-trixie-slim
+# The generic runtime builds on the pinned uv-bin stage; Terra targets override this image.
+ARG HEARTWOOD_BASE_IMAGE=uv-bin
 ARG HEARTWOOD_BASE_PLATFORM=$TARGETPLATFORM
 
-FROM --platform=$BUILDPLATFORM node:24-trixie-slim AS webui-build
+FROM --platform=$BUILDPLATFORM node:24-trixie-slim@sha256:8ec5d7557396cfe32d21c3f9c13072355ceab22b584578ca4bb28af31120cffe AS webui-build
 
 WORKDIR /src/packages/webui
 
@@ -21,7 +22,7 @@ COPY packages/webui ./
 
 RUN npm run build
 
-FROM --platform=${HEARTWOOD_BASE_PLATFORM} ghcr.io/astral-sh/uv:python3.12-trixie-slim AS uv-bin
+FROM --platform=${HEARTWOOD_BASE_PLATFORM} ghcr.io/astral-sh/uv:python3.12-trixie-slim@sha256:38f41574703989d6e5f02be80a3d687b00f98744cce86908097bcd34bcb7eb98 AS uv-bin
 
 FROM --platform=${HEARTWOOD_BASE_PLATFORM} ${HEARTWOOD_BASE_IMAGE} AS heartwood-runtime-base
 

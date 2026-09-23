@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shlex
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
@@ -1026,6 +1027,46 @@ def test_workspace_git_ignores_inherited_repository_routing(
     assert os.environ["GIT_DIR"] == str(outside / ".git")
     assert os.environ["GIT_WORK_TREE"] == str(outside)
     assert sdk_logger.level == logging.WARNING
+
+
+def test_workspace_git_never_runs_repository_configured_commands(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    _initialize_git_file(project, "analysis.py", baseline="baseline\n", current="current\n")
+    marker = tmp_path / "executed"
+    command = f"touch {shlex.quote(str(marker))}; cat"
+    (project / ".gitattributes").write_text("*.py filter=synthetic\n", encoding="utf-8")
+    _git(project, "config", "core.fsmonitor", command)
+    _git(project, "config", "filter.synthetic.clean", command)
+    _git(project, "config", "filter.synthetic.process", command)
+    inspector = WorkspaceInspector(ProjectContext(project))
+    projection = SessionProjection(session_id="session-1", event_count=0, revision=-1)
+
+    changes = inspector.changes(projection)
+    diff = inspector.diff(projection, "analysis.py")
+
+    assert not marker.exists()
+    assert "analysis.py" in [change["path"] for change in changes["changes"]]
+    assert diff["original"] == "baseline\n"
+    assert diff["modified"] == "current\n"
+
+
+def test_workspace_git_changes_fail_closed_when_configuration_inspection_stalls(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _initialize_git_file(tmp_path, "analysis.py", baseline="baseline\n", current="current\n")
+
+    def stalled(*_args: object, **_kwargs: object) -> object:
+        raise subprocess.TimeoutExpired("git", 10)
+
+    monkeypatch.setattr(subprocess, "run", stalled)
+    projection = SessionProjection(session_id="session-1", event_count=0, revision=-1)
+
+    changes = WorkspaceInspector(ProjectContext(tmp_path)).changes(projection)
+
+    assert changes["status"] == "unavailable"
+    assert changes["changes"] == []
 
 
 def test_workspace_git_diff_rejects_a_path_swapped_during_openhands_inspection(

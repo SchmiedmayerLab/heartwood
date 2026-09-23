@@ -22,9 +22,7 @@ jobs:
   dependency-review:
     name: Review dependency changes
     runs-on: ubuntu-latest
-    # Dependency review needs the GitHub dependency graph, which requires a
-    # public repository or GitHub Advanced Security. This job is skipped while
-    # the repository is private and runs automatically once it is public.
+    # The dependency graph requires a public repository or GitHub Advanced Security, so private forks skip this job.
     if: ${{ github.event.repository.private == false }}
     steps:
       - name: Checkout repository
