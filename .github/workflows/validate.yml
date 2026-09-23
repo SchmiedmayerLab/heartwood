@@ -73,7 +73,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v7
       - name: Install yamllint
-        run: pip install yamllint
+        run: pip install yamllint==1.38.0
       - name: Run yamllint
         run: yamllint -c .yamllint.yml .
   whitespace:

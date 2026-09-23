@@ -86,7 +86,8 @@ trap cleanup EXIT
 if [ -n "${cached_archive}" ]; then
   cp "${cached_archive}" "${archive}"
 else
-  curl --fail --location --show-error --retry 5 --retry-delay 2 \
+  curl --proto '=https' --proto-redir '=https' --tlsv1.2 \
+    --fail --location --show-error --retry 5 --retry-delay 2 \
     --retry-connrefused --connect-timeout 15 --max-time 600 \
     "https://github.com/ggml-org/llama.cpp/releases/download/${version}/${asset}" \
     --output "${archive}"

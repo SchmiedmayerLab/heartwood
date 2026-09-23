@@ -50,7 +50,7 @@ jobs:
             --retry 10 --retry-connrefused --retry-delay 1 \
             http://localhost:5000/v2/ >/dev/null
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
         with:
           driver-opts: network=host
           buildkitd-config-inline: |
@@ -150,9 +150,9 @@ jobs:
       - name: Reclaim runner disk
         uses: ./.github/actions/reclaim-runner-disk
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
       - name: Build and validate candidate without image export
-        uses: docker/bake-action@v7
+        uses: docker/bake-action@018cb6412ab401ebaa809aa5f85966b74628600f  # v7.4.0
         env:
           DOCKER_BUILD_RECORD_UPLOAD: false
           GIT_SHA: ${{ github.sha }}

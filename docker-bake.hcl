@@ -21,7 +21,7 @@ variable "HEARTWOOD_VERSION" {
 }
 
 variable "TERRA_BASE_IMAGE" {
-  default = "us.gcr.io/broad-dsp-gcr-public/terra-jupyter-python:1.1.6"
+  default = "us.gcr.io/broad-dsp-gcr-public/terra-jupyter-python:1.1.6@sha256:edd4d65ddae4c1eda555696f205db5a821330c859dba7496eb31b45439c38c73"
 }
 
 variable "TERRA_CI_BASE_IMAGE" {

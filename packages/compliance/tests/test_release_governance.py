@@ -383,18 +383,19 @@ def test_pull_request_validation_has_no_optional_job_placeholders() -> None:
     assert "runner: ubuntu-24.04-arm" in smoke
     assert "cache_scope: runtime-amd64" in smoke
     assert "cache_scope: runtime-arm64" in smoke
-    assert "uses: docker/bake-action@v7" in smoke
+    assert "uses: docker/bake-action@" in smoke
     assert "runtime.cache-from=type=gha,scope=${{ matrix.cache_scope }}" in smoke
     assert "runtime.cache-to=type=gha,scope=${{ matrix.cache_scope }},mode=min" in smoke
     assert "docker compose -f images/generic/compose.yaml run --rm heartwood" in smoke
     assert "runner: ubuntu-24.04" in gpu
     assert "uses: ./.github/actions/reclaim-runner-disk" in gpu
     assert "runs-on: heartwood-ubuntu-large" in capable
-    assert "uses: docker/bake-action@v7" in capable
-    assert "uses: docker/bake-action@v7" in gpu
+    assert "uses: docker/bake-action@" in capable
+    assert "uses: docker/bake-action@" in gpu
     assert "cache-from=type=gha" not in gpu
     assert "cache-to=type=gha" not in gpu
-    assert dependabot.count('multi-ecosystem-group: "weekly-dependencies"') == 3
+    assert dependabot.count('multi-ecosystem-group: "weekly-dependencies"') == 4
+    assert dependabot.count("default-days: 7") == 4
 
 
 def test_only_capable_model_acceptance_uses_the_large_hosted_runner() -> None:
@@ -631,3 +632,25 @@ printf '%s\\n' 'Name: fake' 'Digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
     commands = log.read_text(encoding="utf-8")
     assert commands.count("imagetools create") == 4
     assert commands.count("--prefer-index=false") == 2
+
+
+def test_third_party_actions_are_pinned_to_full_commits() -> None:
+    trusted_owners = {"actions", "SchmiedmayerLab"}
+    unpinned: list[str] = []
+    paths = [
+        *sorted(Path(".github/workflows").glob("*.yml")),
+        *sorted(Path(".github/actions").glob("*/action.yml")),
+    ]
+    for path in paths:
+        document = _workflow(str(path))
+        jobs = document.get("jobs") or {"composite": document.get("runs", {})}
+        for job in jobs.values():
+            for step in job.get("steps", []):
+                uses = step.get("uses", "")
+                if not uses or uses.startswith("./") or uses.split("/")[0] in trusted_owners:
+                    continue
+                reference = uses.rpartition("@")[2]
+                if len(reference) != 40 or any(c not in "0123456789abcdef" for c in reference):
+                    unpinned.append(f"{path}: {uses}")
+
+    assert unpinned == []

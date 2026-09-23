@@ -18,6 +18,8 @@ npm ci --prefix packages/webui
 ```
 
 Use the repository's pinned Python and Node dependency locks.
+Resolution ignores releases younger than seven days through uv's `exclude-newer` setting, npm's `min-release-age`, and the Dependabot cooldown; security updates are not delayed.
+Base images are pinned by digest, and third-party GitHub Actions by full commit, with Dependabot proposing updates in the weekly group.
 Do not add a new language, agent implementation, UI stack, or service when an existing contract or upstream dependency can own the behavior.
 
 ## Reuse Before Variants
