@@ -31,7 +31,7 @@ dependencies = [
     "packaging==26.3",
     "pydantic>=2.12",
     "tomli-w==1.2.0",
-    "uv==0.12.13",
+    "uv==0.12.18",
 ]
 
 [build-system]
