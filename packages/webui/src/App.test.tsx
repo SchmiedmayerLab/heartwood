@@ -3418,7 +3418,7 @@ describe("App", () => {
       name: "Review 2 actions",
     });
     expect(heading).toBeVisible();
-    expect(heading).toHaveFocus();
+    await waitFor(() => expect(heading).toHaveFocus());
     const approval = screen.getByRole("region", { name: "Review 2 actions" });
     expect(within(approval).getByRole("list")).toBeVisible();
     expect(

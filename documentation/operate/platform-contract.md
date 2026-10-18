@@ -497,6 +497,7 @@ These examples describe contract behavior with synthetic workloads; they are not
 The checked-in examples under `fixtures/synthetic/platform-contract/` include a complete overview, exact proposal bytes, and native-request bytes for each workload.
 Exploration shows a platform-authorized bounded run, batch shows platform denial after concurrent spending, and inference shows an unknown price and unavailable budget observation.
 The native requests use a synthetic test service; real integrations preserve their upstream backend request format.
+The `mcp-tasks.json` fixture in the same directory contains immediate and deferred exchanges with identical completed estimates, plus a cancellation acknowledgement followed by continued backend work and spending.
 
 Read each exchange in this order:
 
@@ -606,7 +607,7 @@ Heartwood defines the estimate payload; MCP defines how a caller receives it imm
 
 A completed task can contain a tool result with `isError: true`; it does not establish successful estimation or execution.
 Expired or missing task state requires reconciliation with the platform operation identifier before resubmission.
-The checked-in [synthetic exchanges](https://github.com/SchmiedmayerLab/heartwood/tree/main/fixtures/synthetic/platform-contract) demonstrate both estimate paths and cancellation followed by continued backend work.
+The checked-in [synthetic exchanges](#workload-examples) demonstrate both estimate paths and cancellation followed by continued backend work.
 
 !!! planned "Tasks runtime integration remains separate"
     The installed SDK exposes the superseded experimental Tasks types; their presence does not establish support for this extension.
