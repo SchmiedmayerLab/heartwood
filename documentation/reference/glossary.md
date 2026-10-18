@@ -60,6 +60,9 @@ SPDX-License-Identifier: MIT
 **Ed25519**
 : A public-key signature algorithm supported by Heartwood checkpoint signers and used by the explicit local fallback.
 
+**FinOps Open Cost and Usage Specification (FOCUS)**
+: A vendor-neutral specification for technology cost and usage data; its pricing and cost definitions inform the platform contract without replacing platform estimation, authorization, or spending controls.
+
 **Global Alliance for Genomics and Health (GA4GH)**
 : A standards organization whose interfaces include the Task Execution Service, Workflow Execution Service, and Data Repository Service used by research platforms.
 
@@ -95,6 +98,9 @@ SPDX-License-Identifier: MIT
 
 **Model Context Protocol (MCP)**
 : An open protocol through which an agent discovers and calls tools that an external service provides.
+
+**MCP Tasks**
+: An optional MCP extension for retrieving a delayed tool result through a task identifier. Its status is separate from the backend job and incurred spending.
 
 **Model credential boundary**
 : The technical separation, or documented lack of separation, between provider authentication used for model calls and the operating-system identity that runs agent tools.
@@ -140,6 +146,9 @@ SPDX-License-Identifier: MIT
 
 **safetensors**
 : A tensor-storage format designed to load model weights without executing serialized code.
+
+**Semantic Versioning (SemVer)**
+: A major.minor.patch version scheme that communicates public-contract compatibility. Heartwood defines its pre-1.0 conventions in the support policy and platform contract.
 
 **SHA-256**
 : A cryptographic hash function Heartwood uses to verify that model files and other artifacts have not changed.

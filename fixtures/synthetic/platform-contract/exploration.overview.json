@@ -1,0 +1,291 @@
+{
+  "authorizations": [
+    {
+      "authorization_id": "authorization",
+      "budget_id": "budget",
+      "document_sha256": "1c94ba2bfa0a5ff6505dda08e513f876f7f40b62c39734a60bd94c120eb00025",
+      "observed_at": "2026-10-17T10:00:00Z",
+      "platform_record_ref": "platform://authorization-1",
+      "project_context_id": "project",
+      "proposal": {
+        "record_id": "proposal",
+        "revision": 1
+      },
+      "reason": "Platform authorized the bounded workload.",
+      "reservation_ref": "platform://reservation-1",
+      "schema_version": "heartwood.platform-authorization.v1",
+      "status": "authorized",
+      "valid_until": null
+    }
+  ],
+  "budgets": [
+    {
+      "allocated": "100",
+      "available": "80",
+      "budget_id": "budget",
+      "constraints": [],
+      "denomination": {
+        "kind": "currency",
+        "unit": "USD"
+      },
+      "limitations": [],
+      "observed_at": "2026-10-17T10:00:00Z",
+      "platform_record_ref": "platform://budget-1",
+      "project_context_id": "project",
+      "reserved": "0",
+      "schema_version": "heartwood.budget-observation.v1",
+      "spent": "20"
+    }
+  ],
+  "estimates": [
+    {
+      "covered_element_ids": [
+        "exploration"
+      ],
+      "created_at": "2026-10-17T10:00:00Z",
+      "element_estimates": [
+        {
+          "cost": {
+            "coverage": "complete",
+            "denomination": {
+              "kind": "currency",
+              "unit": "USD"
+            },
+            "expected": "4.10",
+            "limitations": [],
+            "lower": null,
+            "upper": null
+          },
+          "element_ids": [
+            "exploration"
+          ],
+          "included_in_total": true
+        }
+      ],
+      "estimate_id": "estimate",
+      "exclusions": [],
+      "focus_evidence": [],
+      "plan": {
+        "record_id": "plan",
+        "revision": 1
+      },
+      "prediction": {
+        "record_id": "prediction",
+        "revision": 1
+      },
+      "pricing_assumptions": [
+        "Illustrative platform quote only; not a provider price."
+      ],
+      "project_context_id": "project",
+      "schema_version": "heartwood.platform-estimate.v1",
+      "scope": "plan",
+      "total": {
+        "coverage": "complete",
+        "denomination": {
+          "kind": "currency",
+          "unit": "USD"
+        },
+        "expected": "4.10",
+        "limitations": [],
+        "lower": null,
+        "upper": null
+      },
+      "valid_until": "2026-10-17T11:00:00Z"
+    }
+  ],
+  "operation_sets": [
+    {
+      "document_ref": "exploration.proposal.json",
+      "document_sha256": "1c94ba2bfa0a5ff6505dda08e513f876f7f40b62c39734a60bd94c120eb00025",
+      "proposal": {
+        "created_at": "2026-10-17T10:00:00Z",
+        "estimates": [
+          {
+            "covered_element_ids": [
+              "exploration"
+            ],
+            "created_at": "2026-10-17T10:00:00Z",
+            "element_estimates": [
+              {
+                "cost": {
+                  "coverage": "complete",
+                  "denomination": {
+                    "kind": "currency",
+                    "unit": "USD"
+                  },
+                  "expected": "4.10",
+                  "limitations": [],
+                  "lower": null,
+                  "upper": null
+                },
+                "element_ids": [
+                  "exploration"
+                ],
+                "included_in_total": true
+              }
+            ],
+            "estimate_id": "estimate",
+            "exclusions": [],
+            "focus_evidence": [],
+            "plan": {
+              "record_id": "plan",
+              "revision": 1
+            },
+            "prediction": {
+              "record_id": "prediction",
+              "revision": 1
+            },
+            "pricing_assumptions": [
+              "Illustrative platform quote only; not a provider price."
+            ],
+            "project_context_id": "project",
+            "schema_version": "heartwood.platform-estimate.v1",
+            "scope": "plan",
+            "total": {
+              "coverage": "complete",
+              "denomination": {
+                "kind": "currency",
+                "unit": "USD"
+              },
+              "expected": "4.10",
+              "limitations": [],
+              "lower": null,
+              "upper": null
+            },
+            "valid_until": "2026-10-17T11:00:00Z"
+          }
+        ],
+        "operations": [
+          {
+            "data_scope": "Synthetic inputs only.",
+            "description": "Submit exactly the reviewed exploration workload.",
+            "destination": "project output directory",
+            "element_ids": [
+              "exploration"
+            ],
+            "estimate_ids": [
+              "estimate"
+            ],
+            "operation_id": "exploration-submission",
+            "request": {
+              "protocol": "synthetic-platform-profile.v1",
+              "request_ref": "exploration.native-request.json",
+              "request_sha256": "65d3345c9bb769703a1ad47757202a179075e55f0babbd5244aa99d6d7083c4a",
+              "service_id": "compute"
+            },
+            "resource_limits": [
+              {
+                "maximum": "7200",
+                "metric": "duration",
+                "unit": "seconds"
+              }
+            ]
+          }
+        ],
+        "plan": {
+          "record_id": "plan",
+          "revision": 1
+        },
+        "prediction": {
+          "record_id": "prediction",
+          "revision": 1
+        },
+        "project_context_id": "project",
+        "proposal": {
+          "record_id": "proposal",
+          "revision": 1
+        },
+        "schema_version": "heartwood.operation-set-proposal.v1"
+      }
+    }
+  ],
+  "operations": [
+    {
+      "backend_operation_ref": "backend://request-1",
+      "limitations": [],
+      "observed_at": "2026-10-17T10:00:00Z",
+      "operation_id": "exploration-submission",
+      "platform_record_ref": "platform://operation-1",
+      "project_context_id": "project",
+      "schema_version": "heartwood.platform-operation-observation.v1",
+      "service_id": "compute",
+      "status": "running"
+    }
+  ],
+  "prediction": {
+    "assumptions": [],
+    "created_at": "2026-10-17T10:00:00Z",
+    "elements": [
+      {
+        "assumptions": [
+          "Synthetic input only; use the declared runtime profile."
+        ],
+        "description": "Synthetic exploration workload",
+        "element_id": "exploration",
+        "evidence_ids": [
+          "researcher-assumptions"
+        ],
+        "kind": "exploration",
+        "quantities": [
+          {
+            "expected": "7200",
+            "lower": null,
+            "metric": "duration",
+            "uncertainty": "Researcher assumption; no calibrated confidence.",
+            "unit": "seconds",
+            "upper": null
+          },
+          {
+            "expected": "1",
+            "lower": null,
+            "metric": "dataset_scans",
+            "uncertainty": "Researcher assumption; no calibrated confidence.",
+            "unit": "count",
+            "upper": null
+          }
+        ],
+        "runtime_profile_ref": "synthetic-exploration-small"
+      }
+    ],
+    "evidence": [
+      {
+        "content_sha256": null,
+        "description": "Synthetic researcher-supplied workload assumptions.",
+        "evidence_id": "researcher-assumptions",
+        "kind": "researcher-input",
+        "observed_at": "2026-10-17T10:00:00Z",
+        "project_context_id": "project",
+        "reference": "project://evidence/assumptions-1"
+      }
+    ],
+    "plan": {
+      "record_id": "plan",
+      "revision": 1
+    },
+    "prediction": {
+      "record_id": "prediction",
+      "revision": 1
+    },
+    "project_context_id": "project",
+    "schema_version": "heartwood.workload-prediction.v1",
+    "supersedes": null,
+    "uncertainty": "Duration depends on the observed input sizes."
+  },
+  "researcher_decisions": [
+    {
+      "actor_ref": "researcher",
+      "audit_ref": "session://decision-1",
+      "decided_at": "2026-10-17T10:00:00Z",
+      "decision": "approved",
+      "decision_id": "decision",
+      "document_sha256": "1c94ba2bfa0a5ff6505dda08e513f876f7f40b62c39734a60bd94c120eb00025",
+      "project_context_id": "project",
+      "proposal": {
+        "record_id": "proposal",
+        "revision": 1
+      },
+      "schema_version": "heartwood.researcher-decision.v1"
+    }
+  ],
+  "schema_version": "heartwood.planning-overview.v1"
+}

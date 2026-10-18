@@ -1,0 +1,372 @@
+{
+  "description": "Synthetic offline exchanges. Schema validity and cancellation acknowledgment do not grant authority, stop backend work, or erase incurred cost.",
+  "extension": "io.modelcontextprotocol/tasks",
+  "extension_version": "2026-07-28",
+  "server_capabilities": {
+    "extensions": {
+      "io.modelcontextprotocol/tasks": {}
+    }
+  },
+  "estimate_source": "exploration.overview.json",
+  "exchanges": [
+    {
+      "name": "immediate-estimate",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+          "name": "estimate_workload",
+          "arguments": {
+            "prediction_ref": "exploration.overview.json#prediction"
+          },
+          "_meta": {
+            "io.modelcontextprotocol/clientCapabilities": {
+              "extensions": {
+                "io.modelcontextprotocol/tasks": {}
+              }
+            }
+          }
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "resultType": "complete",
+          "content": [],
+          "structuredContent": {
+            "covered_element_ids": [
+              "exploration"
+            ],
+            "created_at": "2026-10-17T10:00:00Z",
+            "element_estimates": [
+              {
+                "cost": {
+                  "coverage": "complete",
+                  "denomination": {
+                    "kind": "currency",
+                    "unit": "USD"
+                  },
+                  "expected": "4.10",
+                  "limitations": [],
+                  "lower": null,
+                  "upper": null
+                },
+                "element_ids": [
+                  "exploration"
+                ],
+                "included_in_total": true
+              }
+            ],
+            "estimate_id": "estimate",
+            "exclusions": [],
+            "focus_evidence": [],
+            "plan": {
+              "record_id": "plan",
+              "revision": 1
+            },
+            "prediction": {
+              "record_id": "prediction",
+              "revision": 1
+            },
+            "pricing_assumptions": [
+              "Illustrative platform quote only; not a provider price."
+            ],
+            "project_context_id": "project",
+            "schema_version": "heartwood.platform-estimate.v1",
+            "scope": "plan",
+            "total": {
+              "coverage": "complete",
+              "denomination": {
+                "kind": "currency",
+                "unit": "USD"
+              },
+              "expected": "4.10",
+              "limitations": [],
+              "lower": null,
+              "upper": null
+            },
+            "valid_until": "2026-10-17T11:00:00Z"
+          }
+        }
+      }
+    },
+    {
+      "name": "deferred-estimate",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+          "name": "estimate_workload",
+          "arguments": {
+            "prediction_ref": "exploration.overview.json#prediction"
+          },
+          "_meta": {
+            "io.modelcontextprotocol/clientCapabilities": {
+              "extensions": {
+                "io.modelcontextprotocol/tasks": {}
+              }
+            }
+          }
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {
+          "resultType": "task",
+          "taskId": "estimate-task",
+          "status": "working",
+          "createdAt": "2026-10-17T10:00:00Z",
+          "lastUpdatedAt": "2026-10-17T10:00:00Z",
+          "ttlMs": 3600000,
+          "pollIntervalMs": 1000
+        }
+      }
+    },
+    {
+      "name": "estimate-working",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tasks/get",
+        "params": {
+          "taskId": "estimate-task",
+          "_meta": {
+            "io.modelcontextprotocol/clientCapabilities": {
+              "extensions": {
+                "io.modelcontextprotocol/tasks": {}
+              }
+            }
+          }
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "result": {
+          "resultType": "complete",
+          "taskId": "estimate-task",
+          "status": "working",
+          "createdAt": "2026-10-17T10:00:00Z",
+          "lastUpdatedAt": "2026-10-17T10:00:01Z",
+          "ttlMs": 3600000,
+          "pollIntervalMs": 1000
+        }
+      }
+    },
+    {
+      "name": "estimate-completed",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "tasks/get",
+        "params": {
+          "taskId": "estimate-task",
+          "_meta": {
+            "io.modelcontextprotocol/clientCapabilities": {
+              "extensions": {
+                "io.modelcontextprotocol/tasks": {}
+              }
+            }
+          }
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "result": {
+          "resultType": "complete",
+          "taskId": "estimate-task",
+          "status": "completed",
+          "createdAt": "2026-10-17T10:00:00Z",
+          "lastUpdatedAt": "2026-10-17T10:00:02Z",
+          "ttlMs": 3600000,
+          "pollIntervalMs": 1000,
+          "result": {
+            "resultType": "complete",
+            "content": [],
+            "structuredContent": {
+              "covered_element_ids": [
+                "exploration"
+              ],
+              "created_at": "2026-10-17T10:00:00Z",
+              "element_estimates": [
+                {
+                  "cost": {
+                    "coverage": "complete",
+                    "denomination": {
+                      "kind": "currency",
+                      "unit": "USD"
+                    },
+                    "expected": "4.10",
+                    "limitations": [],
+                    "lower": null,
+                    "upper": null
+                  },
+                  "element_ids": [
+                    "exploration"
+                  ],
+                  "included_in_total": true
+                }
+              ],
+              "estimate_id": "estimate",
+              "exclusions": [],
+              "focus_evidence": [],
+              "plan": {
+                "record_id": "plan",
+                "revision": 1
+              },
+              "prediction": {
+                "record_id": "prediction",
+                "revision": 1
+              },
+              "pricing_assumptions": [
+                "Illustrative platform quote only; not a provider price."
+              ],
+              "project_context_id": "project",
+              "schema_version": "heartwood.platform-estimate.v1",
+              "scope": "plan",
+              "total": {
+                "coverage": "complete",
+                "denomination": {
+                  "kind": "currency",
+                  "unit": "USD"
+                },
+                "expected": "4.10",
+                "limitations": [],
+                "lower": null,
+                "upper": null
+              },
+              "valid_until": "2026-10-17T11:00:00Z"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "operation-tracking",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "method": "tools/call",
+        "params": {
+          "name": "submit_research_operation",
+          "arguments": {
+            "proposal_ref": "exploration.proposal.json",
+            "operation_id": "exploration-submission"
+          },
+          "_meta": {
+            "io.modelcontextprotocol/clientCapabilities": {
+              "extensions": {
+                "io.modelcontextprotocol/tasks": {}
+              }
+            }
+          }
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "result": {
+          "resultType": "task",
+          "taskId": "operation-task",
+          "status": "working",
+          "createdAt": "2026-10-17T10:00:00Z",
+          "lastUpdatedAt": "2026-10-17T10:00:00Z",
+          "ttlMs": 3600000,
+          "pollIntervalMs": 1000
+        }
+      }
+    },
+    {
+      "name": "cancellation-acknowledged",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 6,
+        "method": "tasks/cancel",
+        "params": {
+          "taskId": "operation-task",
+          "_meta": {
+            "io.modelcontextprotocol/clientCapabilities": {
+              "extensions": {
+                "io.modelcontextprotocol/tasks": {}
+              }
+            }
+          }
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 6,
+        "result": {
+          "resultType": "complete"
+        }
+      }
+    },
+    {
+      "name": "cancellation-still-working",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 7,
+        "method": "tasks/get",
+        "params": {
+          "taskId": "operation-task",
+          "_meta": {
+            "io.modelcontextprotocol/clientCapabilities": {
+              "extensions": {
+                "io.modelcontextprotocol/tasks": {}
+              }
+            }
+          }
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 7,
+        "result": {
+          "resultType": "complete",
+          "taskId": "operation-task",
+          "status": "working",
+          "createdAt": "2026-10-17T10:00:00Z",
+          "lastUpdatedAt": "2026-10-17T10:00:03Z",
+          "ttlMs": 3600000,
+          "pollIntervalMs": 1000,
+          "statusMessage": "Cancellation requested; backend reconciliation is pending."
+        }
+      }
+    }
+  ],
+  "after_cancellation": {
+    "backend_operation": {
+      "backend_operation_ref": "backend://request-1",
+      "limitations": [],
+      "observed_at": "2026-10-17T10:00:03Z",
+      "operation_id": "exploration-submission",
+      "platform_record_ref": "platform://operation-1",
+      "project_context_id": "project",
+      "schema_version": "heartwood.platform-operation-observation.v1",
+      "service_id": "compute",
+      "status": "running"
+    },
+    "budget": {
+      "allocated": "100",
+      "available": "78.75",
+      "budget_id": "budget",
+      "constraints": [],
+      "denomination": {
+        "kind": "currency",
+        "unit": "USD"
+      },
+      "limitations": [],
+      "observed_at": "2026-10-17T10:00:03Z",
+      "platform_record_ref": "platform://budget-1",
+      "project_context_id": "project",
+      "reserved": "0",
+      "schema_version": "heartwood.budget-observation.v1",
+      "spent": "21.25"
+    }
+  }
+}
