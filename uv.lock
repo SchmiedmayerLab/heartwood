@@ -1598,6 +1598,7 @@ dependencies = [
     { name = "heartwood-detector" },
     { name = "heartwood-model-policy" },
     { name = "heartwood-schemas" },
+    { name = "jsonschema" },
 ]
 
 [package.metadata]
@@ -1605,6 +1606,7 @@ requires-dist = [
     { name = "heartwood-detector", editable = "packages/detector" },
     { name = "heartwood-model-policy", editable = "packages/model-policy" },
     { name = "heartwood-schemas", editable = "packages/schemas" },
+    { name = "jsonschema", specifier = ">=4.26.0" },
 ]
 
 [[package]]

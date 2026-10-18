@@ -18,6 +18,8 @@ from pathlib import Path
 from typing import Any, Literal, Protocol, cast
 from urllib.parse import urlsplit
 
+from pydantic import ValidationError
+
 from heartwood.gateway._model_settings import CredentialKind, ModelProfile
 from heartwood.gateway._openhands_models import (
     OpenHandsModelError,
@@ -31,6 +33,7 @@ from heartwood.gateway._subscriptions import (
     OpenHandsOpenAISubscription,
 )
 from heartwood.model_policy import PolicyInputError, normalize_endpoint
+from heartwood.schemas import ModelConnectionManifest, ModelConnectionsManifest
 
 type ConnectionProtocol = Literal[
     "anthropic", "openai", "openai-compatible", "static", "subscription"
@@ -66,25 +69,6 @@ _CATALOG_TIMEOUT_SECONDS = 30.0
 _CATALOG_MAX_RETRIES = 1
 _ENVIRONMENT_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _SAFE_ID = re.compile(r"^[A-Za-z0-9_-]+$")
-_CONNECTION_FIELDS = {
-    "api_key_env",
-    "api_key_file",
-    "api_version",
-    "aws_profile_name",
-    "aws_region_name",
-    "base_url",
-    "catalog_endpoint",
-    "connection_id",
-    "credential_kind",
-    "description",
-    "label",
-    "model_prefix",
-    "policy_endpoint",
-    "protocol",
-    "source",
-    "static_models",
-    "subscription_vendor",
-}
 _SECRET_FIELD_MARKERS = ("api_key", "apikey", "password", "secret", "token")
 
 
@@ -624,18 +608,16 @@ def model_connections_from_mapping(value: object) -> tuple[ModelConnection, ...]
     """Validate configured connections and combine them with built-ins."""
     for connection in BUILT_IN_MODEL_CONNECTIONS:
         connection.validate(configurable=connection.connection_id == "custom-api")
-    if (
-        not isinstance(value, dict)
-        or value.get("schema_version") != "heartwood.model-connections.v1"
-    ):
-        raise ModelCatalogError("unsupported model connections schema")
-    raw_connections = value.get("connections")
-    if not isinstance(raw_connections, list):
-        raise ModelCatalogError("model connections must be a list")
     _reject_secret_values(value)
-    configured = tuple(_connection_from_mapping(item) for item in raw_connections)
-    if any(connection.source != "platform" for connection in configured):
-        raise ModelCatalogError("configured model connections must use source platform")
+    try:
+        manifest = ModelConnectionsManifest.model_validate(value)
+    except ValidationError as error:
+        details = "; ".join(
+            f"{'.'.join(str(part) for part in item['loc']) or 'manifest'}: {item['msg']}"
+            for item in error.errors(include_input=False, include_url=False)
+        )
+        raise ModelCatalogError(f"invalid model connections manifest: {details}") from None
+    configured = tuple(_connection_from_manifest(item) for item in manifest.connections)
     connection_ids = [
         connection.connection_id for connection in (*BUILT_IN_MODEL_CONNECTIONS, *configured)
     ]
@@ -679,39 +661,26 @@ def custom_model_connection_requires_token(base_url: str) -> bool:
     return not (parsed.scheme == "http" and parsed.hostname in {"127.0.0.1", "::1", "localhost"})
 
 
-def _connection_from_mapping(value: object) -> ModelConnection:
-    if not isinstance(value, dict):
-        raise ModelCatalogError("model connection must be an object")
-    unsupported = set(value) - _CONNECTION_FIELDS
-    if unsupported:
-        raise ModelCatalogError(
-            f"model connection contains unsupported fields: {', '.join(sorted(unsupported))}"
-        )
-    static_models = value.get("static_models", [])
-    if not isinstance(static_models, list) or not all(
-        isinstance(item, str) for item in static_models
-    ):
-        raise ModelCatalogError("static_models must be a list of strings")
+def _connection_from_manifest(value: ModelConnectionManifest) -> ModelConnection:
     connection = ModelConnection(
-        connection_id=_required_string(value, "connection_id"),
-        label=_required_string(value, "label"),
-        protocol=cast(ConnectionProtocol, _required_string(value, "protocol")),
-        model_prefix=_required_string(value, "model_prefix"),
-        source=cast(ConnectionSource, value.get("source", "platform")),
-        credential_kind=cast(CredentialKind, _required_string(value, "credential_kind")),
-        policy_endpoint=_optional_string(value, "policy_endpoint"),
-        catalog_endpoint=_optional_string(value, "catalog_endpoint"),
-        base_url=_optional_string(value, "base_url"),
-        api_key_env=_optional_string(value, "api_key_env"),
-        api_key_file=_optional_string(value, "api_key_file"),
-        api_version=_optional_string(value, "api_version"),
-        aws_region_name=_optional_string(value, "aws_region_name"),
-        aws_profile_name=_optional_string(value, "aws_profile_name"),
-        description=cast(str, value.get("description", "")),
-        static_models=tuple(cast(list[str], static_models)),
+        connection_id=value.connection_id,
+        label=value.label,
+        protocol=value.protocol,
+        model_prefix=value.model_prefix,
+        source=value.source,
+        credential_kind=value.credential_kind,
+        policy_endpoint=value.policy_endpoint,
+        catalog_endpoint=value.catalog_endpoint,
+        base_url=value.base_url,
+        api_key_env=value.api_key_env,
+        api_key_file=value.api_key_file,
+        api_version=value.api_version,
+        aws_region_name=value.aws_region_name,
+        aws_profile_name=value.aws_profile_name,
+        description=value.description,
+        static_models=tuple(value.static_models),
+        subscription_vendor=value.subscription_vendor,
     )
-    if not isinstance(connection.description, str):
-        raise ModelCatalogError("description must be a string")
     connection.validate()
     return connection
 
@@ -873,19 +842,3 @@ def _reject_secret_values(value: object) -> None:
     elif isinstance(value, list):
         for nested in value:
             _reject_secret_values(nested)
-
-
-def _required_string(value: Mapping[str, object], key: str) -> str:
-    item = value.get(key)
-    if not isinstance(item, str) or not item:
-        raise ModelCatalogError(f"{key} must be a non-empty string")
-    return item
-
-
-def _optional_string(value: Mapping[str, object], key: str) -> str | None:
-    item = value.get(key)
-    if item is None:
-        return None
-    if not isinstance(item, str) or not item:
-        raise ModelCatalogError(f"{key} must be a non-empty string when provided")
-    return item

@@ -1,0 +1,5 @@
+{
+  "input_ref": "synthetic-input",
+  "profile": "synthetic-batch-small",
+  "synthetic": true
+}

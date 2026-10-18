@@ -1,0 +1,19 @@
+MCP Tasks extension, published revision 2026-07-28
+Copyright 2025 The Model Context Protocol Authors
+License: Apache-2.0; see mcp-tasks.LICENSE.txt.
+
+The schema is an unmodified upstream file. It is not a Heartwood protocol definition.
+Source: https://github.com/modelcontextprotocol/ext-tasks/blob/0d0a6bd4c258b35caa3c810a1dd506cf105b1501/schema/2026-07-28/schema.json
+Commit: 0d0a6bd4c258b35caa3c810a1dd506cf105b1501
+Original SHA-256: bf30afb7ac251e3e22c037b7a685f60ef6603031b5484c0d08b1fa0bbe86d460
+Specification: https://tasks.extensions.modelcontextprotocol.io/specification/2026-07-28/tasks
+
+Conformance checks use the versioned specification and this schema together.
+The schema's CreateTaskResult is flat, as in the versioned example; the specification's
+reference to an embedded task object is inconsistent with that shape.
+The versioned missing-capability error code is -32021.
+Heartwood's checks for sensible durations and timestamp ordering are profile checks;
+the upstream schema alone does not enforce them.
+The versioned completed-task examples omit resultType inside the original tool result.
+The checker accepts that nested shape while requiring resultType on outer results;
+this is a limited compatibility interpretation, not complete core-protocol validation.

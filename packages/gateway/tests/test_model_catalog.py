@@ -291,7 +291,7 @@ def test_platform_connection_manifest_supports_multi_model_research_service(
                 "schema_version": "heartwood.model-connections.v1",
                 "connections": {"bad": "shape"},
             },
-            "must be a list",
+            "connections: Input should be a valid list",
         ),
         (
             {
@@ -338,7 +338,7 @@ def test_connection_manifest_accepts_only_platform_sources(tmp_path: Path) -> No
         encoding="utf-8",
     )
 
-    with pytest.raises(ModelCatalogError, match="must use source platform"):
+    with pytest.raises(ModelCatalogError, match="source: Input should be 'platform'"):
         load_model_connections(path)
 
 
@@ -1007,9 +1007,12 @@ def test_manifest_rejects_unreadable_duplicate_and_malformed_connections(
         "static_models": ["model"],
     }
     cases = (
-        (manifest("bad"), "must be an object"),
-        (manifest({**base, "unsupported": True}), "unsupported fields"),
-        (manifest({**base, "static_models": "model"}), "list of strings"),
+        (manifest("bad"), "connections.0: Input should be a valid dictionary"),
+        (manifest({**base, "unsupported": True}), "unsupported: Extra inputs are not permitted"),
+        (
+            manifest({**base, "static_models": "model"}),
+            "static_models: Input should be a valid list",
+        ),
         (manifest({**base, "description": 7}), "description"),
         (manifest({**base, "connection_id": "heartwood"}), "ids must be unique"),
     )
