@@ -1055,7 +1055,10 @@ def _available_gpu_memory_bytes(
     *,
     count: int = 1,
 ) -> int | None:
-    executable = shutil.which("nvidia-smi", path=env.get("PATH"))
+    executable_path = env.get("PATH")
+    if executable_path is None:
+        return None
+    executable = shutil.which("nvidia-smi", path=executable_path)
     if executable is None:
         return None
     try:
