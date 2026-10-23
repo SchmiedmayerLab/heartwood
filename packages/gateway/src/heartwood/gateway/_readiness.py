@@ -60,6 +60,7 @@ ModelSource = Literal[
 
 _STANFORD_ROOT = "https://aiapi-prod.stanford.edu/v1"
 _MANAGED_MODEL_CATALOG_URL = "http://127.0.0.1:8765/v1/models"
+_NVIDIA_DEVICE = Path("/dev/nvidia0")
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -842,4 +843,4 @@ def gpu_visible(env: Mapping[str, str]) -> bool:
     """Return whether the current process has evidence of an attached NVIDIA GPU."""
     visible = env.get("NVIDIA_VISIBLE_DEVICES") or env.get("CUDA_VISIBLE_DEVICES")
     configured = bool(visible and visible.lower() not in {"none", "void", "-1"})
-    return configured or Path("/dev/nvidia0").exists()
+    return configured or _NVIDIA_DEVICE.exists()
