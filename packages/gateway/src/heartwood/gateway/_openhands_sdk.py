@@ -208,7 +208,7 @@ class OpenHandsSdkBackend:
         skills_dir: Path,
         persistence_dir: Path,
         conversation_key: str,
-        additional_skills_dirs: Sequence[Path] = (),
+        installed_skill_roots: Sequence[Path] = (),
         specialist_catalog: SpecialistCatalog | None = None,
         credential_environment_names: Sequence[str] = (),
         action_confirmation_mode: ActionConfirmationMode = "always-confirm",
@@ -227,7 +227,7 @@ class OpenHandsSdkBackend:
         self._action_confirmation_mode = action_confirmation_mode
         self.workspace = workspace.resolve()
         self.skills_dir = skills_dir.resolve()
-        self.additional_skills_dirs = tuple(path.resolve() for path in additional_skills_dirs)
+        self.installed_skill_roots = tuple(path.resolve() for path in installed_skill_roots)
         self.specialist_catalog = specialist_catalog
         self.persistence_dir = persistence_dir.resolve()
         self.conversation_key = conversation_key
@@ -708,18 +708,11 @@ class OpenHandsSdkBackend:
         token_callback: Callable[[LLMStreamChunk], None],
     ) -> BaseConversation:
         _configure_upstream_defaults(self.env)
-        from openhands.sdk.skills import load_skills_from_dir
-
         from heartwood.gateway._project_file_editor import PROJECT_FILE_EDITOR_SPEC
 
         self.workspace.mkdir(parents=True, exist_ok=True)
         self.persistence_dir.mkdir(parents=True, exist_ok=True)
-        skills: list[Skill] = []
-        for skills_dir in (self.skills_dir, *self.additional_skills_dirs):
-            if not skills_dir.is_dir():
-                continue
-            repository, knowledge, agent_skills = load_skills_from_dir(skills_dir)
-            skills.extend((*repository.values(), *knowledge.values(), *agent_skills.values()))
+        skills = _load_session_skills(self.skills_dir, self.installed_skill_roots)
         self._register_specialized_agents()
         options = _llm_options(
             self.profile,
@@ -2005,6 +1998,21 @@ def _conversation_runtime_options() -> _ConversationRuntimeOptions:
         "max_iteration_per_run": _AGENT_MAX_ITERATIONS_PER_RUN,
         "stuck_detection": True,
     }
+
+
+def _load_session_skills(
+    bundled_dir: Path,
+    installed_skill_roots: Sequence[Path],
+) -> list[Skill]:
+    """Load release-bundled Skills and exactly the verified installed Skill directories."""
+    from openhands.sdk.skills import load_skills_from_dir
+
+    skills: list[Skill] = []
+    if bundled_dir.is_dir():
+        repository, knowledge, agent_skills = load_skills_from_dir(bundled_dir)
+        skills.extend((*repository.values(), *knowledge.values(), *agent_skills.values()))
+    skills.extend(Skill.load(root / "SKILL.md") for root in installed_skill_roots)
+    return skills
 
 
 def _agent_context(
