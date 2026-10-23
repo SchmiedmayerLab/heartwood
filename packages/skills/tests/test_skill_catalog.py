@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import shutil
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -143,6 +144,12 @@ def _client(tmp_path: Path) -> tuple[SkillCatalogClient, SkillCatalogSnapshot, P
     trusted_root = _write_tuf_repository(repository, catalog_targets)
     client = SkillCatalogClient(_profile(repository, trusted_root), tmp_path / "cache")
     return client, client.refresh(), repository
+
+
+def _local_skill_source(tmp_path: Path) -> tuple[Path, str]:
+    source = tmp_path / "source" / "aggregate-export"
+    shutil.copytree(_SKILLS_ROOT / "aggregate-export", source)
+    return source, LocalSkillVerifier(source.parent).load_manifest(source).tree_sha256
 
 
 def test_offline_tuf_catalog_refreshes_and_downloads_immutable_targets(tmp_path: Path) -> None:
@@ -609,6 +616,84 @@ def test_local_install_is_unreviewed_content_addressed_and_tamper_evident(tmp_pa
 
     (store.artifact_path(record) / "SKILL.md").write_text("tampered\n", encoding="utf-8")
     with pytest.raises(SkillStoreError, match="artifact is invalid"):
+        store.active_manifests()
+
+
+@pytest.mark.parametrize(
+    ("entry", "copied_skill"),
+    [
+        pytest.param("baseline-model", "baseline-model", id="sibling-skill"),
+        pytest.param(
+            ".aggregate-export-interrupted/aggregate-export",
+            "aggregate-export",
+            id="interrupted-staging-copy",
+        ),
+        pytest.param("notes.md", None, id="loose-markdown"),
+    ],
+)
+def test_store_rejects_unexpected_content_next_to_an_installed_skill(
+    tmp_path: Path,
+    entry: str,
+    copied_skill: str | None,
+) -> None:
+    source, tree_sha256 = _local_skill_source(tmp_path)
+    store = SkillArtifactStore(tmp_path / "state" / "skills")
+    record = store.install_local(source, expected_tree_sha256=tree_sha256)
+    artifact = store.artifact_path(record)
+    unexpected = artifact.parent / entry
+    if copied_skill is None:
+        unexpected.write_text("# Unverified instructions\n", encoding="utf-8")
+    else:
+        shutil.copytree(_SKILLS_ROOT / copied_skill, unexpected)
+
+    with pytest.raises(SkillStoreError, match="contains unexpected content"):
+        store.active_manifests()
+    with pytest.raises(SkillStoreError, match="contains unexpected content"):
+        store.install_local(source, expected_tree_sha256=tree_sha256)
+
+    top_level_entry = artifact.parent / Path(entry).parts[0]
+    if top_level_entry.is_dir():
+        shutil.rmtree(top_level_entry)
+    else:
+        top_level_entry.unlink()
+    assert store.active_manifests()[0].root == artifact
+
+
+def test_store_does_not_activate_a_skill_beside_an_interrupted_installation(
+    tmp_path: Path,
+) -> None:
+    source, tree_sha256 = _local_skill_source(tmp_path)
+    store = SkillArtifactStore(tmp_path / "state" / "skills")
+    leftover = store.artifacts_dir / tree_sha256 / ".aggregate-export-interrupted"
+    shutil.copytree(_SKILLS_ROOT / "aggregate-export", leftover / "aggregate-export")
+
+    with pytest.raises(SkillStoreError, match="contains unexpected content"):
+        store.install_local(source, expected_tree_sha256=tree_sha256)
+    assert store.records() == ()
+
+    shutil.rmtree(leftover)
+    record = store.install_local(source, expected_tree_sha256=tree_sha256)
+    assert store.active_manifests()[0].root == store.artifact_path(record)
+
+
+def test_store_fails_closed_when_installed_skill_directory_cannot_be_listed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source, tree_sha256 = _local_skill_source(tmp_path)
+    store = SkillArtifactStore(tmp_path / "state" / "skills")
+    record = store.install_local(source, expected_tree_sha256=tree_sha256)
+    artifact_parent = store.artifact_path(record).parent
+    list_directory = Path.iterdir
+
+    def unreadable(path: Path) -> Iterator[Path]:
+        if path == artifact_parent:
+            raise PermissionError("synthetic unreadable directory")
+        return list_directory(path)
+
+    monkeypatch.setattr(Path, "iterdir", unreadable)
+
+    with pytest.raises(SkillStoreError, match="Unable to inspect installed Skill"):
         store.active_manifests()
 
 

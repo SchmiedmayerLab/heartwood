@@ -393,7 +393,6 @@ An approved command can read anything that identity can read and can change `.he
     - Terminals receive the Heartwood environment with only the project's configured model-credential variables and the capability masked, so other secrets pass through; an allowlist will replace that mask in [#155](https://github.com/SchmiedmayerLab/heartwood/issues/155).
     - Low-Risk Automation decides from the model's own risk label; a deterministic allowlist will make that label advisory in [#157](https://github.com/SchmiedmayerLab/heartwood/issues/157).
     - An approval binds to model-supplied tool-call identifiers; binding it to the reviewed content comes in [#158](https://github.com/SchmiedmayerLab/heartwood/issues/158).
-    - A verified Skill's neighboring directories also load; loading exactly the verified Skills comes in [#159](https://github.com/SchmiedmayerLab/heartwood/issues/159).
 
 See [Threat Boundaries](security.md#threat-boundaries) for the current limits.
 
