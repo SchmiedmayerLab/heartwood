@@ -65,6 +65,9 @@ The activation index records the source identifier, full source commit, catalog 
 One project-scoped native lock serializes source refresh, download, activation, removal, and runtime revalidation across CLI and browser processes.
 Heartwood revalidates the signed source, installed tree, and matching activation event in the verified audit chain before exposing an active catalog Skill to OpenHands.
 It also reevaluates tool, network, and platform compatibility for the current deployment, so project state moved between environments cannot activate an incompatible Skill.
+OpenHands receives only the exact directory of each verified installed Skill, so content written beside it cannot load as trusted context.
+Heartwood refuses to install a Skill whose content-addressed directory holds anything else, including a leftover from an interrupted installation.
+Such content beside an active installed Skill stops Skill listing and starting agent sessions until it is removed, and the error names the directory to clean up.
 
 ## Offline Use
 

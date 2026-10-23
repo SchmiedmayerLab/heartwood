@@ -10,6 +10,7 @@ import asyncio
 import inspect
 import json
 import os
+import shutil
 import time
 import uuid
 from collections.abc import Callable, Sequence
@@ -119,6 +120,7 @@ from heartwood.gateway._openhands_sdk import (
     _llm_max_message_chars,
     _llm_options,
     _llm_resilience_options,
+    _load_session_skills,
     _observation_exit_code,
     _security_configuration,
     _task_status,
@@ -188,6 +190,25 @@ def test_verified_skills_load_through_openhands_native_loader() -> None:
         "baseline-model",
         "omop-cohort-summary",
     }
+
+
+def test_only_exact_verified_skill_roots_load_beside_bundled_skills(tmp_path: Path) -> None:
+    artifact_parent = tmp_path / "artifacts" / "sha256" / ("0" * 64)
+    verified = _renamed_skill("aggregate-export", artifact_parent / "community-summary")
+    _renamed_skill("baseline-model", artifact_parent / "unverified-model")
+    (artifact_parent / "unverified-notes.md").write_text("# Unverified\n", encoding="utf-8")
+
+    skills = _load_session_skills(_verified_skills_root(), (verified,))
+    without_bundled = _load_session_skills(tmp_path / "missing", (verified,))
+
+    assert sorted(skill.name for skill in skills) == [
+        "aggregate-export",
+        "baseline-model",
+        "community-summary",
+        "omop-cohort-summary",
+    ]
+    assert [skill.name for skill in without_bundled] == ["community-summary"]
+    assert without_bundled[0].source == str(verified / "SKILL.md")
 
 
 def test_real_sdk_invokes_a_verified_skill_through_the_public_tool(tmp_path: Path) -> None:
@@ -4483,6 +4504,17 @@ def _repository_root() -> Path:
 
 def _verified_skills_root() -> Path:
     return _repository_root() / "vendor" / "heartwood-skills" / "skills"
+
+
+def _renamed_skill(name: str, destination: Path) -> Path:
+    shutil.copytree(_verified_skills_root() / name, destination)
+    skill_file = destination / "SKILL.md"
+    content = skill_file.read_text(encoding="utf-8")
+    skill_file.write_text(
+        content.replace(f"name: {name}", f"name: {destination.name}"),
+        encoding="utf-8",
+    )
+    return destination
 
 
 @cache
