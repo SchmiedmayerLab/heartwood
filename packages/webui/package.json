@@ -42,7 +42,7 @@
     "rehype-sanitize": "6.0.0",
     "remark-gfm": "4.0.1",
     "unist-util-visit": "5.1.0",
-    "zod": "4.4.3"
+    "zod": "4.6.6"
   },
   "overrides": {
     "brace-expansion@1.1.16": "1.1.18",
