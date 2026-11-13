@@ -221,7 +221,17 @@ def test_openhands_sdk_is_the_only_agent_runtime_dependency() -> None:
     assert locked == pins
     assert "optional-dependencies" not in gateway["project"]
     assert "openhands-agent-server" not in _read("packages/gateway/pyproject.toml")
-    assert "openhands-agent-server" not in _read("uv.lock")
+    worker_pins = dict(
+        _exact_package_pin(requirement)
+        for requirement in _toml("pyproject.toml")["dependency-groups"]["worker"]
+    )
+    assert worker_pins == {"openhands-agent-server": pins["openhands-sdk"]}
+    locked_server = next(
+        package
+        for package in _toml("uv.lock")["package"]
+        if package["name"] == "openhands-agent-server"
+    )
+    assert locked_server["version"] == pins["openhands-sdk"]
 
 
 def test_runtime_image_sets_the_release_version_label() -> None:
@@ -304,6 +314,7 @@ def test_bake_file_has_portable_and_explicit_nvidia_variants() -> None:
         "terra-runtime",
         "terra-runtime-gpu-nvidia",
         "terra-ci",
+        "worker",
     }
     assert 'targets = ["runtime"]' in bake
     assert 'platforms = ["linux/amd64", "linux/arm64"]' in bake
@@ -341,7 +352,7 @@ def test_gpu_runtime_is_isolated_pinned_and_no_weight() -> None:
     assert dockerfile.index("images/gpu/install_runtime.sh") < dockerfile.index(
         "COPY packages ./packages"
     )
-    assert dockerfile.count("UV_CACHE_DIR=/root/.cache/uv") == 2
+    assert dockerfile.count("UV_CACHE_DIR=/root/.cache/uv") == 3
     for line in dockerfile.splitlines():
         if "chown" in line:
             assert "/opt/heartwood" not in line

@@ -13,7 +13,7 @@ FROM --platform=$BUILDPLATFORM node:24-trixie-slim@sha256:8ec5d7557396cfe32d21c3
 
 WORKDIR /src/packages/webui
 
-COPY packages/webui/package.json packages/webui/package-lock.json ./
+COPY packages/webui/package.json packages/webui/package-lock.json packages/webui/.npmrc ./
 
 RUN --mount=type=cache,target=/root/.npm \
     npm ci --no-audit --fund=false
@@ -176,6 +176,25 @@ ENV HEARTWOOD_IMAGE_REVISION=${HEARTWOOD_REVISION}
 FROM heartwood-image-metadata AS gpu-ci-validate
 
 RUN /opt/heartwood/images/gpu/verify_runtime.sh
+
+FROM heartwood-image-metadata AS worker-image
+
+USER root
+WORKDIR /opt/heartwood
+
+RUN --mount=type=cache,target=/root/.cache/uv \
+    UV_CACHE_DIR=/root/.cache/uv uv sync --locked --no-dev --all-extras --group worker --python 3.12
+
+RUN install -d --mode=0755 /etc/heartwood
+COPY --chmod=0444 images/worker/config.json /etc/heartwood/worker.json
+
+WORKDIR /workspace
+USER heartwood
+
+RUN test -r /etc/heartwood/worker.json && test ! -w /etc/heartwood/worker.json
+
+ENTRYPOINT ["/opt/heartwood/.venv/bin/python", "-I", "-B", "-u", "/opt/heartwood/images/worker/launch.py"]
+CMD []
 
 FROM heartwood-image-metadata AS platform-runtime-image
 

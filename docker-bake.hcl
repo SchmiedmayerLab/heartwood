@@ -71,6 +71,16 @@ target "runtime" {
   ]
 }
 
+target "worker" {
+  inherits = ["_runtime_common"]
+  target = "worker-image"
+  platforms = ["linux/amd64", "linux/arm64"]
+  args = {
+    HEARTWOOD_IMAGE_FLAVOR = "worker"
+  }
+  tags = ["${IMAGE_NAME}:sha-${GIT_SHA}-worker"]
+}
+
 target "_terra_common" {
   context = "."
   dockerfile = "images/Dockerfile"

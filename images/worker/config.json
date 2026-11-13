@@ -1,0 +1,16 @@
+{
+  "conversations_path": "/home/heartwood/.local/state/worker/conversations",
+  "workspace_path": "/workspace",
+  "conversation_worktree_root": "/home/heartwood/.local/state/worker/worktrees",
+  "bash_events_dir": "/home/heartwood/.local/state/worker/bash-events",
+  "enable_vscode": false,
+  "enable_browser": false,
+  "preload_tools": false,
+  "conversation_runtime": "local",
+  "conversation_runtime_selectable": false,
+  "max_concurrent_runs": 1,
+  "trust_forwarded_headers": false,
+  "webhooks": [],
+  "registered_marketplaces": [],
+  "telemetry": {"exporter": "none"}
+}
