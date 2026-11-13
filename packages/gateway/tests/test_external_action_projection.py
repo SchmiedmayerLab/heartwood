@@ -18,6 +18,7 @@ from heartwood.core_adapter.external_actions import (
     ExternalActionRecord,
     ExternalActionRequest,
 )
+from heartwood.core_adapter.external_results import ExternalResultProposal, ExternalResultRecord
 from heartwood.core_adapter.worker_attempts import WorkerAttemptIntent
 from heartwood.gateway._session_projection import project_session
 from heartwood.schemas import PlatformOperationObservation
@@ -177,3 +178,105 @@ def test_denied_outside_operation_has_no_execution_result(proposal: ExternalActi
     assert projection.pending_approval is None
     assert projection.actions[-1].state == "rejected"
     assert projection.actions[-1].outcome is None
+
+
+@pytest.mark.parametrize(
+    ("phase", "expected"),
+    [
+        ("proposed", "awaiting-review"),
+        ("submitting", "outcome-unknown"),
+        ("unknown", "outcome-unknown"),
+        ("submitted", "succeeded"),
+        ("denied", "rejected"),
+    ],
+)
+def test_result_release_has_independent_review_and_delivery_outcome(
+    proposal: ExternalActionProposal, phase: str, expected: str
+) -> None:
+    decision = ExternalActionDecision(
+        command_id="outside-approval",
+        actor_id="researcher",
+        decision="approved",
+        decided_at=_NOW,
+        proposal_sha256=proposal.sha256,
+    )
+    outside = ExternalActionRecord(
+        phase="observed",
+        proposal=proposal,
+        decision=decision,
+        observation=ExternalActionObservation(
+            proposal_sha256=proposal.sha256,
+            operation=PlatformOperationObservation(
+                project_context_id=str(proposal.worker.project_id),
+                operation_id=str(proposal.operation_id),
+                service_id=proposal.request.service_id,
+                backend_operation_ref="native-operation",
+                observed_at=_NOW,
+                status="completed",
+                platform_record_ref="native-audit",
+            ),
+        ),
+    )
+    events = [
+        _source(proposal),
+        _event(ExternalActionRecord(phase="proposed", proposal=proposal), 1),
+        _event(ExternalActionRecord(phase="submitting", proposal=proposal, decision=decision), 2),
+        _event(outside, 3),
+    ]
+    release = ExternalResultProposal(
+        release_id=uuid4(),
+        operation_id=proposal.operation_id,
+        operation_sha256=proposal.sha256,
+        observation_event_id="event-3",
+        worker=proposal.worker,
+        service_policy_sha256=proposal.service_policy_sha256,
+        content_json='{"aggregate":7}',
+        model_route_json='{"endpoint":"https://model.invalid"}',
+        created_at=_NOW,
+        expires_at=_NOW + timedelta(minutes=5),
+    )
+    release_decision = ExternalActionDecision(
+        command_id="result-approval",
+        actor_id="researcher",
+        decision="denied" if phase == "denied" else "approved",
+        decided_at=_NOW,
+        proposal_sha256=release.sha256,
+    )
+    phases = ["proposed"]
+    if phase != "proposed":
+        phases.append("denied" if phase == "denied" else "submitting")
+    if phase in {"submitted", "unknown"}:
+        phases.append(phase)
+    for current in phases:
+        record = ExternalResultRecord.model_validate(
+            {
+                "phase": current,
+                "proposal": release,
+                "decision": None if current == "proposed" else release_decision,
+            }
+        )
+        events.append(
+            SessionEvent(
+                event_id=f"event-{len(events)}",
+                session_id="synthetic-session",
+                sequence=len(events),
+                kind=EventKind.EXTERNAL_RESULT_RECORDED,
+                occurred_at=_NOW.isoformat(),
+                payload={"record": record.model_dump(mode="json")},
+            )
+        )
+    projected = project_session(tuple(events), session_id="synthetic-session")
+    action = projected.actions[-1]
+    assert action.action_id == release.action_id
+    assert action.arguments == release.review_call.arguments
+    assert action.state == expected
+    assert projected.activity[-1].label == "Outside result release"
+    if phase == "proposed":
+        assert projected.pending_approval is not None
+        assert projected.pending_approval.group_id == release.group_id
+    else:
+        assert projected.pending_approval is None
+    if phase == "submitted":
+        assert action.outcome is not None
+        assert action.outcome.result is not None
+        assert "execution is not established" in action.outcome.result

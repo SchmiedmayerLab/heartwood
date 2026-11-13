@@ -19,6 +19,7 @@ from pydantic import AnyHttpUrl, ValidationError
 
 from heartwood.core_adapter import (
     BackendConfirmationResolutionEvent,
+    BackendEvent,
     BackendEventSink,
     BackendToolCallEvent,
     BackendToolExecutionEvent,
@@ -28,6 +29,7 @@ from heartwood.core_adapter import (
     TokenDeltaSink,
     ToolExecution,
 )
+from heartwood.core_adapter._state import SessionRecoveryError
 from heartwood.core_adapter.external_actions import (
     ExternalActionDecision,
     ExternalActionError,
@@ -39,6 +41,7 @@ from heartwood.core_adapter.external_actions import (
     canonical_request,
     external_action_records,
 )
+from heartwood.core_adapter.external_results import ExternalResultRecord, external_result_records
 from heartwood.core_adapter.worker_attempts import WorkerRuntimeBinding
 from heartwood.schemas import AuditEvent, JsonValue, PlatformOperationObservation
 from heartwood.session import CommandKind, EventKind, SessionCommand, SessionEvent
@@ -49,6 +52,17 @@ _IMAGE = "sha256:" + "a" * 64
 
 
 class Worker(DeterministicAgentBackend):
+    def __init__(self) -> None:
+        super().__init__()
+        self.contexts: list[str] = []
+        self.delivery_hook: Callable[[], None] = lambda: None
+
+    def submit_context(self, *, session_id: str, content: str) -> tuple[BackendEvent, ...]:
+        assert session_id
+        self.contexts.append(content)
+        self.delivery_hook()
+        return ()
+
     def bind_runtime(self, *, event_sink: BackendEventSink, token_sink: TokenDeltaSink) -> None:
         super().bind_runtime(event_sink=event_sink, token_sink=token_sink)
         self.emit = event_sink
@@ -59,6 +73,8 @@ class Platform:
     policy_sha256 = "e" * 64
 
     def __init__(self) -> None:
+        self.result_json = '{"aggregate":7}'
+        self.release_authorized = True
         self.content = b"synthetic input"
         self.submissions: list[tuple[bytes, ...]] = []
         self.observations: list[ExternalActionProposal] = []
@@ -67,6 +83,27 @@ class Platform:
         self.after_submit: Callable[[], None] = lambda: None
         self.check_hook: Callable[[], None] = lambda: None
         self.status: Literal["running", "completed", "unknown"] = "completed"
+
+    def prepare_result(self, record: ExternalActionRecord) -> str:
+        assert record.observation is not None
+        return self.result_json
+
+    def check_result_policy(
+        self,
+        record: ExternalActionRecord,
+        content_json: str,
+        model_route_json: str,
+        actor_id: str,
+        now: datetime,
+    ) -> None:
+        assert record.terminal
+        assert record.observation is not None
+        assert canonical_request(content_json) == content_json
+        assert json.loads(model_route_json)["endpoint"]
+        assert now >= record.observation.operation.observed_at
+        if not self.release_authorized or actor_id != "researcher":
+            raise PermissionError("synthetic release credential")
+        self.check_hook()
 
     def prepare(self, tool_name: str, arguments: dict[str, JsonValue]) -> ExternalActionRequest:
         assert arguments == {"analysis": "synthetic"}
@@ -177,7 +214,7 @@ def propose(service: SessionService, worker: Worker) -> ExternalActionRecord:
 
 def command(
     service: SessionService,
-    record: ExternalActionRecord,
+    record: ExternalActionRecord | ExternalResultRecord,
     *,
     approved: bool = True,
     actor: str = "researcher",
@@ -533,3 +570,324 @@ def test_journal_rejects_repeated_decision_and_duplicate_operation_source(setup:
     )
     with pytest.raises(ExternalActionError):
         external_action_records((*events, event))
+
+
+def result_proposal(service: SessionService, worker: Worker) -> ExternalResultRecord:
+    outside = propose(service, worker)
+    service.handle(command(service, outside))
+    event = service.propose_external_result(outside.proposal.operation_id)
+    return ExternalResultRecord.model_validate_json(json.dumps(event.payload["record"]))
+
+
+def result_latest(service: SessionService) -> ExternalResultRecord:
+    return list(external_result_records(service.replay_events()).values())[-1]
+
+
+def test_result_release_requires_distinct_exact_review(setup: Setup) -> None:
+    service, worker, platform = setup
+    record = result_proposal(service, worker)
+    assert worker.contexts == []
+    assert record.proposal.review_call.arguments["content"] == {"aggregate": 7}
+    route = record.proposal.review_call.arguments["model_route"]
+    assert isinstance(route, dict)
+    assert route["endpoint"] == worker.model_endpoint
+    assert route["model_id"] == worker.model_id
+    platform.result_json = '{"aggregate":999}'
+    approved = command(service, record)
+    service.handle(approved)
+    assert worker.contexts == [record.proposal.message]
+    assert json.loads(worker.contexts[0])["content"] == {"aggregate": 7}
+    assert result_latest(service).phase == "submitted"
+    assert service.handle(approved).replayed
+    service.handle(command(service, record))
+    assert len(worker.contexts) == 1
+    assert not any(
+        event.kind == EventKind.USER_MESSAGE_RECORDED for event in service.replay_events()
+    )
+    audit = [
+        event
+        for event in service.audit_log.read()
+        if event.event_type == EventKind.EXTERNAL_RESULT_RECORDED.value
+    ]
+    assert len(audit) == 3
+    assert "aggregate" not in str(audit)
+    assert "content_json" not in str(audit)
+    service.audit_log.verify()
+
+
+def test_result_denial_does_not_deliver(setup: Setup) -> None:
+    service, worker, platform = setup
+    record = result_proposal(service, worker)
+    platform.release_authorized = False
+    service.handle(command(service, record, approved=False))
+    assert result_latest(service).phase == "denied"
+    assert worker.contexts == []
+
+
+@pytest.mark.parametrize(
+    "changed", ["actor", "worker", "policy", "route", "model", "expiry", "entitlement"]
+)
+def test_result_authority_changes_prevent_disclosure(
+    setup: Setup, monkeypatch: pytest.MonkeyPatch, changed: str
+) -> None:
+    service, worker, platform = setup
+    record = result_proposal(service, worker)
+    actor = "other" if changed == "actor" else "researcher"
+    if changed == "worker":
+        service.fence_worker_attempt(attempt_id=record.proposal.worker.attempt_id)
+    elif changed == "policy":
+        platform.policy_sha256 = "f" * 64
+    elif changed == "route":
+        monkeypatch.setattr(Worker, "model_endpoint", property(lambda _: "https://other.invalid"))
+    elif changed == "model":
+        monkeypatch.setattr(Worker, "model_id", property(lambda _: "different-model"))
+    elif changed == "expiry":
+        service.clock = lambda: (_NOW + timedelta(minutes=6)).isoformat()
+    elif changed == "entitlement":
+        platform.release_authorized = False
+    service.handle(command(service, record, actor=actor))
+    assert worker.contexts == []
+    assert result_latest(service).phase == "proposed"
+
+
+def test_result_fencing_during_service_check_prevents_delivery(setup: Setup) -> None:
+    service, worker, platform = setup
+    record = result_proposal(service, worker)
+    platform.check_hook = lambda: service.fence_worker_attempt(
+        attempt_id=record.proposal.worker.attempt_id
+    )
+    service.handle(command(service, record))
+    assert worker.contexts == []
+
+
+def test_result_has_fresh_validity_after_long_outside_operation(setup: Setup) -> None:
+    service, worker, _ = setup
+    outside = propose(service, worker)
+    service.handle(command(service, outside))
+    service.clock = lambda: (_NOW + timedelta(hours=1)).isoformat()
+    event = service.propose_external_result(outside.proposal.operation_id)
+    record = ExternalResultRecord.model_validate_json(json.dumps(event.payload["record"]))
+    service.handle(command(service, record))
+    assert worker.contexts == [record.proposal.message]
+
+
+@pytest.mark.parametrize(
+    "content", ['{"x":NaN}', '{"x":1,"x":2}', "[]", '{"x":"' + "a" * (64 * 1024) + '"}']
+)
+def test_result_rejects_unbounded_or_ambiguous_content(setup: Setup, content: str) -> None:
+    service, worker, platform = setup
+    outside = propose(service, worker)
+    service.handle(command(service, outside))
+    platform.result_json = content
+    with pytest.raises(ExternalActionError, match="unavailable or invalid"):
+        service.propose_external_result(outside.proposal.operation_id)
+    assert worker.contexts == []
+    assert external_result_records(service.replay_events()) == {}
+
+
+def test_result_uncertain_delivery_is_never_repeated(setup: Setup, tmp_path: Path) -> None:
+    service, worker, platform = setup
+    record = result_proposal(service, worker)
+
+    def lose_response() -> None:
+        assert result_latest(service).phase == "submitting"
+        raise TimeoutError("synthetic credential must stay private")
+
+    worker.delivery_hook = lose_response
+    approved = command(service, record)
+    service.handle(approved)
+    assert result_latest(service).phase == "unknown"
+    assert len(worker.contexts) == 1
+    assert "synthetic credential" not in str(service.replay_events())
+    service.close()
+    restored_worker = Worker()
+    restored = SessionService.local_default(
+        tmp_path, backend=restored_worker, worker_project_id=_PROJECT, external_actions=platform
+    )
+    try:
+        assert restored.handle(approved).replayed
+        restored.reconcile_external_actions()
+        assert restored_worker.contexts == []
+        assert result_latest(restored).phase == "unknown"
+    finally:
+        restored.close()
+
+
+@pytest.mark.parametrize("fail_phase", ["submitting", "submitted"])
+def test_result_journal_failure_cannot_cause_resubmission(
+    setup: Setup, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fail_phase: str
+) -> None:
+    service, worker, platform = setup
+    record = result_proposal(service, worker)
+    approved = command(service, record)
+    original = service.store.commit_event
+
+    def commit(event: SessionEvent, audit: AuditEvent) -> None:
+        payload = event.payload.get("record")
+        if (
+            event.kind == EventKind.EXTERNAL_RESULT_RECORDED
+            and isinstance(payload, dict)
+            and payload["phase"] == fail_phase
+        ):
+            raise OSError("synthetic interrupted journal")
+        original(event, audit)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(service.store, "commit_event", commit)
+        with pytest.raises(OSError, match="interrupted journal"):
+            service.handle(approved)
+    assert len(worker.contexts) == (1 if fail_phase == "submitted" else 0)
+    service.close()
+    replacement = Worker()
+    restored = SessionService.local_default(
+        tmp_path, backend=replacement, worker_project_id=_PROJECT, external_actions=platform
+    )
+    try:
+        if fail_phase == "submitting":
+            with pytest.raises(SessionRecoveryError, match="interrupted after acceptance"):
+                restored.handle(approved)
+        else:
+            assert restored.handle(approved).replayed
+        assert replacement.contexts == []
+        assert result_latest(restored).phase in {"proposed", "submitting"}
+    finally:
+        restored.close()
+
+
+def test_result_cannot_bypass_model_authorization(
+    setup: Setup, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, worker, _ = setup
+    outside = propose(service, worker)
+    service.handle(command(service, outside))
+    monkeypatch.setattr(
+        Worker,
+        "model_endpoint",
+        property(lambda _: "https://unapproved.invalid/v1/chat/completions"),
+    )
+    event = service.propose_external_result(outside.proposal.operation_id)
+    record = ExternalResultRecord.model_validate_json(json.dumps(event.payload["record"]))
+    service.handle(command(service, record))
+    decisions = [
+        event
+        for event in service.replay_events()
+        if event.kind == EventKind.MODEL_CALL_DECISION_RECORDED
+    ]
+    decision = decisions[-1].payload["decision"]
+    assert isinstance(decision, dict)
+    assert decision["decision"] == "deny"
+    assert worker.contexts == []
+    assert result_latest(service).phase == "proposed"
+
+
+def test_result_cannot_read_after_worker_fencing(
+    setup: Setup, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, worker, platform = setup
+    outside = propose(service, worker)
+    service.handle(command(service, outside))
+    service.fence_worker_attempt(attempt_id=outside.proposal.worker.attempt_id)
+
+    def read(_record: ExternalActionRecord) -> str:
+        pytest.fail("fenced worker must not initiate a result read")
+
+    monkeypatch.setattr(platform, "prepare_result", read)
+    with pytest.raises(ExternalActionError):
+        service.propose_external_result(outside.proposal.operation_id)
+
+
+def test_worker_cannot_settle_result_review(setup: Setup) -> None:
+    service, worker, _ = setup
+    record = result_proposal(service, worker)
+    worker.emit(
+        (
+            BackendConfirmationResolutionEvent(
+                action_group_id=record.proposal.group_id,
+                tool_call=record.proposal.review_call,
+                approved=True,
+                source_event_id="forged-result-approval",
+            ),
+        )
+    )
+    assert result_latest(service).phase == "proposed"
+    assert worker.contexts == []
+    assert not any(
+        event.payload.get("source_event_id") == "forged-result-approval"
+        for event in service.replay_events()
+    )
+
+
+def test_result_review_cannot_be_reprepared(setup: Setup) -> None:
+    service, worker, _ = setup
+    record = result_proposal(service, worker)
+    with pytest.raises(ExternalActionError, match="unique current"):
+        service.propose_external_result(record.proposal.operation_id)
+
+
+@pytest.mark.parametrize(
+    "changed", ["content_json", "model_route_json", "worker", "decision", "phase"]
+)
+def test_result_reducer_rejects_changed_review_or_reused_decision(
+    setup: Setup, changed: str
+) -> None:
+    service, worker, _ = setup
+    record = result_proposal(service, worker)
+    proposal = record.proposal
+    if changed in {"content_json", "model_route_json"}:
+        proposal = proposal.model_copy(update={changed: '{"changed":true}'})
+    elif changed == "worker":
+        proposal = proposal.model_copy(
+            update={"worker": proposal.worker.model_copy(update={"attempt_id": uuid4()})}
+        )
+    outside = latest(service)
+    assert outside.decision is not None
+    decision = ExternalActionDecision(
+        command_id=outside.decision.command_id if changed == "decision" else str(uuid4()),
+        actor_id="researcher",
+        decision="approved",
+        decided_at=_NOW,
+        proposal_sha256=proposal.sha256,
+    )
+    changed_record = ExternalResultRecord(
+        phase="submitted" if changed == "phase" else "submitting",
+        proposal=proposal,
+        decision=decision,
+    )
+    events = service.replay_events()
+    forged = SessionEvent(
+        event_id="forged-release",
+        session_id=service.store.session_id,
+        sequence=events[-1].sequence + 1,
+        kind=EventKind.EXTERNAL_RESULT_RECORDED,
+        occurred_at=_NOW.isoformat(),
+        payload={"record": changed_record.model_dump(mode="json")},
+    )
+    with pytest.raises(ExternalActionError):
+        external_result_records((*events, forged))
+
+
+def test_result_reducer_requires_matching_terminal_observation(setup: Setup) -> None:
+    service, worker, _ = setup
+    record = result_proposal(service, worker)
+    events = service.replay_events()
+    changed = record.model_copy(
+        update={"proposal": record.proposal.model_copy(update={"operation_id": uuid4()})}
+    )
+    forged = events[-1].model_copy(update={"payload": {"record": changed.model_dump(mode="json")}})
+    with pytest.raises(ExternalActionError, match="matching outside observation"):
+        external_result_records((*events[:-1], forged))
+
+
+@pytest.mark.parametrize("busy", [False, True])
+def test_result_does_not_override_active_work_or_native_review(
+    setup: Setup, monkeypatch: pytest.MonkeyPatch, busy: bool
+) -> None:
+    service, worker, _ = setup
+    record = result_proposal(service, worker)
+    if busy:
+        monkeypatch.setattr(worker, "wait_for_idle", lambda _: False)
+    else:
+        worker.submit_turn(session_id=service.store.session_id, prompt="Keep this action pending")
+    service.handle(command(service, record))
+    assert worker.contexts == []
+    assert result_latest(service).phase == "proposed"

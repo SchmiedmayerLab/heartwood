@@ -620,6 +620,29 @@ The worker must have no alternate credential or network route to the privileged 
 These requirements need deployment-specific qualification, including revocation races, interruption, input storage isolation, and service-side duplicate suppression.
 The adapter interface and local journal checks alone do not establish those infrastructure guarantees.
 
+#### Result Release to the Worker
+
+An outside operation's approval does not authorize disclosing its result to a worker or inference provider.
+A trusted embedding can call `propose_external_result` for a terminal, observed operation from the current worker attempt.
+The native service adapter must independently authorize and bound the result read, omit credentials, and return sanitized JSON data.
+The gateway rejects ambiguous or oversized JSON and limits the complete message, including its provenance envelope, to 64 KiB.
+
+The shared action review binds the exact result, outside observation, worker identity, service policy revision, declared model identifier and route, and a fresh five-minute validity interval.
+Approval checks current service disclosure policy, the live worker lease, an idle conversation without pending native actions, and the existing model and workflow admission rules.
+The adapter's disclosure check must enforce the researcher's entitlement and data eligibility for the exact worker and inference destination.
+Sender labels are descriptive metadata and never establish approval or authenticated identity.
+
+The paired journal retains the decision and delivery intent before sending the reviewed snapshot through the native conversation message and run APIs.
+Result data is untrusted context; the worker retains its enforced tool and network restrictions.
+The operational audit records release and operation identifiers, digests, actor, command, and phase without copying the result.
+A submitted result means the native delivery path accepted it; it does not establish that the worker used it correctly or completed subsequent work.
+
+There is one result-release review per outside operation.
+Denial is final for that release; changed content or destinations require a separately authorized workflow.
+An interrupted or uncertain delivery is never retried automatically, including after gateway restart.
+The retained record and native conversation must be inspected before continuing in a new authorized session.
+This optional boundary does not establish protected result storage, deployed isolation, provider eligibility, or controlled-data readiness.
+
 #### Asynchronous Results
 
 Pending results use the optional [MCP Tasks extension, revision 2026-07-28](https://tasks.extensions.modelcontextprotocol.io/specification/2026-07-28/tasks).
