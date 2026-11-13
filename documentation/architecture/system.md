@@ -298,6 +298,12 @@ The complete returned registration set must match before any import can execute,
 The adapter uses the public workspace client property and HTTPX transport interface without changing SDK code or conversation orchestration.
 
 Responses are bounded, uncompressed UTF-8 JSON with unique object keys and finite numbers.
+Each workspace additionally permits at most 1,024 HTTP requests and 32 MiB of cumulative response bodies, including repeated history pages and requests that fail admission.
+Concurrent requests share that budget; resetting the HTTP client does not replenish it.
+Exhaustion or invalid response admission permanently closes the workspace's HTTP admission, including responses still in flight.
+Starting another workspace requires a new trusted execution decision; reconnecting is not a budget renewal.
+These limits bound received data and request count, not the SDK's exact memory consumption or execution inside the worker.
+Admission failure does not stop worker execution; the trusted launcher must revoke access and stop the worker through the independent sandbox control plane.
 HTTP requests through this client remain on the configured server origin; redirects, ambient proxies, and server-selected client tools are rejected.
 Remote agent metadata cannot select another agent implementation or enable the SDK’s client-side completion-log file writer.
 Errors expose a stable admission failure rather than worker response content.
