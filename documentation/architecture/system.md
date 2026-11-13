@@ -194,6 +194,10 @@ Import validates archive structure, path safety, sizes, and every SHA-256 digest
 Existing destinations are reverified on retries, and incomplete staging is never selected.
 
 The shared transfer manager owns byte progress, lifecycle, warnings, cancellation, and results for the terminal, browser, and notebook adapters.
+Gateway shutdown stops new model downloads and transfers, requests cooperative cancellation, and waits for their worker threads and final selection callbacks.
+The wait releases the gateway state lock so a callback already in progress can finish.
+If model work remains active after the shutdown deadline, the gateway reports failure and retains its worker references for a later shutdown attempt.
+This does not stop a separately supervised inference runtime or establish project-wide migration exclusion.
 An explicit license decision is required before import, and the request is bound to the SHA-256 identity of the exact manifest shown during review.
 Bundle integrity is not treated as source authorization or platform qualification: exact catalog identities are rehydrated from trusted local catalog metadata, while every other transferred model is marked unvalidated.
 Transferred models remain outside the repository-download registry, so an offline restart cannot silently turn an imported artifact into a network request.

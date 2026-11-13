@@ -590,13 +590,28 @@ class SessionGateway:
         self.project.initialize()
         return self.startup_plan(interface=interface)
 
-    @_serialized_state
     def stop(self) -> None:
-        """Close active OpenHands conversations."""
+        """Stop background model work and close active conversations."""
+        with self._state_lock:
+            self.local_model_manager.request_stop()
+            self.model_transfer_manager.request_stop()
+        errors: list[Exception] = []
         try:
-            self._reset_services()
+            for close in (
+                self.local_model_manager.close,
+                self.model_transfer_manager.close,
+                self._reset_services,
+            ):
+                try:
+                    close()
+                except Exception as error:
+                    errors.append(error)
         finally:
             self.credential_store.clear_process_values()
+        if len(errors) == 1:
+            raise errors[0]
+        if errors:
+            raise ExceptionGroup("unable to stop all gateway workers", errors)
 
     def handle(self, command: SessionCommand) -> SessionResult:
         """Handle one command and publish emitted events."""

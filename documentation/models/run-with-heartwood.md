@@ -25,6 +25,10 @@ In the terminal, Heartwood continues automatically after the verified download a
 In the browser setup flow, stop the process and repeat `heartwood --interface web` when the page reports that the model is ready.
 The restarted browser process verifies the stored model, starts its local server, and keeps that server supervised for the session.
 
+Stopping the gateway also requests cancellation of unfinished model downloads and waits for their workers.
+A shutdown timeout means work is still active; wait for it to finish and retry shutdown before moving project state.
+Verified cached model files remain available for the next launch.
+
 ## Hardware
 
 | Runtime | Model Shape | Typical Environment |

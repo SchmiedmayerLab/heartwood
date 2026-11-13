@@ -14,9 +14,10 @@ import tempfile
 import threading
 import tomllib
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from importlib import import_module
 from pathlib import Path
+from time import monotonic
 from types import TracebackType
 from typing import Any, Literal, Protocol, cast
 
@@ -246,6 +247,8 @@ class LocalModelDownloadManager:
         self.on_ready = on_ready
         self._downloads: dict[str, ModelDownload] = {}
         self._lock = threading.Lock()
+        self._threads: list[threading.Thread] = []
+        self._closed = False
 
     def start(self, model_id: str) -> ModelDownload:
         """Start or return one recommended artifact or snapshot download."""
@@ -257,6 +260,8 @@ class LocalModelDownloadManager:
         model.validate()
         model_id, total, _runtime_profile = self._metadata(model)
         with self._lock:
+            if self._closed:
+                raise ModelArtifactError("model download manager is closed")
             current = self._downloads.get(model_id)
             if current is not None and current.status in {"downloading", "ready"}:
                 return current
@@ -267,14 +272,40 @@ class LocalModelDownloadManager:
                 bytes_total=total,
             )
             self._downloads[model_id] = download
-        thread = threading.Thread(
-            target=self._download,
-            args=(model,),
-            daemon=True,
-            name=f"heartwood-model-{model_id}",
-        )
-        thread.start()
+            thread = threading.Thread(
+                target=self._download,
+                args=(model,),
+                daemon=True,
+                name=f"heartwood-model-{model_id}",
+            )
+            try:
+                thread.start()
+            except Exception:
+                self._downloads[model_id] = replace(
+                    download, status="error", error="Unable to start the model download worker."
+                )
+                raise
+            self._threads = [worker for worker in self._threads if worker.is_alive()]
+            self._threads.append(thread)
         return download
+
+    def request_stop(self) -> None:
+        """Prevent new downloads and cancel at the next progress or selection boundary."""
+        with self._lock:
+            self._closed = True
+
+    def close(self, *, timeout: float = 5) -> None:
+        """Wait for owned workers and callbacks, retaining them if shutdown times out."""
+        self.request_stop()
+        with self._lock:
+            workers = tuple(self._threads)
+        deadline = monotonic() + max(0, timeout)
+        for worker in workers:
+            worker.join(timeout=max(0, deadline - monotonic()))
+        if any(worker.is_alive() for worker in workers):
+            raise TimeoutError("model download workers did not stop")
+        with self._lock:
+            self._threads.clear()
 
     def statuses(self) -> tuple[ModelDownload, ...]:
         """Return stable snapshots of current downloads."""
@@ -300,6 +331,9 @@ class LocalModelDownloadManager:
                         model_id, downloaded, total
                     ),
                 )
+            with self._lock:
+                if self._closed:
+                    raise ModelArtifactError("download cancelled during gateway shutdown")
             self.on_ready(model_id, path, runtime_profile)
             result = ModelDownload(
                 model_id=model_id,
@@ -324,6 +358,8 @@ class LocalModelDownloadManager:
 
     def _record_progress(self, model_id: str, downloaded: int, total: int) -> None:
         with self._lock:
+            if self._closed:
+                raise ModelArtifactError("download cancelled during gateway shutdown")
             current = self._downloads.get(model_id)
             if current is None or current.status != "downloading":
                 return

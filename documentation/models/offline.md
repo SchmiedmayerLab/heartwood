@@ -53,6 +53,8 @@ Repeating an export from unchanged model files and metadata produces the same bu
 
 Large models can take several minutes to verify and copy.
 The terminal and browser report byte progress and allow a transfer to be cancelled without publishing a partial bundle.
+Gateway shutdown also requests transfer cancellation and waits for the worker and any final model-selection callback.
+A timeout leaves shutdown incomplete; retry it after the worker finishes before moving project state.
 
 Move the completed `.heartwood-model.zip` file through the approved transfer process.
 Do not include provider credentials or unrelated `.heartwood/` state.
