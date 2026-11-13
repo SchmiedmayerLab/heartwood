@@ -5,3 +5,4 @@
 setuptools>=84.2.1
 setuptools-scm[simple]>=8
 wheel
+hatchling

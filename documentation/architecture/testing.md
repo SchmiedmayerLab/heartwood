@@ -98,16 +98,22 @@ Promotion into the production dependency lock requires compatible upstream relea
 The candidate environment command compiles a separate hash-pinned dependency graph and installs it only into a new environment.
 It fixes the Python and package-manager versions, runtime hashes and isolated build dependencies, and checks installed-package consistency.
 The fixed release cutoff has explicit exceptions for the file-lock security update and the inference-client version required by the reviewed SDK patch.
-The lock includes test tools and supports Heartwood source through `PYTHONPATH`; it is not an installation of the published Heartwood distributions, whose dependency metadata still targets the public lock.
+The lock includes test tools.
+The application builder archives the current Heartwood commit and its pinned Skill submodule, then builds wheels from that snapshot.
+Only the temporary Heartwood package metadata receives the declared candidate dependency pins and local version suffix; source checkouts and public dependency metadata are unchanged.
+The pinned Skill catalog is built without source or metadata changes.
+The application record includes both source commits, wheel hashes and a hash-pinned installation manifest.
+Installation uses those local wheels without dependency resolution, then verifies that their declared dependencies are satisfied by the locked environment.
 
 ```bash
+uv run --no-project --python 3.12.15 deploy/build-worker-candidate.py --application --output test-results/application-candidate
 bash images/worker/candidate/runtime.sh compile test-results/worker-candidate
-bash images/worker/candidate/runtime.sh install test-results/worker-candidate test-results/worker-environment
+bash images/worker/candidate/runtime.sh install test-results/worker-candidate test-results/application-candidate test-results/worker-environment
 ```
 
 Set `UV_BIN` when the pinned package manager is not on `PATH`.
 An existing environment is rejected to preserve installed work.
-The candidate workflow verifies lock regeneration, installs this environment and runs worker admission and lifecycle checks against the packaged SDKs.
+The candidate workflow verifies lock regeneration and reproducible application builds, installs this environment and runs the Python suite with isolated imports against the packaged application and SDKs.
 This verifies package integration, not operating-system isolation or model-route eligibility; native deployment drills remain required.
 
 ## Research Evaluation Evidence

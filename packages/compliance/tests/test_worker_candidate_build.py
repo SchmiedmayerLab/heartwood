@@ -123,3 +123,49 @@ def test_wheel_identity_requires_preserved_license_and_unambiguous_metadata(
     else:
         with pytest.raises(ValueError, match="Candidate wheel"):
             builder._wheel_identity(wheel)
+
+
+def test_application_metadata_binds_the_candidate_dependency_versions(
+    builder: ModuleType, tmp_path: Path
+) -> None:
+    project = tmp_path / "application"
+    project.mkdir()
+    metadata = project / "pyproject.toml"
+    metadata.write_text(
+        '[project]\nname = "heartwood-synthetic"\nversion = "0.4.0"\n'
+        'dependencies = ["filelock==3.32.2", "unchanged>=1"]\n'
+    )
+    settings = {
+        "version_suffix": "+heartwood.1",
+        "dependency_replacements": {"filelock==3.32.2": "filelock==4.2.10"},
+    }
+    assert builder._application_metadata(project, settings) == (
+        "heartwood-synthetic",
+        "0.4.0+heartwood.1",
+    )
+    content = metadata.read_text()
+    assert '"filelock==4.2.10"' in content
+    assert '"unchanged>=1"' in content
+
+
+@pytest.mark.parametrize("dependency", ["filelock==3.32.1", "filelock>=3", "filelock<4"])
+def test_application_metadata_rejects_unreviewed_dependency_changes(
+    builder: ModuleType, tmp_path: Path, dependency: str
+) -> None:
+    project = tmp_path / "application"
+    project.mkdir()
+    metadata = project / "pyproject.toml"
+    original = (
+        '[project]\nname = "heartwood-synthetic"\nversion = "0.4.0"\n'
+        f'dependencies = ["{dependency}"]\n'
+    )
+    metadata.write_text(original)
+    with pytest.raises(ValueError, match="differs from the qualification manifest"):
+        builder._application_metadata(
+            project,
+            {
+                "version_suffix": "+heartwood.1",
+                "dependency_replacements": {"filelock==3.32.2": "filelock==4.2.10"},
+            },
+        )
+    assert metadata.read_text() == original

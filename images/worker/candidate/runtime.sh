@@ -5,8 +5,8 @@
 
 # Compile or install the qualification environment; never modify an existing environment.
 set -euo pipefail
-if [[ $# -lt 2 || $# -gt 3 || ( "$1" != compile && "$1" != install ) ]]; then
-  echo "Usage: $0 compile WHEEL_DIRECTORY | install WHEEL_DIRECTORY NEW_ENVIRONMENT" >&2
+if [[ $# -lt 2 || $# -gt 4 || ( "$1" != compile && "$1" != install ) ]]; then
+  echo "Usage: $0 compile WHEEL_DIRECTORY | install WHEEL_DIRECTORY APPLICATION_DIRECTORY NEW_ENVIRONMENT" >&2
   exit 2
 fi
 operation="$1"
@@ -18,11 +18,16 @@ if [[ "$("$uv_bin" --version | awk '{print $2}')" != 0.13.7 ]]; then
   exit 1
 fi
 if [[ "$operation" == install ]]; then
-  if [[ $# != 3 || -e "$3" || -L "$3" ]]; then
+  if [[ $# != 4 || -e "$4" || -L "$4" ]]; then
     echo "Installation requires a new environment path" >&2
     exit 2
   fi
-  target="$(python3 -c 'import pathlib, sys; print(pathlib.Path(sys.argv[1]).resolve())' "$3")"
+  application_dir="$(cd "$3" && pwd -P)"
+  if [[ ! -f "$application_dir/application-requirements.txt" ]]; then
+    echo "Application candidate requirements are missing" >&2
+    exit 2
+  fi
+  target="$(python3 -c 'import pathlib, sys; print(pathlib.Path(sys.argv[1]).resolve())' "$4")"
 elif [[ $# != 2 ]]; then
   echo "Compilation accepts only the wheel directory" >&2
   exit 2
@@ -46,5 +51,8 @@ else
     "${release_cutoff[@]}" --find-links "$wheel_dir" --require-hashes \
     --build-constraints images/worker/candidate/build-requirements.txt --require-build-hashes \
     images/worker/candidate/runtime-requirements.txt
+  "$uv_bin" pip install --no-config --python "$target/bin/python" \
+    --no-index --no-deps --require-hashes --find-links "$application_dir" \
+    --requirements "$application_dir/application-requirements.txt"
   "$uv_bin" pip check --python "$target/bin/python"
 fi

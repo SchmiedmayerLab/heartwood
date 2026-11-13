@@ -524,13 +524,11 @@ class SessionGateway:
         self.subscription_provider = subscription_provider or OpenHandsOpenAISubscription()
         self.workspace_inspector = workspace_inspector or WorkspaceInspector(self.project)
         self._verified_local_artifacts: set[tuple[Path, int, int, str]] = set()
-        repository_root = _repository_root()
-        catalog_path = (
-            repository_root / "images" / "generic" / "local-runtime" / "model-catalog.toml"
-        )
+        resource_root = _runtime_resource_root()
+        catalog_path = resource_root / "images" / "generic" / "local-runtime" / "model-catalog.toml"
         self.artifact_catalog = artifact_catalog or load_model_artifact_catalog(catalog_path)
         snapshot_catalog_path = (
-            repository_root / "images" / "generic" / "local-runtime" / "snapshots.toml"
+            resource_root / "images" / "generic" / "local-runtime" / "snapshots.toml"
         )
         self.snapshot_catalog = snapshot_catalog or load_model_snapshot_catalog(
             snapshot_catalog_path
@@ -583,7 +581,7 @@ class SessionGateway:
             models_dir=self.model_cache_dir,
             on_import_ready=self._select_transferred_local_model,
         )
-        bundled_skills_dir = repository_root / "vendor" / "heartwood-skills" / "skills"
+        bundled_skills_dir = resource_root / "vendor" / "heartwood-skills" / "skills"
         if skill_source_registry is None:
             try:
                 skill_source_registry, _ = configured_skill_source_registry(self.env)
@@ -2580,7 +2578,7 @@ class SessionGateway:
         from heartwood.gateway._specialists import load_specialist_catalog
 
         catalog = load_specialist_catalog(
-            _repository_root() / "agents" / "verified",
+            _runtime_resource_root() / "agents" / "verified",
             self.skill_manager.bundled_dir,
         )
         self._specialist_catalog_cache = catalog
@@ -3405,8 +3403,15 @@ class SessionGateway:
                 return sum(item.stat().st_size for item in path.rglob("*") if item.is_file())
 
 
-def _repository_root() -> Path:
-    return Path(__file__).resolve().parents[5]
+def _runtime_resource_root() -> Path:
+    module_dir = Path(__file__).resolve().parent
+    packaged = module_dir / "_bundled"
+    if packaged.is_dir():
+        return packaged
+    source_root = module_dir.parents[4]
+    if source_root / "packages/gateway/src/heartwood/gateway" == module_dir:
+        return source_root
+    raise RuntimeError("Gateway package is missing bundled runtime resources")
 
 
 def _clears_streaming_text(event: SessionEvent) -> bool:
