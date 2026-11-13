@@ -259,8 +259,9 @@ Matching model-written metadata without an approved probe remains unverified.
 Conformance tests cover real tool execution, incompatible versions, fresh-output confinement, preserved experiment fingerprints, interface capture, restart, and content-minimized audit export.
 These bounded observations are not a sandbox or proof against an adversarial process changing and restoring files between observations.
 Fresh-process checks compare the gateway's persisted projection, event-chain identity, and verified audit identity without creating a model client.
+Managed deployments pass the operator-bound protected-state directory and project identity to that verifier; project content cannot select the replay source.
 
-The driver reserves a private result under `.heartwood/evaluations/` before starting model work.
+The driver reserves a private result in the bound state's `evaluations/` directory before starting model work (`.heartwood/evaluations/` for local projects).
 Before reviewing a pending group or assessing completion, it waits for the SDK worker's final publication and reconciles usage through the shared gateway.
 An early finished lifecycle cannot by itself trigger reproduction or finalize an evaluation.
 Workflow completion additionally requires passing artifact checks and, where required, independently witnessed reproduction; a final message alone is not evidence of completion.

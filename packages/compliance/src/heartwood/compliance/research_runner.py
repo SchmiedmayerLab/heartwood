@@ -521,6 +521,14 @@ def _destination_absent(gateway: SessionGateway, directory: str) -> bool:
 
 
 def _fresh_replay(gateway: SessionGateway, session_id: str, expected: dict[str, object]) -> bool:
+    binding = []
+    if gateway.project.protected_state is not None:
+        binding = [
+            "--protected-state",
+            str(gateway.project.protected_state),
+            "--project-id",
+            str(gateway.project.project_id),
+        ]
     result = subprocess.run(
         [
             sys.executable,
@@ -528,6 +536,7 @@ def _fresh_replay(gateway: SessionGateway, session_id: str, expected: dict[str, 
             "heartwood.compliance.replay_evidence",
             str(gateway.project.root),
             session_id,
+            *binding,
         ],
         capture_output=True,
         text=True,
