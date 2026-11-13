@@ -6,11 +6,13 @@
 
 """Operator deployment bindings reach the actual gateway launch boundary."""
 
+import socket
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
 import tomli_w
+import uvicorn
 
 from heartwood.cli import main
 from heartwood.gateway import GatewayAsgiApp
@@ -49,7 +51,9 @@ def test_gateway_launch_uses_external_binding_or_fails_closed(
         manifest.chmod(0o600)
     started: list[Path] = []
 
-    def run(app: GatewayAsgiApp, **_kwargs: object) -> None:
+    def run(server: uvicorn.Server, **_kwargs: object) -> None:
+        app = server.config.app
+        assert isinstance(app, GatewayAsgiApp)
         assert app.gateway.project.project_id == identity
         assert app.gateway.project.state_root == state
         assert app.gateway.config_store.load().policy == policy
@@ -59,7 +63,11 @@ def test_gateway_launch_uses_external_binding_or_fails_closed(
 
     monkeypatch.chdir(workspace)
     monkeypatch.setenv("HEARTWOOD_PLATFORM", "generic")
-    monkeypatch.setattr("heartwood.cli.uvicorn.run", run)
+    monkeypatch.setattr("heartwood.cli.uvicorn.Server.run", run)
+    monkeypatch.setattr(
+        "heartwood.cli.uvicorn.Config.bind_socket",
+        lambda _config: socket.create_server(("127.0.0.1", 0)),
+    )
     result = main(
         [
             "gateway",

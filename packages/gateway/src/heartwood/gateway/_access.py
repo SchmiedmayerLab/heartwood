@@ -8,9 +8,13 @@
 
 from __future__ import annotations
 
+import os
 import re
 import secrets
-from collections.abc import Mapping, MutableMapping
+import selectors
+import stat
+import time
+from collections.abc import Mapping
 from threading import Lock
 from urllib.parse import urlencode
 
@@ -21,6 +25,8 @@ CAPABILITY_HEADER = "x-heartwood-capability"
 CAPABILITY_ENVIRONMENT = "HEARTWOOD_GATEWAY_CAPABILITY"
 CAPABILITY_ACTOR = "human"
 _MINIMUM_SECRET_LENGTH = 32
+_MAXIMUM_SECRET_BYTES = 4096
+_DESCRIPTOR_TIMEOUT_SECONDS = 5.0
 _COOKIE_OCTETS = re.compile(r"[\x21\x23-\x2B\x2D-\x3A\x3C-\x5B\x5D-\x7E]+")  # RFC 6265
 
 
@@ -51,11 +57,47 @@ class LaunchCapability:
         return cls(secrets.token_urlsafe(32), launch_token=secrets.token_urlsafe(32))
 
     @classmethod
-    def from_environment(cls, env: MutableMapping[str, str]) -> LaunchCapability | None:
-        """Consume an operator-supplied secret so no child process inherits it."""
-        secret = env.pop(CAPABILITY_ENVIRONMENT, None)
-        if secret is None:
-            return None
+    def from_descriptor(cls, descriptor: int) -> LaunchCapability:
+        """Consume and close an exclusively handed-off file or pipe descriptor.
+
+        Standard streams are never consumed. Pipes must reach EOF within five
+        seconds; the bounded payload may end with one newline. The launcher owns
+        source-file permissions and must keep the source outside worker access.
+        """
+        if descriptor < 3:
+            raise IngressConfigurationError("capability descriptor must be at least 3")
+        try:
+            with os.fdopen(descriptor, "rb", buffering=0) as source:
+                os.set_inheritable(descriptor, False)
+                mode = os.fstat(descriptor).st_mode
+                if not (stat.S_ISREG(mode) or stat.S_ISFIFO(mode)):
+                    raise IngressConfigurationError("capability descriptor must be a file or pipe")
+                payload = bytearray()
+                with selectors.DefaultSelector() as selector:
+                    if stat.S_ISFIFO(mode):
+                        os.set_blocking(descriptor, False)
+                        selector.register(descriptor, selectors.EVENT_READ)
+                    deadline = time.monotonic() + _DESCRIPTOR_TIMEOUT_SECONDS
+                    while True:
+                        if stat.S_ISFIFO(mode):
+                            remaining = deadline - time.monotonic()
+                            if remaining <= 0 or not selector.select(remaining):
+                                raise IngressConfigurationError("capability descriptor timed out")
+                        chunk = source.read(_MAXIMUM_SECRET_BYTES + 1 - len(payload))
+                        if chunk is None:
+                            continue
+                        if not chunk:
+                            break
+                        payload.extend(chunk)
+                        if len(payload) > _MAXIMUM_SECRET_BYTES:
+                            raise IngressConfigurationError(
+                                "capability descriptor exceeds 4096 bytes"
+                            )
+                secret = payload.removesuffix(b"\n").decode("ascii")
+        except IngressConfigurationError:
+            raise
+        except (OSError, ValueError) as error:
+            raise IngressConfigurationError("cannot read capability descriptor") from error
         return cls(secret, launch_token=None)
 
     @property

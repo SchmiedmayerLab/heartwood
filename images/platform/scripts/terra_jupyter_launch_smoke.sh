@@ -78,9 +78,11 @@ fi
 
 capability="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
 docker exec "${container_name}" mkdir -p "${project_root}"
-docker exec --detach --workdir "${project_root}" \
-  --env "HEARTWOOD_GATEWAY_CAPABILITY=${capability}" "${container_name}" \
-  sh -c "exec heartwood gateway serve --host 127.0.0.1 --port ${gateway_port} \
+printf '%s' "${capability}" | docker exec --interactive "${container_name}" \
+  sh -c 'umask 077; cat > /tmp/heartwood-smoke-capability'
+docker exec --detach --workdir "${project_root}" "${container_name}" \
+  sh -c "exec heartwood gateway serve --capability-fd 3 \
+    3</tmp/heartwood-smoke-capability --host 127.0.0.1 --port ${gateway_port} \
     --ingress-mode jupyter-proxy \
     --public-origin http://127.0.0.1:${host_port} \
     --base-path ${notebook_path}proxy/${gateway_port} \
@@ -109,8 +111,8 @@ if [ "${anonymous_status}" != "401" ]; then
   dump_logs
   exit 1
 fi
-if ! readiness="$(curl --fail --silent --show-error \
-  --header "X-Heartwood-Capability: ${capability}" "${heartwood_url}project/readiness")"; then
+if ! readiness="$(printf 'X-Heartwood-Capability: %s\n' "${capability}" | \
+  curl --fail --silent --show-error --header @- "${heartwood_url}project/readiness")"; then
   dump_logs
   exit 1
 fi
