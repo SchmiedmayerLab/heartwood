@@ -253,6 +253,11 @@ This initializes modules only; model clients, conversations, and tool executors 
 
 The adapter creates an OpenHands conversation with `OpenHandsAgentSettings`, the selected LiteLLM-compatible model profile, project workspace, Skills, persistence directory, and confirmation policy.
 It uses public typed OpenHands events and conversation state to derive lifecycle, unmatched actions, task progress, usage, and errors.
+For remote state, each reconciliation reads one native branch snapshot containing the conversation identity, active events, execution status, and reported usage.
+The adapter rejects a snapshot for another conversation and reports unavailable snapshots without exposing worker response content.
+It does not reconstruct the worker's event tree or mutate its context view; pending-action recovery belongs to the worker runtime.
+Local conversations retain the pinned SDK's existing state and context-repair path.
+Snapshot support does not enable remote execution by default or establish worker-attempt identity, authorization for external effects, or infrastructure isolation.
 OpenHands' privacy-safe failure classifications are translated into stable Heartwood diagnostics, and raw conversation-error detail is minimized at the OpenHands file-store boundary before persistence.
 OpenHands owns the agent loop, conversation persistence, coding tools, Task Tracker, and specialist execution.
 The gateway supplies a catalog-scoped Task adapter that reuses OpenHands orchestration while rejecting agents outside the executable catalog, supervising child interruption, and applying the same content-minimized persistence policy to parent and child conversations.
