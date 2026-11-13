@@ -2794,3 +2794,23 @@ def _community_skill(tmp_path: Path) -> Path:
         encoding="utf-8",
     )
     return source
+
+
+@pytest.mark.parametrize("relative", [Path("packages/webui/dist"), Path("fixtures/synthetic")])
+def test_installed_cli_does_not_select_project_or_ancestor_assets(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, relative: Path
+) -> None:
+    import heartwood.cli as cli
+
+    module = tmp_path / "environment/lib/python3.12/site-packages/heartwood/cli/__init__.py"
+    module.parent.mkdir(parents=True)
+    monkeypatch.setattr(cli, "__file__", str(module))
+    project = tmp_path / "research"
+    (project / relative).mkdir(parents=True)
+    (tmp_path / relative).mkdir(parents=True)
+    monkeypatch.chdir(project)
+    expected = module.parent / "_bundled" / relative
+    assert cli._bundled_path(relative) == expected
+    assert not expected.exists()
+    expected.mkdir(parents=True)
+    assert cli._bundled_path(relative) == expected

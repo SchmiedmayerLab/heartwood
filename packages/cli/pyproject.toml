@@ -36,3 +36,6 @@ packages = ["src/heartwood"]
 heartwood-gateway = { workspace = true }
 heartwood-schemas = { workspace = true }
 heartwood-session = { workspace = true }
+
+[tool.hatch.build.targets.wheel.force-include]
+"../../fixtures/synthetic" = "heartwood/cli/_bundled/fixtures/synthetic"

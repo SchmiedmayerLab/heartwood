@@ -116,6 +116,29 @@ An existing environment is rejected to preserve installed work.
 The candidate workflow verifies lock regeneration and reproducible application builds, installs this environment and runs the Python suite with isolated imports against the packaged application and SDKs.
 This verifies package integration, not operating-system isolation or model-route eligibility; native deployment drills remain required.
 
+### Candidate Images
+
+The shared Dockerfile accepts an explicit `candidate` dependency profile for generic CPU qualification images.
+Supply the verified SDK artifacts under `sdk/` and application artifacts under `application/` in a separate named build context.
+The build installs them through the same candidate environment command, checks the application source commit against the image revision, and retains both build records in `/opt/heartwood/qualification/`.
+The normal locked profile remains the default.
+
+```bash
+docker buildx build --load --file images/Dockerfile --target worker-image \
+  --build-arg HEARTWOOD_DEPENDENCY_PROFILE=candidate \
+  --build-arg HEARTWOOD_IMAGE_FLAVOR=worker \
+  --build-arg HEARTWOOD_REVISION="$(git rev-parse HEAD)" \
+  --build-context worker-qualification-artifacts=test-results/image-candidate \
+  --tag heartwood-worker:qualification .
+```
+
+Use `runtime-image` with the same inputs for the controller application.
+Both targets retain the shared non-root runtime and browser build.
+The worker target retains the fixed launch restrictions.
+The browser bundle is installed beside the candidate CLI from the existing frontend build; fixture data is included in the CLI wheel.
+Missing CLI resources resolve only within the installed package or the exact editable checkout layout, never relative to the research project.
+Image construction and worker smoke checks do not establish native sandbox, provider-authorization or sensitive-data readiness.
+
 ## Research Evaluation Evidence
 
 Research evaluations distinguish connectivity, tool compatibility, workflow completion, artifact completeness, coding correctness, statistical correctness, policy adherence, and recovery.
