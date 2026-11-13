@@ -579,6 +579,11 @@ def _build_parser() -> argparse.ArgumentParser:
     gateway_serve.add_argument("--port", type=int, default=8767, help="Gateway bind port.")
     gateway_serve.add_argument("--web-root", type=Path, default=_DEFAULT_WEB_ROOT)
     gateway_serve.add_argument(
+        "--capability-fd",
+        type=int,
+        help="Consume an inherited file or pipe descriptor containing the operator capability.",
+    )
+    gateway_serve.add_argument(
         "--deployment",
         type=Path,
         help="Absolute operator manifest binding this project to external state and model policy.",
@@ -690,6 +695,7 @@ def _main(argv: Sequence[str] | None = None) -> int:
             proxy_strips_prefix=args.proxy_strips_prefix,
             host_loopback_publication=args.host_loopback_publication,
             deployment_path=args.deployment,
+            capability_descriptor=args.capability_fd,
         )
     if args.command == "doctor":
         return _handle_doctor(project=project, as_json=args.json)
@@ -2575,6 +2581,7 @@ def _handle_serve(
     proxy_strips_prefix: bool = False,
     host_loopback_publication: bool = False,
     deployment_path: Path | None = None,
+    capability_descriptor: int | None = None,
 ) -> int:
     deployment = (
         load_project_deployment(deployment_path, project_root=project.root)
@@ -2607,7 +2614,15 @@ def _handle_serve(
             trusted_identity=trusted_identity,
             host_loopback_publication=host_loopback_publication,
         )
-        access = LaunchCapability.from_environment(os.environ) or LaunchCapability.generate()
+        if "HEARTWOOD_GATEWAY_CAPABILITY" in os.environ:
+            raise IngressConfigurationError(
+                "environment capability delivery is unsupported; use --capability-fd"
+            )
+        access = (
+            LaunchCapability.from_descriptor(capability_descriptor)
+            if capability_descriptor is not None
+            else LaunchCapability.generate()
+        )
     except IngressConfigurationError as error:
         raise SystemExit(f"{diagnostic.code}: {error}") from error
     app = GatewayAsgiApp(
@@ -2618,16 +2633,21 @@ def _handle_serve(
         ingress=ingress,
         access=access,
     )
-    launch_url = access.launch_url(ingress)
-    if launch_url is not None:
-        print(f"Open Heartwood with this one-time link:\n  {launch_url}\n", flush=True)
-    uvicorn.run(
+    config = uvicorn.Config(
         app,
         host=host,
         port=port,
         log_level="info",
         proxy_headers=False,
+        access_log=False,
     )
+    with config.bind_socket() as listener:
+        listener.set_inheritable(False)
+        listener.listen(config.backlog)
+        launch_url = access.launch_url(ingress)
+        if launch_url is not None:
+            print(f"Open Heartwood with this one-time link:\n  {launch_url}\n", flush=True)
+        uvicorn.Server(config).run(sockets=[listener])
     return 0
 
 

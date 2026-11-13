@@ -167,9 +167,13 @@ Private signing keys are never command arguments or project state.
 It never replaces an existing output.
 See [Audit Checkpoints and Retention](../operate/audit-checkpoints.md) for the complete operator workflow and trust boundary.
 
-`heartwood gateway serve` prints one launch link at startup.
+`heartwood gateway serve` prints one launch link after binding and listening on its configured port.
 Open that link once; it sets the capability cookie that every gateway API request, event stream, and WebSocket requires, and the link is invalid afterwards.
-Automation can instead set `HEARTWOOD_GATEWAY_CAPABILITY` to a random token of at least 32 printable ASCII characters, such as the output of `openssl rand -hex 32`, before starting the gateway and send it in the `X-Heartwood-Capability` header; the gateway then prints no launch link.
+Automation can supply a random token of at least 32 printable ASCII characters through `--capability-fd N`, where `N` is an inherited file or pipe descriptor numbered at least 3.
+For example, `heartwood gateway serve --capability-fd 3 3</run/secrets/heartwood-capability` reads an operator-protected secret file without putting its contents in arguments or the environment.
+The gateway consumes at most 4096 bytes, accepts one optional trailing newline, requires pipe EOF within five seconds, closes the descriptor, and prints no launch link.
+The proxy or automation client sends the same secret in the `X-Heartwood-Capability` header.
+The source must remain outside worker access; environment capability delivery is rejected.
 Restart the gateway to obtain a new link.
 
 An operator can bind canonical state and model policy outside the research directory:

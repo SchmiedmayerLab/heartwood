@@ -1456,9 +1456,9 @@ def test_launch_scripts_are_valid_and_require_explicit_local_artifact() -> None:
     jupyter_smoke = _read("images/generic/scripts/terra_jupyter_demo_smoke.py")
     assert '"chat"' in jupyter_smoke
     assert '"approve"' in jupyter_smoke
-    assert (
-        '[\n            "heartwood",\n            "gateway",\n            "serve",' in jupyter_smoke
-    )
+    assert '"--capability-fd"' in jupyter_smoke
+    assert "pass_fds=(capability.fileno(),)" in jupyter_smoke
+    assert "HEARTWOOD_GATEWAY_CAPABILITY" not in jupyter_smoke
     assert 'RUNTIME_ROOT / "packages" / "webui" / "dist"' in jupyter_smoke
     assert '"waiting-for-confirmation"' in jupyter_smoke
     assert '"pendingApproval"' in jupyter_smoke
@@ -1477,7 +1477,10 @@ def test_launch_scripts_are_valid_and_require_explicit_local_artifact() -> None:
     assert '"project/readiness"' in jupyter_smoke
 
     terra_launch = _read("images/platform/scripts/terra_jupyter_launch_smoke.sh")
-    assert "heartwood gateway serve --host 127.0.0.1" in terra_launch
+    assert "heartwood gateway serve --capability-fd 3" in terra_launch
+    assert "--host 127.0.0.1" in terra_launch
+    assert "--header @-" in terra_launch
+    assert "HEARTWOOD_GATEWAY_CAPABILITY" not in terra_launch
     assert "--ingress-mode jupyter-proxy" in terra_launch
     assert "--public-origin http://127.0.0.1:" in terra_launch
     assert "--base-path" in terra_launch

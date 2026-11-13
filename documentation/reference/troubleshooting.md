@@ -307,7 +307,7 @@ The request reached the gateway route but did not carry the capability that `hea
 Open the launch link printed by the terminal that started Heartwood; it works once and sets the cookie the page needs.
 If the link was already used or the gateway was restarted, stop Heartwood, start it again, and open the new link.
 
-Automation must send the value of `HEARTWOOD_GATEWAY_CAPABILITY` in the `X-Heartwood-Capability` header.
+Automation must send the capability supplied through `--capability-fd` in the `X-Heartwood-Capability` header.
 Do not share the link or the secret with other users or processes.
 
 ## Browser Access

@@ -8,6 +8,10 @@
 
 from __future__ import annotations
 
+import os
+import socket
+from pathlib import Path
+
 import pytest
 
 from heartwood.gateway import IngressConfigurationError, IngressPolicy, LaunchCapability
@@ -29,16 +33,68 @@ def test_generated_capability_issues_one_launch_link() -> None:
     assert capability.launch_url(IngressPolicy.create()) is None
 
 
-def test_environment_capability_is_consumed_and_prints_no_link() -> None:
-    env = {"HEARTWOOD_GATEWAY_CAPABILITY": _SECRET, "PATH": "/usr/bin"}
+@pytest.mark.parametrize("pipe", [False, True])
+def test_descriptor_capability_is_consumed_and_prints_no_link(tmp_path: Path, pipe: bool) -> None:
+    payload = (_SECRET + "\n").encode()
+    if pipe:
+        descriptor, writer = os.pipe()
+        os.write(writer, payload)
+        os.close(writer)
+    else:
+        path = tmp_path / "secret"
+        path.write_bytes(payload)
+        descriptor = os.open(path, os.O_RDONLY)
+    os.set_inheritable(descriptor, True)
 
-    capability = LaunchCapability.from_environment(env)
+    capability = LaunchCapability.from_descriptor(descriptor)
 
-    assert capability is not None
-    assert env == {"PATH": "/usr/bin"}
+    with pytest.raises(OSError, match="Bad file descriptor"):
+        os.fstat(descriptor)
     assert capability.launch_url(IngressPolicy.create()) is None
     assert capability.authorizes({"x-heartwood-capability": (f" {_SECRET} ",)})
-    assert LaunchCapability.from_environment({}) is None
+
+
+@pytest.mark.parametrize(
+    "payload", [b"", b"short", b"x" * 4097, b"x" * 32 + b"\xff", b"x" * 32 + b"\nextra"]
+)
+def test_descriptor_rejects_invalid_payload_and_always_closes(
+    tmp_path: Path, payload: bytes
+) -> None:
+    source = tmp_path / "invalid"
+    source.write_bytes(payload)
+    descriptor = os.open(source, os.O_RDONLY)
+    with pytest.raises(IngressConfigurationError):
+        LaunchCapability.from_descriptor(descriptor)
+    with pytest.raises(OSError, match="Bad file descriptor"):
+        os.fstat(descriptor)
+
+
+@pytest.mark.parametrize("descriptor", [-1, 0, 1, 2])
+def test_standard_streams_are_not_consumed(descriptor: int) -> None:
+    with pytest.raises(IngressConfigurationError, match="at least 3"):
+        LaunchCapability.from_descriptor(descriptor)
+
+
+def test_descriptor_rejects_socket() -> None:
+    transport = socket.socket()
+    descriptor = transport.detach()
+    with pytest.raises(IngressConfigurationError, match="file or pipe"):
+        LaunchCapability.from_descriptor(descriptor)
+    with pytest.raises(OSError, match="Bad file descriptor"):
+        os.fstat(descriptor)
+
+
+def test_descriptor_requires_pipe_eof(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("heartwood.gateway._access._DESCRIPTOR_TIMEOUT_SECONDS", 0.01)
+    descriptor, writer = os.pipe()
+    try:
+        os.write(writer, _SECRET.encode())
+        with pytest.raises(IngressConfigurationError, match="timed out"):
+            LaunchCapability.from_descriptor(descriptor)
+        with pytest.raises(OSError, match="Bad file descriptor"):
+            os.fstat(descriptor)
+    finally:
+        os.close(writer)
 
 
 @pytest.mark.parametrize(
