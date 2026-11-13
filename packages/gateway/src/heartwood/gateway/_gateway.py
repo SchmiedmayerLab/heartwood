@@ -2482,6 +2482,8 @@ class SessionGateway:
                         project=self.project,
                         session_id=session_id,
                         profile=backend.profile,
+                        policy=service.policy_profile,
+                        action_confirmation_mode=configuration.action_settings.confirmation_mode,
                         skills=self.skill_manager,
                         specialists=backend.specialist_catalog,
                     ),

@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from heartwood.gateway._project import ProjectContext
     from heartwood.gateway._skill_settings import SkillManager
     from heartwood.gateway._specialists import SpecialistCatalog
+    from heartwood.schemas import ActionConfirmationMode, PolicyProfile
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,6 +38,8 @@ class WorkerSessionRequest:
     project: ProjectContext
     session_id: str
     profile: ModelProfile
+    policy: PolicyProfile
+    action_confirmation_mode: ActionConfirmationMode
     skills: SkillManager
     specialists: SpecialistCatalog
 
@@ -81,6 +84,19 @@ class ManagedWorkerSession:
         if self._attempted:
             raise WorkerAttemptError("worker session requires outside reconciliation")
         self._attempted = True
+        if reason := self._service.backend.configuration_error:
+            raise WorkerAttemptError(reason)
+        profile = self._request.profile
+        decision = self._service.policy.evaluate(
+            endpoint=profile.policy_endpoint,
+            capability_tier=profile.capability_tier,
+            action_confirmation_mode=self._request.action_confirmation_mode,
+            credential_reference=profile.credential_reference,
+            decision_id="worker-launch",
+            purpose="worker launch",
+        )
+        if decision.decision != "allow":
+            raise WorkerAttemptError("worker launch is denied by session policy")
         plan = self._prepare(self._request)
         self._plan = plan
         lease = self._service.launch_worker(

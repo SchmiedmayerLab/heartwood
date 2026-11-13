@@ -51,7 +51,10 @@ Gateway-local parallel-review executors are not installed on remote agent copies
 This embedding contract does not provision a sandbox or enable remote execution in the default gateway launch path.
 
 A managed `SessionGateway` can receive an operator-owned worker-plan factory when its project uses protected external state.
-The factory prepares one session's image, effective policy and input identities, plus native launch, connection and outside-revocation callbacks.
+The factory receives the selected profile, effective session policy and action-confirmation mode, and prepares image, effective sandbox policy and input identities plus native launch, connection and outside-revocation callbacks.
+Before calling the factory, the gateway validates the worker inference route and evaluates the endpoint, credential reference, capability tier and confirmation mode through the existing model policy engine.
+A denied or unsupported route reaches no platform callback and creates no worker attempt.
+This launch gate precedes any platform preparation; normal per-command model authorization remains required, and the platform must enforce the admitted restrictions outside the worker.
 Preparation must not create a worker or grant service access; launch occurs only after the session retains its attempt.
 The gateway uses its normal model, action, session and interface contracts, but constructs the admitted-worker backend instead of a local conversation.
 Injected session factories and deterministic local backends cannot bypass this selection.
