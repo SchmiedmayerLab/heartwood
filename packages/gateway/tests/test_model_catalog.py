@@ -639,7 +639,15 @@ def test_gateway_authorizes_discovery_before_retaining_transient_token(
     assert "transient-secret" not in persisted
     assert "transient-secret" not in str(settings)
     allowed.stop()
-    assert _records(allowed.model_settings(), "connections")[1]["credential_status"] == "missing"
+    assert allowed.credential_store.resolve("OPENAI_API_KEY") is None
+    reopened = SessionGateway(project=allowed.project, env={}, model_catalog_service=service)
+    try:
+        assert (
+            _records(reopened.model_settings(), "connections")[1]["credential_status"] == "missing"
+        )
+    finally:
+        reopened.stop()
+        denied.stop()
 
 
 def test_custom_api_manual_fallback_reuses_the_authorized_runtime_credential(

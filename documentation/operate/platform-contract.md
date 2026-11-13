@@ -820,6 +820,8 @@ Gateway HTTP authentication requires the capability header after ingress validat
 Browser WebSockets send `{ "type": "authenticate", "capability": "…" }` as their first frame within five seconds and before receiving events; trusted proxies may inject the capability header instead.
 The capability does not establish per-person platform identity.
 Streaming clients reconnect with the `after` query cursor; the server does not implement `Last-Event-ID` replay.
+Shutdown closes admission to gateway calls, returns `503` for new REST and server-sent event requests, and closes WebSocket connections with code `1012`.
+Existing event streams end during shutdown; clients reconnect to a new gateway instance with their last observed cursor.
 Session command payloads remain generic JSON objects validated by their command handlers, rather than a separate schema for each command kind.
 
 ### Check Platform Service Responses

@@ -377,7 +377,7 @@ def test_catalog_recovers_after_interrupted_metadata_write(
     with pytest.raises(OSError, match="synthetic write failure"):
         SessionCatalog(tmp_path).create()
 
-    session_dir = next(tmp_path.iterdir())
+    (session_dir,) = (path for path in tmp_path.iterdir() if path.is_dir())
     assert not (session_dir / "metadata.json").exists()
     assert not tuple(session_dir.glob(".metadata.json-*"))
 

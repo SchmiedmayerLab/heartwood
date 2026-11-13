@@ -58,6 +58,7 @@ def test_bound_runtime_observer_uses_owned_service_without_gateway_lock(tmp_path
         with pytest.raises(ValueError, match="requested session"):
             observe(session_id)
         # A new owner does not renew a callback bound to the old service.
+        gateway = SessionGateway(project=gateway.project, env={}, backend_id="deterministic")
         gateway.handle(
             SessionCommand(
                 command_id="renewed-pause",

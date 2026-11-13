@@ -197,7 +197,10 @@ Only incomplete staging is removed during failure cleanup.
 
 The shared transfer manager owns byte progress, lifecycle, warnings, cancellation, and results for the terminal, browser, and notebook adapters.
 Gateway shutdown stops new model downloads and transfers, requests cooperative cancellation, and waits for their worker threads and final selection callbacks.
-The wait releases the gateway state lock so a callback already in progress can finish.
+Shutdown first closes admission to the gateway API and waits for accepted calls, including synchronous downloads and nested calls, to finish.
+If calls are still active after five seconds, shutdown reports a timeout and retains session ownership and credentials for the in-flight work; admission remains closed and shutdown can be retried.
+After shutdown starts, callers must use a new gateway instance for further work; REST requests to the stopped instance return `503`.
+The wait does not hold the gateway state lock, so a callback already in progress can finish.
 If model work remains active after the shutdown deadline, the gateway reports failure and retains its worker references for a later shutdown attempt.
 This does not stop a separately supervised inference runtime or establish project-wide migration exclusion.
 An explicit license decision is required before import, and the request is bound to the SHA-256 identity of the exact manifest shown during review.
