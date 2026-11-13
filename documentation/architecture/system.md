@@ -50,6 +50,20 @@ Native streaming-delta events feed transient interface text, while durable trans
 Gateway-local parallel-review executors are not installed on remote agent copies; sequential advisory specialists remain available, and remote parallel review requires separate qualification.
 This embedding contract does not provision a sandbox or enable remote execution in the default gateway launch path.
 
+A managed `SessionGateway` can receive an operator-owned worker-plan factory when its project uses protected external state.
+The factory prepares one session's image, effective policy and input identities, plus native launch, connection and outside-revocation callbacks.
+Preparation must not create a worker or grant service access; launch occurs only after the session retains its attempt.
+The gateway uses its normal model, action, session and interface contracts, but constructs the admitted-worker backend instead of a local conversation.
+Injected session factories and deterministic local backends cannot bypass this selection.
+Model preflight preserves endpoint and credential-reference checks without resolving a gateway credential; the admitted worker receives only its inference placeholder.
+The returned workspace must carry the exact lease issued by that session, and its specialist catalog must match the selected image contract.
+Preparation, launch and connection are attempted once per service; uncertainty requires outside reconciliation.
+
+Before replacing or closing a managed session, the gateway fences its lease and records the platform callback's revocation evidence through the existing session lifecycle.
+Failed revocation retains the service and writer ownership for recovery; closing an HTTP client is not revocation evidence.
+The platform callback remains responsible for native worker and service cleanup, including attempt-owned storage.
+This constructor-owned integration does not select an infrastructure driver from project content or add a deployment-file worker configuration.
+
 ### Project Context
 
 `ProjectContext.current()` resolves the process current directory and reserves `.heartwood/` beneath it.
