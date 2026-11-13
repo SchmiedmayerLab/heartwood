@@ -731,3 +731,18 @@ def _skills_root() -> Path:
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[3]
+
+
+def test_runtime_selection_applies_new_revocations_immediately(tmp_path: Path) -> None:
+    entry, archive = _catalog_skill(tmp_path)
+    client = _CatalogClient(_snapshot(entry), archive)
+    manager = _manager(tmp_path, client=client)
+    manager.install_catalog(
+        entry.name, source_id=None, expected_tree_sha256=entry.tree_sha256, approved=True
+    )
+    client.snapshot = _snapshot(
+        entry.model_copy(update={"revoked": True, "revocation_reason": "Synthetic withdrawal"})
+    )
+
+    assert manager.active_skill_roots() == ()
+    assert manager.store.records()[0].status == "revoked"

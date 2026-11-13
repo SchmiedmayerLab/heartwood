@@ -479,6 +479,7 @@ class SkillManager:
                         f"Installed Skill source is no longer configured: {source_id}"
                     )
                 self._refresh_source(source_id)
+            records = self.store.records()
             self._verify_active_installation_audit(records)
             roots: list[Path] = []
             for record in records:
