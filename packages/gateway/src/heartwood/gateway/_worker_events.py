@@ -18,7 +18,7 @@ import httpx
 from openhands.sdk.event import Event
 from openhands.sdk.event.conversation_state import FULL_STATE_KEY, ConversationStateUpdateEvent
 from openhands.sdk.workspace import RemoteWorkspace
-from pydantic import PrivateAttr, model_validator
+from pydantic import Field, PrivateAttr, model_validator
 from websockets.asyncio.client import ClientConnection, connect
 from websockets.exceptions import (
     ConnectionClosed,
@@ -28,6 +28,7 @@ from websockets.exceptions import (
 )
 from websockets.frames import Close, CloseCode
 
+from heartwood.core_adapter.worker_attempts import WorkerAttemptLease
 from heartwood.gateway._remote_workspace import (
     _MAX_RESPONSE_BYTES,
     AdmittedRemoteWorkspace,
@@ -55,6 +56,10 @@ class WorkerEventAdmission:
         self._origin = _worker_origin(host)
         self._budget = budget
         self._tool_modules = dict(tool_modules)
+        if budget.attempt is not None and self._origin != _worker_origin(
+            str(budget.attempt.runtime.endpoint)
+        ):
+            raise WorkerResponseError("worker origin does not match its retained binding")
 
     def connect(self, url: str, *, max_size: int) -> AbstractAsyncContextManager[ClientConnection]:
         """Open only the configured worker's native event endpoint."""
@@ -63,6 +68,11 @@ class WorkerEventAdmission:
             target = httpx.URL(url)
             prefix = "/sockets/events/"
             identity = UUID(target.path.removeprefix(prefix))
+            if (
+                self._budget.attempt is not None
+                and identity != self._budget.attempt.intent.conversation_id
+            ):
+                raise ValueError
             expected = self._origin.copy_with(
                 scheme="wss" if self._origin.scheme == "https" else "ws",
                 path=f"{prefix}{identity}",
@@ -93,6 +103,7 @@ class WorkerEventAdmission:
     async def _open(self, connection: _DirectConnection) -> AsyncIterator[ClientConnection]:
         try:
             async with connection as socket:
+                self._budget.charge(0)
                 yield socket
         except (WorkerResponseError, ssl.SSLError, InvalidHandshake):
             self._budget.close()
@@ -135,6 +146,13 @@ class WorkerEventAdmission:
                 if not isinstance(metadata, dict):
                     raise ValueError
                 _admit_metadata(metadata, self._tool_modules)
+                attempt = self._budget.attempt
+                if (
+                    attempt is not None
+                    and (event.key == FULL_STATE_KEY or "id" in metadata)
+                    and metadata.get("id") != str(attempt.intent.conversation_id)
+                ):
+                    raise ValueError
             self._budget.charge(0)
         except Exception:
             self._budget.close()
@@ -144,6 +162,7 @@ class WorkerEventAdmission:
 class AdmittedWorkerWorkspace(AdmittedRemoteWorkspace):
     """HTTP and event admission, requiring the SDK's public transport hooks."""
 
+    attempt: WorkerAttemptLease = Field(exclude=True, repr=False, frozen=True)
     _event_admission: WorkerEventAdmission | None = PrivateAttr(default=None)
 
     @model_validator(mode="before")

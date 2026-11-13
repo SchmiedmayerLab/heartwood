@@ -28,6 +28,7 @@ from websockets.asyncio.server import ServerConnection, serve
 from websockets.exceptions import ConnectionClosedError
 from websockets.http11 import Request, Response
 
+from heartwood.core_adapter.worker_attempts import WorkerAttemptLease
 from heartwood.gateway._remote_workspace import (
     WorkerResponseBudget,
     WorkerResponseError,
@@ -40,9 +41,15 @@ def _event() -> str:
     return ConversationStateUpdateEvent(key="execution_status", value="idle").model_dump_json()
 
 
-def test_worker_workspace_requires_supported_sdk() -> None:
+def test_worker_workspace_requires_supported_sdk(
+    worker_attempt: Callable[[str], WorkerAttemptLease],
+) -> None:
     if callable(getattr(RemoteWorkspace, "connect_websocket", None)):
-        workspace = AdmittedWorkerWorkspace(host="http://worker.test", working_dir="/workspace")
+        workspace = AdmittedWorkerWorkspace(
+            host="http://worker.test",
+            working_dir="/workspace",
+            attempt=worker_attempt("http://worker.test"),
+        )
         assert "_response_budget" not in workspace.model_dump()
     else:
         values = {
@@ -52,7 +59,10 @@ def test_worker_workspace_requires_supported_sdk() -> None:
         }
         constructors: tuple[Callable[[], object], ...] = (
             lambda: AdmittedWorkerWorkspace(
-                host="http://worker.test", working_dir="/workspace", api_key="synthetic-private-key"
+                host="http://worker.test",
+                working_dir="/workspace",
+                api_key="synthetic-private-key",
+                attempt=worker_attempt("http://worker.test"),
             ),
             lambda: AdmittedWorkerWorkspace.model_validate(values),
         )

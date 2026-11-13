@@ -303,7 +303,10 @@ Replacement preserves the native conversation identity and requires the previous
 Replaying a record does not grant a live capability or permit a local execution fallback.
 
 Each process-local admission capability belongs to one retained binding and session writer.
-Fencing closes callback admission; session callbacks require the same live capability.
+The full worker workspace requires that capability and restricts requests and event connections to its observed origin and native conversation.
+Creation supplies the retained conversation identity; gateway-initiated forks require a separately authorized lifecycle and are rejected by this binding.
+Fencing closes its HTTP, event, and callback admission.
+In-flight HTTP responses and queued event messages are checked again before admission, and session callbacks require the same live capability.
 A capability cannot prove that a sandbox stopped or that service access was revoked.
 The sandbox control plane and outside services enforce those controls, and an unavailable or uncertain revocation blocks replacement.
 Attempt records and ordinary session/audit correlation contain no worker credentials.
