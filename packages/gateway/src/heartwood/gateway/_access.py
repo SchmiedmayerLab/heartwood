@@ -18,22 +18,37 @@ from collections.abc import Mapping
 from threading import Lock
 from urllib.parse import urlencode
 
+from pydantic import BaseModel, ConfigDict, Field
+
 from heartwood.gateway._ingress import IngressConfigurationError, IngressPolicy
 
-CAPABILITY_COOKIE = "heartwood-capability"
 CAPABILITY_HEADER = "x-heartwood-capability"
 CAPABILITY_ENVIRONMENT = "HEARTWOOD_GATEWAY_CAPABILITY"
 CAPABILITY_ACTOR = "human"
 _MINIMUM_SECRET_LENGTH = 32
 _MAXIMUM_SECRET_BYTES = 4096
 _DESCRIPTOR_TIMEOUT_SECONDS = 5.0
-_COOKIE_OCTETS = re.compile(r"[\x21\x23-\x2B\x2D-\x3A\x3C-\x5B\x5D-\x7E]+")  # RFC 6265
+_SECRET_CHARACTERS = re.compile(r"[\x21\x23-\x2B\x2D-\x3A\x3C-\x5B\x5D-\x7E]+")
+
+
+class LaunchRequest(BaseModel):
+    """One-time browser exchange; credentials never belong in request URLs."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    token: str = Field(min_length=1, max_length=256, repr=False)
+
+
+class LaunchResponse(BaseModel):
+    """Origin-scoped browser capability returned only by a valid launch exchange."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    capability: str = Field(min_length=32, max_length=4096, repr=False)
 
 
 class LaunchCapability:
     """Process-lifetime secret that every gateway API, SSE, and WebSocket request must carry.
 
-    The secret reaches the browser through a one-time launch link that sets an HttpOnly cookie.
+    The browser exchanges a one-time fragment token for an origin-scoped header credential.
     Automation and proxies supply the same secret through the capability header.
     """
 
@@ -42,7 +57,9 @@ class LaunchCapability:
             raise IngressConfigurationError(
                 f"gateway capability must be at least {_MINIMUM_SECRET_LENGTH} characters"
             )
-        if _COOKIE_OCTETS.fullmatch(secret) is None:
+        if len(secret) > _MAXIMUM_SECRET_BYTES:
+            raise IngressConfigurationError("gateway capability exceeds 4096 bytes")
+        if _SECRET_CHARACTERS.fullmatch(secret) is None:
             raise IngressConfigurationError(
                 "gateway capability must be printable ASCII without spaces, quotes, commas, "
                 "semicolons, or backslashes"
@@ -109,36 +126,22 @@ class LaunchCapability:
         """Return the one-time browser link, or None when the secret was supplied externally."""
         if self._launch_token is None:
             return None
-        query = urlencode({"token": self._launch_token})
-        return f"{ingress.external_origin}{ingress.browser_base_path}/launch?{query}"
+        fragment = urlencode({"launch": self._launch_token})
+        return f"{ingress.external_origin}{ingress.browser_base_path}/#{fragment}"
 
-    def consume_launch_token(self, token: str) -> bool:
-        """Exchange the launch token exactly once."""
+    def exchange_launch_token(self, token: str) -> str | None:
+        """Exchange the launch token for the request capability exactly once."""
         with self._lock:
             expected = self._launch_token
             if expected is None or not secrets.compare_digest(expected.encode(), token.encode()):
-                return False
+                return None
             self._launch_token = None
-            return True
+            return self._secret.decode("ascii")
 
     def authorizes(self, headers: Mapping[str, tuple[str, ...]]) -> bool:
-        """Return whether the request carries the secret as a header or cookie."""
+        """Return whether the request carries the explicit capability header."""
         presented = [value.strip() for value in headers.get(CAPABILITY_HEADER, ())]
-        for raw in headers.get("cookie", ()):
-            for pair in raw.split(";"):
-                name, separator, value = pair.strip().partition("=")
-                if separator and name == CAPABILITY_COOKIE:
-                    presented.append(value)
-        return any(secrets.compare_digest(self._secret, value.encode()) for value in presented)
-
-    def cookie_header(self, ingress: IngressPolicy) -> str:
-        """Return the Set-Cookie value scoping the secret to the browser-visible gateway path."""
-        attributes = [
-            f"{CAPABILITY_COOKIE}={self._secret.decode('ascii')}",
-            f"Path={ingress.browser_base_path or '/'}",
-            "HttpOnly",
-            "SameSite=Strict",
-        ]
-        if ingress.external_origin.startswith("https://"):
-            attributes.append("Secure")
-        return "; ".join(attributes)
+        try:
+            return any(secrets.compare_digest(self._secret, value.encode()) for value in presented)
+        except UnicodeError:
+            return False

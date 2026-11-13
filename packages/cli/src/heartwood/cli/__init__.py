@@ -2640,6 +2640,7 @@ def _handle_serve(
         log_level="info",
         proxy_headers=False,
         access_log=False,
+        ws_max_size=8192,
     )
     with config.bind_socket() as listener:
         listener.set_inheritable(False)

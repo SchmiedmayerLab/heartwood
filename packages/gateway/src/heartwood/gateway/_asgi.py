@@ -19,10 +19,17 @@ from pathlib import Path
 from typing import Literal, cast
 from urllib.parse import parse_qs, urlsplit
 
-from heartwood.gateway._access import LaunchCapability
+from pydantic import ValidationError
+
+from heartwood.gateway._access import (
+    CAPABILITY_HEADER,
+    LaunchCapability,
+    LaunchRequest,
+    LaunchResponse,
+)
 from heartwood.gateway._diagnostics import diagnostic_for
 from heartwood.gateway._gateway import SessionGateway
-from heartwood.gateway._ingress import IngressPolicy, IngressRequest, IngressRequestError
+from heartwood.gateway._ingress import IngressPolicy, IngressRequestError
 from heartwood.gateway._rest import RestGateway, RestRequest
 from heartwood.session import JsonValue, SessionEvent, validate_session_id
 
@@ -32,6 +39,8 @@ AsgiScope = Mapping[str, object]
 AsgiSend = Callable[[AsgiMessage], Awaitable[None]]
 _HEAD_TAG = re.compile(r"<head\b[^>]*>", re.IGNORECASE)
 _MAX_REQUEST_BODY_BYTES = 1_048_576
+_MAX_AUTH_FRAME_BYTES = 8192
+_AUTH_FRAME_TIMEOUT_SECONDS = 5.0
 
 
 class _RequestBodyTooLargeError(ValueError):
@@ -97,7 +106,7 @@ class GatewayAsgiApp:
             return
         method = _scope_string(scope, "method")
         if request.path == "/launch":
-            await self._handle_launch(request, method=method, send=send)
+            await self._handle_launch(method=method, receive=receive, send=send)
             return
         requires_capability = _is_gateway_api_path(request.path)
         if requires_capability and not self.access.authorizes(_scope_headers(scope)):
@@ -165,24 +174,24 @@ class GatewayAsgiApp:
             return
         await _send_json_response(send, status_code=404, body={"error": "unknown gateway route"})
 
-    async def _handle_launch(self, request: IngressRequest, *, method: str, send: AsgiSend) -> None:
-        token = _query_values(request.query_string).get("token", [None])[0]
-        if method != "GET" or token is None or not self.access.consume_launch_token(token):
+    async def _handle_launch(self, *, method: str, receive: AsgiReceive, send: AsgiSend) -> None:
+        if method != "POST":
             await _send_capability_required(send, status_code=403)
             return
-        await send(
-            {
-                "type": "http.response.start",
-                "status": 303,
-                "headers": [
-                    (b"location", f"{self.ingress.browser_base_path}/".encode("ascii")),
-                    (b"set-cookie", self.access.cookie_header(self.ingress).encode("ascii")),
-                    (b"cache-control", b"no-store"),
-                    (b"referrer-policy", b"no-referrer"),
-                ],
-            }
+        try:
+            request = LaunchRequest.model_validate_json(await _read_http_body(receive))
+        except (ValidationError, _RequestBodyTooLargeError):
+            await _send_json_response(
+                send, status_code=400, body={"error": "Invalid launch request"}
+            )
+            return
+        capability = self.access.exchange_launch_token(request.token)
+        if capability is None:
+            await _send_capability_required(send, status_code=403)
+            return
+        await _send_json_response(
+            send, status_code=200, body=LaunchResponse(capability=capability).model_dump()
         )
-        await send({"type": "http.response.body", "body": b""})
 
     async def _handle_sse(
         self,
@@ -254,7 +263,7 @@ class GatewayAsgiApp:
             await send({"type": "websocket.close", "code": 1008})
             return
         route = _session_events_route(request.path)
-        if route is None or not self.access.authorizes(_scope_headers(scope)):
+        if route is None:
             await send({"type": "websocket.close", "code": 1008})
             return
         try:
@@ -265,6 +274,11 @@ class GatewayAsgiApp:
             return
 
         await send({"type": "websocket.accept"})
+        if not self.access.authorizes(_scope_headers(scope)) and not await self._authorize_socket(
+            receive
+        ):
+            await send({"type": "websocket.close", "code": 1008})
+            return
         stream, snapshot = await asyncio.to_thread(
             partial(
                 self.gateway.open_event_stream,
@@ -304,6 +318,34 @@ class GatewayAsgiApp:
                     )
         finally:
             stream.close()
+
+    async def _authorize_socket(self, receive: AsgiReceive) -> bool:
+        try:
+            async with asyncio.timeout(_AUTH_FRAME_TIMEOUT_SECONDS):
+                message = await receive()
+                if message.get("type") == "websocket.connect":
+                    message = await receive()
+        except TimeoutError:
+            return False
+        raw = message.get("text")
+        if (
+            message.get("type") != "websocket.receive"
+            or not isinstance(raw, str)
+            or len(raw.encode("utf-8")) > _MAX_AUTH_FRAME_BYTES
+        ):
+            return False
+        try:
+            payload = json.loads(raw)
+        except (ValueError, RecursionError):
+            return False
+        if (
+            not isinstance(payload, dict)
+            or set(payload) != {"type", "capability"}
+            or payload["type"] != "authenticate"
+            or not isinstance(payload["capability"], str)
+        ):
+            return False
+        return self.access.authorizes({CAPABILITY_HEADER: (payload["capability"],)})
 
 
 async def _read_http_body(receive: AsgiReceive) -> bytes:

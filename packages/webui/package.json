@@ -35,6 +35,7 @@
     "@schmiedmayerlab/grove-design-system": "0.1.1",
     "@tanstack/react-query": "5.101.4",
     "codemirror": "6.0.2",
+    "eventsource": "5.1.4",
     "lucide-react": "1.28.0",
     "react": "19.2.8",
     "react-dom": "19.2.8",

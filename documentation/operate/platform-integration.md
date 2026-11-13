@@ -62,7 +62,7 @@ Restrict its upstream network route to the configured gateway bind.
 Heartwood validates that request metadata agrees with the declared route; the proxy remains responsible for end-user authentication, authorization, TLS, and network isolation.
 
 Every gateway API request also needs the launch capability.
-Let the researcher open the launch link that `heartwood gateway serve` prints, and forward the resulting cookie unchanged, or supply the gateway capability through `--capability-fd` and inject `X-Heartwood-Capability` from the proxy for callers the platform has already authenticated.
+Let the researcher open the launch link that `heartwood gateway serve` prints, and forward the browser’s capability header and WebSocket authentication frame unchanged, or supply the gateway capability through `--capability-fd` and inject `X-Heartwood-Capability` from the proxy for callers the platform has already authenticated.
 Never expose the secret to the agent workspace or to other users of the platform.
 The gateway consumes and closes the inherited descriptor before serving requests and rejects environment delivery.
 Protect the descriptor source from worker access and never forward researcher capabilities to the agent server.
