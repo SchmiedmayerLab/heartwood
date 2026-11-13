@@ -44,8 +44,11 @@ The worker target is a Linux CPU qualification artifact and is not connected to 
 The entry point requires a fresh URL-safe `SESSION_API_KEY` with at least 43 characters and accepts only the optional `HEARTWOOD_INFERENCE_PLACEHOLDER` from the launching environment.
 Generate the key with a cryptographically secure random source for each attempt, never reuse it between workers, and deliver it through the sandbox's secret mechanism.
 The placeholder must be issued by the outside inference transport; never supply an actual provider credential under that name.
-All remaining environment values are fixed in the image: system paths and locale, private worker home, disabled telemetry, and the read-only server configuration.
-Proxy settings, certificate overrides, dynamic loader settings, Python import paths, arbitrary server overrides, host identity, and other credentials are not forwarded.
+The worker also admits OpenShell's exact supervisor certificate and combined trust-bundle paths under `/run/openshell-supervisor-ca/material/` for Python, Requests, curl, Git, Node, and Deno TLS clients.
+The sandbox owns these public trust files and must keep them outside worker-writable paths.
+This preserves inference credential substitution through the supervisor's authenticated TLS interception without accepting arbitrary certificate overrides.
+All other environment values are fixed in the image: system paths and locale, private worker home, disabled telemetry, and the read-only server configuration.
+Proxy settings, other certificate paths, dynamic loader settings, Python import paths, arbitrary server overrides, host identity, and other credentials are not forwarded.
 The entry point closes inherited descriptors other than standard input, output, and error before replacing itself with the native server.
 It binds to sandbox loopback, disables browser and editor services, and admits one concurrent native conversation run.
 
