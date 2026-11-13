@@ -57,7 +57,8 @@ An internal maintenance context holds that gate while acquiring every existing s
 The context leaves writer metadata and historical records unchanged and releases its locks after failure or process exit.
 Gateway versions that do not use the admission lock must be stopped before maintenance.
 This excludes session writes only; project configuration, runtime activity, and model transfers require separate exclusion before a complete state migration.
-Internal migration staging verifies paired session and audit histories and command receipts under these locks, then copies their original bytes into a private directory on the destination volume.
+Internal migration staging first excludes gateway startup and acquires every registered gateway lifetime lease; any active gateway prevents staging.
+It then verifies paired session and audit histories and command receipts under the configuration and session locks and copies their original bytes into a private directory on the destination volume.
 The copy is verified again before a receipt records its file hashes and session heads.
 Pending append recovery, unresolved commands, corrupt records, symbolic links, and existing destinations prevent staging.
 Worker recovery state, writer metadata, and derived exports remain in the source; they are not promoted into canonical records.

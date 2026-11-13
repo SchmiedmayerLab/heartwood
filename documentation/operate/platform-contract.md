@@ -821,6 +821,8 @@ Browser WebSockets send `{ "type": "authenticate", "capability": "…" }` as the
 The capability does not establish per-person platform identity.
 Streaming clients reconnect with the `after` query cursor; the server does not implement `Last-Event-ID` replay.
 Shutdown closes admission to gateway calls, returns `503` for new REST and server-sent event requests, and closes WebSocket connections with code `1012`.
+Project maintenance excludes new gateway registration; conflicting REST and server-sent event requests return `409`, and conflicting WebSocket connections close with code `1012`.
+The terminal reports project unavailability with temporary-failure exit code `75`.
 Existing event streams end during shutdown; clients reconnect to a new gateway instance with their last observed cursor.
 Session command payloads remain generic JSON objects validated by their command handlers, rather than a separate schema for each command kind.
 

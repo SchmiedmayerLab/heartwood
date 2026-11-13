@@ -129,6 +129,7 @@ from heartwood.gateway._model_transfer import (
 )
 from heartwood.gateway._openhands_models import prepare_openhands_import
 from heartwood.gateway._project import ProjectContext, ProjectStateError
+from heartwood.gateway._project_activity import ProjectActivity
 from heartwood.gateway._project_config import (
     LocalModelSelection,
     ProjectActionSettingsStore,
@@ -443,7 +444,8 @@ class SessionGateway:
     ) -> None:
         prepare_openhands_import()
         self.project = ProjectContext.current() if project is None else project
-        self._operations = GatewayOperations()
+        self._project_activity = ProjectActivity(self.project)
+        self._operations = GatewayOperations(on_enter=self._project_activity.acquire_existing)
         self.sessions_root = self.project.sessions_dir
         self.env = dict(os.environ if env is None else env)
         self.backend_id = backend_id
@@ -473,6 +475,7 @@ class SessionGateway:
                 policy=deployment_policy or adapter.default_policy_profile(),
             ),
             deployment_policy=deployment_policy,
+            initialize_project=self._project_activity.initialize,
         )
         self.settings_store = settings_store or ProjectModelSettingsStore(self.config_store)
         self.action_settings_store = action_settings_store or ProjectActionSettingsStore(
@@ -591,7 +594,7 @@ class SessionGateway:
     @_serialized_state
     def initialize_project(self, *, interface: InterfaceKind = "web") -> StartupPlanResponse:
         """Confirm the current directory as the project and create private state."""
-        self.project.initialize()
+        self._project_activity.initialize()
         return self.startup_plan(interface=interface)
 
     def stop(self) -> None:
@@ -618,6 +621,7 @@ class SessionGateway:
             raise errors[0]
         if errors:
             raise ExceptionGroup("unable to stop all gateway workers", errors)
+        self._project_activity.close()
 
     @gateway_operation
     def handle(self, command: SessionCommand) -> SessionResult:
@@ -631,7 +635,7 @@ class SessionGateway:
     @_serialized_state
     def _handle_command(self, command: SessionCommand) -> SessionResult:
         with self.config_store.locked():
-            self.project.initialize()
+            self._project_activity.initialize()
             if command.session_id == DEFAULT_SESSION_ID:
                 self.session_catalog.default()
             else:
@@ -754,13 +758,13 @@ class SessionGateway:
     @gateway_operation
     def create_session(self, title: str | None = None) -> SessionSummaryResponse:
         """Create and return one empty session."""
-        self.project.initialize()
+        self._project_activity.initialize()
         return api_response(SessionSummaryResponse, self.session_catalog.create(title).safe_dict())
 
     @gateway_operation
     def default_session(self) -> SessionSummaryResponse:
         """Return the shared first session, creating it when needed."""
-        self.project.initialize()
+        self._project_activity.initialize()
         return api_response(SessionSummaryResponse, self.session_catalog.default().safe_dict())
 
     @gateway_operation
@@ -966,13 +970,13 @@ class SessionGateway:
         depth: int | None = None,
     ) -> WorkspaceTreeResponse:
         """Return the bounded project tree shared by every interface."""
-        self.project.initialize()
+        self._project_activity.initialize()
         return self.workspace_inspector.tree(path, depth=depth)
 
     @gateway_operation
     def workspace_file(self, *, path: str) -> WorkspaceFileResponse:
         """Return one bounded read-only project file."""
-        self.project.initialize()
+        self._project_activity.initialize()
         return self.workspace_inspector.file(path)
 
     @gateway_operation
@@ -1001,7 +1005,7 @@ class SessionGateway:
         after_sequence: int | None = None,
     ) -> tuple[SessionEvent, ...]:
         """Replay persisted events for a session."""
-        self.project.initialize()
+        self._project_activity.initialize()
         events = FileSessionStore(self.sessions_root, session_id).replay_events()
         return (
             events
@@ -1214,7 +1218,7 @@ class SessionGateway:
 
         if not self.project.state_exists():
             return None
-        self.project.initialize()
+        self._project_activity.initialize()
         store = ExperimentStore(self.project.state_root / "experiments.jsonl")
         store.synchronize(
             record
@@ -1258,7 +1262,7 @@ class SessionGateway:
     def persisted_session_projection(self, *, session_id: str) -> SessionProjection:
         """Project committed Heartwood events without reconciling OpenHands state."""
         with self._stream_lock:
-            self.project.initialize()
+            self._project_activity.initialize()
             events = FileSessionStore(self.sessions_root, session_id).replay_events()
             return project_session(
                 events,
@@ -2039,7 +2043,7 @@ class SessionGateway:
     @gateway_operation
     def download_local_model(self, model_id: str) -> ModelDownloadResponse:
         """Start a known local-model download into project storage."""
-        self.project.initialize()
+        self._project_activity.initialize()
         choice = self._require_downloadable_local_model(model_id)
         return api_response(
             ModelDownloadResponse,
@@ -2054,7 +2058,7 @@ class SessionGateway:
         revision: str | None = None,
     ) -> ModelDownloadResponse:
         """Resolve and start one user-selected Hugging Face model download."""
-        self.project.initialize()
+        self._project_activity.initialize()
         choice = self._custom_local_model_choice(
             repository,
             revision=revision,
@@ -2072,7 +2076,7 @@ class SessionGateway:
         progress_callback: Callable[[int, int], None] | None = None,
     ) -> Path:
         """Download and verify a known model, selecting it when agent-compatible."""
-        self.project.initialize()
+        self._project_activity.initialize()
         model = self._require_downloadable_local_model(model_id).download_model()
         if isinstance(model, ModelArtifact):
             path = download_artifact(
@@ -2099,7 +2103,7 @@ class SessionGateway:
         progress_callback: Callable[[int, int], None] | None = None,
     ) -> Path:
         """Resolve, download, verify, and select one user-selected model."""
-        self.project.initialize()
+        self._project_activity.initialize()
         choice = self._custom_local_model_choice(
             repository,
             revision=revision,
@@ -2132,7 +2136,7 @@ class SessionGateway:
         context_window: int,
     ) -> LocalModelImportResponse:
         """Import and select a reviewed local GGUF file or vLLM snapshot."""
-        self.project.initialize()
+        self._project_activity.initialize()
         imported = import_local_model(
             source,
             models_dir=self.model_cache_dir,
@@ -2196,7 +2200,7 @@ class SessionGateway:
     @gateway_operation
     def export_local_model(self, path: Path) -> ModelTransferResponse:
         """Start a verified export of the selected Heartwood-managed model."""
-        self.project.initialize()
+        self._project_activity.initialize()
         selected = self.config_store.load().local_model
         if selected is None:
             raise ModelTransferError(
@@ -2222,7 +2226,7 @@ class SessionGateway:
         manifest_sha256: str,
     ) -> ModelTransferResponse:
         """Start an atomic model-bundle import after explicit review."""
-        self.project.initialize()
+        self._project_activity.initialize()
         plan = inspect_model_bundle(path)
         if plan.manifest_sha256 != manifest_sha256:
             raise ModelTransferError(
@@ -2264,7 +2268,7 @@ class SessionGateway:
     @_serialized_state
     def refresh_skills(self, source_id: str | None = None) -> SkillSettingsResponse:
         """Refresh signed Skill sources and apply their current revocation state."""
-        self.project.initialize()
+        self._project_activity.initialize()
         self.skill_manager.refresh(source_id)
         self._reset_services()
         return self.skill_settings()
@@ -2294,7 +2298,7 @@ class SessionGateway:
         approved: bool,
     ) -> SkillSettingsResponse:
         """Install one signed, digest-pinned Skill after explicit approval."""
-        self.project.initialize()
+        self._project_activity.initialize()
         self.skill_manager.install_catalog(
             name,
             source_id=source_id,
@@ -2320,7 +2324,7 @@ class SessionGateway:
         approved: bool,
     ) -> SkillSettingsResponse:
         """Install one digest-pinned local, unreviewed Skill after approval."""
-        self.project.initialize()
+        self._project_activity.initialize()
         self.skill_manager.install_local(
             self._project_skill_source(source),
             expected_tree_sha256=expected_tree_sha256,
@@ -2567,7 +2571,7 @@ class SessionGateway:
         service: SessionService | None = None,
     ) -> tuple[SessionEvent, ...]:
         """Resolve the service and reconcile durable state without holding the stream lock."""
-        self.project.initialize()
+        self._project_activity.initialize()
         if service is None:
             store = FileSessionStore(
                 self.sessions_root,

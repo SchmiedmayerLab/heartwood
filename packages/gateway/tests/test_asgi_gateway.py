@@ -25,6 +25,7 @@ from heartwood.gateway import (
     IngressPolicy,
     LaunchCapability,
     ProjectContext,
+    ProjectOwnershipError,
     RestResponse,
     SessionGateway,
 )
@@ -649,6 +650,53 @@ def test_gateway_shutdown_rejects_new_streams_and_ends_connected_streams(
     else:
         assert sent[0]["status"] == 200
         assert sent[-1] == {"type": "http.response.body", "body": b"", "more_body": False}
+
+
+@pytest.mark.parametrize("transport", ["sse", "websocket"])
+@pytest.mark.parametrize("failure", ["maintenance", "unsupported-lock"])
+def test_asgi_streams_report_project_maintenance_before_opening_a_stream(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, transport: str, failure: str
+) -> None:
+    gateway = _gateway(tmp_path)
+
+    def unavailable(**_kwargs: object) -> tuple[GatewayEventStream, GatewaySessionSnapshot]:
+        if failure == "unsupported-lock":
+            from heartwood.persistence import NativeLockUnavailableError
+
+            raise NativeLockUnavailableError("synthetic private filesystem path")
+        raise ProjectOwnershipError("gateway admission is busy with initialization or maintenance")
+
+    monkeypatch.setattr(gateway, "open_event_stream", unavailable)
+
+    async def scenario() -> list[dict[str, object]]:
+        sent: list[dict[str, object]] = []
+
+        async def receive() -> dict[str, object]:
+            pytest.fail("an authorized stream needs no client messages before admission")
+
+        async def send(message: dict[str, object]) -> None:
+            sent.append(message)
+
+        scope = (
+            _http_scope("GET", "/sessions/session-1/events/stream")
+            if transport == "sse"
+            else _websocket_scope("/sessions/session-1/events")
+        )
+        await _app(gateway)(scope, receive, send)
+        return sent
+
+    try:
+        sent = asyncio.run(scenario())
+        if transport == "sse":
+            assert sent[0]["status"] == 409
+            message = str(_status_and_body(sent)[1])
+            assert ("maintenance" if failure == "maintenance" else "process locks") in message
+            assert "private filesystem path" not in message
+        else:
+            assert sent[-1] == {"type": "websocket.close", "code": 1012}
+        assert not gateway.project.state_root.exists()
+    finally:
+        gateway.stop()
 
 
 def test_asgi_sse_streams_transient_projection_updates(tmp_path: Path) -> None:
