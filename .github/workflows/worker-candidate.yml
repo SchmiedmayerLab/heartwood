@@ -9,6 +9,7 @@ on:
     paths:
       - .github/workflows/worker-candidate.yml
       - deploy/build-worker-candidate.py
+      - deploy/tests/worker_network_*.py
       - images/worker/candidate/**
       - packages/**
       - vendor/heartwood-skills
