@@ -42,6 +42,25 @@ Raw provider API keys and subscription tokens are not written to `config.toml`, 
 On supported workstations, Heartwood can store an API key in the operating-system credential store after explicit confirmation; otherwise it keeps an entered key only for the running process or uses a deployment-provided secret binding.
 ChatGPT account credentials remain in OpenHands' private user-level credential store rather than project state.
 
+### Operator-Bound External State
+
+An operator can launch the gateway with an external project deployment manifest using `heartwood gateway serve --deployment /absolute/path/project.toml`.
+This mode keeps configuration, canonical sessions, audit records, installed Skills, models, runtime records, logs, and caches in the manifest's external state directory.
+It does not create `.heartwood/` in the research directory or read project-local identity hints as authority.
+A copied research directory needs its own authorized deployment binding.
+
+The manifest must bind the exact canonical launch directory and contain a deny-by-default model-policy ceiling.
+Its project identifier is a canonical UUID, and its external state directory must have that identifier as its final path component.
+Both the manifest and the state directory must remain outside the research tree, with operator-owned parent directories that other users cannot replace.
+The state parent must already exist.
+Missing, malformed, mismatched, writable, or symlinked deployment configuration stops launch instead of falling back to local state.
+
+Existing `.heartwood/state.json` prevents this mode from starting until an explicit state migration has preserved and verified the old records.
+Do not remove that marker to bypass the check or point a new binding at an unverified copy.
+External placement alone does not restrict same-identity terminal access; the execution environment still needs an independently enforced filesystem and process boundary.
+
+See the [gateway reference](../reference/cli.md) for the manifest format.
+
 ## Persistence by Environment
 
 | Environment | Durable Project Location |
