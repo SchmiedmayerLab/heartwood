@@ -309,8 +309,17 @@ Remote agent metadata cannot select another agent implementation or enable the S
 Errors expose a stable admission failure rather than worker response content.
 Resetting the workspace client retains the same admission policy.
 
-This adapter is not connected to the default local conversation factory.
-HTTP admission alone does not qualify remote execution: WebSocket input, remote-state projections, attempt fencing, independently authorized external effects, and infrastructure isolation require their own boundaries.
+The full worker workspace additionally requires the SDK's public connection and raw-message admission hooks before it can be constructed.
+It rejects an installed SDK without those hooks, including the pinned application SDK.
+The event connection permits only the configured origin's canonical conversation endpoint, without credentials in the URL, query parameters, fragments, redirects, ambient proxies, or compression.
+TLS uses the bundled certificate authorities with certificate and hostname verification; ambient certificate variables cannot replace that trust.
+The library bounds each message to 4 MiB and its receive queue to four frames.
+Connection attempts and received events share the workspace's 1,024-response and 32 MiB lifetime budget with HTTP traffic.
+Individual and full-state updates receive the same metadata checks as HTTP responses.
+Raw text passes the JSON admission rules and native event schema before callback delivery; binary messages, completion-log events, and rejected data cannot authorize local file writing or appear in admission errors.
+
+Neither workspace adapter is connected to the default local conversation factory.
+Hook availability alone does not qualify remote execution: the selected SDK/runtime set, remote-state projections, attempt fencing, independently authorized external effects, and infrastructure isolation require their own qualification.
 
 ### Research Specialist Catalog
 

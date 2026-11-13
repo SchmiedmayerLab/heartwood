@@ -59,6 +59,20 @@ class WorkerResponseBudget:
             self._closed = True
 
 
+def _worker_origin(host: str) -> httpx.URL:
+    origin = httpx.URL(host)
+    if (
+        origin.scheme not in {"http", "https"}
+        or not origin.host
+        or origin.userinfo
+        or origin.path != "/"
+        or origin.query
+        or origin.fragment
+    ):
+        raise ValueError("worker host must be a complete server origin")
+    return origin
+
+
 class WorkerResponseTransport(httpx.BaseTransport):
     """Bound responses and admit module names before handing bytes to the SDK."""
 
@@ -70,16 +84,7 @@ class WorkerResponseTransport(httpx.BaseTransport):
         transport: httpx.BaseTransport,
         budget: WorkerResponseBudget | None = None,
     ) -> None:
-        self._origin = httpx.URL(host)
-        if (
-            self._origin.scheme not in {"http", "https"}
-            or not self._origin.host
-            or self._origin.userinfo
-            or self._origin.path != "/"
-            or self._origin.query
-            or self._origin.fragment
-        ):
-            raise ValueError("worker host must be a complete server origin")
+        self._origin = _worker_origin(host)
         self._tool_modules = dict(tool_modules)
         self._transport = transport
         self._budget = budget if budget is not None else WorkerResponseBudget()
@@ -145,9 +150,9 @@ def _reject_constant(_value: str) -> None:
     raise WorkerResponseError("worker JSON contains a nonfinite number")
 
 
-def _admit_json(content: bytes, tool_modules: Mapping[str, str]) -> None:
+def _admit_json(content: bytes, tool_modules: Mapping[str, str]) -> object:
     try:
-        value = json.loads(
+        value: object = json.loads(
             content.decode("utf-8"),
             object_pairs_hook=_unique_object,
             parse_constant=_reject_constant,
@@ -166,7 +171,12 @@ def _admit_json(content: bytes, tool_modules: Mapping[str, str]) -> None:
         elif isinstance(item, float) and not math.isfinite(item):
             raise WorkerResponseError("worker JSON contains a nonfinite number")
     if not isinstance(value, dict):
-        return
+        return value
+    _admit_metadata(value, tool_modules)
+    return value
+
+
+def _admit_metadata(value: dict[str, Any], tool_modules: Mapping[str, str]) -> None:
     registrations = value.get("tool_module_qualnames", {})
     if not isinstance(registrations, dict) or any(
         not isinstance(name, str) or not isinstance(module, str) or tool_modules.get(name) != module
