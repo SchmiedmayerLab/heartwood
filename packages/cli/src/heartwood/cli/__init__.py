@@ -135,11 +135,15 @@ def _sha256_argument(value: str) -> str:
 
 
 def _bundled_path(relative: Path) -> Path:
-    for parent in Path(__file__).resolve().parents:
-        candidate = parent / relative
-        if candidate.exists():
-            return candidate
-    return relative
+    module_dir = Path(__file__).resolve().parent
+    packaged = module_dir / "_bundled" / relative
+    if packaged.exists():
+        return packaged
+    if len(module_dir.parents) > 4:
+        source_root = module_dir.parents[4]
+        if source_root / "packages/cli/src/heartwood/cli" == module_dir:
+            return source_root / relative
+    return packaged
 
 
 _DEFAULT_WEB_ROOT = _bundled_path(Path("packages") / "webui" / "dist")

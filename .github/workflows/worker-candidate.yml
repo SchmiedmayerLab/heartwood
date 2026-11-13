@@ -14,6 +14,10 @@ on:
       - vendor/heartwood-skills
       - pyproject.toml
       - LICENSE.md
+      - images/Dockerfile
+      - images/worker/launch.py
+      - images/worker/config.json
+      - images/worker/smoke.py
   workflow_dispatch:
 
 permissions:
@@ -23,7 +27,7 @@ jobs:
   build:
     name: Verify candidate wheel reproducibility
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -55,6 +59,22 @@ jobs:
           LITELLM_LOCAL_MODEL_COST_MAP: 'True'
         run: |
           test-results/worker-candidate/environment/bin/python -I -m pytest --no-cov -q
+      - name: Build and check candidate images
+        run: |
+          mkdir -p test-results/worker-candidate/image
+          cp -R test-results/worker-candidate/first test-results/worker-candidate/image/sdk
+          cp -R test-results/worker-candidate/application-first test-results/worker-candidate/image/application
+          for target in worker runtime; do
+            docker buildx build --load --file images/Dockerfile --target "$target-image" \
+              --build-arg HEARTWOOD_DEPENDENCY_PROFILE=candidate \
+              --build-arg "HEARTWOOD_IMAGE_FLAVOR=$target" \
+              --build-arg "HEARTWOOD_REVISION=$GITHUB_SHA" \
+              --build-context worker-qualification-artifacts=test-results/worker-candidate/image \
+              --tag "heartwood-$target:qualification" .
+          done
+          python3 images/worker/smoke.py heartwood-worker:qualification
+          docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+            heartwood-runtime:qualification heartwood --help
       - name: Retain qualification artifacts
         uses: actions/upload-artifact@v7
         with:
