@@ -18,7 +18,9 @@ from heartwood.core_adapter import (
     FileSessionStore,
     SessionOwnershipError,
     SessionRecoveryError,
+    SessionStorageCapabilityError,
     SessionStoreBoundaryError,
+    session_writer_admission,
 )
 from heartwood.persistence import (
     PERSISTENCE_MIGRATIONS,
@@ -100,21 +102,22 @@ class SessionCatalog:
     def ensure(self, session_id: str, *, title: str | None = None) -> SessionSummary:
         """Register a session used by any command surface if it is not known yet."""
         store = _session_store(self.workspace, session_id)
-        store.session_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-        store.session_dir.chmod(0o700)
         events, recovery_required = _catalog_events(store)
         metadata_path = store.session_dir / "metadata.json"
-        with native_file_lock(store.session_dir / ".metadata.lock"):
-            if metadata_path.exists():
-                metadata = _read_metadata(metadata_path)
-            else:
-                now = _utc_timestamp()
-                metadata = _SessionMetadata(
-                    title=_validate_title(title or session_id),
-                    created_at=events[0].occurred_at if events else now,
-                    updated_at=events[-1].occurred_at if events else now,
-                )
-                _write_metadata(metadata_path, metadata)
+        with session_writer_admission(self.workspace):
+            store.session_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+            store.session_dir.chmod(0o700)
+            with native_file_lock(store.session_dir / ".metadata.lock"):
+                if metadata_path.exists():
+                    metadata = _read_metadata(metadata_path)
+                else:
+                    now = _utc_timestamp()
+                    metadata = _SessionMetadata(
+                        title=_validate_title(title or session_id),
+                        created_at=events[0].occurred_at if events else now,
+                        updated_at=events[-1].occurred_at if events else now,
+                    )
+                    _write_metadata(metadata_path, metadata)
         return _summary(
             store,
             metadata,
@@ -140,7 +143,7 @@ class SessionCatalog:
                 continue
             try:
                 summaries.append(self.ensure(candidate.name))
-            except NativeLockUnavailableError:
+            except (NativeLockUnavailableError, SessionStorageCapabilityError):
                 summaries.append(_unavailable_summary(candidate))
             except (SessionCatalogError, SessionStoreBoundaryError):
                 continue
@@ -160,7 +163,10 @@ class SessionCatalog:
             raise SessionNotFoundError(msg)
         self.ensure(session_id)
         metadata_path = store.session_dir / "metadata.json"
-        with native_file_lock(store.session_dir / ".metadata.lock"):
+        with (
+            session_writer_admission(self.workspace),
+            native_file_lock(store.session_dir / ".metadata.lock"),
+        ):
             current = _read_metadata(metadata_path)
             metadata = _SessionMetadata(
                 title=_validate_title(title),
