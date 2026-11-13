@@ -1,0 +1,30 @@
+# This source file is part of the Heartwood open-source project
+# SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+# SPDX-License-Identifier: MIT
+
+# Qualification environment for Heartwood source and the reviewed candidate wheels.
+# The public application lock is independent of this environment.
+anthropic==0.120.2
+certifi==2026.10.23
+cryptography==50.0.0
+filelock==4.2.10
+huggingface-hub==1.26.1
+jsonschema>=4.26.0
+keyring==25.7.0
+litellm==1.109.1
+openai==2.53.0
+openhands-agent-server==1.62.0+heartwood.1
+openhands-sdk==1.62.0+heartwood.1
+openhands-tools==1.62.0+heartwood.1
+openshell==0.1.8+heartwood.1
+packaging==26.3
+pydantic>=2.12
+pytest==9.1.1
+pytest-cov==7.1.0
+rich==15.0.0
+textual==8.2.8
+tomli-w==1.2.0
+tuf==7.0.0
+uv==0.13.7
+uvicorn==0.54.0
+websockets==16.1.1
