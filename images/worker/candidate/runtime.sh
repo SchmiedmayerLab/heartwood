@@ -52,7 +52,7 @@ else
     --build-constraints images/worker/candidate/build-requirements.txt --require-build-hashes \
     images/worker/candidate/runtime-requirements.txt
   "$uv_bin" pip install --no-config --python "$target/bin/python" \
-    --no-index --no-deps --require-hashes --find-links "$application_dir" \
+    --no-index --no-deps --require-hashes --link-mode copy --find-links "$application_dir" \
     --requirements "$application_dir/application-requirements.txt"
   "$uv_bin" pip check --python "$target/bin/python"
 fi
