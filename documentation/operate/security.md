@@ -77,8 +77,15 @@ Heartwood uses the upstream OpenHands credential and model transports without tr
 Use **Review Every Action** for an API key, ChatGPT subscription, mounted secret, or managed identity unless the active platform explicitly reports a qualified platform-isolated boundary.
 **Low-Risk Automation** classifies actions from the model's own risk label and a small set of fixed command patterns, so a model that follows injected instructions can label an unsafe command low risk.
 Use it only when every file, dataset, and page the agent reads is trusted.
-Removing a saved provider credential revokes model access independently of the action policy.
+Removing a credential from Heartwood's saved settings does not invalidate copies held by running processes or revoke the key at its issuer.
+For sandbox provider access, require acknowledged outside detachment or verified worker revocation; neither undoes requests already forwarded upstream.
 Changing the action policy never broadens model authorization.
+
+Credential rotation is separate from revocation.
+After an ordinary static provider update, a running process can retain a reference to the previous value; launch a new process to receive the updated reference.
+For deployments that need value-only rotation without replacing the worker, the provider profile can explicitly enable OpenShell's `stable_placeholder` capability before launch.
+Qualify that mode against the deployed gateway and supervisor, wait for the update's readiness receipt, and independently verify that acknowledged detachment prevents retained references from reaching the provider.
+Updating a stored value alone does not establish that the previous upstream key is safe to retire.
 
 Platform isolation is distinct from institutional approval.
 A separate service identity or platform proxy can enforce a technical credential boundary, while data eligibility still depends on the provider agreement, institutional controls, and reviewed deployment.
