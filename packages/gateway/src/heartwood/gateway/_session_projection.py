@@ -8,12 +8,14 @@
 
 from __future__ import annotations
 
+import json
 from enum import StrEnum
 from typing import Annotated, ClassVar, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 from heartwood.core_adapter import backend_error_is_fatal
+from heartwood.core_adapter.external_actions import ExternalActionRecord, external_action_records
 from heartwood.core_adapter.workflow_provenance import workflow_experiment_events
 from heartwood.core_adapter.workflow_runtime import workflow_controls, workflow_run
 from heartwood.schemas.execution import ExecutionBudget, ExecutionUsage, NativeTaskExecution
@@ -444,6 +446,7 @@ def project_session(
     usage_by_purpose: dict[str, ProjectionUsage] = {}
     subagents: dict[str, ProjectionSubagent] = {}
 
+    external_action_records(events)
     for event in events:
         activity.append(_activity(event))
         kind = str(event.kind)
@@ -470,6 +473,62 @@ def project_session(
                 label="Agent",
                 content=_string(event.payload.get("content")),
             )
+        elif kind == EventKind.EXTERNAL_ACTION_RECORDED.value:
+            outside = ExternalActionRecord.model_validate_json(json.dumps(event.payload["record"]))
+            outside_proposal = outside.proposal
+            call = outside_proposal.review_call
+            outside_action = actions.get(outside_proposal.action_id) or _action_record(
+                event,
+                payload={"summary": call.summary, "action_id": outside_proposal.action_id},
+                tool_call_id=outside_proposal.action_id,
+                tool_name=call.tool_name,
+                arguments=call.arguments,
+            )
+            state = "awaiting-review"
+            outcome = None
+            decision = None
+            if outside.decision is not None:
+                decision = "approved" if outside.decision.decision == "approved" else "rejected"
+                state = "rejected" if decision == "rejected" else "outcome-unknown"
+                approval_group_decisions[outside_proposal.group_id] = outside.decision.decision
+                _append_approval_message(
+                    conversation,
+                    event,
+                    group_id=outside_proposal.group_id,
+                    decision=outside.decision.decision,
+                    action_count=1,
+                    reported_resolutions=reported_resolutions,
+                )
+            else:
+                approval_group_decisions[outside_proposal.group_id] = None
+            if outside.observation is not None:
+                operation = outside.observation.operation
+                state = {
+                    "submitted": "running",
+                    "queued": "running",
+                    "running": "running",
+                    "completed": "succeeded",
+                    "failed": "failed",
+                    "cancelled": "failed",
+                    "denied": "failed",
+                    "unknown": "outcome-unknown",
+                }[operation.status]
+                if outside.terminal:
+                    outcome = ProjectionActionOutcome(
+                        exit_code=0 if operation.status == "completed" else 1,
+                        summary=f"Platform operation {operation.status}",
+                        result=f"Platform record: {operation.platform_record_ref}",
+                    )
+            actions[outside_proposal.action_id] = outside_action.model_copy(
+                update={
+                    "group_id": outside_proposal.group_id,
+                    "state": state,
+                    "decision": decision,
+                    "outcome": outcome,
+                    "updated_sequence": event.sequence,
+                }
+            )
+            approval_group_actions[outside_proposal.group_id] = [outside_proposal.action_id]
         elif kind == EventKind.TOOL_CALL_PROPOSED.value:
             tool_name = _string(event.payload.get("tool_name"))
             arguments = _mapping(event.payload.get("arguments"))
@@ -1199,6 +1258,9 @@ def _activity(event: SessionEvent) -> ProjectionActivity:
 
 def _activity_detail(event: SessionEvent) -> str:
     kind = str(event.kind)
+    if kind == EventKind.EXTERNAL_ACTION_RECORDED.value:
+        record = _mapping(event.payload.get("record"))
+        return _string(record.get("phase"))
     if kind == EventKind.COMMAND_RECEIVED.value:
         return " · ".join(
             value
@@ -1676,6 +1738,7 @@ _ACTIVITY_LABELS = {
     EventKind.CONFIRMATION_REQUESTED.value: "Confirmation requested",
     EventKind.CONFIRMATION_RESOLVED.value: "Confirmation resolved",
     EventKind.ERROR_RECORDED.value: "Error",
+    EventKind.EXTERNAL_ACTION_RECORDED.value: "Outside operation",
     EventKind.MODEL_CALL_DECISION_RECORDED.value: "Model route decision",
     EventKind.MODEL_USAGE_UPDATED.value: "Model usage",
     EventKind.POLICY_DECISION_RECORDED.value: "Policy decision",

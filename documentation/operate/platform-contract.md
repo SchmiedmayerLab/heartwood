@@ -593,6 +593,33 @@ sequenceDiagram
 An unknown outcome is Heartwood's lack of an authoritative observation, not proof that nothing happened.
 Cancellation can leave completed work and incurred charges; status and cost observations must preserve both.
 
+#### Outside Operation Admission
+
+A trusted embedding can supply `ExternalActionAdapter` to a managed `SessionService` and prepare an outside operation from a retained worker tool proposal with `propose_external_action`.
+The adapter resolves native service requests and immutable input references from deployment configuration; preparation must have no external effects.
+This optional boundary is disabled by default and is not installed by the built-in launchers.
+
+The gateway issues a separate operation identifier and presents the complete request, input digests, destination, worker identity, policy revision, and five-minute validity interval through the shared action review.
+The existing approve and deny commands bind the full proposal digest.
+Immediately before submission, the gateway rechecks the live worker attempt, current project and policy, actor entitlement, validity interval, and input contents.
+It submits the exact verified input bytes without reopening worker paths.
+The trusted adapter must bound reads, exclude credentials from the reviewable request, and resolve input references without granting worker-selected filesystem access.
+
+The decision and submission intent are committed through the paired session and audit journal before contacting the service.
+The private session retains review content; the audit records operation identifiers, digests, decisions, and status without copying request or input payloads.
+A worker acknowledgement or completion event cannot settle the separately identified outside operation.
+
+`reconcile_external_actions` queries the existing operation identifier after an interrupted submission or an uncertain result.
+It does not repeat submission, restore a worker lease, or fall back to local tool execution.
+A platform observation must match the project, service, operation, and exact proposal digest.
+Cancellation requires the service's native operation contract; denying an already submitted operation does not cancel it.
+
+The service must independently authenticate the caller and enforce actor entitlement, project scope, current attempt revocation, policy, expiry, and transactional idempotency.
+A command's actor identifier is a claim, not authentication; the embedding must bind it to an authenticated researcher and the service's own identity context.
+The worker must have no alternate credential or network route to the privileged service.
+These requirements need deployment-specific qualification, including revocation races, interruption, input storage isolation, and service-side duplicate suppression.
+The adapter interface and local journal checks alone do not establish those infrastructure guarantees.
+
 #### Asynchronous Results
 
 Pending results use the optional [MCP Tasks extension, revision 2026-07-28](https://tasks.extensions.modelcontextprotocol.io/specification/2026-07-28/tasks).
