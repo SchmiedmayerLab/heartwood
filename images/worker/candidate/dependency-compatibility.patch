@@ -1,0 +1,89 @@
+--- a/openhands-sdk/pyproject.toml
++++ b/openhands-sdk/pyproject.toml
+@@ -12,11 +12,11 @@
+     # 4.x requires mcp>=2; browser-use 0.11.x runs on it through the decorator
+     # shim in openhands-tools browser_use/logging_fix.py (#5152)
+     "fastmcp>=4.1.6,<5",
+-    "filelock>=3.20.1",
++    "filelock>=4.2.1",
+     "httpx[socks]>=0.28.1",
+     "jsonschema>=4.26.0",
+     "joserfc>=1.7.7",
+-    "litellm>=1.104.3,<1.106",  # 1.106+ needs mcp>=2 (fails to import on mcp 1.x); see #6088
++    "litellm>=1.109.1,<1.110",
+     "pillow>=13.0.0",
+     "pydantic>=2.13.5",
+     "python-frontmatter>=1.3.0",
+--- a/openhands-sdk/openhands/sdk/llm/utils/model_features.py
++++ b/openhands-sdk/openhands/sdk/llm/utils/model_features.py
+@@ -6,10 +6,13 @@
+ from functools import cache
+ from typing import Any, Literal, cast
+ 
+-from litellm import get_llm_provider, get_supported_openai_params
++from litellm import (
++    OpenAIGPT5Config,
++    OpenAIGPTConfig,
++    get_llm_provider,
++    get_supported_openai_params,
++)
+ from litellm.exceptions import BadRequestError
+-from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
+-from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+ from litellm.utils import supports_vision as litellm_supports_vision
+ 
+ from openhands.sdk.llm.utils.openhands_provider import OPENHANDS_PROVIDER_PREFIX
+--- a/openhands-sdk/openhands/sdk/llm/utils/telemetry.py
++++ b/openhands-sdk/openhands/sdk/llm/utils/telemetry.py
+@@ -431,9 +431,19 @@
+                 api_base=call_kwargs["api_base"],
+             )
+         extra_kwargs.update(provider_info.as_litellm_call_kwargs())
++        pricing_response = resp
++        usage = _response_usage(resp)
++        if usage is not None and getattr(usage, "cost", None) is not None:
++            # Pricing must not reconsider a charge rejected or overridden above.
++            # Keep the original response intact for metrics and completion logs.
++            pricing_response = resp.model_copy(
++                update={"usage": usage.model_copy(update={"cost": None})}
++            )
+         try:
+             return float(
+-                litellm_completion_cost(completion_response=resp, **extra_kwargs)
++                litellm_completion_cost(
++                    completion_response=pricing_response, **extra_kwargs
++                )
+             )
+         except Exception as e:
+             warnings.warn(f"Cost calculation failed: {e}")
+--- a/tests/sdk/llm/test_decision.py
++++ b/tests/sdk/llm/test_decision.py
+@@ -479,7 +479,7 @@
+     assert attrs["gen_ai.usage.cost"] > 0
+ 
+ 
+-def test_reply_without_usage_records_zero_tokens_and_no_cost(provider, lmnr_exporter):
++def test_reply_without_usage_records_no_token_counts_or_cost(provider, lmnr_exporter):
+     from lmnr import Laminar
+ 
+     base_url, replies, _ = provider
+@@ -494,7 +494,8 @@
+     attrs = {s.name: s for s in lmnr_exporter.get_finished_spans()}[
+         f"decision.{MODEL}"
+     ].attributes
+-    assert attrs["gen_ai.usage.input_tokens"] == 0
++    assert "gen_ai.usage.input_tokens" not in attrs
++    assert "gen_ai.usage.output_tokens" not in attrs
+     assert "gen_ai.usage.cost" not in attrs
+ 
+ 
+--- a/tests/sdk/llm/test_reported_usage_cost.py
++++ b/tests/sdk/llm/test_reported_usage_cost.py
+@@ -128,6 +128,7 @@
+         model="gpt-4o", choices=[], usage={**tokens, "cost": 0.0}
+     )
+     assert telemetry._compute_cost(with_placeholder_zero) == expected
++    assert with_placeholder_zero.usage.cost == 0.0
+ 
+ 
+ def test_responses_api_reported_cost():

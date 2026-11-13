@@ -1,0 +1,650 @@
+diff --git a/openhands-agent-server/openhands/agent_server/event_router.py b/openhands-agent-server/openhands/agent_server/event_router.py
+index ff8a2ff..2dee505 100644
+--- a/openhands-agent-server/openhands/agent_server/event_router.py
++++ b/openhands-agent-server/openhands/agent_server/event_router.py
+@@ -40,7 +40,10 @@ from openhands.agent_server.models import (
+ from openhands.agent_server.openai.usage import token_usage_delta
+ from openhands.agent_server.persistence import PersistedSettings, get_settings_store
+ from openhands.sdk import Message
+-from openhands.sdk.conversation.state import ConversationExecutionStatus
++from openhands.sdk.conversation.state import (
++    ConversationExecutionStatus,
++    ConversationSnapshot,
++)
+ from openhands.sdk.errors import (
+     Conflict,
+     Invalid,
+@@ -64,6 +67,29 @@ _GATEWAY_RUN_TIMEOUT_SECONDS = 120.0
+ # Read methods
+ 
+ 
++@event_read_router.get(
++    "/snapshot",
++    responses=error_responses(
++        {
++            NotFound: "Conversation not found",
++            Conflict: "Conversation runtime is inactive",
++        }
++    ),
++)
++async def get_conversation_snapshot(
++    event_service: EventService = Depends(get_event_service),
++) -> ConversationSnapshot:
++    """Read the full active branch, status, and usage in one locked snapshot.
++
++    This does not run the agent. A persisted-history-only service must be
++    resumed through its normal lifecycle before requesting a snapshot.
++    """
++    if not event_service.is_open():
++        raise Conflict("Conversation runtime is inactive")
++    state = await event_service.get_state()
++    return await asyncio.to_thread(state.snapshot)
++
++
+ def normalize_datetime_to_server_timezone(dt: datetime) -> datetime:
+     """
+     Normalize datetime to server timezone for consistent comparison with events.
+diff --git a/openhands-sdk/openhands/sdk/agent/agent.py b/openhands-sdk/openhands/sdk/agent/agent.py
+index 21bfce7..03e14fb 100644
+--- a/openhands-sdk/openhands/sdk/agent/agent.py
++++ b/openhands-sdk/openhands/sdk/agent/agent.py
+@@ -774,6 +774,7 @@ class Agent(CriticMixin, ResponseDispatchMixin, AgentBase):
+                 len(pending_actions),
+             )
+             self._execute_actions(conversation, pending_actions, on_event)
++            state.rebuild_view()
+             return
+ 
+         # Check if the last user message was blocked by a UserPromptSubmit hook
+@@ -996,6 +997,7 @@ class Agent(CriticMixin, ResponseDispatchMixin, AgentBase):
+                 len(pending_actions),
+             )
+             await self._aexecute_actions(conversation, pending_actions, on_event)
++            state.rebuild_view()
+             return
+ 
+         if state.last_user_message_id is not None:
+diff --git a/openhands-sdk/openhands/sdk/conversation/base.py b/openhands-sdk/openhands/sdk/conversation/base.py
+index 6a0e4cc..c6ccfad 100644
+--- a/openhands-sdk/openhands/sdk/conversation/base.py
++++ b/openhands-sdk/openhands/sdk/conversation/base.py
+@@ -46,7 +46,10 @@ def _conversation_tag_attributes(
+ if TYPE_CHECKING:
+     from openhands.sdk.agent.base import AgentBase
+     from openhands.sdk.conversation.secret_registry import SecretRegistry
+-    from openhands.sdk.conversation.state import ConversationExecutionStatus
++    from openhands.sdk.conversation.state import (
++        ConversationExecutionStatus,
++        ConversationSnapshot,
++    )
+     from openhands.sdk.hooks import HookConfig
+ 
+ 
+@@ -60,6 +63,10 @@ CallbackType = TypeVar(
+ class ConversationStateProtocol(Protocol):
+     """Protocol defining the interface for conversation state objects."""
+ 
++    def snapshot(self) -> "ConversationSnapshot":
++        """Read a consistent copy of the active branch, status, and usage."""
++        ...
++
+     @property
+     def id(self) -> ConversationID:
+         """The conversation ID."""
+diff --git a/openhands-sdk/openhands/sdk/conversation/exceptions.py b/openhands-sdk/openhands/sdk/conversation/exceptions.py
+index f45f877..e68ecc2 100644
+--- a/openhands-sdk/openhands/sdk/conversation/exceptions.py
++++ b/openhands-sdk/openhands/sdk/conversation/exceptions.py
+@@ -8,7 +8,7 @@ ISSUE_URL = "https://github.com/OpenHands/software-agent-sdk/issues/new"
+ 
+ 
+ class WebSocketConnectionError(RuntimeError):
+-    """Raised when WebSocket connection fails to establish within the timeout."""
++    """Raised on subscription timeout or a terminal WebSocket failure."""
+ 
+     def __init__(
+         self,
+diff --git a/openhands-sdk/openhands/sdk/conversation/impl/local_conversation.py b/openhands-sdk/openhands/sdk/conversation/impl/local_conversation.py
+index a2e2c75..3a7100f 100644
+--- a/openhands-sdk/openhands/sdk/conversation/impl/local_conversation.py
++++ b/openhands-sdk/openhands/sdk/conversation/impl/local_conversation.py
+@@ -3118,6 +3118,8 @@ class LocalConversation(BaseConversation):
+                 self._on_event(rejection_event)
+                 logger.info(f"Rejected pending action: {action_event} - {reason}")
+ 
++            self._state.rebuild_view()
++
+     def _emit_orphaned_action_errors(self) -> None:
+         """Emit ``AgentErrorEvent`` for actions that have no observation.
+ 
+diff --git a/openhands-sdk/openhands/sdk/conversation/impl/remote_conversation.py b/openhands-sdk/openhands/sdk/conversation/impl/remote_conversation.py
+index ac50680..6f21842 100644
+--- a/openhands-sdk/openhands/sdk/conversation/impl/remote_conversation.py
++++ b/openhands-sdk/openhands/sdk/conversation/impl/remote_conversation.py
+@@ -7,6 +7,8 @@ import threading
+ import time
+ import uuid
+ from collections.abc import Callable, Mapping
++from contextlib import AbstractAsyncContextManager
++from functools import partial
+ from queue import Empty, Queue
+ from typing import TYPE_CHECKING, Final, Self, SupportsIndex, overload
+ from urllib.parse import urlparse
+@@ -14,6 +16,7 @@ from urllib.parse import urlparse
+ import httpx
+ import websockets
+ from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
++from websockets.asyncio.client import ClientConnection
+ from websockets.exceptions import ConnectionClosed
+ 
+ from openhands.sdk.agent.base import AgentBase
+@@ -34,7 +37,10 @@ from openhands.sdk.conversation.secret_registry import (
+     SecretRegistry,
+     SecretValue,
+ )
+-from openhands.sdk.conversation.state import ConversationExecutionStatus
++from openhands.sdk.conversation.state import (
++    ConversationExecutionStatus,
++    ConversationSnapshot,
++)
+ from openhands.sdk.conversation.title_utils import generate_conversation_title
+ from openhands.sdk.conversation.types import (
+     ConversationCallbackType,
+@@ -192,17 +198,34 @@ class WebSocketCallbackClient:
+         callback: ConversationCallbackType,
+         api_key: str | None = None,
+         on_reconnect: Callable[[], object] | None = None,
++        websocket_connect: Callable[
++            [str], AbstractAsyncContextManager[ClientConnection]
++        ]
++        | None = None,
++        validate_message: Callable[[str | bytes], None] | None = None,
++        on_failure: Callable[[str], None] | None = None,
+     ):
+         self.host = host
+         self.conversation_id = conversation_id
+         self.callback = callback
+         self.api_key = api_key
+         self.on_reconnect = on_reconnect
++        self._websocket_connect = websocket_connect
++        self._validate_message = validate_message
++        self._on_failure = on_failure
+         self._thread = None
+         self._stop = threading.Event()
+         self._ready = threading.Event()
++        self._loop: asyncio.AbstractEventLoop | None = None
++        self._client_task: asyncio.Task[None] | None = None
+         self.failure_reason: str | None = None
+ 
++    def _fail(self, reason: str) -> None:
++        self.failure_reason = reason
++        self._stop.set()
++        if self._on_failure is not None:
++            self._on_failure(reason)
++
+     def start(self) -> None:
+         if self._thread:
+             return
+@@ -212,10 +235,20 @@ class WebSocketCallbackClient:
+         self._thread.start()
+ 
+     def stop(self) -> None:
++        """Stop receiving events, retaining ownership if a callback cannot finish."""
+         if not self._thread:
+             return
+         self._stop.set()
++        loop, task = self._loop, self._client_task
++        if loop is not None and task is not None:
++            try:
++                loop.call_soon_threadsafe(task.cancel)
++            except RuntimeError:
++                # The loop can finish between taking the snapshot and scheduling.
++                pass
+         self._thread.join(timeout=5)
++        if self._thread.is_alive():
++            raise TimeoutError("WebSocket callback thread did not stop")
+         self._thread = None
+ 
+     def wait_until_ready(self, timeout: float | None = None) -> bool:
+@@ -252,14 +285,27 @@ class WebSocketCallbackClient:
+ 
+     def _run(self) -> None:
+         try:
+-            asyncio.run(self._client_loop())
++            asyncio.run(self._run_client())
+         except RuntimeError:
+             # Fallback in case of an already running loop in rare environments
+             loop = asyncio.new_event_loop()
+             asyncio.set_event_loop(loop)
+-            loop.run_until_complete(self._client_loop())
++            loop.run_until_complete(self._run_client())
+             loop.close()
+ 
++    async def _run_client(self) -> None:
++        self._loop = asyncio.get_running_loop()
++        self._client_task = asyncio.current_task()
++        try:
++            if not self._stop.is_set():
++                await self._client_loop()
++        except asyncio.CancelledError:
++            if not self._stop.is_set():
++                raise
++        finally:
++            self._client_task = None
++            self._loop = None
++
+     async def _client_loop(self) -> None:
+         parsed = urlparse(self.host)
+         ws_scheme = "wss" if parsed.scheme == "https" else "ws"
+@@ -270,9 +316,10 @@ class WebSocketCallbackClient:
+         has_connected = False
+         while not self._stop.is_set():
+             try:
+-                async with websockets.connect(
+-                    ws_url, max_size=_WEBSOCKET_MAX_MESSAGE_SIZE
+-                ) as ws:
++                connect = self._websocket_connect or partial(
++                    websockets.connect, max_size=_WEBSOCKET_MAX_MESSAGE_SIZE
++                )
++                async with connect(ws_url) as ws:
+                     if self.api_key:
+                         await ws.send(
+                             json.dumps(
+@@ -287,6 +334,14 @@ class WebSocketCallbackClient:
+                     async for message in ws:
+                         if self._stop.is_set():
+                             break
++                        if self._validate_message is not None:
++                            try:
++                                self._validate_message(message)
++                            except Exception:
++                                self._fail(
++                                    "WebSocket message rejected by client admission"
++                                )
++                                return
+                         try:
+                             event = Event.model_validate(json.loads(message))
+ 
+@@ -313,21 +368,22 @@ class WebSocketCallbackClient:
+                     frame is not None and frame.code == 1009
+                     for frame in (exc.rcvd, exc.sent)
+                 ):
+-                    self.failure_reason = (
++                    self._fail(
+                         "WebSocket message too big (close code 1009) for conversation "
+                         f"{self.conversation_id}; the SDK receive limit is "
+                         f"{_WEBSOCKET_MAX_MESSAGE_SIZE} bytes."
+                     )
+                     logger.error(self.failure_reason)
+-                    self._stop.set()
+                     break
+                 if _is_fatal_websocket_close(exc):
+-                    logger.debug("ws_connection_closed_fatal", exc_info=True)
+-                    self._stop.set()
++                    self._fail("WebSocket connection closed with a fatal status")
+                     break
+                 logger.debug("ws_connection_closed_retry", exc_info=True)
+                 await self._sleep_before_retry(delay)
+                 delay = min(delay * 2, 30.0)
++            except ValueError:
++                self._fail("WebSocket connection rejected by client policy")
++                break
+             except Exception:
+                 logger.debug("ws_connect_retry", exc_info=True)
+                 await self._sleep_before_retry(delay)
+@@ -575,6 +631,7 @@ class RemoteState(ConversationStateProtocol):
+     _client: httpx.Client
+     _conversation_id: str
+     _conversation_info_base_path: str
++    _events_base_path: str
+     _events: RemoteEventsList
+     _cached_state: dict | None
+     _lock: threading.RLock
+@@ -590,6 +647,7 @@ class RemoteState(ConversationStateProtocol):
+         self._client = client
+         self._conversation_id = conversation_id
+         self._conversation_info_base_path = conversation_info_base_path
++        self._events_base_path = events_base_path
+         self._events = RemoteEventsList(client, conversation_id, events_base_path)
+ 
+         # Cache for state information to avoid REST calls. Seeded with the
+@@ -607,6 +665,18 @@ class RemoteState(ConversationStateProtocol):
+             # Fallback to REST API if no cached state
+             return self.refresh_from_server()
+ 
++    def snapshot(self) -> ConversationSnapshot:
++        """Fetch one consistent branch snapshot without changing event caches."""
++        response = _send_request(
++            self._client,
++            "GET",
++            f"{self._events_base_path}/{self._conversation_id}/events/snapshot",
++        )
++        snapshot = ConversationSnapshot.model_validate(response.json())
++        if snapshot.id != self.id:
++            raise ValueError("Conversation snapshot identity does not match")
++        return snapshot
++
+     def refresh_from_server(self) -> dict:
+         """Fetch and cache the latest authoritative conversation state."""
+         resp = _send_request(
+@@ -772,6 +842,7 @@ class RemoteState(ConversationStateProtocol):
+ 
+ 
+ class RemoteConversation(BaseConversation):
++    _websocket_failure: str | None = None
+     _id: uuid.UUID
+     _state: "RemoteState"
+     _visualizer: ConversationVisualizerBase | None
+@@ -1286,6 +1357,11 @@ class RemoteConversation(BaseConversation):
+             callback=socket_callback,
+             api_key=self.workspace.api_key,
+             on_reconnect=replay_missed_events,
++            websocket_connect=partial(
++                self.workspace.connect_websocket, max_size=_WEBSOCKET_MAX_MESSAGE_SIZE
++            ),
++            validate_message=self.workspace.validate_websocket_message,
++            on_failure=self._record_websocket_failure,
+         )
+         self._ws_client.start()
+ 
+@@ -1294,7 +1370,9 @@ class RemoteConversation(BaseConversation):
+         # The server sends a ConversationStateUpdateEvent after subscription.
+         ws_timeout = float(os.getenv("OPENHANDS_REMOTE_WS_READY_TIMEOUT", "30"))
+         if not self._ws_client.wait_until_ready(timeout=ws_timeout):
+-            if os.getenv("OPENHANDS_REMOTE_WS_READY_REQUIRED", "true").lower() in (
++            if self._websocket_failure is None and os.getenv(
++                "OPENHANDS_REMOTE_WS_READY_REQUIRED", "true"
++            ).lower() in (
+                 "0",
+                 "false",
+                 "no",
+@@ -1324,6 +1402,7 @@ class RemoteConversation(BaseConversation):
+         # Reconcile events after WebSocket is ready to catch any events that
+         # were emitted between the initial REST sync and WebSocket subscription.
+         # This is the "reconciliation" part of the subscription handshake.
++        self._raise_if_websocket_failed()
+         self._state.events.reconcile()
+         # Callbacks are not replayed history: only events recorded after this
+         # point and missed by the socket are replayed on reconnect.
+@@ -1369,8 +1448,18 @@ class RemoteConversation(BaseConversation):
+     @property
+     def state(self) -> RemoteState:
+         """Access to remote conversation state."""
++        self._raise_if_websocket_failed()
+         return self._state
+ 
++    def _record_websocket_failure(self, reason: str) -> None:
++        self._websocket_failure = reason
++
++    def _raise_if_websocket_failed(self) -> None:
++        if self._websocket_failure is not None:
++            raise WebSocketConnectionError(
++                self._id, timeout=0, message=self._websocket_failure
++            )
++
+     @property
+     def max_budget_per_run(self) -> float | None:
+         """The server's limit on accumulated conversation LLM cost."""
+@@ -1391,6 +1480,7 @@ class RemoteConversation(BaseConversation):
+ 
+     @observe(name="conversation.send_message")
+     def send_message(self, message: str | Message, sender: str | None = None) -> None:
++        self._raise_if_websocket_failed()
+         if isinstance(message, str):
+             message = Message(role="user", content=[TextContent(text=message)])
+         assert message.role == "user", (
+@@ -1432,13 +1522,52 @@ class RemoteConversation(BaseConversation):
+                 it ends in ``ERROR`` (e.g. the iteration limit) or ``STUCK``.
+                 ``LocalConversation.run()`` returns with that status instead.
+         """
++        self._run(blocking, poll_interval, timeout)
++
++    @observe(name="conversation.arun")
++    async def arun(self, poll_interval: float = 1.0, timeout: float = 3600.0) -> None:
++        """Run remotely without blocking the caller's event loop.
++
++        Cancellation waits for any pending trigger request, interrupts the remote
++        run, and joins the completion wait before propagating. If interruption
++        fails, raise ConversationRunError because remote execution is uncertain.
++        The polling interval and completion timeout have the same meaning as run().
++        """
++        cancelled = threading.Event()
++        worker = asyncio.create_task(
++            asyncio.to_thread(self._run, True, poll_interval, timeout, cancelled)
++        )
++        try:
++            await asyncio.shield(worker)
++        except asyncio.CancelledError:
++            cancelled.set()
++            while not worker.done():
++                try:
++                    await asyncio.shield(worker)
++                except asyncio.CancelledError:
++                    continue
++            worker.result()
++            raise
++
++    def _run(
++        self,
++        blocking: bool,
++        poll_interval: float,
++        timeout: float,
++        cancelled: threading.Event | None = None,
++    ) -> None:
++        if cancelled is not None and cancelled.is_set():
++            return
+         # Disarm and drain any stale terminal status events from previous runs
+         # before arming for the new one. _run_armed gates full-state WS snapshots
+         # in run_complete_callback; clearing it here prevents the initial WS
+         # subscription snapshot from being mistaken for the post-run snapshot.
++        self._raise_if_websocket_failed()
+         self._run_armed.clear()
+         self._drain_terminal_status_queue()
+         run_start_event_count = len(self._state.events)
++        if cancelled is not None and cancelled.is_set():
++            return
+ 
+         # Trigger a run on the server using the dedicated run endpoint.
+         # Let the server tell us if it's already running (409), avoiding an extra GET.
+@@ -1465,7 +1594,7 @@ class RemoteConversation(BaseConversation):
+             self._run_armed.set()
+             try:
+                 self._wait_for_run_completion(
+-                    poll_interval, timeout, run_start_event_count
++                    poll_interval, timeout, run_start_event_count, cancelled=cancelled
+                 )
+             finally:
+                 self._run_armed.clear()
+@@ -1475,6 +1604,8 @@ class RemoteConversation(BaseConversation):
+         poll_interval: float = 1.0,
+         timeout: float = 1800.0,
+         since: int = 0,
++        *,
++        cancelled: threading.Event | None = None,
+     ) -> None:
+         """Wait for the conversation run to complete.
+ 
+@@ -1511,9 +1642,21 @@ class RemoteConversation(BaseConversation):
+         # dropped after the run finishes on the server).
+         TERMINAL_HARD_FALLBACK_SECS = 30.0
+         terminal_first_seen_at: float | None = None
++        interruption_requested = False
+ 
+         while True:
++            if (
++                cancelled is not None
++                and cancelled.is_set()
++                and not interruption_requested
++            ):
++                try:
++                    self.interrupt()
++                except Exception as error:
++                    raise ConversationRunError(self._id, error) from error
++                interruption_requested = True
+             elapsed = time.monotonic() - start_time
++            self._raise_if_websocket_failed()
+             if elapsed > timeout:
+                 raise ConversationRunError(
+                     self._id,
+@@ -1528,6 +1671,7 @@ class RemoteConversation(BaseConversation):
+             # 2. Poll interval expires (fall through to REST poll)
+             try:
+                 ws_status = self._terminal_status_queue.get(timeout=poll_interval)
++                self._raise_if_websocket_failed()
+                 # Raises ConversationRunError on ERROR/STUCK; no-op otherwise.
+                 self._handle_conversation_status(ws_status, since)
+                 logger.info(
+@@ -1541,6 +1685,7 @@ class RemoteConversation(BaseConversation):
+                 # so non-running statuses from that snapshot are authoritative
+                 # run-complete signals.
+                 self._state.events.reconcile()
++                self._raise_if_websocket_failed()
+                 return
+             except Empty:
+                 pass  # Queue.get() timed out, fall through to REST polling
+@@ -1551,6 +1696,7 @@ class RemoteConversation(BaseConversation):
+             try:
+                 status = self._poll_status_once()
+             except Exception as exc:
++                self._raise_if_websocket_failed()
+                 self._handle_poll_exception(exc)
+                 # Reset on error: we cannot confirm the server is still in a
+                 # terminal state after a failed poll, so conservatively restart
+@@ -1561,6 +1707,7 @@ class RemoteConversation(BaseConversation):
+                 terminal_poll_count = 0
+                 terminal_first_seen_at = None
+             else:
++                self._raise_if_websocket_failed()
+                 # Raises ConversationRunError for ERROR/STUCK states
+                 self._handle_conversation_status(status, since)
+ 
+@@ -1595,6 +1742,7 @@ class RemoteConversation(BaseConversation):
+                         )
+                         self._state.refresh_from_server()
+                         self._state.events.reconcile()
++                        self._raise_if_websocket_failed()
+                         return
+                 else:
+                     terminal_poll_count = 0
+@@ -1988,9 +2136,16 @@ class RemoteConversation(BaseConversation):
+         Note: We don't close self._client here because it's shared with the workspace.
+         The workspace owns the client and will close it during its own cleanup.
+         Closing it here would prevent the workspace from making cleanup API calls.
++
++        Raises:
++            TimeoutError: The WebSocket callback thread is still running. Let pending
++                callbacks or connection cleanup finish, then retry close.
+         """
+         if self._cleanup_complete:
+             return
++        if self._ws_client:
++            self._ws_client.stop()
++            self._ws_client = None
+         first_attempt = not self._cleanup_initiated
+         if first_attempt:
+             self._cleanup_initiated = True
+@@ -2015,15 +2170,6 @@ class RemoteConversation(BaseConversation):
+             except Exception as e:
+                 logger.debug(f"Could not register accumulated cost: {e}")
+ 
+-            # SessionEnd hooks are executed server-side (via hook_config in payload).
+-            try:
+-                # Stop WebSocket client if it exists
+-                if self._ws_client:
+-                    self._ws_client.stop()
+-                    self._ws_client = None
+-            except Exception:
+-                pass
+-
+             self._end_observability_span()
+             if self.delete_on_close:
+                 try:
+diff --git a/openhands-sdk/openhands/sdk/conversation/state.py b/openhands-sdk/openhands/sdk/conversation/state.py
+index e5388ce..287c1ca 100644
+--- a/openhands-sdk/openhands/sdk/conversation/state.py
++++ b/openhands-sdk/openhands/sdk/conversation/state.py
+@@ -80,6 +80,16 @@ class ConversationExecutionStatus(str, Enum):
+         )
+ 
+ 
++class ConversationSnapshot(OpenHandsModel):
++    """An independent copy of one active branch and its execution metadata."""
++
++    id: ConversationID
++    leaf_event_id: EventID | None
++    execution_status: ConversationExecutionStatus
++    stats: ConversationStats
++    events: list[Event]
++
++
+ _Status = ConversationExecutionStatus
+ 
+ # Moves no code path makes: ConversationState.transition() rejects these and
+@@ -410,6 +420,23 @@ class ConversationState(OpenHandsModel):
+         """
+         return self._events.path_to_root(self._resolve_active_leaf(), limit=limit)
+ 
++    def snapshot(self) -> ConversationSnapshot:
++        """Copy the active branch, status, and usage under the state lock.
++
++        Agent configuration and the secret registry are omitted. Events retain
++        their normal content and may contain sensitive conversation data.
++        """
++        with self:
++            events = self.active_branch()
++            snapshot = ConversationSnapshot(
++                id=self.id,
++                leaf_event_id=events[-1].id if events else None,
++                execution_status=self.execution_status,
++                stats=self.stats,
++                events=events,
++            )
++            return ConversationSnapshot.model_validate_json(snapshot.model_dump_json())
++
+     def _stamp_parent_id(self, event: Event) -> Event:
+         """Return ``event`` with ``parent_id`` set to the active leaf if unset."""
+         if event.parent_id is not None:
+diff --git a/openhands-sdk/openhands/sdk/workspace/remote/base.py b/openhands-sdk/openhands/sdk/workspace/remote/base.py
+index 1f65474..54af3ed 100644
+--- a/openhands-sdk/openhands/sdk/workspace/remote/base.py
++++ b/openhands-sdk/openhands/sdk/workspace/remote/base.py
+@@ -1,6 +1,7 @@
+ import json
+ import os
+ from collections.abc import Generator
++from contextlib import AbstractAsyncContextManager
+ from pathlib import Path
+ from typing import TYPE_CHECKING, Any
+ from urllib.parse import quote
+@@ -9,6 +10,7 @@ from urllib.request import urlopen
+ import httpx
+ import tenacity
+ from pydantic import PrivateAttr, ValidationError
++from websockets.asyncio.client import ClientConnection, connect
+ 
+ from openhands.sdk.git.models import GitChange, GitDiff
+ from openhands.sdk.logger import get_logger
+@@ -72,6 +74,23 @@ class RemoteWorkspace(RemoteWorkspaceMixin, BaseWorkspace):
+ 
+     _client: httpx.Client | None = PrivateAttr(default=None)
+ 
++    def connect_websocket(
++        self, url: str, *, max_size: int
++    ) -> AbstractAsyncContextManager[ClientConnection]:
++        """Open a conversation socket; override to supply transport policy.
++
++        Raise ValueError to reject a connection without retrying. The SDK owns
++        authentication, event delivery, reconnects, and connection cleanup.
++        """
++        return connect(url, max_size=max_size)
++
++    def validate_websocket_message(self, message: str | bytes) -> None:
++        """Override to reject raw messages before event parsing and callbacks.
++
++        Any exception terminates reception and is reported as a connection
++        failure without logging the message or the exception's contents.
++        """
++
+     def reset_client(self) -> None:
+         """Reset the HTTP client to force re-initialization.
+ 

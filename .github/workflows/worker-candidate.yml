@@ -1,0 +1,43 @@
+# This source file is part of the Heartwood open-source project
+# SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+# SPDX-License-Identifier: MIT
+
+name: Worker Dependency Candidate
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/worker-candidate.yml
+      - deploy/build-worker-candidate.py
+      - images/worker/candidate/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Verify candidate wheel reproducibility
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Install pinned build tools
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          version: 0.13.7
+          python-version: 3.12.15
+      - name: Build twice from verified sources
+        run: |
+          uv run --no-project --python 3.12.15 deploy/build-worker-candidate.py --output test-results/worker-candidate/first
+          uv run --no-project --python 3.12.15 deploy/build-worker-candidate.py --output test-results/worker-candidate/second
+          cmp test-results/worker-candidate/first/build-record.json test-results/worker-candidate/second/build-record.json
+      - name: Retain qualification artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: worker-dependency-candidate-${{ github.sha }}
+          path: test-results/worker-candidate/first/
+          retention-days: 14
