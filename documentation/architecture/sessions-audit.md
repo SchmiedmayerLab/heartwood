@@ -94,6 +94,13 @@ OpenHands can supply several proposed tool calls through one confirmation callba
 Heartwood displays every member as one action set and applies one decision to the complete set; it does not imply that members can be approved independently.
 The gateway commits that complete-set decision before OpenHands can continue into model or tool execution.
 The pending set is reconstructed from unmatched OpenHands actions after restart rather than from a separate Heartwood cache.
+Its identifier contains a full SHA-256 digest of the ordered tool-call identifiers, native action identifiers, tool names, action kinds, and exact structured arguments.
+Canonical JSON makes object-key order irrelevant while preserving list and action order.
+Changed arguments, substituted tools, or added actions require a different decision even when tool-call identifiers are reused.
+Advisory risk labels and presentation summaries are not execution authority and do not change this binding.
+The gateway and backend both compare the current binding before resolving a decision.
+This binds the proposed action content; it does not freeze files referenced by a command or establish an outside security boundary for local tool execution.
+Previously issued identifiers that only bound tool-call identifiers are not valid for new approvals; preserve their history and start a new session when an upgrade invalidates pending review.
 
 Each OpenHands proposal becomes one `heartwood.action-record.v1` projection correlated by stable action and tool-call identifiers.
 The same record accumulates its group, decision, execution state, bounded result, and typed affected-path evidence across replay.
