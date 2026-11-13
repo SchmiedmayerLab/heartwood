@@ -14,6 +14,7 @@ import subprocess
 import sys
 import threading
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -488,7 +489,7 @@ def test_retried_approval_does_not_repeat_backend_tool_resolution(tmp_path: Path
             BackendToolCallEvent(tool_call=tool_call),
             BackendConfirmationRequestEvent(
                 tool_call=tool_call,
-                action_group_id=_action_group_id(tool_call.tool_call_id),
+                action_group_id=_action_group_id(tool_call),
             ),
         ),
     )
@@ -503,7 +504,7 @@ def test_retried_approval_does_not_repeat_backend_tool_resolution(tmp_path: Path
     approval = _command(
         CommandKind.APPROVE,
         target_type="action-set",
-        target_id=_action_group_id(tool_call.tool_call_id),
+        target_id=_action_group_id(tool_call),
     ).model_copy(update={"session_id": "session-main"})
 
     first = service.handle(approval)
@@ -511,7 +512,94 @@ def test_retried_approval_does_not_repeat_backend_tool_resolution(tmp_path: Path
 
     assert retried.replayed
     assert retried.events == first.events
-    assert backend.resolutions == [(_action_group_id(tool_call.tool_call_id), True)]
+    assert backend.resolutions == [(_action_group_id(tool_call), True)]
+
+
+@pytest.mark.parametrize("restart", [False, True])
+@pytest.mark.parametrize("change", ["arguments", "tool", "growing-group"])
+def test_stale_content_approval_cannot_resolve_reused_identifiers(
+    tmp_path: Path,
+    restart: bool,
+    change: str,
+) -> None:
+    action = ProposedToolCall(
+        tool_call_id="stable-call",
+        action_id="stable-action",
+        tool_name="terminal",
+        risk="medium",
+        summary="Write a synthetic result",
+        arguments={"command": "printf reviewed"},
+    )
+    reviewed_id = _action_group_id(action)
+    backend = _RecordingBackend(
+        endpoint="https://model.local.invalid/v1/chat/completions",
+        response=(
+            BackendToolCallEvent(tool_call=action),
+            BackendConfirmationRequestEvent(tool_call=action, action_group_id=reviewed_id),
+        ),
+    )
+    service = SessionService.local_default(
+        tmp_path, backend=backend, session_id="session-synthetic-001"
+    )
+    service.handle(_command(CommandKind.CHAT, prompt="write"))
+    if restart:
+        service.close()
+        backend = _RecordingBackend(endpoint="https://model.local.invalid/v1/chat/completions")
+        service = SessionService.local_default(
+            tmp_path, backend=backend, session_id="session-synthetic-001"
+        )
+    changes = {
+        "arguments": (replace(action, arguments={"command": "printf substituted"}),),
+        "tool": (replace(action, tool_name="substituted-tool"),),
+        "growing-group": (
+            action,
+            replace(action, tool_call_id="extra-call", action_id="extra-action"),
+        ),
+    }
+    backend._pending_actions = changes[change]
+    result = service.handle(
+        _command(CommandKind.APPROVE, target_type="action-set", target_id=reviewed_id)
+    )
+    assert result.events[-1].kind == EventKind.ERROR_RECORDED
+    assert not any(event.kind == EventKind.APPROVAL_RECORDED for event in result.events)
+    assert backend.resolutions == []
+    service.close()
+
+
+def test_interrupted_approval_cannot_recover_against_changed_arguments(tmp_path: Path) -> None:
+    action = ProposedToolCall(
+        tool_call_id="stable-call",
+        action_id="stable-action",
+        tool_name="terminal",
+        risk="medium",
+        summary="Write a synthetic result",
+        arguments={"command": "printf reviewed"},
+    )
+    reviewed_id = _action_group_id(action)
+    backend = _InterruptBeforeResolutionBackend(
+        endpoint="https://model.local.invalid/v1/chat/completions",
+        response=(
+            BackendToolCallEvent(tool_call=action),
+            BackendConfirmationRequestEvent(tool_call=action, action_group_id=reviewed_id),
+        ),
+    )
+    service = SessionService.local_default(
+        tmp_path, backend=backend, session_id="session-synthetic-001"
+    )
+    service.handle(_command(CommandKind.CHAT, prompt="write"))
+    with pytest.raises(OSError, match="before backend transition"):
+        service.handle(
+            _command(CommandKind.APPROVE, target_type="action-set", target_id=reviewed_id)
+        )
+    backend._pending_actions = (replace(action, arguments={"command": "printf substituted"}),)
+    recovered = service.reconcile()
+    assert any(
+        event.kind == EventKind.ERROR_RECORDED
+        and event.payload.get("code") == BackendErrorCode.ACTION_OUTCOME_UNKNOWN.value
+        for event in recovered
+    )
+    assert backend.resolutions == []
+    service.close()
 
 
 def test_second_writer_cannot_mutate_until_owner_closes(tmp_path: Path) -> None:
@@ -559,6 +647,7 @@ def test_writer_lease_excludes_another_process(tmp_path: Path) -> None:
     owner.handle(_command(CommandKind.PAUSE))
     child_script = """
 import sys
+from dataclasses import replace
 from pathlib import Path
 from heartwood.core_adapter import SessionOwnershipError, SessionService
 from heartwood.session import CommandKind, SessionCommand
@@ -600,6 +689,7 @@ def test_replay_waits_for_a_complete_paired_commit(tmp_path: Path) -> None:
     writer_script = """
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 import heartwood.core_adapter._state as state
 from heartwood.core_adapter import SessionService
@@ -632,6 +722,7 @@ service.close()
 """
     reader_script = """
 import sys
+from dataclasses import replace
 from pathlib import Path
 from heartwood.core_adapter import SessionService
 
@@ -681,6 +772,7 @@ def test_command_waits_for_snapshot_contention_without_stranding_receipt(
     holder_script = """
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 from heartwood.core_adapter import FileSessionStore
 
@@ -791,6 +883,7 @@ def test_writer_lease_recovers_after_process_is_killed(tmp_path: Path) -> None:
     child_script = """
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 from heartwood.core_adapter import SessionService
 from heartwood.session import CommandKind, SessionCommand
@@ -974,7 +1067,7 @@ def test_interrupted_approval_receipt_recovers_without_repeating_tool_resolution
             BackendToolCallEvent(tool_call=tool_call),
             BackendConfirmationRequestEvent(
                 tool_call=tool_call,
-                action_group_id=_action_group_id(tool_call.tool_call_id),
+                action_group_id=_action_group_id(tool_call),
             ),
         ),
     )
@@ -1005,7 +1098,7 @@ def test_interrupted_approval_receipt_recovers_without_repeating_tool_resolution
     approval = _command(
         CommandKind.APPROVE,
         target_type="action-set",
-        target_id=_action_group_id(tool_call.tool_call_id),
+        target_id=_action_group_id(tool_call),
     ).model_copy(update={"session_id": "session-main"})
     with pytest.raises(OSError, match="simulated approval receipt interruption"):
         service.handle(approval)
@@ -1014,7 +1107,7 @@ def test_interrupted_approval_receipt_recovers_without_repeating_tool_resolution
     replayed = service.handle(approval)
 
     assert replayed.replayed
-    assert backend.resolutions == [(_action_group_id(tool_call.tool_call_id), True)]
+    assert backend.resolutions == [(_action_group_id(tool_call), True)]
 
 
 def test_approval_intent_recovers_when_interrupted_before_backend_transition(
@@ -1032,7 +1125,7 @@ def test_approval_intent_recovers_when_interrupted_before_backend_transition(
             BackendToolCallEvent(tool_call=tool_call),
             BackendConfirmationRequestEvent(
                 tool_call=tool_call,
-                action_group_id=_action_group_id(tool_call.tool_call_id),
+                action_group_id=_action_group_id(tool_call),
             ),
         ),
     )
@@ -1047,7 +1140,7 @@ def test_approval_intent_recovers_when_interrupted_before_backend_transition(
     approval = _command(
         CommandKind.APPROVE,
         target_type="action-set",
-        target_id=_action_group_id(tool_call.tool_call_id),
+        target_id=_action_group_id(tool_call),
     ).model_copy(update={"session_id": "session-main"})
 
     with pytest.raises(OSError, match="before backend transition"):
@@ -1057,17 +1150,17 @@ def test_approval_intent_recovers_when_interrupted_before_backend_transition(
         _command(
             CommandKind.DENY,
             target_type="action-set",
-            target_id=_action_group_id(tool_call.tool_call_id),
+            target_id=_action_group_id(tool_call),
         ).model_copy(update={"session_id": "session-main"})
     )
     replayed = service.handle(approval)
 
     assert replayed.replayed
-    assert backend.resolutions == [(_action_group_id(tool_call.tool_call_id), True)]
+    assert backend.resolutions == [(_action_group_id(tool_call), True)]
     assert any(event.kind == EventKind.CONFIRMATION_RESOLVED.value for event in recovered)
     assert denied.events[-1].kind == EventKind.ERROR_RECORDED.value
     assert denied.events[-1].payload["reason"] == (
-        f"no matching pending action group: {_action_group_id(tool_call.tool_call_id)}"
+        f"no matching pending action group: {_action_group_id(tool_call)}"
     )
 
 
@@ -1086,7 +1179,7 @@ def test_approval_intent_recovers_from_backend_state_after_interrupted_return(
             BackendToolCallEvent(tool_call=tool_call),
             BackendConfirmationRequestEvent(
                 tool_call=tool_call,
-                action_group_id=_action_group_id(tool_call.tool_call_id),
+                action_group_id=_action_group_id(tool_call),
             ),
         ),
     )
@@ -1101,7 +1194,7 @@ def test_approval_intent_recovers_from_backend_state_after_interrupted_return(
     approval = _command(
         CommandKind.APPROVE,
         target_type="action-set",
-        target_id=_action_group_id(tool_call.tool_call_id),
+        target_id=_action_group_id(tool_call),
     ).model_copy(update={"session_id": "session-main"})
 
     with pytest.raises(OSError, match="after backend transition"):
@@ -1109,7 +1202,7 @@ def test_approval_intent_recovers_from_backend_state_after_interrupted_return(
     replayed = service.handle(approval)
 
     assert replayed.replayed
-    assert backend.resolutions == [(_action_group_id(tool_call.tool_call_id), True)]
+    assert backend.resolutions == [(_action_group_id(tool_call), True)]
 
 
 def test_session_control_files_are_private(tmp_path: Path) -> None:
@@ -1652,7 +1745,7 @@ def test_approved_action_records_tool_execution(tmp_path: Path) -> None:
         _command(
             CommandKind.APPROVE,
             target_type="action-set",
-            target_id=_action_group_id("session-synthetic-001-toolcall-0"),
+            target_id=_pending_group_id(service),
         )
     )
 
@@ -1686,7 +1779,7 @@ def test_rejected_action_is_not_recorded_as_tool_execution(tmp_path: Path) -> No
         _command(
             CommandKind.DENY,
             target_type="action-set",
-            target_id=_action_group_id("session-synthetic-001-toolcall-0"),
+            target_id=_pending_group_id(service),
         )
     )
 
@@ -1726,7 +1819,7 @@ def test_failed_backend_decision_records_a_fatal_unknown_action_outcome(
         _command(
             CommandKind.APPROVE,
             target_type="action-set",
-            target_id=_action_group_id(action.tool_call_id),
+            target_id=_action_group_id(action),
         ).model_copy(update={"session_id": "session-main"})
     )
 
@@ -1740,12 +1833,12 @@ def test_failed_backend_decision_records_a_fatal_unknown_action_outcome(
         _command(
             CommandKind.APPROVE,
             target_type="action-set",
-            target_id=_action_group_id(action.tool_call_id),
+            target_id=_action_group_id(action),
         ).model_copy(update={"session_id": "session-main"})
     )
 
     assert replayed.replayed is True
-    assert backend.resolutions == [(_action_group_id(action.tool_call_id), True)]
+    assert backend.resolutions == [(_action_group_id(action), True)]
 
 
 @pytest.mark.parametrize(
@@ -1830,7 +1923,7 @@ def test_fatal_approval_outcome_finishes_an_interrupted_receipt_without_retry(
             _command(
                 CommandKind.APPROVE,
                 target_type="action-set",
-                target_id=_action_group_id(action.tool_call_id),
+                target_id=_action_group_id(action),
             ).model_copy(update={"session_id": "session-main"})
         )
     monkeypatch.setattr(session_state, "_write_private_json_atomic", original_write)
@@ -1840,7 +1933,7 @@ def test_fatal_approval_outcome_finishes_an_interrupted_receipt_without_retry(
 
     assert recovered == ()
     assert backend.reconcile_calls == reconcile_calls_before_recovery
-    assert backend.resolutions == [(_action_group_id(action.tool_call_id), True)]
+    assert backend.resolutions == [(_action_group_id(action), True)]
     assert service.store.unresolved_command_ids() == ()
     assert (
         sum(
@@ -1945,7 +2038,7 @@ def test_approved_action_rechecks_route_before_backend_continuation(tmp_path: Pa
             BackendToolCallEvent(tool_call=pending),
             BackendConfirmationRequestEvent(
                 tool_call=pending,
-                action_group_id=_action_group_id(pending.tool_call_id),
+                action_group_id=_action_group_id(pending),
             ),
         ),
     )
@@ -1971,7 +2064,7 @@ def test_approved_action_rechecks_route_before_backend_continuation(tmp_path: Pa
         _command(
             CommandKind.APPROVE,
             target_type="action-set",
-            target_id=_action_group_id(pending.tool_call_id),
+            target_id=_action_group_id(pending),
         ).model_copy(update={"session_id": "session-main"})
     )
 
@@ -2007,11 +2100,11 @@ def test_service_uses_backend_owned_pending_group_after_restart(tmp_path: Path) 
             BackendToolCallEvent(tool_call=second),
             BackendConfirmationRequestEvent(
                 tool_call=first,
-                action_group_id=_action_group_id(first.tool_call_id, second.tool_call_id),
+                action_group_id=_action_group_id(first, second),
             ),
             BackendConfirmationRequestEvent(
                 tool_call=second,
-                action_group_id=_action_group_id(first.tool_call_id, second.tool_call_id),
+                action_group_id=_action_group_id(first, second),
             ),
         ),
     )
@@ -2041,13 +2134,11 @@ def test_service_uses_backend_owned_pending_group_after_restart(tmp_path: Path) 
         _command(
             CommandKind.APPROVE,
             target_type="action-set",
-            target_id=_action_group_id(first.tool_call_id, second.tool_call_id),
+            target_id=_action_group_id(first, second),
         ).model_copy(update={"session_id": "session-main"})
     )
 
-    assert restored_backend.resolutions == [
-        (_action_group_id(first.tool_call_id, second.tool_call_id), True)
-    ]
+    assert restored_backend.resolutions == [(_action_group_id(first, second), True)]
     assert any(
         event.kind == EventKind.MODEL_CALL_DECISION_RECORDED.value for event in result.events
     )
@@ -2374,7 +2465,7 @@ def test_local_workspace_backend_writes_only_after_allow_once(tmp_path: Path) ->
         _command(
             CommandKind.APPROVE,
             target_type="action-set",
-            target_id=_action_group_id("session-local-toolcall-0"),
+            target_id=_pending_group_id(service),
         ).model_copy(update={"session_id": "session-local"})
     )
 
@@ -2699,18 +2790,14 @@ def _write_pending_commit(
     )
 
 
-def _action_group_id(*tool_call_ids: str) -> str:
-    group = pending_action_group(
-        tuple(
-            ProposedToolCall(
-                tool_call_id=tool_call_id,
-                tool_name="test-tool",
-                risk="unknown",
-                summary="test action",
-            )
-            for tool_call_id in tool_call_ids
-        )
-    )
+def _action_group_id(*actions: ProposedToolCall) -> str:
+    group = pending_action_group(actions)
+    assert group is not None
+    return group.group_id
+
+
+def _pending_group_id(service: SessionService) -> str:
+    group = service.backend.pending_action_group(session_id=service.store.session_id)
     assert group is not None
     return group.group_id
 
