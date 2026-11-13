@@ -11,7 +11,7 @@ import json
 import socket
 import sys
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -35,6 +35,7 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
+from heartwood.core_adapter.worker_attempts import WorkerAttemptLease
 from heartwood.gateway._remote_workspace import (
     AdmittedRemoteWorkspace,
     WorkerResponseBudget,
@@ -448,8 +449,10 @@ def test_client_reset_preserves_admission_and_policy_is_not_serialized(
 
 
 @pytest.mark.parametrize("workspace_type", [AdmittedRemoteWorkspace, AdmittedWorkerWorkspace])
-def test_native_attach_and_fork_preserve_admission(
-    workspace_type: type[AdmittedRemoteWorkspace], caplog: pytest.LogCaptureFixture
+def test_native_create_attach_and_fork_preserve_admission(
+    workspace_type: type[AdmittedRemoteWorkspace],
+    caplog: pytest.LogCaptureFixture,
+    worker_attempt: Callable[[str], WorkerAttemptLease],
 ) -> None:
     if workspace_type is AdmittedWorkerWorkspace and not callable(
         getattr(RemoteWorkspace, "connect_websocket", None)
@@ -465,7 +468,13 @@ def test_native_attach_and_fork_preserve_admission(
         if request.url.path.endswith("/events/search"):
             return JSONResponse({"items": [], "next_page_id": None})
         is_fork = request.url.path.endswith("/fork")
-        identity = str(uuid4()) if is_fork else request.path_params["identity"]
+        identity = (
+            (await request.json())["conversation_id"]
+            if request.url.path == "/api/conversations"
+            else str(uuid4())
+            if is_fork
+            else request.path_params["identity"]
+        )
         return JSONResponse(
             {
                 "id": identity,
@@ -494,6 +503,7 @@ def test_native_attach_and_fork_preserve_admission(
 
     app = Starlette(
         routes=[
+            Route("/api/conversations", metadata, methods=["POST"]),
             Route(
                 "/api/conversations/{identity}/{operation:path}", metadata, methods=["GET", "POST"]
             ),
@@ -507,8 +517,11 @@ def test_native_attach_and_fork_preserve_admission(
         server = uvicorn.Server(uvicorn.Config(app, log_level="error", access_log=False))
         thread = Thread(target=server.run, kwargs={"sockets": [listener]}, daemon=True)
         thread.start()
+        host = f"http://127.0.0.1:{listener.getsockname()[1]}"
+        attempt = worker_attempt(host) if workspace_type is AdmittedWorkerWorkspace else None
         workspace = workspace_type(
-            host=f"http://127.0.0.1:{listener.getsockname()[1]}",
+            host=host,
+            attempt=attempt,
             working_dir="/workspace",
             api_key=worker_key,
         )
@@ -517,14 +530,29 @@ def test_native_attach_and_fork_preserve_admission(
             while not server.started and time.monotonic() < deadline:
                 time.sleep(0.01)
             assert server.started
-            parent = RemoteConversation.attach(workspace, uuid4(), visualizer=None)
+            if attempt is not None:
+                created = RemoteConversation.create(
+                    workspace,
+                    StartConversationRequest(
+                        agent=agent,
+                        conversation_id=attempt.intent.conversation_id,
+                        workspace=LocalWorkspace(working_dir="/workspace"),
+                    ),
+                    visualizer=None,
+                )
+                assert created.id == attempt.intent.conversation_id
+                created.close()
+            parent = RemoteConversation.attach(
+                workspace, attempt.intent.conversation_id if attempt else uuid4(), visualizer=None
+            )
             try:
-                child = parent.fork()
-                try:
-                    assert child.id != parent.id
-                    assert child.workspace is workspace
-                finally:
-                    child.close()
+                if attempt is None:
+                    child = parent.fork()
+                    try:
+                        assert child.id != parent.id
+                        assert child.workspace is workspace
+                    finally:
+                        child.close()
                 if workspace_type is AdmittedWorkerWorkspace:
                     reject_events = True
                     deadline = time.monotonic() + 5
