@@ -295,6 +295,21 @@ Qualification I/O runs outside the session command lock; dispatch then rechecks 
 This protects session transitions but does not provide a filesystem transaction against external programs changing project files.
 The gateway supplies one review-execution summary and exact revision-bound controls to the terminal, browser, and notebook.
 
+### Worker Attempt Ownership
+
+Managed worker launch intent and observed runtime bindings use the existing paired session and audit journal.
+The gateway issues a fresh attempt identity before dispatch, retaining the project, session, native conversation, image digest, deployment policy, sandbox policy, and input-manifest digest.
+Replacement preserves the native conversation identity and requires the previous attempt to be fenced with independently observed service-revocation evidence retained by the trusted launcher.
+Replaying a record does not grant a live capability or permit a local execution fallback.
+
+Each process-local admission capability belongs to one retained binding and session writer.
+Fencing closes callback admission; session callbacks require the same live capability.
+A capability cannot prove that a sandbox stopped or that service access was revoked.
+The sandbox control plane and outside services enforce those controls, and an unavailable or uncertain revocation blocks replacement.
+Attempt records and ordinary session/audit correlation contain no worker credentials.
+These internal launcher contracts do not launch sandboxes, verify an observer's evidence, or revoke service access themselves.
+The default remote factory remains disabled until its control-plane integration and the selected runtime satisfy the deployment qualification gates.
+
 ### Remote Response Admission
 
 The remote workspace adapter validates HTTP responses before the native SDK consumes them.

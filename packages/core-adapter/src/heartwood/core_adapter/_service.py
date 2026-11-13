@@ -18,6 +18,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from threading import RLock
 from typing import assert_never, cast
+from uuid import UUID, uuid4
 
 from heartwood.adapters import PlatformAdapter
 from heartwood.adapters.platform import GenericPlatformAdapter, select_platform_adapter
@@ -47,6 +48,16 @@ from heartwood.core_adapter.reproduction_journal import (
     observe_reproduction,
     prepare_reproduction,
     reproduction_records,
+)
+from heartwood.core_adapter.worker_attempts import (
+    WorkerAttemptError,
+    WorkerAttemptIntent,
+    WorkerAttemptLease,
+    WorkerAttemptRecord,
+    WorkerRevocationEvidence,
+    WorkerRuntimeBinding,
+    current_worker_attempt,
+    validate_worker_transition,
 )
 from heartwood.core_adapter.workflow_review import validate_parallel_review_plan
 from heartwood.core_adapter.workflow_runtime import (
@@ -107,6 +118,7 @@ class SessionService:
         event_sink: Callable[[tuple[SessionEvent, ...]], None] | None = None,
         token_sink: Callable[[str], None] | None = None,
         workflow_evaluator: WorkflowEvaluator | None = None,
+        worker_project_id: UUID | None = None,
     ) -> None:
         self.store = store
         self.audit_log = AuditLog(store.audit_path)
@@ -121,10 +133,15 @@ class SessionService:
         self._event_sink = event_sink or (lambda _events: None)
         self._token_sink = token_sink or (lambda _delta: None)
         self._known_source_event_ids: set[str] | None = None
+        self._journal_writer_identity: str | None = None
+        self._worker_record: WorkerAttemptRecord | None = None
         self._workflow_evaluator = workflow_evaluator
+        self._worker_project_id = worker_project_id
+        self._worker_lease: WorkerAttemptLease | None = None
+        self._worker_attempt_created = False
         self.backend.bind_runtime(
-            event_sink=self._accept_backend_events,
-            token_sink=self._token_sink,
+            event_sink=self._accept_unbound_backend_events,
+            token_sink=self._accept_unbound_backend_token,
         )
 
     @classmethod
@@ -166,6 +183,7 @@ class SessionService:
         event_sink: Callable[[tuple[SessionEvent, ...]], None] | None = None,
         token_sink: Callable[[str], None] | None = None,
         workflow_evaluator: WorkflowEvaluator | None = None,
+        worker_project_id: UUID | None = None,
     ) -> SessionService:
         """Build a local service with an explicitly supplied or deterministic backend."""
         active_env = os.environ if env is None else env
@@ -187,6 +205,7 @@ class SessionService:
             event_sink=event_sink,
             token_sink=token_sink,
             workflow_evaluator=workflow_evaluator,
+            worker_project_id=worker_project_id,
         )
 
     def handle(
@@ -240,6 +259,8 @@ class SessionService:
                     last_sequence=duplicate.events[-1].sequence,
                 )
                 return duplicate
+            if command_kind not in {CommandKind.REPLAY.value, CommandKind.AUDIT_EXPORT.value}:
+                unavailable_reason = unavailable_reason or self._worker_admission_error_locked()
             if unavailable_reason is None and command_kind != CommandKind.AUDIT_EXPORT.value:
                 fatal_error = next(
                     (
@@ -393,8 +414,179 @@ class SessionService:
                 return
         self.backend.close()
         with self._command_lock:
+            if self._worker_lease is not None:
+                self._worker_lease.fence()
             self._closed = True
             self.store.release_writer()
+
+    def worker_attempt(self) -> WorkerAttemptRecord | None:
+        """Read retained worker identity without restoring execution authority."""
+        with self._command_lock:
+            return current_worker_attempt(self.replay_events())
+
+    def prepare_worker_attempt(
+        self, *, image_digest: str, sandbox_policy_sha256: str, input_manifest_sha256: str
+    ) -> WorkerAttemptIntent:
+        """Retain a fresh gateway-issued attempt before trusted sandbox launch."""
+        with self._command_lock:
+            self._require_worker_owner_locked()
+            if self._worker_attempt_created or not self.backend.wait_for_idle(0):
+                raise WorkerAttemptError("a fresh idle backend is required for a worker attempt")
+            previous = current_worker_attempt(self.replay_events())
+            if previous is not None and previous.phase != "revoked":
+                raise WorkerAttemptError("previous worker access has not been revoked")
+            if previous is None and any(
+                event.kind
+                in {
+                    EventKind.USER_MESSAGE_RECORDED,
+                    EventKind.TOOL_CALL_PROPOSED,
+                    EventKind.MODEL_CALL_DECISION_RECORDED,
+                }
+                for event in self.replay_events()
+            ):
+                raise WorkerAttemptError("local execution history requires explicit migration")
+            assert self._worker_project_id is not None
+            policy = json.dumps(
+                self.policy_profile.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
+            ).encode()
+            intent = WorkerAttemptIntent(
+                project_id=self._worker_project_id,
+                session_id=self.store.session_id,
+                attempt_id=uuid4(),
+                conversation_id=previous.intent.conversation_id if previous else uuid4(),
+                image_digest=image_digest,
+                gateway_policy_sha256=hashlib.sha256(policy).hexdigest(),
+                sandbox_policy_sha256=sandbox_policy_sha256,
+                input_manifest_sha256=input_manifest_sha256,
+            )
+            self._worker_attempt_created = True
+            self._record_worker_transition_locked(
+                WorkerAttemptRecord(phase="prepared", intent=intent)
+            )
+            return intent
+
+    def bind_worker_runtime(
+        self, *, attempt_id: UUID, runtime: WorkerRuntimeBinding
+    ) -> WorkerAttemptLease:
+        """Activate only this service's retained intent and observed runtime."""
+        with self._command_lock:
+            self._require_worker_owner_locked()
+            current = self._require_worker_attempt_locked(attempt_id)
+            if not self._worker_attempt_created or self._worker_lease is not None:
+                raise WorkerAttemptError("replayed worker intent requires launcher reconciliation")
+            record = WorkerAttemptRecord(phase="active", intent=current.intent, runtime=runtime)
+            self._record_worker_transition_locked(record)
+            writer_identity = self.store.writer_identity
+            lease = WorkerAttemptLease(
+                record,
+                owns_writer=lambda: (
+                    not self._closed and self.store.writer_identity == writer_identity
+                ),
+            )
+            self._worker_lease = lease
+            try:
+                self.backend.bind_runtime(
+                    event_sink=lambda events: self._accept_worker_events(lease, events),
+                    token_sink=lambda delta: self._accept_worker_token(lease, delta),
+                )
+            except Exception:
+                lease.fence()
+                raise
+            return lease
+
+    def fence_worker_attempt(self, *, attempt_id: UUID) -> None:
+        """Close local admission before recording the required outside revocation."""
+        with self._command_lock:
+            self._require_worker_owner_locked()
+            current = self._require_worker_attempt_locked(attempt_id)
+            if current.phase == "fenced":
+                return
+            if self._worker_lease is not None:
+                self._worker_lease.fence()
+            self._record_worker_transition_locked(
+                WorkerAttemptRecord(phase="fenced", intent=current.intent, runtime=current.runtime)
+            )
+
+    def record_worker_revocation(self, evidence: WorkerRevocationEvidence) -> None:
+        """Retain trusted launcher evidence; this method performs no infrastructure mutation."""
+        with self._command_lock:
+            self._require_worker_owner_locked()
+            current = self._require_worker_attempt_locked(evidence.attempt_id)
+            record = WorkerAttemptRecord(
+                phase="revoked", intent=current.intent, runtime=current.runtime, revocation=evidence
+            )
+            if record != current:
+                self._record_worker_transition_locked(record)
+
+    def _require_worker_owner_locked(self) -> None:
+        if self._closed or self._worker_project_id is None:
+            raise WorkerAttemptError("worker lifecycle requires an owned deployment project")
+        self.store.acquire_writer()
+        self._recover_pending_commit_locked()
+        current = current_worker_attempt(self.replay_events())
+        if current is not None and current.intent.project_id != self._worker_project_id:
+            raise WorkerAttemptError("worker journal belongs to another project")
+
+    def _require_worker_attempt_locked(self, attempt_id: UUID) -> WorkerAttemptRecord:
+        current = current_worker_attempt(self.replay_events())
+        if current is None or current.intent.attempt_id != attempt_id:
+            raise WorkerAttemptError("worker attempt is not current")
+        return current
+
+    def _record_worker_transition_locked(self, record: WorkerAttemptRecord) -> None:
+        validate_worker_transition(current_worker_attempt(self.replay_events()), record)
+        self._record_event(
+            EventKind.WORKER_ATTEMPT_RECORDED,
+            cast(dict[str, JsonValue], record.model_dump(mode="json")),
+        )
+
+    def _worker_admission_error_locked(self) -> str | None:
+        self._known_source_event_ids_locked()
+        current = self._worker_record
+        if current is None:
+            return None
+        lease = self._worker_lease
+        if (
+            current.phase != "active"
+            or lease is None
+            or not lease.active
+            or lease.intent != current.intent
+            or self._worker_project_id != current.intent.project_id
+        ):
+            return "worker attempt requires trusted launcher reconciliation"
+        return None
+
+    def _accept_worker_events(
+        self, lease: WorkerAttemptLease, events: tuple[BackendEvent, ...]
+    ) -> None:
+        with self._command_lock:
+            if lease is self._worker_lease and lease.active:
+                self._accept_backend_events(events)
+
+    def _accept_unbound_backend_events(self, events: tuple[BackendEvent, ...]) -> None:
+        with self._command_lock:
+            if not self._worker_attempt_created:
+                self._accept_backend_events(events)
+
+    def _accept_unbound_backend_token(self, delta: str) -> None:
+        if (
+            not self._closed
+            and not self._worker_attempt_created
+            and self._known_source_event_ids is not None
+            and self._worker_record is None
+            and self.store.writer_identity is not None
+            and self.store.writer_identity == self._journal_writer_identity
+        ):
+            self._token_sink(delta)
+
+    def _accept_worker_token(self, lease: WorkerAttemptLease, delta: str) -> None:
+        if lease is not self._worker_lease:
+            return
+        try:
+            with lease.admit_callback():
+                self._token_sink(delta)
+        except WorkerAttemptError:
+            return
 
     def admit_parallel_review(
         self, actions: tuple[ReviewDispatchAction, ...], *, cancelled: Callable[[], bool]
@@ -916,15 +1108,19 @@ class SessionService:
         if not stream:
             return
         with self._command_lock:
-            if self._closed:
+            if self._closed or (self._worker_lease is not None and not self._worker_lease.active):
                 return
             self.store.acquire_writer()
             self._recover_pending_commit_locked()
+            if self._worker_admission_error_locked() is not None:
+                return
             events = tuple(self._translate_backend_events(stream))
         if events:
             self._event_sink(events)
 
     def _reconcile_locked(self) -> tuple[SessionEvent, ...]:
+        if self._worker_admission_error_locked() is not None:
+            return ()
         known_source_event_ids = self._known_source_event_ids_locked()
         return tuple(
             self._translate_backend_events(
@@ -937,13 +1133,20 @@ class SessionService:
         )
 
     def _known_source_event_ids_locked(self) -> set[str]:
-        if self._known_source_event_ids is None:
-            self._known_source_event_ids = set(_source_event_ids(self.replay_events()))
+        if (
+            self._known_source_event_ids is None
+            or self._journal_writer_identity != self.store.writer_identity
+        ):
+            events = self.replay_events()
+            self._known_source_event_ids = set(_source_event_ids(events))
+            self._worker_record = current_worker_attempt(events)
+            self._journal_writer_identity = self.store.writer_identity
         return self._known_source_event_ids
 
     def _recover_pending_commit_locked(self) -> None:
-        if self.store.recover_pending_commit() and self._known_source_event_ids is not None:
-            self._known_source_event_ids = set(_source_event_ids(self.replay_events()))
+        if self.store.recover_pending_commit():
+            self._known_source_event_ids = None
+            self._known_source_event_ids_locked()
 
     def _has_failed_approval_recovery_locked(self) -> bool:
         unresolved_command_ids = self.store.unresolved_command_ids()
@@ -961,6 +1164,8 @@ class SessionService:
 
     def _recover_approval_commands_locked(self) -> tuple[SessionEvent, ...]:
         """Finish an interrupted approval only when persisted state makes it unambiguous."""
+        if self._worker_admission_error_locked() is not None:
+            return ()
         recovered: list[SessionEvent] = []
         for command_id in self.store.unresolved_command_ids():
             events = self.replay_events()
@@ -1061,6 +1266,13 @@ class SessionService:
         )
 
     def _record_event(self, kind: EventKind, payload: dict[str, JsonValue]) -> SessionEvent:
+        correlation: dict[str, JsonValue] = {}
+        if self._worker_lease is not None and kind != EventKind.WORKER_ATTEMPT_RECORDED:
+            correlation = {
+                "worker_attempt_id": str(self._worker_lease.intent.attempt_id),
+                "worker_project_id": str(self._worker_lease.intent.project_id),
+            }
+            payload = {**payload, **correlation}
         sequence, previous_event_hash = self.store.verified_head()
         occurred_at = self.clock()
         event = SessionEvent(
@@ -1074,6 +1286,7 @@ class SessionService:
         )
         audit_payload = {
             **_audit_payload(kind, payload),
+            **correlation,
             "session_event_hash": compute_session_event_hash(event),
         }
         audit_event = prepare_audit_event(
@@ -1090,6 +1303,8 @@ class SessionService:
         ):
             raise AuditIntegrityError("audit log changed during session event append")
         self.store.commit_event(event, audit_event)
+        if kind == EventKind.WORKER_ATTEMPT_RECORDED:
+            self._worker_record = WorkerAttemptRecord.model_validate(payload)
         source_event_id = payload.get("source_event_id")
         if (
             self._known_source_event_ids is not None
@@ -1102,6 +1317,17 @@ class SessionService:
 
 def _audit_payload(kind: EventKind, payload: dict[str, JsonValue]) -> dict[str, JsonValue]:
     """Project an operational event into its content-minimized audit representation."""
+    if kind == EventKind.WORKER_ATTEMPT_RECORDED:
+        record = WorkerAttemptRecord.model_validate(payload)
+        return {
+            "phase": record.phase,
+            "project_id": str(record.intent.project_id),
+            "attempt_id": str(record.intent.attempt_id),
+            "conversation_id": str(record.intent.conversation_id),
+            "binding_sha256": hashlib.sha256(
+                json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest(),
+        }
     if kind == EventKind.WORKFLOW_EXECUTION_RECORDED:
         return _selected_audit_fields(
             payload,

@@ -89,6 +89,7 @@ class EventKind(StrEnum):
     SESSION_RESUMED = "session.resumed"
     AUDIT_EXPORT_RECORDED = "audit.export.recorded"
     ERROR_RECORDED = "error.recorded"
+    WORKER_ATTEMPT_RECORDED = "worker_attempt.recorded"
     WORKFLOW_UPDATED = "workflow.updated"
     WORKFLOW_EXECUTION_RECORDED = "workflow.execution.recorded"
 
