@@ -276,6 +276,22 @@ Qualification I/O runs outside the session command lock; dispatch then rechecks 
 This protects session transitions but does not provide a filesystem transaction against external programs changing project files.
 The gateway supplies one review-execution summary and exact revision-bound controls to the terminal, browser, and notebook.
 
+### Remote Response Admission
+
+The remote workspace adapter validates HTTP responses before the native SDK consumes them.
+Its caller supplies exact tool-name/module pairs from trusted deployment configuration; an empty set permits no tool imports.
+The complete returned registration set must match before any import can execute, including on create, attach, resume, and fork.
+The adapter uses the public workspace client property and HTTPX transport interface without changing SDK code or conversation orchestration.
+
+Responses are bounded, uncompressed UTF-8 JSON with unique object keys and finite numbers.
+HTTP requests through this client remain on the configured server origin; redirects, ambient proxies, and server-selected client tools are rejected.
+Remote agent metadata cannot select another agent implementation or enable the SDK’s client-side completion-log file writer.
+Errors expose a stable admission failure rather than worker response content.
+Resetting the workspace client retains the same admission policy.
+
+This adapter is not connected to the default local conversation factory.
+HTTP admission alone does not qualify remote execution: WebSocket input, remote-state projections, attempt fencing, independently authorized external effects, and infrastructure isolation require their own boundaries.
+
 ### Research Specialist Catalog
 
 The gateway loads the maintained specialist catalog through OpenHands `AgentDefinition` and registers enabled roles with OpenHands' public agent factory and Task tool.
