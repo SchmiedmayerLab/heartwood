@@ -81,7 +81,7 @@ The native worker qualification path needs SDK admission and remote-event hooks 
 `deploy/build-worker-candidate.py` builds a separate, explicitly versioned wheel set from immutable upstream source archives and reviewed patches in `images/worker/candidate/`.
 It verifies source, patch and build-tool hashes, uses a fixed source timestamp, preserves upstream licenses, and records each wheel digest.
 The candidate workflow repeats the build and requires byte-identical wheel records.
-These artifacts support integration tests; they do not replace the application lock, install dependencies, publish upstream packages, or establish a supported deployment.
+Building these artifacts supports integration tests; it does not replace the application lock, install dependencies, publish upstream packages, or establish a supported deployment.
 
 ```bash
 uv run --no-project --python 3.12.15 deploy/build-worker-candidate.py --output test-results/worker-candidate
@@ -94,6 +94,21 @@ The dependency patch updates the SDK's stale inference-client constraint, public
 The local package version suffix distinguishes these reviewed candidates from upstream releases.
 Source revisions, patch digests and wheel records must accompany any qualification result that uses them.
 Promotion into the production dependency lock requires compatible upstream releases or an explicitly maintained patched dependency source, followed by integrated qualification of the exact resulting image.
+
+The candidate environment command compiles a separate hash-pinned dependency graph and installs it only into a new environment.
+It fixes the Python and package-manager versions, runtime hashes and isolated build dependencies, and checks installed-package consistency.
+The fixed release cutoff has explicit exceptions for the file-lock security update and the inference-client version required by the reviewed SDK patch.
+The lock includes test tools and supports Heartwood source through `PYTHONPATH`; it is not an installation of the published Heartwood distributions, whose dependency metadata still targets the public lock.
+
+```bash
+bash images/worker/candidate/runtime.sh compile test-results/worker-candidate
+bash images/worker/candidate/runtime.sh install test-results/worker-candidate test-results/worker-environment
+```
+
+Set `UV_BIN` when the pinned package manager is not on `PATH`.
+An existing environment is rejected to preserve installed work.
+The candidate workflow verifies lock regeneration, installs this environment and runs worker admission and lifecycle checks against the packaged SDKs.
+This verifies package integration, not operating-system isolation or model-route eligibility; native deployment drills remain required.
 
 ## Research Evaluation Evidence
 

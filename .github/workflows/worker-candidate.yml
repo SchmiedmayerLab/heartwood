@@ -25,6 +25,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           persist-credentials: false
+          submodules: true
       - name: Install pinned build tools
         uses: astral-sh/setup-uv@v9.0.0
         with:
@@ -35,6 +36,24 @@ jobs:
           uv run --no-project --python 3.12.15 deploy/build-worker-candidate.py --output test-results/worker-candidate/first
           uv run --no-project --python 3.12.15 deploy/build-worker-candidate.py --output test-results/worker-candidate/second
           cmp test-results/worker-candidate/first/build-record.json test-results/worker-candidate/second/build-record.json
+      - name: Verify the candidate environment lock
+        run: |
+          bash images/worker/candidate/runtime.sh compile test-results/worker-candidate/first
+          git diff --exit-code -- images/worker/candidate/runtime-requirements.txt
+      - name: Install the candidate qualification environment
+        run: bash images/worker/candidate/runtime.sh install test-results/worker-candidate/first test-results/worker-candidate/environment
+      - name: Test worker admission and lifecycle with candidate wheels
+        env:
+          OPENHANDS_SUPPRESS_BANNER: '1'
+          LITELLM_LOCAL_MODEL_COST_MAP: 'True'
+        run: |
+          PYTHONPATH="$(find "$PWD/packages" -mindepth 2 -maxdepth 2 -type d -name src -print | paste -sd:):$PWD/vendor/heartwood-skills/src"
+          export PYTHONPATH
+          test-results/worker-candidate/environment/bin/python -m pytest --no-cov -q \
+            packages/gateway/tests/test_worker*.py \
+            packages/gateway/tests/test_remote_workspace.py \
+            packages/compliance/tests/test_worker_candidate_build.py \
+            packages/compliance/tests/test_worker_image.py
       - name: Retain qualification artifacts
         uses: actions/upload-artifact@v7
         with:
