@@ -48,6 +48,8 @@ from heartwood.core_adapter._state import (
     SessionRecoveryError,
     SessionStorageCapabilityError,
     SessionStoreBoundaryError,
+    session_maintenance,
+    session_writer_admission,
 )
 
 __all__ = [
@@ -91,6 +93,8 @@ __all__ = [
     "backend_error_is_fatal",
     "backend_error_message",
     "pending_action_group",
+    "session_maintenance",
+    "session_writer_admission",
 ]
 
 __version__ = "0.4.0"

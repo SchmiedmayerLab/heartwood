@@ -52,6 +52,11 @@ Final events delivered during shutdown remain durable; this lifecycle fence does
 A second process cannot reconcile or mutate that session until the owner releases the lease or exits.
 Replay and live updates remain available through the interface connected to the owning gateway.
 Distinct sessions have independent leases.
+Writer admission and session-catalog changes briefly hold one admission lock for the session root.
+An internal maintenance context holds that gate while acquiring every existing session writer lock; an active writer prevents maintenance from starting.
+The context leaves writer metadata and historical records unchanged and releases its locks after failure or process exit.
+Gateway versions that do not use the admission lock must be stopped before maintenance.
+This excludes session writes only; project configuration, runtime activity, and model transfers require separate exclusion before a complete state migration.
 Mutation acquires the writer lease before the paired-snapshot lock; recovery and replay never hold the snapshot lock while waiting for a writer lease.
 This fixed ordering prevents deadlock as new gateway workers and presentation adapters reuse the store.
 
