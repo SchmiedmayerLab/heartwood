@@ -40,6 +40,7 @@ from heartwood.core_adapter._facade import (
     BackendToolExecutionEvent,
     BackendUsageEvent,
     DeterministicAgentBackend,
+    PendingActionGroup,
     backend_error_is_fatal,
     backend_error_message,
 )
@@ -1324,6 +1325,17 @@ class SessionService:
                     },
                 ),
             )
+        if not self._pending_proposal_is_durable(pending_group):
+            return (
+                self._record_event(
+                    EventKind.ERROR_RECORDED,
+                    {
+                        "command": _kind_value(command.kind),
+                        "reason": "the complete action proposal is not yet durably published",
+                        "affects_lifecycle": False,
+                    },
+                ),
+            )
         events: list[SessionEvent] = []
         if approved and self.backend.continuation_requires_model_authorization:
             authorized, authorization_events = self._authorize_backend(
@@ -1387,6 +1399,31 @@ class SessionService:
                 )
             )
         return tuple(events)
+
+    def _pending_proposal_is_durable(self, group: PendingActionGroup) -> bool:
+        fields = ("tool_call_id", "action_id", "tool_name", "kind", "arguments")
+        expected = {
+            action.tool_call_id: {field: getattr(action, field) for field in fields}
+            for action in group.actions
+        }
+        proposals: dict[str, dict[str, JsonValue]] = {}
+        requests: dict[str, dict[str, JsonValue]] = {}
+        for event in self.replay_events():
+            payload = event.payload
+            if event.kind == EventKind.TOOL_CALL_PROPOSED:
+                target = proposals
+            elif event.kind == EventKind.CONFIRMATION_REQUESTED:
+                request = payload.get("request")
+                if not isinstance(request, dict) or request.get("group_id") != group.group_id:
+                    continue
+                payload = request
+                target = requests
+            else:
+                continue
+            identity = payload.get("tool_call_id")
+            if isinstance(identity, str) and identity in expected:
+                target[identity] = {field: payload.get(field) for field in fields}
+        return proposals == expected and requests == expected
 
     def _translate_backend_events(
         self, stream: tuple[BackendEvent, ...], *, live: bool = True

@@ -119,6 +119,8 @@ SDK profile and provider-connection storage is scoped to private conversation st
 
 OpenHands can supply several proposed tool calls through one confirmation callback.
 Heartwood displays every member as one action set and applies one decision to the complete set; it does not imply that members can be approved independently.
+The complete proposal and confirmation request must already be durable before the gateway accepts a decision.
+If native pending state arrives ahead of its live publisher, a decision is rejected without resolving the callback; a fresh command can be submitted after publication.
 The gateway commits that complete-set decision before OpenHands can continue into model or tool execution.
 The pending set is reconstructed from unmatched OpenHands actions after restart rather than from a separate Heartwood cache.
 Its identifier contains a full SHA-256 digest of the ordered tool-call identifiers, native action identifiers, tool names, action kinds, and exact structured arguments.
