@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import math
 from collections.abc import Mapping
+from threading import Lock
 from typing import Any
 
 import httpx
@@ -25,6 +26,39 @@ class WorkerResponseError(ValueError):
     """A remote response failed admission before SDK deserialization."""
 
 
+class WorkerResponseBudget:
+    """Lifetime admission shared by a workspace's response transports."""
+
+    def __init__(self, *, max_bytes: int = 32 * 1024 * 1024, max_responses: int = 1024) -> None:
+        if type(max_bytes) is not int or type(max_responses) is not int:
+            raise ValueError("worker response limits must be positive integers")
+        if max_bytes <= 0 or max_responses <= 0:
+            raise ValueError("worker response limits must be positive integers")
+        self._remaining_bytes = max_bytes
+        self._remaining_responses = max_responses
+        self._closed = False
+        self._lock = Lock()
+
+    def charge(self, size: int, *, new_response: bool = False) -> None:
+        """Charge received bytes or reserve a request before contacting the worker."""
+        if size < 0:
+            raise ValueError("worker response size must not be negative")
+        with self._lock:
+            if self._closed:
+                raise WorkerResponseError("worker response admission is closed")
+            if size > self._remaining_bytes or (new_response and not self._remaining_responses):
+                self._closed = True
+                raise WorkerResponseError("worker response budget exhausted")
+            self._remaining_bytes -= size
+            if new_response:
+                self._remaining_responses -= 1
+
+    def close(self) -> None:
+        """Refuse further admission without replenishing the lifetime budget."""
+        with self._lock:
+            self._closed = True
+
+
 class WorkerResponseTransport(httpx.BaseTransport):
     """Bound responses and admit module names before handing bytes to the SDK."""
 
@@ -34,6 +68,7 @@ class WorkerResponseTransport(httpx.BaseTransport):
         host: str,
         tool_modules: Mapping[str, str],
         transport: httpx.BaseTransport,
+        budget: WorkerResponseBudget | None = None,
     ) -> None:
         self._origin = httpx.URL(host)
         if (
@@ -47,8 +82,10 @@ class WorkerResponseTransport(httpx.BaseTransport):
             raise ValueError("worker host must be a complete server origin")
         self._tool_modules = dict(tool_modules)
         self._transport = transport
+        self._budget = budget if budget is not None else WorkerResponseBudget()
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
+        self._budget.charge(0, new_response=True)
         if (
             request.url.scheme != self._origin.scheme
             or request.url.host != self._origin.host
@@ -56,6 +93,7 @@ class WorkerResponseTransport(httpx.BaseTransport):
             or request.url.userinfo
             or request.url.fragment
         ):
+            self._budget.close()
             raise WorkerResponseError("worker request left the configured origin")
         request.headers["Accept-Encoding"] = "identity"
         response = self._transport.handle_request(request)
@@ -70,6 +108,7 @@ class WorkerResponseTransport(httpx.BaseTransport):
             stream = response.stream
             assert isinstance(stream, httpx.SyncByteStream)
             for chunk in stream:
+                self._budget.charge(len(chunk))
                 if len(body) + len(chunk) > _MAX_RESPONSE_BYTES:
                     raise WorkerResponseError("worker response exceeds the byte limit")
                 body.extend(chunk)
@@ -81,7 +120,11 @@ class WorkerResponseTransport(httpx.BaseTransport):
                 _admit_json(content, self._tool_modules)
             elif response.status_code != 204:
                 raise WorkerResponseError("worker response is empty")
+            self._budget.charge(0)
             return httpx.Response(response.status_code, headers=response.headers, content=content)
+        except WorkerResponseError:
+            self._budget.close()
+            raise
         finally:
             response.close()
 
@@ -160,6 +203,7 @@ class AdmittedRemoteWorkspace(RemoteWorkspace):
     tool_modules: tuple[tuple[str, str], ...] = Field(default=(), exclude=True, frozen=True)
     api_key: str | None = Field(default=None, exclude=True, repr=False, frozen=True)
     _admitted_client: httpx.Client | None = PrivateAttr(default=None)
+    _response_budget: WorkerResponseBudget = PrivateAttr(default_factory=WorkerResponseBudget)
 
     @property
     def client(self) -> httpx.Client:
@@ -170,6 +214,7 @@ class AdmittedRemoteWorkspace(RemoteWorkspace):
             transport = WorkerResponseTransport(
                 host=self.host,
                 tool_modules=modules,
+                budget=self._response_budget,
                 transport=httpx.HTTPTransport(
                     trust_env=False, limits=httpx.Limits(max_connections=4)
                 ),

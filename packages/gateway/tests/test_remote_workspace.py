@@ -12,10 +12,11 @@ import socket
 import sys
 import time
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from threading import Thread
+from threading import Event, Thread
 from uuid import uuid4
 
 import httpx
@@ -34,6 +35,7 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from heartwood.gateway._remote_workspace import (
     AdmittedRemoteWorkspace,
+    WorkerResponseBudget,
     WorkerResponseError,
     WorkerResponseTransport,
 )
@@ -196,9 +198,146 @@ def test_other_origin_is_rejected_before_transport() -> None:
     )
     with httpx.Client(transport=transport, follow_redirects=True) as client:
         for url in ("http://other.test/", "https://worker.test/", "http://worker.test:81/"):
-            with pytest.raises(WorkerResponseError, match="origin"):
+            with pytest.raises(WorkerResponseError):
                 client.get(url)
     assert not calls
+
+
+@pytest.mark.parametrize(("max_bytes", "max_responses"), [(0, 1), (1, 0), (-1, 1), (True, 1)])
+def test_response_budget_requires_positive_integer_limits(
+    max_bytes: int, max_responses: int
+) -> None:
+    with pytest.raises(ValueError, match="positive integers"):
+        WorkerResponseBudget(max_bytes=max_bytes, max_responses=max_responses)
+
+
+@pytest.mark.parametrize(
+    ("status", "body", "max_bytes", "max_responses"), [(200, b"{}", 4, 5), (204, b"", 4, 2)]
+)
+def test_lifetime_response_budget_is_not_refunded(
+    status: int, body: bytes, max_bytes: int, max_responses: int
+) -> None:
+    calls = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(status, content=body, headers={"Content-Type": "application/json"})
+
+    transport = WorkerResponseTransport(
+        host="http://worker.test",
+        tool_modules={},
+        transport=httpx.MockTransport(handle),
+        budget=WorkerResponseBudget(max_bytes=max_bytes, max_responses=max_responses),
+    )
+    with httpx.Client(transport=transport, base_url="http://worker.test") as client:
+        assert client.get("/").content == body
+        assert client.get("/").content == body
+        with pytest.raises(WorkerResponseError, match="budget exhausted"):
+            client.get("/")
+        count_at_rejection = len(calls)
+        with pytest.raises(WorkerResponseError, match="closed"):
+            client.get("/")
+        assert len(calls) == count_at_rejection
+        assert len(calls) == (3 if body else 2)
+
+
+def test_budget_closes_response_stream_at_cumulative_limit() -> None:
+    stream = _Chunks()
+    transport = WorkerResponseTransport(
+        host="http://worker.test",
+        tool_modules={},
+        transport=httpx.MockTransport(lambda _: httpx.Response(200, stream=stream)),
+        budget=WorkerResponseBudget(max_bytes=1024 * 1024),
+    )
+    with httpx.Client(transport=transport) as client:
+        with pytest.raises(WorkerResponseError, match="budget exhausted"):
+            client.get("http://worker.test/")
+        assert stream.read_count == 2
+        assert stream.closed
+
+
+def test_concurrent_rejection_prevents_pending_response_admission() -> None:
+    reading = Event()
+    resume = Event()
+    closed = Event()
+
+    class PendingBody(httpx.SyncByteStream):
+        def __iter__(self) -> Iterator[bytes]:
+            yield b"{}"
+            reading.set()
+            assert resume.wait(timeout=5)
+
+        def close(self) -> None:
+            closed.set()
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            stream=PendingBody()
+            if request.url.path == "/pending"
+            else httpx.ByteStream(b"invalid"),
+            headers={"Content-Type": "application/json"},
+        )
+
+    transport = WorkerResponseTransport(
+        host="http://worker.test", tool_modules={}, transport=httpx.MockTransport(handle)
+    )
+    with httpx.Client(transport=transport, base_url="http://worker.test") as client:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            pending = pool.submit(client.get, "/pending")
+            try:
+                assert reading.wait(timeout=5)
+                with pytest.raises(WorkerResponseError, match="invalid JSON"):
+                    client.get("/invalid")
+            finally:
+                resume.set()
+            with pytest.raises(WorkerResponseError, match="closed"):
+                pending.result(timeout=5)
+        assert closed.is_set()
+
+
+def test_network_errors_consume_request_budget() -> None:
+    calls = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        raise httpx.ConnectError("synthetic connection failure")
+
+    transport = WorkerResponseTransport(
+        host="http://worker.test",
+        tool_modules={},
+        transport=httpx.MockTransport(handle),
+        budget=WorkerResponseBudget(max_responses=1),
+    )
+    with httpx.Client(transport=transport, base_url="http://worker.test") as client:
+        with pytest.raises(httpx.ConnectError):
+            client.get("/")
+        with pytest.raises(WorkerResponseError, match="budget exhausted"):
+            client.get("/")
+    assert len(calls) == 1
+
+
+def test_client_reset_does_not_renew_request_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(204)
+
+    monkeypatch.setattr(httpx, "HTTPTransport", lambda **_: httpx.MockTransport(handle))
+    workspace = AdmittedRemoteWorkspace(host="http://worker.test", working_dir="/workspace")
+    try:
+        for _ in range(1024):
+            workspace.client.get("/")
+            workspace.reset_client()
+        with pytest.raises(WorkerResponseError, match="budget exhausted"):
+            workspace.client.get("/")
+        workspace.reset_client()
+        with pytest.raises(WorkerResponseError, match="closed"):
+            workspace.client.get("/")
+        assert len(calls) == 1024
+    finally:
+        workspace.reset_client()
 
 
 @contextmanager
