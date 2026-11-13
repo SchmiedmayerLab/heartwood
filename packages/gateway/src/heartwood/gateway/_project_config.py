@@ -294,7 +294,7 @@ class LocalModelSelection:
         configured = Path(self.path)
         if configured.is_absolute():
             raise ProjectConfigError("Heartwood-managed model path must be relative to the project")
-        resolved = (project.root / configured).resolve()
+        resolved = (project.model_path_root / configured).resolve()
         if project.models_dir not in resolved.parents:
             raise ProjectConfigError(
                 "Heartwood-managed model path must remain under .heartwood/models"
@@ -303,7 +303,7 @@ class LocalModelSelection:
     def resolved_path(self, project: ProjectContext) -> Path:
         """Return the validated absolute artifact path."""
         self.validate(project)
-        return (project.root / self.path).resolve()
+        return (project.model_path_root / self.path).resolve()
 
 
 @dataclass(frozen=True, slots=True)
@@ -516,7 +516,7 @@ class ProjectConfigStore:
             raise ProjectConfigError("downloaded model must be stored under .heartwood/models")
         selection = LocalModelSelection(
             artifact_id=artifact_id,
-            path=str(resolved.relative_to(self.project.root)),
+            path=str(resolved.relative_to(self.project.model_path_root)),
             runtime=runtime,
             model_id=model_id,
             display_name=display_name,

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from uuid import UUID
 
 from heartwood.persistence import (
     PERSISTENCE_MIGRATIONS,
@@ -37,12 +38,27 @@ class ProjectContext:
     """One invocation directory and its reserved Heartwood state paths."""
 
     root: Path
+    protected_state: Path | None = None
+    project_id: UUID | None = None
 
     def __post_init__(self) -> None:
         resolved = self.root.expanduser().resolve()
         if not resolved.is_dir():
             raise ProjectStateError(f"project directory does not exist: {resolved}")
         object.__setattr__(self, "root", resolved)
+        if (self.protected_state is None) != (self.project_id is None):
+            raise ProjectStateError("protected state requires a deployment project identity")
+        if self.protected_state is not None:
+            if not self.protected_state.is_absolute() or self.protected_state.is_symlink():
+                raise ProjectStateError("protected state must be an absolute non-symlink path")
+            state = self.protected_state.resolve()
+            if state != self.protected_state:
+                raise ProjectStateError("protected state must not traverse symbolic links")
+            if state == resolved or state in resolved.parents or resolved in state.parents:
+                raise ProjectStateError("protected state and research directory must be disjoint")
+            if state.name != str(self.project_id):
+                raise ProjectStateError("protected state directory must match project identity")
+            object.__setattr__(self, "protected_state", state)
 
     @classmethod
     def current(cls) -> ProjectContext:
@@ -51,8 +67,13 @@ class ProjectContext:
 
     @property
     def state_root(self) -> Path:
-        """Return the reserved project-local Heartwood directory."""
-        return self.root / ".heartwood"
+        """Return the launcher-bound state directory or the local state layout."""
+        return self.protected_state or self.root / ".heartwood"
+
+    @property
+    def model_path_root(self) -> Path:
+        """Return the base for persisted model paths in this state layout."""
+        return self.state_root if self.protected_state is not None else self.root
 
     @property
     def config_path(self) -> Path:
@@ -146,6 +167,7 @@ class ProjectContext:
 
     def state_exists(self) -> bool:
         """Return whether a valid initialized state structure exists."""
+        self._validate_state_root()
         if not self.state_root.exists():
             return False
         self._validate_existing_state()
@@ -157,7 +179,8 @@ class ProjectContext:
         if resolved != self.root and self.root not in resolved.parents:
             return False
         return include_state or (
-            resolved != self.state_root and self.state_root not in resolved.parents
+            resolved != self.root / ".heartwood"
+            and self.root / ".heartwood" not in resolved.parents
         )
 
     def require_project_path(self, path: Path, *, include_state: bool = False) -> Path:
@@ -233,6 +256,14 @@ class ProjectContext:
             raise ProjectStateError(".heartwood/.state.lock must be a regular file")
 
     def _validate_state_root(self) -> None:
+        if self.protected_state is not None:
+            legacy_marker = self.root / ".heartwood" / "state.json"
+            if legacy_marker.exists() or legacy_marker.is_symlink():
+                raise ProjectStateError(
+                    "project-local state requires migration before protected-state launch"
+                )
+            if self.state_root.resolve() != self.protected_state:
+                raise ProjectStateError("protected state path changed after launch")
         if self.state_root.is_symlink():
             raise ProjectStateError(".heartwood must not be a symbolic link")
         if not self.state_root.exists():

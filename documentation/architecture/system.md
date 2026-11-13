@@ -323,6 +323,13 @@ This application admission control requires an independently confined worker and
 
 ## Process Ownership
 
+An operator-owned project deployment manifest binds one opaque project identifier to an exact research directory, an external state directory, and a model-policy ceiling.
+The gateway verifies that binding against its launch directory before opening any project state.
+Project-local hints cannot select the binding, and copying the research directory does not authorize access to the original project's state.
+The manifest and state directory must remain outside the research directory; the external state directory is named by the project identifier.
+An existing project-local state marker requires an explicit migration before this launch mode can initialize external state.
+This placement separates canonical configuration, sessions, audit records, Skills, runtime records, and model artifacts from research files; operating-system identities and worker mounts still enforce access.
+
 Project configuration writes use a project-scoped interprocess lock.
 Session mutation uses a separate interprocess lease for each session, owned by the gateway process that first handles a command.
 The lease remains active until that session service closes.
