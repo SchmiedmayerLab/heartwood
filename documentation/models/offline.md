@@ -89,6 +89,8 @@ The import is bound to the exact manifest shown during review and stops if the b
 
 The import streams every file into private staging storage, checks its size and SHA-256 digest, verifies the runtime-specific model structure, and publishes it atomically under `.heartwood/models/`.
 It also selects the imported model through the normal project configuration path; no manual state edit is needed.
+Cancellation or a selection failure retains files that have already been fully verified and published in the model cache.
+A retry verifies those cached files again before selecting the model; incomplete staging is removed.
 
 ## 5. Verify and Start
 
