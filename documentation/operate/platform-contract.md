@@ -248,8 +248,9 @@ sequenceDiagram
     alt Launch link
         G-->>R: One-time launch link printed at startup
         R->>P: Open launch link
-        P->>G: GET /launch?token=…
-        G-->>R: HttpOnly, SameSite=Strict capability cookie
+        R->>R: Remove fragment token from browser URL
+        P->>G: POST /launch with token in JSON body
+        G-->>R: Gateway capability for tab-scoped storage
     else Proxy injection
         P->>G: Request with X-Heartwood-Capability
     end
@@ -285,8 +286,10 @@ See the [serve options](../reference/cli.md#operator-commands) and [HW-INGRESS-0
 
 The gateway consumes and closes the inherited descriptor, rejects environment capability delivery, and prints generated launch links only after owning a listening socket.
 The platform must protect the descriptor source from workers and other users.
-With direct loopback, browsers still send the capability cookie to every port of the host; do not open untrusted local servers in that browser context.
-Origin-scoped browser delivery remains tracked in [#156](https://github.com/SchmiedmayerLab/heartwood/issues/156).
+The browser keeps the capability in origin- and tab-scoped storage, keyed by gateway base path, and explicitly supplies it only to that gateway.
+HTTP requests reject redirects; WebSockets authenticate before receiving project events.
+Scripts on the same origin can access this storage: use separate authenticated origins for mutually untrusted projects.
+A Jupyter proxy base path does not isolate the gateway from other scripts on the notebook origin.
 
 ## Deployment Policy
 
@@ -813,7 +816,9 @@ The loader does not yet wire a deployment-owned manifest into startup.
 
 The OpenAPI description includes all implemented REST operations, launch-token exchange, and server-sent events.
 Its `x-websocket` section describes the WebSocket transport using the same event/projection schema.
-Gateway authentication accepts the capability header **or** capability cookie, after ingress validation; it does not establish per-person platform identity.
+Gateway HTTP authentication requires the capability header after ingress validation; capability cookies are not accepted.
+Browser WebSockets send `{ "type": "authenticate", "capability": "…" }` as their first frame within five seconds and before receiving events; trusted proxies may inject the capability header instead.
+The capability does not establish per-person platform identity.
 Streaming clients reconnect with the `after` query cursor; the server does not implement `Last-Event-ID` replay.
 Session command payloads remain generic JSON objects validated by their command handlers, rather than a separate schema for each command kind.
 

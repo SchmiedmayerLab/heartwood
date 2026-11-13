@@ -6,6 +6,8 @@
  * SPDX-License-Identifier: MIT
  */
 
+/* global sessionStorage */
+
 const { spawn, spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
@@ -53,7 +55,7 @@ const specialistResultMarker = "SPECIALIST REVIEW COMPLETE:";
 const processes = [];
 const logs = [];
 let launchLinksUsed = 0;
-let capabilityCookie = "";
+let capability = "";
 const runtimeEnvironment = Object.assign({}, process.env, {
   HEARTWOOD_MODEL_REQUEST_LOG: path.join(
     stateRoot,
@@ -738,23 +740,24 @@ async function openLaunchLink(page) {
   let links = [];
   while (links.length <= launchLinksUsed && Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, 100));
-    links = logs.join("").match(/https?:\/\/\S+\/launch\?token=\S+/g) ?? [];
+    links = logs.join("").match(/https?:\/\/\S+\/#launch=\S+/g) ?? [];
   }
   if (links.length <= launchLinksUsed) {
     throw new Error("gateway did not print a new launch link");
   }
   await page.goto(links[launchLinksUsed++]);
-  const cookie = (await page.context().cookies()).find(
-    (candidate) => candidate.name === "heartwood-capability",
+  const key = `heartwood.gateway-capability:${new URL(page.url()).pathname}`;
+  await page.waitForFunction(
+    (key) => sessionStorage.getItem(key) !== null,
+    key,
   );
-  if (cookie === undefined) {
-    throw new Error("launch link did not set the capability cookie");
-  }
-  capabilityCookie = `${cookie.name}=${cookie.value}`;
+  capability = await page.evaluate((key) => sessionStorage.getItem(key), key);
 }
 
 async function fetchJson(url) {
-  const response = await fetch(url, { headers: { cookie: capabilityCookie } });
+  const response = await fetch(url, {
+    headers: { "X-Heartwood-Capability": capability },
+  });
   if (!response.ok) throw new Error(`${url} returned ${response.status}`);
   return response.json();
 }

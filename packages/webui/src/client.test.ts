@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+import type { EventSourceInit } from "eventsource";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GatewayClient, createCommand } from "./client";
 import { sessionProjectionJsonSchema } from "./sessionProjectionSchema.generated";
@@ -16,6 +17,15 @@ import {
   syntheticProjection,
 } from "./test/fixtures";
 import type { SessionEvent, SessionProjection } from "./types";
+
+vi.mock("eventsource", () => ({
+  EventSource: Object.assign(
+    vi.fn(function (url: string, options: EventSourceInit) {
+      return new FakeEventSource(url, options);
+    }),
+    { CLOSED: 2 },
+  ),
+}));
 
 const projectionResponse = (
   events: SessionEvent[] = [],
@@ -37,6 +47,7 @@ class FakeWebSocket {
   onmessage: ((message: MessageEvent<string>) => void) | null = null;
   onopen: (() => void) | null = null;
   readonly close = vi.fn();
+  readonly send = vi.fn();
 
   constructor(readonly url: string) {
     FakeWebSocket.instances.push(this);
@@ -79,7 +90,10 @@ class FakeEventSource {
   readyState = FakeEventSource.CONNECTING;
   readonly close = vi.fn();
 
-  constructor(readonly url: string) {
+  constructor(
+    readonly url: string,
+    readonly options: EventSourceInit,
+  ) {
     FakeEventSource.instances.push(this);
   }
 
@@ -117,6 +131,7 @@ class FakeEventSource {
 }
 
 afterEach(() => {
+  window.sessionStorage.clear();
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
   FakeWebSocket.instances.length = 0;
@@ -196,9 +211,16 @@ describe("GatewayClient", () => {
     ).ensureDefaultSession();
 
     expect(ensured).toEqual(session);
-    expect(fetch).toHaveBeenCalledWith("/proxy/8767/sessions/default", {
-      method: "POST",
-    });
+    expect(fetch).toHaveBeenCalledWith(
+      "/proxy/8767/sessions/default",
+      expect.objectContaining({
+        ...{
+          method: "POST",
+        },
+        credentials: "same-origin",
+        redirect: "error",
+      }),
+    );
   });
 
   it("manages persisted session lifecycle routes", async () => {
@@ -237,7 +259,14 @@ describe("GatewayClient", () => {
     await client.renameSession("session test", "Renamed");
     const exported = await client.getAuditExport("session test");
 
-    expect(fetch).toHaveBeenNthCalledWith(1, "/proxy/8767/sessions");
+    expect(fetch).toHaveBeenNthCalledWith(
+      1,
+      "/proxy/8767/sessions",
+      expect.objectContaining({
+        credentials: "same-origin",
+        redirect: "error",
+      }),
+    );
     expect(fetch).toHaveBeenNthCalledWith(
       2,
       "/proxy/8767/sessions",
@@ -249,6 +278,10 @@ describe("GatewayClient", () => {
     expect(fetch).toHaveBeenNthCalledWith(
       3,
       "/proxy/8767/sessions/session%20test",
+      expect.objectContaining({
+        credentials: "same-origin",
+        redirect: "error",
+      }),
     );
     expect(fetch).toHaveBeenNthCalledWith(
       4,
@@ -261,6 +294,10 @@ describe("GatewayClient", () => {
     expect(fetch).toHaveBeenNthCalledWith(
       5,
       "/proxy/8767/sessions/session%20test/audit-export",
+      expect.objectContaining({
+        credentials: "same-origin",
+        redirect: "error",
+      }),
     );
     expect(exported.filename).toBe("session test-audit.jsonl");
   });
@@ -364,18 +401,34 @@ describe("GatewayClient", () => {
     expect(fetch).toHaveBeenNthCalledWith(
       1,
       "/proxy/8767/sessions/session%20test/workspace/tree?path=.&depth=4",
+      expect.objectContaining({
+        credentials: "same-origin",
+        redirect: "error",
+      }),
     );
     expect(fetch).toHaveBeenNthCalledWith(
       2,
       "/proxy/8767/sessions/session%20test/workspace/file?path=results%2Fcohort+summary.py",
+      expect.objectContaining({
+        credentials: "same-origin",
+        redirect: "error",
+      }),
     );
     expect(fetch).toHaveBeenNthCalledWith(
       3,
       "/proxy/8767/sessions/session%20test/workspace/changes",
+      expect.objectContaining({
+        credentials: "same-origin",
+        redirect: "error",
+      }),
     );
     expect(fetch).toHaveBeenNthCalledWith(
       4,
       "/proxy/8767/sessions/session%20test/workspace/diff?path=results%2Fcohort+summary.py",
+      expect.objectContaining({
+        credentials: "same-origin",
+        redirect: "error",
+      }),
     );
   });
 
@@ -619,6 +672,10 @@ describe("GatewayClient", () => {
     expect(fetch).toHaveBeenNthCalledWith(
       2,
       "/proxy/8767/settings/models/validation",
+      expect.objectContaining({
+        credentials: "same-origin",
+        redirect: "error",
+      }),
     );
     expect(response.events).toEqual([]);
   });
@@ -667,7 +724,14 @@ describe("GatewayClient", () => {
     await client.removeModelProfile("custom-loopback");
     await client.validateModelProfile("custom profile");
 
-    expect(fetch).toHaveBeenNthCalledWith(1, "/proxy/8767/settings/models");
+    expect(fetch).toHaveBeenNthCalledWith(
+      1,
+      "/proxy/8767/settings/models",
+      expect.objectContaining({
+        credentials: "same-origin",
+        redirect: "error",
+      }),
+    );
     expect(fetch).toHaveBeenNthCalledWith(
       2,
       "/proxy/8767/settings/models/profiles",
@@ -681,11 +745,19 @@ describe("GatewayClient", () => {
     expect(fetch).toHaveBeenNthCalledWith(
       4,
       "/proxy/8767/settings/models/profiles/custom-loopback",
-      { method: "DELETE" },
+      expect.objectContaining({
+        ...{ method: "DELETE" },
+        credentials: "same-origin",
+        redirect: "error",
+      }),
     );
     expect(fetch).toHaveBeenNthCalledWith(
       5,
       "/proxy/8767/settings/models/validation?profile_id=custom%20profile",
+      expect.objectContaining({
+        credentials: "same-origin",
+        redirect: "error",
+      }),
     );
   });
 
@@ -859,6 +931,10 @@ describe("GatewayClient", () => {
     expect(fetch).toHaveBeenNthCalledWith(
       1,
       "/proxy/8767/settings/models/artifacts",
+      expect.objectContaining({
+        credentials: "same-origin",
+        redirect: "error",
+      }),
     );
     expect(fetch).toHaveBeenNthCalledWith(
       2,
@@ -932,7 +1008,11 @@ describe("GatewayClient", () => {
     expect(fetch).toHaveBeenNthCalledWith(
       4,
       "/proxy/8767/settings/models/transfers/import-1",
-      { method: "DELETE" },
+      expect.objectContaining({
+        ...{ method: "DELETE" },
+        credentials: "same-origin",
+        redirect: "error",
+      }),
     );
   });
 
@@ -1031,7 +1111,14 @@ describe("GatewayClient", () => {
     await client.getProjectReadiness();
     await client.configureModelSource("stanford-ai-api-gateway");
 
-    expect(fetch).toHaveBeenNthCalledWith(1, "/proxy/8767/project/readiness");
+    expect(fetch).toHaveBeenNthCalledWith(
+      1,
+      "/proxy/8767/project/readiness",
+      expect.objectContaining({
+        credentials: "same-origin",
+        redirect: "error",
+      }),
+    );
     expect(fetch).toHaveBeenNthCalledWith(
       2,
       "/proxy/8767/settings/models/source",
@@ -1074,7 +1161,14 @@ describe("GatewayClient", () => {
     await client.getActionSettings();
     await client.selectActionConfirmationMode("confirm-risky");
 
-    expect(fetch).toHaveBeenNthCalledWith(1, "/proxy/8767/settings/actions");
+    expect(fetch).toHaveBeenNthCalledWith(
+      1,
+      "/proxy/8767/settings/actions",
+      expect.objectContaining({
+        credentials: "same-origin",
+        redirect: "error",
+      }),
+    );
     expect(fetch).toHaveBeenNthCalledWith(
       2,
       "/proxy/8767/settings/actions/confirmation",
@@ -1132,7 +1226,14 @@ describe("GatewayClient", () => {
     await client.installLocalSkill("/mnt/community-summary", digest);
     await client.removeSkill("community summary");
 
-    expect(fetch).toHaveBeenNthCalledWith(1, "/proxy/8767/settings/skills");
+    expect(fetch).toHaveBeenNthCalledWith(
+      1,
+      "/proxy/8767/settings/skills",
+      expect.objectContaining({
+        credentials: "same-origin",
+        redirect: "error",
+      }),
+    );
     expect(fetch).toHaveBeenNthCalledWith(
       2,
       "/proxy/8767/settings/skills/refresh",
@@ -1183,7 +1284,11 @@ describe("GatewayClient", () => {
     expect(fetch).toHaveBeenNthCalledWith(
       7,
       "/proxy/8767/settings/skills/community%20summary",
-      { method: "DELETE" },
+      expect.objectContaining({
+        ...{ method: "DELETE" },
+        credentials: "same-origin",
+        redirect: "error",
+      }),
     );
   });
 
@@ -1197,7 +1302,13 @@ describe("GatewayClient", () => {
     await expect(
       new GatewayClient("/proxy/8767").getSpecialistSettings(),
     ).resolves.toEqual(settings);
-    expect(fetch).toHaveBeenCalledWith("/proxy/8767/settings/specialists");
+    expect(fetch).toHaveBeenCalledWith(
+      "/proxy/8767/settings/specialists",
+      expect.objectContaining({
+        credentials: "same-origin",
+        redirect: "error",
+      }),
+    );
   });
 
   it("loads research workflows through the deployment URL prefix", async () => {
@@ -1209,7 +1320,13 @@ describe("GatewayClient", () => {
     await expect(
       new GatewayClient("/proxy/8767").getResearchWorkflows(),
     ).resolves.toEqual(catalog);
-    expect(fetch).toHaveBeenCalledWith("/proxy/8767/research/workflows");
+    expect(fetch).toHaveBeenCalledWith(
+      "/proxy/8767/research/workflows",
+      expect.objectContaining({
+        credentials: "same-origin",
+        redirect: "error",
+      }),
+    );
   });
 
   it("captures verification Python through the deployment URL prefix", async () => {
@@ -1228,7 +1345,13 @@ describe("GatewayClient", () => {
     await expect(
       new GatewayClient("/proxy/8767").getVerificationEnvironment(),
     ).resolves.toEqual(snapshot);
-    expect(fetch).toHaveBeenCalledWith("/proxy/8767/research/environment");
+    expect(fetch).toHaveBeenCalledWith(
+      "/proxy/8767/research/environment",
+      expect.objectContaining({
+        credentials: "same-origin",
+        redirect: "error",
+      }),
+    );
   });
 
   it("reports gateway errors", async () => {
@@ -1272,6 +1395,10 @@ describe("GatewayClient", () => {
       );
       expect(fetch).toHaveBeenCalledWith(
         `/proxy/8767/research/experiments${method === "getExperimentExport" ? "/export" : ""}`,
+        expect.objectContaining({
+          credentials: "same-origin",
+          redirect: "error",
+        }),
       );
     },
   );
@@ -1328,6 +1455,10 @@ describe("GatewayClient", () => {
 
     expect(fetch).toHaveBeenCalledWith(
       "/user/synthetic/proxy/8767/sessions/session-test/events?after=0",
+      expect.objectContaining({
+        credentials: "same-origin",
+        redirect: "error",
+      }),
     );
   });
 
@@ -1348,6 +1479,10 @@ describe("GatewayClient", () => {
 
     expect(fetch).toHaveBeenCalledWith(
       "/proxy/terra-project/saturn-runtime/jupyter/proxy/8767/sessions/session-test/events?after=0",
+      expect.objectContaining({
+        credentials: "same-origin",
+        redirect: "error",
+      }),
     );
   });
 
@@ -1367,7 +1502,91 @@ describe("GatewayClient", () => {
 
     expect(fetch).toHaveBeenCalledWith(
       "/configured-gateway/sessions/session-test/events",
+      expect.objectContaining({
+        credentials: "same-origin",
+        redirect: "error",
+      }),
     );
+  });
+
+  it("rejects streaming to another origin before opening a socket", () => {
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    expect(() =>
+      new GatewayClient("http://127.0.0.1:9999").streamSession(
+        "session-test",
+        undefined,
+        {
+          onProjection: vi.fn(),
+        },
+      ),
+    ).toThrow("origin");
+    expect(FakeWebSocket.instances).toHaveLength(0);
+  });
+
+  it("authenticates WebSockets before reporting a connected projection", () => {
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const capability = "synthetic-gateway-secret-1234567890";
+    window.sessionStorage.setItem(
+      "heartwood.gateway-capability:/proxy/8767/",
+      capability,
+    );
+    const onState = vi.fn();
+    const cleanup = new GatewayClient("/proxy/8767").streamSession(
+      "session-test",
+      undefined,
+      {
+        onProjection: vi.fn(),
+        onState,
+      },
+    );
+    const socket = FakeWebSocket.instances[0];
+    socket?.open();
+    expect(socket?.send).toHaveBeenCalledWith(
+      JSON.stringify({ type: "authenticate", capability }),
+    );
+    expect(socket?.url).not.toContain(capability);
+    expect(onState).not.toHaveBeenCalledWith("connected");
+    socket?.emit(syntheticProjection());
+    expect(onState).toHaveBeenLastCalledWith("connected");
+    cleanup();
+  });
+
+  it("authenticates the SSE fallback and refuses redirected credential delivery", async () => {
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const capability = "synthetic-gateway-secret-1234567890";
+    window.sessionStorage.setItem(
+      "heartwood.gateway-capability:/proxy/8767/",
+      capability,
+    );
+    const fetch = vi.fn().mockResolvedValue(new Response(""));
+    vi.stubGlobal("fetch", fetch);
+    const cleanup = new GatewayClient("/proxy/8767").streamSession(
+      "session-test",
+      undefined,
+      {
+        onProjection: vi.fn(),
+      },
+    );
+    FakeWebSocket.instances[0]?.fail();
+    const source = FakeEventSource.instances[0];
+    expect(source?.options.maxBufferSize).toBe(4 * 1024 * 1024);
+    await source?.options.fetch?.(source.url, {
+      headers: { Accept: "text/event-stream" },
+      signal: new AbortController().signal,
+      mode: "cors",
+      cache: "no-store",
+      redirect: "follow",
+    });
+    const options = fetch.mock.calls[0]?.[1] as RequestInit;
+    expect(new Headers(options.headers).get("X-Heartwood-Capability")).toBe(
+      capability,
+    );
+    expect(new Headers(options.headers).get("Accept")).toBe(
+      "text/event-stream",
+    );
+    expect(options.redirect).toBe("error");
+    cleanup();
+    expect(source?.close).toHaveBeenCalled();
   });
 
   it("falls back to server-sent events after a WebSocket error", () => {
@@ -1411,6 +1630,7 @@ describe("GatewayClient", () => {
       },
     );
     FakeWebSocket.instances[0]?.open();
+    FakeWebSocket.instances[0]?.emit(emptyProjection());
     FakeWebSocket.instances[0]?.fail();
     FakeEventSource.instances[0]?.open();
     cleanup();
@@ -1498,7 +1718,7 @@ describe("GatewayClient", () => {
     FakeWebSocket.instances[0]?.closeWith(1000);
 
     expect(FakeEventSource.instances).toHaveLength(1);
-    expect(states).toEqual(["connecting", "connected", "reconnecting"]);
+    expect(states).toEqual(["connecting", "reconnecting"]);
     cleanup();
   });
 
@@ -1551,12 +1771,12 @@ describe("GatewayClient", () => {
       globalThis,
       "WebSocket",
     );
-    const eventSourceDescriptor = Object.getOwnPropertyDescriptor(
+    const fetchDescriptor = Object.getOwnPropertyDescriptor(
       globalThis,
-      "EventSource",
+      "fetch",
     );
     Reflect.deleteProperty(globalThis, "WebSocket");
-    Reflect.deleteProperty(globalThis, "EventSource");
+    Reflect.deleteProperty(globalThis, "fetch");
 
     const onError = vi.fn();
     const onState = vi.fn();
@@ -1573,8 +1793,8 @@ describe("GatewayClient", () => {
       if (websocketDescriptor !== undefined) {
         Object.defineProperty(globalThis, "WebSocket", websocketDescriptor);
       }
-      if (eventSourceDescriptor !== undefined) {
-        Object.defineProperty(globalThis, "EventSource", eventSourceDescriptor);
+      if (fetchDescriptor !== undefined) {
+        Object.defineProperty(globalThis, "fetch", fetchDescriptor);
       }
     }
   });

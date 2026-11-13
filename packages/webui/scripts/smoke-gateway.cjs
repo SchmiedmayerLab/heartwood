@@ -6,7 +6,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-/* global clearTimeout, document, window */
+/* global clearTimeout, document, window, sessionStorage, URLSearchParams */
 
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
@@ -25,7 +25,7 @@ const workspace = fs.mkdtempSync(
   path.join(os.tmpdir(), "heartwood-web-gateway-"),
 );
 const logs = [];
-let capabilityCookie = "";
+let capability = "";
 
 main().catch((error) => {
   console.error(error);
@@ -93,18 +93,6 @@ async function main() {
         `gateway served an API route without the capability: ${anonymous.status}`,
       );
     }
-    const launched = await fetch(launchUrl, { redirect: "manual" });
-    const setCookie = launched.headers.get("set-cookie") || "";
-    if (launched.status !== 303 || !setCookie.includes("HttpOnly")) {
-      throw new Error(
-        `launch link did not set the capability cookie: ${launched.status} ${setCookie}`,
-      );
-    }
-    capabilityCookie = setCookie.split(";")[0];
-    const replayed = await fetch(launchUrl, { redirect: "manual" });
-    if (replayed.status !== 403) {
-      throw new Error(`launch link was reusable: ${replayed.status}`);
-    }
     const html = await fetchText(proxiedBaseUrl);
     if (!html.includes('<div id="root"></div>')) {
       throw new Error(
@@ -123,7 +111,18 @@ async function main() {
       throw new Error("proxied web UI asset was empty");
     }
 
-    await inspectResearchSetup(proxiedBaseUrl);
+    await inspectResearchSetup(proxiedBaseUrl, launchUrl);
+    const token = new URLSearchParams(new URL(launchUrl).hash.slice(1)).get(
+      "launch",
+    );
+    const replayed = await fetch(`${proxiedBaseUrl}launch`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token }),
+    });
+    if (replayed.status !== 403) {
+      throw new Error(`launch link was reusable: ${replayed.status}`);
+    }
 
     const createdSession = await fetchJson(`${origin}${basePath}sessions`, {
       body: JSON.stringify({ title: "Web smoke session" }),
@@ -234,24 +233,26 @@ async function main() {
   }
 }
 
-async function inspectResearchSetup(url) {
+async function inspectResearchSetup(url, launchUrl) {
   const browser = await chromium.launch({ headless: true });
   try {
     const context = await browser.newContext({
       viewport: { width: 1440, height: 1000 },
     });
-    const [name, value] = capabilityCookie.split("=");
-    await context.addCookies([
-      {
-        domain: new URL(url).hostname,
-        httpOnly: true,
-        name,
-        path: new URL(url).pathname.replace(/\/$/, "") || "/",
-        sameSite: "Strict",
-        value,
-      },
-    ]);
     const page = await context.newPage();
+    const authenticatedSockets = [];
+    const streamedProjections = [];
+    page.on("websocket", (socket) => {
+      socket.on("framesent", ({ payload }) => {
+        const frame = JSON.parse(String(payload));
+        if (frame.type === "authenticate")
+          authenticatedSockets.push(frame.capability);
+      });
+      socket.on("framereceived", ({ payload }) => {
+        const frame = JSON.parse(String(payload));
+        if (frame.projection) streamedProjections.push(frame.projection);
+      });
+    });
     page.on("response", (response) => {
       if (response.status() >= 500) {
         console.error(
@@ -259,7 +260,23 @@ async function inspectResearchSetup(url) {
         );
       }
     });
-    await page.goto(url);
+    await page.goto(launchUrl);
+    const key = `heartwood.gateway-capability:${new URL(url).pathname}`;
+    await page.waitForFunction(
+      (key) => sessionStorage.getItem(key) !== null,
+      key,
+    );
+    capability = await page.evaluate((key) => sessionStorage.getItem(key), key);
+    if (
+      page.url().includes("#") ||
+      (await context.cookies()).some(
+        (cookie) => cookie.name === "heartwood-capability",
+      )
+    ) {
+      throw new Error("launch retained its token or set a capability cookie");
+    }
+    await verifyOtherPortIsolation(context, key);
+    await page.reload();
     await expect(
       page.getByRole("heading", { name: "Set up Heartwood" }),
     ).toBeVisible();
@@ -273,6 +290,10 @@ async function inspectResearchSetup(url) {
     await expect(
       page.getByRole("heading", { name: "Main session", exact: true }),
     ).toBeVisible();
+    await expect
+      .poll(() => authenticatedSockets.includes(capability))
+      .toBe(true);
+    await expect.poll(() => streamedProjections.length).toBeGreaterThan(0);
     await page.getByRole("tab", { name: "Research", exact: true }).click();
     await expect(
       page.getByRole("heading", { name: "Research Workflows" }),
@@ -407,7 +428,7 @@ async function fetchText(url) {
 async function waitForLaunchLink(server) {
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
-    const match = /(https?:\/\/\S+\/launch\?token=\S+)/.exec(logs.join(""));
+    const match = /(https?:\/\/\S+\/#launch=\S+)/.exec(logs.join(""));
     if (match !== null) {
       return match[1];
     }
@@ -424,7 +445,10 @@ async function waitForLaunchLink(server) {
 async function fetchJson(url, init) {
   const response = await fetch(url, {
     ...init,
-    headers: { ...(init && init.headers), cookie: capabilityCookie },
+    headers: {
+      ...(init && init.headers),
+      "X-Heartwood-Capability": capability,
+    },
   });
   const payload = await response.json();
   if (!response.ok) {
@@ -472,5 +496,32 @@ function terminateProcessGroup(child) {
     process.kill(-child.pid, "SIGTERM");
   } catch {
     child.kill("SIGTERM");
+  }
+}
+
+async function verifyOtherPortIsolation(context, storageKey) {
+  const requests = [];
+  const server = require("node:http").createServer((request, response) => {
+    requests.push(request.headers);
+    response.setHeader("Content-Type", "text/html");
+    response.end("<!doctype html><title>Other local origin</title>");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const page = await context.newPage();
+  try {
+    await page.goto(`http://127.0.0.1:${server.address().port}/`);
+    expect(
+      await page.evaluate((key) => sessionStorage.getItem(key), storageKey),
+    ).toBeNull();
+    expect(requests.length).toBeGreaterThan(0);
+    for (const headers of requests) {
+      expect(headers["x-heartwood-capability"]).toBeUndefined();
+      expect(headers.cookie ?? "").not.toContain("heartwood-capability");
+    }
+  } finally {
+    await page.close();
+    await new Promise((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve())),
+    );
   }
 }

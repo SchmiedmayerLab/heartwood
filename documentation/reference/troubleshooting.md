@@ -304,7 +304,8 @@ Do not disable host, origin, or path validation to make the request pass.
 ### `HW-INGRESS-003` — Gateway Request Is Missing the Launch Capability
 
 The request reached the gateway route but did not carry the capability that `heartwood gateway serve` issued at startup.
-Open the launch link printed by the terminal that started Heartwood; it works once and sets the cookie the page needs.
+Open the launch link printed by the terminal that started Heartwood; it works once and authorizes that browser tab.
+Reload the same tab to retain access; after restarting the gateway, use its new launch link.
 If the link was already used or the gateway was restarted, stop Heartwood, start it again, and open the new link.
 
 Automation must send the capability supplied through `--capability-fd` in the `X-Heartwood-Capability` header.

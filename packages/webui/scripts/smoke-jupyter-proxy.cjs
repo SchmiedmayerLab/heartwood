@@ -6,7 +6,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-/* global clearTimeout */
+/* global sessionStorage, window, clearTimeout */
 
 const { Buffer } = require("node:buffer");
 const { spawn } = require("node:child_process");
@@ -235,17 +235,16 @@ async function verifyBrowserRoute(baseUrl) {
       );
     }
     await page.locator("#root").waitFor({ state: "visible" });
-    capability = (await context.cookies()).find(
-      (cookie) => cookie.name === "heartwood-capability",
-    );
+    const key = `heartwood.gateway-capability:${new URL(baseUrl).pathname}`;
+    capability = await page.evaluate((key) => sessionStorage.getItem(key), key);
     if (
-      capability === undefined ||
-      !capability.httpOnly ||
-      capability.path !== externalBasePath.slice(0, -1)
+      !capability ||
+      page.url().includes("#") ||
+      (await context.cookies()).some(
+        (cookie) => cookie.name === "heartwood-capability",
+      )
     ) {
-      throw new Error(
-        `launch link did not set the scoped capability cookie: ${JSON.stringify(capability)}`,
-      );
+      throw new Error("launch did not establish tab-scoped access");
     }
   } finally {
     await browser.close();
@@ -361,13 +360,36 @@ async function verifyRenderedInterface(baseUrl) {
     const context = await browser.newContext({
       viewport: { width: 390, height: 760 },
     });
-    await context.addCookies([capability]);
+    await context.addInitScript(
+      ({ origin, key, capability }) => {
+        if (window.location.origin === origin) {
+          sessionStorage.setItem(key, capability);
+          delete window.WebSocket;
+        }
+      },
+      {
+        origin: new URL(baseUrl).origin,
+        key: `heartwood.gateway-capability:${new URL(baseUrl).pathname}`,
+        capability,
+      },
+    );
     const page = await context.newPage();
+    const eventStream = page.waitForResponse((response) =>
+      response.url().includes("/events/stream"),
+    );
     await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
     const setup = page.getByRole("heading", { name: "Set up Heartwood" });
     await setup.waitFor({ state: "visible" });
     await page.keyboard.press("Escape");
     await setup.waitFor({ state: "hidden" });
+    const streamResponse = await eventStream;
+    if (
+      !streamResponse.ok() ||
+      streamResponse.request().headers()["x-heartwood-capability"] !==
+        capability
+    ) {
+      throw new Error("browser SSE fallback was not authenticated");
+    }
     const filesTab = page.getByRole("tab", { name: "Files" });
     await filesTab.waitFor({ state: "visible" });
     const conversationTab = page.getByRole("tab", { name: "Conversation" });
@@ -465,7 +487,7 @@ async function waitForServer(url) {
 async function waitForLaunchLink() {
   const deadline = Date.now() + 15000;
   while (Date.now() < deadline) {
-    const match = /(https?:\/\/\S+\/launch\?token=\S+)/.exec(logs.join(""));
+    const match = /(https?:\/\/\S+\/#launch=\S+)/.exec(logs.join(""));
     if (match !== null) {
       return match[1];
     }
@@ -616,7 +638,7 @@ function hasSseFrame(buffer) {
 function withGatewayHeaders(init = {}) {
   const headers = { Connection: "close" };
   if (capability !== undefined) {
-    headers.Cookie = `${capability.name}=${capability.value}`;
+    headers["X-Heartwood-Capability"] = capability;
   }
   return Object.assign({}, init, {
     headers: Object.assign(headers, init.headers ?? {}),
