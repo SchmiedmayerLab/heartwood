@@ -84,6 +84,7 @@ from heartwood.gateway._ingress import (
     IngressRequest,
     IngressRequestError,
 )
+from heartwood.gateway._lifecycle import GatewayClosedError
 from heartwood.gateway._local_import import LocalModelImport, import_local_model
 from heartwood.gateway._local_model_contract import (
     LocalContextPlan,
@@ -262,6 +263,7 @@ __all__ = [
     "DeploymentReadiness",
     "DiagnosticDefinition",
     "GatewayAsgiApp",
+    "GatewayClosedError",
     "GatewayEventStream",
     "GpuCapacity",
     "GpuDevice",

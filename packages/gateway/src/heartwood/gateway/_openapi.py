@@ -424,14 +424,15 @@ _ERROR_DESCRIPTIONS = {
     409: "Storage locking, session ownership, integrity recovery, or command conflict.",
     413: "The request body exceeds 1 MiB.",
     422: "The request or current configuration fails validation.",
-    503: "The verification Python environment could not be inspected.",
+    503: "The gateway is shutting down or stopped, or the verification environment is unavailable.",
 }
 _STREAM_DESCRIPTION = (
     "Each update contains durable events and the current projection. Transient text can change "
     "the projection without adding events. Reconnect with the last observed durable sequence "
     "in the after query parameter. SSE does not emit event IDs or consume Last-Event-ID. "
-    "The transport currently starts the response before opening the backend stream; a backend "
-    "failure after that point can close the connection rather than return a JSON error."
+    "Shutdown closes existing streams and rejects new connections: SSE returns 503, "
+    "and WebSockets close with code 1012. "
+    "Reconnect to a new gateway instance to continue from the last observed sequence."
 )
 
 
@@ -458,7 +459,7 @@ def gateway_openapi(*, api_version: str | None = None) -> dict[str, Any]:
     paths: dict[str, Any] = {}
     for operation in _REST_OPERATIONS:
         response = refs[operation.response, "serialization"]
-        errors = sorted({400, 401, 403, 404, 409, 413, *operation.errors})
+        errors = sorted({400, 401, 403, 404, 409, 413, 503, *operation.errors})
         description: dict[str, Any] = {
             "operationId": _operation_id(operation.method, operation.path),
             "summary": operation.summary,
@@ -530,7 +531,7 @@ def gateway_openapi(*, api_version: str | None = None) -> dict[str, Any]:
                     "description": "A stream of heartwood-session-events events.",
                     "content": {"text/event-stream": {"schema": {"type": "string"}}},
                 },
-                **_errors([400, 401, 403, 404, 422], error_ref),
+                **_errors([400, 401, 403, 404, 422, 503], error_ref),
             },
             "x-sse-event": {"name": "heartwood-session-events", "dataSchema": snapshot_ref},
         }
@@ -573,6 +574,7 @@ def gateway_openapi(*, api_version: str | None = None) -> dict[str, Any]:
             "security": security,
             "messageSchema": snapshot_ref,
             "rejectedCloseCode": 1008,
+            "shutdownCloseCode": 1012,
         },
     }
 
