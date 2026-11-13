@@ -90,6 +90,30 @@ def test_worker_rejects_missing_or_invalid_attempt_key(launcher: ModuleType, key
         launcher.worker_environment({"SESSION_API_KEY": key})
 
 
+@pytest.mark.parametrize(
+    ("name", "filename"),
+    [
+        ("SSL_CERT_FILE", "ca-bundle.crt"),
+        ("REQUESTS_CA_BUNDLE", "ca-bundle.crt"),
+        ("CURL_CA_BUNDLE", "ca-bundle.crt"),
+        ("GIT_SSL_CAINFO", "ca-bundle.crt"),
+        ("NODE_EXTRA_CA_CERTS", "ca.crt"),
+        ("DENO_CERT", "ca.crt"),
+    ],
+)
+def test_worker_admits_only_the_exact_supervisor_certificate_path(
+    launcher: ModuleType,
+    name: str,
+    filename: str,
+) -> None:
+    expected = f"/run/openshell-supervisor-ca/material/{filename}"
+    environment = launcher.worker_environment({"SESSION_API_KEY": "a" * 43, name: expected})
+    assert environment[name] == expected
+    for substituted in ("/workspace/ca.pem", expected + "/../untrusted.pem", expected + "\n"):
+        environment = launcher.worker_environment({"SESSION_API_KEY": "a" * 43, name: substituted})
+        assert name not in environment
+
+
 @pytest.mark.parametrize("placeholder", ["", "x" * 4097, "x\0y", "x\ny", "x\ry"])
 def test_worker_rejects_invalid_placeholder(launcher: ModuleType, placeholder: str) -> None:
     with pytest.raises(ValueError, match="placeholder"):
