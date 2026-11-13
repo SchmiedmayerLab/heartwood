@@ -270,8 +270,7 @@ A trusted identity header is an exact route marker, not a credential.
 For example, a platform proxy at `https://research.example.org` that strips the `/heartwood/project-a` prefix and forwards from `10.0.0.2` starts the gateway with a secret supplied by the platform's secret manager:
 
 ```bash
-HEARTWOOD_GATEWAY_CAPABILITY="$(cat /run/secrets/heartwood-capability)" \
-heartwood gateway serve \
+heartwood gateway serve --capability-fd 3 3</run/secrets/heartwood-capability \
   --ingress-mode trusted-proxy \
   --host 10.0.0.5 \
   --port 8767 \
@@ -284,12 +283,10 @@ heartwood gateway serve \
 The proxy then adds `X-Heartwood-Capability` with the same secret to each authenticated request.
 See the [serve options](../reference/cli.md#operator-commands) and [HW-INGRESS-003](../reference/troubleshooting.md#gateway-ingress).
 
-!!! planned "Not yet implemented: capability delivery without the environment"
-    The gateway keeps `HEARTWOOD_GATEWAY_CAPABILITY` out of the processes it starts, but the operating system still exposes a process's initial environment to other processes of the same user, including approved agent commands.
-    Use the environment route only when agent tools run under a different identity.
-    With direct loopback, browsers also send the capability cookie to every port of the host.
-    Heartwood will accept an operator secret through an inherited file descriptor or a read-once owner-only file, scope the capability to its own origin, and print the launch link only after it owns its port.
-    Tracked in [#156](https://github.com/SchmiedmayerLab/heartwood/issues/156).
+The gateway consumes and closes the inherited descriptor, rejects environment capability delivery, and prints generated launch links only after owning a listening socket.
+The platform must protect the descriptor source from workers and other users.
+With direct loopback, browsers still send the capability cookie to every port of the host; do not open untrusted local servers in that browser context.
+Origin-scoped browser delivery remains tracked in [#156](https://github.com/SchmiedmayerLab/heartwood/issues/156).
 
 ## Deployment Policy
 

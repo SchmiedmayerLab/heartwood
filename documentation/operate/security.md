@@ -105,17 +105,20 @@ A trusted identity assertion is an additional route marker, not a bearer secret 
 
 Ingress validation confirms the route, not the caller.
 A loopback bind is reachable by every process running as the same operating-system user, including the agent's own terminal, so the gateway additionally requires a process-lifetime launch capability on every API request, server-sent event stream, and WebSocket.
-`heartwood gateway serve` generates the secret at startup and prints one launch link.
+`heartwood gateway serve` generates the secret at startup and prints one launch link only after owning a listening socket.
+Gateway request access logging is disabled so launch tokens do not enter access logs.
 Opening the link exchanges its one-time token for an HttpOnly, `SameSite=Strict` cookie scoped to the browser-visible gateway path; the token cannot be reused and the secret never appears in page scripts or browser storage.
-Automation supplies the same secret through `HEARTWOOD_GATEWAY_CAPABILITY` and presents it in the `X-Heartwood-Capability` header.
-The gateway keeps the variable out of the processes it starts, but the operating system still exposes a process's initial environment to other processes of the same user, so the launch link is the stronger route.
+Automation supplies the same secret through `--capability-fd` and presents it in the `X-Heartwood-Capability` header.
+The gateway consumes and closes that inherited file or pipe descriptor before serving requests; environment delivery is rejected.
+Keep any source file outside worker access, and hand off the descriptor exclusively with no other readers.
+The descriptor payload is limited to 4096 bytes and pipes must reach EOF within five seconds.
 A request without the capability receives `HW-INGRESS-003`; static browser assets need no capability because they contain no project data.
 
 Every command accepted through the gateway records the launching principal as its actor.
 A caller cannot claim another actor in the command body, and `approval.recorded` carries the actor that approved or denied the action set.
 
 The capability separates the researcher's browser from other operating-system users and from requests that do not carry it.
-It is not a boundary against processes running as the same user, including approved agent commands, which can read the gateway's initial environment, the browser profile, and project settings.
+It is not a boundary against processes running as the same user, including approved agent commands, which can read the browser profile and project settings or inspect same-user processes.
 Browsers send cookies to every port of a host, so with direct loopback any other local server the browser opens on the same address receives the capability; open only local links you trust while Heartwood runs.
 In Jupyter proxy mode, other content served from the notebook origin can use the cookie, as it can use the Jupyter server itself.
 The capability does not separate two people who share one operating-system account and does not replace the platform's user authentication.
