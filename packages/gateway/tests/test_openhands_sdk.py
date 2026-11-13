@@ -1129,6 +1129,66 @@ def test_openhands_status_mappings_are_exhaustive_and_fail_closed() -> None:
     assert _task_status("unknown-upstream-status") == BackendTaskStatus.TODO
 
 
+def test_reconciliation_uses_one_native_branch_snapshot(tmp_path: Path) -> None:
+    conversation = _ControlledConversation()
+    action = _terminal_action_event("snapshot-action", "snapshot-call", "printf synthetic")
+    calls = 0
+
+    def snapshot() -> SimpleNamespace:
+        nonlocal calls
+        calls += 1
+        assert calls == 1
+        return SimpleNamespace(
+            id=conversation.id,
+            execution_status=ConversationExecutionStatus.WAITING_FOR_CONFIRMATION,
+            stats=ConversationStats(),
+            events=[action],
+        )
+
+    conversation.state = cast(_ControlledState, SimpleNamespace(snapshot=snapshot))
+    backend = _backend(
+        tmp_path,
+        cast(ConversationFactory, lambda *_: conversation),
+    )
+    try:
+        events = backend.reconcile(session_id="session-1", known_source_event_ids=frozenset())
+        assert calls == 1
+        assert any(isinstance(event, BackendToolCallEvent) for event in events)
+        requests = [event for event in events if isinstance(event, BackendConfirmationRequestEvent)]
+        assert len(requests) == 1
+        assert requests[0].tool_call.tool_call_id == "snapshot-call"
+        assert not any(isinstance(event, BackendErrorEvent) for event in events)
+    finally:
+        backend.close()
+
+
+@pytest.mark.parametrize("wrong_identity", [False, True])
+def test_snapshot_failure_is_content_safe_and_never_projects_actions(
+    tmp_path: Path, wrong_identity: bool
+) -> None:
+    conversation = _ControlledConversation()
+
+    def snapshot() -> SimpleNamespace:
+        if not wrong_identity:
+            raise ValueError("synthetic-private-worker-content")
+        return SimpleNamespace(
+            id=uuid.uuid4(),
+            execution_status=ConversationExecutionStatus.WAITING_FOR_CONFIRMATION,
+            stats=ConversationStats(),
+            events=[_terminal_action_event("other-action", "other-call", "printf synthetic")],
+        )
+
+    conversation.state = cast(_ControlledState, SimpleNamespace(snapshot=snapshot))
+    backend = _backend(tmp_path, cast(ConversationFactory, lambda *_: conversation))
+    try:
+        events = backend.reconcile(session_id="session-1", known_source_event_ids=frozenset())
+        assert len(events) == 1
+        assert isinstance(events[0], BackendErrorEvent)
+        assert "synthetic-private-worker-content" not in repr(events)
+    finally:
+        backend.close()
+
+
 def test_public_conversation_state_projects_a_content_safe_error(
     tmp_path: Path,
 ) -> None:
