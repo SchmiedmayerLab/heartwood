@@ -714,7 +714,64 @@ def test_manager_reports_unknown_transfers_and_worker_failures(
     assert "Verify the bundle" in model_transfer_module._safe_transfer_error(RuntimeError())
 
 
-def test_manager_removes_new_import_when_selection_fails(tmp_path: Path) -> None:
+@pytest.mark.parametrize("cancel_first", [False, True])
+def test_failed_import_keeps_files_selected_by_another_transfer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cancel_first: bool
+) -> None:
+    source = tmp_path / "source.gguf"
+    source.write_bytes(b"GGUFsynthetic-transfer-model")
+    bundle = tmp_path / "model.zip"
+    export_model_bundle(_gguf_choice(source), model_path=source, bundle_path=bundle)
+    plan = inspect_model_bundle(bundle)
+    published, release = Event(), Event()
+    selected: list[Path] = []
+
+    def pause_after_publication(
+        plan: model_transfer_module.ModelTransferPlan,
+        *,
+        models_dir: Path,
+        progress_callback: model_transfer_module.ProgressCallback | None = None,
+        cancel: Event | None = None,
+    ) -> tuple[LocalModelChoice, Path, str, bool]:
+        result = import_model_bundle(
+            plan, models_dir=models_dir, progress_callback=progress_callback, cancel=cancel
+        )
+        if result[3]:
+            published.set()
+            assert release.wait(timeout=5)
+        return result
+
+    def reject_selection(_choice: LocalModelChoice, _path: Path, _runtime: str) -> None:
+        raise ModelTransferError("synthetic selection failure")
+
+    first = ModelTransferManager(models_dir=tmp_path / "models", on_import_ready=reject_selection)
+    second = ModelTransferManager(
+        models_dir=tmp_path / "models",
+        on_import_ready=lambda _choice, path, _runtime: selected.append(path),
+    )
+    monkeypatch.setattr(model_transfer_module, "import_model_bundle", pause_after_publication)
+    started_first = first.start_import(plan=plan, approved=True)
+    try:
+        assert published.wait(timeout=2)
+        started_second = second.start_import(plan=plan, approved=True)
+        assert _wait_for_transfer(second, started_second.transfer_id).status == "ready"
+        assert selected[0].read_bytes() == source.read_bytes()
+        if cancel_first:
+            first.request_stop()
+        release.set()
+        failed = _wait_for_transfer(first, started_first.transfer_id)
+        assert failed.status == ("cancelled" if cancel_first else "error")
+        first.close(timeout=2)
+        second.close(timeout=2)
+        assert selected[0].read_bytes() == source.read_bytes()
+        assert second.status(started_second.transfer_id).status == "ready"
+    finally:
+        release.set()
+        first.close(timeout=2)
+        second.close(timeout=2)
+
+
+def test_manager_retains_verified_import_when_selection_fails(tmp_path: Path) -> None:
     source = tmp_path / "source.gguf"
     source.write_bytes(b"GGUFsynthetic-transfer-model")
     choice = _gguf_choice(source)
@@ -734,10 +791,15 @@ def test_manager_removes_new_import_when_selection_fails(tmp_path: Path) -> None
         completed.error
         == "Model transfer failed. Verify the bundle and available project storage, then retry."
     )
-    assert not (models / choice.model_id).exists()
+    _choice, cached, _runtime, created = import_model_bundle(
+        inspect_model_bundle(bundle), models_dir=models
+    )
+    assert not created
+    assert cached.read_bytes() == source.read_bytes()
+    manager.close(timeout=2)
 
 
-def test_manager_removes_new_import_when_cancelled_before_selection(
+def test_manager_retains_verified_import_when_cancelled_before_selection(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -755,20 +817,18 @@ def test_manager_removes_new_import_when_cancelled_before_selection(
     )
 
     def cancel_after_import(
-        _plan: object,
+        plan: model_transfer_module.ModelTransferPlan,
         *,
         models_dir: Path,
-        progress_callback: object | None = None,
+        progress_callback: model_transfer_module.ProgressCallback | None = None,
         cancel: Event | None = None,
     ) -> tuple[LocalModelChoice, Path, str, bool]:
-        del progress_callback
-        destination = models_dir / choice.model_id
-        destination.mkdir(parents=True)
-        imported = destination / "model.gguf"
-        imported.write_bytes(source.read_bytes())
+        result = import_model_bundle(
+            plan, models_dir=models_dir, progress_callback=progress_callback, cancel=cancel
+        )
         assert cancel is not None
         cancel.set()
-        return choice, imported, "llama-cpp-cpu", True
+        return result
 
     monkeypatch.setattr(model_transfer_module, "import_model_bundle", cancel_after_import)
     started = manager.start_import(plan=plan, approved=True)
@@ -776,7 +836,10 @@ def test_manager_removes_new_import_when_cancelled_before_selection(
 
     assert completed.status == "cancelled"
     assert selected == []
-    assert not (models / choice.model_id).exists()
+    _choice, cached, _runtime, created = import_model_bundle(plan, models_dir=models)
+    assert not created
+    assert cached.read_bytes() == source.read_bytes()
+    manager.close(timeout=2)
 
 
 def test_bundle_paths_and_existing_destination_cannot_escape_storage(tmp_path: Path) -> None:

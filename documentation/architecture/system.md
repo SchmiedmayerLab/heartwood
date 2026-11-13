@@ -192,6 +192,8 @@ Downloads resolve repository metadata to an immutable revision before writing pr
 A portable transfer first verifies the selected model, records the exact payload and runtime configuration in a canonical manifest, and writes a reproducible uncompressed ZIP64 bundle.
 Import validates archive structure, path safety, sizes, and every SHA-256 digest before atomically publishing private files under `.heartwood/models/`.
 Existing destinations are reverified on retries, and incomplete staging is never selected.
+Cancellation and selection failure preserve verified, published cache files because another transfer may already use them.
+Only incomplete staging is removed during failure cleanup.
 
 The shared transfer manager owns byte progress, lifecycle, warnings, cancellation, and results for the terminal, browser, and notebook adapters.
 Gateway shutdown stops new model downloads and transfers, requests cooperative cancellation, and waits for their worker threads and final selection callbacks.

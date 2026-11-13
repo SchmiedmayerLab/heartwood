@@ -419,7 +419,7 @@ class ModelTransferManager:
     ) -> None:
         try:
             self._phase(transfer_id, "importing")
-            choice, path, runtime_profile, created = import_model_bundle(
+            choice, path, runtime_profile, _created = import_model_bundle(
                 plan,
                 models_dir=self.models_dir,
                 progress_callback=lambda processed, total: self._progress(
@@ -428,14 +428,8 @@ class ModelTransferManager:
                 cancel=cancel,
             )
             self._phase(transfer_id, "selecting")
-            try:
-                _raise_if_cancelled(cancel)
-                self.on_import_ready(choice, path, runtime_profile)
-            except Exception:
-                if created:
-                    shutil.rmtree(self.models_dir / choice.model_id, ignore_errors=True)
-                    fsync_directory(self.models_dir)
-                raise
+            _raise_if_cancelled(cancel)
+            self.on_import_ready(choice, path, runtime_profile)
             self._ready(transfer_id, path)
         except ModelTransferCancelledError:
             self._cancelled(transfer_id)
