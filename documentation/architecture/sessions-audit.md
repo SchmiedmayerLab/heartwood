@@ -47,7 +47,9 @@ The first mutating command registers the session and creates private state.
 
 The gateway acquires an interprocess writer lease before mutating a session and retains it until that gateway closes the session service.
 If an OpenHands worker does not stop during shutdown, Heartwood keeps the lease instead of allowing another writer to mutate the session.
-A second process cannot reconcile or mutate that session until the owner exits.
+After shutdown succeeds, the closed session service rejects further commands and reconciliation and discards later backend event callbacks before acquiring a writer lease.
+Final events delivered during shutdown remain durable; this lifecycle fence does not establish remote worker identity or terminate an independently running worker.
+A second process cannot reconcile or mutate that session until the owner releases the lease or exits.
 Replay and live updates remain available through the interface connected to the owning gateway.
 Distinct sessions have independent leases.
 Mutation acquires the writer lease before the paired-snapshot lock; recovery and replay never hold the snapshot lock while waiting for a writer lease.

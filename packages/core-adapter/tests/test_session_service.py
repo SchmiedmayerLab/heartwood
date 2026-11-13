@@ -615,6 +615,77 @@ def test_second_writer_cannot_mutate_until_owner_closes(tmp_path: Path) -> None:
     assert result.events[-1].kind == EventKind.SESSION_RESUMED.value
 
 
+@pytest.mark.parametrize("successor_active", [False, True])
+def test_closed_service_ignores_retained_backend_callbacks(
+    tmp_path: Path, successor_active: bool
+) -> None:
+    backend = _RecordingBackend(endpoint="https://model.local.invalid/v1/chat/completions")
+    published: list[SessionEvent] = []
+    service = SessionService.local_default(
+        tmp_path, backend=backend, env={}, event_sink=published.extend
+    )
+    callback = backend.event_sink
+    service.reconcile()
+    service.close()
+    before = service.replay_events()
+    successor = FileSessionStore(tmp_path, "session-main")
+    if successor_active:
+        successor.acquire_writer()
+    try:
+        callback((BackendAgentMessageEvent(message="late", source_event_id="closed-worker"),))
+        assert service.replay_events() == before
+        assert published == []
+        assert not service.store.owns_writer
+        if not successor_active:
+            successor.acquire_writer()
+        assert successor.owns_writer
+    finally:
+        service.store.release_writer()
+        successor.release_writer()
+
+
+@pytest.mark.parametrize("operation", ["command", "reconcile"])
+def test_closed_service_cannot_reacquire_writer(tmp_path: Path, operation: str) -> None:
+    service = SessionService.synthetic_default(tmp_path)
+    service.close()
+    invoke = (
+        service.reconcile
+        if operation == "reconcile"
+        else lambda: service.handle(_command(CommandKind.PAUSE))
+    )
+    try:
+        with pytest.raises(RuntimeError, match="service is closed"):
+            invoke()
+        assert not service.store.owns_writer
+        assert service.replay_events() == ()
+    finally:
+        service.store.release_writer()
+
+
+def test_close_preserves_final_backend_callback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    backend = _RecordingBackend(endpoint="https://model.local.invalid/v1/chat/completions")
+    service = SessionService.local_default(tmp_path, backend=backend, env={})
+    callback = backend.event_sink
+    final = BackendAgentMessageEvent(message="finished", source_event_id="final-worker-event")
+
+    def finish_backend() -> None:
+        worker = threading.Thread(target=lambda: callback((final,)))
+        worker.start()
+        worker.join(timeout=2)
+        assert not worker.is_alive()
+
+    monkeypatch.setattr(backend, "close", finish_backend)
+
+    service.close()
+
+    events = service.replay_events()
+    assert len(events) == 1
+    assert events[0].payload["content"] == "finished"
+    assert not service.store.owns_writer
+
+
 def test_writer_lease_can_be_released_from_a_gateway_worker_thread(
     tmp_path: Path,
 ) -> None:
