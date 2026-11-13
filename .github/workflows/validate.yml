@@ -87,7 +87,19 @@ jobs:
           submodules: true
       - name: Check trailing whitespace
         run: |
-          if git grep -nI '[[:blank:]]$' -- .; then
-            echo "Trailing whitespace found."
-            exit 1
-          fi
+          python3 - <<'PYTHON'
+          import re
+          import subprocess
+
+          result = subprocess.run(
+              ["git", "grep", "-nI", "[[:blank:]]$", "--", "."],
+              capture_output=True, text=True,
+          )
+          if result.returncode not in (0, 1):
+              raise SystemExit(result.stderr or "Could not inspect tracked files")
+          # A unified diff represents an empty context line with exactly one space.
+          context = re.compile(r"images/worker/candidate/[a-z-]+\.patch:[0-9]+: ")
+          invalid = [line for line in result.stdout.splitlines() if not context.fullmatch(line)]
+          if invalid:
+              raise SystemExit("Trailing whitespace found:\n" + "\n".join(invalid))
+          PYTHON
