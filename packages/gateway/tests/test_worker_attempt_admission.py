@@ -253,3 +253,24 @@ def test_rejected_binding_does_not_include_credentials(attempt: WorkerAttemptLea
             api_key="synthetic-private-key",
         )
     assert "synthetic-private-key" not in str(error.value)
+
+
+def test_native_metadata_acknowledgement_does_not_require_conversation_payload(
+    attempt: WorkerAttemptLease,
+) -> None:
+    calls: list[str] = []
+
+    def receive(request: httpx.Request) -> httpx.Response:
+        calls.append(request.method)
+        return httpx.Response(200, json={"message": "Conversation updated successfully"})
+
+    with httpx.Client(
+        transport=_transport(attempt, receive), base_url="http://worker.test"
+    ) as client:
+        response = client.patch(
+            f"/api/conversations/{attempt.intent.conversation_id}", json={"title": "Synthetic"}
+        )
+        assert response.status_code == 200
+        with pytest.raises(WorkerResponseError, match="another conversation"):
+            client.get(f"/api/conversations/{attempt.intent.conversation_id}")
+    assert calls == ["PATCH", "GET"]

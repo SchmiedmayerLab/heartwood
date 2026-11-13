@@ -328,6 +328,11 @@ Starting another workspace requires a new trusted execution decision; reconnecti
 These limits bound received data and request count, not the SDK's exact memory consumption or execution inside the worker.
 Admission failure does not stop worker execution; the trusted launcher must revoke access and stop the worker through the independent sandbox control plane.
 HTTP requests through this client remain on the configured server origin; redirects, ambient proxies, and server-selected client tools are rejected.
+Trusted gateway configuration may supply exact native client-tool specifications.
+Admission captures those specifications independently of mutable caller objects and compares returned names, descriptions, parameter schemas, and annotations before native registration, including on attachment and state updates.
+Client reset and model revalidation do not replace that captured contract.
+The SDK owns client-tool registration and execution semantics: its acknowledgement means a proposal was dispatched to the client, not that an external effect was authorized or completed.
+Outside authorization and independently observed service results remain separate requirements; worker claims cannot grant either.
 Remote agent metadata cannot select another agent implementation or enable the SDK’s client-side completion-log file writer.
 Errors expose a stable admission failure rather than worker response content.
 Resetting the workspace client retains the same admission policy.
