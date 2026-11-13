@@ -312,6 +312,15 @@ They are not treated as model-only isolation without an additional platform boun
 The selected adapter supplies environment detection, capabilities, ingress modes, model-credential boundary, data-mount declarations, credential allowlists, and default policy.
 Generic, Terra, and Carina behavior differs only through these boundaries and startup/runtime orchestration.
 
+A trusted embedding launcher can supply an immutable `deployment_policy` to `SessionGateway`.
+That profile is the default and the maximum authority for every project configuration read, write, update, and restore in that gateway.
+Project rules may narrow endpoint, credential, capability, and confirmation allowlists or raise the aggregate-count floor; they cannot disable default-deny egress or change platforms.
+Selecting a Custom API route does not add endpoints or credentials when a deployment policy is supplied.
+Malformed or broader persisted rules fail closed rather than silently changing the operator's policy.
+The ceiling is a constructor dependency, never selected by project content or an interface request.
+Launchers without that dependency retain the platform-default workflow and do not provide this deployment ceiling.
+This application admission control requires an independently confined worker and infrastructure egress enforcement to withstand a compromised execution process.
+
 ## Process Ownership
 
 Project configuration writes use a project-scoped interprocess lock.

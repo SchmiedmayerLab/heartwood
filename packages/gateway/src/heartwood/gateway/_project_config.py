@@ -49,6 +49,7 @@ from heartwood.gateway._model_settings import (
     model_settings_from_mapping,
 )
 from heartwood.gateway._project import ProjectContext
+from heartwood.model_policy import PolicyInputError, validate_policy_restriction
 from heartwood.persistence import (
     PERSISTENCE_MIGRATIONS,
     PROJECT_CONFIG_KIND,
@@ -384,10 +385,25 @@ class ProjectConfig:
 class ProjectConfigStore:
     """Atomically load and persist one project configuration."""
 
-    def __init__(self, project: ProjectContext, default: ProjectConfig) -> None:
+    def __init__(
+        self,
+        project: ProjectContext,
+        default: ProjectConfig,
+        *,
+        deployment_policy: PolicyProfile | None = None,
+    ) -> None:
         self.project = project
         self.default = default
-        self.default.validate(project)
+        self._deployment_policy = deployment_policy
+        self._validate_config(default)
+
+    def _validate_config(self, config: ProjectConfig) -> None:
+        config.validate(self.project)
+        if self._deployment_policy is not None:
+            try:
+                validate_policy_restriction(config.policy, self._deployment_policy)
+            except PolicyInputError as error:
+                raise ProjectConfigError(str(error)) from error
 
     @property
     def configured(self) -> bool:
@@ -405,12 +421,12 @@ class ProjectConfigStore:
         except (DurableFileError, OSError, tomllib.TOMLDecodeError) as error:
             raise ProjectConfigError(f"unable to load .heartwood/config.toml: {error}") from error
         config = project_config_from_mapping(value, project=self.project)
-        config.validate(self.project)
+        self._validate_config(config)
         return config
 
     def save(self, config: ProjectConfig) -> None:
         """Persist validated configuration as owner-only TOML."""
-        config.validate(self.project)
+        self._validate_config(config)
         with self.locked():
             self._save_unlocked(config)
 
@@ -419,7 +435,7 @@ class ProjectConfigStore:
         with self.locked():
             current = self.load()
             updated = transform(current)
-            updated.validate(self.project)
+            self._validate_config(updated)
             if updated == current:
                 return current
             self._save_unlocked(updated)
@@ -441,7 +457,7 @@ class ProjectConfigStore:
             yield
 
     def _save_unlocked(self, config: ProjectConfig) -> None:
-        config.validate(self.project)
+        self._validate_config(config)
         payload = _config_mapping(config)
         contents = tomli_w.dumps(payload)
         try:

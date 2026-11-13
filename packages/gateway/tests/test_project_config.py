@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import tomllib
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from dataclasses import asdict, replace
@@ -83,6 +84,58 @@ def test_project_config_store_returns_unsaved_default(tmp_path: Path) -> None:
     assert store.load() == default
     assert not project.state_root.exists()
     assert not store.configured
+
+
+@pytest.mark.parametrize("operation", ["save", "update", "restore"])
+def test_project_config_cannot_persist_authority_above_deployment_policy(
+    tmp_path: Path, operation: str
+) -> None:
+    project = ProjectContext(tmp_path)
+    default = _default_config(project)
+    store = ProjectConfigStore(project, default, deployment_policy=default.policy)
+    store.save(default)
+    before = project.config_path.read_bytes()
+    broader = replace(
+        default, policy=default.policy.model_copy(update={"deny_egress_by_default": False})
+    )
+    actions: dict[str, Callable[[], object]] = {
+        "update": lambda: store.update(lambda _current: broader),
+        "restore": lambda: store.restore(broader),
+        "save": lambda: store.save(broader),
+    }
+    with pytest.raises(ProjectConfigError, match="deployment policy"):
+        actions[operation]()
+    assert project.config_path.read_bytes() == before
+    assert store.load() == default
+
+
+def test_project_config_rejects_tampered_policy_on_reload(tmp_path: Path) -> None:
+    project = ProjectContext(tmp_path)
+    default = _default_config(project)
+    store = ProjectConfigStore(project, default, deployment_policy=default.policy)
+    store.save(default)
+    project.config_path.write_text(
+        project.config_path.read_text().replace(
+            "deny_egress_by_default = true", "deny_egress_by_default = false"
+        )
+    )
+    with pytest.raises(ProjectConfigError, match="deployment policy"):
+        store.load()
+    with pytest.raises(ProjectConfigError, match="deployment policy"):
+        store.update(lambda current: current)
+
+
+def test_project_config_restores_only_within_the_current_deployment_policy(tmp_path: Path) -> None:
+    project = ProjectContext(tmp_path)
+    original = _default_config(project)
+    restricted = replace(
+        original, policy=original.policy.model_copy(update={"credential_allowlist": ()})
+    )
+    store = ProjectConfigStore(project, restricted, deployment_policy=restricted.policy)
+    with pytest.raises(ProjectConfigError, match="credential_allowlist"):
+        store.restore(original)
+    store.restore(None)
+    assert store.load() == restricted
 
 
 def test_checked_in_project_config_compatibility_fixture_loads(tmp_path: Path) -> None:
