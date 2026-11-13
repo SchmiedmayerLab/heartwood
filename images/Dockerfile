@@ -22,7 +22,7 @@ COPY packages/webui ./
 
 RUN npm run build
 
-FROM --platform=${HEARTWOOD_BASE_PLATFORM} ghcr.io/astral-sh/uv:python3.12-trixie-slim@sha256:38f41574703989d6e5f02be80a3d687b00f98744cce86908097bcd34bcb7eb98 AS uv-bin
+FROM --platform=${HEARTWOOD_BASE_PLATFORM} ghcr.io/astral-sh/uv:0.13.7-python3.12-trixie-slim@sha256:d4a752dd52f42e0c508bb0b6a912f15922bb32e42f66af30671c3fdc0d759f21 AS uv-bin
 
 FROM --platform=${HEARTWOOD_BASE_PLATFORM} ${HEARTWOOD_BASE_IMAGE} AS heartwood-runtime-base
 

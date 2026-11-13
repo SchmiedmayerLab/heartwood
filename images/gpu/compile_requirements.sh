@@ -13,7 +13,7 @@ uv pip compile \
   --python-platform x86_64-manylinux_2_28 \
   --generate-hashes \
   --emit-index-url \
-  --exclude-newer 2026-09-11T23:00:00Z \
+  --exclude-newer 2026-11-06T00:00:00Z \
   --override images/gpu/vllm-overrides.txt \
   --exclude images/gpu/vllm-exclusions.txt \
   --custom-compile-command "bash images/gpu/compile_requirements.sh" \
