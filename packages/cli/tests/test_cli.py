@@ -2574,7 +2574,7 @@ def test_serve_starts_gateway_for_current_project(
     assert not (project / ".heartwood").exists()
     printed = capsys.readouterr().out
     assert "Open Heartwood with this one-time link:" in printed
-    assert "https://notebooks.firecloud.org/proxy/9876/launch?token=" in printed
+    assert "https://notebooks.firecloud.org/proxy/9876/#launch=" in printed
 
 
 def test_serve_rejects_non_loopback_and_incomplete_proxy_routes(

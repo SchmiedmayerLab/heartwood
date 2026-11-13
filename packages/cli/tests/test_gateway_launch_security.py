@@ -39,7 +39,7 @@ def test_occupied_port_never_discloses_launch_link(
         with pytest.raises(SystemExit) as error:
             main(args)
         assert error.value.code != 0
-    assert "launch?token=" not in capsys.readouterr().out
+    assert "#launch=" not in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("supplied", [False, True])
@@ -83,7 +83,7 @@ def test_gateway_owns_listener_and_consumes_descriptor_before_start(
         app = server.config.app
         assert isinstance(app, GatewayAsgiApp)
         printed = capsys.readouterr().out
-        assert ("launch?token=" in printed) is not supplied
+        assert ("#launch=" in printed) is not supplied
         assert _SECRET not in printed
         if descriptor is not None:
             with pytest.raises(OSError, match="Bad file descriptor"):
@@ -106,4 +106,4 @@ def test_environment_delivery_fails_without_printing_secret(
     with pytest.raises(SystemExit, match="use --capability-fd") as error:
         main(args)
     assert _SECRET not in str(error.value)
-    assert "launch?token=" not in capsys.readouterr().out
+    assert "#launch=" not in capsys.readouterr().out

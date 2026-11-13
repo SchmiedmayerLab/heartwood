@@ -168,7 +168,8 @@ It never replaces an existing output.
 See [Audit Checkpoints and Retention](../operate/audit-checkpoints.md) for the complete operator workflow and trust boundary.
 
 `heartwood gateway serve` prints one launch link after binding and listening on its configured port.
-Open that link once; it sets the capability cookie that every gateway API request, event stream, and WebSocket requires, and the link is invalid afterwards.
+Open that link once; the page exchanges its fragment token for a tab-scoped gateway capability used by API requests and event streams.
+The link is invalid afterwards, but the same tab retains access across reloads while the gateway runs.
 Automation can supply a random token of at least 32 printable ASCII characters through `--capability-fd N`, where `N` is an inherited file or pipe descriptor numbered at least 3.
 For example, `heartwood gateway serve --capability-fd 3 3</run/secrets/heartwood-capability` reads an operator-protected secret file without putting its contents in arguments or the environment.
 The gateway consumes at most 4096 bytes, accepts one optional trailing newline, requires pipe EOF within five seconds, closes the descriptor, and prints no launch link.

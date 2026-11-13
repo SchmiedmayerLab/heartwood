@@ -41,7 +41,7 @@ Do not enable the unbounded outlines disk cache, share runtime caches between us
 
 ### Credentials
 
-Raw credentials are excluded from project configuration, browser storage, command arguments, durable session events, logs, and audit exports by design.
+Provider credentials are excluded from project configuration, browser storage, command arguments, durable session events, logs, and audit exports by design.
 Heartwood resolves process values, operator bindings, optional system-keyring entries, or platform identity only for named provider calls.
 Provider failures are reduced to OpenHands' typed failure category while the exception is still in process.
 Raw provider exception text is replaced before OpenHands runtime persistence and is not retained in Heartwood retry logs, session events, or audit data.
@@ -107,7 +107,12 @@ Ingress validation confirms the route, not the caller.
 A loopback bind is reachable by every process running as the same operating-system user, including the agent's own terminal, so the gateway additionally requires a process-lifetime launch capability on every API request, server-sent event stream, and WebSocket.
 `heartwood gateway serve` generates the secret at startup and prints one launch link only after owning a listening socket.
 Gateway request access logging is disabled so launch tokens do not enter access logs.
-Opening the link exchanges its one-time token for an HttpOnly, `SameSite=Strict` cookie scoped to the browser-visible gateway path; the token cannot be reused and the secret never appears in page scripts or browser storage.
+The launch token is carried in a URL fragment, which the browser removes before exchanging it through `POST /launch`; it is never sent in an HTTP URL.
+The response supplies a gateway-only capability, stored in tab-scoped `sessionStorage` under the gateway base path.
+The browser sends it explicitly in `X-Heartwood-Capability` for API and server-sent event requests, and in the first WebSocket authentication frame.
+Requests stay within the configured origin and base path and reject redirects; the gateway sets no capability cookie.
+The launch token works once; reloads retain access in the same tab while the gateway runs.
+An unauthenticated WebSocket receives no project events and must authenticate within five seconds using a text frame of at most 8192 bytes.
 Automation supplies the same secret through `--capability-fd` and presents it in the `X-Heartwood-Capability` header.
 The gateway consumes and closes that inherited file or pipe descriptor before serving requests; environment delivery is rejected.
 Keep any source file outside worker access, and hand off the descriptor exclusively with no other readers.
@@ -119,8 +124,10 @@ A caller cannot claim another actor in the command body, and `approval.recorded`
 
 The capability separates the researcher's browser from other operating-system users and from requests that do not carry it.
 It is not a boundary against processes running as the same user, including approved agent commands, which can read the browser profile and project settings or inspect same-user processes.
-Browsers send cookies to every port of a host, so with direct loopback any other local server the browser opens on the same address receives the capability; open only local links you trust while Heartwood runs.
-In Jupyter proxy mode, other content served from the notebook origin can use the cookie, as it can use the Jupyter server itself.
+A server on another port cannot read the tab’s origin-scoped storage or receive the capability through an automatically attached cookie.
+Scripts executing on the same origin can read browser storage; a base-path storage key is routing separation, not a security boundary against same-origin code.
+In Jupyter proxy mode, notebook content served from the same origin remains trusted, as it is for the Jupyter server itself.
+Use separate authenticated origins for mutually untrusted projects and keep untrusted scripts outside the gateway origin.
 The capability does not separate two people who share one operating-system account and does not replace the platform's user authentication.
 
 ### Skills and Instructions

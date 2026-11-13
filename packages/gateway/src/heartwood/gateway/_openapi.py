@@ -20,7 +20,7 @@ from typing import Any, Literal, NotRequired, TypedDict
 from pydantic import TypeAdapter
 
 from heartwood import schemas as api
-from heartwood.gateway._access import CAPABILITY_COOKIE, CAPABILITY_HEADER
+from heartwood.gateway._access import CAPABILITY_HEADER, LaunchRequest, LaunchResponse
 from heartwood.gateway._gateway import GatewaySessionSnapshot
 from heartwood.gateway._session_projection import SessionProjection
 from heartwood.schemas.experiments import ExperimentCollection, ExperimentExport
@@ -441,13 +441,15 @@ def gateway_openapi(*, api_version: str | None = None) -> dict[str, Any]:
     The document version identifies the application release, not an additional wire version.
     All paths are relative to the deployment's browser-visible gateway base URL.
     """
-    security: list[dict[str, list[str]]] = [{"CapabilityHeader": []}, {"CapabilityCookie": []}]
+    security: list[dict[str, list[str]]] = [{"CapabilityHeader": []}]
     types: dict[tuple[Any, Literal["validation", "serialization"]], TypeAdapter[Any]] = {}
     for operation in _REST_OPERATIONS:
         types[operation.response, "serialization"] = TypeAdapter(operation.response)
         if operation.request is not None:
             types[operation.request, "validation"] = TypeAdapter(operation.request)
     types[GatewayError, "serialization"] = TypeAdapter(GatewayError)
+    types[LaunchRequest, "validation"] = TypeAdapter(LaunchRequest)
+    types[LaunchResponse, "serialization"] = TypeAdapter(LaunchResponse)
     refs, definitions = TypeAdapter.json_schemas(
         [(record, mode, adapter) for (record, mode), adapter in types.items()],
         ref_template="#/components/schemas/{model}",
@@ -492,42 +494,30 @@ def gateway_openapi(*, api_version: str | None = None) -> dict[str, Any]:
 
     snapshot_ref = refs[GatewaySessionSnapshot, "serialization"]
     paths["/launch"] = {
-        "get": {
-            "operationId": "get_launch",
-            "summary": "Exchange a one-time launch token for the capability cookie",
+        "post": {
+            "operationId": "exchange_launch",
+            "summary": "Exchange a one-time launch token for an origin-scoped capability",
             "security": [],
-            "parameters": [
-                {
-                    "name": "token",
-                    "in": "query",
-                    "required": True,
-                    "schema": {"type": "string"},
-                    "description": "One-time secret from the launch link; never log it.",
-                }
-            ],
+            "requestBody": {
+                "required": True,
+                "content": {"application/json": {"schema": refs[LaunchRequest, "validation"]}},
+            },
             "responses": {
-                "303": {
-                    "description": "Cookie established; redirect to the gateway browser root.",
-                    "headers": {
-                        "Location": {"schema": {"type": "string"}},
-                        "Set-Cookie": {
-                            "schema": {"type": "string"},
-                            "description": (
-                                "HttpOnly, SameSite=Strict capability cookie scoped to the base "
-                                "path; Secure when the external origin uses HTTPS."
-                            ),
-                        },
+                "200": {
+                    "description": "Capability returned without setting a cookie. Never log it.",
+                    "content": {
+                        "application/json": {"schema": refs[LaunchResponse, "serialization"]}
                     },
                 },
                 **_errors([400, 404], error_ref),
                 "403": {
-                    "description": "Missing, invalid, or already consumed launch token, "
-                    "or rejected ingress.",
+                    "description": "Invalid or already consumed launch token, or rejected ingress.",
                     "content": {"application/json": {"schema": error_ref}},
                 },
             },
         }
     }
+
     stream_path = "/sessions/{session_id}/events/stream"
     paths[stream_path] = {
         "get": {
@@ -570,13 +560,15 @@ def gateway_openapi(*, api_version: str | None = None) -> dict[str, Any]:
             "schemas": definitions.get("$defs", {}),
             "securitySchemes": {
                 "CapabilityHeader": {"type": "apiKey", "in": "header", "name": CAPABILITY_HEADER},
-                "CapabilityCookie": {"type": "apiKey", "in": "cookie", "name": CAPABILITY_COOKIE},
             },
         },
         "x-websocket": {
             "path": "/sessions/{session_id}/events",
             "description": _STREAM_DESCRIPTION + " The stream sends snapshots only; submit "
-            "commands through HTTP. The exact configured Origin header is required.",
+            "commands through HTTP. The exact configured Origin header is required. "
+            "Authenticate with the capability header or, after connection, a JSON frame with "
+            "type=authenticate and capability. No events are sent before authorization; the "
+            "authentication frame is limited to 8192 bytes and must arrive within five seconds.",
             "parameters": _parameters("/sessions/{session_id}/events"),
             "security": security,
             "messageSchema": snapshot_ref,
