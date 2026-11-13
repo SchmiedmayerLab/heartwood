@@ -14,9 +14,19 @@ import sys
 from collections.abc import Mapping
 from pathlib import Path
 
+_SUPERVISOR_CA = "/run/openshell-supervisor-ca/material"
+_TLS_ENVIRONMENT = {
+    "SSL_CERT_FILE": f"{_SUPERVISOR_CA}/ca-bundle.crt",
+    "REQUESTS_CA_BUNDLE": f"{_SUPERVISOR_CA}/ca-bundle.crt",
+    "CURL_CA_BUNDLE": f"{_SUPERVISOR_CA}/ca-bundle.crt",
+    "GIT_SSL_CAINFO": f"{_SUPERVISOR_CA}/ca-bundle.crt",
+    "NODE_EXTRA_CA_CERTS": f"{_SUPERVISOR_CA}/ca.crt",
+    "DENO_CERT": f"{_SUPERVISOR_CA}/ca.crt",
+}
+
 
 def worker_environment(source: Mapping[str, str]) -> dict[str, str]:
-    """Admit only the attempt key and an optional outside-issued model placeholder."""
+    """Admit scoped credentials and the exact supervisor-owned public trust paths."""
     key = source.get("SESSION_API_KEY", "")
     if re.fullmatch(r"[A-Za-z0-9_-]{43,256}", key) is None:
         raise ValueError("worker launch requires a URL-safe attempt key of at least 43 characters")
@@ -40,6 +50,13 @@ def worker_environment(source: Mapping[str, str]) -> dict[str, str]:
         "OPENHANDS_AGENT_SERVER_CONFIG_PATH": "/etc/heartwood/worker.json",
         "SESSION_API_KEY": key,
     }
+    # The sandbox supplies these public CA files outside worker-writable paths.
+    # Equality admits its maintained TLS contract without trusting arbitrary overrides.
+    environment.update(
+        (name, expected)
+        for name, expected in _TLS_ENVIRONMENT.items()
+        if source.get(name) == expected
+    )
     placeholder = source.get("HEARTWOOD_INFERENCE_PLACEHOLDER")
     if placeholder is not None:
         if not placeholder or len(placeholder) > 4096 or any(c in placeholder for c in "\0\r\n"):
