@@ -2008,13 +2008,18 @@ def test_native_workflow_corrects_twice_with_normal_grouped_approvals_and_replay
         restored.stop()
 
 
-@pytest.mark.parametrize("case", ["statistical", "reproduction", "copied-results"])
+@pytest.mark.parametrize(
+    "case", ["statistical", "reproduction", "copied-results", "reproduction-reconcile"]
+)
 def test_native_correction_rechecks_analysis_and_requires_recorded_reproduction(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
 ) -> None:
     from heartwood.core_adapter.research_workflows import workflow_reproduction_spec
     from heartwood.core_adapter.workflow_corrections import correction_artifact_binding
 
+    reconcile_first = case == "reproduction-reconcile"
+    if reconcile_first:
+        case = "reproduction"
     monkeypatch.setenv("PATH", f"{Path(sys.executable).parent}{os.pathsep}{os.environ['PATH']}")
     backend = ReviewBackend()
     baseline = _gateway(tmp_path, backend)
@@ -2147,6 +2152,16 @@ def test_native_correction_rechecks_analysis_and_requires_recorded_reproduction(
     )
     llm = TestLLM.from_messages(responses)
     gateway = _sdk_gateway(tmp_path, llm, monkeypatch)
+    if reconcile_first:
+        service = gateway._service("research")
+        native = cast(OpenHandsSdkBackend, service.backend)
+        publish = native._event_sink
+
+        def reconcile_then_publish(events: tuple[BackendEvent, ...]) -> None:
+            service.reconcile()
+            publish(events)
+
+        native.bind_runtime(event_sink=reconcile_then_publish, token_sink=native._token_sink)
     try:
         gateway.handle(command)
         for index in range(len(responses) - 1):

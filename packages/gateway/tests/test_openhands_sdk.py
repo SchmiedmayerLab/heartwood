@@ -2301,6 +2301,18 @@ def test_internal_view_repair_remains_one_running_interface_operation(
         return conversation
 
     backend = _backend(tmp_path, cast(ConversationFactory, factory))
+    published: list[BackendEvent] = []
+    running = Event()
+
+    def publish(events: tuple[BackendEvent, ...]) -> None:
+        published.extend(events)
+        if any(
+            isinstance(event, BackendLifecycleEvent) and event.lifecycle == BackendLifecycle.RUNNING
+            for event in events
+        ):
+            running.set()
+
+    backend.bind_runtime(event_sink=publish, token_sink=lambda _delta: None)
     try:
         group = backend.pending_action_group(session_id="session-1")
         assert group is not None
@@ -2316,7 +2328,11 @@ def test_internal_view_repair_remains_one_running_interface_operation(
             session_id="session-1",
             known_source_event_ids=frozenset(),
         )
-        lifecycle_events = [event for event in events if isinstance(event, BackendLifecycleEvent)]
+        assert events == ()
+        assert running.wait(timeout=2)
+        lifecycle_events = [
+            event for event in published if isinstance(event, BackendLifecycleEvent)
+        ]
 
         assert lifecycle_events
         assert lifecycle_events[-1].lifecycle == BackendLifecycle.RUNNING
@@ -2592,6 +2608,80 @@ def test_idle_wait_includes_final_publication_and_never_joins_its_own_worker(
     finally:
         conversation.release.set()
         release_publication.set()
+        backend.close()
+
+
+@pytest.mark.parametrize("boundary", ["progress", "settled"])
+def test_reconciliation_cannot_consume_pending_live_publication(
+    tmp_path: Path, boundary: str
+) -> None:
+    conversation = _ProgressConversation()
+    publishing, release_publication = Event(), Event()
+    backend = _backend(
+        tmp_path,
+        cast(ConversationFactory, lambda _event_callback, _token_callback: conversation),
+    )
+    delivered: list[BackendEvent] = []
+
+    def publish(events: tuple[BackendEvent, ...]) -> None:
+        settled = isinstance(events[-1], BackendExecutionSettledEvent)
+        if settled == (boundary == "settled"):
+            publishing.set()
+            if not release_publication.wait(timeout=5):
+                raise TimeoutError("Live publication was not released")
+        delivered.extend(events)
+
+    backend.bind_runtime(event_sink=publish, token_sink=lambda _delta: None)
+    try:
+        backend.submit_turn(session_id="session-1", prompt="Start")
+        assert conversation.started.wait(timeout=2)
+        if boundary == "settled":
+            conversation.release.set()
+        assert publishing.wait(timeout=2)
+        assert backend.reconcile(session_id="session-1", known_source_event_ids=frozenset()) == ()
+        release_publication.set()
+        conversation.release.set()
+        assert backend.wait_for_idle(5)
+        assert any(isinstance(event, BackendAgentMessageEvent) for event in delivered)
+        known = frozenset(
+            event.source_event_id for event in delivered if event.source_event_id is not None
+        )
+        assert backend.reconcile(session_id="session-1", known_source_event_ids=known) == ()
+        replayed = backend.reconcile(session_id="session-1", known_source_event_ids=frozenset())
+        assert any(isinstance(event, BackendAgentMessageEvent) for event in replayed)
+    finally:
+        release_publication.set()
+        conversation.release.set()
+        backend.close()
+
+
+def test_pause_acknowledges_stable_state_while_final_publication_waits(tmp_path: Path) -> None:
+    conversation = _ControlledConversation()
+    publishing, release_publication = Event(), Event()
+    backend = _backend(
+        tmp_path,
+        cast(ConversationFactory, lambda _event_callback, _token_callback: conversation),
+    )
+
+    def publish(events: tuple[BackendEvent, ...]) -> None:
+        if isinstance(events[-1], BackendExecutionSettledEvent):
+            publishing.set()
+            if not release_publication.wait(timeout=5):
+                raise TimeoutError("Final publication was not released")
+
+    backend.bind_runtime(event_sink=publish, token_sink=lambda _delta: None)
+    try:
+        backend.submit_turn(session_id="session-1", prompt="Start")
+        assert conversation.started.wait(timeout=2)
+        paused = backend.pause(session_id="session-1")
+        assert publishing.wait(timeout=2)
+        assert any(
+            isinstance(event, BackendLifecycleEvent) and event.lifecycle == BackendLifecycle.PAUSED
+            for event in paused
+        )
+    finally:
+        release_publication.set()
+        conversation.release.set()
         backend.close()
 
 

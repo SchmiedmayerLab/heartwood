@@ -38,6 +38,9 @@ sequenceDiagram
 Session directories contain metadata, event records, audit records, exports, and OpenHands persistence for that conversation.
 Session identifiers are validated before any state path is created.
 The gateway incrementally translates persisted OpenHands messages, actions, observations, lifecycle, task, usage, specialist, and error state into Heartwood events.
+While a native run is executing or publishing its final events, its live publisher owns event delivery.
+Read-side reconciliation waits for that publisher to finish so it cannot consume an observation before live reproduction evidence is recorded.
+After the publisher exits, reconciliation can recover persisted events without claiming that replay observed their execution.
 Incremental token deltas remain in process memory and disappear after the run reaches a stable boundary or the process stops.
 Each REST, WebSocket, and server-sent-events response pairs an event batch with the projection produced from the same serialized snapshot.
 A transient revision orders token-only updates that share a durable event revision.

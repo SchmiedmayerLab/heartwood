@@ -441,6 +441,11 @@ class OpenHandsSdkBackend:
         """Translate persisted OpenHands state not yet committed by Heartwood."""
         try:
             conversation = self._get_conversation()
+            with self._run_lock:
+                # Live publication owns these events until its final callback returns.
+                # Replay must not consume observations before live evidence is captured.
+                if self._worker_threads:
+                    return ()
             return self._reconcile_conversation(
                 conversation,
                 session_id=session_id,
@@ -635,7 +640,10 @@ class OpenHandsSdkBackend:
                     error_code=BackendErrorCode.WORKER_STOPPED,
                 ),
             )
-        return self.reconcile(
+        # This is a live command response after the native run has stopped.
+        # Its final publisher may still be waiting for the session command lock.
+        return self._reconcile_conversation(
+            conversation,
             session_id=session_id,
             known_source_event_ids=frozenset(),
         )
