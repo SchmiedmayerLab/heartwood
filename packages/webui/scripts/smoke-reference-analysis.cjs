@@ -748,8 +748,11 @@ async function openLaunchLink(page) {
   await page.goto(links[launchLinksUsed++]);
   const key = `heartwood.gateway-capability:${new URL(page.url()).pathname}`;
   await page.waitForFunction(
-    (key) => sessionStorage.getItem(key) !== null,
-    key,
+    ({ key, previous }) => {
+      const current = sessionStorage.getItem(key);
+      return current !== null && current !== previous;
+    },
+    { key, previous: capability },
   );
   capability = await page.evaluate((key) => sessionStorage.getItem(key), key);
 }

@@ -20,6 +20,11 @@ if (root === null) {
 }
 
 const application = createRoot(root);
+window.addEventListener("hashchange", () => {
+  if (new URLSearchParams(window.location.hash.slice(1)).has("launch")) {
+    window.location.reload();
+  }
+});
 void initializeGatewayAccess().then(
   () =>
     application.render(
