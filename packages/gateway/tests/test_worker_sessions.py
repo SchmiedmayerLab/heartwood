@@ -40,6 +40,10 @@ class Platform:
         self.lease: WorkerAttemptLease | None = None
 
     def prepare(self, request: WorkerSessionRequest) -> WorkerSessionPlan:
+        assert self.gateway is not None
+        service = self.gateway._services[request.session_id]
+        assert request.policy == service.policy_profile
+        assert request.action_confirmation_mode == service.backend.action_confirmation_mode
         self.calls.append("prepare")
         if self.fail == "prepare":
             raise RuntimeError("synthetic preparation failure")
@@ -299,5 +303,40 @@ def test_worker_model_preflight_does_not_resolve_gateway_credentials(
         assert backend.configuration_error is None
         assert backend.credential_reference == "SYNTHETIC_PROVIDER_KEY"
         assert platform.calls == []
+    finally:
+        gateway.stop()
+
+
+@pytest.mark.parametrize("denied", ["endpoint", "credential", "tier", "identity-route"])
+def test_model_admission_precedes_all_platform_callbacks(tmp_path: Path, denied: str) -> None:
+    platform = Platform()
+    gateway = configured_gateway(tmp_path, platform)
+    config = gateway.config_store.load()
+    profile = config.model_settings.profile()
+    policy = config.policy
+    if denied == "endpoint":
+        policy = policy.model_copy(update={"allowed_model_endpoints": ()})
+    elif denied == "tier":
+        policy = policy.model_copy(update={"allowed_capability_tiers": ("experimental",)})
+    elif denied == "credential":
+        profile = replace(profile, credential_kind="environment", api_key_env="UNAPPROVED_KEY")
+    else:
+        profile = replace(profile, aws_region_name="us-east-1")
+    gateway.config_store.save(
+        replace(
+            config,
+            policy=policy,
+            model_settings=replace(config.model_settings, profiles=(profile,)),
+        )
+    )
+    service = gateway._service("session-worker")
+    backend = service.backend
+    assert isinstance(backend, OpenHandsSdkBackend)
+    assert backend._worker_context is not None
+    try:
+        with pytest.raises(WorkerAttemptError):
+            backend._worker_context()
+        assert platform.calls == []
+        assert service.worker_attempt() is None
     finally:
         gateway.stop()
