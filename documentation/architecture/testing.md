@@ -104,6 +104,7 @@ Only the temporary Heartwood package metadata receives the declared candidate de
 The pinned Skill catalog is built without source or metadata changes.
 The application record includes both source commits, wheel hashes and a hash-pinned installation manifest.
 Installation uses those local wheels without dependency resolution, then verifies that their declared dependencies are satisfied by the locked environment.
+Application files are copied rather than hard-linked to the package cache so bundled Skills retain the independent-file integrity requirement.
 
 ```bash
 uv run --no-project --python 3.12.15 deploy/build-worker-candidate.py --application --output test-results/application-candidate
