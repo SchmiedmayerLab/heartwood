@@ -518,7 +518,57 @@ def test_import_rejects_insufficient_destination_storage(
         import_model_bundle(inspect_model_bundle(bundle), models_dir=tmp_path / "models")
 
 
-def test_manager_reports_shared_progress_and_selection(tmp_path: Path) -> None:
+def test_transfer_shutdown_retains_unfinished_worker_and_rejects_new_work(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source.gguf"
+    source.write_bytes(b"GGUFsynthetic-transfer-model")
+    choice = _gguf_choice(source)
+    entered, release, finished = Event(), Event(), Event()
+
+    def export(
+        _choice: LocalModelChoice,
+        *,
+        model_path: Path,
+        bundle_path: Path,
+        progress_callback: object | None = None,
+        cancel: Event | None = None,
+    ) -> Path:
+        del model_path, bundle_path, progress_callback
+        entered.set()
+        assert release.wait(timeout=5)
+        assert cancel is not None
+        assert cancel.is_set()
+        finished.set()
+        raise model_transfer_module.ModelTransferCancelledError("transfer cancelled")
+
+    monkeypatch.setattr(model_transfer_module, "export_model_bundle", export)
+    manager = ModelTransferManager(
+        models_dir=tmp_path / "models",
+        on_import_ready=lambda _model, _path, _runtime: None,
+    )
+    bundle = tmp_path / "model.zip"
+    transfer = manager.start_export(choice=choice, model_path=source, bundle_path=bundle)
+    try:
+        assert entered.wait(timeout=2)
+        with pytest.raises(TimeoutError, match="transfer"):
+            manager.close(timeout=0)
+        with pytest.raises(ModelTransferError, match="closed"):
+            manager.start_export(choice=choice, model_path=source, bundle_path=bundle)
+        release.set()
+        manager.close(timeout=2)
+        assert finished.is_set()
+        assert manager.status(transfer.transfer_id).status == "cancelled"
+        manager.close(timeout=0)
+    finally:
+        manager.cancel(transfer.transfer_id)
+        release.set()
+
+
+@pytest.mark.parametrize("fail_first_start", [False, True])
+def test_manager_reports_shared_progress_and_selection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fail_first_start: bool
+) -> None:
     source = tmp_path / "source.gguf"
     source.write_bytes(b"GGUFsynthetic-transfer-model")
     choice = _gguf_choice(source)
@@ -529,6 +579,17 @@ def test_manager_reports_shared_progress_and_selection(tmp_path: Path) -> None:
     )
     bundle = tmp_path / "model.heartwood-model.zip"
 
+    if fail_first_start:
+
+        def fail_start(_worker: object) -> None:
+            raise RuntimeError("synthetic worker startup failure")
+
+        with monkeypatch.context() as context:
+            context.setattr("threading.Thread.start", fail_start)
+            with pytest.raises(RuntimeError, match="startup failure"):
+                manager.start_export(choice=choice, model_path=source, bundle_path=bundle)
+        assert manager.statuses()[0].status == "error"
+
     export_status = manager.start_export(
         choice=choice,
         model_path=source,
@@ -538,7 +599,7 @@ def test_manager_reports_shared_progress_and_selection(tmp_path: Path) -> None:
     assert exported.status == "ready"
     assert exported.phase == "complete"
     assert exported.bytes_processed == exported.bytes_total
-    assert exported.sequence == 1
+    assert exported.sequence == 1 + int(fail_first_start)
 
     plan = inspect_model_bundle(bundle)
     with pytest.raises(ModelTransferError, match="explicit approval"):
@@ -548,10 +609,14 @@ def test_manager_reports_shared_progress_and_selection(tmp_path: Path) -> None:
 
     assert imported.status == "ready"
     assert imported.result_path is not None
-    assert imported.sequence == 2
-    assert [transfer.sequence for transfer in manager.statuses()] == [1, 2]
+    assert imported.sequence == exported.sequence + 1
+    assert [transfer.sequence for transfer in manager.statuses()] == [
+        exported.sequence,
+        imported.sequence,
+    ]
     assert len(selected) == 1
     assert selected[0][0].catalog_source == "transferred"
+    manager.close(timeout=2)
 
 
 def test_manager_cancels_active_work_and_revalidates_completed_retries(
