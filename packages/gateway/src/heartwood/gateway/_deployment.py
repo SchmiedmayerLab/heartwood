@@ -8,14 +8,17 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import stat
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
 from uuid import UUID
 
 from heartwood.gateway._project import ProjectContext, ProjectStateError
+from heartwood.gateway.worker_deployment import OpenShellWorkerDeployment
 from heartwood.model_policy import validate_policy_restriction
 from heartwood.persistence import read_private_text
 from heartwood.schemas import PolicyProfile
@@ -30,6 +33,7 @@ class ProjectDeployment:
 
     project: ProjectContext
     policy: PolicyProfile
+    worker: OpenShellWorkerDeployment | None = None
 
 
 def load_project_deployment(path: Path, *, project_root: Path) -> ProjectDeployment:
@@ -54,7 +58,10 @@ def load_project_deployment(path: Path, *, project_root: Path) -> ProjectDeploym
                 "deployment manifest must be operator-owned and write-protected"
             )
         record = tomllib.loads(read_private_text(resolved, max_bytes=64 * 1024))
-        if set(record) != _FIELDS or record["schema_version"] != _SCHEMA:
+        if (
+            set(record) not in (_FIELDS, _FIELDS | {"worker"})
+            or record["schema_version"] != _SCHEMA
+        ):
             raise ValueError("invalid deployment schema")
         identity = UUID(record["project_id"])
         if str(identity) != record["project_id"]:
@@ -71,9 +78,16 @@ def load_project_deployment(path: Path, *, project_root: Path) -> ProjectDeploym
             raise ProjectStateError("deployment manifest must remain separate from project state")
         policy = PolicyProfile.model_validate(record["policy"])
         validate_policy_restriction(policy, policy)
+        worker = (
+            OpenShellWorkerDeployment.model_validate(record["worker"])
+            if "worker" in record
+            else None
+        )
+        if worker is not None:
+            validate_worker_deployment(worker, project)
         # Fail before opening gateway stores, including when legacy state is present.
         project.state_exists()
-        return ProjectDeployment(project=project, policy=policy)
+        return ProjectDeployment(project=project, policy=policy, worker=worker)
     except ProjectStateError:
         raise
     except (OSError, ValueError, TypeError, AttributeError) as error:
@@ -89,3 +103,63 @@ def _validate_trusted_parents(directory: Path) -> None:
         system_temporary_root = metadata.st_uid == 0 and metadata.st_mode & stat.S_ISVTX
         if writable and not system_temporary_root:
             raise ProjectStateError("deployment paths have a writable parent directory")
+
+
+def validate_worker_deployment(worker: OpenShellWorkerDeployment, project: ProjectContext) -> None:
+    """Reject workspace authority and changed policy before native clients are constructed."""
+    for path in (worker.openshell_cli, worker.docker_cli, worker.policy_path):
+        validate_operator_file(path, project)
+    for binary in (worker.openshell_cli, worker.docker_cli):
+        if not os.access(binary, os.X_OK):
+            raise ProjectStateError("native worker tools must be executable")
+    socket_path = Path(urlsplit(worker.docker_host).path)
+    _validate_operator_location(socket_path, project)
+    _validate_trusted_parents(socket_path.parent)
+    socket_metadata = socket_path.stat()
+    if (
+        not stat.S_ISSOCK(socket_metadata.st_mode)
+        or socket_metadata.st_uid not in {0, os.geteuid()}
+        or socket_metadata.st_mode & stat.S_IWOTH
+        or (
+            worker.docker_socket_group is not None
+            and socket_metadata.st_gid != worker.docker_socket_group
+        )
+        or (socket_metadata.st_mode & stat.S_IWGRP and worker.docker_socket_group is None)
+    ):
+        raise ProjectStateError("native Docker access requires an operator-owned local socket")
+    home = worker.native_config_home
+    _validate_operator_location(home, project)
+    _validate_trusted_parents(home)
+    gateway = home / "openshell" / "gateways" / worker.gateway
+    for name in ("metadata.json", "mtls/ca.crt", "mtls/tls.crt", "mtls/tls.key"):
+        path = gateway / name
+        validate_operator_file(path, project)
+        if name.endswith(".key") and stat.S_IMODE(path.stat().st_mode) & 0o077:
+            raise ProjectStateError("native gateway keys require owner-only access")
+    content = read_private_text(worker.policy_path, max_bytes=64 * 1024)
+    if hashlib.sha256(content.encode()).hexdigest() != worker.policy_file_sha256:
+        raise ProjectStateError("native worker policy changed after qualification")
+
+
+def _validate_operator_location(path: Path, project: ProjectContext) -> None:
+    if (
+        not path.is_absolute()
+        or path.resolve(strict=True) != path
+        or path.is_relative_to(project.root)
+        or path.is_relative_to(project.state_root)
+    ):
+        raise ProjectStateError("native worker authority must be outside project files and state")
+
+
+def validate_operator_file(path: Path, project: ProjectContext) -> None:
+    """Validate a native control file without disclosing its contents."""
+    _validate_operator_location(path, project)
+    _validate_trusted_parents(path.parent)
+    metadata = path.stat()
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+        or metadata.st_uid not in {0, os.geteuid()}
+        or metadata.st_nlink != 1
+    ):
+        raise ProjectStateError("native worker files must be operator-owned and write-protected")

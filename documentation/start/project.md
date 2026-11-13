@@ -59,6 +59,10 @@ Existing `.heartwood/state.json` prevents this mode from starting until an expli
 Do not remove that marker to bypass the check or point a new binding at an unverified copy.
 External placement alone does not restrict same-identity terminal access; the execution environment still needs an independently enforced filesystem and process boundary.
 
+A qualified deployment can add an explicit native worker selection to the same operator manifest.
+The worker receives selected input snapshots and verified Skills through read-only volumes and keeps its writable work inside the sandbox.
+It receives no research-directory bind mount, protected state directory, signing key or native control-plane credential.
+The native execution path requires compatible admission APIs and a separately qualified provider route; it does not establish sensitive-data readiness merely by starting successfully.
 See the [gateway reference](../reference/cli.md) for the manifest format.
 
 ## Persistence by Environment

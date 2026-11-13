@@ -104,6 +104,7 @@ def test_cli_does_not_inherit_ambient_authority(
     assert args[0][3:] == ["--host", "unix:///var/run/docker.sock", "version"]
     assert not Path(args[0][2]).exists()
     assert kwargs["env"] == {"PATH": os.defpath}
+    assert kwargs["cwd"] == args[0][2]
     assert kwargs["timeout"] == 60
 
 

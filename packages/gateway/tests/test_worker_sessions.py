@@ -340,3 +340,63 @@ def test_model_admission_precedes_all_platform_callbacks(tmp_path: Path, denied:
         assert service.worker_attempt() is None
     finally:
         gateway.stop()
+
+
+def test_preparation_is_released_when_journal_rejects_launch_intent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    platform = Platform()
+    original = platform.prepare
+    released: list[bool] = []
+
+    def prepare(request: WorkerSessionRequest) -> WorkerSessionPlan:
+        return replace(original(request), release_preparation=lambda: released.append(True))
+
+    monkeypatch.setattr(platform, "prepare", prepare)
+    gateway = configured_gateway(tmp_path, platform)
+    service = gateway._service("session-worker")
+    backend = service.backend
+    assert isinstance(backend, OpenHandsSdkBackend)
+    assert backend._worker_context is not None
+
+    def reject_intent(*_args: object, **_kwargs: object) -> WorkerAttemptLease:
+        raise WorkerAttemptError("synthetic journal failure")
+
+    monkeypatch.setattr(service, "launch_worker", reject_intent)
+    with pytest.raises(WorkerAttemptError, match="journal"):
+        backend._worker_context()
+    assert service.worker_attempt() is None
+    assert platform.calls == ["prepare"]
+    gateway.stop()
+    assert released == [True]
+    assert not service.store.owns_writer
+
+
+def test_failed_revocation_retains_preparation_for_reconciliation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    platform = Platform()
+    original = platform.prepare
+    released: list[bool] = []
+
+    def prepare(request: WorkerSessionRequest) -> WorkerSessionPlan:
+        return replace(original(request), release_preparation=lambda: released.append(True))
+
+    monkeypatch.setattr(platform, "prepare", prepare)
+    gateway = configured_gateway(tmp_path, platform)
+    service = gateway._service("session-worker")
+    backend = service.backend
+    assert isinstance(backend, OpenHandsSdkBackend)
+    assert backend._worker_context is not None
+    backend._worker_context()
+    platform.fail = "revoke"
+    with pytest.raises(ExceptionGroup):
+        gateway.stop()
+    assert released == []
+    assert service.store.owns_writer
+    platform.fail = None
+    gateway.stop()
+    assert released == [True]
+    assert not service.store.owns_writer
