@@ -70,6 +70,20 @@ OpenHands receives only the exact directory of each verified installed Skill, so
 Heartwood refuses to install a Skill whose content-addressed directory holds anything else, including a leftover from an interrupted installation.
 Such content beside an active installed Skill stops Skill listing and starting agent sessions until it is removed, and the error names the directory to clean up.
 
+## Worker Projection
+
+`SkillManager.stage_worker_skills` creates a temporary projection containing only compatible release-bundled and verified active installed Skill packages.
+It refreshes signed sources and checks activation audit records under the existing lifecycle lock, then uses the catalog's verified tree copier to bind every copied package to its selected tree digest.
+Installation indexes, source registries, trust roots, signatures, and audit records remain outside the projection.
+The snapshot digest binds the selected names and complete-tree digests; native Skill objects use `/skills/<name>` locations instead of gateway filesystem paths.
+Automatic user, project, and marketplace discovery must remain disabled in the worker's agent context.
+
+The trusted launcher owns the private staging directory outside the project, verifies the transferred snapshot, and mounts it read-only at `/skills` before admitting the worker.
+The projection accepts at most 256 packages and 64 MiB of content, in addition to the catalog's per-package limits.
+The staging context removes its directory after transfer or failure; an abrupt process exit can leave unused staging data that recovery must discard.
+A snapshot records a selection at one point in time; it does not revoke an already running worker when source metadata later changes.
+The launcher must fence and revoke that worker before replacing its context, and must select and validate a new snapshot for the replacement attempt.
+
 ## Offline Use
 
 An offline source is a transferred TUF repository containing metadata and targets plus its independently obtained trusted root.
