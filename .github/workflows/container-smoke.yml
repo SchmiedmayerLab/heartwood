@@ -72,6 +72,26 @@ jobs:
         env:
           DOCKER_DEFAULT_PLATFORM: ${{ matrix.platform }}
         run: docker compose -f images/generic/compose.yaml run --rm heartwood
+      - name: Build the worker image
+        uses: docker/bake-action@v7.4.0
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: false
+        with:
+          files: docker-bake.hcl
+          load: true
+          provenance: false
+          sbom: false
+          source: .
+          targets: worker
+          set: |
+            worker.platform=${{ matrix.platform }}
+            worker.tags=heartwood-worker-smoke:local
+            worker.cache-from=type=gha,scope=worker-${{ matrix.cache_scope }}
+            worker.cache-to=type=gha,scope=worker-${{ matrix.cache_scope }},mode=min
+      - name: Verify native worker startup and environment
+        env:
+          DOCKER_DEFAULT_PLATFORM: ${{ matrix.platform }}
+        run: python3 images/worker/smoke.py heartwood-worker-smoke:local
       - name: Verify named-volume persistence
         env:
           DOCKER_DEFAULT_PLATFORM: ${{ matrix.platform }}

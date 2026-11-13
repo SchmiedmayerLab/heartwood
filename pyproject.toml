@@ -30,6 +30,7 @@ members = [
 ]
 
 [dependency-groups]
+worker = ["openhands-agent-server==1.60.1"]
 dev = [
     "ruff>=0.16.1",
     "mypy>=2.3.0",

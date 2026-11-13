@@ -32,6 +32,29 @@ Generic and platform-derived artifacts use `images/Dockerfile` and `docker-bake.
 Native and container GPU variants use `images/gpu/install_runtime.sh` for the same pinned vLLM environment.
 Add a parameter, platform adapter, or validation target for a real platform difference instead of copying installation or packaging steps.
 
+### Worker Image
+
+`docker buildx bake worker` builds the native agent server through the same image stages and workspace lock.
+The optional `worker` dependency group pins the server to the SDK and tool version; it is not installed in the ordinary application image.
+Use `uv sync --locked --all-groups --all-extras` to include its configuration checks locally.
+Run `python images/worker/smoke.py IMAGE` against the locally loaded worker image to verify native command execution, authentication, private workspace persistence, read-only configuration, and removal of synthetic inherited secrets.
+The check creates a disposable container with no network or host mounts and removes it afterward.
+The worker target is a Linux CPU qualification artifact and is not connected to the gateway's local conversation factory.
+
+The entry point requires a fresh URL-safe `SESSION_API_KEY` with at least 43 characters and accepts only the optional `HEARTWOOD_INFERENCE_PLACEHOLDER` from the launching environment.
+Generate the key with a cryptographically secure random source for each attempt, never reuse it between workers, and deliver it through the sandbox's secret mechanism.
+The placeholder must be issued by the outside inference transport; never supply an actual provider credential under that name.
+All remaining environment values are fixed in the image: system paths and locale, private worker home, disabled telemetry, and the read-only server configuration.
+Proxy settings, certificate overrides, dynamic loader settings, Python import paths, arbitrary server overrides, host identity, and other credentials are not forwarded.
+The entry point closes inherited descriptors other than standard input, output, and error before replacing itself with the native server.
+It binds to sandbox loopback, disables browser and editor services, and admits one concurrent native conversation run.
+
+Launch this target through a qualified sandbox with no host environment inheritance, scoped volumes, non-root identity, resource limits, and outside network enforcement.
+The initial executable must already be launched under that boundary: cleaning its environment cannot undo a malicious dynamic-loader setting used before the bootstrap runs.
+Worker conversation and command state is private, untrusted runtime data under the worker home; it is never canonical gateway state and can contain sensitive content.
+Its retention and deletion require deployment controls.
+An image, a loopback bind, and environment filtering alone do not establish isolation, independent approval enforcement, or sensitive-data readiness.
+
 ## Package Ownership
 
 | Area | Package or Directory |
