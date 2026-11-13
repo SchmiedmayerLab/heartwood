@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import RLock
-from typing import assert_never, cast
+from typing import Literal, assert_never, cast
 from uuid import UUID, uuid4
 
 from heartwood.adapters import PlatformAdapter
@@ -50,9 +50,17 @@ from heartwood.core_adapter.external_actions import (
     ExternalActionProposal,
     ExternalActionRecord,
     ExternalActionRequest,
+    canonical_request,
     external_action_records,
     reserved_external_identity,
     validate_external_transition,
+)
+from heartwood.core_adapter.external_results import (
+    RESULT_PREFIX,
+    ExternalResultProposal,
+    ExternalResultRecord,
+    external_result_records,
+    validate_result_transition,
 )
 from heartwood.core_adapter.reproduction_journal import (
     JournaledReproduction,
@@ -495,6 +503,189 @@ class SessionService:
         self._event_sink((event,))
         return event
 
+    def _result_model_route(self) -> str:
+        return canonical_request(
+            json.dumps(
+                {
+                    "backend_id": self.backend.backend_id,
+                    "model_id": self.backend.model_id,
+                    "profile_id": self.backend.model_profile_id,
+                    "endpoint": self.backend.model_endpoint,
+                    "credential_reference": self.backend.credential_reference,
+                    "capability_tier": self.backend.capability_tier,
+                    "action_confirmation_mode": self.backend.action_confirmation_mode,
+                }
+            )
+        )
+
+    def propose_external_result(self, operation_id: UUID) -> SessionEvent:
+        """Prepare separate review before outside content can enter worker/model context."""
+        with self._command_lock:
+            self._require_worker_owner_locked()
+            adapter, lease = self._external_actions, self._worker_lease
+            events = self.replay_events()
+            outside = external_action_records(events).get(operation_id)
+            if (
+                adapter is None
+                or lease is None
+                or outside is None
+                or not outside.terminal
+                or outside.observation is None
+                or outside.proposal.worker != lease.intent
+                or any(
+                    item.proposal.operation_id == operation_id
+                    for item in external_result_records(events).values()
+                )
+            ):
+                raise ExternalActionError("result release requires a unique current worker outcome")
+            source = next(
+                event
+                for event in reversed(events)
+                if event.kind == EventKind.EXTERNAL_ACTION_RECORDED
+                and ExternalActionRecord.model_validate_json(json.dumps(event.payload["record"]))
+                == outside
+            )
+            policy = adapter.policy_sha256
+            route = self._result_model_route()
+            created_at = self._external_now()
+            proposal = ExternalResultProposal(
+                release_id=uuid4(),
+                operation_id=operation_id,
+                operation_sha256=outside.proposal.sha256,
+                observation_event_id=source.event_id,
+                worker=lease.intent,
+                service_policy_sha256=policy,
+                model_route_json=route,
+                content_json="{}",
+                created_at=created_at,
+                expires_at=created_at + timedelta(minutes=5),
+            )
+            self._check_result_authority(proposal)
+            try:
+                content = canonical_request(adapter.prepare_result(outside))
+                proposal = ExternalResultProposal.model_validate(
+                    proposal.model_copy(update={"content_json": content})
+                )
+            except Exception:
+                raise ExternalActionError("outside result is unavailable or invalid") from None
+            self._check_result_authority(proposal)
+            event = self._record_external_result(
+                ExternalResultRecord(phase="proposed", proposal=proposal)
+            )
+        self._event_sink((event,))
+        return event
+
+    def _check_result_authority(self, proposal: ExternalResultProposal) -> None:
+        adapter, lease = self._external_actions, self._worker_lease
+        policy = json.dumps(
+            self.policy_profile.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
+        )
+        if (
+            adapter is None
+            or lease is None
+            or not lease.active
+            or lease.intent != proposal.worker
+            or self._worker_project_id != proposal.worker.project_id
+            or self._worker_admission_error_locked() is not None
+            or hashlib.sha256(policy.encode()).hexdigest() != proposal.worker.gateway_policy_sha256
+            or adapter.policy_sha256 != proposal.service_policy_sha256
+            or self._result_model_route() != proposal.model_route_json
+            or not proposal.created_at <= self._external_now() < proposal.expires_at
+        ):
+            raise ExternalActionError("result release authority or destination changed")
+
+    def _record_external_result(self, record: ExternalResultRecord) -> SessionEvent:
+        previous = external_result_records(self.replay_events()).get(record.proposal.release_id)
+        validate_result_transition(previous, record)
+        return self._record_event(
+            EventKind.EXTERNAL_RESULT_RECORDED,
+            {
+                "record": cast(dict[str, JsonValue], record.model_dump(mode="json")),
+                "worker_attempt_id": str(record.proposal.worker.attempt_id),
+                "worker_project_id": str(record.proposal.worker.project_id),
+            },
+        )
+
+    def _decide_external_result(
+        self, command: SessionCommand, current: ExternalResultRecord
+    ) -> tuple[SessionEvent, ...]:
+        proposal, adapter = current.proposal, self._external_actions
+        approved = _kind_value(command.kind) == CommandKind.APPROVE.value
+        emitted: list[SessionEvent] = []
+        try:
+            if current.phase != "proposed":
+                raise ExternalActionError("result release already has a decision")
+            if approved:
+                self._check_result_authority(proposal)
+                if (
+                    not self.backend.wait_for_idle(0)
+                    or self.backend.pending_action_group(session_id=command.session_id) is not None
+                ):
+                    raise ExternalActionError("worker has unfinished execution or review")
+                assert adapter is not None
+                outside = external_action_records(self.replay_events())[proposal.operation_id]
+                adapter.check_result_policy(
+                    outside,
+                    proposal.content_json,
+                    proposal.model_route_json,
+                    command.actor_id,
+                    self._external_now(),
+                )
+                self._check_result_authority(proposal)
+                authorized, authorization_events = self._authorize_backend(
+                    command, purpose="release reviewed outside result to the worker model"
+                )
+                emitted.extend(authorization_events)
+                if not authorized:
+                    return tuple(emitted)
+                self._check_result_authority(proposal)
+            decision = ExternalActionDecision(
+                command_id=command.command_id,
+                actor_id=command.actor_id,
+                decision="approved" if approved else "denied",
+                decided_at=self._external_now(),
+                proposal_sha256=proposal.sha256,
+            )
+            intent = ExternalResultRecord(
+                phase="submitting" if approved else "denied", proposal=proposal, decision=decision
+            )
+        except Exception:
+            return (
+                *emitted,
+                self._record_event(
+                    EventKind.ERROR_RECORDED,
+                    {
+                        "reason": "outside result release validation failed",
+                        "affects_lifecycle": False,
+                    },
+                ),
+            )
+        # Journal failure must prevent disclosure, not be reduced to a delivery error.
+        emitted.append(self._record_external_result(intent))
+        if not approved:
+            return tuple(emitted)
+        stream: tuple[BackendEvent, ...] = ()
+        phase: Literal["unknown", "submitted"]
+        try:
+            self._check_result_authority(proposal)
+            stream = self.backend.submit_context(
+                session_id=command.session_id, content=proposal.message
+            )
+            phase = (
+                "unknown"
+                if any(isinstance(event, BackendErrorEvent) for event in stream)
+                else "submitted"
+            )
+        except Exception:
+            phase = "unknown"
+        emitted.append(
+            self._record_external_result(
+                ExternalResultRecord(phase=phase, proposal=proposal, decision=decision)
+            )
+        )
+        emitted.extend(self._translate_backend_events(stream))
+        return tuple(emitted)
+
     def reconcile_external_actions(self) -> tuple[SessionEvent, ...]:
         """Query retained outside operation IDs without reviving a worker or submitting work."""
         with self._command_lock:
@@ -648,8 +839,11 @@ class SessionService:
             ),
         ):
             call = event.tool_call
-            if reserved_external_identity(call.tool_call_id) or reserved_external_identity(
-                call.action_id
+            if (
+                reserved_external_identity(call.tool_call_id)
+                or reserved_external_identity(call.action_id)
+                or call.tool_call_id.startswith(RESULT_PREFIX)
+                or (call.action_id or "").startswith(RESULT_PREFIX)
             ):
                 return True
             if isinstance(
@@ -658,11 +852,17 @@ class SessionService:
                 return any(
                     item.proposal.group_id == event.action_group_id
                     for item in external_action_records(self.replay_events()).values()
+                ) or any(
+                    item.proposal.group_id == event.action_group_id
+                    for item in external_result_records(self.replay_events()).values()
                 )
         elif isinstance(event, BackendToolExecutionEvent):
-            return reserved_external_identity(
-                event.tool_execution.tool_call_id
-            ) or reserved_external_identity(event.tool_execution.action_id)
+            return (
+                reserved_external_identity(event.tool_execution.tool_call_id)
+                or reserved_external_identity(event.tool_execution.action_id)
+                or event.tool_execution.tool_call_id.startswith(RESULT_PREFIX)
+                or (event.tool_execution.action_id or "").startswith(RESULT_PREFIX)
+            )
         return False
 
     def worker_attempt(self) -> WorkerAttemptRecord | None:
@@ -1027,6 +1227,16 @@ class SessionService:
                     {"command": _kind_value(command.kind), "reason": "target_id is required"},
                 ),
             )
+        release = next(
+            (
+                record
+                for record in external_result_records(self.replay_events()).values()
+                if record.proposal.group_id == action_group_id
+            ),
+            None,
+        )
+        if release is not None:
+            return self._decide_external_result(command, release)
         outside = next(
             (
                 record
@@ -1434,12 +1644,16 @@ class SessionService:
         unresolved = self.store.unresolved_command_ids()
         if not unresolved:
             return
-        outside = external_action_records(self.replay_events())
+        events = self.replay_events()
+        outside: list[ExternalActionRecord | ExternalResultRecord] = [
+            *external_action_records(events).values(),
+            *external_result_records(events).values(),
+        ]
         for command_id in unresolved:
             decided = next(
                 (
                     item
-                    for item in outside.values()
+                    for item in outside
                     if item.decision is not None and item.decision.command_id == command_id
                 ),
                 None,
@@ -1568,6 +1782,7 @@ class SessionService:
         if self._worker_lease is not None and kind not in {
             EventKind.WORKER_ATTEMPT_RECORDED,
             EventKind.EXTERNAL_ACTION_RECORDED,
+            EventKind.EXTERNAL_RESULT_RECORDED,
         }:
             correlation = {
                 "worker_attempt_id": str(self._worker_lease.intent.attempt_id),
@@ -1618,6 +1833,16 @@ class SessionService:
 
 def _audit_payload(kind: EventKind, payload: dict[str, JsonValue]) -> dict[str, JsonValue]:
     """Project an operational event into its content-minimized audit representation."""
+    if kind == EventKind.EXTERNAL_RESULT_RECORDED:
+        release = ExternalResultRecord.model_validate_json(json.dumps(payload["record"]))
+        return {
+            "release_id": str(release.proposal.release_id),
+            "operation_id": str(release.proposal.operation_id),
+            "proposal_sha256": release.proposal.sha256,
+            "phase": release.phase,
+            "actor_id": release.decision.actor_id if release.decision else None,
+            "command_id": release.decision.command_id if release.decision else None,
+        }
     if kind == EventKind.EXTERNAL_ACTION_RECORDED:
         outside = ExternalActionRecord.model_validate_json(json.dumps(payload["record"]))
         return {

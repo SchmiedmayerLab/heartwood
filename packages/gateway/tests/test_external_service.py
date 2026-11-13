@@ -313,6 +313,28 @@ class RecordsAdapter:
         self.input = _INPUT
         self.before_submit: Callable[[], None] = lambda: None
 
+    def prepare_result(self, record: ExternalActionRecord) -> str:
+        return canonical_request(self.observe(record.proposal).model_dump_json())
+
+    def check_result_policy(
+        self,
+        record: ExternalActionRecord,
+        content_json: str,
+        model_route_json: str,
+        actor_id: str,
+        now: datetime,  # noqa: ARG002
+    ) -> None:
+        content = json.loads(content_json)
+        route = json.loads(model_route_json)
+        if (
+            actor_id != "researcher"
+            or record.observation is None
+            or content["proposal_sha256"] != record.proposal.sha256
+            or content["operation"]["operation_id"] != str(record.proposal.operation_id)
+            or route["endpoint"] != "http://127.0.0.1:8765/v1/chat/completions"
+        ):
+            raise ExternalActionError("synthetic release authorization denied")
+
     def prepare(self, tool_name: str, arguments: dict[str, JsonValue]) -> ExternalActionRequest:
         if tool_name not in self.tool_names or arguments != {"record": "synthetic-result"}:
             raise ExternalActionError("unsupported synthetic request")

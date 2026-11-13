@@ -15,7 +15,8 @@ from typing import Annotated, ClassVar, Literal, cast
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 from heartwood.core_adapter import backend_error_is_fatal
-from heartwood.core_adapter.external_actions import ExternalActionRecord, external_action_records
+from heartwood.core_adapter.external_actions import ExternalActionRecord
+from heartwood.core_adapter.external_results import ExternalResultRecord, external_result_records
 from heartwood.core_adapter.workflow_provenance import workflow_experiment_events
 from heartwood.core_adapter.workflow_runtime import workflow_controls, workflow_run
 from heartwood.schemas.execution import ExecutionBudget, ExecutionUsage, NativeTaskExecution
@@ -446,7 +447,7 @@ def project_session(
     usage_by_purpose: dict[str, ProjectionUsage] = {}
     subagents: dict[str, ProjectionSubagent] = {}
 
-    external_action_records(events)
+    external_result_records(events)
     for event in events:
         activity.append(_activity(event))
         kind = str(event.kind)
@@ -473,8 +474,15 @@ def project_session(
                 label="Agent",
                 content=_string(event.payload.get("content")),
             )
-        elif kind == EventKind.EXTERNAL_ACTION_RECORDED.value:
-            outside = ExternalActionRecord.model_validate_json(json.dumps(event.payload["record"]))
+        elif kind in {
+            EventKind.EXTERNAL_ACTION_RECORDED.value,
+            EventKind.EXTERNAL_RESULT_RECORDED.value,
+        }:
+            outside = (
+                ExternalActionRecord.model_validate_json(json.dumps(event.payload["record"]))
+                if kind == EventKind.EXTERNAL_ACTION_RECORDED.value
+                else ExternalResultRecord.model_validate_json(json.dumps(event.payload["record"]))
+            )
             outside_proposal = outside.proposal
             call = outside_proposal.review_call
             outside_action = actions.get(outside_proposal.action_id) or _action_record(
@@ -501,7 +509,14 @@ def project_session(
                 )
             else:
                 approval_group_decisions[outside_proposal.group_id] = None
-            if outside.observation is not None:
+            if isinstance(outside, ExternalResultRecord) and outside.phase == "submitted":
+                state = "succeeded"
+                outcome = ProjectionActionOutcome(
+                    exit_code=0,
+                    summary="Result submitted to worker",
+                    result="Native delivery accepted; worker execution is not established.",
+                )
+            if isinstance(outside, ExternalActionRecord) and outside.observation is not None:
                 operation = outside.observation.operation
                 state = {
                     "submitted": "running",
@@ -1258,7 +1273,7 @@ def _activity(event: SessionEvent) -> ProjectionActivity:
 
 def _activity_detail(event: SessionEvent) -> str:
     kind = str(event.kind)
-    if kind == EventKind.EXTERNAL_ACTION_RECORDED.value:
+    if kind in {EventKind.EXTERNAL_ACTION_RECORDED.value, EventKind.EXTERNAL_RESULT_RECORDED.value}:
         record = _mapping(event.payload.get("record"))
         return _string(record.get("phase"))
     if kind == EventKind.COMMAND_RECEIVED.value:
@@ -1739,6 +1754,7 @@ _ACTIVITY_LABELS = {
     EventKind.CONFIRMATION_RESOLVED.value: "Confirmation resolved",
     EventKind.ERROR_RECORDED.value: "Error",
     EventKind.EXTERNAL_ACTION_RECORDED.value: "Outside operation",
+    EventKind.EXTERNAL_RESULT_RECORDED.value: "Outside result release",
     EventKind.MODEL_CALL_DECISION_RECORDED.value: "Model route decision",
     EventKind.MODEL_USAGE_UPDATED.value: "Model usage",
     EventKind.POLICY_DECISION_RECORDED.value: "Policy decision",

@@ -325,3 +325,23 @@ class ExternalActionAdapter(Protocol):
     def observe(self, proposal: ExternalActionProposal) -> ExternalActionObservation:
         """Query the existing operation identity without submitting or retrying an effect."""
         ...
+
+    def prepare_result(self, record: ExternalActionRecord) -> str:
+        """Read a sanitized bounded JSON result through native service authorization.
+
+        The service must enforce this gateway's entitlement to read the result.
+        This is not permission to disclose it to a worker or inference provider.
+        Never return credentials or implicitly follow worker-selected paths.
+        """
+        ...
+
+    def check_result_policy(
+        self,
+        record: ExternalActionRecord,
+        content_json: str,
+        model_route_json: str,
+        actor_id: str,
+        now: datetime,
+    ) -> None:
+        """Independently authorize exact result disclosure to the reviewed model route."""
+        ...

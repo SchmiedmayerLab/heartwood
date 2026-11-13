@@ -91,6 +91,7 @@ class EventKind(StrEnum):
     ERROR_RECORDED = "error.recorded"
     WORKER_ATTEMPT_RECORDED = "worker_attempt.recorded"
     EXTERNAL_ACTION_RECORDED = "external_action.recorded"
+    EXTERNAL_RESULT_RECORDED = "external_result.recorded"
     WORKFLOW_UPDATED = "workflow.updated"
     WORKFLOW_EXECUTION_RECORDED = "workflow.execution.recorded"
 

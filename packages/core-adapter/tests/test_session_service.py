@@ -2586,6 +2586,11 @@ class _RecordingBackend:
         return self.endpoint
 
     @property
+    def model_id(self) -> str:
+        """Return the declared model identifier used for result disclosure review."""
+        return "recording-model"
+
+    @property
     def model_profile_id(self) -> str:
         return "recording"
 
@@ -2634,6 +2639,10 @@ class _RecordingBackend:
     ) -> PendingActionGroup | None:
         self.pending_group_calls += 1
         return pending_action_group(self._pending_actions)
+
+    def submit_context(self, *, session_id: str, content: str) -> tuple[BackendEvent, ...]:
+        """Use this backend's existing admission behavior for reviewed context."""
+        return self.submit_turn(session_id=session_id, prompt=content)
 
     def submit_turn(
         self,
