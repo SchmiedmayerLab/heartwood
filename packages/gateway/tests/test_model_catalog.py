@@ -782,6 +782,39 @@ def test_terra_custom_api_uses_an_explicit_project_policy(tmp_path: Path) -> Non
     assert "https://custom.example/v1/chat/completions" in policy.allowed_model_endpoints
 
 
+def test_custom_api_selection_cannot_expand_a_deployment_policy(tmp_path: Path) -> None:
+    calls: list[str] = []
+
+    def lister(connection: ModelConnection, _api_key: str | None) -> tuple[ProviderModel, ...]:
+        assert connection.base_url is not None
+        calls.append(connection.base_url)
+        return (ProviderModel("custom-coder"),)
+
+    ceiling = PolicyProfile(
+        policy_id="deployment",
+        platform_id="generic",
+        allowed_model_endpoints=("https://approved.example/v1/chat/completions",),
+        allowed_model_catalog_endpoints=("https://approved.example/v1/models",),
+        credential_allowlist=("HEARTWOOD_CUSTOM_MODEL_API_KEY",),
+    )
+    gateway = SessionGateway(
+        project=_project(tmp_path / "deployment-custom"),
+        env={},
+        deployment_policy=ceiling,
+        model_catalog_service=ModelCatalogService(openai_lister=lister),
+    )
+    gateway.discover_models(
+        "custom-api", token="synthetic-token", base_url="https://approved.example/v1"
+    )
+    assert calls == ["https://approved.example/v1"]
+    with pytest.raises(ModelCatalogError, match="allowlisted"):
+        gateway.discover_models(
+            "custom-api", token="synthetic-token", base_url="https://unapproved.example/v1"
+        )
+    assert calls == ["https://approved.example/v1"]
+    assert gateway.config_store.load().policy == ceiling
+
+
 def _openai_connection() -> ModelConnection:
     return next(
         connection

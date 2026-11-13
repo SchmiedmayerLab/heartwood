@@ -13,6 +13,7 @@ from heartwood.model_policy._engine import (
     PolicyInputError,
     filter_credentials,
     normalize_endpoint,
+    validate_policy_restriction,
 )
 
 __all__ = [
@@ -21,6 +22,7 @@ __all__ = [
     "__version__",
     "filter_credentials",
     "normalize_endpoint",
+    "validate_policy_restriction",
 ]
 
 __version__ = "0.4.0"
