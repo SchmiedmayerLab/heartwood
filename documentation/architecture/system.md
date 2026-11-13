@@ -8,6 +8,10 @@ SPDX-License-Identifier: MIT
 
 The session gateway is the application boundary shared by every interaction surface.
 It is the only path from Heartwood interfaces to the OpenHands SDK backend.
+The adapter supplies an explicit tool list to the pinned SDK settings contract; it does not inherit the SDK's default execution or model-switching tools.
+Specialist tools enter that list only through the gateway's scoped specialist catalog, and automatic model routing remains disabled.
+OpenHands owns provider retries, with at most two total attempts for a local model call and three for a remote call.
+Timeouts and maximum retry waits remain bounded; the adapter does not add another retry loop around the SDK.
 
 ```mermaid
 flowchart LR

@@ -151,8 +151,8 @@ ConversationFactory = Callable[
 ]
 OpenHandsModules = tuple[Any, Any, Any, Any]
 
-_AGENT_LLM_NUM_RETRIES = 2
-_AGENT_LLM_LOCAL_NUM_RETRIES = 1
+_AGENT_LLM_MAX_ATTEMPTS = 3
+_AGENT_LLM_LOCAL_MAX_ATTEMPTS = 2
 _AGENT_LLM_RETRY_MAX_WAIT_SECONDS = 8
 _AGENT_LLM_RETRY_MIN_WAIT_SECONDS = 1
 _AGENT_LLM_RETRY_MULTIPLIER = 2.0
@@ -1898,10 +1898,10 @@ def _usage_source_event_id(anchor: str, usage: BackendUsage) -> str:
 
 
 def _llm_resilience_options(profile: ModelProfile) -> dict[str, int | float]:
-    """Bound interactive model retries while allowing transient recovery."""
+    """Bound total model attempts through the SDK's sole retry owner."""
     return {
         "num_retries": (
-            _AGENT_LLM_LOCAL_NUM_RETRIES if profile.is_local else _AGENT_LLM_NUM_RETRIES
+            _AGENT_LLM_LOCAL_MAX_ATTEMPTS if profile.is_local else _AGENT_LLM_MAX_ATTEMPTS
         ),
         "retry_max_wait": _AGENT_LLM_RETRY_MAX_WAIT_SECONDS,
         "retry_min_wait": _AGENT_LLM_RETRY_MIN_WAIT_SECONDS,
@@ -1981,8 +1981,7 @@ def _agent_settings(
         tools=tools,
         agent_context=context,
         condenser=condenser,
-        enable_sub_agents=False,
-        enable_switch_llm_tool=False,
+        enable_classify_and_switch_llm_tool=False,
         tool_concurrency_limit=1,
         mcp_config={},
         verification=VerificationSettings(
