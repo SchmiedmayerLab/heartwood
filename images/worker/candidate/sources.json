@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "purpose": "qualification-only",
+  "python": "3.12.15",
+  "uv": "0.13.7",
+  "source_date_epoch": 1794539629,
+  "build_requirements_sha256": "050fa80cdb2957a899bc6466f2e960ecc8e322046d82df6c7851cd294062af30",
+  "sources": {
+    "openhands": {
+      "repository": "OpenHands/software-agent-sdk",
+      "revision": "365f886933cfe70e4c7ae44722699ab1cc8f411e",
+      "url": "https://codeload.github.com/OpenHands/software-agent-sdk/tar.gz/365f886933cfe70e4c7ae44722699ab1cc8f411e",
+      "sha256": "8069d533af40f51dd93a1b51e3f28b03e1ec66dc0b156c48a884d15a6adec3aa",
+      "size": 6001238,
+      "directory": "software-agent-sdk-365f886933cfe70e4c7ae44722699ab1cc8f411e",
+      "patches": [
+        {
+          "path": "conversation-admission.patch",
+          "sha256": "6fec43fdfa28af12c39a27f3a967b2cc0b57690412be3982ea8ced34312d9ff6"
+        },
+        {
+          "path": "dependency-compatibility.patch",
+          "sha256": "e5356e0ab9d36f9755ba67e6e25dcc9cf2e55365388fc6a05ab86d62028003dc"
+        }
+      ],
+      "packages": [
+        {
+          "path": "openhands-sdk",
+          "version": "1.62.0+heartwood.1",
+          "original_version": "1.62.0",
+          "name": "openhands-sdk"
+        },
+        {
+          "path": "openhands-tools",
+          "version": "1.62.0+heartwood.1",
+          "original_version": "1.62.0",
+          "name": "openhands-tools"
+        },
+        {
+          "path": "openhands-agent-server",
+          "version": "1.62.0+heartwood.1",
+          "original_version": "1.62.0",
+          "name": "openhands-agent-server"
+        }
+      ]
+    },
+    "openshell": {
+      "repository": "ai-openshell/sdk-python",
+      "revision": "03e15024f38aac5ae202e9480395adcbdbc8be1b",
+      "url": "https://codeload.github.com/ai-openshell/sdk-python/tar.gz/03e15024f38aac5ae202e9480395adcbdbc8be1b",
+      "sha256": "d2c4761e1a52cf1feef1913727f57956e3a551bbd6ecd3638f0e6551ce8a4750",
+      "size": 220381,
+      "directory": "sdk-python-03e15024f38aac5ae202e9480395adcbdbc8be1b",
+      "patches": [
+        {
+          "path": "sandbox-admission.patch",
+          "sha256": "e5aaefbab08a3de0f2003a69b2884bdeb550bf45a9a037747555b9b8088251c6"
+        }
+      ],
+      "packages": [
+        {
+          "path": ".",
+          "version": "0.1.8+heartwood.1",
+          "original_version": null,
+          "name": "openshell"
+        }
+      ]
+    }
+  }
+}

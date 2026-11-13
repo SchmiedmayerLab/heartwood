@@ -75,6 +75,26 @@ Registry writes, multi-platform manifest assembly, and moving-tag promotion rema
 Release creation also requires the repository-managed Python and JavaScript/TypeScript CodeQL analyses for the exact commit.
 Capable-model acceptance runs on the organization's large hosted runner because CPU inference does not finish inside its command deadline on a standard runner; every other job runs on standard GitHub-hosted runners, and container builds reclaim unused preinstalled toolchains first and reuse bounded GitHub Actions BuildKit caches.
 
+## Native Worker Dependency Candidates
+
+The native worker qualification path needs SDK admission and remote-event hooks that are not available in the public application lock.
+`deploy/build-worker-candidate.py` builds a separate, explicitly versioned wheel set from immutable upstream source archives and reviewed patches in `images/worker/candidate/`.
+It verifies source, patch and build-tool hashes, uses a fixed source timestamp, preserves upstream licenses, and records each wheel digest.
+The candidate workflow repeats the build and requires byte-identical wheel records.
+These artifacts support integration tests; they do not replace the application lock, install dependencies, publish upstream packages, or establish a supported deployment.
+
+```bash
+uv run --no-project --python 3.12.15 deploy/build-worker-candidate.py --output test-results/worker-candidate
+```
+
+The builder requires the uv version recorded in the source manifest and a new output directory.
+The conversation patch adds bounded remote-event admission, terminal failure propagation and explicit outside client-tool control.
+The sandbox patch exposes the native configuration-admission record needed to bind a worker to its admitted policy and process generation.
+The dependency patch updates the SDK's stale inference-client constraint, public imports and usage-cost handling after its MCP 2 migration.
+The local package version suffix distinguishes these reviewed candidates from upstream releases.
+Source revisions, patch digests and wheel records must accompany any qualification result that uses them.
+Promotion into the production dependency lock requires compatible upstream releases or an explicitly maintained patched dependency source, followed by integrated qualification of the exact resulting image.
+
 ## Research Evaluation Evidence
 
 Research evaluations distinguish connectivity, tool compatibility, workflow completion, artifact completeness, coding correctness, statistical correctness, policy adherence, and recovery.
