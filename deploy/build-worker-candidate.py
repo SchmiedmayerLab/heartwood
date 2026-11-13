@@ -11,14 +11,17 @@ import hashlib
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import tarfile
+import tomllib
 import urllib.request
 import zipfile
 from email.parser import Parser
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Any
 
 _CONFIG = Path(__file__).resolve().parents[1] / "images/worker/candidate"
 _MAX_ARCHIVE = 50 * 1024 * 1024
@@ -50,8 +53,8 @@ def _wheel_identity(path: Path) -> tuple[str, str]:
     return name[0], version[0]
 
 
-def build(output: Path, uv: str) -> None:
-    """Build new artifacts without changing installed dependencies or source checkouts."""
+def _configuration(uv: str) -> tuple[dict[str, Any], bytes, Path]:
+    """Verify the tool and shared build inputs before executing any build."""
     manifest_bytes = (_CONFIG / "sources.json").read_bytes()
     manifest = json.loads(manifest_bytes)
     if manifest["schema_version"] != 1 or manifest["purpose"] != "qualification-only":
@@ -64,6 +67,45 @@ def build(output: Path, uv: str) -> None:
     for source in manifest["sources"].values():
         for patch in source["patches"]:
             _verified(_CONFIG / patch["path"], patch["sha256"])
+    return manifest, manifest_bytes, constraints
+
+
+def _build_wheel(
+    project: Path,
+    output: Path,
+    uv: str,
+    manifest: dict[str, Any],
+    constraints: Path,
+    scm_version: str | None = None,
+) -> None:
+    env = {**os.environ, "SOURCE_DATE_EPOCH": str(manifest["source_date_epoch"])}
+    if scm_version is not None:
+        env["SETUPTOOLS_SCM_PRETEND_VERSION"] = scm_version
+    subprocess.run(
+        [
+            uv,
+            "build",
+            "--no-config",
+            "--no-sources",
+            "--wheel",
+            "--python",
+            manifest["python"],
+            "--build-constraints",
+            str(constraints),
+            "--require-build-hashes",
+            "--out-dir",
+            str(output),
+            str(project),
+        ],
+        cwd=project,
+        env=env,
+        check=True,
+    )
+
+
+def build(output: Path, uv: str) -> None:
+    """Build new artifacts without changing installed dependencies or source checkouts."""
+    manifest, manifest_bytes, constraints = _configuration(uv)
     output = output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     with TemporaryDirectory(prefix="heartwood-worker-build-") as temporary:
@@ -96,27 +138,7 @@ def build(output: Path, uv: str) -> None:
                     metadata.write_text(content.replace(old, f'version = "{package["version"]}"'))
                     if project != checkout:
                         shutil.copyfile(checkout / "LICENSE", project / "LICENSE")
-                build_env = {**env, "SETUPTOOLS_SCM_PRETEND_VERSION": package["version"]}
-                subprocess.run(
-                    [
-                        uv,
-                        "build",
-                        "--no-config",
-                        "--no-sources",
-                        "--wheel",
-                        "--python",
-                        manifest["python"],
-                        "--build-constraints",
-                        str(constraints),
-                        "--require-build-hashes",
-                        "--out-dir",
-                        str(output),
-                        str(project),
-                    ],
-                    cwd=staging,
-                    env=build_env,
-                    check=True,
-                )
+                _build_wheel(project, output, uv, manifest, constraints, package["version"])
     wheels = sorted(output.glob("*.whl"))
     expected = sum(len(source["packages"]) for source in manifest["sources"].values())
     if len(wheels) != expected:
@@ -133,19 +155,103 @@ def build(output: Path, uv: str) -> None:
         "purpose": "qualification-only",
         "manifest_sha256": _digest(manifest_bytes),
         "python": manifest["python"],
-        "uv": version,
+        "uv": manifest["uv"],
         "wheels": {path.name: _digest(path.read_bytes()) for path in wheels},
     }
     (output / "build-record.json").write_text(json.dumps(report, indent=2) + "\n")
+
+
+def _application_metadata(project: Path, settings: dict[str, Any]) -> tuple[str, str]:
+    metadata = project / "pyproject.toml"
+    content = metadata.read_text()
+    original = tomllib.loads(content)["project"]
+    version = original["version"] + settings["version_suffix"]
+    old_version = f'version = "{original["version"]}"'
+    if content.count(old_version) != 1:
+        raise ValueError("Application version declaration is ambiguous")
+    content = content.replace(old_version, f'version = "{version}"')
+    replacements = settings["dependency_replacements"]
+    names = {item.split("==")[0] for item in replacements}
+    for dependency in original.get("dependencies", []):
+        if re.split(r"[<>=!~;\[\s]", dependency, maxsplit=1)[0] in names:
+            if dependency not in replacements or content.count(f'"{dependency}"') != 1:
+                raise ValueError("Application dependency differs from the qualification manifest")
+            content = content.replace(f'"{dependency}"', f'"{replacements[dependency]}"')
+    metadata.write_text(content)
+    return original["name"], version
+
+
+def build_application(output: Path, uv: str) -> None:
+    """Build installable application candidates from the exact committed source tree."""
+    manifest, manifest_bytes, constraints = _configuration(uv)
+    repository = _CONFIG.parents[2]
+    commit = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=repository, text=True
+    ).strip()
+    skill_commit = subprocess.check_output(
+        ["git", "rev-parse", f"{commit}:vendor/heartwood-skills"], cwd=repository, text=True
+    ).strip()
+    output = output.resolve()
+    output.mkdir(parents=True, exist_ok=False)
+    with TemporaryDirectory(prefix="heartwood-application-build-") as temporary:
+        staging = Path(temporary)
+        for checkout, revision, destination in (
+            (repository, commit, staging),
+            (
+                repository / "vendor/heartwood-skills",
+                skill_commit,
+                staging / "vendor/heartwood-skills",
+            ),
+        ):
+            archive = subprocess.check_output(["git", "archive", revision], cwd=checkout)
+            destination.mkdir(parents=True, exist_ok=True)
+            with tarfile.open(fileobj=io.BytesIO(archive), mode="r:") as bundle:
+                bundle.extractall(destination, filter="data")
+        identities = set()
+        for metadata in sorted((staging / "packages").glob("*/pyproject.toml")):
+            project = metadata.parent
+            identities.add(_application_metadata(project, manifest["application"]))
+            shutil.copyfile(staging / "LICENSE.md", project / "LICENSE")
+            _build_wheel(project, output, uv, manifest, constraints)
+        # The pinned Skill catalog is built unchanged from its own commit.
+        project = staging / "vendor/heartwood-skills"
+        metadata = tomllib.loads((project / "pyproject.toml").read_text())["project"]
+        identities.add((metadata["name"], metadata["version"]))
+        _build_wheel(project, output, uv, manifest, constraints)
+    wheels = sorted(output.glob("*.whl"))
+    actual = [_wheel_identity(path) for path in wheels]
+    if len(actual) != len(identities) or set(actual) != identities:
+        raise ValueError("Application candidate wheel set does not match its source")
+    hashes = {path.name: _digest(path.read_bytes()) for path in wheels}
+    requirements = "".join(
+        f"{name}=={version} --hash=sha256:{hashes[path.name]}\n"
+        for path, (name, version) in zip(wheels, actual, strict=True)
+    )
+    (output / "application-requirements.txt").write_text(requirements)
+    report = {
+        "purpose": "qualification-only",
+        "commit": commit,
+        "skill_commit": skill_commit,
+        "manifest_sha256": _digest(manifest_bytes),
+        "python": manifest["python"],
+        "uv": manifest["uv"],
+        "wheels": hashes,
+        "requirements_sha256": _digest(requirements.encode()),
+    }
+    (output / "application-build-record.json").write_text(json.dumps(report, indent=2) + "\n")
 
 
 def main() -> None:
     """Parse the artifact destination and build with the pinned tool version."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True, help="New wheel output directory")
+    parser.add_argument(
+        "--application", action="store_true", help="Build the committed Heartwood application"
+    )
     parser.add_argument("--uv", default="uv", help="Path to the pinned uv executable")
     args = parser.parse_args()
-    build(args.output, str(Path(args.uv).resolve()) if "/" in args.uv else args.uv)
+    builder = build_application if args.application else build
+    builder(args.output, str(Path(args.uv).resolve()) if "/" in args.uv else args.uv)
 
 
 if __name__ == "__main__":

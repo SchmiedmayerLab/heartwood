@@ -10,6 +10,10 @@ on:
       - .github/workflows/worker-candidate.yml
       - deploy/build-worker-candidate.py
       - images/worker/candidate/**
+      - packages/**
+      - vendor/heartwood-skills
+      - pyproject.toml
+      - LICENSE.md
   workflow_dispatch:
 
 permissions:
@@ -36,27 +40,26 @@ jobs:
           uv run --no-project --python 3.12.15 deploy/build-worker-candidate.py --output test-results/worker-candidate/first
           uv run --no-project --python 3.12.15 deploy/build-worker-candidate.py --output test-results/worker-candidate/second
           cmp test-results/worker-candidate/first/build-record.json test-results/worker-candidate/second/build-record.json
+          uv run --no-project --python 3.12.15 deploy/build-worker-candidate.py --application --output test-results/worker-candidate/application-first
+          uv run --no-project --python 3.12.15 deploy/build-worker-candidate.py --application --output test-results/worker-candidate/application-second
+          cmp test-results/worker-candidate/application-first/application-build-record.json test-results/worker-candidate/application-second/application-build-record.json
       - name: Verify the candidate environment lock
         run: |
           bash images/worker/candidate/runtime.sh compile test-results/worker-candidate/first
           git diff --exit-code -- images/worker/candidate/runtime-requirements.txt
       - name: Install the candidate qualification environment
-        run: bash images/worker/candidate/runtime.sh install test-results/worker-candidate/first test-results/worker-candidate/environment
-      - name: Test worker admission and lifecycle with candidate wheels
+        run: bash images/worker/candidate/runtime.sh install test-results/worker-candidate/first test-results/worker-candidate/application-first test-results/worker-candidate/environment
+      - name: Test the installed application and worker candidate
         env:
           OPENHANDS_SUPPRESS_BANNER: '1'
           LITELLM_LOCAL_MODEL_COST_MAP: 'True'
         run: |
-          PYTHONPATH="$(find "$PWD/packages" -mindepth 2 -maxdepth 2 -type d -name src -print | paste -sd:):$PWD/vendor/heartwood-skills/src"
-          export PYTHONPATH
-          test-results/worker-candidate/environment/bin/python -m pytest --no-cov -q \
-            packages/gateway/tests/test_worker*.py \
-            packages/gateway/tests/test_remote_workspace.py \
-            packages/compliance/tests/test_worker_candidate_build.py \
-            packages/compliance/tests/test_worker_image.py
+          test-results/worker-candidate/environment/bin/python -I -m pytest --no-cov -q
       - name: Retain qualification artifacts
         uses: actions/upload-artifact@v7
         with:
           name: worker-dependency-candidate-${{ github.sha }}
-          path: test-results/worker-candidate/first/
+          path: |
+            test-results/worker-candidate/first/
+            test-results/worker-candidate/application-first/
           retention-days: 14
