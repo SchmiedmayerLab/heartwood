@@ -361,6 +361,8 @@ These internal launcher contracts do not launch sandboxes, verify an observer's 
 Native worker selection is explicit and requires qualified runtime dependencies; ordinary launch does not silently switch execution modes.
 After an uncertain creation response, revocation may resolve the uniquely named sandbox only when its full project and attempt ownership match this process's retained intent.
 Cleanup verifies native worker absence and removes only owned staging resources before releasing the session writer.
+If provisioning is still unresolved, deletion can require retry while the attempt remains fenced and the writer remains owned.
+A control-plane absence response alone is insufficient when the container runtime still retains attempt resources; never release ownership or repeat creation to bypass that discrepancy.
 The native deletion API is name-scoped rather than an atomic expected-generation deletion; unique attempt names and outside identity checks do not replace control-plane authorization.
 A prior process's attempt or changed native connection identity requires explicit outside reconciliation rather than automatic deletion against potentially different infrastructure.
 
