@@ -91,6 +91,7 @@ class WorkerVolumes:
                         *args,
                     ],
                     env={"PATH": os.defpath},
+                    cwd=config,
                     capture_output=True,
                     timeout=60,
                     check=False,

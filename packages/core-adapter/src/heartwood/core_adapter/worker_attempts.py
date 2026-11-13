@@ -168,6 +168,7 @@ class WorkerAttemptLease:
         self._runtime = record.runtime
         self._owns_writer = owns_writer
         self._fenced = False
+        self._runtime_observer: Callable[[WorkerRuntimeBinding], None] | None = None
         self._lock = RLock()
 
     @property
@@ -190,6 +191,25 @@ class WorkerAttemptLease:
         """Reject stale work before dispatch and again before admitting its result."""
         if not self.active:
             raise WorkerAttemptError("worker attempt admission is closed")
+        if self._runtime_observer is not None:
+            try:
+                self._runtime_observer(self._runtime)
+            except Exception:
+                self.fence()
+                raise WorkerAttemptError(
+                    "native runtime observation closed worker admission"
+                ) from None
+            if not self.active:
+                raise WorkerAttemptError("worker attempt admission is closed")
+
+    def require_runtime_observation(self, observer: Callable[[WorkerRuntimeBinding], None]) -> None:
+        """Bind one outside runtime observer before admitting the worker connection."""
+        with self._lock:
+            if self._runtime_observer is not None:
+                raise WorkerAttemptError("worker runtime observer cannot be replaced")
+            self.ensure_active()
+            self._runtime_observer = observer
+            self.ensure_active()
 
     def fence(self) -> None:
         """Permanently close this capability without claiming infrastructure revocation."""

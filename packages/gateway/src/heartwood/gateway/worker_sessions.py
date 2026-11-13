@@ -54,6 +54,7 @@ class WorkerSessionPlan:
     launch: Callable[[WorkerAttemptIntent], WorkerRuntimeBinding]
     connect: Callable[[WorkerAttemptLease], WorkerConversationContext]
     revoke: Callable[[WorkerAttemptRecord], WorkerRevocationEvidence]
+    release_preparation: Callable[[], None] | None = None
 
 
 WorkerPlanFactory = Callable[[WorkerSessionRequest], WorkerSessionPlan]
@@ -121,6 +122,9 @@ class ManagedWorkerSession:
 
     def close(self) -> None:
         """Keep ownership until outside revocation and native client shutdown succeed."""
-        if self._plan is not None and self._service.worker_attempt() is not None:
-            self._service.revoke_worker(self._plan.revoke)
+        if self._plan is not None:
+            if self._service.worker_attempt() is not None:
+                self._service.revoke_worker(self._plan.revoke)
+            if self._plan.release_preparation is not None:
+                self._plan.release_preparation()
         self._service.close()

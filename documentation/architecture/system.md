@@ -65,7 +65,13 @@ Preparation, launch and connection are attempted once per service; uncertainty r
 Before replacing or closing a managed session, the gateway fences its lease and records the platform callback's revocation evidence through the existing session lifecycle.
 Failed revocation retains the service and writer ownership for recovery; closing an HTTP client is not revocation evidence.
 The platform callback remains responsible for native worker and service cleanup, including attempt-owned storage.
-This constructor-owned integration does not select an infrastructure driver from project content or add a deployment-file worker configuration.
+An operator-owned deployment manifest can explicitly select the native Docker sandbox adapter.
+The launcher validates native tools, the local daemon socket, registered mutual TLS identity and the exact policy file outside research files and protected project state.
+Unsupported SDK admission or transport hooks stop launch without a local fallback.
+The adapter reuses native sandbox creation, configuration admission, provider attachments and service forwarding; it does not implement another agent loop, scheduler, inference router or tunnel.
+Input, Skill and specialist identities are bound before launch; the worker is admitted only after its image, effective policy, runtime generation, projected bytes, non-root identity and authenticated API match the outside observations.
+Native provider credentials remain in the sandbox control plane; the gateway receives an opaque placeholder from the worker environment.
+Model and tenant restrictions must be enforced by the qualified provider endpoint or existing institutional inference service; the selected model name and a provider attachment alone do not enforce them against a compromised worker.
 
 The Docker reference adapter can transfer verified private input and Skill snapshots into attempt-owned named volumes using the native Docker CLI.
 It uses an explicit local daemon and an empty client configuration, with no inherited Docker context, credential helpers or proxy settings.
@@ -73,7 +79,7 @@ A short-lived preparation container receives only those named volumes and runs o
 The worker receives `/inputs` and `/skills` as read-only mounts; outside inspection checks the image, network and exact volume identities and rejects overlapping mounts.
 Transfer is attempted once, and uncertainty requires reconciliation instead of repeating the copy.
 Cleanup checks both ownership labels and attempt-specific container names before removing projections, and refuses to remove resources whose ownership changed.
-This storage adapter does not establish sandbox policy admission, runtime generation, provider restrictions or revocation by itself; those remain responsibilities of the native worker launcher.
+The storage adapter supplies only storage observations; the native launcher combines these with control-plane admission and revocation evidence.
 
 ### Project Context
 
@@ -342,6 +348,8 @@ Replacement preserves the native conversation identity and requires the previous
 Replaying a record does not grant a live capability or permit a local execution fallback.
 
 Each process-local admission capability belongs to one retained binding and session writer.
+The native launcher binds one outside runtime observer before connection; subsequent admission checks reject a changed sandbox, process generation, configuration or forwarding process and permanently fence the lease.
+The native forwarder does not itself pin process generation, so its continued liveness is insufficient evidence.
 The full worker workspace requires that capability and restricts requests and event connections to its observed origin and native conversation.
 Creation supplies the retained conversation identity; gateway-initiated forks require a separately authorized lifecycle and are rejected by this binding.
 Fencing closes its HTTP, event, and callback admission.
@@ -350,7 +358,11 @@ A capability cannot prove that a sandbox stopped or that service access was revo
 The sandbox control plane and outside services enforce those controls, and an unavailable or uncertain revocation blocks replacement.
 Attempt records and ordinary session/audit correlation contain no worker credentials.
 These internal launcher contracts do not launch sandboxes, verify an observer's evidence, or revoke service access themselves.
-The default remote factory remains disabled until its control-plane integration and the selected runtime satisfy the deployment qualification gates.
+Native worker selection is explicit and requires qualified runtime dependencies; ordinary launch does not silently switch execution modes.
+After an uncertain creation response, revocation may resolve the uniquely named sandbox only when its full project and attempt ownership match this process's retained intent.
+Cleanup verifies native worker absence and removes only owned staging resources before releasing the session writer.
+The native deletion API is name-scoped rather than an atomic expected-generation deletion; unique attempt names and outside identity checks do not replace control-plane authorization.
+A prior process's attempt or changed native connection identity requires explicit outside reconciliation rather than automatic deletion against potentially different infrastructure.
 
 ### Remote Response Admission
 

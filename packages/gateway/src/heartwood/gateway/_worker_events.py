@@ -167,6 +167,15 @@ class WorkerEventAdmission:
             raise WorkerResponseError("worker event failed admission") from None
 
 
+def require_worker_event_hooks() -> None:
+    """Reject unsupported SDKs before a native launcher can grant worker access."""
+    if not all(
+        callable(getattr(RemoteWorkspace, name, None))
+        for name in ("connect_websocket", "validate_websocket_message")
+    ):
+        raise RuntimeError("installed SDK does not support required worker event admission")
+
+
 class AdmittedWorkerWorkspace(AdmittedRemoteWorkspace):
     """HTTP and event admission, requiring the SDK's public transport hooks."""
 
@@ -177,11 +186,7 @@ class AdmittedWorkerWorkspace(AdmittedRemoteWorkspace):
     @classmethod
     def require_event_hooks(cls, data: object) -> object:
         """Reject unsupported SDKs before parsing or retaining credentials."""
-        if not all(
-            callable(getattr(RemoteWorkspace, name, None))
-            for name in ("connect_websocket", "validate_websocket_message")
-        ):
-            raise RuntimeError("installed SDK does not support required worker event admission")
+        require_worker_event_hooks()
         return data
 
     @property
