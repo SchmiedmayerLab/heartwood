@@ -165,6 +165,7 @@ from heartwood.gateway._model_transfer import (
     inspect_model_bundle,
 )
 from heartwood.gateway._project import ProjectContext, ProjectStateError
+from heartwood.gateway._project_activity import ProjectOwnershipError
 from heartwood.gateway._project_config import (
     AuditCheckpointSettings,
     LocalModelSelection,
@@ -322,6 +323,7 @@ __all__ = [
     "ProjectConfigStore",
     "ProjectContext",
     "ProjectDeployment",
+    "ProjectOwnershipError",
     "ProjectStateError",
     "ProjectionActionOutcome",
     "ProjectionActionRecord",

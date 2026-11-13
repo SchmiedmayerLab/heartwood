@@ -356,6 +356,13 @@ An existing project-local state marker requires an explicit migration before thi
 This placement separates canonical configuration, sessions, audit records, Skills, runtime records, and model artifacts from research files; operating-system identities and worker mounts still enforce access.
 
 Project configuration writes use a project-scoped interprocess lock.
+Each gateway registers a native lifetime lease before serving calls for an initialized project or completing first initialization.
+Registration uses the existing project initialization lock, and distinct gateways keep independent leases so separate sessions remain concurrent.
+Successful shutdown releases the gateway lease only after accepted calls, model workers, and session services have drained; failed shutdown retains it.
+An internal maintenance context holds the initialization lock and every gateway lease before session staging can begin.
+Idle gateways therefore prevent staging, and new gateways cannot enter the project during staging.
+Process exit releases native ownership; an old empty lease file does not indicate a live gateway.
+These locks coordinate participating gateway processes, not older binaries or independently supervised inference runtimes, which must be stopped separately.
 Session mutation uses a separate interprocess lease for each session, owned by the gateway process that first handles a command.
 The lease remains active until that session service closes.
 

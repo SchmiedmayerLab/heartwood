@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import json
 import tomllib
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import asdict, replace
 from pathlib import Path
@@ -30,8 +31,10 @@ from heartwood.gateway import (
     ProjectConfigError,
     ProjectConfigStore,
     ProjectContext,
+    ProjectStateError,
 )
 from heartwood.gateway._project_config import _config_mapping, project_config_from_mapping
+from heartwood.persistence import native_file_lock, write_private_json_atomic
 from heartwood.schemas import PolicyProfile
 
 
@@ -226,6 +229,38 @@ def test_project_config_updates_serialize_across_store_instances(tmp_path: Path)
     assert configured.model_settings.active_profile == profile.profile_id
     assert configured.action_settings.confirmation_mode == "confirm-risky"
     assert project.config_lock_path.stat().st_mode & 0o777 == 0o600
+
+
+def test_waiting_configuration_writer_revalidates_project_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = ProjectContext(tmp_path)
+    store = ProjectConfigStore(project, _default_config(project))
+    store.save(store.default)
+    before = project.config_path.read_bytes()
+    waiting = Event()
+
+    @contextmanager
+    def observe_lock(path: Path) -> Iterator[None]:
+        waiting.set()
+        with native_file_lock(path):
+            yield
+
+    monkeypatch.setattr("heartwood.gateway._project_config.native_file_lock", observe_lock)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        with native_file_lock(project.config_lock_path):
+            pending = executor.submit(
+                store.save,
+                store.default.with_action_settings(
+                    ActionSettings(confirmation_mode="confirm-risky")
+                ),
+            )
+            assert waiting.wait(timeout=5)
+            with native_file_lock(project.state_lock_path):
+                write_private_json_atomic(project.state_path, {"schema_version": "retired"})
+        with pytest.raises(ProjectStateError):
+            pending.result(timeout=5)
+    assert project.config_path.read_bytes() == before
 
 
 def test_local_model_selection_stays_under_project_model_root(tmp_path: Path) -> None:

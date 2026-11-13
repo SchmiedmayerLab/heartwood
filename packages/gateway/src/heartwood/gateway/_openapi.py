@@ -421,7 +421,7 @@ _ERROR_DESCRIPTIONS = {
     401: "The launch capability is missing or invalid.",
     403: "The request does not satisfy the configured ingress boundary.",
     404: "The resource or configured ingress path is unavailable.",
-    409: "Storage locking, session ownership, integrity recovery, or command conflict.",
+    409: "Storage locking, project or session ownership, integrity recovery, or command conflict.",
     413: "The request body exceeds 1 MiB.",
     422: "The request or current configuration fails validation.",
     503: "The gateway is shutting down or stopped, or the verification environment is unavailable.",
@@ -531,7 +531,7 @@ def gateway_openapi(*, api_version: str | None = None) -> dict[str, Any]:
                     "description": "A stream of heartwood-session-events events.",
                     "content": {"text/event-stream": {"schema": {"type": "string"}}},
                 },
-                **_errors([400, 401, 403, 404, 422, 503], error_ref),
+                **_errors([400, 401, 403, 404, 409, 422, 503], error_ref),
             },
             "x-sse-event": {"name": "heartwood-session-events", "dataSchema": snapshot_ref},
         }

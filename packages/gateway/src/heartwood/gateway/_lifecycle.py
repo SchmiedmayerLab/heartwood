@@ -20,10 +20,11 @@ class GatewayClosedError(RuntimeError):
 class GatewayOperations:
     """Let accepted calls finish without admitting new calls during shutdown."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, on_enter: Callable[[], None] | None = None) -> None:
         self._condition = Condition()
         self._active: dict[int, int] = {}
         self._closing = False
+        self._on_enter = on_enter
 
     @contextmanager
     def enter(self) -> Iterator[None]:
@@ -34,6 +35,8 @@ class GatewayOperations:
                 raise GatewayClosedError("gateway is shutting down or stopped")
             self._active[thread_id] = depth + 1
         try:
+            if depth == 0 and self._on_enter is not None:
+                self._on_enter()
             yield
         finally:
             with self._condition:

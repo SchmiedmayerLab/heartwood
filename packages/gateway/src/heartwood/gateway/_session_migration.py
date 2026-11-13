@@ -17,6 +17,7 @@ from tempfile import TemporaryDirectory
 from heartwood.core_adapter import FileSessionStore, session_maintenance
 from heartwood.gateway._deployment import _validate_trusted_parents
 from heartwood.gateway._project import ProjectContext, ProjectStateError
+from heartwood.gateway._project_activity import project_gateway_maintenance
 from heartwood.gateway._session_catalog import _read_metadata
 from heartwood.persistence import (
     fsync_directory,
@@ -59,7 +60,7 @@ def staged_session_records(source: ProjectContext, target: ProjectContext) -> It
     if not source.state_exists():
         raise ProjectStateError("session staging requires initialized source state")
     with (
-        native_file_lock(source.state_lock_path, timeout=0, reentrant=False),
+        project_gateway_maintenance(source),
         native_file_lock(source.config_lock_path, timeout=0, reentrant=False),
         session_maintenance(source.sessions_dir) as stores,
     ):

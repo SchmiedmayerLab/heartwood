@@ -15,10 +15,12 @@ import pytest
 from heartwood.gateway import (
     GatewayClosedError,
     ProjectContext,
+    ProjectOwnershipError,
     RestGateway,
     RestRequest,
     SessionGateway,
 )
+from heartwood.gateway._project_activity import project_gateway_maintenance
 from heartwood.gateway._session_catalog import SessionSummary
 from heartwood.session import CommandKind, SessionCommand
 
@@ -158,6 +160,8 @@ def test_shutdown_timeout_retains_session_ownership_and_credentials_until_retry(
             with pytest.raises(TimeoutError, match="calls are still active"):
                 gateway.stop()
             assert bool(service.store.owns_writer)
+            with pytest.raises(ProjectOwnershipError), project_gateway_maintenance(gateway.project):
+                pytest.fail("timed-out shutdown must retain project ownership")
             assert gateway.credential_store.resolve("SYNTHETIC_TOKEN") == "synthetic-value"
             with pytest.raises(GatewayClosedError):
                 gateway.default_session()
@@ -167,6 +171,8 @@ def test_shutdown_timeout_retains_session_ownership_and_credentials_until_retry(
     gateway.stop()
     assert not service.store.owns_writer
     assert gateway.credential_store.resolve("SYNTHETIC_TOKEN") is None
+    with project_gateway_maintenance(gateway.project):
+        assert gateway.project.state_exists()
 
 
 def test_shutdown_closes_all_owned_event_streams(tmp_path: Path) -> None:
