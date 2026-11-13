@@ -57,6 +57,13 @@ An internal maintenance context holds that gate while acquiring every existing s
 The context leaves writer metadata and historical records unchanged and releases its locks after failure or process exit.
 Gateway versions that do not use the admission lock must be stopped before maintenance.
 This excludes session writes only; project configuration, runtime activity, and model transfers require separate exclusion before a complete state migration.
+Internal migration staging verifies paired session and audit histories and command receipts under these locks, then copies their original bytes into a private directory on the destination volume.
+The copy is verified again before a receipt records its file hashes and session heads.
+Pending append recovery, unresolved commands, corrupt records, symbolic links, and existing destinations prevent staging.
+Worker recovery state, writer metadata, and derived exports remain in the source; they are not promoted into canonical records.
+The staged copy is temporary and cannot be opened as a project; leaving the staging context removes it and leaves the original records in place.
+An abrupt process exit can leave an inert staging directory; a retry uses a fresh directory and never adopts an earlier partial copy.
+Staging neither switches a deployment binding nor authenticates historical records, and is not exposed as an operator migration command.
 Mutation acquires the writer lease before the paired-snapshot lock; recovery and replay never hold the snapshot lock while waiting for a writer lease.
 This fixed ordering prevents deadlock as new gateway workers and presentation adapters reuse the store.
 
