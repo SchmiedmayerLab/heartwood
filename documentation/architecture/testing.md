@@ -140,6 +140,28 @@ The browser bundle is installed beside the candidate CLI from the existing front
 Missing CLI resources resolve only within the installed package or the exact editable checkout layout, never relative to the research project.
 Image construction and worker smoke checks do not establish native sandbox, provider-authorization or sensitive-data readiness.
 
+### Native Network Qualification
+
+`deploy/tests/worker_network_qualification.py` runs against an existing disposable sandbox through the native authenticated control API.
+Run it on a trusted Linux controller with IPv4 and native IPv6 addresses that reach its canary listeners; account for any container port mappings when supplying the addresses and ports.
+The controller needs the candidate SDK, its gateway client certificate, and network reachability to the gateway.
+The admitted policy must allow the hostname supplied through `--allowed-host` (default `host.docker.internal`) while denying the canary ports and unlisted destinations.
+The worker receives only the probe program and synthetic destination addresses, never the controller certificate or key.
+
+```bash
+python deploy/tests/worker_network_qualification.py \
+  --gateway "$GATEWAY_ADDRESS" --ca "$CA_PATH" --cert "$CLIENT_CERT_PATH" --key "$CLIENT_KEY_PATH" \
+  --sandbox "$SYNTHETIC_SANDBOX" --ipv4 "$CONTROLLER_IPV4" --ipv6 "$CONTROLLER_IPV6" \
+  --port 19672 --ipv6-port 19673
+```
+
+The check opens TCP and UDP canaries and independently reaches every tested transport before and after the worker probe.
+It requires explicit policy denial for direct IPv4, mapped IPv6, native IPv6, UDP, and an unlisted hostname; timeout, refused connection, and missing route do not qualify as denials.
+Unknown names may resolve to observation-only synthetic addresses without gaining connection permission.
+Any canary traffic from the probe, listener failure, or change in sandbox identity, process generation, or admitted configuration invalidates the result.
+The record binds the probe digest and observed native sandbox identity; retain it with the image and gateway build provenance.
+This command does not create or delete the sandbox, change its policy, qualify IPv6 inference, or establish model authorization or sensitive-data readiness.
+
 ## Research Evaluation Evidence
 
 Research evaluations distinguish connectivity, tool compatibility, workflow completion, artifact completeness, coding correctness, statistical correctness, policy adherence, and recovery.
