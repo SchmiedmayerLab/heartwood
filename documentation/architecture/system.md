@@ -67,6 +67,14 @@ Failed revocation retains the service and writer ownership for recovery; closing
 The platform callback remains responsible for native worker and service cleanup, including attempt-owned storage.
 This constructor-owned integration does not select an infrastructure driver from project content or add a deployment-file worker configuration.
 
+The Docker reference adapter can transfer verified private input and Skill snapshots into attempt-owned named volumes using the native Docker CLI.
+It uses an explicit local daemon and an empty client configuration, with no inherited Docker context, credential helpers or proxy settings.
+A short-lived preparation container receives only those named volumes and runs only the qualified image's permission utility; its root filesystem is read-only, its network is disabled, and its sole added capability is `FOWNER` to set permissions on copied files.
+The worker receives `/inputs` and `/skills` as read-only mounts; outside inspection checks the image, network and exact volume identities and rejects overlapping mounts.
+Transfer is attempted once, and uncertainty requires reconciliation instead of repeating the copy.
+Cleanup checks both ownership labels and attempt-specific container names before removing projections, and refuses to remove resources whose ownership changed.
+This storage adapter does not establish sandbox policy admission, runtime generation, provider restrictions or revocation by itself; those remain responsibilities of the native worker launcher.
+
 ### Project Context
 
 `ProjectContext.current()` resolves the process current directory and reserves `.heartwood/` beneath it.
