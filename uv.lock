@@ -1870,6 +1870,7 @@ version = "0.4.0"
 source = { editable = "packages/gateway" }
 dependencies = [
     { name = "anthropic" },
+    { name = "certifi" },
     { name = "filelock" },
     { name = "heartwood-adapters" },
     { name = "heartwood-audit" },
@@ -1888,11 +1889,13 @@ dependencies = [
     { name = "pydantic" },
     { name = "tomli-w" },
     { name = "uv" },
+    { name = "websockets" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "anthropic", specifier = "==0.120.2" },
+    { name = "certifi", specifier = "==2026.10.23" },
     { name = "filelock", specifier = "==3.32.2" },
     { name = "heartwood-adapters", editable = "packages/adapters" },
     { name = "heartwood-audit", editable = "packages/audit" },
@@ -1911,6 +1914,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.12" },
     { name = "tomli-w", specifier = "==1.2.0" },
     { name = "uv", specifier = "==0.13.7" },
+    { name = "websockets", specifier = "==16.1.1" },
 ]
 
 [[package]]

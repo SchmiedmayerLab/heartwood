@@ -23,6 +23,8 @@ import httpx
 import pytest
 import uvicorn
 from openhands.sdk import Agent, Conversation, RemoteConversation
+from openhands.sdk.conversation.base import BaseConversation
+from openhands.sdk.conversation.exceptions import WebSocketConnectionError
 from openhands.sdk.conversation.request import StartConversationRequest
 from openhands.sdk.event.conversation_state import ConversationStateUpdateEvent
 from openhands.sdk.testing import TestLLM
@@ -39,6 +41,7 @@ from heartwood.gateway._remote_workspace import (
     WorkerResponseError,
     WorkerResponseTransport,
 )
+from heartwood.gateway._worker_events import AdmittedWorkerWorkspace
 
 
 def _request(
@@ -444,11 +447,21 @@ def test_client_reset_preserves_admission_and_policy_is_not_serialized(
         assert first_client.is_closed
 
 
-def test_native_attach_and_fork_preserve_admission() -> None:
+@pytest.mark.parametrize("workspace_type", [AdmittedRemoteWorkspace, AdmittedWorkerWorkspace])
+def test_native_attach_and_fork_preserve_admission(
+    workspace_type: type[AdmittedRemoteWorkspace], caplog: pytest.LogCaptureFixture
+) -> None:
+    if workspace_type is AdmittedWorkerWorkspace and not callable(
+        getattr(RemoteWorkspace, "connect_websocket", None)
+    ):
+        pytest.skip("installed SDK lacks required worker event hooks")
     agent = Agent(llm=TestLLM(model="test-model"), tools=[])
     poisoned = False
+    reject_events = False
+    worker_key = "synthetic-event-key"
 
     async def metadata(request: Request) -> JSONResponse:
+        assert request.headers.get("X-Session-API-Key") == worker_key
         if request.url.path.endswith("/events/search"):
             return JSONResponse({"items": [], "next_page_id": None})
         is_fork = request.url.path.endswith("/fork")
@@ -465,10 +478,13 @@ def test_native_attach_and_fork_preserve_admission() -> None:
 
     async def events(socket: WebSocket) -> None:
         await socket.accept()
+        assert await socket.receive_json() == {"type": "auth", "session_api_key": worker_key}
         try:
             while True:
                 await socket.send_text(
-                    ConversationStateUpdateEvent(
+                    '{"kind":"MissingEvent","private":"synthetic-private-event"}'
+                    if reject_events
+                    else ConversationStateUpdateEvent(
                         key="execution_status", value="idle"
                     ).model_dump_json()
                 )
@@ -491,8 +507,10 @@ def test_native_attach_and_fork_preserve_admission() -> None:
         server = uvicorn.Server(uvicorn.Config(app, log_level="error", access_log=False))
         thread = Thread(target=server.run, kwargs={"sockets": [listener]}, daemon=True)
         thread.start()
-        workspace = AdmittedRemoteWorkspace(
-            host=f"http://127.0.0.1:{listener.getsockname()[1]}", working_dir="/workspace"
+        workspace = workspace_type(
+            host=f"http://127.0.0.1:{listener.getsockname()[1]}",
+            working_dir="/workspace",
+            api_key=worker_key,
         )
         try:
             deadline = time.monotonic() + 5
@@ -507,9 +525,27 @@ def test_native_attach_and_fork_preserve_admission() -> None:
                     assert child.workspace is workspace
                 finally:
                     child.close()
-                poisoned = True
-                with pytest.raises(WorkerResponseError, match="registrations"):
-                    parent.fork()
+                if workspace_type is AdmittedWorkerWorkspace:
+                    reject_events = True
+                    deadline = time.monotonic() + 5
+                    while True:
+                        try:
+                            _ = parent.state
+                        except WebSocketConnectionError:
+                            break
+                        assert time.monotonic() < deadline, "event rejection was not surfaced"
+                        time.sleep(0.01)
+                    conversation: BaseConversation = parent
+                    with pytest.raises(WebSocketConnectionError, match="admission"):
+                        conversation.send_message("Must not reach the worker")
+                    workspace.reset_client()
+                    with pytest.raises(WorkerResponseError, match="closed"):
+                        workspace.client.get("/api/conversations/fixture")
+                    assert "synthetic-private-event" not in caplog.text
+                else:
+                    poisoned = True
+                    with pytest.raises(WorkerResponseError, match="registrations"):
+                        parent.fork()
             finally:
                 parent.close()
         finally:
