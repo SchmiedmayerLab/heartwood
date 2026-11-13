@@ -24,7 +24,7 @@ class ProjectOwnershipError(RuntimeError):
 
 
 class ProjectActivity:
-    """Own one process-shared lease for the lifetime of a gateway's project access."""
+    """Own one native lease for a gateway or supervised runtime's project access."""
 
     def __init__(self, project: ProjectContext) -> None:
         self.project = project
@@ -90,7 +90,7 @@ class ProjectActivity:
 
 @contextmanager
 def project_gateway_maintenance(project: ProjectContext) -> Iterator[None]:
-    """Exclude registered gateways and new registration using existing native locks."""
+    """Exclude registered project activity and new registration using native locks."""
     if not project.state_exists():
         raise ProjectStateError("gateway maintenance requires initialized project state")
     with _admission(project, timeout=0), ExitStack() as leases:
@@ -105,9 +105,17 @@ def project_gateway_maintenance(project: ProjectContext) -> Iterator[None]:
                 except NativeLockUnavailableError as error:
                     if isinstance(error.__cause__, FileLockTimeout):
                         raise ProjectOwnershipError(
-                            "project maintenance requires all gateways to stop"
+                            "project maintenance requires all gateway and runtime activity to stop"
                         ) from error
                     raise
+        if (
+            project.managed_runtime_intent_path.exists()
+            or project.managed_runtime_intent_path.is_symlink()
+        ):
+            raise ProjectOwnershipError(
+                "managed inference outcome is unresolved; "
+                "reconcile runtime termination before maintenance"
+            )
         yield
 
 

@@ -203,6 +203,11 @@ After shutdown starts, callers must use a new gateway instance for further work;
 The wait does not hold the gateway state lock, so a callback already in progress can finish.
 If model work remains active after the shutdown deadline, the gateway reports failure and retains its worker references for a later shutdown attempt.
 This does not stop a separately supervised inference runtime or establish project-wide migration exclusion.
+The native inference launcher holds project ownership while reading the selected model, staging files, supervising inference, and cleaning up.
+It writes a durable launch intent before spawning its inference child and removes that intent only after observing the child's exit.
+Interrupted launch or failed termination leaves the intent in place and prevents another native launch or migration staging, even if the launcher's process lease has disappeared.
+An unresolved intent requires operator reconciliation against the platform supervisor; a stale PID or absent launcher is not proof that inference has stopped.
+These controls cover the supervised child, not arbitrary descendants or independently launched inference services; complete runtime termination still requires platform qualification.
 An explicit license decision is required before import, and the request is bound to the SHA-256 identity of the exact manifest shown during review.
 Bundle integrity is not treated as source authorization or platform qualification: exact catalog identities are rehydrated from trusted local catalog metadata, while every other transferred model is marked unvalidated.
 Transferred models remain outside the repository-download registry, so an offline restart cannot silently turn an imported artifact into a network request.

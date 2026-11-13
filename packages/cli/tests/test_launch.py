@@ -62,10 +62,12 @@ from heartwood.gateway import (
     ProjectConfig,
     ProjectConfigStore,
     ProjectContext,
+    ProjectOwnershipError,
     SessionGateway,
     SlurmGpuPartition,
     model_profile_from_preset,
 )
+from heartwood.gateway._project_activity import project_gateway_maintenance
 
 
 def _options(
@@ -844,6 +846,9 @@ def test_launch_supervises_selected_vllm_and_opens_project_chat(
 
     def ensure_setup(*_args: object, **kwargs: object) -> int:
         setup_options.append(kwargs)
+        assert options.project.managed_runtime_intent_path.is_file()
+        with pytest.raises(ProjectOwnershipError), project_gateway_maintenance(options.project):
+            pytest.fail("the inference launcher must retain project ownership")
         return 0
 
     monkeypatch.setattr(
@@ -864,6 +869,82 @@ def test_launch_supervises_selected_vllm_and_opens_project_chat(
     assert "--workspace" not in observed_runs[-1][0]
     assert (tmp_path / ".heartwood" / "logs" / "local-model.log").is_file()
     assert not (tmp_path / ".heartwood" / "runtime" / "scratch").exists()
+    assert not options.project.managed_runtime_intent_path.exists()
+    with project_gateway_maintenance(options.project):
+        assert options.project.state_exists()
+
+
+def test_launch_holds_ownership_during_model_verification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    options = _options(tmp_path)
+    _snapshot(options.project.models_dir / "model")
+
+    def verify(_selection: LocalRuntimeSelection) -> None:
+        with pytest.raises(ProjectOwnershipError), project_gateway_maintenance(options.project):
+            pytest.fail("migration must not overlap model verification")
+        raise OSError("synthetic verification failure")
+
+    monkeypatch.setattr("heartwood.cli._launch._verify_local_model", verify)
+    assert run_launch(options, env={"HEARTWOOD_PLATFORM": "generic"}) == 66
+    assert not options.project.managed_runtime_intent_path.exists()
+    with project_gateway_maintenance(options.project):
+        assert options.project.state_exists()
+
+
+@pytest.mark.parametrize("failure", ["intent-write", "spawn", "terminate"])
+def test_launch_preserves_uncertain_runtime_outcomes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    options = _options(tmp_path)
+    _snapshot(options.project.models_dir / "model")
+    executable = tmp_path / "vllm"
+    executable.write_text("#!/bin/sh\n")
+    executable.chmod(0o755)
+    spawned: list[bool] = []
+
+    class Process:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            assert options.project.managed_runtime_intent_path.is_file()
+            spawned.append(True)
+            if failure == "spawn":
+                raise OSError("synthetic spawn uncertainty")
+
+        def poll(self) -> None:
+            return None
+
+        def terminate(self) -> None:
+            assert options.project.managed_runtime_intent_path.is_file()
+            raise OSError("synthetic termination failure")
+
+    def fail_intent(*_args: object) -> None:
+        raise OSError("synthetic intent write failure")
+
+    monkeypatch.setattr(
+        "heartwood.cli._launch._resolve_runtime_executable", lambda _kind: executable
+    )
+    monkeypatch.setattr("heartwood.cli._launch._preflight_vllm", lambda *_args: None)
+    monkeypatch.setattr("heartwood.cli._launch.subprocess.Popen", Process)
+    monkeypatch.setattr("heartwood.cli._launch._wait_for_runtime", lambda *_args, **_kw: True)
+    monkeypatch.setattr("heartwood.cli._launch._ensure_setup", lambda *_args, **_kw: 0)
+    monkeypatch.setattr("heartwood.cli._launch._run_interaction", lambda *_args, **_kw: 0)
+    if failure == "intent-write":
+        monkeypatch.setattr(
+            "heartwood.gateway._runtime_activity.write_private_json_atomic", fail_intent
+        )
+    with pytest.raises(OSError, match="synthetic"):
+        run_launch(options, env={"HEARTWOOD_PLATFORM": "generic"})
+    assert bool(spawned) == (failure != "intent-write")
+    assert options.project.managed_runtime_intent_path.exists() == (failure != "intent-write")
+    if failure == "intent-write":
+        with project_gateway_maintenance(options.project):
+            assert options.project.state_exists()
+    else:
+        with (
+            pytest.raises(ProjectOwnershipError, match="unresolved"),
+            project_gateway_maintenance(options.project),
+        ):
+            pytest.fail("an unconfirmed process outcome must prevent migration")
 
 
 def test_launch_reports_runtime_timeout_and_forces_cleanup(

@@ -183,6 +183,7 @@ from heartwood.gateway._readiness import (
     persist_deployment_profile,
 )
 from heartwood.gateway._rest import RestGateway, RestRequest, RestResponse
+from heartwood.gateway._runtime_activity import ManagedRuntimeActivity, managed_runtime_activity
 from heartwood.gateway._session_catalog import (
     DEFAULT_SESSION_ID,
     SessionCatalog,
@@ -286,6 +287,7 @@ __all__ = [
     "LocalModelImport",
     "LocalModelRuntime",
     "LocalModelSelection",
+    "ManagedRuntimeActivity",
     "ModelArtifact",
     "ModelArtifactCatalog",
     "ModelArtifactError",
@@ -410,6 +412,7 @@ __all__ = [
     "managed_model_reasoning_parser",
     "managed_model_request_body",
     "managed_model_token_budgets",
+    "managed_runtime_activity",
     "minimum_compute_capability_for_model",
     "model_connections_from_mapping",
     "model_profile_from_mapping",
