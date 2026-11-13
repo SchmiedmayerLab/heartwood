@@ -12,7 +12,8 @@ import hashlib
 import json
 import math
 import os
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -149,6 +150,8 @@ class SessionService:
         self.env = os.environ if env is None else env
         self.clock: Callable[[], str] = _utc_now if clock is None else clock
         self._command_lock = RLock()
+        self._worker_control_lock = RLock()
+        self._worker_control_active = False
         self._closed = False
         self._event_sink = event_sink or (lambda _events: None)
         self._token_sink = token_sink or (lambda _delta: None)
@@ -432,15 +435,16 @@ class SessionService:
 
     def close(self) -> None:
         """Release backend resources."""
-        with self._command_lock:
-            if self._closed:
-                return
-        self.backend.close()
-        with self._command_lock:
-            if self._worker_lease is not None:
-                self._worker_lease.fence()
-            self._closed = True
-            self.store.release_writer()
+        with self._control_worker():
+            with self._command_lock:
+                if self._closed:
+                    return
+            self.backend.close()
+            with self._command_lock:
+                if self._worker_lease is not None:
+                    self._worker_lease.fence()
+                self._closed = True
+                self.store.release_writer()
 
     def propose_external_action(self, source_event_id: str) -> SessionEvent:
         """Prepare review of a retained worker proposal through a trusted service adapter."""
@@ -869,6 +873,67 @@ class SessionService:
         """Read retained worker identity without restoring execution authority."""
         with self._command_lock:
             return current_worker_attempt(self.replay_events())
+
+    @contextmanager
+    def _control_worker(self) -> Iterator[None]:
+        with self._worker_control_lock:
+            if self._worker_control_active:
+                raise WorkerAttemptError("worker lifecycle operation is already in progress")
+            self._worker_control_active = True
+            try:
+                yield
+            finally:
+                self._worker_control_active = False
+
+    def launch_worker(
+        self,
+        launch: Callable[[WorkerAttemptIntent], WorkerRuntimeBinding],
+        *,
+        image_digest: str,
+        sandbox_policy_sha256: str,
+        input_manifest_sha256: str,
+    ) -> WorkerAttemptLease:
+        """Retain intent before one trusted launch; leave uncertain outcomes fenced."""
+        with self._control_worker():
+            intent = self.prepare_worker_attempt(
+                image_digest=image_digest,
+                sandbox_policy_sha256=sandbox_policy_sha256,
+                input_manifest_sha256=input_manifest_sha256,
+            )
+            try:
+                runtime = launch(intent)
+                if runtime.generation is None:
+                    raise WorkerAttemptError("worker process generation is unavailable")
+                return self.bind_worker_runtime(attempt_id=intent.attempt_id, runtime=runtime)
+            except BaseException as error:
+                # A retained prepared intent also blocks replay if fencing cannot be written.
+                with suppress(Exception):
+                    self.fence_worker_attempt(attempt_id=intent.attempt_id)
+                if not isinstance(error, Exception):
+                    raise
+                raise WorkerAttemptError("worker launch requires outside reconciliation") from None
+
+    def revoke_worker(
+        self, revoke: Callable[[WorkerAttemptRecord], WorkerRevocationEvidence]
+    ) -> WorkerRevocationEvidence:
+        """Fence before outside revocation and retain only matching observer evidence."""
+        with self._control_worker():
+            current = self.worker_attempt()
+            if current is None:
+                raise WorkerAttemptError("no worker attempt exists")
+            if current.revocation is not None:
+                return current.revocation
+            self.fence_worker_attempt(attempt_id=current.intent.attempt_id)
+            current = self.worker_attempt()
+            assert current is not None
+            try:
+                evidence = revoke(current)
+                self.record_worker_revocation(evidence)
+            except Exception:
+                raise WorkerAttemptError(
+                    "worker revocation requires outside reconciliation"
+                ) from None
+            return evidence
 
     def prepare_worker_attempt(
         self, *, image_digest: str, sandbox_policy_sha256: str, input_manifest_sha256: str

@@ -55,6 +55,14 @@ Final events delivered during shutdown remain durable; this lifecycle fence does
 A second process cannot reconcile or mutate that session until the owner releases the lease or exits.
 Replay and live updates remain available through the interface connected to the owning gateway.
 Distinct sessions have independent leases.
+Trusted worker launch uses `SessionService.launch_worker` to retain an attempt before invoking the platform launcher and bind the observed runtime only after that call succeeds.
+The launcher must use the retained identity with the native sandbox lifecycle and verify the authorized image, effective policy, active configuration, and process generation before returning a binding.
+Missing generation, failed admission, interruption, or an uncertain create response leaves the attempt fenced for outside reconciliation; Heartwood does not retry creation or infer that no worker exists.
+`revoke_worker` closes local admission before invoking the platform's revocation observer and records only returned evidence matching the retained attempt and runtime.
+A failed or uncertain revocation does not permit replacement.
+Launch, revocation, and service shutdown are serialized independently of command and event handling, so shutdown cannot release writer ownership while a launch may still return.
+Platform callbacks must bound their control-plane operations and must not wait for session shutdown or recursively start another worker lifecycle operation.
+These coordination methods do not install a platform launcher, terminate workers themselves, or infer infrastructure enforcement from a worker acknowledgement.
 Writer admission and session-catalog changes briefly hold one admission lock for the session root.
 An internal maintenance context holds that gate while acquiring every existing session writer lock; an active writer prevents maintenance from starting.
 The context leaves writer metadata and historical records unchanged and releases its locks after failure or process exit.
