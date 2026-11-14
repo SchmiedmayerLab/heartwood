@@ -187,9 +187,9 @@ def test_gateway_log_leak_is_redacted_and_fails_qualification(
 
 
 @pytest.mark.usefixtures("profile_module")
-@pytest.mark.parametrize("lifetime", [None, 30])
+@pytest.mark.parametrize(("lifetime", "update_fails"), [(None, False), (30, False), (30, True)])
 def test_native_provider_expiry_is_installed_before_worker_admission(
-    monkeypatch: pytest.MonkeyPatch, lifetime: int | None
+    monkeypatch: pytest.MonkeyPatch, lifetime: int | None, update_fails: bool
 ) -> None:
     root = Path(__file__).resolve().parents[3]
     monkeypatch.syspath_prepend(str(root))
@@ -205,17 +205,43 @@ def test_native_provider_expiry_is_installed_before_worker_admission(
     fixture.cli_command = MagicMock()
     monkeypatch.setattr(module.time, "monotonic", lambda: 10.0)
     monkeypatch.setattr(module.time, "time", lambda: 100.0)
-    fixture._create_inference_provider()
+
+    def invoke(arguments: list[str], **environment: str) -> str:
+        assert "synthetic-qualification-secret" not in arguments
+        if arguments[1] == "create":
+            assert "--credential-expires-at" not in arguments
+            assert fixture.resources.callback.call_count == 0
+            if lifetime is not None:
+                assert environment["HEARTWOOD_QUALIFICATION_KEY"] == "qualification-pending"
+        else:
+            assert arguments[:3] == ["provider", "update", "synthetic-owner"]
+            fixture.resources.callback.assert_called_once_with(
+                fixture.cli_command, ["provider", "delete", "synthetic-owner"]
+            )
+            if update_fails:
+                raise RuntimeError("Synthetic provider update failed")
+        return ""
+
+    fixture.cli_command.side_effect = invoke
+    if update_fails:
+        with pytest.raises(RuntimeError, match="Synthetic provider update failed"):
+            fixture._create_inference_provider()
+    else:
+        fixture._create_inference_provider()
     arguments = fixture.cli_command.call_args.args[0]
     assert fixture.cli_command.call_args.kwargs == {
         "HEARTWOOD_QUALIFICATION_KEY": "synthetic-qualification-secret"
     }
     assert "synthetic-qualification-secret" not in arguments
     if lifetime is None:
+        assert fixture.cli_command.call_count == 1
         assert "--credential-expires-at" not in arguments
         assert fixture.inference_deadline is None
     else:
-        assert arguments[-2:] == ["--credential-expires-at", "HEARTWOOD_QUALIFICATION_KEY=130000"]
+        assert fixture.cli_command.call_count == 2
+        assert arguments[:3] == ["provider", "update", "synthetic-owner"]
+        assert arguments[-2] == "--credential-expires-at"
+        assert arguments[-1] == "HEARTWOOD_QUALIFICATION_KEY=" + str(130000)
         assert fixture.inference_deadline == 40.0
         assert fixture.credential_expires_at_ms == 130000
     fixture.resources.callback.assert_called_once_with(
