@@ -20,6 +20,7 @@ from uuid import UUID, uuid4
 
 from heartwood.gateway._experiment_store import ExperimentStore
 from heartwood.gateway._project import ProjectContext
+from heartwood.gateway._project_activity import ProjectActivity
 from heartwood.gateway._workspace import WorkspaceInspector
 from heartwood.gateway.python_environment import observe_python_environment
 from heartwood.persistence import native_file_lock
@@ -86,9 +87,11 @@ class ExperimentRecorder:
         definition = ExperimentDefinition.model_validate(definition)
         self._require_script(definition)
         identity = UUID(str(run_id)) if run_id is not None else uuid4()
-        self.project.initialize()
-        with native_file_lock(
-            self.project.state_root / f".experiment-{identity}.lock", timeout=0, reentrant=False
+        with (
+            _experiment_activity(self.project, initialize=True),
+            native_file_lock(
+                self.project.state_root / f".experiment-{identity}.lock", timeout=0, reentrant=False
+            ),
         ):
             if any(run.run_id == identity for run in self._store.runs()):
                 raise ValueError("Experiment identity already exists; inspect its recorded outcome")
@@ -227,8 +230,11 @@ class ExperimentRecorder:
         identity = UUID(str(run_id))
         if not self.project.state_exists():
             raise ValueError("No experiment exists in this project")
-        with native_file_lock(
-            self.project.state_root / f".experiment-{identity}.lock", timeout=0, reentrant=False
+        with (
+            _experiment_activity(self.project),
+            native_file_lock(
+                self.project.state_root / f".experiment-{identity}.lock", timeout=0, reentrant=False
+            ),
         ):
             run = self._find_run(identity)
             self._require_script(run.definition)
@@ -315,6 +321,19 @@ class ExperimentRecorder:
 
     def _file(self, path: str) -> ExperimentFile:
         return self._workspace.fingerprint(path, max_bytes=self.max_file_bytes)
+
+
+@contextmanager
+def _experiment_activity(project: ProjectContext, *, initialize: bool = False) -> Iterator[None]:
+    activity = ProjectActivity(project)
+    try:
+        if initialize:
+            activity.initialize()
+        else:
+            activity.acquire_existing()
+        yield
+    finally:
+        activity.close()
 
 
 def experiment_digest(value: object) -> str:

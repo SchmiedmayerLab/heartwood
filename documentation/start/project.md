@@ -49,7 +49,7 @@ This mode keeps configuration, canonical sessions, audit records, installed Skil
 It does not create `.heartwood/` in the research directory or read project-local identity hints as authority.
 A copied research directory needs its own authorized deployment binding.
 
-Only `heartwood gateway serve` accepts `--deployment`; standalone terminal, notebook and maintenance commands do not automatically discover this binding.
+`heartwood gateway serve` and the explicit project migration commands accept `--deployment`; standalone terminal, notebook and other maintenance commands do not automatically discover this binding.
 Use the explicitly bound gateway and trusted operator integration for managed state.
 Do not run local project initialization or point an ordinary command at the state directory to imitate a managed launch.
 
@@ -62,6 +62,39 @@ Missing, malformed, mismatched, writable, or symlinked deployment configuration 
 Existing `.heartwood/state.json` prevents this mode from starting until an explicit state migration has preserved and verified the old records.
 Do not remove that marker to bypass the check or point a new binding at an unverified copy.
 External placement alone does not restrict same-identity terminal access; the execution environment still needs an independently enforced filesystem and process boundary.
+
+#### Moving Existing Local State
+
+Stop the project's gateways, inference runtimes and recorded experiments, then run the migration from the research directory with an operator-owned manifest and a new protected backup path:
+
+```sh
+heartwood project migrate --deployment /etc/heartwood/project.toml --backup /srv/heartwood/backups/project-original
+```
+
+The backup parent and external state parent must already exist and satisfy the deployment ownership checks.
+The backup must share the research directory's filesystem so the original state can be retired atomically.
+The destination can reside on another filesystem; its staged copy is published atomically on that destination volume.
+Allocate space for an independent copy of the state and its model artifacts.
+No model download is performed.
+
+Migration verifies the session and audit chains, command receipts, preferences, experiment journal and installed Skill content before activating the protected state.
+Symbolic links, multiply linked files and special files stop migration rather than allowing another path to modify retained records.
+It retains the complete original directory as the protected backup, including recovery records that are not promoted into active state.
+Local model references are adjusted to the protected model directory; provider profiles retain their configuration.
+Historical records retain their existing assurance and are not retroactively authenticated by relocation.
+
+A `.heartwood-migration.json` file prevents local startup after retirement; it grants no deployment authority.
+Do not delete it to reinitialize a migrated project.
+An interruption during retirement or activation leaves both startup paths closed until an operator inspects the retained migration evidence and resumes:
+
+```sh
+heartwood project recover-migration --deployment /etc/heartwood/project.toml
+```
+
+To restore the original local state before the protected project has changed, use the same command with `--rollback`.
+Rollback requires exclusive access, verifies both copies, and retains the protected original and retired target.
+It refuses restoration over existing local state or after any canonical target change.
+Backups and failed staging directories require separate, explicit operator cleanup.
 
 A qualified deployment can add an explicit native worker selection to the same operator manifest.
 The worker receives selected input snapshots and verified Skills through read-only volumes and keeps its writable work inside the sandbox.
