@@ -19,6 +19,7 @@ path = [
     "uv.lock",
     "agents/**/*.md",
     "images/gpu/vllm-requirements.txt",
+    "images/worker/config.json",
     "**/py.typed",
     "**/__pycache__/**",
     "fixtures/**/*.csv",
