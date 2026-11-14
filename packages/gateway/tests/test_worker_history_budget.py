@@ -54,6 +54,7 @@ def test_native_attach_bounds_repeating_history_pages(monkeypatch: pytest.Monkey
     workspace = AdmittedRemoteWorkspace(
         host=f"http://127.0.0.1:{server.server_port}", working_dir="/workspace"
     )
+    workspace.authorize_agent(agent)
     conversation = None
     try:
         with pytest.raises(WorkerResponseError, match="budget exhausted"):

@@ -391,7 +391,8 @@ Admission captures those specifications independently of mutable caller objects 
 Client reset and model revalidation do not replace that captured contract.
 The SDK owns client-tool registration and execution semantics: its acknowledgement means a proposal was dispatched to the client, not that an external effect was authorized or completed.
 Outside authorization and independently observed service results remain separate requirements; worker claims cannot grant either.
-Remote agent metadata cannot select another agent implementation or enable the SDK’s client-side completion-log file writer.
+Remote agent metadata is admitted only when it equals the agent the gateway sent, apart from redacted or omitted secret values.
+A worker therefore cannot select another agent implementation, model route, tokenizer or completion-log setting for the gateway to construct.
 Errors expose a stable admission failure rather than worker response content.
 Resetting the workspace client retains the same admission policy.
 
