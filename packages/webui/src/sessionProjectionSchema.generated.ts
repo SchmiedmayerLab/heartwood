@@ -51,6 +51,8 @@ export const sessionProjectionJsonSchema = {
         "audit.export.recorded",
         "error.recorded",
         "worker_attempt.recorded",
+        "external_action.recorded",
+        "external_result.recorded",
         "workflow.updated",
         "workflow.execution.recorded",
       ],

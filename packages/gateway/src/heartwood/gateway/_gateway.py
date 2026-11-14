@@ -330,6 +330,11 @@ class _UnconfiguredAgentBackend:
         return "https://model.local.invalid/v1/chat/completions"
 
     @property
+    def model_id(self) -> str:
+        """Return the declared model identifier used for result disclosure review."""
+        return "unconfigured"
+
+    @property
     def model_profile_id(self) -> str:
         return "unconfigured"
 
@@ -375,6 +380,10 @@ class _UnconfiguredAgentBackend:
         session_id: str,  # noqa: ARG002
     ) -> PendingActionGroup | None:
         return None
+
+    def submit_context(self, *, session_id: str, content: str) -> tuple[BackendEvent, ...]:
+        """Use this backend's existing admission behavior for reviewed context."""
+        return self.submit_turn(session_id=session_id, prompt=content)
 
     def submit_turn(
         self,

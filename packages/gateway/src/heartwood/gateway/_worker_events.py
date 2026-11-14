@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 import ssl
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from uuid import UUID
 
@@ -17,6 +17,7 @@ import certifi
 import httpx
 from openhands.sdk.event import Event
 from openhands.sdk.event.conversation_state import FULL_STATE_KEY, ConversationStateUpdateEvent
+from openhands.sdk.tool.client_tool import ClientToolSpec
 from openhands.sdk.workspace import RemoteWorkspace
 from pydantic import Field, PrivateAttr, model_validator
 from websockets.asyncio.client import ClientConnection, connect
@@ -36,6 +37,7 @@ from heartwood.gateway._remote_workspace import (
     WorkerResponseError,
     _admit_json,
     _admit_metadata,
+    _client_tool_contract,
     _worker_origin,
 )
 
@@ -51,11 +53,17 @@ class WorkerEventAdmission:
     """Share HTTP admission limits while retaining native WebSocket ownership."""
 
     def __init__(
-        self, *, host: str, tool_modules: Mapping[str, str], budget: WorkerResponseBudget
+        self,
+        *,
+        host: str,
+        tool_modules: Mapping[str, str],
+        budget: WorkerResponseBudget,
+        client_tools: Sequence[ClientToolSpec] = (),
     ) -> None:
         self._origin = _worker_origin(host)
         self._budget = budget
         self._tool_modules = dict(tool_modules)
+        self._client_tools = _client_tool_contract(client_tools)
         if budget.attempt is not None and self._origin != _worker_origin(
             str(budget.attempt.runtime.endpoint)
         ):
@@ -137,7 +145,7 @@ class WorkerEventAdmission:
             self._budget.charge(len(content), new_response=True)
             if len(content) > _MAX_RESPONSE_BYTES:
                 raise ValueError
-            value = _admit_json(content, self._tool_modules)
+            value = _admit_json(content, self._tool_modules, self._client_tools)
             if not isinstance(value, dict) or value.get("kind") == "LLMCompletionLogEvent":
                 raise ValueError
             event = Event.model_validate(value)
@@ -145,7 +153,7 @@ class WorkerEventAdmission:
                 metadata = event.value if event.key == FULL_STATE_KEY else {event.key: event.value}
                 if not isinstance(metadata, dict):
                     raise ValueError
-                _admit_metadata(metadata, self._tool_modules)
+                _admit_metadata(metadata, self._tool_modules, self._client_tools)
                 attempt = self._budget.attempt
                 if (
                     attempt is not None
@@ -180,7 +188,10 @@ class AdmittedWorkerWorkspace(AdmittedRemoteWorkspace):
     def _events(self) -> WorkerEventAdmission:
         if self._event_admission is None:
             self._event_admission = WorkerEventAdmission(
-                host=self.host, tool_modules=dict(self.tool_modules), budget=self._response_budget
+                host=self.host,
+                tool_modules=dict(self.tool_modules),
+                budget=self._response_budget,
+                client_tools=self.authorized_client_tools,
             )
         return self._event_admission
 

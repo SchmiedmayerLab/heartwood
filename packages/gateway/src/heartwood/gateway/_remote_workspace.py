@@ -10,11 +10,12 @@ from __future__ import annotations
 
 import json
 import math
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from threading import Lock
 from typing import Any
 
 import httpx
+from openhands.sdk.tool.client_tool import ClientToolSpec
 from openhands.sdk.workspace import RemoteWorkspace
 from pydantic import ConfigDict, Field, PrivateAttr, model_validator
 
@@ -106,9 +107,11 @@ class WorkerResponseTransport(httpx.BaseTransport):
         tool_modules: Mapping[str, str],
         transport: httpx.BaseTransport,
         budget: WorkerResponseBudget | None = None,
+        client_tools: Sequence[ClientToolSpec] = (),
     ) -> None:
         self._origin = _worker_origin(host)
         self._tool_modules = dict(tool_modules)
+        self._client_tools = _client_tool_contract(client_tools)
         self._transport = transport
         self._budget = budget if budget is not None else WorkerResponseBudget()
         if self._budget.attempt is not None and self._origin != _worker_origin(
@@ -154,15 +157,18 @@ class WorkerResponseTransport(httpx.BaseTransport):
                 media_type = response.headers.get("content-type", "").split(";", 1)[0]
                 if media_type.strip().lower() != "application/json":
                     raise WorkerResponseError("worker response must be JSON")
-                value = _admit_json(content, self._tool_modules)
+                value = _admit_json(content, self._tool_modules, self._client_tools)
                 attempt = self._budget.attempt
                 if (
                     attempt is not None
-                    and request.url.path
+                    and (request.method, request.url.path)
                     in {
-                        "/api/conversations",
-                        f"/api/conversations/{attempt.intent.conversation_id}",
-                        f"/api/conversations/{attempt.intent.conversation_id}/events/snapshot",
+                        ("POST", "/api/conversations"),
+                        ("GET", f"/api/conversations/{attempt.intent.conversation_id}"),
+                        (
+                            "GET",
+                            f"/api/conversations/{attempt.intent.conversation_id}/events/snapshot",
+                        ),
                     }
                     and (
                         not isinstance(value, dict)
@@ -188,7 +194,7 @@ class WorkerResponseTransport(httpx.BaseTransport):
         path = request.url.path
         canonical = request.url.raw_path.split(b"?", 1)[0] == path.encode("utf-8")
         if path == "/api/conversations" and request.method == "POST" and canonical:
-            value = _admit_json(request.content, self._tool_modules)
+            value = _admit_json(request.content, self._tool_modules, self._client_tools)
             if isinstance(value, dict) and value.get("conversation_id") == identity:
                 return
         prefix = f"/api/conversations/{identity}"
@@ -217,7 +223,9 @@ def _reject_constant(_value: str) -> None:
     raise WorkerResponseError("worker JSON contains a nonfinite number")
 
 
-def _admit_json(content: bytes, tool_modules: Mapping[str, str]) -> object:
+def _admit_json(
+    content: bytes, tool_modules: Mapping[str, str], client_tools: Mapping[str, str] | None = None
+) -> object:
     try:
         value: object = json.loads(
             content.decode("utf-8"),
@@ -239,19 +247,57 @@ def _admit_json(content: bytes, tool_modules: Mapping[str, str]) -> object:
             raise WorkerResponseError("worker JSON contains a nonfinite number")
     if not isinstance(value, dict):
         return value
-    _admit_metadata(value, tool_modules)
+    _admit_metadata(value, tool_modules, client_tools)
     return value
 
 
-def _admit_metadata(value: dict[str, Any], tool_modules: Mapping[str, str]) -> None:
+def _client_tool_contract(specs: Sequence[ClientToolSpec]) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for spec in specs:
+        if spec.name in result:
+            raise ValueError("worker client tool names must be unique")
+        result[spec.name] = json.dumps(
+            spec.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
+        )
+    return result
+
+
+def _admit_client_tools(value: object, expected: Mapping[str, str]) -> None:
+    if value is None:
+        return
+    if not isinstance(value, list):
+        raise WorkerResponseError("worker client tool specifications are not authorized")
+    seen: set[str] = set()
+    for raw in value:
+        if not isinstance(raw, dict) or set(raw) - ClientToolSpec.model_fields.keys():
+            raise WorkerResponseError("worker client tool specifications are not authorized")
+        name = raw.get("name")
+        if not isinstance(name, str) or name not in expected:
+            raise WorkerResponseError("worker client tool specifications are not authorized")
+        try:
+            spec = ClientToolSpec.model_validate(raw)
+            canonical = _client_tool_contract([spec])[spec.name]
+        except (ValueError, TypeError):
+            raise WorkerResponseError(
+                "worker client tool specifications are not authorized"
+            ) from None
+        if spec.name in seen or expected.get(spec.name) != canonical:
+            raise WorkerResponseError("worker client tool specifications are not authorized")
+        seen.add(spec.name)
+
+
+def _admit_metadata(
+    value: dict[str, Any],
+    tool_modules: Mapping[str, str],
+    client_tools: Mapping[str, str] | None = None,
+) -> None:
     registrations = value.get("tool_module_qualnames", {})
     if not isinstance(registrations, dict) or any(
         not isinstance(name, str) or not isinstance(module, str) or tool_modules.get(name) != module
         for name, module in registrations.items()
     ):
         raise WorkerResponseError("worker tool registrations are not authorized")
-    if value.get("client_tools") not in (None, []):
-        raise WorkerResponseError("worker-selected client tools are not authorized")
+    _admit_client_tools(value.get("client_tools"), client_tools or {})
     agent = value.get("agent")
     if agent is not None:
         if not isinstance(agent, dict) or agent.get("kind") != "Agent":
@@ -279,13 +325,17 @@ class AdmittedRemoteWorkspace(RemoteWorkspace):
 
     model_config = ConfigDict(arbitrary_types_allowed=True, hide_input_in_errors=True)
     attempt: WorkerAttemptLease | None = Field(default=None, exclude=True, repr=False, frozen=True)
+    client_tools: tuple[ClientToolSpec, ...] = Field(default=(), exclude=True, frozen=True)
     tool_modules: tuple[tuple[str, str], ...] = Field(default=(), exclude=True, frozen=True)
     api_key: str | None = Field(default=None, exclude=True, repr=False, frozen=True)
     _admitted_client: httpx.Client | None = PrivateAttr(default=None)
     _response_budget: WorkerResponseBudget = PrivateAttr(default_factory=WorkerResponseBudget)
+    _client_tool_specs: tuple[str, ...] | None = PrivateAttr(default=None)
 
     @model_validator(mode="after")
     def _bind_attempt_budget(self) -> AdmittedRemoteWorkspace:
+        if self._client_tool_specs is None:
+            self._client_tool_specs = tuple(_client_tool_contract(self.client_tools).values())
         if self.attempt is not None:
             self.attempt.ensure_active()
             if _worker_origin(self.host) != _worker_origin(str(self.attempt.runtime.endpoint)):
@@ -293,6 +343,11 @@ class AdmittedRemoteWorkspace(RemoteWorkspace):
             if self._response_budget.attempt is not self.attempt:
                 self._response_budget = WorkerResponseBudget(attempt=self.attempt)
         return self
+
+    @property
+    def authorized_client_tools(self) -> list[ClientToolSpec]:
+        """Copy the captured native specifications without sharing mutable schemas."""
+        return [ClientToolSpec.model_validate_json(spec) for spec in self._client_tool_specs or ()]
 
     @property
     def client(self) -> httpx.Client:
@@ -309,6 +364,7 @@ class AdmittedRemoteWorkspace(RemoteWorkspace):
             transport = WorkerResponseTransport(
                 host=self.host,
                 tool_modules=modules,
+                client_tools=self.authorized_client_tools,
                 budget=self._response_budget,
                 transport=httpx.HTTPTransport(
                     trust_env=False, limits=httpx.Limits(max_connections=4)

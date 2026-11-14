@@ -1364,6 +1364,28 @@ def test_cancelled_unmatched_action_is_safe_only_at_an_intentional_pause(
     backend.close()
 
 
+def test_real_sdk_result_context_uses_native_message_and_run(tmp_path: Path) -> None:
+    llm = TestLLM.from_messages([_assistant_message("Result received.")])
+    backend = _backend(tmp_path, _conversation_factory(tmp_path, llm, tools=[]))
+    content = '{"kind":"outside-result","content":{"aggregate":7}}'
+    try:
+        immediate = backend.submit_context(session_id="session-1", content=content)
+        assert isinstance(immediate[0], BackendLifecycleEvent)
+        _wait_for_lifecycle(backend, BackendLifecycle.FINISHED)
+        conversation = backend._get_conversation()
+        messages = [
+            event
+            for event in conversation.state.events
+            if isinstance(event, MessageEvent) and event.source == "user"
+        ]
+        assert len(messages) == 1
+        assert messages[0].sender == "outside-result"
+        assert messages[0].llm_message.content == [TextContent(text=content)]
+        assert llm.call_count == 1
+    finally:
+        backend.close()
+
+
 def test_real_sdk_test_llm_turn_runs_in_background_and_reconciles_once(
     tmp_path: Path,
 ) -> None:
