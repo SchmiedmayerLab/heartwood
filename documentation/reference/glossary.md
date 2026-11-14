@@ -91,7 +91,7 @@ SPDX-License-Identifier: MIT
 : A managed service that controls cryptographic keys and performs authorized operations such as checkpoint signing without exposing private key material to Heartwood.
 
 **Launch capability**
-: The process-lifetime secret that every Heartwood gateway API request, event stream, and WebSocket must carry, delivered through a one-time launch link or a platform proxy header.
+: The process-lifetime secret required for protected Heartwood gateway API requests, event streams, and WebSockets, obtained through a one-time launch exchange or supplied by an authenticated platform proxy.
 
 **Large language model (LLM)**
 : The model used by the agent to interpret requests, reason, produce text, and propose tools.
@@ -108,6 +108,9 @@ SPDX-License-Identifier: MIT
 **Model transfer bundle**
 : A reproducible Heartwood ZIP64 artifact containing one model's immutable source metadata, runtime settings, selected files, and per-file SHA-256 digests for verified import into another project.
 
+**Mutual TLS (mTLS)**
+: Transport Layer Security configured so both the client and server authenticate with certificates trusted by the other side.
+
 **OAuth**
 : A standard authorization protocol that lets a user grant account access without giving Heartwood the account password.
 
@@ -117,6 +120,9 @@ SPDX-License-Identifier: MIT
 **OpenAI-compatible service**
 : A model endpoint implementing the relevant OpenAI API request and response shapes; compatibility does not imply operation by OpenAI.
 
+**Open Cybersecurity Schema Framework (OCSF)**
+: A shared schema for security events, used by the reference sandbox infrastructure to describe observed activity.
+
 **OpenID Connect (OIDC)**
 : An identity protocol built on OAuth that supplies authenticated user claims; a gateway capability is not an OpenID Connect identity.
 
@@ -125,6 +131,9 @@ SPDX-License-Identifier: MIT
 
 **OpenShell**
 : The sandbox infrastructure used by Heartwood's native reference adapter for externally enforced worker restrictions and inference credential transport.
+
+**OpenTelemetry Protocol (OTLP)**
+: A standard protocol for exporting telemetry such as logs, metrics and traces to a collector.
 
 **Pilot evaluation**
 : A bounded trial in which a small group of researchers uses one standard research environment so the deployment can record installation, workflow, reproducibility, and support evidence before a wider rollout.

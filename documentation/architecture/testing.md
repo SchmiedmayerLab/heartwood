@@ -207,6 +207,23 @@ If revocation cannot settle, the local fixture retains its control state for rec
 CI retains only the selected synthetic evidence and logs, excluding private gateway state and generated credentials.
 These tests do not establish model-driven attack resistance, signed-checkpoint retention, tenant authorization, or institutional sensitive-data approval.
 
+### Infrastructure Telemetry
+
+The native fixture receives the existing OpenShell OCSF export through OTLP with mutual TLS at an outside test collector.
+An unauthenticated client must be rejected while an authenticated positive control succeeds.
+It checks the gateway and sandbox resource identifiers, retains native event identifiers, and rejects synthetic provider credentials or protected-state canaries before writing telemetry artifacts.
+The test collector is a qualification fixture; deployments use their existing authenticated telemetry service.
+
+During an injected collector outage, bounded harmless commands continue producing events until the supervisor reports a native export gap.
+The collector then resumes and must receive that sandbox's gap record with a positive dropped-record count and loss timestamp.
+Counting transport retries alone does not establish loss because the transport SDK and native exporter have separate retry loops.
+The canonical Heartwood audit must remain byte-for-byte unchanged during the telemetry fault and continue to verify afterward.
+
+Retain the OTLP records, bounded collector status, application evidence and verified cleanup together.
+Native event identifiers support deduplication after retries; receipt of a gap record establishes known loss, not complete capture of every other event.
+An exporter reports a gap with a subsequent event batch, so idle periods and abrupt teardown can leave loss unreported.
+The fixture marks collection incomplete after its deliberate outage; it does not qualify a production collector's retention, alerting or shutdown recovery.
+
 ### Native Network Qualification
 
 `deploy/tests/worker_network_qualification.py` runs against an existing disposable sandbox through the native authenticated control API.

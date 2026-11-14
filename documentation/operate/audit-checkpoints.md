@@ -40,6 +40,25 @@ Heartwood does not block action dispatch on independently retained checkpoint ev
 Signed retention dates do not prove that the records system enforced immutability, availability or deletion policy.
 Deployments requiring these guarantees need independently enforced controls and qualification beyond checkpoint signature verification.
 
+## Infrastructure Telemetry
+
+Keep Heartwood's canonical decisions and signed checkpoints distinct from outside observations of sandbox activity.
+The reference infrastructure supports OpenShell's native OCSF export through OTLP to an existing authenticated collector.
+Configure the gateway's `openshell.gateway.otlp.ocsf` section with `enabled`, the exact collector `endpoint`, and operator-controlled `ca_file`, `cert_file` and `key_file` paths.
+The infrastructure supplies export configuration to its supervisors; collector credentials and management access stay outside workers.
+Require a collector that validates the client certificate, and restrict its network route and retained data to authorized operators.
+
+Correlate `openshell.gateway.name` and `openshell.sandbox.id` with the outside worker-attempt binding, and preserve native event identifiers for deduplication.
+Infrastructure events can contain sensitive operational metadata; apply the deployment's access, retention and export policy to them.
+They do not independently prove the scientific correctness of a worker's results or replace the canonical decision record.
+
+Delivery is best effort and can repeat records after a lost response.
+The native `openshell.ocsf.gap` event reports dropped records through `openshell.ocsf.gap.dropped` and `openshell.ocsf.gap.since_unix_ms` on a subsequent exported batch.
+Absence of a gap event does not prove complete collection, especially during inactivity, collector rejection or abrupt teardown.
+Monitor collector availability, rejected exports and retention independently, and retain explicit unknown or missing intervals.
+Heartwood does not gate dispatch on OTLP collector health; any requirement to stop work when infrastructure observation is unavailable needs outside deployment enforcement.
+See [Infrastructure Telemetry qualification](../architecture/testing.md#infrastructure-telemetry) for the synthetic loss and ledger-preservation checks.
+
 ## Understand Configuration Ownership
 
 Heartwood separates project selection from deployment trust:

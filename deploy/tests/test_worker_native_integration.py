@@ -425,6 +425,10 @@ print(json.dumps(result))
             assert len(hostile_checks) == 9
             assert all(value is True for value in hostile_checks.values())
         service.audit_log.verify()
+        ledger_before_telemetry_outage = service.store.audit_path.read_bytes()
+        telemetry = fixture.qualify_telemetry(worker_name, attempt.runtime.sandbox_id)
+        assert service.store.audit_path.read_bytes() == ledger_before_telemetry_outage
+        service.audit_log.verify()
         _stop(application)
         _assert_revoked(service)
         _restore(fixture, application.project, service.store.session_id, service.store.audit_path)
@@ -433,6 +437,7 @@ print(json.dumps(result))
             "drill_id": "approved-hostile-terminal.v1" if fixture.hostile else "native-workflow.v1",
             "worker_claims": hostile_checks,
             "direct_network": network_evidence,
+            "infrastructure_telemetry": telemetry,
             "outside_canary_positive_controls": fixture.provider.canary_requests,
             "forbidden_provider_requests": 0,
             "allowed_endpoint_redirect_requests": fixture.provider.redirect_requests,

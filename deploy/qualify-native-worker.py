@@ -59,6 +59,18 @@ def controller_socket_group(image: str) -> str:
 
 def qualify(worker: str, runtime: str, artifacts: Path, output: Path) -> None:
     """Assemble the trusted controller and retain the installed test outcome."""
+    source_paths = (
+        ROOT / "deploy/qualify-native-worker.py",
+        ROOT / "deploy/tests/test_worker_native_integration.py",
+        ROOT / "deploy/tests/worker_native_fixture.py",
+        ROOT / "deploy/tests/worker_telemetry.py",
+        ROOT / "deploy/tests/worker_hostile_probe.py",
+        ROOT / "deploy/tests/worker_network_probe.py",
+        ROOT / "deploy/tests/worker_network_qualification.py",
+        ROOT / "images/worker/candidate/symlink-workspace.Dockerfile",
+        ROOT / "images/worker/candidate/controller.Dockerfile",
+    )
+    source_hashes = {str(path.relative_to(ROOT)): digest(path) for path in source_paths}
     artifacts, output = artifacts.resolve(), output.resolve()
     if "," in str(artifacts) or "," in str(output):
         raise ValueError("Docker paths must not contain commas")
@@ -307,29 +319,22 @@ def qualify(worker: str, runtime: str, artifacts: Path, output: Path) -> None:
             )
             + "\n"
         )
+    sources_unchanged = source_hashes == {
+        str(path.relative_to(ROOT)): digest(path) for path in source_paths
+    }
     evidence = {
         "host": host,
         "controller_socket_group": socket_group,
-        "qualification_sources": {
-            str(path.relative_to(ROOT)): digest(path)
-            for path in (
-                ROOT / "deploy/qualify-native-worker.py",
-                ROOT / "deploy/tests/test_worker_native_integration.py",
-                ROOT / "deploy/tests/worker_native_fixture.py",
-                ROOT / "deploy/tests/worker_hostile_probe.py",
-                ROOT / "deploy/tests/worker_network_probe.py",
-                ROOT / "deploy/tests/worker_network_qualification.py",
-                ROOT / "images/worker/candidate/symlink-workspace.Dockerfile",
-            )
-        },
+        "qualification_sources": source_hashes,
+        "qualification_sources_unchanged": sources_unchanged,
         "images": image_ids,
         "gateway_build": record,
         "returncode": result.returncode,
-        "passed": result.returncode == 0 and not retained,
+        "passed": result.returncode == 0 and not retained and sources_unchanged,
         "sensitive_data_ready": False,
     }
     (output / "qualification.json").write_text(json.dumps(evidence, indent=2) + "\n")
-    if result.returncode or retained:
+    if result.returncode or retained or not sources_unchanged:
         raise RuntimeError("Native qualification failed; inspect qualification.log and junit.xml")
 
 
