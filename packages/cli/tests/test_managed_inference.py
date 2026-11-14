@@ -17,7 +17,7 @@ import time
 from collections.abc import Awaitable, Callable, Iterator
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import pytest
@@ -63,7 +63,7 @@ def model_server(tmp_path: Path) -> Iterator[tuple[Path, list[str], uvicorn.Serv
                 break
         observed.append(scope["path"])
         if scope["path"] == "/v1/models":
-            payload = {"data": [{"id": "synthetic-model"}]}
+            payload: dict[str, object] = {"data": [{"id": "synthetic-model"}]}
         else:
             assert scope["path"] == "/v1/chat/completions"
             message = json.loads(body)
@@ -157,7 +157,7 @@ def test_catalog_readiness_and_real_sdk_use_socket_while_tcp_is_squatted(
 ) -> None:
     prepare_openhands_import()
     import litellm
-    from openhands.sdk import LLM
+    from openhands.sdk import LLM, LLMStreamChunk
     from openhands.sdk.llm import Message, TextContent
 
     path, observed, server = model_server
@@ -219,6 +219,11 @@ def test_catalog_readiness_and_real_sdk_use_socket_while_tcp_is_squatted(
         litellm.client_session = None
         placeholder = configure_managed_inference(env)
         assert configure_managed_inference(env) == placeholder
+        # Installation mutates the SDK's public client hooks in another function.
+        client = cast(httpx.Client, litellm.client_session)
+        async_client = cast(httpx.AsyncClient, litellm.aclient_session)
+        assert isinstance(client, httpx.Client)
+        assert isinstance(async_client, httpx.AsyncClient)
         try:
             llm = LLM(
                 model="openai/synthetic-model",
@@ -233,7 +238,7 @@ def test_catalog_readiness_and_real_sdk_use_socket_while_tcp_is_squatted(
             assert "synthetic reply" in str(llm.generate(messages))
             assert "synthetic reply" in str(asyncio.run(llm.agenerate(messages)))
             streaming = llm.model_copy(update={"stream": True})
-            chunks = []
+            chunks: list[LLMStreamChunk] = []
             assert "synthetic reply" in str(streaming.generate(messages, on_token=chunks.append))
             assert chunks
             chunks.clear()
@@ -252,7 +257,7 @@ def test_catalog_readiness_and_real_sdk_use_socket_while_tcp_is_squatted(
             # A vanished listener must not trigger the model client's ordinary TCP path.
             path.unlink()
             with pytest.raises(FileNotFoundError):
-                litellm.client_session.post(
+                client.post(
                     MANAGED_MODEL_BASE_URL + "/chat/completions",
                     json={"messages": "synthetic prompt"},
                 )
@@ -261,8 +266,8 @@ def test_catalog_readiness_and_real_sdk_use_socket_while_tcp_is_squatted(
                 squatter.accept()
         finally:
             previous_client.close()
-            litellm.client_session.close()
-            asyncio.run(litellm.aclient_session.aclose())
+            client.close()
+            asyncio.run(async_client.aclose())
 
 
 def test_missing_binding_never_selects_tcp() -> None:
