@@ -12,7 +12,9 @@ on:
       - deploy/build-records-fixture.py
       - deploy/qualify-native-worker.py
       - deploy/tests/worker_native_fixture.py
-      - deploy/tests/test_worker_native_integration.py
+      - deploy/tests/test_worker_*_integration.py
+      - deploy/tests/external_service_fixture.py
+      - deploy/worker_model_profile.py
       - deploy/tests/worker_network_*.py
       - deploy/tests/worker_hostile_probe.py
       - deploy/tests/worker_telemetry.py

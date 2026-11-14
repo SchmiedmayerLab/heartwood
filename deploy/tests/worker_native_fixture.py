@@ -638,22 +638,32 @@ additional_ca_bundle = {q(tls / "ca.crt")}
             "--credential",
             "HEARTWOOD_QUALIFICATION_KEY",
         ]
-        if self.provider_deadline_seconds is not None:
-            self.inference_deadline = time.monotonic() + self.provider_deadline_seconds
-            self.credential_expires_at_ms = (
-                int(time.time() * 1000) + self.provider_deadline_seconds * 1000
-            )
-            provider_arguments.extend(
-                [
-                    "--credential-expires-at",
-                    f"HEARTWOOD_QUALIFICATION_KEY={self.credential_expires_at_ms}",
-                ]
-            )
-        self.cli_command(
-            provider_arguments,
-            HEARTWOOD_QUALIFICATION_KEY=self._inference_credential or self.provider.credential,
+        credential = self._inference_credential or self.provider.credential
+        if self.provider_deadline_seconds is None:
+            self.cli_command(provider_arguments, HEARTWOOD_QUALIFICATION_KEY=credential)
+            self.resources.callback(self.cli_command, ["provider", "delete", self.identity])
+            return
+        self.inference_deadline = time.monotonic() + self.provider_deadline_seconds
+        self.credential_expires_at_ms = (
+            int(time.time() * 1000) + self.provider_deadline_seconds * 1000
         )
+        # Required provider profiles cannot be created without a credential.
+        # Keep the real credential absent until the public update installs it
+        # together with its expiry, before any worker can attach this provider.
+        self.cli_command(provider_arguments, HEARTWOOD_QUALIFICATION_KEY="qualification-pending")
         self.resources.callback(self.cli_command, ["provider", "delete", self.identity])
+        self.cli_command(
+            [
+                "provider",
+                "update",
+                self.identity,
+                "--credential",
+                "HEARTWOOD_QUALIFICATION_KEY",
+                "--credential-expires-at",
+                f"HEARTWOOD_QUALIFICATION_KEY={self.credential_expires_at_ms}",
+            ],
+            HEARTWOOD_QUALIFICATION_KEY=credential,
+        )
 
     def prepare_hostile(self, protected_state: Path) -> None:
         """Keep the writable-state canary in the actual bound application state."""
