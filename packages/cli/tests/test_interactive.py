@@ -1574,6 +1574,67 @@ def test_textual_terminal_restores_action_review_after_busy_projection_race() ->
     asyncio.run(exercise())
 
 
+def test_terminal_review_shows_commands_and_paths_without_model_summaries() -> None:
+    command = "python summarize.py --output summary.json"
+    path = "results/summary.txt"
+    projection = SessionProjection(
+        session_id="summaryless-review",
+        event_count=4,
+        revision=3,
+        pending_approval=ProjectionApprovalGroup(
+            group_id="action-set-synthetic",
+            actions=(
+                _approval_action(
+                    "command", tool_name="terminal", summary="", arguments={"command": command}
+                ),
+                _approval_action(
+                    "edit",
+                    tool_name="file_editor",
+                    summary="",
+                    arguments={"command": "create", "path": path},
+                ),
+            ),
+        ),
+    )
+    lines = "\n".join(format_projection_lines(projection))
+    assert f"$ {command}" in lines
+    assert f"create {path}" in lines
+    assert "Model-provided summary:" not in lines
+
+    class ReviewSession(InteractiveSession):
+        def __init__(self) -> None:
+            self.session_id = projection.session_id
+
+        def replay(self) -> SessionProjection:
+            return projection
+
+        def action_settings(self) -> ActionSettingsResponse:
+            return _test_action_settings()
+
+    async def exercise() -> None:
+        app = HeartwoodTerminalApp(ReviewSession())
+        async with app.run_test(size=(100, 30)) as pilot:
+            await _wait_for_tui(
+                pilot,
+                lambda: (
+                    app.query_one("#approval", Vertical).display
+                    and any(
+                        command in line.text
+                        for line in app.query_one("#approval-actions", RichLog).lines
+                    )
+                ),
+                description="the action review without model summaries",
+            )
+            rendered = "\n".join(
+                line.text for line in app.query_one("#approval-actions", RichLog).lines
+            )
+            assert f"$ {command}" in rendered
+            assert f"create {path}" in rendered
+            assert "Model-provided summary:" not in rendered
+
+    asyncio.run(exercise())
+
+
 def test_textual_terminal_keeps_the_first_long_action_visible() -> None:
     class LongBatchSession(InteractiveSession):
         def __init__(self) -> None:
