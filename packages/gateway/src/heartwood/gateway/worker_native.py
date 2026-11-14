@@ -11,12 +11,14 @@ from __future__ import annotations
 import hashlib
 import json
 import secrets
+from collections.abc import Sequence
 from contextlib import ExitStack
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from time import monotonic, sleep
 
 import httpx
+from openhands.sdk.tool.client_tool import ClientToolSpec
 from openhands.sdk.tool.registry import get_tool_module_qualnames
 from pydantic import AnyHttpUrl, SecretStr
 
@@ -30,6 +32,7 @@ from heartwood.core_adapter.worker_attempts import (
 )
 from heartwood.gateway._openhands_sdk import WorkerConversationContext, prepare_openhands_sdk
 from heartwood.gateway._project import ProjectContext, ProjectStateError
+from heartwood.gateway._remote_workspace import _client_tool_contract
 from heartwood.gateway._worker_events import AdmittedWorkerWorkspace, require_worker_event_hooks
 from heartwood.gateway._workspace import WorkspaceInspector
 from heartwood.gateway.worker_control import NativeWorkerControl, NativeWorkerForward
@@ -46,8 +49,11 @@ from heartwood.gateway.worker_volumes import WorkerVolumes, WorkerVolumeSettings
 def native_worker_plan_factory(
     settings: OpenShellWorkerDeployment,
     project: ProjectContext,
+    *,
+    client_tools: Sequence[ClientToolSpec] = (),
 ) -> WorkerPlanFactory:
     """Select native execution explicitly, failing before any fallback or service grant."""
+    specifications = tuple(_client_tool_contract(client_tools).values())
     try:
         require_worker_event_hooks()
         NativeWorkerControl(settings, project).policy()
@@ -57,15 +63,26 @@ def native_worker_plan_factory(
     def prepare(request: WorkerSessionRequest) -> WorkerSessionPlan:
         if request.project != project:
             raise WorkerAttemptError("native worker deployment belongs to another project")
-        return _NativeWorkerAttempt(settings, request).plan()
+        return _NativeWorkerAttempt(
+            settings,
+            request,
+            client_tools=tuple(ClientToolSpec.model_validate_json(spec) for spec in specifications),
+        ).plan()
 
     return prepare
 
 
 class _NativeWorkerAttempt:
-    def __init__(self, settings: OpenShellWorkerDeployment, request: WorkerSessionRequest) -> None:
+    def __init__(
+        self,
+        settings: OpenShellWorkerDeployment,
+        request: WorkerSessionRequest,
+        *,
+        client_tools: Sequence[ClientToolSpec] = (),
+    ) -> None:
         self.settings = settings
         self.request = request
+        self._client_tools = tuple(_client_tool_contract(client_tools).values())
         if (
             request.profile.profile_id != settings.profile_id
             or request.profile.model != settings.model
@@ -122,6 +139,7 @@ class _NativeWorkerAttempt:
                         "inputs": settings.inputs.sha256,
                         "skills": skills.sha256,
                         "specialists": request.specialists.fingerprint,
+                        **({"client_tools": self._client_tools} if self._client_tools else {}),
                     },
                     sort_keys=True,
                     separators=(",", ":"),
@@ -346,6 +364,9 @@ print(json.dumps({'files':files,'uid':os.getuid(),
             api_key=self._key,
             attempt=lease,
             tool_modules=tuple(get_tool_module_qualnames().items()),
+            client_tools=tuple(
+                ClientToolSpec.model_validate_json(spec) for spec in self._client_tools
+            ),
         )
         return WorkerConversationContext(
             workspace=self._workspace,

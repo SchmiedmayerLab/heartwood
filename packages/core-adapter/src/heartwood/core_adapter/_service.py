@@ -45,6 +45,7 @@ from heartwood.core_adapter._facade import (
     backend_error_message,
 )
 from heartwood.core_adapter._state import FileSessionStore, SessionRecoveryError
+from heartwood.core_adapter.checkpoint_evidence import SessionCheckpointEvidence
 from heartwood.core_adapter.external_actions import (
     ExternalActionAdapter,
     ExternalActionDecision,
@@ -141,6 +142,7 @@ class SessionService:
         workflow_evaluator: WorkflowEvaluator | None = None,
         worker_project_id: UUID | None = None,
         external_actions: ExternalActionAdapter | None = None,
+        checkpoint_evidence: SessionCheckpointEvidence | None = None,
     ) -> None:
         self.store = store
         self.audit_log = AuditLog(store.audit_path)
@@ -161,6 +163,7 @@ class SessionService:
         self._worker_record: WorkerAttemptRecord | None = None
         self._workflow_evaluator = workflow_evaluator
         self._external_actions = external_actions
+        self._checkpoint_evidence = checkpoint_evidence
         self._worker_project_id = worker_project_id
         self._worker_lease: WorkerAttemptLease | None = None
         self._worker_attempt_created = False
@@ -210,6 +213,7 @@ class SessionService:
         workflow_evaluator: WorkflowEvaluator | None = None,
         worker_project_id: UUID | None = None,
         external_actions: ExternalActionAdapter | None = None,
+        checkpoint_evidence: SessionCheckpointEvidence | None = None,
     ) -> SessionService:
         """Build a local service with an explicitly supplied or deterministic backend."""
         active_env = os.environ if env is None else env
@@ -233,6 +237,7 @@ class SessionService:
             workflow_evaluator=workflow_evaluator,
             worker_project_id=worker_project_id,
             external_actions=external_actions,
+            checkpoint_evidence=checkpoint_evidence,
         )
 
     def handle(
@@ -249,6 +254,8 @@ class SessionService:
                 f"store session {self.store.session_id}"
             )
             raise ValueError(msg)
+        if "checkpoint_context" in command.payload:
+            raise CommandConflictError("Checkpoint bindings must be computed by the session owner")
         with self._command_lock:
             if self._closed:
                 raise RuntimeError("Session service is closed")
@@ -442,10 +449,16 @@ class SessionService:
                     return
             self.backend.close()
             with self._command_lock:
-                if self._worker_lease is not None:
-                    self._worker_lease.fence()
-                self._closed = True
-                self.store.release_writer()
+                try:
+                    if self._checkpoint_evidence is not None and self.replay_events():
+                        self.store.acquire_writer()
+                        boundary = self._record_event(EventKind.SESSION_CLOSED, {})
+                        self._event_sink((boundary, *self._checkpoint_boundary(boundary)))
+                finally:
+                    if self._worker_lease is not None:
+                        self._worker_lease.fence()
+                    self._closed = True
+                    self.store.release_writer()
 
     def propose_external_action(self, source_event_id: str) -> SessionEvent:
         """Prepare review of a retained worker proposal through a trusted service adapter."""
@@ -606,6 +619,7 @@ class SessionService:
             EventKind.EXTERNAL_RESULT_RECORDED,
             {
                 "record": cast(dict[str, JsonValue], record.model_dump(mode="json")),
+                **self._evidence_policy(required=record.phase == "authorized"),
                 "worker_attempt_id": str(record.proposal.worker.attempt_id),
                 "worker_project_id": str(record.proposal.worker.project_id),
             },
@@ -616,9 +630,16 @@ class SessionService:
     ) -> tuple[SessionEvent, ...]:
         proposal, adapter = current.proposal, self._external_actions
         approved = _kind_value(command.kind) == CommandKind.APPROVE.value
+        if current.phase == "authorized" and (
+            not approved
+            or current.decision is None
+            or current.decision.command_id != command.command_id
+            or current.decision.actor_id != command.actor_id
+        ):
+            raise SessionRecoveryError("Retained outside authorization belongs to another command")
         emitted: list[SessionEvent] = []
         try:
-            if current.phase != "proposed":
+            if current.phase not in {"proposed", "authorized"}:
                 raise ExternalActionError("result release already has a decision")
             if approved:
                 self._check_result_authority(proposal)
@@ -652,7 +673,9 @@ class SessionService:
                 proposal_sha256=proposal.sha256,
             )
             intent = ExternalResultRecord(
-                phase="submitting" if approved else "denied", proposal=proposal, decision=decision
+                phase="authorized" if approved else "denied",
+                proposal=proposal,
+                decision=current.decision or decision,
             )
         except Exception:
             return (
@@ -666,9 +689,21 @@ class SessionService:
                 ),
             )
         # Journal failure must prevent disclosure, not be reduced to a delivery error.
-        emitted.append(self._record_external_result(intent))
+        boundary = (
+            self._external_decision_boundary(current)
+            if current.phase == "authorized"
+            else self._record_external_result(intent)
+        )
+        if current.phase != "authorized":
+            emitted.append(boundary)
+        emitted.extend(self._checkpoint_boundary(boundary, required=approved))
         if not approved:
             return tuple(emitted)
+        assert intent.decision is not None
+        decision = intent.decision
+        emitted.append(
+            self._record_external_result(intent.model_copy(update={"phase": "submitting"}))
+        )
         stream: tuple[BackendEvent, ...] = ()
         phase: Literal["unknown", "submitted"]
         try:
@@ -703,7 +738,7 @@ class SessionService:
                 return ()
             emitted: list[SessionEvent] = []
             for record in external_action_records(self.replay_events()).values():
-                if record.phase in {"proposed", "denied"} or record.terminal:
+                if record.phase in {"proposed", "authorized", "denied"} or record.terminal:
                     continue
                 if record.proposal.worker.project_id != self._worker_project_id:
                     raise ExternalActionError("outside journal belongs to another project")
@@ -724,7 +759,7 @@ class SessionService:
                     )
                 if observed != record:
                     emitted.append(self._record_external_action(observed))
-            self._recover_external_approvals_locked()
+            emitted.extend(self._recover_external_approvals_locked())
         if emitted:
             self._event_sink(tuple(emitted))
         return tuple(emitted)
@@ -761,6 +796,7 @@ class SessionService:
             EventKind.EXTERNAL_ACTION_RECORDED,
             {
                 "record": cast(dict[str, JsonValue], record.model_dump(mode="json")),
+                **self._evidence_policy(required=record.phase == "authorized"),
                 "worker_attempt_id": str(record.proposal.worker.attempt_id),
                 "worker_project_id": str(record.proposal.worker.project_id),
             },
@@ -771,7 +807,14 @@ class SessionService:
     ) -> tuple[SessionEvent, ...]:
         proposal, adapter = current.proposal, self._external_actions
         approved = _kind_value(command.kind) == CommandKind.APPROVE.value
-        if current.phase != "proposed":
+        if current.phase == "authorized" and (
+            not approved
+            or current.decision is None
+            or current.decision.command_id != command.command_id
+            or current.decision.actor_id != command.actor_id
+        ):
+            raise SessionRecoveryError("Retained outside authorization belongs to another command")
+        if current.phase not in {"proposed", "authorized"}:
             return (
                 self._record_event(
                     EventKind.ERROR_RECORDED,
@@ -805,7 +848,9 @@ class SessionService:
                 proposal_sha256=proposal.sha256,
             )
             intent = ExternalActionRecord(
-                phase="submitting" if approved else "denied", proposal=proposal, decision=decision
+                phase="authorized" if approved else "denied",
+                proposal=proposal,
+                decision=current.decision or decision,
             )
         except Exception:
             return (
@@ -818,10 +863,21 @@ class SessionService:
                 ),
             )
         # Commit the decision before any service effect. Journal failures must propagate.
-        emitted = [self._record_external_action(intent)]
+        boundary = (
+            self._external_decision_boundary(current)
+            if current.phase == "authorized"
+            else self._record_external_action(intent)
+        )
+        emitted = [] if current.phase == "authorized" else [boundary]
+        emitted.extend(self._checkpoint_boundary(boundary, required=approved))
         if not approved:
             return tuple(emitted)
         assert adapter is not None
+        assert intent.decision is not None
+        decision = intent.decision
+        emitted.append(
+            self._record_external_action(intent.model_copy(update={"phase": "submitting"}))
+        )
         try:
             self._check_external_authority(proposal)
             observation = adapter.submit(proposal, decision, tuple(inputs))
@@ -1369,10 +1425,12 @@ class SessionService:
                     "actor_id": command.actor_id,
                     "group_id": pending_group.group_id,
                     "decision": decision,
+                    **self._evidence_policy(),
                     "tool_call_ids": [action.tool_call_id for action in pending_group.actions],
                 },
             )
         )
+        events.extend(self._checkpoint_boundary(events[-1]))
         backend_events = self.backend.resolve_confirmation(
             session_id=command.session_id,
             action_group_id=action_group_id,
@@ -1741,11 +1799,30 @@ class SessionService:
                 return True
         return False
 
-    def _recover_external_approvals_locked(self) -> None:
-        """Complete retained outside decisions without dispatching any backend operation."""
+    def _external_decision_boundary(
+        self, record: ExternalActionRecord | ExternalResultRecord
+    ) -> SessionEvent:
+        """Locate the original durable decision, never a request-supplied checkpoint."""
+        kind = (
+            EventKind.EXTERNAL_ACTION_RECORDED
+            if isinstance(record, ExternalActionRecord)
+            else EventKind.EXTERNAL_RESULT_RECORDED
+        )
+        payload = record.model_dump(mode="json")
+        return next(
+            event
+            for event in self.replay_events()
+            if event.kind == kind and event.payload.get("record") == payload
+        )
+
+    def _recover_external_approvals_locked(
+        self, *, dispatch_pending: bool = False
+    ) -> tuple[SessionEvent, ...]:
+        """Resume only proven pre-dispatch decisions; never repeat uncertain effects."""
         unresolved = self.store.unresolved_command_ids()
         if not unresolved:
-            return
+            return ()
+        recovered: list[SessionEvent] = []
         events = self.replay_events()
         outside: list[ExternalActionRecord | ExternalResultRecord] = [
             *external_action_records(events).values(),
@@ -1768,6 +1845,40 @@ class SessionService:
             first, digest = receipt.get("first_sequence"), receipt.get("command_hash")
             if not isinstance(first, int) or not isinstance(digest, str):
                 raise SessionRecoveryError("outside approval receipt is invalid")
+            if decided.phase == "authorized":
+                if not dispatch_pending or self._worker_admission_error_locked() is not None:
+                    continue
+                assert decided.decision is not None
+                decision = decided.decision
+                # The command receipt remains authoritative. This envelope is used only
+                # to repeat live authorization checks for its retained decision.
+                command = SessionCommand(
+                    session_id=self.store.session_id,
+                    command_id=decision.command_id,
+                    actor_id=decision.actor_id,
+                    kind=CommandKind.APPROVE,
+                    created_at=decision.decided_at.isoformat(),
+                    payload={"target_type": "action-set", "target_id": decided.proposal.group_id},
+                )
+                current: ExternalActionRecord | ExternalResultRecord
+                if isinstance(decided, ExternalActionRecord):
+                    recovered.extend(self._decide_external_action(command, decided))
+                    current = external_action_records(self.replay_events())[
+                        decided.proposal.operation_id
+                    ]
+                else:
+                    recovered.extend(self._decide_external_result(command, decided))
+                    current = external_result_records(self.replay_events())[
+                        decided.proposal.release_id
+                    ]
+                if current.phase == "authorized":
+                    raise SessionRecoveryError(
+                        "Retained outside authorization cannot dispatch under current policy"
+                    )
+            elif decided.phase == "denied":
+                recovered.extend(
+                    self._checkpoint_boundary(self._external_decision_boundary(decided))
+                )
             self.store.complete_command(
                 command_id=command_id,
                 command_hash=digest,
@@ -1775,10 +1886,11 @@ class SessionService:
                 last_sequence=self.replay_events()[-1].sequence,
             )
 
+        return tuple(recovered)
+
     def _recover_approval_commands_locked(self) -> tuple[SessionEvent, ...]:
         """Finish approvals whose retained state makes recovery unambiguous."""
-        self._recover_external_approvals_locked()
-        recovered: list[SessionEvent] = []
+        recovered = list(self._recover_external_approvals_locked(dispatch_pending=True))
         if self._worker_admission_error_locked() is not None:
             return tuple(recovered)
         for command_id in self.store.unresolved_command_ids():
@@ -1797,6 +1909,13 @@ class SessionService:
                     and tuple(action.tool_call_id for action in pending_group.actions)
                     == intent.tool_call_ids
                 ):
+                    boundary = next(
+                        event
+                        for event in reversed(events)
+                        if event.kind == EventKind.APPROVAL_RECORDED
+                        and event.payload.get("command_id") == intent.command_id
+                    )
+                    recovered.extend(self._checkpoint_boundary(boundary))
                     backend_events = self.backend.resolve_confirmation(
                         session_id=self.store.session_id,
                         action_group_id=intent.group_id,
@@ -1836,6 +1955,29 @@ class SessionService:
                 "group_id": intent.group_id,
                 "tool_call_ids": list(intent.tool_call_ids),
             },
+        )
+
+    def _evidence_policy(self, *, required: bool = False) -> dict[str, JsonValue]:
+        """Persist the required policy atomically with the authorization decision."""
+        if self._checkpoint_evidence is None:
+            return {}
+        return {"evidence_mode": "required" if required else self._checkpoint_evidence.mode}
+
+    def _checkpoint_boundary(
+        self, boundary: SessionEvent, *, required: bool = False
+    ) -> tuple[SessionEvent, ...]:
+        if self._checkpoint_evidence is None:
+            if any(
+                event.kind == EventKind.AUDIT_EVIDENCE_RECORDED
+                or event.payload.get("evidence_mode") in {"required", "buffered"}
+                for event in self.replay_events()
+            ):
+                raise SessionRecoveryError(
+                    "Session evidence requires its trusted records configuration before dispatch"
+                )
+            return ()
+        return self._checkpoint_evidence.ensure(
+            self.store, boundary, self._record_event, required=required
         )
 
     def _handle_audit_export(self, command: SessionCommand) -> SessionEvent:
@@ -1942,6 +2084,7 @@ def _audit_payload(kind: EventKind, payload: dict[str, JsonValue]) -> dict[str, 
             "operation_id": str(release.proposal.operation_id),
             "proposal_sha256": release.proposal.sha256,
             "phase": release.phase,
+            **_selected_audit_fields(payload, "evidence_mode"),
             "actor_id": release.decision.actor_id if release.decision else None,
             "command_id": release.decision.command_id if release.decision else None,
         }
@@ -1951,6 +2094,7 @@ def _audit_payload(kind: EventKind, payload: dict[str, JsonValue]) -> dict[str, 
             "operation_id": str(outside.proposal.operation_id),
             "proposal_sha256": outside.proposal.sha256,
             "phase": outside.phase,
+            **_selected_audit_fields(payload, "evidence_mode"),
             "actor_id": outside.decision.actor_id if outside.decision else None,
             "command_id": outside.decision.command_id if outside.decision else None,
             "status": outside.observation.operation.status if outside.observation else None,
@@ -2040,6 +2184,7 @@ def _audit_payload(kind: EventKind, payload: dict[str, JsonValue]) -> dict[str, 
                 "command_id",
                 "group_id",
                 "decision",
+                "evidence_mode",
             ),
             "action_count": len(tool_call_ids) if isinstance(tool_call_ids, list) else 0,
         }
@@ -2146,7 +2291,7 @@ def _audit_payload(kind: EventKind, payload: dict[str, JsonValue]) -> dict[str, 
         }
     if kind == EventKind.AGENT_LIFECYCLE_UPDATED:
         return _selected_audit_fields(payload, "status")
-    if kind in {EventKind.SESSION_PAUSED, EventKind.SESSION_RESUMED}:
+    if kind in {EventKind.SESSION_PAUSED, EventKind.SESSION_RESUMED, EventKind.SESSION_CLOSED}:
         return _selected_audit_fields(payload, "command_id")
     if kind == EventKind.ERROR_RECORDED:
         minimized = _selected_audit_fields(
@@ -2159,7 +2304,20 @@ def _audit_payload(kind: EventKind, payload: dict[str, JsonValue]) -> dict[str, 
             minimized["reason"] = "[scrubbed]"
         return minimized
     if kind == EventKind.AUDIT_EXPORT_RECORDED:
-        return _selected_audit_fields(payload, "event_count", "scrubbed", "experiment_export")
+        return _selected_audit_fields(
+            payload, "event_count", "scrubbed", "experiment_export", "checkpoint_context"
+        )
+    if kind == EventKind.AUDIT_EVIDENCE_RECORDED:
+        return _selected_audit_fields(
+            payload,
+            "boundary_event_id",
+            "boundary_sequence",
+            "mode",
+            "status",
+            "code",
+            "checkpoint_sha256",
+            "covered_through_sequence",
+        )
     return {"payload_omitted": True}
 
 

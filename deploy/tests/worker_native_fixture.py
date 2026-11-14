@@ -18,21 +18,24 @@ import subprocess
 import threading
 import time
 import urllib.request
+from collections.abc import Callable
 from contextlib import ExitStack
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 import grpc
 from google.protobuf.json_format import MessageToDict
-from openshell import SandboxClient, TlsConfig
-from openshell._proto import openshell_pb2 as pb
-from openshell._proto import sandbox_pb2 as policy_pb
+from worker_model_profile import QualificationModelProfile
 from worker_network_qualification import qualify_network
 from worker_telemetry import InfrastructureCollector
 
-from heartwood.gateway import SessionGateway
+from deploy.tests.checkpoint_transport_integration import RecordsTransport, records_transport
+from heartwood.core_adapter.checkpoint_evidence import SessionCheckpointEvidence
+from heartwood.gateway import ProjectContext, SessionGateway
+from heartwood.gateway.checkpoint_deployment import deployment_checkpoint_evidence
 from heartwood.gateway.worker_deployment import OpenShellWorkerDeployment
 from heartwood.gateway.worker_inputs import WorkerInputManifest
 
@@ -64,6 +67,8 @@ class SyntheticProvider:
             ("terminal", {"command": TERMINAL_COMMAND}),
             ("finish", {"message": "Synthetic aggregate check completed."}),
         ]
+        self.scripts: dict[str, list[tuple[str, dict[str, Any]]]] = {}
+        self._request_lock = threading.Lock()
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -86,7 +91,6 @@ class SyntheticProvider:
                     body = json.loads(self.rfile.read(length))
                     if any(value in json.dumps(body) for value in owner.forbidden_values):
                         raise AssertionError("Outside secret reached the inference request")
-                    index = len(owner.observations)
                     authorized = secrets.compare_digest(
                         self.headers.get("Authorization", ""), "Bearer " + owner.credential
                     )
@@ -99,25 +103,46 @@ class SyntheticProvider:
                         self.send_header("Content-Length", "0")
                         self.end_headers()
                         return
-                    owner.observations.append(
-                        {"path": self.path, "authorized": authorized, "model": body.get("model")}
-                    )
+                    with owner._request_lock:
+                        routes = [
+                            marker
+                            for marker in owner.scripts
+                            if any(
+                                message.get("role") == "user"
+                                and marker in json.dumps(message.get("content"))
+                                for message in body.get("messages", [])
+                            )
+                        ]
+                        if owner.scripts and len(routes) != 1:
+                            raise ValueError("Inference request has no unique synthetic route")
+                        route = routes[0] if routes else None
+                        script = owner.scripts[route] if route is not None else owner.script
+                        index = sum(item.get("route") == route for item in owner.observations)
+                        owner.observations.append(
+                            {
+                                "path": self.path,
+                                "authorized": authorized,
+                                "model": body.get("model"),
+                                "route": route,
+                            }
+                        )
                     if (
                         not authorized
                         or self.path != "/v1/chat/completions"
-                        or index >= len(owner.script)
+                        or index >= len(script)
                     ):
                         self.send_error(403)
                         return
-                    name, arguments = owner.script[index]
+                    name, arguments = script[index]
                     if name not in [tool["function"]["name"] for tool in body.get("tools", [])]:
                         raise ValueError("required tool absent from native request")
+                    call_id = f"{route or 'synthetic'}-{index}"
                     call = {
-                        "id": f"synthetic-{index}",
+                        "id": call_id,
                         "type": "function",
                         "function": {"name": name, "arguments": json.dumps(arguments)},
                     }
-                    common = {"id": f"synthetic-{index}", "created": 1, "model": "synthetic"}
+                    common = {"id": call_id, "created": 1, "model": "synthetic"}
                     usage = {"prompt_tokens": 10, "completion_tokens": 10, "total_tokens": 20}
                     if body.get("stream"):
                         first = {
@@ -194,8 +219,33 @@ class SyntheticProvider:
 class NativeFixture:
     """Own one gateway and synthetic provider; Heartwood owns every actual attempt."""
 
-    def __init__(self, private: Path, output: Path, *, hostile: bool = False) -> None:
+    def __init__(
+        self,
+        private: Path,
+        output: Path,
+        *,
+        hostile: bool = False,
+        model_profile: QualificationModelProfile | None = None,
+        credential: str | None = None,
+        provider_deadline_seconds: int | None = None,
+    ) -> None:
         self.private, self.output = private, output
+        if (model_profile is None) != (credential is None):
+            raise ValueError("External qualification requires both a profile and a credential")
+        if provider_deadline_seconds is not None and (
+            type(provider_deadline_seconds) is not int or not 1 <= provider_deadline_seconds <= 600
+        ):
+            raise ValueError("Provider lifetime must be between one and 600 seconds")
+        self.provider_deadline_seconds = (
+            model_profile.deadline_seconds if model_profile else provider_deadline_seconds
+        )
+        self.inference_deadline: float | None = None
+        self.credential_expires_at_ms: int | None = None
+        self.model_profile = model_profile
+        self._inference_credential = credential
+        self.base_url = (
+            model_profile.base_url if model_profile else "https://host.docker.internal:19671/v1"
+        )
         self.hostile = hostile
         self.terminal_command = TERMINAL_COMMAND
         self.sentinel = secrets.token_urlsafe(32)
@@ -223,6 +273,28 @@ class NativeFixture:
         self.resources = ExitStack()
         self.applications: list[SessionGateway] = []
         self.probes: dict[str, str | None] = {}
+        self.records: RecordsTransport | None = None
+        self.evidence: Callable[[str], SessionCheckpointEvidence] | None = None
+
+    def bind_records(self, project: ProjectContext) -> Callable[[str], SessionCheckpointEvidence]:
+        """Attach the same outside records deployment used by transport qualification."""
+        assert self.records is None
+        self.records = self.resources.enter_context(
+            records_transport(
+                Path("/opt/qualification/bin/minio"),
+                Path("/opt/qualification/bin/mc"),
+                self.controller_image,
+                self.private / "records",
+                project=project,
+                session_id="composition",
+            )
+        )
+        self.provider.forbidden_values += self.records.forbidden_values
+        self.collector.forbidden_values += self.records.forbidden_values
+        self.evidence = self.resources.enter_context(
+            deployment_checkpoint_evidence(self.records.settings, project)
+        )
+        return self.evidence
 
     def cli_command(self, arguments: list[str], **environment: str) -> str:
         return command([str(self.cli), *arguments], env={**self.env, **environment})
@@ -307,6 +379,9 @@ class NativeFixture:
         }
 
     def start(self) -> None:
+        from openshell import SandboxClient, TlsConfig
+        from openshell._proto import sandbox_pb2 as policy_pb
+
         controller = json.loads(command(["docker", "inspect", os.environ["HW_CONTROLLER_NAME"]]))[0]
         if self.network not in controller["NetworkSettings"]["Networks"]:
             command(
@@ -467,6 +542,9 @@ additional_ca_bundle = {q(tls / "ca.crt")}
         self.provider = SyntheticProvider(tls)
         self.collector.forbidden_values = (self.provider.credential, self.sentinel)
         self.resources.callback(self.provider.close)
+        if self._inference_credential is not None:
+            self.provider.forbidden_values += (self._inference_credential,)
+            self.collector.forbidden_values += (self._inference_credential,)
         self.protected_canary.write_text(self.sentinel)
         self.protected_canary.chmod(0o600)
         self.provider.forbidden_values += (self.sentinel,)
@@ -490,7 +568,7 @@ additional_ca_bundle = {q(tls / "ca.crt")}
                 "from pathlib import Path;import sys;print(Path(sys.executable).resolve())",
             ]
         ).strip()
-        profile = {
+        profile: dict[str, Any] = {
             "id": self.identity,
             "display_name": "Synthetic Qualification",
             "category": "inference",
@@ -516,24 +594,16 @@ additional_ca_bundle = {q(tls / "ca.crt")}
             ],
             "binaries": [interpreter],
         }
+        if self.model_profile is not None:
+            profile["endpoints"][0].update(
+                host=urlsplit(self.model_profile.base_url).hostname,
+                port=443,
+            )
         profile_path = self.output / "provider-profile.json"
         profile_path.write_text(json.dumps(profile, indent=2) + "\n")
         self.cli_command(["provider", "profile", "import", "--file", str(profile_path)])
         self.resources.callback(self.cli_command, ["provider", "profile", "delete", self.identity])
-        self.cli_command(
-            [
-                "provider",
-                "create",
-                "--name",
-                self.identity,
-                "--type",
-                self.identity,
-                "--credential",
-                "HEARTWOOD_QUALIFICATION_KEY",
-            ],
-            HEARTWOOD_QUALIFICATION_KEY=self.provider.credential,
-        )
-        self.resources.callback(self.cli_command, ["provider", "delete", self.identity])
+        self._create_inference_provider()
         self.policy = policy_pb.SandboxPolicy(
             version=1,
             filesystem=policy_pb.FilesystemPolicy(
@@ -555,7 +625,93 @@ additional_ca_bundle = {q(tls / "ca.crt")}
             process=policy_pb.ProcessPolicy(run_as_user="10001", run_as_group="10001"),
         )
 
-    def prepare_hostile(self, protected_state: Path) -> None:
+    def _create_inference_provider(self) -> None:
+        """Install authorization expiry before any worker can attach the provider."""
+        provider_arguments = [
+            "provider",
+            "create",
+            "--name",
+            self.identity,
+            "--type",
+            self.identity,
+            "--credential",
+            "HEARTWOOD_QUALIFICATION_KEY",
+        ]
+        credential = self._inference_credential or self.provider.credential
+        if self.provider_deadline_seconds is None:
+            self.cli_command(provider_arguments, HEARTWOOD_QUALIFICATION_KEY=credential)
+            self.resources.callback(self.cli_command, ["provider", "delete", self.identity])
+            return
+        self.inference_deadline = time.monotonic() + self.provider_deadline_seconds
+        self.credential_expires_at_ms = (
+            int(time.time() * 1000) + self.provider_deadline_seconds * 1000
+        )
+        # Required provider profiles cannot be created without a credential.
+        # Keep the real credential absent until the public update installs it
+        # together with its expiry, before any worker can attach this provider.
+        self.cli_command(provider_arguments, HEARTWOOD_QUALIFICATION_KEY="qualification-pending")
+        self.resources.callback(self.cli_command, ["provider", "delete", self.identity])
+        self.cli_command(
+            [
+                "provider",
+                "update",
+                self.identity,
+                "--credential",
+                "HEARTWOOD_QUALIFICATION_KEY",
+                "--credential-expires-at",
+                f"HEARTWOOD_QUALIFICATION_KEY={self.credential_expires_at_ms}",
+            ],
+            HEARTWOOD_QUALIFICATION_KEY=credential,
+        )
+
+    def wait_for_inference_expiry(self) -> None:
+        """Wait for the expiry admitted before launch, with a monotonic upper bound."""
+        assert self.credential_expires_at_ms is not None
+        assert self.inference_deadline is not None
+        while time.time() * 1000 <= self.credential_expires_at_ms + 100:
+            if time.monotonic() > self.inference_deadline + 2:
+                raise TimeoutError("Native credential expiry could not be established")
+            time.sleep(0.1)
+
+    def probe_inference(
+        self, worker: str, *, body: dict[str, object] | None = None
+    ) -> dict[str, object]:
+        """Return only a placeholder hash and a bounded native response classification."""
+        program = """import hashlib,json,os,sys,urllib.error,urllib.request
+key=os.environ['HEARTWOOD_QUALIFICATION_KEY']
+assert key.startswith('openshell:resolve:env:')
+result={'placeholder_sha256':hashlib.sha256(key.encode()).hexdigest()}
+body=json.loads(sys.argv[2])
+if body is not None:
+ request=urllib.request.Request(sys.argv[1],data=json.dumps(body).encode(),
+  headers={'Authorization':'Bearer '+key,'Content-Type':'application/json'})
+ error_code=None
+ try:
+  with urllib.request.urlopen(request,timeout=10) as response:
+   status=response.status
+   response.read(1024*1024)
+ except urllib.error.HTTPError as error:
+  status=error.code
+  content=error.read(16385)
+  assert len(content)<=16384, 'credential error response exceeds limit'
+  error_code=json.loads(content).get('error')
+  assert isinstance(error_code,str) and len(error_code)<=128
+ result.update(status=status,error_code=error_code)
+print(json.dumps(result))
+"""
+        observation = self.control.exec(
+            worker,
+            [PYTHON, "-I", "-c", program, self.base_url + "/chat/completions", json.dumps(body)],
+            workspace="default",
+            timeout_seconds=15,
+            no_login_shell=True,
+        )
+        if observation.exit_code != 0:
+            raise AssertionError("Inference probe failed without a bounded native response")
+        result: dict[str, object] = json.loads(observation.stdout)
+        return result
+
+    def prepare_hostile(self, protected_state: Path, *, filesystem_only: bool = False) -> None:
         """Keep the writable-state canary in the actual bound application state."""
         self.protected_canary = protected_state / "synthetic-canary"
         self.protected_canary.write_text(self.sentinel)
@@ -571,11 +727,14 @@ additional_ca_bundle = {q(tls / "ca.crt")}
             str(self.protected_canary),
             "--credential",
             str(self.private / "tls/client/tls.key"),
-            "--endpoint",
-            "https://host.docker.internal:19671/v1/forbidden",
         ]
-        self.terminal_command = shlex.join(arguments) + " && " + TERMINAL_COMMAND
-        self.provider.script[1] = ("terminal", {"command": self.terminal_command})
+        if filesystem_only:
+            arguments.append("--filesystem-only")
+            self.terminal_command = shlex.join(arguments)
+        else:
+            arguments.extend(["--endpoint", "https://host.docker.internal:19671/v1/forbidden"])
+            self.terminal_command = shlex.join(arguments) + " && " + TERMINAL_COMMAND
+            self.provider.script[1] = ("terminal", {"command": self.terminal_command})
 
     def check_outside_canary(self) -> None:
         """Prove the forbidden destination works from outside the worker boundary."""
@@ -636,6 +795,7 @@ additional_ca_bundle = {q(tls / "ca.crt")}
             ipv6=self.ipv6,
             port=19672,
             ipv6_port=19673,
+            allowed_host=urlsplit(self.base_url).hostname or "",
             peer=peer,
         )
 
@@ -646,12 +806,19 @@ additional_ca_bundle = {q(tls / "ca.crt")}
         logs = subprocess.run(
             ["docker", "logs", self.identity], capture_output=True, text=True, timeout=15
         )
-        (self.output / "gateway.log").write_text(logs.stdout + logs.stderr)
+        rendered = logs.stdout + logs.stderr
+        if self._inference_credential is not None and self._inference_credential in rendered:
+            rendered = rendered.replace(self._inference_credential, "[redacted]")
+            (self.output / "gateway.log").write_text(rendered)
+            raise RuntimeError("Native gateway logs contained protected qualification content")
+        (self.output / "gateway.log").write_text(rendered)
         command(["docker", "stop", "--time", "20", observed["Id"]])
         command(["docker", "rm", observed["Id"]])
 
     def create_probe(self, image: str) -> tuple[str, str]:
         """Retain a probe's identity before observing its startup or failure."""
+        from openshell._proto import openshell_pb2 as pb
+
         name = "probe-" + uuid4().hex[:12]
         self.probes[name] = None
         created = self.control.create(
@@ -674,6 +841,8 @@ additional_ca_bundle = {q(tls / "ca.crt")}
 
     def qualify_policy(self) -> str:
         """Admit a disposable probe before selecting the production launch policy hash."""
+        from openshell._proto import openshell_pb2 as pb
+
         name, sandbox_id = self.create_probe(self.worker)
         try:
             ready = self.control.wait_ready(name, workspace="default", timeout_seconds=90)
@@ -755,8 +924,8 @@ additional_ca_bundle = {q(tls / "ca.crt")}
             policy_path=policy_path,
             policy_file_sha256=hashlib.sha256(policy_path.read_bytes()).hexdigest(),
             profile_id="synthetic",
-            model="openai/synthetic-boundary",
-            model_endpoint="https://host.docker.internal:19671/v1/chat/completions",
+            model=self.model_profile.model if self.model_profile else "openai/synthetic-boundary",
+            model_endpoint=self.base_url + "/chat/completions",
             provider=self.identity,
             placeholder_env="HEARTWOOD_QUALIFICATION_KEY",
             inputs=inputs,

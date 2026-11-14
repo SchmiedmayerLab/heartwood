@@ -9,11 +9,16 @@ on:
     paths:
       - .github/workflows/worker-candidate.yml
       - deploy/build-worker-candidate.py
+      - deploy/build-records-fixture.py
       - deploy/qualify-native-worker.py
       - deploy/tests/worker_native_fixture.py
-      - deploy/tests/test_worker_native_integration.py
+      - deploy/tests/test_worker_*_integration.py
+      - deploy/tests/external_service_fixture.py
+      - deploy/worker_model_profile.py
       - deploy/tests/worker_network_*.py
       - deploy/tests/worker_hostile_probe.py
+      - deploy/tests/worker_telemetry.py
+      - deploy/tests/checkpoint_*_integration.py
       - images/worker/candidate/**
       - packages/**
       - vendor/heartwood-skills
@@ -56,8 +61,9 @@ jobs:
       - name: Build from verified upstream inputs
         run: >-
           uv run --no-project --python 3.12.15 deploy/build-worker-candidate.py
-          --gateway --output test-results/gateway-candidate --cache test-results/gateway-cache
+          --gateway --gateway-tests --output test-results/gateway-candidate --cache test-results/gateway-cache
       - name: Retain gateway qualification artifacts
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: worker-gateway-candidate-${{ github.sha }}
@@ -66,6 +72,8 @@ jobs:
             test-results/gateway-candidate/deploy/
             test-results/gateway-candidate/LICENSE.openshell
             test-results/gateway-candidate/gateway-build-record.json
+            test-results/gateway-candidate/gateway-test-command.json
+            test-results/gateway-candidate/gateway-tests.log
           include-hidden-files: true
           retention-days: 14
 
@@ -118,9 +126,35 @@ jobs:
             test-results/worker-candidate/application-first/
           retention-days: 14
 
+  records:
+    name: Build synthetic records tools
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          submodules: 'true'
+          persist-credentials: false
+      - name: Restore records build cache
+        uses: actions/cache@v6.1.0
+        with:
+          path: test-results/records-cache
+          key: records-linux-amd64-${{ hashFiles('images/worker/candidate/records.json') }}
+      - name: Build verified sources
+        run: >-
+          python3 deploy/build-records-fixture.py
+          --output test-results/records-tools --cache test-results/records-cache
+      - name: Retain tools, corresponding sources and licenses
+        uses: actions/upload-artifact@v7
+        with:
+          name: records-tools-${{ github.sha }}
+          path: test-results/records-tools/
+          retention-days: 14
+
   native:
     name: Qualify the installed native worker
-    needs: [gateway, build]
+    needs: [gateway, build, records]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -139,6 +173,11 @@ jobs:
         with:
           name: worker-gateway-candidate-${{ github.sha }}
           path: test-results/gateway-candidate
+      - name: Download verified records tools
+        uses: actions/download-artifact@v8
+        with:
+          name: records-tools-${{ github.sha }}
+          path: test-results/records-tools
       - name: Build and check candidate images
         run: |
           mkdir -p test-results/worker-candidate/image
@@ -161,6 +200,7 @@ jobs:
           --worker-image heartwood-worker:qualification
           --runtime-image heartwood-runtime:qualification
           --gateway-artifacts test-results/gateway-candidate
+          --records-artifacts test-results/records-tools
           --output test-results/native-qualification
       - name: Retain synthetic qualification evidence
         if: always()
@@ -178,4 +218,6 @@ jobs:
             test-results/native-qualification/*/gateway.log
             test-results/native-qualification/*/infrastructure-otlp.jsonl
             test-results/native-qualification/*/infrastructure-otlp-status.json
+            test-results/native-qualification/*/checkpoint-evidence.json
+            test-results/native-qualification/*/records-result.json
           retention-days: 14

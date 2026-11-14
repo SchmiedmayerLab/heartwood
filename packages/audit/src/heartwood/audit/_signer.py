@@ -15,6 +15,7 @@ import json
 import math
 import os
 import re
+import ssl
 import stat
 import urllib.error
 import urllib.request
@@ -23,6 +24,7 @@ from pathlib import Path
 from typing import Protocol, cast
 from urllib.parse import urlsplit
 
+import certifi
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -124,6 +126,7 @@ class RemoteCheckpointSigner:
         authorization_token: str | None = None,
         timeout_seconds: float = 15.0,
         allow_local_socket: bool = False,
+        trusted_ca_bundle: Path | None = None,
         transport: CheckpointSignerTransport | None = None,
     ) -> None:
         self.endpoint = _validate_signer_endpoint(
@@ -137,11 +140,13 @@ class RemoteCheckpointSigner:
             if authorization_token is None
             else validate_checkpoint_signer_token(authorization_token)
         )
+        if trusted_ca_bundle is not None and self.endpoint.startswith("unix:"):
+            raise CheckpointSignerError("local socket signers do not use a TLS CA bundle")
         self.timeout_seconds = timeout_seconds
         self.transport = transport or (
             _UnixSignerTransport()
             if self.endpoint.startswith("unix:")
-            else _UrlLibSignerTransport()
+            else _UrlLibSignerTransport(trusted_ca_bundle=trusted_ca_bundle)
         )
 
     def sign(self, statement: AuditCheckpointStatement) -> AuditCheckpointSignature:
@@ -320,6 +325,15 @@ def _canonical_json(value: object) -> str:
 
 
 class _UrlLibSignerTransport:
+    def __init__(self, *, trusted_ca_bundle: Path | None = None) -> None:
+        self._context = ssl.create_default_context(cafile=certifi.where())
+        if trusted_ca_bundle is not None:
+            try:
+                content = read_private_bytes(trusted_ca_bundle, max_bytes=256 * 1024)
+                self._context.load_verify_locations(cadata=content.decode("ascii"))
+            except (OSError, ValueError, DurableFileError) as error:
+                raise CheckpointSignerError("checkpoint signer CA bundle is invalid") from error
+
     def post(
         self,
         endpoint: str,
@@ -334,7 +348,11 @@ class _UrlLibSignerTransport:
             headers=dict(headers),
             method="POST",
         )
-        opener = urllib.request.build_opener(_RejectRedirects())
+        opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}),
+            urllib.request.HTTPSHandler(context=self._context),
+            _RejectRedirects(),
+        )
         try:
             with opener.open(request, timeout=timeout_seconds) as response:
                 content_type = response.headers.get_content_type()

@@ -14,6 +14,7 @@ from collections.abc import Mapping
 from copy import deepcopy
 from datetime import date, datetime
 from typing import Any, ClassVar, Literal
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 
@@ -30,6 +31,7 @@ __all__ = [
     "ActionConfirmationMode",
     "ApprovalRecord",
     "AuditCheckpoint",
+    "AuditCheckpointContext",
     "AuditCheckpointSignRequest",
     "AuditCheckpointSignature",
     "AuditCheckpointStatement",
@@ -136,6 +138,24 @@ class AuditRetention(_HeartwoodRecord):
         except ValueError as error:
             raise ValueError("retain_until must be a valid ISO 8601 date") from error
         return value
+
+
+class AuditCheckpointContext(_HeartwoodRecord):
+    """Continuity metadata bound inside the terminal audit-export event."""
+
+    schema_version: Literal["heartwood.audit-checkpoint-context.v1"] = (
+        "heartwood.audit-checkpoint-context.v1"
+    )
+    project_id: UUID
+    publication_id: str = Field(pattern=_SAFE_IDENTIFIER_PATTERN)
+    sequence: int = Field(ge=1, strict=True)
+    previous_checkpoint_sha256: str | None = Field(default=None, pattern=r"^sha256:[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def _validate_predecessor(self) -> AuditCheckpointContext:
+        if (self.sequence == 1) != (self.previous_checkpoint_sha256 is None):
+            raise ValueError("only the first checkpoint can omit its predecessor")
+        return self
 
 
 class AuditCheckpointStatement(_HeartwoodRecord):
@@ -269,6 +289,7 @@ class ApprovalRecord(_HeartwoodRecord):
 
 _SCHEMA_MODELS: Mapping[str, type[BaseModel]] = {
     "approval-record.v1": ApprovalRecord,
+    "audit-checkpoint-context.v1": AuditCheckpointContext,
     "audit-checkpoint-sign-request.v1": AuditCheckpointSignRequest,
     "audit-checkpoint-signature.v1": AuditCheckpointSignature,
     "audit-checkpoint-statement.v1": AuditCheckpointStatement,

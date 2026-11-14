@@ -12,6 +12,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from uuid import uuid4
 
@@ -57,11 +58,31 @@ def controller_socket_group(image: str) -> str:
     ).strip()
 
 
-def qualify(worker: str, runtime: str, artifacts: Path, output: Path) -> None:
+def qualify(
+    worker: str,
+    runtime: str,
+    artifacts: Path,
+    records: Path,
+    output: Path,
+    *,
+    model_profile: Path | None = None,
+) -> None:
     """Assemble the trusted controller and retain the installed test outcome."""
+    profile = None
+    if model_profile is not None:
+        from worker_model_profile import QualificationModelProfile
+
+        profile = QualificationModelProfile.load(model_profile)
+        if sys.stdin.isatty():
+            raise ValueError("Supply the qualification credential through protected stdin")
     source_paths = (
         ROOT / "deploy/qualify-native-worker.py",
+        ROOT / "deploy/worker_model_profile.py",
+        ROOT / "deploy/tests/test_worker_model_integration.py",
         ROOT / "deploy/tests/test_worker_native_integration.py",
+        ROOT / "deploy/tests/test_worker_external_integration.py",
+        ROOT / "deploy/tests/test_worker_pair_integration.py",
+        ROOT / "deploy/tests/external_service_fixture.py",
         ROOT / "deploy/tests/worker_native_fixture.py",
         ROOT / "deploy/tests/worker_telemetry.py",
         ROOT / "deploy/tests/worker_hostile_probe.py",
@@ -69,9 +90,14 @@ def qualify(worker: str, runtime: str, artifacts: Path, output: Path) -> None:
         ROOT / "deploy/tests/worker_network_qualification.py",
         ROOT / "images/worker/candidate/symlink-workspace.Dockerfile",
         ROOT / "images/worker/candidate/controller.Dockerfile",
+        ROOT / "deploy/tests/checkpoint_records_integration.py",
+        ROOT / "deploy/tests/checkpoint_transport_integration.py",
+        ROOT / "packages/audit/tests/tls_fixture.py",
+        ROOT / "deploy/build-records-fixture.py",
+        ROOT / "images/worker/candidate/records.json",
     )
-    artifacts, output = artifacts.resolve(), output.resolve()
-    if "," in str(artifacts) or "," in str(output):
+    artifacts, records, output = artifacts.resolve(), records.resolve(), output.resolve()
+    if any("," in str(path) for path in (artifacts, records, output)):
         raise ValueError("Docker paths must not contain commas")
     manifest_path = ROOT / "images/worker/candidate/gateway.json"
     manifest = json.loads(manifest_path.read_text())
@@ -100,6 +126,30 @@ def qualify(worker: str, runtime: str, artifacts: Path, output: Path) -> None:
         or digest(prebuilt) != record["binaries"]["openshell-gateway"]
     ):
         raise ValueError("Gateway packaging inputs differ from their build record")
+    records_manifest_path = ROOT / "images/worker/candidate/records.json"
+    records_manifest = json.loads(records_manifest_path.read_text())
+    records_build = json.loads((records / "records-build-record.json").read_text())
+    if (
+        records_build["purpose"] != "qualification-only"
+        or records_build["manifest_sha256"] != digest(records_manifest_path)
+        or records_build["builder_sha256"] != digest(ROOT / "deploy/build-records-fixture.py")
+        or records_build["architecture"] != record["architecture"]
+        or records_build["builder_image"] != records_manifest["builder"]
+        or records_build["sources"] != records_manifest["sources"]
+        or set(records_build["files"])
+        != {
+            "bin/minio",
+            "bin/mc",
+            "LICENSE.minio",
+            "LICENSE.mc",
+            "minio-source.tar.gz",
+            "mc-source.tar.gz",
+        }
+    ):
+        raise ValueError("Records artifacts do not match the reviewed build inputs")
+    for name, expected in records_build["files"].items():
+        if digest(records / name) != expected:
+            raise ValueError("Records artifact digest mismatch")
     source_hashes = {str(path.relative_to(ROOT)): digest(path) for path in source_paths}
     image_ids = {}
     for name, image in (("worker", worker), ("runtime", runtime)):
@@ -191,6 +241,10 @@ def qualify(worker: str, runtime: str, artifacts: Path, output: Path) -> None:
             "DOCKER_CLIENT_IMAGE=" + manifest["images"]["docker_client"],
             "--build-context",
             "worker-qualification-tools=" + str(artifacts),
+            "--build-context",
+            "records-qualification-tools=" + str(records),
+            "--build-context",
+            "records-tls-fixture=" + str(ROOT / "packages/audit/tests"),
             "--iidfile",
             str(output / "controller-image-id"),
             str(ROOT),
@@ -246,6 +300,11 @@ def qualify(worker: str, runtime: str, artifacts: Path, output: Path) -> None:
         "OPENHANDS_SUPPRESS_BANNER": "1",
         "LITELLM_LOCAL_MODEL_COST_MAP": "True",
     }
+    if profile is not None:
+        profile_path = output / "requested-model-profile.json"
+        profile_path.write_text(json.dumps(profile.mapping(), indent=2) + "\n")
+        profile_path.chmod(0o600)
+        environment["HW_MODEL_QUALIFICATION_PROFILE"] = str(profile_path)
     # Check the operator transport before creating fixtures. Retain Docker's own
     # diagnosis rather than hiding it in several identical fixture exceptions.
     with (output / "controller-preflight.log").open("w") as log:
@@ -266,6 +325,8 @@ def qualify(worker: str, runtime: str, artifacts: Path, output: Path) -> None:
             check=True,
             timeout=60,
         )
+    if profile is not None:
+        arguments.append("--interactive")
     for key, value in environment.items():
         arguments.extend(["--env", f"{key}={value}"])
     arguments.extend(
@@ -275,11 +336,21 @@ def qualify(worker: str, runtime: str, artifacts: Path, output: Path) -> None:
             "pytest",
             "-o",
             "addopts=",
+            "-o",
+            "pythonpath=/opt/qualification",
             "-p",
             "no:cacheprovider",
             "-v",
             "--junitxml=" + str(output / "junit.xml"),
-            "/opt/qualification/tests/test_worker_native_integration.py",
+            *(
+                ["-s", "--tb=short", "/opt/qualification/tests/test_worker_model_integration.py"]
+                if profile is not None
+                else [
+                    "/opt/qualification/tests/test_worker_native_integration.py",
+                    "/opt/qualification/tests/test_worker_external_integration.py",
+                    "/opt/qualification/tests/test_worker_pair_integration.py",
+                ]
+            ),
         ]
     )
     run(
@@ -299,7 +370,12 @@ def qualify(worker: str, runtime: str, artifacts: Path, output: Path) -> None:
     )
     try:
         with (output / "qualification.log").open("w") as log:
-            result = subprocess.run(arguments, stdout=log, stderr=subprocess.STDOUT)
+            result = subprocess.run(
+                arguments,
+                stdin=sys.stdin if profile is not None else subprocess.DEVNULL,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+            )
     finally:
         observed = json.loads(subprocess.check_output(["docker", "network", "inspect", network]))[0]
         if observed["Labels"].get("heartwood-qualification-owner") != name:
@@ -323,12 +399,15 @@ def qualify(worker: str, runtime: str, artifacts: Path, output: Path) -> None:
         str(path.relative_to(ROOT)): digest(path) for path in source_paths
     }
     evidence = {
+        "qualification_kind": "capable-model-native" if profile else "synthetic-native",
+        "requested_model_profile": profile.mapping() if profile else None,
         "host": host,
         "controller_socket_group": socket_group,
         "qualification_sources": source_hashes,
         "qualification_sources_unchanged": sources_unchanged,
         "images": image_ids,
         "gateway_build": record,
+        "records_build": records_build,
         "returncode": result.returncode,
         "passed": result.returncode == 0 and not retained and sources_unchanged,
         "sensitive_data_ready": False,
@@ -343,6 +422,19 @@ if __name__ == "__main__":
     parser.add_argument("--worker-image", required=True)
     parser.add_argument("--runtime-image", required=True)
     parser.add_argument("--gateway-artifacts", required=True, type=Path)
+    parser.add_argument("--records-artifacts", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument(
+        "--model-profile",
+        type=Path,
+        help="Run explicit capable-model qualification; supply its credential through stdin",
+    )
     args = parser.parse_args()
-    qualify(args.worker_image, args.runtime_image, args.gateway_artifacts, args.output)
+    qualify(
+        args.worker_image,
+        args.runtime_image,
+        args.gateway_artifacts,
+        args.records_artifacts,
+        args.output,
+        model_profile=args.model_profile,
+    )

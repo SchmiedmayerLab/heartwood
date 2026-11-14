@@ -251,6 +251,11 @@ The qualified inference endpoint must independently enforce approved models and 
 Unavailable native dependencies, unsupported admission hooks, mismatched observed policy or failed outside revocation stop the operation without local fallback.
 Stopping an uncertain worker requires outside reconciliation; do not delete its records or release its writer merely because a client disconnected.
 
+The same manifest can select automatic checkpointing through an `evidence` table.
+Evidence configuration requires complete worker isolation and explicitly binds the records service, credential source, retention and approved production signer profile.
+The operator-owned records client is closed when gateway serving exits, including failed startup.
+See [Configure Managed Evidence](../operate/audit-checkpoints.md#configure-managed-evidence) for the complete table and storage permissions.
+
 `heartwood gateway serve` uses the detected platform's declared default ingress mode.
 Workstations and Carina default to direct loopback and refuse a non-loopback bind.
 A generic container can use a wildcard bind only when the operator explicitly declares loopback-only host publication.

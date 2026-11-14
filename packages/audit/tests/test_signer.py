@@ -10,8 +10,11 @@ from __future__ import annotations
 
 import base64
 import json
+import ssl
 from collections.abc import Mapping
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from threading import Thread
 from typing import Literal
 from urllib.request import Request
 
@@ -34,6 +37,7 @@ from heartwood.schemas import (
     AuditCheckpointStatement,
     AuditRetention,
 )
+from packages.audit.tests.tls_fixture import server_certificates
 
 
 class _SigningTransport:
@@ -347,3 +351,60 @@ def _local_signer(root: Path) -> LocalEd25519CheckpointSigner:
         key_id="audit-signing",
         key_version="v1",
     )
+
+
+@pytest.mark.parametrize("trusted", [False, True])
+def test_https_signer_uses_operator_roots_and_ignores_ambient_proxy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, trusted: bool
+) -> None:
+    ca = server_certificates(tmp_path / "tls")
+    signer = _local_signer(tmp_path)
+    received: list[AuditCheckpointStatement] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, format: str, *args: object) -> None:  # noqa: A002
+            pass
+
+        def do_POST(self) -> None:
+            assert self.headers.get("Authorization") == "Bearer synthetic-token"
+            body = self.rfile.read(int(self.headers["Content-Length"]))
+            statement = AuditCheckpointSignRequest.model_validate_json(body).statement
+            received.append(statement)
+            response = signer.sign(statement).model_dump_json().encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(response)))
+            self.end_headers()
+            self.wfile.write(response)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(ca.parent / "public.crt", ca.parent / "private.key")
+    server.socket = context.wrap_socket(server.socket, server_side=True)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:1")
+    monkeypatch.setenv("NO_PROXY", "")
+    monkeypatch.setenv("SSL_CERT_FILE", str(ca))
+    try:
+        client = RemoteCheckpointSigner(
+            endpoint=f"https://127.0.0.1:{server.server_port}/v1/checkpoints/sign",
+            trusted_ca_bundle=ca if trusted else None,
+            authorization_token="synthetic-token",
+            timeout_seconds=2,
+        )
+        if trusted:
+            signature = client.sign(_statement())
+            verify_checkpoint_signature(
+                statement=_statement(), signature=signature, public_key=signer.public_key
+            )
+            assert received == [_statement()]
+        else:
+            with pytest.raises(CheckpointSignerError, match="request failed"):
+                client.sign(_statement())
+            assert received == []
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+        assert not thread.is_alive()

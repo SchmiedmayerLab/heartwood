@@ -15,6 +15,7 @@ authors = [{ name = "Stanford University and the project authors" }]
 dependencies = [
     "anthropic==0.120.2",
     "certifi==2026.10.23",
+    "botocore==1.43.125",
     "filelock==3.32.2",
     "heartwood-adapters",
     "heartwood-audit",

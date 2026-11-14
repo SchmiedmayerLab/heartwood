@@ -89,6 +89,11 @@ An exact retry of a completed command returns its original event range without r
 Reusing the identifier with different command content is rejected.
 If a process stops after command acceptance but before completion is recorded, Heartwood refuses to execute that identifier again unless its exact outcome can be derived from durable state.
 An interrupted approval is completed automatically only when its recorded intent and OpenHands state unambiguously prove whether the complete action set was resolved.
+Outside decisions distinguish authorization from attempted dispatch.
+An authorized record proves that the native call has not started; a submitting record means its outcome may be uncertain.
+A configured required-evidence gate must observe the authorization checkpoint before recording submission and calling the adapter.
+An interrupted authorization can resume only with the original decision, a live matching worker and renewed input, policy and expiry checks.
+Read-only reconciliation skips undispatched authorizations; it never converts observation into submission authority.
 Otherwise, the session rejects further mutation so a second approval or task cannot repeat an uncertain side effect.
 After replaying and verifying the available evidence, continue in a new session.
 
@@ -155,6 +160,9 @@ Managed deployments resolve an approved HTTPS signer and independently trusted p
 The explicit development and offline fallback uses the same contract through an authenticated Unix socket in an owner-only directory, with an owner-only Ed25519 key.
 Verification requires the active deployment profile or a public key obtained through an independent trust path and rejects noncanonical or unexpected bundle content.
 The chain and signature cannot prove that an intact suffix was not deleted before checkpoint creation.
+An operator-bound evidence controller additionally verifies the complete independently retained checkpoint history and requires each successor to extend the retained audit prefix.
+This detects rewriting or truncation of that prefix; it does not authenticate unobserved events or prove the completeness of activity after the last retained checkpoint.
+The [managed evidence contract](../operate/audit-checkpoints.md#automatic-evidence-boundaries) defines publication, retention observation and required-mode recovery.
 The retention declaration also does not implement storage lifecycle controls; the deployment records system remains responsible for authoritative storage and policy enforcement.
 
 Exact action arguments, commands, affected paths, file content, patches, tool output, and failure text stay out of the content-minimized audit payload.
