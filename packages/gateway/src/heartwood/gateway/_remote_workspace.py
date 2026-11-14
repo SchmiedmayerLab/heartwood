@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import math
+import time
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from threading import Lock
@@ -24,6 +25,7 @@ from pydantic import ConfigDict, Field, PrivateAttr, model_validator
 from heartwood.core_adapter.worker_attempts import WorkerAttemptError, WorkerAttemptLease
 
 _MAX_RESPONSE_BYTES = 4 * 1024 * 1024
+_MAX_RESPONSE_SECONDS = 120.0
 _MAX_JSON_DEPTH = 64
 
 # The gateway's agent as sent to the worker and as serialized without secrets.
@@ -35,21 +37,34 @@ class WorkerResponseError(ValueError):
 
 
 class WorkerResponseBudget:
-    """Lifetime admission shared by a workspace's response transports."""
+    """Rate-bounded admission shared by a workspace's response transports.
+
+    The allowance absorbs bursts such as reading retained history and refills at the
+    rate of ordinary status polling and progress reads, so a run of any length stays
+    admitted while a worker that answers faster than that is fenced.
+    """
 
     def __init__(
         self,
         *,
         max_bytes: int = 32 * 1024 * 1024,
         max_responses: int = 1024,
+        bytes_per_second: int = 1024 * 1024,
+        responses_per_second: int = 4,
         attempt: WorkerAttemptLease | None = None,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
-        if type(max_bytes) is not int or type(max_responses) is not int:
+        limits = (max_bytes, max_responses, bytes_per_second, responses_per_second)
+        if any(type(limit) is not int or limit <= 0 for limit in limits):
             raise ValueError("worker response limits must be positive integers")
-        if max_bytes <= 0 or max_responses <= 0:
-            raise ValueError("worker response limits must be positive integers")
-        self._remaining_bytes = max_bytes
-        self._remaining_responses = max_responses
+        self._max_bytes = max_bytes
+        self._max_responses = max_responses
+        self._bytes_per_second = bytes_per_second
+        self._responses_per_second = responses_per_second
+        self._remaining_bytes = float(max_bytes)
+        self._remaining_responses = float(max_responses)
+        self._clock = clock
+        self._replenished = clock()
         self._closed = False
         self._lock = Lock()
         self._attempt = attempt
@@ -71,7 +86,17 @@ class WorkerResponseBudget:
                     self._closed = True
             if self._closed:
                 raise WorkerResponseError("worker response admission is closed")
-            if size > self._remaining_bytes or (new_response and not self._remaining_responses):
+            now = self._clock()
+            elapsed = max(0.0, now - self._replenished)
+            self._replenished = now
+            self._remaining_bytes = min(
+                self._max_bytes, self._remaining_bytes + elapsed * self._bytes_per_second
+            )
+            self._remaining_responses = min(
+                self._max_responses,
+                self._remaining_responses + elapsed * self._responses_per_second,
+            )
+            if size > self._remaining_bytes or (new_response and self._remaining_responses < 1):
                 self._closed = True
                 if self._attempt is not None:
                     self._attempt.fence()
@@ -81,7 +106,7 @@ class WorkerResponseBudget:
                 self._remaining_responses -= 1
 
     def close(self) -> None:
-        """Refuse further admission without replenishing the lifetime budget."""
+        """Refuse further admission permanently."""
         with self._lock:
             self._closed = True
             if self._attempt is not None:
@@ -114,8 +139,10 @@ class WorkerResponseTransport(httpx.BaseTransport):
         budget: WorkerResponseBudget | None = None,
         client_tools: Sequence[ClientToolSpec] = (),
         agent: Callable[[], AgentContract | None] = lambda: None,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._origin = _worker_origin(host)
+        self._clock = clock
         self._tool_modules = dict(tool_modules)
         self._client_tools = _client_tool_contract(client_tools)
         self._agent = agent
@@ -143,6 +170,15 @@ class WorkerResponseTransport(httpx.BaseTransport):
             self._budget.close()
             raise
         request.headers["Accept-Encoding"] = "identity"
+        # Callers hold session and gateway locks while they wait, so a worker may not
+        # keep one response open: each read and the whole body are bounded.
+        deadline = self._clock() + _MAX_RESPONSE_SECONDS
+        timeout = dict(request.extensions.get("timeout") or {})
+        read = timeout.get("read")
+        timeout["read"] = (
+            _MAX_RESPONSE_SECONDS if read is None else min(read, _MAX_RESPONSE_SECONDS)
+        )
+        request.extensions["timeout"] = timeout
         response = self._transport.handle_request(request)
         try:
             if response.is_redirect:
@@ -155,6 +191,8 @@ class WorkerResponseTransport(httpx.BaseTransport):
             stream = response.stream
             assert isinstance(stream, httpx.SyncByteStream)
             for chunk in stream:
+                if self._clock() > deadline:
+                    raise WorkerResponseError("worker response exceeded its deadline")
                 self._budget.charge(len(chunk))
                 if len(body) + len(chunk) > _MAX_RESPONSE_BYTES:
                     raise WorkerResponseError("worker response exceeds the byte limit")

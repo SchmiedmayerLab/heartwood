@@ -49,7 +49,7 @@ Creation is attempted once; an uncertain response fences the worker lease and re
 Native streaming-delta events feed transient interface text, while durable translation continues through admitted native state.
 During remote execution, admitted event callbacks coalesce progress reads; token deltas do not request conversation snapshots.
 A five-second fallback refresh and final reconciliation preserve progress and settled state without repeatedly fetching an unchanged branch.
-These reads remain subject to the worker attempt's unchanged lifetime response budget.
+These reads remain subject to the worker attempt's response budget.
 Gateway-local parallel-review executors are not installed on remote agent copies; sequential advisory specialists remain available, and remote parallel review requires separate qualification.
 This embedding contract does not provision a sandbox or enable remote execution in the default gateway launch path.
 
@@ -401,7 +401,10 @@ It rejects an installed SDK without those hooks, including the pinned applicatio
 The event connection permits only the configured origin's canonical conversation endpoint, without credentials in the URL, query parameters, fragments, redirects, ambient proxies, or compression.
 TLS uses the bundled certificate authorities with certificate and hostname verification; ambient certificate variables cannot replace that trust.
 The library bounds each message to 4 MiB and its receive queue to four frames.
-Connection attempts and received events share the workspace's 1,024-response and 32 MiB lifetime budget with HTTP traffic.
+HTTP responses, connection attempts and received events share one response budget for the worker attempt.
+It admits bursts of 1,024 responses and 32 MiB and refills at four responses and 1 MiB per second, which covers status polling and progress reads for a run of any length.
+Received events are charged by size only.
+A worker that exceeds the budget, keeps a response open beyond 120 seconds, or stalls a read for that long is fenced.
 Individual and full-state updates receive the same metadata checks as HTTP responses.
 Raw text passes the JSON admission rules and native event schema before callback delivery; binary messages, completion-log events, and rejected data cannot authorize local file writing or appear in admission errors.
 

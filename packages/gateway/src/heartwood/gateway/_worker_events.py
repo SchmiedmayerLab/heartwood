@@ -145,7 +145,8 @@ class WorkerEventAdmission:
             if not isinstance(message, str) or len(message) > _MAX_RESPONSE_BYTES:
                 raise ValueError
             content = message.encode("utf-8")
-            self._budget.charge(len(content), new_response=True)
+            # Streamed deltas arrive far faster than requests, so events are bounded by size.
+            self._budget.charge(len(content))
             if len(content) > _MAX_RESPONSE_BYTES:
                 raise ValueError
             agent = self._agent()
@@ -212,5 +213,5 @@ class AdmittedWorkerWorkspace(AdmittedRemoteWorkspace):
         return self._events.connect(url, max_size=max_size)
 
     def validate_websocket_message(self, message: str | bytes) -> None:
-        """Apply the lifetime response budget and event schema before callbacks."""
+        """Apply the response budget and event schema before callbacks."""
         self._events.validate_message(message)
