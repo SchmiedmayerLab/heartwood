@@ -417,3 +417,22 @@ def test_credential_helper_timeout_is_bounded_and_output_is_private() -> None:
         child.communicate()
     assert "synthetic-secret" not in str(failure.value)
     assert child.poll() is not None
+
+
+def test_records_client_startup_failure_does_not_expose_provider_details(
+    binding: tuple[CheckpointEvidenceDeployment, ProjectContext],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    configured, project = binding
+
+    def unavailable(*_args: object) -> None:
+        raise RuntimeError("synthetic provider secret in SDK error")
+
+    monkeypatch.setattr("heartwood.gateway.checkpoint_deployment._sdk_client", unavailable)
+    with (
+        pytest.raises(ProjectStateError, match="unavailable or invalid") as failure,
+        deployment_checkpoint_evidence(configured, project),
+    ):
+        pytest.fail("an unavailable records client must not yield a session binding")
+    assert "synthetic provider secret" not in str(failure.value)
+    assert failure.value.__suppress_context__
