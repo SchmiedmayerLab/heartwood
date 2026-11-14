@@ -52,7 +52,6 @@ from openhands.sdk.event.conversation_error import ConversationErrorEvent
 from openhands.sdk.llm import Metrics, content_to_str
 from openhands.sdk.security import (
     AlwaysConfirm,
-    ConfirmRisky,
     EnsembleSecurityAnalyzer,
     LLMSecurityAnalyzer,
     PatternSecurityAnalyzer,
@@ -323,7 +322,7 @@ class OpenHandsSdkBackend:
             raise OpenHandsSdkError(msg)
         self.profile = profile
         self._managed_inference = managed_inference
-        self._action_confirmation_mode = action_confirmation_mode
+        self._action_confirmation_mode: ActionConfirmationMode = "always-confirm"
         self.workspace = workspace.resolve()
         self.skills_dir = skills_dir.resolve()
         self.installed_skill_roots = tuple(path.resolve() for path in installed_skill_roots)
@@ -2322,7 +2321,7 @@ def _terminal_tool_params(
 
 def _security_configuration(
     mode: ActionConfirmationMode,
-) -> tuple[SecurityAnalyzerBase, AlwaysConfirm | ConfirmRisky]:
+) -> tuple[SecurityAnalyzerBase, AlwaysConfirm]:
     """Build the pinned OpenHands defense-in-depth analyzer and confirmation policy."""
     analyzer = EnsembleSecurityAnalyzer(
         analyzers=[
@@ -2332,15 +2331,10 @@ def _security_configuration(
         ],
         propagate_unknown=True,
     )
-    policy: AlwaysConfirm | ConfirmRisky
-    if mode == "always-confirm":
-        policy = AlwaysConfirm()
-    else:
-        policy = ConfirmRisky(
-            threshold=SecurityRisk.MEDIUM,
-            confirm_unknown=True,
-        )
-    return analyzer, policy
+    if mode not in {"always-confirm", "confirm-risky"}:
+        raise ValueError("unsupported action confirmation mode")
+    # Risk analyzers supply advisory labels, never automatic execution authority.
+    return analyzer, AlwaysConfirm()
 
 
 def _configure_upstream_defaults(env: Mapping[str, str] | None) -> None:

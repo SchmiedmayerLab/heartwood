@@ -145,9 +145,9 @@ class ReviewerPacketGenerator:
                     "model capability and unattended operation remain deployment-specific gates."
                 ),
                 (
-                    "- `always-confirm` is the default action policy. `confirm-risky` is a "
-                    "deployment-policy opt-in that automatically allows only action sets made "
-                    "entirely of low-risk actions."
+                    "- `always-confirm` is the required action policy. "
+                    "Low-risk labels are advisory; "
+                    "automatic approval is unavailable without a qualified deterministic allowlist."
                 ),
                 (
                     "- Published documentation and artifacts are release-scoped; development "
@@ -203,8 +203,8 @@ class ReviewerPacketGenerator:
                 ),
                 (
                     "- `always-confirm` requires one allow or reject decision for each pending "
-                    "OpenHands action set. The optional `confirm-risky` mode continues only sets "
-                    "made entirely of low-risk actions."
+                    "OpenHands action set. Retained `confirm-risky` preferences are interpreted as "
+                    "`always-confirm`; risk labels cannot authorize execution."
                 ),
                 "- Audit exports use scrubbed JSONL records with a verified hash chain.",
                 "",

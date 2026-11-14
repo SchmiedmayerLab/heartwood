@@ -18,9 +18,9 @@ ACTION_TOOL_LABELS = {
     "terminal": "Terminal Command",
 }
 ACTION_RISK_LABELS = {
-    "high": "High Risk",
-    "low": "Low Risk",
-    "medium": "Medium Risk",
+    "high": "Advisory High Risk",
+    "low": "Advisory Low Risk",
+    "medium": "Advisory Medium Risk",
     "unknown": "Not Classified",
 }
 UNKNOWN_ACTION_TOOL_LABEL = "Tool Action"

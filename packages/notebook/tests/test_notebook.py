@@ -23,6 +23,7 @@ from heartwood.core_adapter import (
     SessionResult,
 )
 from heartwood.gateway import (
+    ActionSettingsError,
     CredentialStore,
     ModelCatalogService,
     ModelProfile,
@@ -353,13 +354,15 @@ def test_notebook_groups_every_pending_member_under_one_action_set() -> None:
     assert approval_items == (
         "Review 2 actions as one complete set: pending",
         (
-            "1. Run the synthetic cohort command\n"
-            "Terminal Command · Medium Risk\n"
+            "1. $ python run.py --output cohort-summary.json\n"
+            "Terminal Command · Advisory Medium Risk\n"
+            "Model-provided summary: Run the synthetic cohort command\n"
             "Arguments:\n{\n"
             '  "command": "python run.py --output cohort-summary.json"\n'
             "}"
         ),
-        "2. Write the aggregate result\nFile Change · Not Classified",
+        "2. unknown path unavailable\nFile Change · Not Classified\n"
+        "Model-provided summary: Write the aggregate result",
     )
 
 
@@ -603,7 +606,9 @@ def test_notebook_observes_shared_project_setup_and_action_settings(tmp_path: Pa
     )
 
     configured = session.configure_model_source("heartwood")
-    action_settings = session.select_action_confirmation_mode("confirm-risky")
+    with pytest.raises(ActionSettingsError, match="risk hints cannot authorize"):
+        session.select_action_confirmation_mode("confirm-risky")
+    action_settings = session.select_action_confirmation_mode("always-confirm")
 
     reopened = NotebookSession(
         project=project,
@@ -611,9 +616,9 @@ def test_notebook_observes_shared_project_setup_and_action_settings(tmp_path: Pa
         gateway=SessionGateway(project=project, env={}, backend_id="deterministic"),
     )
     assert configured["model_source"] == "heartwood"
-    assert action_settings["confirmation_mode"] == "confirm-risky"
+    assert action_settings["confirmation_mode"] == "always-confirm"
     assert reopened.model_settings()["model_source"] == "heartwood"
-    assert reopened.action_settings()["confirmation_mode"] == "confirm-risky"
+    assert reopened.action_settings()["confirmation_mode"] == "always-confirm"
     assert reopened.project_readiness()["project_root"] == str(tmp_path)
 
 

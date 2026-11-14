@@ -196,10 +196,20 @@ def _approval_items(view_model: NotebookViewModel) -> tuple[str, ...]:
     action_label = "action" if len(group.actions) == 1 else "actions"
     items = [(f"Review {len(group.actions)} {action_label} as one complete set: pending")]
     for index, action in enumerate(group.actions, 1):
+        details = action.details
+        heading = (
+            f"$ {details.command}"
+            if details.kind == "terminal"
+            else f"{details.operation} {details.path or 'path unavailable'}"
+            if details.kind == "file-editor"
+            else action_tool_label(action.tool_name)
+        )
         lines = [
-            f"{index}. {action.summary or action.tool_name}",
+            f"{index}. {heading}",
             f"{action_tool_label(action.tool_name)} · {action_risk_label(action.risk)}",
         ]
+        if action.summary:
+            lines.append(f"Model-provided summary: {action.summary}")
         if action.details.kind == "task":
             role = action.details.role_label or action.details.subagent_type
             if role:

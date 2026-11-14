@@ -584,8 +584,9 @@ def test_interactive_session_uses_gateway_commands_and_persisted_replay(
         assert "Research Planner" in (specialists.message or "")
         assert "Analysis Implementer" in (specialists.message or "")
         assert "Not available in this release" in (specialists.message or "")
-        assert not selected.failed
-        assert gateway.action_settings()["confirmation_mode"] == "confirm-risky"
+        assert selected.failed
+        assert "risk hints cannot authorize execution" in (selected.message or "")
+        assert gateway.action_settings()["confirmation_mode"] == "always-confirm"
     finally:
         gateway.stop()
 
@@ -1308,9 +1309,9 @@ def test_terminal_presentation_uses_researcher_facing_labels() -> None:
     assert action_tool_label("terminal") == "Terminal Command"
     assert action_tool_label("custom") == "custom Action"
     assert action_tool_label("") == "Tool Action"
-    assert action_risk_label("high") == "High Risk"
-    assert action_risk_label("low") == "Low Risk"
-    assert action_risk_label("medium") == "Medium Risk"
+    assert action_risk_label("high") == "Advisory High Risk"
+    assert action_risk_label("low") == "Advisory Low Risk"
+    assert action_risk_label("medium") == "Advisory Medium Risk"
     assert action_risk_label("unknown") == "Not Classified"
     assert action_risk_label("unexpected") == "Not Classified"
 
@@ -1322,7 +1323,7 @@ def test_terminal_presentation_uses_researcher_facing_labels() -> None:
     assert _line_style("[002] Tool: Ran File Change") == "blue"
     assert _line_style("[003] Tool terminal exit=0") is None
     assert _line_style("[001] Model route allow") is None
-    assert _risk_presentation("low") == ("Low Risk", "green")
+    assert _risk_presentation("low") == ("Advisory Low Risk", "green")
     assert _risk_presentation("other") == ("Not Classified", "bold yellow")
 
     selected_mode: ActionModeOptionResponse = {
@@ -1356,7 +1357,7 @@ def test_terminal_presentation_uses_researcher_facing_labels() -> None:
     )
 
 
-def test_textual_terminal_selects_action_review_mode_with_arrow_keys(
+def test_textual_terminal_cannot_select_unavailable_automation_with_arrow_keys(
     tmp_path: Path,
 ) -> None:
     gateway = SessionGateway(
@@ -1389,15 +1390,18 @@ def test_textual_terminal_selects_action_review_mode_with_arrow_keys(
             assert options.has_focus
             assert options.highlighted == 0
 
-            await pilot.press("down", "enter")
+            assert options.get_option_at_index(1).disabled
+            await pilot.press("down")
+            assert options.highlighted == 0
+            await pilot.press("enter")
             await _wait_for_tui(
                 pilot,
-                lambda: gateway.action_settings()["confirmation_mode"] == "confirm-risky",
-                description="the selected action review mode to persist",
+                lambda: app.query_one("#composer", Input).has_focus,
+                description="the review mode selection to close",
             )
 
-            assert gateway.action_settings()["confirmation_mode"] == "confirm-risky"
-            assert "Low-Risk Automation" in str(app.query_one("#status", Static).render())
+            assert gateway.action_settings()["confirmation_mode"] == "always-confirm"
+            assert "Review Every Action" in str(app.query_one("#status", Static).render())
             assert app.query_one("#composer", Input).has_focus
 
     try:
@@ -1612,7 +1616,8 @@ def test_textual_terminal_keeps_the_first_long_action_visible() -> None:
                 pilot,
                 lambda: (
                     app.query_one("#approval", Vertical).display
-                    and "1. Review step 1" in str(app.query_one("#approval-actions", RichLog).lines)
+                    and "1. $ python analyze.py"
+                    in str(app.query_one("#approval-actions", RichLog).lines)
                 ),
                 description="the long action review",
             )
@@ -1620,7 +1625,7 @@ def test_textual_terminal_keeps_the_first_long_action_visible() -> None:
 
             assert action_log.auto_scroll is False
             assert action_log.scroll_y == 0
-            assert "1. Review step 1" in str(action_log.lines)
+            assert "1. $ python analyze.py" in str(action_log.lines)
             assert app.query_one("#approval-options", OptionList).highlighted == 0
 
     asyncio.run(exercise())
