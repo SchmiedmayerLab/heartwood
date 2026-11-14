@@ -59,8 +59,9 @@ jobs:
       - name: Build from verified upstream inputs
         run: >-
           uv run --no-project --python 3.12.15 deploy/build-worker-candidate.py
-          --gateway --output test-results/gateway-candidate --cache test-results/gateway-cache
+          --gateway --gateway-tests --output test-results/gateway-candidate --cache test-results/gateway-cache
       - name: Retain gateway qualification artifacts
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: worker-gateway-candidate-${{ github.sha }}
@@ -69,6 +70,8 @@ jobs:
             test-results/gateway-candidate/deploy/
             test-results/gateway-candidate/LICENSE.openshell
             test-results/gateway-candidate/gateway-build-record.json
+            test-results/gateway-candidate/gateway-test-command.json
+            test-results/gateway-candidate/gateway-tests.log
           include-hidden-files: true
           retention-days: 14
 

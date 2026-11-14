@@ -1,0 +1,309 @@
+--- a/crates/openshell-server/src/compute/mod.rs
++++ b/crates/openshell-server/src/compute/mod.rs
+@@ -374,8 +374,9 @@
+ enum BeginDelete {
+     /// This request persisted `Deleting` and owns the driver call and recovery.
+     Started(Box<DeleteTransition>),
+-    /// Another request already owns or completed the driver-side delete call.
+-    AlreadyDeleting,
++    /// An existing deletion, with its observed snapshot. Explicit retries
++    /// refresh its CAS version so an earlier owner cannot roll it back.
++    AlreadyDeleting(Box<Sandbox>),
+ }
+ 
+ /// Explicit lifecycle operations that quiesce a running sandbox: an ordinary
+@@ -1942,7 +1943,7 @@
+             .await
+         {
+             Ok(BeginDelete::Started(transition)) => *transition,
+-            Ok(BeginDelete::AlreadyDeleting) => {
++            Ok(BeginDelete::AlreadyDeleting(_)) => {
+                 return Status::new(
+                     original.code(),
+                     format!(
+@@ -3474,17 +3475,22 @@
+         // `Started` carries both sides of the CAS transition: the durable
+         // `Deleting` row used to fence recovery, and the prior row used only
+         // for exact-version rollback after an ambiguous driver failure.
+-        let transition = match self
++        let (transition, retrying) = match self
+             .begin_sandbox_delete_with_initial_snapshot(&target.sandbox_id, Some(current), None)
+             .await?
+         {
+-            BeginDelete::AlreadyDeleting => {
+-                return Ok(DeleteSandboxResult {
+-                    sandbox_id: target.sandbox_id,
+-                    outcome: openshell_core::proto::DeletionOutcome::Accepted,
+-                });
+-            }
+-            BeginDelete::Started(transition) => *transition,
++            // A failed driver call can leave Deleting after a concurrent
++            // configuration write prevents exact-version recovery. An explicit
++            // retry owns the same UUID's lifecycle gate and must retry the
++            // idempotent driver operation rather than acknowledge it forever.
++            BeginDelete::AlreadyDeleting(deleting) => (
++                DeleteTransition {
++                    previous: (*deleting).clone(),
++                    deleting: *deleting,
++                },
++                true,
++            ),
++            BeginDelete::Started(transition) => (*transition, false),
+         };
+ 
+         self.sandbox_index.update_from_sandbox(&transition.deleting);
+@@ -3541,7 +3547,11 @@
+                 })
+             }
+             Err(err) => {
+-                self.recover_failed_delete(&delete_guard, &transition).await;
++                // Retrying an existing deletion must never restore a running
++                // snapshot. Leave the durable fence for another explicit retry.
++                if !retrying {
++                    self.recover_failed_delete(&delete_guard, &transition).await;
++                }
+                 Err(Status::internal(format!(
+                     "delete sandbox failed: {}",
+                     err.message()
+@@ -3593,12 +3603,16 @@
+                 provisioning_operation::ensure_current_result(&sandbox, created)?;
+             }
+ 
+-            if SandboxPhase::try_from(sandbox.phase()).unwrap_or(SandboxPhase::Unknown)
+-                == SandboxPhase::Deleting
+-            {
+-                return Ok(BeginDelete::AlreadyDeleting);
++            let already_deleting = SandboxPhase::try_from(sandbox.phase())
++                .unwrap_or(SandboxPhase::Unknown)
++                == SandboxPhase::Deleting;
++            if already_deleting && failed_create.is_some() {
++                return Ok(BeginDelete::AlreadyDeleting(Box::new(sandbox)));
+             }
+ 
++            // Lifecycle gates are replica-local. Refresh an explicit retry's
++            // durable fence before calling the driver so an earlier replica's
++            // ambiguous-error recovery cannot restore its pre-delete state.
+             let previous = sandbox.clone();
+ 
+             match self
+@@ -3611,6 +3625,9 @@
+                             sandbox_id,
+                             attempt, "Retried sandbox delete phase transition after CAS conflict"
+                         );
++                    }
++                    if already_deleting {
++                        return Ok(BeginDelete::AlreadyDeleting(Box::new(deleting)));
+                     }
+                     return Ok(BeginDelete::Started(Box::new(DeleteTransition {
+                         previous,
+@@ -14692,6 +14709,140 @@
+     }
+ 
+     #[tokio::test]
++    async fn explicit_delete_retry_retains_the_current_snapshot_after_cas_conflict() {
++        let runtime = test_runtime(Arc::new(TestDriver::default())).await;
++        let sandbox = sandbox_record("sb-1", "sandbox-a", SandboxPhase::Ready);
++        runtime.store.put_message(&sandbox).await.unwrap();
++        let stale = runtime
++            .store
++            .get_message::<Sandbox>("sb-1")
++            .await
++            .unwrap()
++            .unwrap();
++        let current = runtime
++            .store
++            .update_message_cas::<Sandbox, _>("sb-1", 0, |sandbox| {
++                sandbox.set_phase(SandboxPhase::Deleting as i32);
++                sandbox.set_current_policy_version(7);
++                sandbox
++                    .status
++                    .get_or_insert_with(Default::default)
++                    .agent_pod = "current-pod".into();
++            })
++            .await
++            .unwrap();
++
++        let result = runtime
++            .begin_sandbox_delete_with_initial_snapshot("sb-1", Some(stale), None)
++            .await
++            .unwrap();
++        let BeginDelete::AlreadyDeleting(deleting) = result else {
++            panic!("expected the existing deletion");
++        };
++        assert_eq!(deleting.phase(), SandboxPhase::Deleting as i32);
++        assert_eq!(deleting.current_policy_version(), 7);
++        assert!(sandbox_resource_version(&deleting) > sandbox_resource_version(&current));
++        runtime.sandbox_index.update_from_sandbox(&deleting);
++        assert_eq!(
++            runtime
++                .sandbox_index
++                .sandbox_id_for_agent_pod("current-pod"),
++            Some("sb-1".into())
++        );
++        assert_eq!(
++            runtime
++                .store
++                .get_message::<Sandbox>("sb-1")
++                .await
++                .unwrap()
++                .unwrap(),
++            *deleting
++        );
++    }
++
++    #[tokio::test]
++    async fn explicit_delete_retry_fences_another_replicas_error_recovery() {
++        let driver = ControlledDriver::new();
++        driver.block_delete();
++        driver.block_get();
++        driver.set_delete_outcome(ControlledDeleteOutcome::Error("delete failed"));
++        driver.set_get_outcome(ControlledGetOutcome::Error("lookup failed"));
++        let runtime = test_runtime(driver.clone()).await;
++        let mut other = runtime.clone();
++        other.mutation_locks = Arc::new(LocalMutationLocks::new());
++        other.lifecycle_gates = Arc::new(LifecycleGateRegistry::default());
++        let mut sandbox = sandbox_record("sb-1", "sandbox-a", SandboxPhase::Ready);
++        sandbox.set_current_policy_version(9);
++        runtime.store.put_message(&sandbox).await.unwrap();
++
++        let first_runtime = runtime.clone();
++        let first =
++            tokio::spawn(async move { first_runtime.delete_sandbox("default", "sandbox-a").await });
++        tokio::time::timeout(Duration::from_secs(1), driver.delete_started.notified())
++            .await
++            .expect("first delete did not reach the driver");
++        driver.release_delete();
++        tokio::time::timeout(Duration::from_secs(1), driver.get_started.notified())
++            .await
++            .expect("first delete did not reach recovery");
++        let original_fence = runtime
++            .store
++            .get_message::<Sandbox>("sb-1")
++            .await
++            .unwrap()
++            .unwrap();
++
++        let second =
++            tokio::spawn(async move { other.delete_sandbox("default", "sandbox-a").await });
++        tokio::time::timeout(Duration::from_secs(1), driver.delete_started.notified())
++            .await
++            .expect("retry did not reach the driver");
++        let refreshed = runtime
++            .store
++            .get_message::<Sandbox>("sb-1")
++            .await
++            .unwrap()
++            .unwrap();
++        assert!(sandbox_resource_version(&refreshed) > sandbox_resource_version(&original_fence));
++
++        driver.release_get();
++        tokio::time::timeout(Duration::from_secs(1), first)
++            .await
++            .unwrap()
++            .unwrap()
++            .unwrap_err();
++        let retained = runtime
++            .store
++            .get_message::<Sandbox>("sb-1")
++            .await
++            .unwrap()
++            .unwrap();
++        assert_eq!(retained.phase(), SandboxPhase::Deleting as i32);
++        assert_eq!(retained.current_policy_version(), 9);
++        assert_eq!(
++            sandbox_resource_version(&retained),
++            sandbox_resource_version(&refreshed)
++        );
++
++        driver.release_delete();
++        tokio::time::timeout(Duration::from_secs(1), second)
++            .await
++            .unwrap()
++            .unwrap()
++            .unwrap_err();
++        assert_eq!(driver.delete_calls(), 2);
++        assert_eq!(
++            runtime
++                .store
++                .get_message::<Sandbox>("sb-1")
++                .await
++                .unwrap()
++                .unwrap(),
++            retained
++        );
++    }
++
++    #[tokio::test]
+     async fn apply_sandbox_update_is_noop_while_deleting() {
+         let runtime = test_runtime(Arc::new(TestDriver::default())).await;
+         let sandbox = sandbox_record("sb-1", "sandbox-a", SandboxPhase::Deleting);
+@@ -14931,7 +15082,7 @@
+     }
+ 
+     #[tokio::test]
+-    async fn concurrent_duplicate_deletes_call_driver_once() {
++    async fn concurrent_duplicate_deletes_retry_unconfirmed_cleanup() {
+         let driver = ControlledDriver::new();
+         driver.block_delete();
+         let runtime = test_runtime(driver.clone()).await;
+@@ -14950,6 +15101,7 @@
+             tokio::spawn(
+                 async move { second_runtime.delete_sandbox("default", "sandbox-a").await },
+             );
++        driver.release_delete();
+         driver.release_delete();
+ 
+         assert!(
+@@ -14968,7 +15120,7 @@
+                 .unwrap()
+                 .acknowledged()
+         );
+-        assert_eq!(driver.delete_calls(), 1);
++        assert_eq!(driver.delete_calls(), 2);
+     }
+ 
+     #[tokio::test]
+@@ -16117,6 +16269,43 @@
+             SandboxPhase::Deleting
+         );
+         assert_eq!(stored.current_policy_version(), 9);
++
++        // A retry failure preserves the deletion fence and the newer policy.
++        driver.release_delete();
++        runtime
++            .delete_sandbox("default", "sandbox-a")
++            .await
++            .unwrap_err();
++        let retained = runtime
++            .store
++            .get_message::<Sandbox>("sb-1")
++            .await
++            .unwrap()
++            .unwrap();
++        assert_eq!(retained.phase(), SandboxPhase::Deleting as i32);
++        assert_eq!(retained.current_policy_version(), 9);
++        assert_eq!(driver.delete_calls(), 2);
++
++        // Once provisioning settles, an explicit retry can finish cleanup.
++        driver.set_delete_outcome(ControlledDeleteOutcome::Ok(false));
++        driver.release_delete();
++        let result = runtime
++            .delete_sandbox("default", "sandbox-a")
++            .await
++            .unwrap();
++        assert_eq!(
++            result.outcome,
++            openshell_core::proto::DeletionOutcome::Completed
++        );
++        assert_eq!(driver.delete_calls(), 3);
++        assert!(
++            runtime
++                .store
++                .get_message::<Sandbox>("sb-1")
++                .await
++                .unwrap()
++                .is_none()
++        );
+     }
+ 
+     #[tokio::test]

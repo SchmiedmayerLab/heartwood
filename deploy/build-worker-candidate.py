@@ -240,7 +240,45 @@ def _gateway_version(checkout: Path, version: str) -> None:
     lock.write_text(locked.replace('version = "0.0.0"', f'version = "{version}"'))
 
 
-def build_gateway(output: Path, cache: Path) -> None:
+def _gateway_tests(container: list[str], rust: str, output: Path) -> dict[str, Any]:
+    """Run deletion regressions before packaging, retaining the exact command and log."""
+    command = list(container)
+    command[command.index("--memory") + 1] = "12g"
+    command[command.index("--memory-swap") + 1] = "12g"
+    command.extend(
+        [
+            rust,
+            "cargo",
+            "test",
+            "--locked",
+            "--release",
+            "--package",
+            "openshell-server",
+            "--lib",
+            "--no-default-features",
+            "--features",
+            "telemetry,vendored-z3",
+            "--jobs",
+            "1",
+            "--config",
+            "profile.release.package.openshell-server.opt-level=0",
+            "delete",
+            "--",
+            "--test-threads=1",
+        ]
+    )
+    (output / "gateway-test-command.json").write_text(json.dumps(command, indent=2) + "\n")
+    log = output / "gateway-tests.log"
+    print(f"Running gateway deletion regressions; log: {log}", flush=True)
+    with log.open("w") as stream:
+        subprocess.run(command, stdout=stream, stderr=subprocess.STDOUT, check=True)
+    result = re.search(r"test result: ok\. (\d+) passed; 0 failed;", log.read_text())
+    if result is None or int(result[1]) == 0:
+        raise ValueError("Gateway deletion tests did not report a nonempty passing suite")
+    return {"command": command, "passed": int(result[1]), "log_sha256": _digest(log.read_bytes())}
+
+
+def build_gateway(output: Path, cache: Path, *, gateway_tests: bool = False) -> None:
     """Build a local gateway image without modifying or publishing upstream checkouts."""
     manifest, manifest_bytes = _gateway_configuration()
     builder_digest = _digest(Path(__file__).read_bytes())
@@ -279,7 +317,7 @@ def build_gateway(output: Path, cache: Path) -> None:
             limit=128 * 1024 * 1024,
         )
         cli = _source(manifest["cli"][arch], staging / "cli", cache=cache / "archives")
-        build = [
+        container = [
             "docker",
             "run",
             "--rm",
@@ -323,6 +361,12 @@ def build_gateway(output: Path, cache: Path) -> None:
             "PATH=/cmake/bin:/usr/local/cargo/bin:/usr/local/bin:/usr/bin:/bin",
             "--workdir",
             "/source",
+        ]
+        tests = (
+            _gateway_tests(container, manifest["images"]["rust"], output) if gateway_tests else None
+        )
+        build = [
+            *container,
             manifest["images"]["rust"],
             "cargo",
             "build",
@@ -363,6 +407,7 @@ def build_gateway(output: Path, cache: Path) -> None:
             "architecture": arch,
             "version": manifest["version"],
             "build": build,
+            "tests": tests,
             "source_revision": manifest["source"]["revision"],
             "cargo_lock_sha256": _digest((checkout / "Cargo.lock").read_bytes()),
             "dockerfile_sha256": _digest(dockerfile.read_bytes()),
@@ -503,8 +548,15 @@ def main() -> None:
     )
     targets.add_argument("--gateway", action="store_true", help="Build the pinned Linux gateway")
     parser.add_argument("--cache", type=Path, help="Gateway archive and Cargo cache directory")
+    parser.add_argument(
+        "--gateway-tests",
+        action="store_true",
+        help="Run gateway deletion regressions before building (requires 12 GiB container memory)",
+    )
     parser.add_argument("--uv", default="uv", help="Path to the pinned uv executable")
     args = parser.parse_args()
+    if args.gateway_tests and not args.gateway:
+        parser.error("--gateway-tests is only valid with --gateway")
     if args.bootstrap:
         if args.cache is not None:
             parser.error("--cache is only valid with --gateway")
@@ -515,7 +567,7 @@ def main() -> None:
     if args.gateway:
         if args.cache is None:
             parser.error("--gateway requires --cache")
-        build_gateway(args.output, args.cache)
+        build_gateway(args.output, args.cache, gateway_tests=args.gateway_tests)
         return
     if args.cache is not None:
         parser.error("--cache is only valid with --gateway")

@@ -29,6 +29,7 @@ def native(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
         pytest.skip("Native SDK fixture checks run in the candidate environment")
     # Expose fixture namespaces without adding any application source directories.
     monkeypatch.syspath_prepend(str(_ROOT))
+    monkeypatch.syspath_prepend(str(_ROOT / "deploy"))
     monkeypatch.syspath_prepend(str(_ROOT / "deploy/tests"))
     spec = importlib.util.spec_from_file_location(
         "worker_native_fixture", _ROOT / "deploy/tests/worker_native_fixture.py"
