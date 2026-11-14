@@ -195,6 +195,9 @@ The synthetic TLS provider uses a generated test credential and a fixed tool-cal
 
 The workflow test uses Heartwood's production native launcher, independently admitted policy, read-only inputs and Skills, exact outside approvals, aggregate suppression, verified audit, and revocation before writer release.
 After shutdown it checks protected-state replay in a fresh process and rejects incorrect project identity and corrupted audit data.
+A derived image changes the OCI working directory to a symlink while preserving the parent worker and policy.
+The suite requires an explicit outside `WorkspaceValidationFailed` condition, no main-process start and no inference requests; the parent image must pass an independent admission control.
+The derived image digest and Dockerfile hash remain part of the qualification evidence.
 A separate fault test discards a successful native create response and requires a fenced attempt until outside revocation removes its containers and volumes.
 Test failure or failed cleanup prevents qualification; retained evidence must include the successful command exit and teardown results, not merely an individual assertion record.
 If revocation cannot settle, the local fixture retains its control state for reconciliation.

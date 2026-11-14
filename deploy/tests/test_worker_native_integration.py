@@ -20,6 +20,7 @@ from typing import Never
 from uuid import uuid4
 
 import pytest
+from openshell._proto import openshell_pb2 as pb
 from pydantic import JsonValue
 from worker_native_fixture import PYTHON, NativeFixture, command
 
@@ -153,6 +154,76 @@ def _assert_revoked(service: SessionService) -> None:
     assert attempt.revocation.sandbox_id is not None
     assert not service.store.owns_writer
     _assert_absent(str(attempt.intent.attempt_id))
+
+
+def test_native_rejects_symlink_workspace(infrastructure: NativeFixture) -> None:
+    fixture = infrastructure
+    # The same provider, policy, runtime and resource limits must admit the parent image.
+    accepted_policy = fixture.qualify_policy()
+    image = os.environ["HW_SYMLINK_WORKSPACE_IMAGE"]
+    inspected = json.loads(command(["docker", "image", "inspect", image]))[0]
+    assert inspected["Config"]["WorkingDir"] == "/workspace-link"
+    assert (
+        command(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "--network",
+                "none",
+                "--read-only",
+                "--cap-drop",
+                "ALL",
+                "--entrypoint",
+                PYTHON,
+                image,
+                "-I",
+                "-c",
+                "from pathlib import Path; p=Path('/workspace-link'); "
+                "assert p.is_symlink() and p.resolve() == Path('/workspace'); print('symlink')",
+            ]
+        ).strip()
+        == "symlink"
+    )
+    name, sandbox_id = fixture.create_probe(image)
+    try:
+        deadline = time.monotonic() + 90
+        while time.monotonic() < deadline:
+            observed = fixture.control.get(name, workspace="default")
+            assert observed.id == sandbox_id
+            assert observed.status.phase != pb.SANDBOX_PHASE_READY
+            failures = [
+                condition
+                for condition in observed.status.conditions
+                if condition.reason == "WorkspaceValidationFailed"
+            ]
+            if failures:
+                assert observed.status.phase == pb.SANDBOX_PHASE_ERROR
+                assert observed.status.main_process_started_at_ms is None
+                break
+            time.sleep(0.5)
+        else:
+            raise AssertionError("Expected an explicit native workspace validation failure")
+        assert fixture.provider.observations == []
+        (fixture.output / "evidence.json").write_text(
+            json.dumps(
+                {
+                    "drill_id": "native-workspace-symlink.v1",
+                    "worker_image": fixture.worker,
+                    "symlink_image": image,
+                    "sandbox_id": sandbox_id,
+                    "positive_control_policy_sha256": accepted_policy,
+                    "failure_reasons": [condition.reason for condition in failures],
+                    "worker_started": False,
+                    "provider_requests": 0,
+                    "sensitive_data_ready": False,
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+    finally:
+        fixture.revoke_probes()
 
 
 @pytest.mark.parametrize(

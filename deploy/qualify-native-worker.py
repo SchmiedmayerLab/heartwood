@@ -115,6 +115,26 @@ def qualify(worker: str, runtime: str, artifacts: Path, output: Path) -> None:
     name = "hw-controller-" + uuid4().hex[:12]
     runtime_tag = name + ":runtime"
     run(["docker", "tag", image_ids["runtime"], runtime_tag])
+    worker_tag = name + ":worker"
+    run(["docker", "tag", image_ids["worker"], worker_tag])
+    run(
+        [
+            "docker",
+            "buildx",
+            "build",
+            "--load",
+            "--network",
+            "none",
+            "--file",
+            str(ROOT / "images/worker/candidate/symlink-workspace.Dockerfile"),
+            "--build-arg",
+            "WORKER_IMAGE=" + worker_tag,
+            "--iidfile",
+            str(output / "symlink-workspace-image-id"),
+            str(ROOT),
+        ]
+    )
+    image_ids["symlink_workspace"] = (output / "symlink-workspace-image-id").read_text().strip()
     # Keep the alias with the retained images; removing its last tag could delete an input image.
     run(
         [
@@ -176,6 +196,7 @@ def qualify(worker: str, runtime: str, artifacts: Path, output: Path) -> None:
         "HW_CONTROLLER_IMAGE": image_ids["controller"],
         "HW_QUALIFICATION_NETWORK": network,
         "HW_WORKER_IMAGE": image_ids["worker"],
+        "HW_SYMLINK_WORKSPACE_IMAGE": image_ids["symlink_workspace"],
         "HW_GATEWAY_IMAGE": image_ids["gateway"],
         "HW_QUALIFICATION_OUTPUT": str(output),
         "OPENHANDS_SUPPRESS_BANNER": "1",
@@ -245,6 +266,7 @@ def qualify(worker: str, runtime: str, artifacts: Path, output: Path) -> None:
                 ROOT / "deploy/tests/worker_hostile_probe.py",
                 ROOT / "deploy/tests/worker_network_probe.py",
                 ROOT / "deploy/tests/worker_network_qualification.py",
+                ROOT / "images/worker/candidate/symlink-workspace.Dockerfile",
             )
         },
         "images": image_ids,
