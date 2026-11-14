@@ -53,7 +53,7 @@ The Heartwood artifact-bundle version is separate from upstream protocol version
 | [Access and identity](#access-and-identity) | Authenticated routing and the launch capability | Implemented for one launching principal per gateway; per-user identity verification unavailable |
 | [Deployment policy](#deployment-policy) | Restrictions the platform imposes on every project | Operator-bound policy ceiling implemented; requires explicit managed launch and outside enforcement |
 | [Inference](#inference) | Model endpoints and authorized model discovery | Built-in and operator-configured routes; deployment connection-manifest startup unavailable |
-| [Platform services](#platform-services) | Compute, data, and application tools through MCP | Unavailable; draft service and operation schemas only |
+| [Platform services](#platform-services) | Compute, data, and application tools through MCP | Draft service-discovery and operation profiles; optional trusted Python adapter boundary implemented, with no built-in platform connectors |
 | [Agent isolation](#agent-isolation) | Keeping the complete worker away from Heartwood's controls | Native reference implementation; exact artifact and deployment qualification required |
 | [Controlled data](#controlled-data) | Read-only inputs, enforced egress denial, and reviewed release of outputs | Selected-input staging and native read-only mounts implemented; quarantine and steward-approved release unavailable |
 | [Audit and provenance](#audit-and-provenance) | Signed checkpoints, retention, and operation references | Explicit signed exports and deployment-bound automatic evidence; independent signer authorization and records retention require qualification |
@@ -601,6 +601,7 @@ Cancellation can leave completed work and incurred charges; status and cost obse
 #### Outside Operation Admission
 
 A trusted embedding supplies a session-scoped `ExternalActionAdapter` through `SessionGateway(external_actions_factory=...)` and prepares an outside operation from a retained worker tool proposal with `SessionService.propose_external_action`.
+These are Python embedding interfaces; the gateway has no HTTP endpoint for adapter registration or outside-operation proposal creation.
 The gateway requires protected state and its owned native worker lifecycle for this binding.
 Supply the exact supported SDK `ClientToolSpec` definitions through `native_worker_plan_factory(client_tools=...)`; their canonical schemas are bound into the worker input identity and admitted independently of worker responses.
 The SDK registers these proposal tools in the worker; their acknowledgement does not execute or authorize a service action.
@@ -888,13 +889,14 @@ Missing or unknown eligibility remains unknown.
 | Launch and budget context | Authorized platform project, opaque billing binding, constraints, and budget observations | Draft schemas; runtime integration unavailable |
 | Plan and element estimates | Predictions and structured platform estimates with coverage, uncertainty, units, and validity | Draft schemas with cross-field validation and worked examples |
 | Approval and budget overview | Exact reviewed proposals, researcher decisions, platform authorization, and budget observations | Draft schemas; no accounting or enforcement engine |
-| Operation schemas | Exact native-request references, hard limits, backend observations, and audit references | Draft schemas; execution unavailable |
+| Operation schemas | Exact native-request references, hard limits, backend observations, and audit references | Draft platform profile; not the implemented Python outside-operation adapter contract |
 | Contract version | Bundle index, maturity, compatibility rules, and content digests | Exported as `contract.json` |
-| Conformance kit | Checks a platform runs on its integration responses | Offline model-catalog, MCP discovery, and captured Tasks exchange checks implemented; authenticated service integration unavailable |
+| Conformance kit | Checks a platform runs on its integration responses | Offline model-catalog, MCP discovery, and captured Tasks exchange checks implemented; no live authenticated platform-service conformance runner |
 
 !!! info "Contract artifacts and runtime availability"
     Current artifacts describe implemented parsers and routes; draft artifacts prepare the platform integration.
-    Authenticated MCP, deployment-manifest model discovery and platform-operation integration are unavailable.
+    Built-in platform service connectors, deployment-manifest model discovery and runtime consumption of the draft platform-operation profile are unavailable.
+    The optional trusted Python adapter boundary supports reviewed outside operations; it requires a deployment-supplied connector and does not install those draft profiles.
     The implemented policy and approval bindings still require qualification inside the selected deployment boundary.
 
 ### Runtime Bindings and Adapter Profiles
