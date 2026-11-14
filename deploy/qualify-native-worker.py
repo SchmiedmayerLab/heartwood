@@ -65,6 +65,22 @@ def qualify(worker: str, runtime: str, artifacts: Path, output: Path) -> None:
         image_ids[name] = subprocess.check_output(
             ["docker", "image", "inspect", "--format", "{{.Id}}", image], text=True
         ).strip()
+    host = json.loads(
+        subprocess.check_output(
+            [
+                "docker",
+                "info",
+                "--format",
+                '{"kernel":{{json .KernelVersion}},"os":{{json .OSType}},'
+                '"architecture":{{json .Architecture}},"docker_version":{{json .ServerVersion}}}',
+            ],
+            text=True,
+        )
+    )
+    if set(host) != {"kernel", "os", "architecture", "docker_version"} or not all(
+        isinstance(value, str) and value for value in host.values()
+    ):
+        raise ValueError("Docker host identity is incomplete")
     output.mkdir(parents=True, exist_ok=False, mode=0o700)
     # Artifact services discard execute bits. Normalize a private packaging copy,
     # preserving both the supplied artifacts and the upstream Dockerfile bytes.
@@ -179,6 +195,16 @@ def qualify(worker: str, runtime: str, artifacts: Path, output: Path) -> None:
     with (output / "qualification.log").open("w") as log:
         result = subprocess.run(arguments, stdout=log, stderr=subprocess.STDOUT)
     evidence = {
+        "host": host,
+        "qualification_sources": {
+            str(path.relative_to(ROOT)): digest(path)
+            for path in (
+                ROOT / "deploy/qualify-native-worker.py",
+                ROOT / "deploy/tests/test_worker_native_integration.py",
+                ROOT / "deploy/tests/worker_native_fixture.py",
+                ROOT / "deploy/tests/worker_hostile_probe.py",
+            )
+        },
         "images": image_ids,
         "gateway_build": record,
         "returncode": result.returncode,
