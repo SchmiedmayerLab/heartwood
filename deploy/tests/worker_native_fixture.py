@@ -23,6 +23,7 @@ from contextlib import ExitStack
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 import grpc
@@ -594,8 +595,6 @@ additional_ca_bundle = {q(tls / "ca.crt")}
             "binaries": [interpreter],
         }
         if self.model_profile is not None:
-            from urllib.parse import urlsplit
-
             profile["endpoints"][0].update(
                 host=urlsplit(self.model_profile.base_url).hostname,
                 port=443,
@@ -665,7 +664,54 @@ additional_ca_bundle = {q(tls / "ca.crt")}
             HEARTWOOD_QUALIFICATION_KEY=credential,
         )
 
-    def prepare_hostile(self, protected_state: Path) -> None:
+    def wait_for_inference_expiry(self) -> None:
+        """Wait for the expiry admitted before launch, with a monotonic upper bound."""
+        assert self.credential_expires_at_ms is not None
+        assert self.inference_deadline is not None
+        while time.time() * 1000 <= self.credential_expires_at_ms + 100:
+            if time.monotonic() > self.inference_deadline + 2:
+                raise TimeoutError("Native credential expiry could not be established")
+            time.sleep(0.1)
+
+    def probe_inference(
+        self, worker: str, *, body: dict[str, object] | None = None
+    ) -> dict[str, object]:
+        """Return only a placeholder hash and a bounded native response classification."""
+        program = """import hashlib,json,os,sys,urllib.error,urllib.request
+key=os.environ['HEARTWOOD_QUALIFICATION_KEY']
+assert key.startswith('openshell:resolve:env:')
+result={'placeholder_sha256':hashlib.sha256(key.encode()).hexdigest()}
+body=json.loads(sys.argv[2])
+if body is not None:
+ request=urllib.request.Request(sys.argv[1],data=json.dumps(body).encode(),
+  headers={'Authorization':'Bearer '+key,'Content-Type':'application/json'})
+ error_code=None
+ try:
+  with urllib.request.urlopen(request,timeout=10) as response:
+   status=response.status
+   response.read(1024*1024)
+ except urllib.error.HTTPError as error:
+  status=error.code
+  content=error.read(16385)
+  assert len(content)<=16384, 'credential error response exceeds limit'
+  error_code=json.loads(content).get('error')
+  assert isinstance(error_code,str) and len(error_code)<=128
+ result.update(status=status,error_code=error_code)
+print(json.dumps(result))
+"""
+        observation = self.control.exec(
+            worker,
+            [PYTHON, "-I", "-c", program, self.base_url + "/chat/completions", json.dumps(body)],
+            workspace="default",
+            timeout_seconds=15,
+            no_login_shell=True,
+        )
+        if observation.exit_code != 0:
+            raise AssertionError("Inference probe failed without a bounded native response")
+        result: dict[str, object] = json.loads(observation.stdout)
+        return result
+
+    def prepare_hostile(self, protected_state: Path, *, filesystem_only: bool = False) -> None:
         """Keep the writable-state canary in the actual bound application state."""
         self.protected_canary = protected_state / "synthetic-canary"
         self.protected_canary.write_text(self.sentinel)
@@ -681,11 +727,14 @@ additional_ca_bundle = {q(tls / "ca.crt")}
             str(self.protected_canary),
             "--credential",
             str(self.private / "tls/client/tls.key"),
-            "--endpoint",
-            "https://host.docker.internal:19671/v1/forbidden",
         ]
-        self.terminal_command = shlex.join(arguments) + " && " + TERMINAL_COMMAND
-        self.provider.script[1] = ("terminal", {"command": self.terminal_command})
+        if filesystem_only:
+            arguments.append("--filesystem-only")
+            self.terminal_command = shlex.join(arguments)
+        else:
+            arguments.extend(["--endpoint", "https://host.docker.internal:19671/v1/forbidden"])
+            self.terminal_command = shlex.join(arguments) + " && " + TERMINAL_COMMAND
+            self.provider.script[1] = ("terminal", {"command": self.terminal_command})
 
     def check_outside_canary(self) -> None:
         """Prove the forbidden destination works from outside the worker boundary."""
@@ -746,6 +795,7 @@ additional_ca_bundle = {q(tls / "ca.crt")}
             ipv6=self.ipv6,
             port=19672,
             ipv6_port=19673,
+            allowed_host=urlsplit(self.base_url).hostname or "",
             peer=peer,
         )
 

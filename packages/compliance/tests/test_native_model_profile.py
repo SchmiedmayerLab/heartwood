@@ -338,3 +338,194 @@ def test_native_provider_expiry_is_installed_before_worker_admission(
     fixture.resources.callback.assert_called_once_with(
         fixture.cli_command, ["provider", "delete", "synthetic-owner"]
     )
+
+
+@pytest.mark.usefixtures("profile_module")
+@pytest.mark.parametrize("failure", [None, "expiry", "status", "code", "placeholder", "attachment"])
+def test_model_revocation_preserves_key_and_requires_exact_native_denial(
+    monkeypatch: pytest.MonkeyPatch, failure: str | None
+) -> None:
+    root = Path(__file__).resolve().parents[3]
+    monkeypatch.syspath_prepend(str(root / "deploy/tests"))
+    module = importlib.import_module("test_worker_model_integration")
+    fixture = MagicMock()
+    fixture.identity = "synthetic-owner"
+    fixture.credential_expires_at_ms = 123456
+    fixture.model_profile.model = "openai/synthetic-model"
+    fixture.control.get.return_value = SimpleNamespace(id="same-worker")
+    steps: list[str] = []
+
+    def cli(arguments: list[str], **environment: str) -> str:
+        assert environment == {}
+        if arguments[:3] == ["sandbox", "provider", "list"]:
+            names = [] if "detach" in steps else [fixture.identity]
+            if failure == "attachment" and "detach" in steps:
+                names = [fixture.identity]
+            return json.dumps(
+                {"providers": [{"name": name} for name in names], "next_page_token": ""}
+            )
+        assert arguments == ["sandbox", "provider", "detach", "worker", fixture.identity]
+        steps.append("detach")
+        return ""
+
+    def probe(worker: str, *, body: dict[str, object] | None = None) -> dict[str, object]:
+        assert worker == "worker"
+        if body is None:
+            steps.append("hash")
+            return {"placeholder_sha256": "same-hash"}
+        assert steps == ["hash", "expiry"]
+        assert body == {
+            "model": "synthetic-model",
+            "messages": [{"role": "user", "content": "Synthetic revocation check."}],
+            "max_tokens": 1,
+        }
+        steps.append("probe")
+        return {
+            "status": 403 if failure == "status" else 500,
+            "error_code": "different" if failure == "code" else "credential_unavailable",
+            "placeholder_sha256": "different" if failure == "placeholder" else "same-hash",
+        }
+
+    def wait_for_expiry() -> None:
+        steps.append("expiry")
+        if failure == "expiry":
+            raise TimeoutError("synthetic expiry timeout")
+
+    fixture.cli_command.side_effect = cli
+    fixture.probe_inference.side_effect = probe
+    fixture.wait_for_inference_expiry.side_effect = wait_for_expiry
+    if failure is None:
+        result = module.revoke_model_provider(fixture, "worker")
+        assert result["provider_detached"] is True
+        assert result["credential_expires_at_ms"] == fixture.credential_expires_at_ms
+        assert steps == ["hash", "expiry", "probe", "detach"]
+    else:
+        with pytest.raises(TimeoutError if failure == "expiry" else AssertionError):
+            module.revoke_model_provider(fixture, "worker")
+        if failure in {"expiry", "status", "code", "placeholder"}:
+            assert "detach" not in steps
+        if failure == "expiry":
+            assert "probe" not in steps
+
+
+@pytest.mark.usefixtures("profile_module")
+@pytest.mark.parametrize("case", ["hash", "denied", "oversized", "transport", "bad-code"])
+def test_shared_inference_probe_has_bounded_content_safe_output(
+    monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    import contextlib
+    import sys
+    import urllib.error
+    import urllib.request
+    from email.message import Message
+
+    root = Path(__file__).resolve().parents[3]
+    monkeypatch.syspath_prepend(str(root / "deploy/tests"))
+    module = importlib.import_module("worker_native_fixture")
+    fixture = module.NativeFixture.__new__(module.NativeFixture)
+    fixture.base_url = "https://provider.invalid/v1"
+    fixture.control = MagicMock()
+    placeholder = "openshell:resolve:env:synthetic-placeholder"
+    monkeypatch.setenv("HEARTWOOD_QUALIFICATION_KEY", placeholder)
+    payload = {"model": "synthetic-model", "messages": [{"role": "user", "content": "synthetic"}]}
+
+    def request(request: urllib.request.Request, *, timeout: int) -> None:
+        assert case != "hash"
+        assert timeout == 10
+        assert request.full_url == fixture.base_url + "/chat/completions"
+        assert isinstance(request.data, bytes)
+        assert json.loads(request.data) == payload
+        if case == "transport":
+            raise urllib.error.URLError("synthetic DNS failure")
+        content = json.dumps({"error": "credential_unavailable"}).encode()
+        if case == "oversized":
+            content = b"x" * 16385
+        if case == "bad-code":
+            content = json.dumps({"error": "x" * 129}).encode()
+        raise urllib.error.HTTPError(
+            request.full_url, 500, "synthetic", Message(), io.BytesIO(content)
+        )
+
+    monkeypatch.setattr(urllib.request, "urlopen", request)
+
+    def execute(worker: str, arguments: list[str], **_kwargs: object) -> SimpleNamespace:
+        assert worker == "worker"
+        assert placeholder not in json.dumps(arguments)
+        monkeypatch.setattr(sys, "argv", ["-c", *arguments[4:]])
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            exec(compile(arguments[3], "native-inference-probe", "exec"), {})
+        assert placeholder not in output.getvalue()
+        return SimpleNamespace(exit_code=0, stdout=output.getvalue())
+
+    fixture.control.exec.side_effect = execute
+    if case in {"oversized", "bad-code", "transport"}:
+        with pytest.raises((AssertionError, urllib.error.URLError)):
+            fixture.probe_inference("worker", body=payload)
+    else:
+        result = fixture.probe_inference("worker", body=None if case == "hash" else payload)
+        assert len(result["placeholder_sha256"]) == 64
+        if case == "denied":
+            assert result["status"] == 500
+            assert result["error_code"] == "credential_unavailable"
+        else:
+            assert set(result) == {"placeholder_sha256"}
+
+
+@pytest.mark.usefixtures("profile_module")
+@pytest.mark.parametrize("mode", ["already-expired", "advance", "stalled", "backward"])
+def test_native_expiry_wait_requires_elapsed_wallclock_and_is_monotonic_bounded(
+    monkeypatch: pytest.MonkeyPatch, mode: str
+) -> None:
+    root = Path(__file__).resolve().parents[3]
+    monkeypatch.syspath_prepend(str(root / "deploy/tests"))
+    module = importlib.import_module("worker_native_fixture")
+    fixture = module.NativeFixture.__new__(module.NativeFixture)
+    fixture.credential_expires_at_ms = 10000
+    fixture.inference_deadline = 100.0
+    clock = [10.2 if mode == "already-expired" else 10.0, 100.0]
+    sleeps: list[float] = []
+    monkeypatch.setattr(module.time, "time", lambda: clock[0])
+    monkeypatch.setattr(module.time, "monotonic", lambda: clock[1])
+
+    def sleep(delay: float) -> None:
+        sleeps.append(delay)
+        clock[1] += 1.0
+        if mode == "advance":
+            clock[0] += 0.2
+        elif mode == "backward":
+            clock[0] -= 1.0
+
+    monkeypatch.setattr(module.time, "sleep", sleep)
+    if mode in {"stalled", "backward"}:
+        with pytest.raises(TimeoutError, match="expiry could not be established"):
+            fixture.wait_for_inference_expiry()
+        assert len(sleeps) == 3
+    else:
+        fixture.wait_for_inference_expiry()
+        assert len(sleeps) == (0 if mode == "already-expired" else 1)
+
+
+@pytest.mark.usefixtures("profile_module")
+@pytest.mark.parametrize(
+    ("base_url", "hostname"),
+    [
+        ("https://provider.invalid/v1", "provider.invalid"),
+        ("https://host.docker.internal:19671/v1", "host.docker.internal"),
+    ],
+)
+def test_direct_network_probe_uses_the_actual_provider_hostname(
+    monkeypatch: pytest.MonkeyPatch, base_url: str, hostname: str
+) -> None:
+    root = Path(__file__).resolve().parents[3]
+    monkeypatch.syspath_prepend(str(root / "deploy/tests"))
+    module = importlib.import_module("worker_native_fixture")
+    fixture = module.NativeFixture.__new__(module.NativeFixture)
+    fixture.base_url = base_url
+    fixture.control = MagicMock()
+    fixture.ipv4, fixture.ipv6 = "192.0.2.1", "2001:db8::1"
+    qualify = MagicMock(return_value={"passed": True})
+    monkeypatch.setattr(module, "qualify_network", qualify)
+    assert fixture.qualify_direct_network("worker") == {"passed": True}
+    assert qualify.call_args.kwargs["allowed_host"] == hostname
+    assert qualify.call_args.args == (fixture.control, "worker")
