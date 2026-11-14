@@ -22,11 +22,13 @@ Start with a synthetic project and the smallest selected access scope.
 | Run the application | A supported application artifact, durable storage and an authenticated researcher route | Terminal, browser and notebook availability depend on the platform adapter |
 | Isolate complete workers | An outside sandbox control plane, protected canonical state, selected read-only inputs, bounded writable storage and enforced egress | Native reference adapter available; exact deployment qualification required |
 | Use approved inference | Authorized model discovery and an approved inference endpoint with streaming and native tool calls | Built-in connections and configured compatible services; deployment connection-manifest startup is unavailable |
-| Inspect research metadata | Authorized project, dataset, file and workflow descriptions | Draft integration profile and offline conformance checks; authenticated platform-service runtime unavailable |
-| Execute research workflows | Native submission, status, results and cancellation APIs with independent authorization | Draft operation contract; platform execution integration unavailable |
+| Inspect research metadata | Authorized project, dataset, file and workflow descriptions | Draft service-discovery profile and offline conformance checks; no built-in platform metadata connector |
+| Execute research workflows | Native submission, status, results and cancellation APIs with independent authorization | Draft platform operation profile; optional trusted Python adapter boundary requires a platform-specific connector |
 | Estimate work and inspect budgets | Platform-owned estimates, observed spend and allocation constraints | Draft schemas only; no runtime budget integration or Heartwood billing cap |
 
 The service-access requests below specify an integration target, not an assertion that a Terra or Seven Bridges service connector is installed.
+A trusted Python embedding can bind an `ExternalActionAdapter` to an owned native worker and the existing action-review flow; see [Outside Operation Admission](platform-contract.md#outside-operation-admission).
+This extension is not installed by the built-in launchers and does not add gateway HTTP routes for adapter registration or operation proposals.
 The Terra image supports its documented terminal and notebook paths; it does not implement Terra workflow API orchestration.
 No built-in Seven Bridges adapter is advertised.
 Installation, schema conformance, live validation and institutional approval are separate evidence levels.
@@ -52,7 +54,8 @@ For a workspace deployment, provide one authorized research directory and persis
 For managed isolation, bind the state directory outside the research directory through an operator-owned deployment manifest and keep it inaccessible to workers.
 State storage must support native advisory locks and preserve the project UUID across restart and restore.
 An object-store mount is not sufficient merely because it exposes files.
-The `--deployment` manifest is accepted by `heartwood gateway serve`; standalone terminal, notebook and maintenance commands do not automatically consume it.
+The `--deployment` manifest is accepted by `heartwood gateway serve` and the explicit `heartwood project migrate` and `heartwood project recover-migration` commands.
+Standalone terminal, notebook and other maintenance commands do not automatically consume it.
 Qualify the selected interface against the explicitly bound gateway.
 
 Provide the following connection details without secret values:
