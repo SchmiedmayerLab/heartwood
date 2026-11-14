@@ -274,47 +274,22 @@ def test_native_expired_provider_denies_retained_placeholder(
     while len(fixture.provider.observations) != 1 and time.monotonic() < deadline:
         time.sleep(0.1)
     assert len(fixture.provider.observations) == 1
-    probe = """import hashlib,json,os,urllib.error,urllib.request
-key=os.environ['HEARTWOOD_QUALIFICATION_KEY']
-assert key.startswith('openshell:resolve:env:')
-body={'model':'synthetic-boundary','messages':[{'role':'user','content':'synthetic'}],
-      'tools':[{'type':'function','function':{'name':'terminal'}}]}
-request=urllib.request.Request('https://host.docker.internal:19671/v1/chat/completions',
-    data=json.dumps(body).encode(),
-    headers={'Authorization':'Bearer '+key,'Content-Type':'application/json'})
-error_code=None
-try:
- with urllib.request.urlopen(request,timeout=10) as response:
-  status=response.status
-  response.read(1024*1024)
-except urllib.error.HTTPError as error:
- status=error.code
- body=error.read(16385)
- assert len(body)<=16384, 'credential error response exceeds limit'
- error_code=json.loads(body).get('error')
- assert isinstance(error_code,str) and len(error_code)<=128
-print(json.dumps({'status':status,'error_code':error_code,
-                  'placeholder_sha256':hashlib.sha256(key.encode()).hexdigest()}))
-"""
 
-    def request() -> dict[str, JsonValue]:
-        observation = fixture.control.exec(
+    def request() -> dict[str, object]:
+        return fixture.probe_inference(
             name,
-            [PYTHON, "-I", "-c", probe],
-            workspace="default",
-            timeout_seconds=15,
-            no_login_shell=True,
+            body={
+                "model": "synthetic-boundary",
+                "messages": [{"role": "user", "content": "synthetic"}],
+                "tools": [{"type": "function", "function": {"name": "terminal"}}],
+            },
         )
-        assert observation.exit_code == 0
-        result: dict[str, JsonValue] = json.loads(observation.stdout)
-        return result
 
     before = request()
     assert before["status"] == 200
     assert len(fixture.provider.observations) == 2
     assert fixture.credential_expires_at_ms is not None
-    while time.time() * 1000 <= fixture.credential_expires_at_ms + 100:
-        time.sleep(0.1)
+    fixture.wait_for_inference_expiry()
     after = request()
     assert after["status"] == 500
     assert after["error_code"] == "credential_unavailable"

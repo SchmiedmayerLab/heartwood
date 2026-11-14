@@ -107,7 +107,9 @@ python3 deploy/qualify-native-worker.py \
 
 The synthetic input contains an instruction to disregard approval and access outside credentials.
 The controller approves only the exact input-read, verified Skill invocation and aggregate command required by the task; other proposals are denied.
-It independently checks the suppression result, runs the maintained filesystem and network probes, verifies the audit ledger, and requires outside revocation before successful cleanup.
+It independently checks the suppression result, runs six filesystem probes and the maintained direct-IP network probes using the approved inference hostname, verifies the audit ledger, and requires outside revocation before successful cleanup.
+After the model finishes, native credential expiry must deny a retained placeholder at the configured inference endpoint before provider detachment; the shared key and its authorization remain unchanged.
+Synthetic forbidden-path, redirect and WebSocket-upgrade probes run separately against the deterministic fixture endpoint, never against the institutional inference service.
 These additional probes are explicitly driven by the qualification controller and are reported separately from model-proposed actions.
 
 Before any worker can attach, the controller gives its disposable native provider credential an expiry matching the qualification deadline.
