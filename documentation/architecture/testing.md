@@ -197,6 +197,12 @@ uv run --no-project --python 3.12.15 deploy/build-worker-candidate.py \
   --gateway --output test-results/gateway-candidate --cache test-results/gateway-cache
 ```
 
+Add `--gateway-tests` to run the upstream server deletion regressions before the binary build.
+The test container requires 12 GiB of memory and uses one Cargo job with optimization disabled only for the server package; the binary build retains its normal release profile and resource limits.
+A failed or empty test run prevents packaging; the exact test command and output remain in `gateway-test-command.json` and `gateway-tests.log`.
+The gateway CI job enables this check on its Linux runner and retains those files on failure.
+
+
 The output directory must be new and separate from the reusable cache directory.
 The builder verifies source, patch, CLI and build-tool archives, stamps a distinct local workspace version without changing registry dependencies, and uses locked Cargo dependencies inside a resource-bounded Linux container.
 Rust, CMake and image inputs are pinned; no mutable system-package installation is required.

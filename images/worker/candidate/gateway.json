@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "purpose": "qualification-only",
-  "version": "0.1.8+heartwood.1",
+  "version": "0.1.8+heartwood.2",
   "source": {
     "url": "https://codeload.github.com/NVIDIA/OpenShell/tar.gz/f3d976590d3eb1379690a2abaf0f0e26c21d487d",
     "sha256": "a89136244db8b5ef693ce48eeb7d1dc819df3b6fa91022172428db1351683ab8",
@@ -12,6 +12,10 @@
     {
       "path": "docker-provisioning.patch",
       "sha256": "4dc6079ce4c131175dd8056a9bf0934cf51d9b4c0e04ef430e0b7465f7e8025e"
+    },
+    {
+      "path": "gateway-delete-retry.patch",
+      "sha256": "2c6ff8223ef1e9c43320c7d9964e14e4754f605a7fa2e041b9c7f2083def66d2"
     }
   ],
   "images": {
