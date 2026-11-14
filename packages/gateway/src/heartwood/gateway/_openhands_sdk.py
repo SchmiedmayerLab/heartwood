@@ -146,6 +146,7 @@ from heartwood.gateway._subscriptions import (
     SubscriptionError,
     create_openai_subscription_llm,
 )
+from heartwood.gateway._terminal_environment import terminal_environment
 from heartwood.gateway._worker_events import AdmittedWorkerWorkspace
 from heartwood.schemas import ActionConfirmationMode, JsonValue
 from heartwood.schemas.evaluation import EvaluationRuntimeObservation
@@ -155,10 +156,17 @@ install_privacy_safe_retry_logging()
 
 
 class _BranchSnapshot(Protocol):
-    id: uuid.UUID
-    execution_status: ConversationExecutionStatus
-    stats: ConversationStats
-    events: Sequence[Event]
+    @property
+    def id(self) -> uuid.UUID: ...
+
+    @property
+    def execution_status(self) -> ConversationExecutionStatus: ...
+
+    @property
+    def stats(self) -> ConversationStats: ...
+
+    @property
+    def events(self) -> Sequence[Event]: ...
 
 
 @runtime_checkable
@@ -911,6 +919,8 @@ class OpenHandsSdkBackend:
                 params=_terminal_tool_params(
                     self.profile,
                     self._credential_environment_names,
+                    env=self.env,
+                    remote_worker=self._worker_context is not None,
                 ),
             ),
             Tool(
@@ -2292,12 +2302,22 @@ def _agent_context(
 def _terminal_tool_params(
     profile: ModelProfile,
     credential_environment_names: Sequence[str] = (),
+    *,
+    env: Mapping[str, str] | None = None,
+    remote_worker: bool = False,
 ) -> dict[str, object]:
-    """Mask provider keys and the gateway capability from agent subprocesses."""
-    names = {CAPABILITY_ENVIRONMENT, *credential_environment_names}
+    """Select local terminal settings without projecting host values into workers."""
+    excluded = {CAPABILITY_ENVIRONMENT, *credential_environment_names}
     if profile.credential_kind == "environment" and profile.api_key_env is not None:
-        names.add(profile.api_key_env)
-    return {"env": dict.fromkeys(sorted(names), "")}
+        excluded.add(profile.api_key_env)
+    if remote_worker:
+        # Native launch already replaces the full worker environment, including
+        # its own executable paths and supervisor CA trust configuration.
+        return {"env": dict.fromkeys(sorted(excluded), "")}
+    return {
+        "inherit_environment": False,
+        "env": terminal_environment(os.environ if env is None else env, excluded=tuple(excluded)),
+    }
 
 
 def _security_configuration(

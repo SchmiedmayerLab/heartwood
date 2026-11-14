@@ -13,9 +13,9 @@ jsonschema>=4.26.0
 keyring==25.7.0
 litellm==1.109.1
 openai==2.53.0
-openhands-agent-server==1.62.0+heartwood.1
-openhands-sdk==1.62.0+heartwood.1
-openhands-tools==1.62.0+heartwood.1
+openhands-agent-server==1.62.0+heartwood.2
+openhands-sdk==1.62.0+heartwood.2
+openhands-tools==1.62.0+heartwood.2
 openshell==0.1.8+heartwood.1
 packaging==26.3
 pydantic>=2.12

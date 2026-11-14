@@ -72,8 +72,23 @@ Heartwood reports one of three effective boundaries for the active model route:
 Application scrubbing is not process isolation.
 OpenHands' local model client and coding tools run under the same Heartwood operating-system identity, so environment filtering cannot prevent every same-identity memory, process, or inherited-resource access path.
 The built-in workstation/container, Terra, and Carina adapters therefore do not claim platform-isolated model credentials.
-For local execution, other secrets in the Heartwood environment, credential files, and keyring entries remain subject to the same-identity limitations.
+Local terminals receive an explicit environment containing executable and virtual-environment paths, locale and terminal settings, selected CUDA and Slurm settings, thread limits, and public certificate paths.
+The exact names are defined by `TERMINAL_ENVIRONMENT_NAMES` in the gateway; deployments can add comma-separated names with `HEARTWOOD_TERMINAL_ENV_ALLOWLIST` in the trusted launch environment.
+Configured provider credential names and the gateway capability remain excluded even when listed there.
+Proxy settings are excluded by default; a deployment that explicitly admits them must ensure they contain no credentials and cannot bypass its egress policy.
+The SDK adds the small set of variables required by its terminal backend.
+Environment selection does not prevent an agent from reading same-identity process memory, credential files or keyrings, contacting cloud metadata services, or loading secrets from shell startup files.
+It does not turn local workstation, Terra, or Carina execution into a full worker sandbox.
 The native worker instead starts with an explicit environment allowlist and receives only the outside provider transport's placeholder; ordinary remote execution without that transport does not separate model credentials from agent tools.
+
+| Local Terminal Settings | Default Variable Names |
+|---|---|
+| Executables and research environment | `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `VIRTUAL_ENV`, `CONDA_PREFIX`, `CONDA_DEFAULT_ENV`, `PYTHONPATH`, `HEARTWOOD_RUNTIME_ROOT`, `LD_LIBRARY_PATH`, `DYLD_LIBRARY_PATH` |
+| Locale, terminal, and temporary files | `LANG`, `LC_ALL`, `LC_CTYPE`, `TERM`, `COLORTERM`, `TZ`, `TMPDIR`, `TEMP`, `TMP` |
+| Accelerator selection | `CUDA_HOME`, `CUDA_PATH`, `CUDA_VISIBLE_DEVICES`, `NVIDIA_VISIBLE_DEVICES`, `NVIDIA_DRIVER_CAPABILITIES` |
+| Scheduler allocation | `SLURM_JOB_ID`, `SLURM_JOB_NAME`, `SLURM_SUBMIT_DIR`, `SLURM_CPUS_PER_TASK`, `SLURM_NTASKS`, `SLURM_PROCID`, `SLURM_LOCALID` |
+| Thread limits | `OMP_NUM_THREADS`, `MKL_NUM_THREADS`, `OPENBLAS_NUM_THREADS` |
+| Public trust material | `SSL_CERT_FILE`, `SSL_CERT_DIR`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, `GIT_SSL_CAINFO`, `NODE_EXTRA_CA_CERTS` |
 
 A Heartwood-managed local model server uses a private Unix socket in an owner-only temporary directory outside the research project.
 The launcher and model clients validate directory ancestry, ownership, permissions and socket identity; managed requests have no TCP fallback.

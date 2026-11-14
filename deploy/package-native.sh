@@ -39,6 +39,14 @@ fi
 mkdir -p "${workspace}/heartwood/vendor/heartwood-skills"
 git -C vendor/heartwood-skills archive --format=tar "${skill_revision}" \
   | tar -xf - -C "${workspace}/heartwood/vendor/heartwood-skills"
+if ! command -v uv >/dev/null 2>&1; then
+  echo "uv 0.13.7 is required to build maintained runtime dependencies" >&2
+  exit 69
+fi
+(
+  cd "${workspace}/heartwood"
+  uv run --no-project --python 3.12.15 deploy/build-worker-candidate.py --bootstrap
+)
 if ! command -v npm >/dev/null 2>&1; then
   echo "npm is required to build the native browser assets" >&2
   exit 69

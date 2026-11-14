@@ -112,7 +112,7 @@ def builder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ModuleType:
         json.dumps(
             {
                 "schema_version": 1,
-                "purpose": "qualification-only",
+                "purpose": "maintained-dependencies",
                 "uv": "0.13.7",
                 "python": "3.12.15",
                 "source_date_epoch": 1,
@@ -163,6 +163,51 @@ def test_existing_output_is_preserved(builder: ModuleType, tmp_path: Path) -> No
     with pytest.raises(FileExistsError):
         builder.build(output, "uv")
     assert (output / "existing.whl").read_bytes() == b"existing work"
+
+
+@pytest.mark.parametrize("changed", [None, "wheel", "record", "extra"])
+def test_bootstrap_verifies_cached_wheels_without_rebuilding(
+    builder: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, changed: str | None
+) -> None:
+    output = tmp_path / "runtime-wheels"
+    output.mkdir()
+    wheel = output / "synthetic.whl"
+    wheel.write_bytes(b"reviewed wheel")
+    manifest_path = builder._CONFIG / "sources.json"
+    manifest = json.loads(manifest_path.read_text())
+    expected = {wheel.name: hashlib.sha256(wheel.read_bytes()).hexdigest()}
+    manifest["wheels_sha256"] = expected
+    manifest_path.write_text(json.dumps(manifest))
+    record = {
+        "manifest_sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+        "wheels": expected,
+    }
+    if changed == "wheel":
+        wheel.write_bytes(b"substituted wheel")
+    elif changed == "record":
+        record["manifest_sha256"] = "substituted"
+    elif changed == "extra":
+        (output / "unreviewed.whl").write_bytes(b"extra dependency")
+    (output / "build-record.json").write_text(json.dumps(record))
+    monkeypatch.setattr(builder, "build", lambda *_args: pytest.fail("rebuilt cached dependencies"))
+    if changed is None:
+        builder.bootstrap(output, "uv")
+    else:
+        with pytest.raises(ValueError, match="differ"):
+            builder.bootstrap(output, "uv")
+
+
+def test_bootstrap_does_not_follow_a_dependency_directory_symlink(
+    builder: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    destination = tmp_path / "outside"
+    destination.mkdir()
+    output = tmp_path / "runtime-wheels"
+    output.symlink_to(destination, target_is_directory=True)
+    monkeypatch.setattr(builder, "build", lambda *_args: pytest.fail("followed dependency symlink"))
+    with pytest.raises(ValueError, match="symlink"):
+        builder.bootstrap(output, "uv")
+    assert not list(destination.iterdir())
 
 
 def test_changed_archive_cannot_execute_build_code(
