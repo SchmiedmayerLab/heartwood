@@ -32,6 +32,7 @@ TERMINAL_ENVIRONMENT_NAMES = frozenset(
         "CONDA_PREFIX",
         "CONDA_DEFAULT_ENV",
         "PYTHONPATH",
+        "HEARTWOOD_RUNTIME_ROOT",
         "CUDA_HOME",
         "CUDA_PATH",
         "CUDA_VISIBLE_DEVICES",

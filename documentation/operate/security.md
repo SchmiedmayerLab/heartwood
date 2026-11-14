@@ -83,7 +83,7 @@ The native worker instead starts with an explicit environment allowlist and rece
 
 | Local Terminal Settings | Default Variable Names |
 |---|---|
-| Executables and research environment | `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `VIRTUAL_ENV`, `CONDA_PREFIX`, `CONDA_DEFAULT_ENV`, `PYTHONPATH`, `LD_LIBRARY_PATH`, `DYLD_LIBRARY_PATH` |
+| Executables and research environment | `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `VIRTUAL_ENV`, `CONDA_PREFIX`, `CONDA_DEFAULT_ENV`, `PYTHONPATH`, `HEARTWOOD_RUNTIME_ROOT`, `LD_LIBRARY_PATH`, `DYLD_LIBRARY_PATH` |
 | Locale, terminal, and temporary files | `LANG`, `LC_ALL`, `LC_CTYPE`, `TERM`, `COLORTERM`, `TZ`, `TMPDIR`, `TEMP`, `TMP` |
 | Accelerator selection | `CUDA_HOME`, `CUDA_PATH`, `CUDA_VISIBLE_DEVICES`, `NVIDIA_VISIBLE_DEVICES`, `NVIDIA_DRIVER_CAPABILITIES` |
 | Scheduler allocation | `SLURM_JOB_ID`, `SLURM_JOB_NAME`, `SLURM_SUBMIT_DIR`, `SLURM_CPUS_PER_TASK`, `SLURM_NTASKS`, `SLURM_PROCID`, `SLURM_LOCALID` |
