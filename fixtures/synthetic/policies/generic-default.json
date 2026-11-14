@@ -15,8 +15,7 @@
     "experimental"
   ],
   "allowed_action_confirmation_modes": [
-    "always-confirm",
-    "confirm-risky"
+    "always-confirm"
   ],
   "credential_allowlist": [],
   "aggregate_count_floor": 20,
