@@ -15,6 +15,7 @@ COPY --from=records-qualification-tools --chmod=0555 /bin/ /opt/qualification/bi
 COPY --from=records-qualification-tools /LICENSE.minio /LICENSE.mc /opt/qualification/
 COPY deploy/tests/worker_network_*.py deploy/tests/worker_hostile_probe.py deploy/tests/worker_native_fixture.py deploy/tests/worker_telemetry.py deploy/tests/test_worker_native_integration.py /opt/qualification/tests/
 COPY deploy/tests/test_worker_external_integration.py /opt/qualification/tests/
+COPY deploy/tests/test_worker_pair_integration.py /opt/qualification/tests/
 COPY deploy/tests/external_service_fixture.py /opt/qualification/deploy/tests/
 COPY deploy/tests/test_worker_model_integration.py /opt/qualification/tests/
 COPY deploy/worker_model_profile.py /opt/qualification/worker_model_profile.py

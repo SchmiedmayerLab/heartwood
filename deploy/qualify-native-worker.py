@@ -81,6 +81,7 @@ def qualify(
         ROOT / "deploy/tests/test_worker_model_integration.py",
         ROOT / "deploy/tests/test_worker_native_integration.py",
         ROOT / "deploy/tests/test_worker_external_integration.py",
+        ROOT / "deploy/tests/test_worker_pair_integration.py",
         ROOT / "deploy/tests/external_service_fixture.py",
         ROOT / "deploy/tests/worker_native_fixture.py",
         ROOT / "deploy/tests/worker_telemetry.py",
@@ -347,6 +348,7 @@ def qualify(
                 else [
                     "/opt/qualification/tests/test_worker_native_integration.py",
                     "/opt/qualification/tests/test_worker_external_integration.py",
+                    "/opt/qualification/tests/test_worker_pair_integration.py",
                 ]
             ),
         ]

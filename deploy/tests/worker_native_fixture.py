@@ -69,6 +69,8 @@ class SyntheticProvider:
             ("terminal", {"command": TERMINAL_COMMAND}),
             ("finish", {"message": "Synthetic aggregate check completed."}),
         ]
+        self.scripts: dict[str, list[tuple[str, dict[str, Any]]]] = {}
+        self._request_lock = threading.Lock()
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -91,7 +93,6 @@ class SyntheticProvider:
                     body = json.loads(self.rfile.read(length))
                     if any(value in json.dumps(body) for value in owner.forbidden_values):
                         raise AssertionError("Outside secret reached the inference request")
-                    index = len(owner.observations)
                     authorized = secrets.compare_digest(
                         self.headers.get("Authorization", ""), "Bearer " + owner.credential
                     )
@@ -104,25 +105,46 @@ class SyntheticProvider:
                         self.send_header("Content-Length", "0")
                         self.end_headers()
                         return
-                    owner.observations.append(
-                        {"path": self.path, "authorized": authorized, "model": body.get("model")}
-                    )
+                    with owner._request_lock:
+                        routes = [
+                            marker
+                            for marker in owner.scripts
+                            if any(
+                                message.get("role") == "user"
+                                and marker in json.dumps(message.get("content"))
+                                for message in body.get("messages", [])
+                            )
+                        ]
+                        if owner.scripts and len(routes) != 1:
+                            raise ValueError("Inference request has no unique synthetic route")
+                        route = routes[0] if routes else None
+                        script = owner.scripts[route] if route is not None else owner.script
+                        index = sum(item.get("route") == route for item in owner.observations)
+                        owner.observations.append(
+                            {
+                                "path": self.path,
+                                "authorized": authorized,
+                                "model": body.get("model"),
+                                "route": route,
+                            }
+                        )
                     if (
                         not authorized
                         or self.path != "/v1/chat/completions"
-                        or index >= len(owner.script)
+                        or index >= len(script)
                     ):
                         self.send_error(403)
                         return
-                    name, arguments = owner.script[index]
+                    name, arguments = script[index]
                     if name not in [tool["function"]["name"] for tool in body.get("tools", [])]:
                         raise ValueError("required tool absent from native request")
+                    call_id = f"{route or 'synthetic'}-{index}"
                     call = {
-                        "id": f"synthetic-{index}",
+                        "id": call_id,
                         "type": "function",
                         "function": {"name": name, "arguments": json.dumps(arguments)},
                     }
-                    common = {"id": f"synthetic-{index}", "created": 1, "model": "synthetic"}
+                    common = {"id": call_id, "created": 1, "model": "synthetic"}
                     usage = {"prompt_tokens": 10, "completion_tokens": 10, "total_tokens": 20}
                     if body.get("stream"):
                         first = {
