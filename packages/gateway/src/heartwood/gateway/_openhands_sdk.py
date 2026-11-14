@@ -197,6 +197,7 @@ _AGENT_CONDENSER_MAX_EVENTS = 240
 _AGENT_CONDENSER_KEEP_FIRST = 2
 _AGENT_MAX_ITERATIONS_PER_RUN = 100
 _AGENT_PROGRESS_POLL_SECONDS = 0.25
+_AGENT_REMOTE_PROGRESS_FALLBACK_SECONDS = 5.0
 _AGENT_WORKER_TRANSITION_TIMEOUT_SECONDS = 10
 _AGENT_WORKER_SHUTDOWN_TIMEOUT_SECONDS = 30
 _MAX_TOOL_RESULT_CHARS = 16_000
@@ -353,6 +354,7 @@ class OpenHandsSdkBackend:
         self._agent_loop: asyncio.AbstractEventLoop | None = None
         self._agent_task: asyncio.Task[Any] | None = None
         self._agent_started = False
+        self._progress_changed = ThreadEvent()
         self._view_repair_lock = Lock()
         self._view_repair_tool_call_ids: set[str] = set()
         self._view_repair_boundary_reached = False
@@ -1086,6 +1088,8 @@ class OpenHandsSdkBackend:
         Durable Heartwood translation reads conversation state at a stable
         boundary so the event and its derived state are consistent.
         """
+        if not isinstance(event, StreamingDeltaEvent):
+            self._progress_changed.set()
         if not isinstance(event, ObservationBaseEvent):
             return
         should_pause = False
@@ -1220,6 +1224,7 @@ class OpenHandsSdkBackend:
             if run is None:
                 self._clear_pending_action_view_repair()
                 return frozenset(published_source_event_ids)
+            next_remote_read = time.monotonic() + _AGENT_REMOTE_PROGRESS_FALLBACK_SECONDS
             try:
                 while not run.done():
                     done, _pending = await asyncio.wait(
@@ -1227,10 +1232,21 @@ class OpenHandsSdkBackend:
                         timeout=_AGENT_PROGRESS_POLL_SECONDS,
                     )
                     if run not in done:
+                        if (
+                            isinstance(conversation, RemoteConversation)
+                            and not self._progress_changed.is_set()
+                            and time.monotonic() < next_remote_read
+                        ):
+                            continue
+                        # Consume before reading so concurrent persisted events remain visible.
+                        self._progress_changed.clear()
                         events = self._reconcile_conversation(
                             conversation,
                             session_id=session_id,
                             known_source_event_ids=frozenset(published_source_event_ids),
+                        )
+                        next_remote_read = (
+                            time.monotonic() + _AGENT_REMOTE_PROGRESS_FALLBACK_SECONDS
                         )
                         if events:
                             await asyncio.to_thread(self._event_sink, events)
