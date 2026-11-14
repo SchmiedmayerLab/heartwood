@@ -11,6 +11,7 @@ import hashlib
 import io
 import json
 import shutil
+import socket
 import subprocess
 import sys
 import time
@@ -2535,10 +2536,12 @@ def test_serve_starts_gateway_for_current_project(
     (web_root / "index.html").write_text("<main>Heartwood</main>\n", encoding="utf-8")
     observed: list[tuple[str, int]] = []
     monkeypatch.setattr(
-        "heartwood.cli.uvicorn.run",
-        lambda _app, *, host, port, log_level, proxy_headers: observed.append(  # noqa: ARG005, F841, RUF100
-            (host, port)
-        ),
+        "heartwood.cli.uvicorn.Server.run",
+        lambda server, *, sockets: observed.append((server.config.host, server.config.port)),  # noqa: ARG005
+    )
+    monkeypatch.setattr(
+        "heartwood.cli.uvicorn.Config.bind_socket",
+        lambda _config: socket.create_server(("127.0.0.1", 0)),
     )
     monkeypatch.setenv("HEARTWOOD_PLATFORM", "terra")
     monkeypatch.setenv("GOOGLE_PROJECT", "terra-project")
@@ -2571,7 +2574,7 @@ def test_serve_starts_gateway_for_current_project(
     assert not (project / ".heartwood").exists()
     printed = capsys.readouterr().out
     assert "Open Heartwood with this one-time link:" in printed
-    assert "https://notebooks.firecloud.org/proxy/9876/launch?token=" in printed
+    assert "https://notebooks.firecloud.org/proxy/9876/#launch=" in printed
 
 
 def test_serve_rejects_non_loopback_and_incomplete_proxy_routes(
@@ -2582,7 +2585,7 @@ def test_serve_rejects_non_loopback_and_incomplete_proxy_routes(
     web_root.mkdir()
     (web_root / "index.html").write_text("<main>Heartwood</main>\n", encoding="utf-8")
     monkeypatch.setattr(
-        "heartwood.cli.uvicorn.run",
+        "heartwood.cli.uvicorn.Server.run",
         lambda *_args, **_kwargs: pytest.fail("unsafe gateway was started"),
     )
     monkeypatch.setenv("HEARTWOOD_IMAGE_FLAVOR", "standard")
@@ -2628,10 +2631,12 @@ def test_serve_requires_an_explicit_host_loopback_publication_assertion(
     (web_root / "index.html").write_text("<main>Heartwood</main>\n", encoding="utf-8")
     observed: list[tuple[str, int]] = []
     monkeypatch.setattr(
-        "heartwood.cli.uvicorn.run",
-        lambda _app, *, host, port, log_level, proxy_headers: observed.append(  # noqa: ARG005, F841, RUF100
-            (host, port)
-        ),
+        "heartwood.cli.uvicorn.Server.run",
+        lambda server, *, sockets: observed.append((server.config.host, server.config.port)),  # noqa: ARG005
+    )
+    monkeypatch.setattr(
+        "heartwood.cli.uvicorn.Config.bind_socket",
+        lambda _config: socket.create_server(("127.0.0.1", 0)),
     )
 
     assert (
@@ -2664,7 +2669,7 @@ def test_serve_uses_the_detected_platform_ingress_default(
     monkeypatch.setenv("GOOGLE_PROJECT", "terra-project")
     monkeypatch.setenv("CLUSTER_NAME", "saturn-runtime")
     monkeypatch.setattr(
-        "heartwood.cli.uvicorn.run",
+        "heartwood.cli.uvicorn.Server.run",
         lambda *_args, **_kwargs: pytest.fail("incomplete gateway route was started"),
     )
 

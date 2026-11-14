@@ -17,6 +17,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
@@ -129,30 +130,35 @@ def main() -> int:
 
 
 def _start_gateway() -> subprocess.Popen[str]:
-    return subprocess.Popen(
-        [
-            "heartwood",
-            "gateway",
-            "serve",
-            "--host",
-            GATEWAY_HOST,
-            "--port",
-            str(GATEWAY_PORT),
-            "--web-root",
-            str(WEB_ROOT),
-            "--ingress-mode",
-            "jupyter-proxy",
-            "--public-origin",
-            f"http://{GATEWAY_HOST}:{PROXY_PORT}",
-            "--base-path",
-            _external_base_path(),
-        ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.STDOUT,
-        text=True,
-        cwd=PROJECT_ROOT,
-        env={**os.environ, "HEARTWOOD_GATEWAY_CAPABILITY": CAPABILITY},
-    )
+    with tempfile.TemporaryFile() as capability:
+        capability.write(CAPABILITY.encode("ascii"))
+        capability.seek(0)
+        return subprocess.Popen(
+            [
+                "heartwood",
+                "gateway",
+                "serve",
+                "--capability-fd",
+                str(capability.fileno()),
+                "--host",
+                GATEWAY_HOST,
+                "--port",
+                str(GATEWAY_PORT),
+                "--web-root",
+                str(WEB_ROOT),
+                "--ingress-mode",
+                "jupyter-proxy",
+                "--public-origin",
+                f"http://{GATEWAY_HOST}:{PROXY_PORT}",
+                "--base-path",
+                _external_base_path(),
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.STDOUT,
+            text=True,
+            cwd=PROJECT_ROOT,
+            pass_fds=(capability.fileno(),),
+        )
 
 
 def _start_proxy() -> ThreadingHTTPServer:

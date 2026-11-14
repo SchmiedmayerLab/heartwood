@@ -47,7 +47,7 @@ def _command(kind: CommandKind, *, session_id: str = "session-1", **payload: Jso
 
 _SECRET = "synthetic" * 5
 _LAUNCH_TOKEN = "test-launch-token"
-_CAPABILITY_COOKIE = (b"cookie", f"heartwood-capability={_SECRET}".encode("ascii"))
+_CAPABILITY_HEADER = (b"x-heartwood-capability", _SECRET.encode("ascii"))
 
 
 def _access() -> LaunchCapability:
@@ -1125,7 +1125,7 @@ def _http_scope(
 ) -> dict[str, object]:
     request_headers = [(b"host", host.encode("ascii")), *headers]
     if capability:
-        request_headers.append(_CAPABILITY_COOKIE)
+        request_headers.append(_CAPABILITY_HEADER)
     if origin is not None:
         request_headers.append((b"origin", origin.encode("ascii")))
     return {
@@ -1151,7 +1151,7 @@ def _websocket_scope(
 ) -> dict[str, object]:
     request_headers = [(b"host", host.encode("ascii")), *headers]
     if capability:
-        request_headers.append(_CAPABILITY_COOKIE)
+        request_headers.append(_CAPABILITY_HEADER)
     if origin is not None:
         request_headers.append((b"origin", origin.encode("ascii")))
     return {
@@ -1227,7 +1227,7 @@ def test_asgi_refuses_api_requests_without_the_launch_capability(
     assert header[0]["status"] == 200
 
 
-def test_asgi_launch_link_sets_the_capability_cookie_exactly_once(tmp_path: Path) -> None:
+def test_asgi_launch_exchange_is_single_use_without_cookies(tmp_path: Path) -> None:
     ingress = IngressPolicy.create(
         mode="jupyter-proxy",
         external_origin="https://notebooks.firecloud.org",
@@ -1237,53 +1237,39 @@ def test_asgi_launch_link_sets_the_capability_cookie_exactly_once(tmp_path: Path
     async def scenario() -> list[list[dict[str, object]]]:
         app = _app(_gateway(tmp_path), ingress=ingress)
         assert app.access.launch_url(ingress) == (
-            f"https://notebooks.firecloud.org/proxy/8767/launch?token={_LAUNCH_TOKEN}"
+            f"https://notebooks.firecloud.org/proxy/8767/#launch={_LAUNCH_TOKEN}"
         )
         origin = "https://notebooks.firecloud.org"
-        wrong = await _http_call(
-            app,
-            method="GET",
-            path="/launch",
-            query_string=b"token=guess",
-            origin=origin,
-            capability=False,
+        responses = []
+        for token in ("guess", _LAUNCH_TOKEN, _LAUNCH_TOKEN):
+            responses.append(
+                await _http_call(
+                    app,
+                    method="POST",
+                    path="/launch",
+                    body=json.dumps({"token": token}).encode(),
+                    origin=origin,
+                    capability=False,
+                )
+            )
+        responses.append(
+            await _http_call(
+                app,
+                method="GET",
+                path="/sessions",
+                origin=origin,
+                capability=False,
+                headers=((b"x-heartwood-capability", _SECRET.encode()),),
+            )
         )
-        launched = await _http_call(
-            app,
-            method="GET",
-            path="/launch",
-            query_string=f"token={_LAUNCH_TOKEN}".encode("ascii"),
-            origin=origin,
-            capability=False,
-        )
-        cookie = dict(cast(list[tuple[bytes, bytes]], launched[0]["headers"]))[b"set-cookie"]
-        replayed = await _http_call(
-            app,
-            method="GET",
-            path="/launch",
-            query_string=f"token={_LAUNCH_TOKEN}".encode("ascii"),
-            origin=origin,
-            capability=False,
-        )
-        authorized = await _http_call(
-            app,
-            method="GET",
-            path="/sessions",
-            headers=((b"cookie", cookie.split(b";", 1)[0]),),
-            origin=origin,
-            capability=False,
-        )
-        return [wrong, launched, replayed, authorized]
+        return responses
 
     wrong, launched, replayed, authorized = asyncio.run(scenario())
-
     assert wrong[0]["status"] == 403
-    assert launched[0]["status"] == 303
+    assert _status_and_body(launched) == (200, {"capability": _SECRET})
     headers = dict(cast(list[tuple[bytes, bytes]], launched[0]["headers"]))
-    assert headers[b"location"] == b"/proxy/8767/"
-    attributes = headers[b"set-cookie"].decode("ascii").split("; ")
-    assert attributes[0] == f"heartwood-capability={_SECRET}"
-    assert set(attributes[1:]) == {"Path=/proxy/8767", "HttpOnly", "SameSite=Strict", "Secure"}
+    assert b"set-cookie" not in headers
+    assert headers[b"cache-control"] == b"no-store"
     assert replayed[0]["status"] == 403
     assert authorized[0]["status"] == 200
 
@@ -1310,7 +1296,7 @@ def test_asgi_refuses_event_streams_without_the_capability(tmp_path: Path) -> No
     status, body = _status_and_body(stream)
     assert status == 401
     assert body["code"] == "HW-INGRESS-003"
-    assert socket == [{"type": "websocket.close", "code": 1008}]
+    assert socket == [{"type": "websocket.accept"}, {"type": "websocket.close", "code": 1008}]
 
 
 def test_asgi_records_the_launching_principal_instead_of_the_claimed_actor(
@@ -1342,3 +1328,129 @@ def test_asgi_records_the_launching_principal_instead_of_the_claimed_actor(
     recorded = [event for event in approval["events"] if event["kind"] == "approval.recorded"]
     assert recorded[0]["payload"]["actor_id"] == "human"
     assert recorded[0]["payload"]["decision"] == "approved"
+
+
+@pytest.mark.parametrize(
+    "body", [b"{}", b"not-json", b'{"token":12}', b'{"token":"secret","extra":true}']
+)
+def test_launch_exchange_rejects_malformed_bodies_without_echoing_them(
+    tmp_path: Path, body: bytes
+) -> None:
+    response = asyncio.run(
+        _http_call(
+            _app(_gateway(tmp_path)),
+            method="POST",
+            path="/launch",
+            body=body,
+            capability=False,
+        )
+    )
+    assert _status_and_body(response) == (400, {"error": "Invalid launch request"})
+
+
+@pytest.mark.parametrize("token", [_SECRET, "wrong", None])
+def test_browser_socket_requires_its_first_authentication_frame(
+    tmp_path: Path, token: str | None
+) -> None:
+    async def scenario() -> list[dict[str, object]]:
+        gateway = _gateway(tmp_path)
+        app = _app(gateway)
+        messages: list[dict[str, object]] = [{"type": "websocket.connect"}]
+        if token is not None:
+            messages.append(
+                {
+                    "type": "websocket.receive",
+                    "text": json.dumps(
+                        {
+                            "type": "authenticate",
+                            "capability": token,
+                        }
+                    ),
+                }
+            )
+        sent = []
+
+        async def receive() -> dict[str, object]:
+            return messages.pop(0) if messages else {"type": "websocket.disconnect"}
+
+        async def send(message: dict[str, object]) -> None:
+            sent.append(message)
+
+        try:
+            await app(
+                _websocket_scope("/sessions/session-1/events", capability=False), receive, send
+            )
+            return sent
+        finally:
+            gateway.stop()
+
+    messages = asyncio.run(scenario())
+    assert messages[0] == {"type": "websocket.accept"}
+    if token == _SECRET:
+        assert any(message["type"] == "websocket.send" for message in messages)
+    else:
+        assert messages == [{"type": "websocket.accept"}, {"type": "websocket.close", "code": 1008}]
+        assert not (tmp_path / ".heartwood").exists()
+
+
+@pytest.mark.parametrize(
+    "frame",
+    [
+        "{",
+        "[]",
+        '{"type":"authenticate","capability":3}',
+        "x" * 8193,
+        json.dumps({"type": "authenticate", "capability": "\ud800"}),
+        "[" * 3000 + "]" * 3000,
+    ],
+)
+def test_browser_socket_rejects_malformed_authentication_frames(tmp_path: Path, frame: str) -> None:
+    async def scenario() -> list[dict[str, object]]:
+        messages: list[dict[str, object]] = [
+            {"type": "websocket.connect"},
+            {"type": "websocket.receive", "text": frame},
+        ]
+        sent = []
+
+        async def receive() -> dict[str, object]:
+            return messages.pop(0)
+
+        async def send(message: dict[str, object]) -> None:
+            sent.append(message)
+
+        await _app(_gateway(tmp_path))(
+            _websocket_scope("/sessions/session-1/events", capability=False), receive, send
+        )
+        return sent
+
+    assert asyncio.run(scenario()) == [
+        {"type": "websocket.accept"},
+        {"type": "websocket.close", "code": 1008},
+    ]
+    assert not (tmp_path / ".heartwood").exists()
+
+
+def test_browser_socket_authentication_has_a_deadline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("heartwood.gateway._asgi._AUTH_FRAME_TIMEOUT_SECONDS", 0.01)
+
+    async def scenario() -> list[dict[str, object]]:
+        sent = []
+
+        async def receive() -> dict[str, object]:
+            await asyncio.Event().wait()
+            raise AssertionError("an unauthenticated socket must time out")
+
+        async def send(message: dict[str, object]) -> None:
+            sent.append(message)
+
+        await _app(_gateway(tmp_path))(
+            _websocket_scope("/sessions/session-1/events", capability=False), receive, send
+        )
+        return sent
+
+    assert asyncio.run(scenario()) == [
+        {"type": "websocket.accept"},
+        {"type": "websocket.close", "code": 1008},
+    ]

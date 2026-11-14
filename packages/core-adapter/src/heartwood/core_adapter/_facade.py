@@ -179,11 +179,29 @@ class PendingActionGroup:
 def pending_action_group(
     actions: tuple[ProposedToolCall, ...],
 ) -> PendingActionGroup | None:
-    """Return the stable atomic group represented by ordered pending actions."""
+    """Bind one ordered action set to its exact execution identities and arguments."""
     if not actions:
         return None
-    canonical = "\n".join(action.tool_call_id for action in actions)
-    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+    canonical = json.dumps(
+        {
+            "schema_version": "heartwood.action-set-binding.v1",
+            "actions": [
+                {
+                    "tool_call_id": action.tool_call_id,
+                    "action_id": action.action_id,
+                    "tool_name": action.tool_name,
+                    "kind": action.kind,
+                    "arguments": action.arguments,
+                }
+                for action in actions
+            ],
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    )
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
     return PendingActionGroup(
         group_id=f"action-set-{digest}",
         actions=actions,

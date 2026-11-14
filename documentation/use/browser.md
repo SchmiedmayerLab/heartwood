@@ -20,7 +20,9 @@ heartwood --interface web
 ```
 
 Keep the terminal process running and open the launch link Heartwood prints.
-The link works once: it sets a browser cookie that authorizes this page for the running gateway, then the page continues at `http://127.0.0.1:8767/` on a workstation.
+The link works once and authorizes the browser tab for the running gateway, then the page continues at `http://127.0.0.1:8767/` on a workstation.
+Reloads in that tab retain access; restarting the gateway requires its new launch link.
+Opening a new launch link in an existing tab reloads the page and refreshes its access and session view.
 If the browser later reports **HW-INGRESS-003**, stop Heartwood with `Ctrl-C`, run it again, and open the new link.
 
 ![Heartwood browser interface showing a project conversation](../assets/screenshots/browser-conversation-light.png#gh-light-mode-only){ .theme-screenshot-light }
