@@ -9,7 +9,8 @@
 
 [tool.uv]
 exclude-newer = "7 days"
-exclude-newer-package = { filelock = "2026-11-13T00:00:00Z", litellm = "2026-11-13T00:00:00Z" }
+# Admit the Tornado security fix for GHSA-5cjw-f85j-cv6r; remove after 2026-11-17.
+exclude-newer-package = { filelock = "2026-11-13T00:00:00Z", litellm = "2026-11-13T00:00:00Z", tornado = "2026-11-10T00:00:00Z" }
 
 [tool.uv.sources]
 openhands-sdk = { path = "vendor/runtime-wheels/openhands_sdk-1.62.0+heartwood.2-py3-none-any.whl" }
