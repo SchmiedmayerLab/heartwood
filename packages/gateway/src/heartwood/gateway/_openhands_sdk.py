@@ -13,6 +13,7 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
@@ -36,6 +37,7 @@ from openhands.sdk.conversation import (
     RemoteConversation,
 )
 from openhands.sdk.conversation.conversation_stats import ConversationStats
+from openhands.sdk.conversation.request import StartConversationRequest
 from openhands.sdk.event import (
     ActionEvent,
     AgentErrorEvent,
@@ -43,6 +45,7 @@ from openhands.sdk.event import (
     MessageEvent,
     ObservationBaseEvent,
     ObservationEvent,
+    StreamingDeltaEvent,
     UserRejectObservation,
 )
 from openhands.sdk.event.conversation_error import ConversationErrorEvent
@@ -66,12 +69,14 @@ from openhands.sdk.skills import Skill
 from openhands.sdk.subagent import AgentDefinition, register_agent_if_absent
 from openhands.sdk.tool.builtins.finish import FinishTool
 from openhands.sdk.tool.schema import Observation
+from openhands.sdk.workspace import LocalWorkspace
 from openhands.tools import TaskTrackerTool, TerminalTool
 from openhands.tools.file_editor import FileEditorAction
 from openhands.tools.preset import TaskOutcome
 from openhands.tools.task import TaskAction, TaskObservation
 from openhands.tools.task_tracker import TaskTrackerObservation
 from openhands.tools.terminal import TerminalAction, TerminalObservation
+from pydantic import SecretStr
 
 from heartwood.core_adapter import (
     BackendAgentMessageEvent,
@@ -136,6 +141,7 @@ from heartwood.gateway._subscriptions import (
     SubscriptionError,
     create_openai_subscription_llm,
 )
+from heartwood.gateway._worker_events import AdmittedWorkerWorkspace
 from heartwood.schemas import ActionConfirmationMode, JsonValue
 from heartwood.schemas.evaluation import EvaluationRuntimeObservation
 from heartwood.schemas.project_paths import ProjectPathError, project_relative_path
@@ -207,6 +213,31 @@ class _ConversationRuntimeOptions(TypedDict):
     stuck_detection: bool
 
 
+def register_specialist_catalog(catalog: SpecialistCatalog) -> None:
+    """Register verified advisory factories once in the current native runtime."""
+    for role in catalog.available_roles:
+        definition = role.definition
+        with _SPECIALIST_REGISTRATION_LOCK:
+            registered_definition = _REGISTERED_HEARTWOOD_SPECIALISTS.get(definition.name)
+            if registered_definition is not None:
+                if registered_definition != definition:
+                    raise OpenHandsSdkError(
+                        f"specialized agent name has conflicting definitions: {definition.name}"
+                    )
+                continue
+            registered = register_agent_if_absent(
+                name=definition.name,
+                factory_func=specialist_agent_factory(role),
+                description=definition,
+            )
+            if not registered:
+                raise OpenHandsSdkError(
+                    f"specialized agent name is already registered outside Heartwood: "
+                    f"{definition.name}"
+                )
+            _REGISTERED_HEARTWOOD_SPECIALISTS[definition.name] = definition
+
+
 def prepare_openhands_sdk(env: Mapping[str, str] | None = None) -> OpenHandsModules:
     """Load the pinned OpenHands runtime with Heartwood's upstream defaults."""
     _configure_upstream_defaults(env)
@@ -216,6 +247,36 @@ def prepare_openhands_sdk(env: Mapping[str, str] | None = None) -> OpenHandsModu
     from heartwood.gateway import _project_file_editor
 
     return sdk, skills, tools, _project_file_editor
+
+
+@dataclass(frozen=True, slots=True)
+class WorkerConversationContext:
+    """Operator-supplied configuration for one already admitted worker attempt."""
+
+    workspace: AdmittedWorkerWorkspace
+    inference_placeholder: SecretStr
+    skills: tuple[Skill, ...] = ()
+    specialist_catalog_sha256: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.workspace.working_dir != "/workspace":
+            raise OpenHandsSdkError("Worker workspace must use the image's project directory")
+        names: set[str] = set()
+        for skill in self.skills:
+            if (
+                re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", skill.name) is None
+                or skill.name in names
+                or skill.source != f"/skills/{skill.name}/SKILL.md"
+                or not skill.is_agentskills_format
+                or skill.mcp_tools
+                or "!`" in skill.content
+                or (
+                    skill.resources is not None
+                    and skill.resources.skill_root != f"/skills/{skill.name}"
+                )
+            ):
+                raise OpenHandsSdkError("Worker Skills require an explicit content projection")
+            names.add(skill.name)
 
 
 class OpenHandsSdkBackend:
@@ -237,6 +298,7 @@ class OpenHandsSdkBackend:
         llm_extra_body: Mapping[str, object] | None = None,
         native_tool_calling: bool | None = None,
         conversation_factory: ConversationFactory | None = None,
+        worker_context: Callable[[], WorkerConversationContext] | None = None,
         structured_task_outcomes: bool = False,
         review_batch_authorizer: ReviewBatchAuthorizer | None = None,
     ) -> None:
@@ -257,7 +319,15 @@ class OpenHandsSdkBackend:
         self._llm_extra_body = dict(llm_extra_body or {})
         self._native_tool_calling = native_tool_calling
         self._security_analyzer: SecurityAnalyzerBase | None = None
-        self._conversation_factory = conversation_factory or self._default_conversation_factory
+        if conversation_factory is not None and worker_context is not None:
+            raise OpenHandsSdkError("Choose one conversation factory")
+        self._worker_context = worker_context
+        self._worker_creation_attempted = False
+        self._conversation_factory = conversation_factory or (
+            self._worker_conversation_factory
+            if worker_context is not None
+            else self._default_conversation_factory
+        )
         self._injected_conversation_factory = conversation_factory is not None
         self._structured_task_outcomes = structured_task_outcomes
         self._review_batch_authorizer = review_batch_authorizer
@@ -441,6 +511,11 @@ class OpenHandsSdkBackend:
         """Translate persisted OpenHands state not yet committed by Heartwood."""
         try:
             conversation = self._get_conversation()
+            with self._run_lock:
+                # Live publication owns these events until its final callback returns.
+                # Replay must not consume observations before live evidence is captured.
+                if self._worker_threads:
+                    return ()
             return self._reconcile_conversation(
                 conversation,
                 session_id=session_id,
@@ -635,7 +710,10 @@ class OpenHandsSdkBackend:
                     error_code=BackendErrorCode.WORKER_STOPPED,
                 ),
             )
-        return self.reconcile(
+        # This is a live command response after the native run has stopped.
+        # Its final publisher may still be waiting for the session command lock.
+        return self._reconcile_conversation(
+            conversation,
             session_id=session_id,
             known_source_event_ids=frozenset(),
         )
@@ -726,7 +804,9 @@ class OpenHandsSdkBackend:
                     self._handle_sdk_event,
                     self._handle_token,
                 )
-                if self._review_batch_authorizer is not None:
+                if self._review_batch_authorizer is not None and not isinstance(
+                    conversation, RemoteConversation
+                ):
                     try:
                         agent = conversation.state.agent
                         if not isinstance(agent, Agent):
@@ -745,8 +825,6 @@ class OpenHandsSdkBackend:
         token_callback: Callable[[LLMStreamChunk], None],
     ) -> BaseConversation:
         _configure_upstream_defaults(self.env)
-        from heartwood.gateway._project_file_editor import PROJECT_FILE_EDITOR_SPEC
-
         self.workspace.mkdir(parents=True, exist_ok=True)
         self.persistence_dir.mkdir(parents=True, exist_ok=True)
         skills = _load_session_skills(self.skills_dir, self.installed_skill_roots)
@@ -776,39 +854,7 @@ class OpenHandsSdkBackend:
             )
         else:
             llm = LLM(**options)
-        tools = [
-            Tool(
-                name=TerminalTool.name,
-                params=_terminal_tool_params(
-                    self.profile,
-                    self._credential_environment_names,
-                ),
-            ),
-            Tool(
-                name=PROJECT_FILE_EDITOR_SPEC,
-                params={"project_root": str(self.workspace)},
-            ),
-            Tool(name=TaskTrackerTool.name),
-        ]
-        if specialist_tool := self._specialist_tool():
-            tools.append(specialist_tool)
-        if self._structured_task_outcomes:
-            tools.append(Tool(name="FinishTool", params={"response_schema": TaskOutcome}))
-        settings = _agent_settings(
-            llm=llm,
-            tools=tools,
-            context=_agent_context(skills),
-            condenser=_context_condenser_settings(self.profile),
-        )
-        agent = settings.create_agent()
-        if self._structured_task_outcomes:
-            agent = agent.model_copy(
-                update={
-                    "include_default_tools": [
-                        name for name in agent.include_default_tools if name != "FinishTool"
-                    ]
-                }
-            )
+        agent = self._build_agent(llm, skills=skills, workspace=self.workspace)
         conversation_id = uuid.uuid5(uuid.NAMESPACE_URL, self.conversation_key)
         conversation_store = ContentMinimizedLocalFileStore(
             LocalConversation.get_persistence_dir(self.persistence_dir, conversation_id),
@@ -833,6 +879,117 @@ class OpenHandsSdkBackend:
         conversation.set_confirmation_policy(confirmation_policy)
         return conversation
 
+    def _build_agent(self, llm: LLM, *, skills: list[Skill], workspace: Path) -> Agent:
+        from heartwood.gateway._project_file_editor import PROJECT_FILE_EDITOR_SPEC
+
+        tools = [
+            Tool(
+                name=TerminalTool.name,
+                params=_terminal_tool_params(
+                    self.profile,
+                    self._credential_environment_names,
+                ),
+            ),
+            Tool(
+                name=PROJECT_FILE_EDITOR_SPEC,
+                params={"project_root": str(workspace)},
+            ),
+            Tool(name=TaskTrackerTool.name),
+        ]
+        if specialist_tool := self._specialist_tool():
+            tools.append(specialist_tool)
+        if self._structured_task_outcomes:
+            tools.append(Tool(name="FinishTool", params={"response_schema": TaskOutcome}))
+        settings = _agent_settings(
+            llm=llm,
+            tools=tools,
+            context=_agent_context(skills),
+            condenser=_context_condenser_settings(self.profile),
+        )
+        agent = settings.create_agent()
+        if self._structured_task_outcomes:
+            agent = agent.model_copy(
+                update={
+                    "include_default_tools": [
+                        name for name in agent.include_default_tools if name != "FinishTool"
+                    ]
+                }
+            )
+        return agent
+
+    def _worker_conversation_factory(
+        self,
+        callback: Callable[[Event], None],
+        _token_callback: Callable[[LLMStreamChunk], None],
+    ) -> BaseConversation:
+        if self._worker_context is None or self._worker_creation_attempted:
+            raise OpenHandsSdkError("Worker conversation requires outside reconciliation")
+        context = self._worker_context()
+        lease = context.workspace.attempt
+        lease.ensure_active()
+        if (
+            self.profile.auth_type != "api_key"
+            or self.profile.credential_kind == "managed-identity"
+            or self.profile.aws_profile_name is not None
+            or self.profile.aws_region_name is not None
+        ):
+            raise OpenHandsSdkError("Worker inference requires an explicit API-key route")
+        placeholder = context.inference_placeholder.get_secret_value()
+        if not placeholder or len(placeholder) > 4096 or any(c in placeholder for c in "\0\r\n"):
+            raise OpenHandsSdkError("Worker inference placeholder is invalid")
+        if self.specialist_catalog is not None and (
+            context.specialist_catalog_sha256 != self.specialist_catalog.fingerprint
+        ):
+            raise OpenHandsSdkError("Worker specialist catalog was not qualified for this image")
+        options = _llm_options(
+            self.profile,
+            api_key=placeholder,
+            extra_body=self._llm_extra_body,
+            native_tool_calling=self._native_tool_calling,
+        )
+        options["api_key"] = placeholder
+        agent = self._build_agent(
+            LLM(**options), skills=list(context.skills), workspace=Path("/workspace")
+        )
+        analyzer, confirmation = _security_configuration(self._action_confirmation_mode)
+        request = StartConversationRequest(
+            agent=agent,
+            workspace=LocalWorkspace(working_dir="/workspace"),
+            conversation_id=lease.intent.conversation_id,
+            confirmation_policy=confirmation,
+            security_analyzer=analyzer,
+            max_iterations=_AGENT_MAX_ITERATIONS_PER_RUN,
+            stuck_detection=True,
+            autotitle=False,
+            tool_module_qualnames=dict(context.workspace.tool_modules),
+            client_tools=list(context.workspace.authorized_client_tools),
+        )
+
+        def on_event(event: Event) -> None:
+            lease.ensure_active()
+            if isinstance(event, StreamingDeltaEvent) and event.content:
+                self._token_sink(event.content)
+            callback(event)
+
+        lease.ensure_active()
+        self._worker_creation_attempted = True
+        conversation: RemoteConversation | None = None
+        try:
+            conversation = RemoteConversation.create(
+                context.workspace, request, callbacks=[on_event], visualizer=None
+            )
+            lease.ensure_active()
+        except BaseException as error:
+            lease.fence()
+            if conversation is not None:
+                with suppress(Exception):
+                    conversation.close()
+            if not isinstance(error, Exception):
+                raise
+            raise OpenHandsSdkError("Worker conversation requires outside reconciliation") from None
+        self._security_analyzer = analyzer
+        return conversation
+
     def _specialist_tool(self) -> Tool | None:
         if self.specialist_catalog is None:
             return None
@@ -855,29 +1012,8 @@ class OpenHandsSdkBackend:
         )
 
     def _register_specialized_agents(self) -> None:
-        if self.specialist_catalog is None:
-            return
-        for role in self.specialist_catalog.available_roles:
-            definition = role.definition
-            with _SPECIALIST_REGISTRATION_LOCK:
-                registered_definition = _REGISTERED_HEARTWOOD_SPECIALISTS.get(definition.name)
-                if registered_definition is not None:
-                    if registered_definition != definition:
-                        raise OpenHandsSdkError(
-                            f"specialized agent name has conflicting definitions: {definition.name}"
-                        )
-                    continue
-                registered = register_agent_if_absent(
-                    name=definition.name,
-                    factory_func=specialist_agent_factory(role),
-                    description=definition,
-                )
-                if not registered:
-                    raise OpenHandsSdkError(
-                        f"specialized agent name is already registered outside Heartwood: "
-                        f"{definition.name}"
-                    )
-                _REGISTERED_HEARTWOOD_SPECIALISTS[definition.name] = definition
+        if self.specialist_catalog is not None:
+            register_specialist_catalog(self.specialist_catalog)
 
     def _specialist_role_label(self, specialist_id: str) -> str:
         if self.specialist_catalog is None:

@@ -701,6 +701,21 @@ A platform that admits controlled or regulated data owns that decision and the c
 
 Heartwood is not a controlled-data boundary on its own; see [Security and Controlled Data](security.md).
 
+### Worker Input Staging
+
+The trusted launcher can stage explicitly selected project files using `WorkerInputManifest` and `stage_worker_inputs` from `heartwood.gateway.worker_inputs`.
+The manifest binds normalized paths, byte sizes, and SHA-256 digests; its canonical digest supplies the worker attempt's `input_manifest_sha256`.
+Manifests accept at most 128 files, 16 MiB per file, and 64 MiB in total.
+Staging rereads and verifies the exact bytes copied, rejects symbolic links, multiply linked files, and nonregular files, and excludes `.git` and `.heartwood` at every path component.
+It creates a temporary private directory under an operator-owned directory outside the project and removes that temporary directory when the staging context ends, including after failure.
+The launcher must keep this directory inaccessible to workers and complete transfer before leaving the context.
+An abrupt process exit can leave an unused staging directory; recovery must remove it before reusing storage and must not adopt it as a verified snapshot.
+
+Staging is neither data-access authorization nor a read-only sandbox mount.
+The platform must authorize the selected inputs, verify the transferred manifest, and attach an immutable or read-only input snapshot separately from the writable workspace before admitting the worker.
+Do not mount the project or private state merely to provide task context: relevant instructions, verified Skills, and other permitted context require an explicit projection without credentials, signer material, or authority-bearing records.
+File digests establish content identity, not data eligibility or confidentiality; a file copied into a public project path still requires an authorized selection.
+
 !!! planned "Not yet implemented: isolated execution and quarantine"
     Heartwood does not provision or verify read-only inputs, enforced egress denial, ephemeral execution, output quarantine, or steward-controlled release.
     Tracked in [#129](https://github.com/SchmiedmayerLab/heartwood/issues/129).

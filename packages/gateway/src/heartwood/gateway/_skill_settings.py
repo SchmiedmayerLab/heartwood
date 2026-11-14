@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Final, Literal, Protocol
 
 from heartwood.audit import AuditIntegrityError, AuditLog
+from heartwood.gateway.worker_skills import WorkerSkillProjection, stage_skill_projection
 from heartwood.persistence import NativeLockUnavailableError, native_file_lock
 from heartwood.schemas import JsonValue
 from heartwood.skills import (
@@ -460,10 +461,27 @@ class SkillManager:
     def active_skill_roots(self) -> tuple[Path, ...]:
         """Return the exact verified installed Skill directories OpenHands may load."""
         with self._lifecycle_lock():
-            return self._active_skill_roots()
+            return tuple(manifest.root for manifest in self._active_skill_manifests())
 
-    def _active_skill_roots(self) -> tuple[Path, ...]:
-        """Return active roots while holding the lifecycle lock."""
+    @contextmanager
+    def stage_worker_skills(
+        self, *, project_root: Path, staging_parent: Path
+    ) -> Iterator[WorkerSkillProjection]:
+        """Project verified active content without exposing the installation store."""
+        with self._lifecycle_lock():
+            manifests = [
+                manifest
+                for manifest in self._bundled_manifests()
+                if self._compatibility_reason(manifest) is None
+            ]
+            manifests.extend(self._active_skill_manifests())
+            with stage_skill_projection(
+                manifests, project_root=project_root, staging_parent=staging_parent
+            ) as projection:
+                yield projection
+
+    def _active_skill_manifests(self) -> tuple[SkillManifest, ...]:
+        """Return active packages while holding the lifecycle lock."""
         try:
             records = self.store.records()
             active_sources = sorted(
@@ -479,15 +497,16 @@ class SkillManager:
                         f"Installed Skill source is no longer configured: {source_id}"
                     )
                 self._refresh_source(source_id)
+            records = self.store.records()
             self._verify_active_installation_audit(records)
-            roots: list[Path] = []
+            manifests: list[SkillManifest] = []
             for record in records:
                 if record.status != "active":
                     continue
                 manifest = self.store.manifest(record)
                 if self._compatibility_reason(manifest) is None:
-                    roots.append(manifest.root)
-            return tuple(roots)
+                    manifests.append(manifest)
+            return tuple(manifests)
         except SkillStoreError as error:
             raise SkillSettingsError(str(error)) from error
 
@@ -552,6 +571,16 @@ class SkillManager:
         raise SkillSettingsError("Choose a Skill source: " + ", ".join(configured))
 
     def _bundled_summaries(self) -> tuple[SkillSummary, ...]:
+        return tuple(
+            SkillSummary.from_manifest(
+                manifest,
+                source="bundled",
+                compatibility_reason=self._compatibility_reason(manifest),
+            )
+            for manifest in self._bundled_manifests()
+        )
+
+    def _bundled_manifests(self) -> tuple[SkillManifest, ...]:
         if not self.bundled_dir.is_dir():
             return ()
         verifier = LocalSkillVerifier(
@@ -559,7 +588,7 @@ class SkillManager:
             review="repository-reviewed",
             require_repository_review=True,
         )
-        summaries: list[SkillSummary] = []
+        manifests: list[SkillManifest] = []
         for path in sorted(self.bundled_dir.iterdir()):
             if not path.is_dir():
                 continue
@@ -567,14 +596,8 @@ class SkillManager:
                 manifest = verifier.inspect_manifest(path)
             except SkillVerificationError as error:
                 raise SkillSettingsError(f"Invalid bundled Skill {path.name}: {error}") from error
-            summaries.append(
-                SkillSummary.from_manifest(
-                    manifest,
-                    source="bundled",
-                    compatibility_reason=self._compatibility_reason(manifest),
-                )
-            )
-        return tuple(summaries)
+            manifests.append(manifest)
+        return tuple(manifests)
 
     def _installed_summaries(self) -> tuple[SkillSummary, ...]:
         try:

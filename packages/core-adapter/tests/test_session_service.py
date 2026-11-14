@@ -476,6 +476,77 @@ def test_command_identifier_reuse_with_different_content_is_rejected(tmp_path: P
     assert len(service.replay_events()) == 2
 
 
+@pytest.mark.parametrize("decision", [CommandKind.APPROVE, CommandKind.DENY])
+@pytest.mark.parametrize("publication", ["absent", "partial", "changed"])
+def test_decision_requires_complete_durable_proposal(
+    tmp_path: Path, decision: CommandKind, publication: str
+) -> None:
+    actions = tuple(
+        ProposedToolCall(
+            tool_call_id=f"call-{index}",
+            action_id=f"action-{index}",
+            tool_name="terminal",
+            risk="medium",
+            summary="Write a synthetic result",
+            arguments={"command": f"printf synthetic-{index}"},
+        )
+        for index in range(2)
+    )
+    group = pending_action_group(actions)
+    assert group is not None
+    backend = _RecordingBackend(
+        endpoint="https://model.local.invalid/v1/chat/completions", pending_actions=actions
+    )
+    service = SessionService.local_default(
+        tmp_path, backend=backend, session_id="session-synthetic-001"
+    )
+
+    def publish(selected: tuple[ProposedToolCall, ...]) -> None:
+        backend.event_sink(
+            tuple(
+                event
+                for action in selected
+                for event in (
+                    BackendToolCallEvent(tool_call=action),
+                    BackendConfirmationRequestEvent(
+                        tool_call=action, action_group_id=group.group_id
+                    ),
+                )
+            )
+        )
+
+    if publication == "partial":
+        publish(actions[:1])
+    elif publication == "changed":
+        publish((actions[0], replace(actions[1], arguments={"command": "printf different"})))
+    command = _command(decision, target_type="action-set", target_id=group.group_id)
+    try:
+        early = service.handle(command)
+        assert early.events[-1].kind == EventKind.ERROR_RECORDED
+        assert not any(event.kind == EventKind.APPROVAL_RECORDED for event in early.events)
+        assert backend.resolutions == []
+
+        publish(actions)
+        assert service.handle(command).replayed
+        assert backend.resolutions == []
+        service.handle(command.model_copy(update={"command_id": "after-publication"}))
+        assert backend.resolutions == [(group.group_id, decision == CommandKind.APPROVE)]
+        events = service.replay_events()
+        approval = next(event for event in events if event.kind == EventKind.APPROVAL_RECORDED)
+        for action in actions:
+            assert any(
+                event.sequence < approval.sequence
+                and event.kind == EventKind.CONFIRMATION_REQUESTED
+                and isinstance(request := event.payload.get("request"), dict)
+                and request["tool_call_id"] == action.tool_call_id
+                and request["arguments"] == action.arguments
+                for event in events
+            )
+        service.audit_log.verify()
+    finally:
+        service.close()
+
+
 def test_retried_approval_does_not_repeat_backend_tool_resolution(tmp_path: Path) -> None:
     tool_call = ProposedToolCall(
         tool_call_id="session-main-action",
@@ -1885,6 +1956,14 @@ def test_failed_backend_decision_records_a_fatal_unknown_action_outcome(
         backend=backend,
         clock=lambda: "2026-01-01T00:00:00Z",
     )
+    backend.event_sink(
+        (
+            BackendToolCallEvent(tool_call=action),
+            BackendConfirmationRequestEvent(
+                tool_call=action, action_group_id=_action_group_id(action)
+            ),
+        )
+    )
 
     result = service.handle(
         _command(
@@ -1972,6 +2051,14 @@ def test_fatal_approval_outcome_finishes_an_interrupted_receipt_without_retry(
         tmp_path,
         backend=backend,
         clock=lambda: "2026-01-01T00:00:00Z",
+    )
+    backend.event_sink(
+        (
+            BackendToolCallEvent(tool_call=action),
+            BackendConfirmationRequestEvent(
+                tool_call=action, action_group_id=_action_group_id(action)
+            ),
+        )
     )
     original_write = session_state._write_private_json_atomic
 
