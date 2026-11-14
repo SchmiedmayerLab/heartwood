@@ -62,6 +62,7 @@ class CheckpointSignerProfile:
     public_key_sha256: str
     trusted_public_key: Path
     authorization_token_file: Path | None = None
+    trusted_ca_bundle: Path | None = None
     timeout_seconds: float = 15.0
 
     def authorization_token(self) -> str | None:
@@ -84,6 +85,7 @@ class CheckpointSignerProfile:
                 authorization_token=self.authorization_token(),
                 timeout_seconds=self.timeout_seconds,
                 allow_local_socket=self.mode == "development",
+                trusted_ca_bundle=self.trusted_ca_bundle,
                 transport=transport,
             )
         )
@@ -242,6 +244,7 @@ def _profile_from_mapping(
         "signer_id",
         "timeout_seconds",
         "trusted_public_key",
+        "trusted_ca_bundle",
     }
     if set(value) - allowed:
         raise CheckpointSignerError(
@@ -278,6 +281,14 @@ def _profile_from_mapping(
             maximum_bytes=_MAXIMUM_TOKEN_BYTES,
             private=True,
         )
+    ca_value = value.get("trusted_ca_bundle")
+    ca_bundle = None
+    if ca_value is not None:
+        ca_bundle = _deployment_file(
+            _absolute_path(ca_value, "trusted_ca_bundle"),
+            label="checkpoint signer CA bundle",
+            maximum_bytes=_MAXIMUM_CONFIG_BYTES,
+        )
     endpoint = _string(value.get("endpoint"), "endpoint")
     timeout_value = value.get("timeout_seconds", 15.0)
     if isinstance(timeout_value, bool) or not isinstance(timeout_value, int | float):
@@ -293,6 +304,7 @@ def _profile_from_mapping(
         public_key_sha256=public_key_sha256,
         trusted_public_key=public_key_path,
         authorization_token_file=token_file,
+        trusted_ca_bundle=ca_bundle,
         timeout_seconds=float(timeout_value),
     )
     if profile.mode == "development" and profile.authorization_token_file is None:
@@ -303,6 +315,7 @@ def _profile_from_mapping(
         endpoint=profile.endpoint,
         timeout_seconds=profile.timeout_seconds,
         allow_local_socket=profile.mode == "development",
+        trusted_ca_bundle=profile.trusted_ca_bundle,
     )
     return profile
 

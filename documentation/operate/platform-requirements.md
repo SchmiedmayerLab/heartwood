@@ -248,6 +248,8 @@ The native reference adapter needs an operator-controlled Docker service; it doe
 Sensitive-data use additionally requires institution-approved data eligibility, provider agreements, residency, retention, monitoring and output-release controls for the exact deployment.
 Heartwood provides selected-input staging and native read-only mounts, but not a complete quarantine or steward-approved release service.
 Signed checkpoint export does not establish immutable retention or continuity between checkpoints.
+Automatic externally anchored evidence uses the deployment manifest's `evidence` table with complete worker isolation, an approved signer registry and a separately authorized records identity.
+Provide the exact records service origin, scoped permissions, retention policy and credential source described in [managed evidence configuration](audit-checkpoints.md#configure-managed-evidence).
 Managed checkpoint creation requires a trusted integration with the bound gateway methods; there is no checkpoint-creation HTTP route, and the standalone audit CLI does not consume the deployment manifest.
 These limitations prevent treating a successful synthetic sandbox run as sensitive-data approval.
 

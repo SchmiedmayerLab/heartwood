@@ -24,8 +24,16 @@ from openshell._proto import openshell_pb2 as pb
 from pydantic import JsonValue
 from worker_native_fixture import PYTHON, NativeFixture, command
 
+from deploy.tests.checkpoint_transport_integration import run as qualify_records_transport
+from heartwood.audit import (
+    checkpoint_public_key_fingerprint,
+    load_checkpoint_public_key,
+    verify_checkpoint_signature,
+)
+from heartwood.audit._continuity import RetainedCheckpoint, verify_checkpoint_extension
 from heartwood.compliance.replay_evidence import replay_evidence
 from heartwood.core_adapter import SessionService
+from heartwood.core_adapter.checkpoint_evidence import CheckpointEvidenceUnavailableError
 from heartwood.core_adapter.worker_attempts import WorkerAttemptIntent, WorkerRuntimeBinding
 from heartwood.gateway import ProjectContext, SessionGateway
 from heartwood.gateway._model_settings import ModelProfile, ModelSettings
@@ -98,7 +106,29 @@ def test_failed_gateway_retains_logs_until_verified_cleanup() -> None:
             fixture._stop_gateway()
 
 
-def _application(fixture: NativeFixture) -> SessionGateway:
+def test_records_transport_authorization() -> None:
+    """Use the installed packages and the same tools as the full-worker evidence path."""
+    output = Path(os.environ["HW_QUALIFICATION_OUTPUT"]) / "records-transport"
+    output.mkdir(mode=0o700)
+    private = output / "private"
+    try:
+        qualify_records_transport(
+            Path("/opt/qualification/bin/minio"),
+            Path("/opt/qualification/bin/mc"),
+            os.environ["HW_CONTROLLER_IMAGE"],
+            private,
+        )
+    finally:
+        result = private / "transport-result.json"
+        if result.is_file():
+            report = json.loads(result.read_text())
+            shutil.copyfile(result, output / "records-result.json")
+            if all(report["cleanup"].values()):
+                shutil.rmtree(private)
+                (output / "cleanup.json").write_text('{"complete": true}\n')
+
+
+def _application(fixture: NativeFixture, *, retain_checkpoints: bool = False) -> SessionGateway:
     root = fixture.private / "project"
     root.mkdir()
     (root / "summary.json").write_text(
@@ -118,7 +148,10 @@ def _application(fixture: NativeFixture) -> SessionGateway:
     )
     settings = fixture.deployment(inputs)
     application = SessionGateway(
-        project=project, worker_plan_factory=native_worker_plan_factory(settings, project), env={}
+        project=project,
+        worker_plan_factory=native_worker_plan_factory(settings, project),
+        checkpoint_evidence_factory=fixture.bind_records(project) if retain_checkpoints else None,
+        env={},
     )
     fixture.applications.append(application)
     profile = ModelProfile(
@@ -270,9 +303,12 @@ def test_native_rejects_symlink_workspace(infrastructure: NativeFixture) -> None
 @pytest.mark.parametrize(
     "infrastructure", [False, True], indirect=True, ids=["workflow", "hostile"]
 )
-def test_native_workflow_and_protected_state_restore(infrastructure: NativeFixture) -> None:
+@pytest.mark.parametrize("retain_checkpoints", [False, True], ids=["local-audit", "retained-audit"])
+def test_native_workflow_and_protected_state_restore(
+    infrastructure: NativeFixture, retain_checkpoints: bool
+) -> None:
     fixture = infrastructure
-    application = _application(fixture)
+    application = _application(fixture, retain_checkpoints=retain_checkpoints)
     service = application._service("composition")
     fixture.check_outside_canary()
     assert fixture.provider.canary_requests == 1
@@ -334,11 +370,39 @@ def test_native_workflow_and_protected_state_restore(infrastructure: NativeFixtu
                         assert action.arguments.get("command") == fixture.terminal_command
                     assert group.group_id not in approvals
                     approvals.append(group.group_id)
-                    _submit(
-                        application,
-                        CommandKind.APPROVE,
-                        {"target_type": "action-set", "target_id": group.group_id},
+                    approval = SessionCommand(
+                        command_id=str(uuid4()),
+                        session_id="composition",
+                        kind=CommandKind.APPROVE,
+                        actor_id="synthetic-researcher",
+                        created_at=datetime.now(UTC).isoformat(),
+                        payload={"target_type": "action-set", "target_id": group.group_id},
                     )
+                    if retain_checkpoints and action.tool_name == "terminal":
+                        assert fixture.records is not None
+                        count = len(fixture.provider.observations)
+                        fixture.records.server.stop()
+                        try:
+                            with pytest.raises(CheckpointEvidenceUnavailableError):
+                                application.handle(approval)
+                            absent = fixture.control.exec(
+                                worker_name,
+                                ["/usr/bin/test", "!", "-e", "/workspace/export.json"],
+                                workspace="default",
+                                timeout_seconds=15,
+                                no_login_shell=True,
+                            )
+                            assert absent.exit_code == 0
+                            assert len(fixture.provider.observations) == count
+                        finally:
+                            fixture.records.server.restart()
+                    application.handle(approval)
+                    assert application.handle(approval).replayed
+                    if retain_checkpoints:
+                        assert fixture.evidence is not None
+                        assert len(fixture.evidence("composition").records.history()) == len(
+                            approvals
+                        )
             if backend.wait_for_idle(0.1):
                 snapshot = conversation.state.snapshot()
                 if snapshot.execution_status.value in {"finished", "error", "stuck"}:
@@ -431,6 +495,55 @@ print(json.dumps(result))
         service.audit_log.verify()
         _stop(application)
         _assert_revoked(service)
+        retained_evidence: dict[str, object] | None = None
+        if retain_checkpoints:
+            assert fixture.evidence is not None
+            assert fixture.records is not None
+            history = fixture.evidence("composition").records.history()
+            assert len(history) == len(approvals) + 1
+            public_key_path = fixture.private / "records/signer.pub"
+            key = load_checkpoint_public_key(public_key_path)
+            predecessor: RetainedCheckpoint | None = None
+            for checkpoint in history:
+                assert application.project.project_id is not None
+                verify_checkpoint_signature(
+                    statement=checkpoint.checkpoint.statement,
+                    signature=checkpoint.checkpoint.signature,
+                    public_key=key,
+                )
+                verify_checkpoint_extension(
+                    statement=checkpoint.checkpoint.statement,
+                    audit_content=checkpoint.audit_content,
+                    project_id=application.project.project_id,
+                    predecessor=predecessor,
+                    trusted_keys={checkpoint_public_key_fingerprint(key): key},
+                )
+                predecessor = checkpoint
+            checkpoint_bundle = json.dumps(
+                {
+                    "public_key": public_key_path.read_text(),
+                    "checkpoints": [
+                        {
+                            "checkpoint": item.checkpoint.model_dump(mode="json"),
+                            "audit_content": item.audit_content,
+                            "digest": item.digest,
+                        }
+                        for item in history
+                    ],
+                },
+                indent=2,
+            )
+            assert not any(value in checkpoint_bundle for value in fixture.records.forbidden_values)
+            (fixture.output / "checkpoint-evidence.json").write_text(checkpoint_bundle + "\n")
+            retained_evidence = {
+                "checkpoints": len(history),
+                "records_outage_blocked_terminal": True,
+                "records_policy_qualified": fixture.records.report["records_policy_qualified"],
+                "conditional_write_enforcement": fixture.records.report[
+                    "conditional_write_enforcement"
+                ],
+                "owner_closure_retained": True,
+            }
         _restore(fixture, application.project, service.store.session_id, service.store.audit_path)
         _assert_absent(str(attempt.intent.attempt_id))
         report = {
@@ -438,6 +551,7 @@ print(json.dumps(result))
             "worker_claims": hostile_checks,
             "direct_network": network_evidence,
             "infrastructure_telemetry": telemetry,
+            "retained_evidence": retained_evidence,
             "outside_canary_positive_controls": fixture.provider.canary_requests,
             "forbidden_provider_requests": 0,
             "allowed_endpoint_redirect_requests": fixture.provider.redirect_requests,

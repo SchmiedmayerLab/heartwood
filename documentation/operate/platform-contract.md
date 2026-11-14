@@ -56,7 +56,7 @@ The Heartwood artifact-bundle version is separate from upstream protocol version
 | [Platform services](#platform-services) | Compute, data, and application tools through MCP | Unavailable; draft service and operation schemas only |
 | [Agent isolation](#agent-isolation) | Keeping the complete worker away from Heartwood's controls | Native reference implementation; exact artifact and deployment qualification required |
 | [Controlled data](#controlled-data) | Read-only inputs, enforced egress denial, and reviewed release of outputs | Selected-input staging and native read-only mounts implemented; quarantine and steward-approved release unavailable |
-| [Audit and provenance](#audit-and-provenance) | Signed checkpoints, retention, and operation references | Checkpoint signing implemented; checkpoint continuity and platform publication unavailable |
+| [Audit and provenance](#audit-and-provenance) | Signed checkpoints, retention, and operation references | Explicit signed exports and deployment-bound automatic evidence; independent signer authorization and records retention require qualification |
 | [Contract artifacts](#contract-artifacts) | Schemas, API descriptions, and conformance checks | Versioned current/draft schema exports, gateway OpenAPI, and offline conformance checks |
 
 ## The Boundary
@@ -769,10 +769,15 @@ Heartwood's canonical audit and experiment records detect corruption; managed la
 External state placement does not make records immutable to the gateway or replace independently retained signed checkpoints.
 See [Audit Checkpoints and Retention](audit-checkpoints.md) and [Sessions and Audit](../architecture/sessions-audit.md#audit-integrity).
 
-!!! info "Unavailable: tamper-resistant history and retained provenance"
-    Checkpoints do not reference earlier checkpoints, so a later checkpoint can sign rewritten history.
-    Independent retention and verification remain necessary.
-    Heartwood does not publish experiment records to retention-locked platform storage.
+An operator-bound evidence controller can publish signed checkpoints through an independently authorized signer and a versioned, retention-locked records service.
+It checks the retained predecessor and exact audit-prefix extension, and requires observed retention before dispatching approved outside operations.
+Optional experiment exports can accompany the retained evidence.
+See [managed evidence configuration](audit-checkpoints.md#configure-managed-evidence) for the manifest, separate storage identities, retention checks and recovery behavior.
+
+!!! info "Evidence scope and deployment qualification"
+    A standalone signed export does not establish continuity or automatic publication.
+    The evidence controller does not checkpoint every model call or independently prove worker-reported results.
+    Storage permissions, signer authorization, immutable retention and restore must be qualified for the selected deployment; local synthetic checks do not establish institutional approval.
 
 ## Security Requirements
 

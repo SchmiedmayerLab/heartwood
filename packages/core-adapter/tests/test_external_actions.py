@@ -15,8 +15,13 @@ from typing import Literal
 from uuid import uuid4
 
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from pydantic import AnyHttpUrl, ValidationError
 
+from heartwood.audit import LocalEd25519CheckpointSigner, checkpoint_public_key_fingerprint
+from heartwood.audit._anchored_signer import AnchoredCheckpointSigner
+from heartwood.audit._records_s3 import CheckpointAuthorityScope, S3CheckpointRecords
 from heartwood.core_adapter import (
     BackendConfirmationResolutionEvent,
     BackendEvent,
@@ -30,6 +35,10 @@ from heartwood.core_adapter import (
     ToolExecution,
 )
 from heartwood.core_adapter._state import SessionRecoveryError
+from heartwood.core_adapter.checkpoint_evidence import (
+    CheckpointEvidenceUnavailableError,
+    SessionCheckpointEvidence,
+)
 from heartwood.core_adapter.external_actions import (
     ExternalActionDecision,
     ExternalActionError,
@@ -43,8 +52,9 @@ from heartwood.core_adapter.external_actions import (
 )
 from heartwood.core_adapter.external_results import ExternalResultRecord, external_result_records
 from heartwood.core_adapter.worker_attempts import WorkerRuntimeBinding
-from heartwood.schemas import AuditEvent, JsonValue, PlatformOperationObservation
+from heartwood.schemas import AuditEvent, AuditRetention, JsonValue, PlatformOperationObservation
 from heartwood.session import CommandKind, EventKind, SessionCommand, SessionEvent
+from packages.audit.tests.records_fixtures import MemoryS3
 
 _NOW = datetime(2026, 1, 1, tzinfo=UTC)
 _PROJECT = uuid4()
@@ -609,7 +619,7 @@ def test_result_release_requires_distinct_exact_review(setup: Setup) -> None:
         for event in service.audit_log.read()
         if event.event_type == EventKind.EXTERNAL_RESULT_RECORDED.value
     ]
-    assert len(audit) == 3
+    assert len(audit) == 4
     assert "aggregate" not in str(audit)
     assert "content_json" not in str(audit)
     service.audit_log.verify()
@@ -749,7 +759,9 @@ def test_result_journal_failure_cannot_cause_resubmission(
         else:
             assert restored.handle(approved).replayed
         assert replacement.contexts == []
-        assert result_latest(restored).phase in {"proposed", "submitting"}
+        assert result_latest(restored).phase == (
+            "authorized" if fail_phase == "submitting" else "submitting"
+        )
     finally:
         restored.close()
 
@@ -891,3 +903,213 @@ def test_result_does_not_override_active_work_or_native_review(
     service.handle(command(service, record))
     assert worker.contexts == []
     assert result_latest(service).phase == "proposed"
+
+
+@pytest.fixture
+def evidence(setup: Setup, tmp_path: Path) -> tuple[SessionCheckpointEvidence, MemoryS3]:
+    service, _, _ = setup
+    key = Ed25519PrivateKey.generate()
+    path = tmp_path / "synthetic-signer.pem"
+    path.write_bytes(
+        key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
+    )
+    path.chmod(0o600)
+    signer = LocalEd25519CheckpointSigner(
+        private_key=path, signer_id="synthetic", key_id="test", key_version="1"
+    )
+    client = MemoryS3()
+    records = S3CheckpointRecords(
+        client=client,
+        bucket="synthetic-records",
+        prefix="audit",
+        scope=CheckpointAuthorityScope(
+            "synthetic",
+            _PROJECT,
+            service.store.session_id,
+            AuditRetention(policy_id="synthetic", retain_until="2033-01-01"),
+        ),
+    )
+    trusted = {checkpoint_public_key_fingerprint(key.public_key()): key.public_key()}
+    authority = AnchoredCheckpointSigner(
+        records=records, signer=signer, trusted_keys=trusted, clock=lambda: _NOW
+    )
+    controller = SessionCheckpointEvidence(
+        records=records, signer=authority, trusted_keys=trusted, mode="buffered"
+    )
+    service._checkpoint_evidence = controller
+    return controller, client
+
+
+@pytest.mark.parametrize("release", [False, True])
+def test_outside_evidence_outage_preserves_predispatch_recovery(
+    setup: Setup, evidence: tuple[SessionCheckpointEvidence, MemoryS3], release: bool
+) -> None:
+    service, worker, platform = setup
+    controller, client = evidence
+    record = result_proposal(service, worker) if release else propose(service, worker)
+    approved = command(service, record)
+    before = len(platform.submissions)
+    client.unavailable = True
+    try:
+        with pytest.raises(CheckpointEvidenceUnavailableError):
+            service.handle(approved)
+        retained = result_latest(service) if release else latest(service)
+        assert retained.phase == "authorized"
+        assert service.store.unresolved_command_ids() == (approved.command_id,)
+        observations = len(platform.observations)
+        assert service.reconcile_external_actions() == ()
+        assert len(platform.observations) == observations
+        with pytest.raises(CheckpointEvidenceUnavailableError):
+            service.reconcile()
+        assert len(platform.submissions) == before
+        assert worker.contexts == []
+    finally:
+        client.unavailable = False
+
+    def check_evidence() -> None:
+        retained = controller.records.history()[-1]
+        boundaries = []
+        for event in service.replay_events():
+            raw = event.payload.get("record")
+            if not isinstance(raw, dict) or raw.get("phase") != "authorized":
+                continue
+            decision = raw.get("decision")
+            if isinstance(decision, dict) and decision.get("command_id") == approved.command_id:
+                boundaries.append(event)
+        assert len(boundaries) == 1
+        boundary = boundaries[0]
+        assert retained.checkpoint.statement.audit_event_count > boundary.sequence
+        assert (result_latest(service) if release else latest(service)).phase == "submitting"
+
+    if release:
+        worker.delivery_hook = check_evidence
+    else:
+        platform.before_submit = check_evidence
+    service.reconcile()
+    assert service.store.unresolved_command_ids() == ()
+    assert (result_latest(service) if release else latest(service)).phase == (
+        "submitted" if release else "observed"
+    )
+    assert len(platform.submissions) == before + (0 if release else 1)
+    assert len(worker.contexts) == int(release)
+    assert service.handle(approved).replayed
+    assert len(platform.submissions) == before + (0 if release else 1)
+    assert len(worker.contexts) == int(release)
+
+
+@pytest.mark.parametrize("release", [False, True])
+def test_pending_outside_authorization_rechecks_policy_after_outage(
+    setup: Setup, evidence: tuple[SessionCheckpointEvidence, MemoryS3], release: bool
+) -> None:
+    service, worker, platform = setup
+    _, client = evidence
+    record = result_proposal(service, worker) if release else propose(service, worker)
+    before = len(platform.submissions)
+    client.unavailable = True
+    try:
+        with pytest.raises(CheckpointEvidenceUnavailableError):
+            service.handle(command(service, record))
+    finally:
+        client.unavailable = False
+    platform.release_authorized = False
+    platform.authorized = False
+    with pytest.raises(SessionRecoveryError, match="current policy"):
+        service.reconcile()
+    assert (result_latest(service) if release else latest(service)).phase == "authorized"
+    assert len(platform.submissions) == before
+    assert worker.contexts == []
+    assert service.store.unresolved_command_ids()
+
+
+@pytest.mark.parametrize("release", [False, True])
+def test_predispatch_recovery_never_revives_a_worker_after_restart(
+    setup: Setup,
+    evidence: tuple[SessionCheckpointEvidence, MemoryS3],
+    tmp_path: Path,
+    release: bool,
+) -> None:
+    service, worker, platform = setup
+    controller, client = evidence
+    record = result_proposal(service, worker) if release else propose(service, worker)
+    approved = command(service, record)
+    before = len(platform.submissions)
+    client.unavailable = True
+    try:
+        with pytest.raises(CheckpointEvidenceUnavailableError):
+            service.handle(approved)
+    finally:
+        client.unavailable = False
+    service.close()
+    replacement = Worker()
+    restored = SessionService.local_default(
+        tmp_path,
+        backend=replacement,
+        worker_project_id=_PROJECT,
+        external_actions=platform,
+        checkpoint_evidence=controller,
+        clock=lambda: _NOW.isoformat(),
+    )
+    try:
+        assert restored.reconcile_external_actions() == ()
+        with pytest.raises(SessionRecoveryError, match="interrupted after acceptance"):
+            restored.handle(approved)
+        assert restored.store.unresolved_command_ids() == (approved.command_id,)
+        assert (result_latest(restored) if release else latest(restored)).phase == "authorized"
+        assert len(platform.submissions) == before
+        assert replacement.contexts == []
+    finally:
+        restored.close()
+
+
+@pytest.mark.parametrize("change", ["input", "expiry"])
+def test_pending_outside_action_revalidates_input_and_expiry(
+    setup: Setup, evidence: tuple[SessionCheckpointEvidence, MemoryS3], change: str
+) -> None:
+    service, worker, platform = setup
+    _, client = evidence
+    record = propose(service, worker)
+    client.unavailable = True
+    try:
+        with pytest.raises(CheckpointEvidenceUnavailableError):
+            service.handle(command(service, record))
+    finally:
+        client.unavailable = False
+    if change == "input":
+        platform.content = b"changed input"
+    else:
+        service.clock = lambda: record.proposal.expires_at.isoformat()
+    with pytest.raises(SessionRecoveryError, match="current policy"):
+        service.reconcile()
+    assert latest(service).phase == "authorized"
+    assert platform.submissions == []
+
+
+@pytest.mark.parametrize("release", [False, True])
+def test_predispatch_recovery_validates_receipt_before_effect(
+    setup: Setup,
+    evidence: tuple[SessionCheckpointEvidence, MemoryS3],
+    monkeypatch: pytest.MonkeyPatch,
+    release: bool,
+) -> None:
+    service, worker, platform = setup
+    _, client = evidence
+    record = result_proposal(service, worker) if release else propose(service, worker)
+    approved = command(service, record)
+    before = len(platform.submissions)
+    client.unavailable = True
+    try:
+        with pytest.raises(CheckpointEvidenceUnavailableError):
+            service.handle(approved)
+    finally:
+        client.unavailable = False
+    with monkeypatch.context() as patch:
+        patch.setattr(service.store, "command_record", lambda _command_id: {})
+        with pytest.raises(SessionRecoveryError, match="receipt is invalid"):
+            service.reconcile()
+    assert len(platform.submissions) == before
+    assert worker.contexts == []
+    assert (result_latest(service) if release else latest(service)).phase == "authorized"

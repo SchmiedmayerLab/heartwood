@@ -47,6 +47,7 @@ from heartwood.core_adapter import (
     SessionService,
     TokenDeltaSink,
 )
+from heartwood.core_adapter.checkpoint_evidence import SessionCheckpointEvidence
 from heartwood.gateway._action_presentation import action_presentation
 from heartwood.gateway._action_settings import (
     ACTION_MODE_OPTIONS,
@@ -451,6 +452,7 @@ class SessionGateway:
         checkpoint_signer_registry: CheckpointSignerRegistry | None = None,
         checkpoint_signer_factory: Callable[[CheckpointSignerProfile], CheckpointSigner]
         | None = None,
+        checkpoint_evidence_factory: Callable[[str], SessionCheckpointEvidence] | None = None,
         subscription_provider: SubscriptionProvider | None = None,
         workspace_inspector: WorkspaceInspector | None = None,
         skill_source_registry: SkillSourceRegistry | None = None,
@@ -461,6 +463,13 @@ class SessionGateway:
     ) -> None:
         prepare_openhands_import()
         self.project = ProjectContext.current() if project is None else project
+        if checkpoint_evidence_factory is not None and (
+            self.project.protected_state is None or service_factory is not None
+        ):
+            raise ValueError(
+                "Managed checkpoint evidence requires protected state and owned services"
+            )
+        self._checkpoint_evidence_factory = checkpoint_evidence_factory
         if worker_plan_factory is not None and (
             self.project.protected_state is None
             or service_factory is not None
@@ -651,10 +660,8 @@ class SessionGateway:
     @gateway_operation
     def handle(self, command: SessionCommand) -> SessionResult:
         """Handle one command and publish emitted events."""
-        if "experiment_export" in command.payload:
-            raise CommandConflictError(
-                "Experiment checkpoint bindings must be computed by the gateway"
-            )
+        if {"experiment_export", "checkpoint_context"}.intersection(command.payload):
+            raise CommandConflictError("Checkpoint bindings must be computed by the gateway")
         return self._handle_command(command)
 
     @_serialized_state
@@ -958,6 +965,8 @@ class SessionGateway:
         if registry.source is not None:
             self._deployment_owned_path(registry.source, label="signer registry")
         for profile in registry.profiles:
+            if profile.trusted_ca_bundle is not None:
+                self._deployment_owned_path(profile.trusted_ca_bundle, label="signer CA bundle")
             self._deployment_owned_path(
                 profile.trusted_public_key,
                 label="trusted public key",
@@ -2437,6 +2446,16 @@ class SessionGateway:
     ) -> SessionService:
         from heartwood.gateway._research_evaluation import ResearchStageEvaluator
 
+        checkpoint_evidence = (
+            self._checkpoint_evidence_factory(session_id)
+            if self._checkpoint_evidence_factory is not None
+            else None
+        )
+        if checkpoint_evidence is not None and (
+            checkpoint_evidence.records.scope.project_id != self.project.project_id
+            or checkpoint_evidence.records.scope.session_id != session_id
+        ):
+            raise ValueError("Checkpoint evidence does not authorize this project and session")
         worker: ManagedWorkerSession | None = None
 
         def worker_context() -> WorkerConversationContext:
@@ -2459,6 +2478,7 @@ class SessionGateway:
             policy_profile=configuration.policy_profile,
             env=self.env,
             worker_project_id=self.project.project_id,
+            checkpoint_evidence=checkpoint_evidence,
             workflow_evaluator=ResearchStageEvaluator(
                 self.workspace_inspector,
                 parallel_review_preparer=self._parallel_review_preparer,

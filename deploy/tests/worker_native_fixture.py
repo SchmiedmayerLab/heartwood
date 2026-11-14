@@ -18,6 +18,7 @@ import subprocess
 import threading
 import time
 import urllib.request
+from collections.abc import Callable
 from contextlib import ExitStack
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -32,7 +33,10 @@ from openshell._proto import sandbox_pb2 as policy_pb
 from worker_network_qualification import qualify_network
 from worker_telemetry import InfrastructureCollector
 
-from heartwood.gateway import SessionGateway
+from deploy.tests.checkpoint_transport_integration import RecordsTransport, records_transport
+from heartwood.core_adapter.checkpoint_evidence import SessionCheckpointEvidence
+from heartwood.gateway import ProjectContext, SessionGateway
+from heartwood.gateway.checkpoint_deployment import deployment_checkpoint_evidence
 from heartwood.gateway.worker_deployment import OpenShellWorkerDeployment
 from heartwood.gateway.worker_inputs import WorkerInputManifest
 
@@ -223,6 +227,28 @@ class NativeFixture:
         self.resources = ExitStack()
         self.applications: list[SessionGateway] = []
         self.probes: dict[str, str | None] = {}
+        self.records: RecordsTransport | None = None
+        self.evidence: Callable[[str], SessionCheckpointEvidence] | None = None
+
+    def bind_records(self, project: ProjectContext) -> Callable[[str], SessionCheckpointEvidence]:
+        """Attach the same outside records deployment used by transport qualification."""
+        assert self.records is None
+        self.records = self.resources.enter_context(
+            records_transport(
+                Path("/opt/qualification/bin/minio"),
+                Path("/opt/qualification/bin/mc"),
+                self.controller_image,
+                self.private / "records",
+                project=project,
+                session_id="composition",
+            )
+        )
+        self.provider.forbidden_values += self.records.forbidden_values
+        self.collector.forbidden_values += self.records.forbidden_values
+        self.evidence = self.resources.enter_context(
+            deployment_checkpoint_evidence(self.records.settings, project)
+        )
+        return self.evidence
 
     def cli_command(self, arguments: list[str], **environment: str) -> str:
         return command([str(self.cli), *arguments], env={**self.env, **environment})

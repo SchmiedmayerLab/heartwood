@@ -57,7 +57,7 @@ def controller_socket_group(image: str) -> str:
     ).strip()
 
 
-def qualify(worker: str, runtime: str, artifacts: Path, output: Path) -> None:
+def qualify(worker: str, runtime: str, artifacts: Path, records: Path, output: Path) -> None:
     """Assemble the trusted controller and retain the installed test outcome."""
     source_paths = (
         ROOT / "deploy/qualify-native-worker.py",
@@ -69,10 +69,15 @@ def qualify(worker: str, runtime: str, artifacts: Path, output: Path) -> None:
         ROOT / "deploy/tests/worker_network_qualification.py",
         ROOT / "images/worker/candidate/symlink-workspace.Dockerfile",
         ROOT / "images/worker/candidate/controller.Dockerfile",
+        ROOT / "deploy/tests/checkpoint_records_integration.py",
+        ROOT / "deploy/tests/checkpoint_transport_integration.py",
+        ROOT / "packages/audit/tests/tls_fixture.py",
+        ROOT / "deploy/build-records-fixture.py",
+        ROOT / "images/worker/candidate/records.json",
     )
     source_hashes = {str(path.relative_to(ROOT)): digest(path) for path in source_paths}
-    artifacts, output = artifacts.resolve(), output.resolve()
-    if "," in str(artifacts) or "," in str(output):
+    artifacts, records, output = artifacts.resolve(), records.resolve(), output.resolve()
+    if any("," in str(path) for path in (artifacts, records, output)):
         raise ValueError("Docker paths must not contain commas")
     manifest_path = ROOT / "images/worker/candidate/gateway.json"
     manifest = json.loads(manifest_path.read_text())
@@ -101,6 +106,30 @@ def qualify(worker: str, runtime: str, artifacts: Path, output: Path) -> None:
         or digest(prebuilt) != record["binaries"]["openshell-gateway"]
     ):
         raise ValueError("Gateway packaging inputs differ from their build record")
+    records_manifest_path = ROOT / "images/worker/candidate/records.json"
+    records_manifest = json.loads(records_manifest_path.read_text())
+    records_build = json.loads((records / "records-build-record.json").read_text())
+    if (
+        records_build["purpose"] != "qualification-only"
+        or records_build["manifest_sha256"] != digest(records_manifest_path)
+        or records_build["builder_sha256"] != digest(ROOT / "deploy/build-records-fixture.py")
+        or records_build["architecture"] != record["architecture"]
+        or records_build["builder_image"] != records_manifest["builder"]
+        or records_build["sources"] != records_manifest["sources"]
+        or set(records_build["files"])
+        != {
+            "bin/minio",
+            "bin/mc",
+            "LICENSE.minio",
+            "LICENSE.mc",
+            "minio-source.tar.gz",
+            "mc-source.tar.gz",
+        }
+    ):
+        raise ValueError("Records artifacts do not match the reviewed build inputs")
+    for name, expected in records_build["files"].items():
+        if digest(records / name) != expected:
+            raise ValueError("Records artifact digest mismatch")
     image_ids = {}
     for name, image in (("worker", worker), ("runtime", runtime)):
         image_ids[name] = subprocess.check_output(
@@ -191,6 +220,8 @@ def qualify(worker: str, runtime: str, artifacts: Path, output: Path) -> None:
             "DOCKER_CLIENT_IMAGE=" + manifest["images"]["docker_client"],
             "--build-context",
             "worker-qualification-tools=" + str(artifacts),
+            "--build-context",
+            "records-qualification-tools=" + str(records),
             "--iidfile",
             str(output / "controller-image-id"),
             str(ROOT),
@@ -275,6 +306,8 @@ def qualify(worker: str, runtime: str, artifacts: Path, output: Path) -> None:
             "pytest",
             "-o",
             "addopts=",
+            "-o",
+            "pythonpath=/opt/qualification",
             "-p",
             "no:cacheprovider",
             "-v",
@@ -329,6 +362,7 @@ def qualify(worker: str, runtime: str, artifacts: Path, output: Path) -> None:
         "qualification_sources_unchanged": sources_unchanged,
         "images": image_ids,
         "gateway_build": record,
+        "records_build": records_build,
         "returncode": result.returncode,
         "passed": result.returncode == 0 and not retained and sources_unchanged,
         "sensitive_data_ready": False,
@@ -343,6 +377,13 @@ if __name__ == "__main__":
     parser.add_argument("--worker-image", required=True)
     parser.add_argument("--runtime-image", required=True)
     parser.add_argument("--gateway-artifacts", required=True, type=Path)
+    parser.add_argument("--records-artifacts", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
-    qualify(args.worker_image, args.runtime_image, args.gateway_artifacts, args.output)
+    qualify(
+        args.worker_image,
+        args.runtime_image,
+        args.gateway_artifacts,
+        args.records_artifacts,
+        args.output,
+    )

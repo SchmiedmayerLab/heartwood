@@ -180,13 +180,19 @@ The supervisor retains its supported bridge configuration, and workers retain `n
 Injected instructions appear in synthetic input and tool output, but deterministic provider responses do not establish resistance to model-driven prompt injection.
 
 The candidate workflow builds the gateway and dependency wheels independently, then assembles the shared worker and runtime images for native integration.
+The records fixture builds its server and administration client from digest-verified source archives using a pinned Go image, read-only sources and bounded build containers.
+Its artifacts retain both source archives, licenses, binary hashes and build inputs.
+These tools provide synthetic storage behavior; they are not a production records-service recommendation.
 Run the same tests locally against those images and gateway artifacts:
 
 ```bash
+python3 deploy/build-records-fixture.py \
+  --output test-results/records-tools --cache test-results/records-cache
 python3 deploy/qualify-native-worker.py \
   --worker-image heartwood-worker:qualification \
   --runtime-image heartwood-runtime:qualification \
   --gateway-artifacts test-results/gateway-candidate \
+  --records-artifacts test-results/records-tools \
   --output test-results/native-qualification
 ```
 
@@ -198,6 +204,10 @@ The synthetic TLS provider uses a generated test credential and a fixed tool-cal
 
 The workflow test uses Heartwood's production native launcher, independently admitted policy, read-only inputs and Skills, exact outside approvals, aggregate suppression, verified audit, and revocation before writer release.
 After shutdown it checks protected-state replay in a fresh process and rejects incorrect project identity and corrupted audit data.
+Both ordinary and hostile sessions also run with deployment-bound checkpoint evidence, using distinct storage identities and an independent HTTPS signer outside the worker.
+A records outage must block the approved terminal action until its exact authorization is retained; command replay must not repeat the effect.
+The evidence bundle retains the signed audit prefixes, predecessor digests and public verification key, including the session-owner closure checkpoint.
+The storage policy result remains separate: the pinned synthetic server rejects the conditional-write bucket policy, so replacement versions must be detected and rejected without claiming full storage-policy qualification.
 A derived image changes the OCI working directory to a symlink while preserving the parent worker and policy.
 The suite requires an explicit outside `WorkspaceValidationFailed` condition, no main-process start and no inference requests; the parent image must pass an independent admission control.
 The derived image digest and Dockerfile hash remain part of the qualification evidence.
@@ -205,7 +215,7 @@ A separate fault test discards a successful native create response and requires 
 Test failure or failed cleanup prevents qualification; retained evidence must include the successful command exit and teardown results, not merely an individual assertion record.
 If revocation cannot settle, the local fixture retains its control state for reconciliation.
 CI retains only the selected synthetic evidence and logs, excluding private gateway state and generated credentials.
-These tests do not establish model-driven attack resistance, signed-checkpoint retention, tenant authorization, or institutional sensitive-data approval.
+These tests do not establish model-driven attack resistance, production records-policy qualification, tenant authorization, or institutional sensitive-data approval.
 
 ### Infrastructure Telemetry
 
