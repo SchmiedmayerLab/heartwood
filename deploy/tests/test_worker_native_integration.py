@@ -21,7 +21,6 @@ from uuid import uuid4
 
 import pytest
 from openhands.sdk.tool.client_tool import ClientToolSpec
-from openshell._proto import openshell_pb2 as pb
 from pydantic import JsonValue
 from worker_native_fixture import PYTHON, NativeFixture, command
 
@@ -314,6 +313,8 @@ def test_native_expired_provider_denies_retained_placeholder(
 
 
 def test_native_rejects_symlink_workspace(infrastructure: NativeFixture) -> None:
+    from openshell._proto import openshell_pb2 as pb
+
     fixture = infrastructure
     # The same provider, policy, runtime and resource limits must admit the parent image.
     accepted_policy = fixture.qualify_policy()
