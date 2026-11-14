@@ -557,8 +557,8 @@ additional_ca_bundle = {q(tls / "ca.crt")}
         (self.output / "gateway.log").write_text(logs.stdout + logs.stderr)
         command(["docker", "stop", "--time", "20", self.identity])
 
-    def qualify_policy(self) -> str:
-        """Admit a disposable probe before selecting the production launch policy hash."""
+    def create_probe(self, image: str) -> tuple[str, str]:
+        """Retain a probe's identity before observing its startup or failure."""
         name = "probe-" + uuid4().hex[:12]
         self.probes[name] = None
         created = self.control.create(
@@ -567,7 +567,8 @@ additional_ca_bundle = {q(tls / "ca.crt")}
             labels={"qualification": self.identity},
             spec=pb.SandboxSpec(
                 template=pb.SandboxTemplate(
-                    image=self.worker, resources={"limits": {"cpu": "1", "memory": "2Gi"}}
+                    image=image,
+                    resources={"limits": {"cpu": "1", "memory": "2Gi"}},
                 ),
                 policy=self.policy,
                 providers=[self.identity],
@@ -576,11 +577,16 @@ additional_ca_bundle = {q(tls / "ca.crt")}
             ),
         )
         self.probes[name] = created.id
+        return name, created.id
+
+    def qualify_policy(self) -> str:
+        """Admit a disposable probe before selecting the production launch policy hash."""
+        name, sandbox_id = self.create_probe(self.worker)
         try:
             ready = self.control.wait_ready(name, workspace="default", timeout_seconds=90)
             admission = ready.status.configuration_admission
             if (
-                ready.id != created.id
+                ready.id != sandbox_id
                 or not ready.status.configuration_activated
                 or admission is None
                 or admission.state != pb.CONFIGURATION_ADMISSION_STATE_ACCEPTED
