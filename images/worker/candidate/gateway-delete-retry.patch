@@ -263,7 +263,45 @@
      }
  
      #[tokio::test]
-@@ -16117,6 +16269,43 @@
+@@ -15487,7 +15639,7 @@
+         let session = seed_sandbox_owned_records(&runtime, &sandbox).await;
+         let mut watch_rx = runtime.sandbox_watch_bus.subscribe("sb-1");
+ 
+-        for _ in 0..2 {
++        for expected_calls in 1..=2 {
+             let result = runtime
+                 .delete_sandbox("default", "sandbox-a")
+                 .await
+@@ -15497,8 +15649,14 @@
+                 openshell_core::proto::DeletionOutcome::Accepted
+             );
+             assert_eq!(result.sandbox_id, "sb-1");
+-        }
+-        assert_eq!(driver.delete_calls(), 1);
++            // Each explicit retry refreshes the deletion fence and driver call.
++            assert_eq!(driver.delete_calls(), expected_calls);
++            assert!(watch_rx.try_recv().is_ok());
++            assert!(matches!(
++                watch_rx.try_recv(),
++                Err(tokio::sync::broadcast::error::TryRecvError::Empty)
++            ));
++        }
+ 
+         let stored = runtime
+             .store
+@@ -15511,11 +15669,6 @@
+             SandboxPhase::Deleting
+         );
+         assert_sandbox_owned_records(&runtime, &sandbox, &session, true).await;
+-        assert!(watch_rx.try_recv().is_ok());
+-        assert!(matches!(
+-            watch_rx.try_recv(),
+-            Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+-        ));
+ 
+         runtime.apply_deleted("sb-1").await.unwrap();
+         assert_sandbox_owned_records(&runtime, &sandbox, &session, false).await;
+@@ -16117,6 +16270,43 @@
              SandboxPhase::Deleting
          );
          assert_eq!(stored.current_policy_version(), 9);
