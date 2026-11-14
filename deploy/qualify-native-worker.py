@@ -28,6 +28,35 @@ def digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def controller_socket_group(image: str) -> str:
+    """Read the mounted socket's Linux group, including when Docker runs in a VM."""
+    return subprocess.check_output(
+        [
+            "docker",
+            "run",
+            "--rm",
+            "--user",
+            f"{os.getuid()}:{os.getgid()}",
+            "--cap-drop",
+            "ALL",
+            "--security-opt",
+            "no-new-privileges",
+            "--network",
+            "none",
+            "--read-only",
+            "--mount",
+            "type=bind,src=/var/run/docker.sock,dst=/run/docker.sock,readonly",
+            image,
+            "-c",
+            "import os, stat; s = os.stat('/run/docker.sock'); "
+            "assert stat.S_ISSOCK(s.st_mode), 'Docker control path is not a socket'; "
+            "print(s.st_gid)",
+        ],
+        text=True,
+        timeout=60,
+    ).strip()
+
+
 def qualify(worker: str, runtime: str, artifacts: Path, output: Path) -> None:
     """Assemble the trusted controller and retain the installed test outcome."""
     artifacts, output = artifacts.resolve(), output.resolve()
@@ -156,6 +185,9 @@ def qualify(worker: str, runtime: str, artifacts: Path, output: Path) -> None:
         ]
     )
     image_ids["controller"] = (output / "controller-image-id").read_text().strip()
+    socket_group = controller_socket_group(image_ids["controller"])
+    if not socket_group.isdecimal():
+        raise ValueError("Docker socket group is not a numeric Linux group identifier")
     network = name + "-network"
     subnet_id = uuid4().hex[:10]
     subnet = f"fd{subnet_id[:2]}:{subnet_id[2:6]}:{subnet_id[6:]}:1::/64"
@@ -170,7 +202,7 @@ def qualify(worker: str, runtime: str, artifacts: Path, output: Path) -> None:
         "--user",
         f"{os.getuid()}:{os.getgid()}",
         "--group-add",
-        "0",
+        socket_group,
         "--cap-drop",
         "ALL",
         "--security-opt",
@@ -202,6 +234,24 @@ def qualify(worker: str, runtime: str, artifacts: Path, output: Path) -> None:
         "OPENHANDS_SUPPRESS_BANNER": "1",
         "LITELLM_LOCAL_MODEL_COST_MAP": "True",
     }
+    # Check the operator transport before creating fixtures. Retain Docker's own
+    # diagnosis rather than hiding it in several identical fixture exceptions.
+    with (output / "controller-preflight.log").open("w") as log:
+        subprocess.run(
+            [
+                *arguments,
+                "--entrypoint",
+                "/usr/local/bin/docker",
+                image_ids["controller"],
+                "version",
+                "--format",
+                "{{.Server.Version}}",
+            ],
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            check=True,
+            timeout=60,
+        )
     for key, value in environment.items():
         arguments.extend(["--env", f"{key}={value}"])
     arguments.extend(
@@ -257,6 +307,7 @@ def qualify(worker: str, runtime: str, artifacts: Path, output: Path) -> None:
         )
     evidence = {
         "host": host,
+        "controller_socket_group": socket_group,
         "qualification_sources": {
             str(path.relative_to(ROOT)): digest(path)
             for path in (
