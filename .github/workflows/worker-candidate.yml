@@ -171,6 +171,7 @@ jobs:
             test-results/native-qualification/qualification.json
             test-results/native-qualification/network.json
             test-results/native-qualification/qualification.log
+            test-results/native-qualification/controller-preflight.log
             test-results/native-qualification/junit.xml
             test-results/native-qualification/*/evidence.json
             test-results/native-qualification/*/cleanup.json
