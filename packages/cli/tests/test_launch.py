@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import signal
 import subprocess
 from collections.abc import Sequence
 from dataclasses import replace
@@ -952,6 +954,65 @@ def test_launch_preserves_uncertain_runtime_outcomes(
             project_gateway_maintenance(options.project),
         ):
             pytest.fail("an unconfirmed process outcome must prevent migration")
+
+
+@pytest.mark.parametrize("signum", [signal.SIGTERM, signal.SIGHUP])
+def test_termination_signal_stops_the_runtime_and_retires_its_intent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, signum: signal.Signals
+) -> None:
+    options = _options(tmp_path)
+    _snapshot(options.project.models_dir / "model")
+    executable = tmp_path / "vllm"
+    executable.write_text("#!/bin/sh\n")
+    executable.chmod(0o755)
+    stopped: list[bool] = []
+    unhandled: list[int] = []
+
+    class Process:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            self.running = True
+
+        def poll(self) -> int | None:
+            return None if self.running else 0
+
+        def terminate(self) -> None:
+            self.running = False
+            stopped.append(True)
+
+        def wait(self, timeout: float | None = None) -> int:
+            del timeout
+            return 0
+
+    def interaction(*_args: object, **_kwargs: object) -> int:
+        assert options.project.managed_runtime_intent_path.is_file()
+        os.kill(os.getpid(), signum)
+        return 0
+
+    monkeypatch.setattr(
+        "heartwood.cli._launch._resolve_runtime_executable", lambda _kind: executable
+    )
+    monkeypatch.setattr("heartwood.cli._launch._preflight_vllm", lambda *_args: None)
+    monkeypatch.setattr("heartwood.cli._launch.subprocess.Popen", Process)
+    monkeypatch.setattr("heartwood.cli._launch._wait_for_runtime", lambda *_args, **_kw: True)
+    monkeypatch.setattr("heartwood.cli._launch._ensure_setup", lambda *_args, **_kw: 0)
+    monkeypatch.setattr("heartwood.cli._launch._run_interaction", interaction)
+
+    def record(received: int, _frame: object) -> None:
+        unhandled.append(received)
+
+    previous = signal.signal(signum, record)
+    try:
+        with pytest.raises(SystemExit) as stop:
+            run_launch(options, env={"HEARTWOOD_PLATFORM": "generic"})
+        assert signal.getsignal(signum) is record
+    finally:
+        signal.signal(signum, previous)
+    assert stop.value.code == 128 + signum
+    assert stopped == [True]
+    assert unhandled == []
+    assert not options.project.managed_runtime_intent_path.exists()
+    with project_gateway_maintenance(options.project):
+        assert options.project.state_exists()
 
 
 def test_launch_reports_runtime_timeout_and_forces_cleanup(
