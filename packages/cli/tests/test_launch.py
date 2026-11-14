@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import hashlib
-import io
 import json
 import subprocess
 from collections.abc import Sequence
@@ -855,16 +854,23 @@ def test_launch_supervises_selected_vllm_and_opens_project_chat(
         "heartwood.cli._launch._ensure_setup",
         ensure_setup,
     )
-    monkeypatch.setattr("heartwood.cli._launch.subprocess.run", completed)
+
+    def interaction(command: Sequence[str], **kwargs: object) -> int:
+        assert isinstance(kwargs.pop("runtime"), FakeProcess)
+        return completed(command, **kwargs).returncode
+
+    monkeypatch.setattr("heartwood.cli._launch._run_interaction", interaction)
 
     assert run_launch(options, env={"HEARTWOOD_PLATFORM": "generic"}) == 0
     assert observed_processes[0][0] == str(executable)
     assert "--enable-auto-tool-choice" in observed_processes[0]
     context_index = observed_processes[0].index("--max-model-len")
     assert observed_processes[0][context_index + 1] == "131072"
-    assert setup_options == [{"context_window": 131_072}]
+    assert len(setup_options) == 1
+    assert setup_options[0]["context_window"] == 131_072
+    assert isinstance(setup_options[0]["runtime"], FakeProcess)
     assert observed_runs[-1][1] == tmp_path
-    assert observed_environments[-1]["HEARTWOOD_LOCAL_RUNTIME_ACTIVE"] == "1"
+    assert observed_environments[-1]["HEARTWOOD_LOCAL_RUNTIME_SOCKET"].endswith("/model.sock")
     assert observed_environments[-1]["HEARTWOOD_LOCAL_RUNTIME_ARTIFACT_ID"] == "test-model"
     assert "--workspace" not in observed_runs[-1][0]
     assert (tmp_path / ".heartwood" / "logs" / "local-model.log").is_file()
@@ -1056,7 +1062,11 @@ def test_llama_cpp_command_uses_the_selected_gguf(tmp_path: Path) -> None:
         Path("/opt/llama.cpp/llama-server"),
         model,
         selection,
+        socket_path=Path("/operator/model.sock"),
     )
+    assert "--no-slots" in command
+    assert command[command.index("--host") + 1] == "/operator/model.sock"
+    assert "--port" not in command
     assert command[:3] == (
         "/opt/llama.cpp/llama-server",
         "--model",
@@ -1095,8 +1105,12 @@ def test_vllm_command_uses_muse_tool_and_reasoning_parsers(tmp_path: Path) -> No
         catalog_source="catalog",
     )
 
-    command = _runtime_command(Path("/opt/vllm/bin/vllm"), model, selection)
+    command = _runtime_command(
+        Path("/opt/vllm/bin/vllm"), model, selection, socket_path=Path("/operator/model.sock")
+    )
 
+    assert command[command.index("--uds") + 1] == "/operator/model.sock"
+    assert "--port" not in command
     assert command[command.index("--tool-call-parser") + 1] == "muse_glimmer"
     assert command[command.index("--reasoning-parser") + 1] == "muse_glimmer"
     assert command[command.index("--tensor-parallel-size") + 1] == "2"
@@ -1188,6 +1202,7 @@ def test_constrained_vllm_gpu_uses_eager_execution(
             Path("/opt/heartwood-vllm/bin/heartwood-vllm"),
             selection.model_root,
             selection,
+            socket_path=Path("/operator/model.sock"),
             enforce_eager=True,
         )[-1]
         == "--enforce-eager"
@@ -1428,48 +1443,8 @@ def test_web_reentry_preserves_only_interface_options(tmp_path: Path) -> None:
     assert label == "Open the launch link printed for 0.0.0.0:9876"
 
 
-def test_runtime_readiness_accepts_requested_model_and_stops_after_exit(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class ExitedProcess:
-        def poll(self) -> int:
-            return 1
-
-    assert not _wait_for_runtime(
-        cast(subprocess.Popen[str], ExitedProcess()),
-        model_id="test-model",
-        timeout=0.1,
-    )
-
-    class RunningProcess:
-        def poll(self) -> None:
-            return None
-
-    class Response(io.BytesIO):
-        status = 200
-
-        def __enter__(self) -> Response:
-            return self
-
-        def __exit__(self, *_args: object) -> None:
-            self.close()
-
-    class Opener:
-        def open(self, *_args: object, **_kwargs: object) -> Response:
-            return Response(json.dumps({"data": [{"id": "test-model"}]}).encode())
-
-    monkeypatch.setattr(
-        "heartwood.cli._launch.urllib.request.build_opener",
-        lambda _handler: Opener(),
-    )
-    assert _wait_for_runtime(
-        cast(subprocess.Popen[str], RunningProcess()),
-        model_id="test-model",
-        timeout=0.1,
-    )
-
-
 def test_runtime_readiness_reports_progress_and_rejects_malformed_catalog(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -1477,21 +1452,14 @@ def test_runtime_readiness_reports_progress_and_rejects_malformed_catalog(
         def poll(self) -> None:
             return None
 
-    class FailingOpener:
-        def open(self, *_args: object, **_kwargs: object) -> object:
-            raise OSError("not ready")
-
     times = iter((0.0, 0.0, 0.0, 16.0, 31.0))
     monkeypatch.setattr("heartwood.cli._launch.time.monotonic", lambda: next(times))
     monkeypatch.setattr("heartwood.cli._launch.time.sleep", lambda _seconds: None)
-    monkeypatch.setattr(
-        "heartwood.cli._launch.urllib.request.build_opener",
-        lambda _handler: FailingOpener(),
-    )
 
     assert not _wait_for_runtime(
         cast(subprocess.Popen[str], RunningProcess()),
         model_id="test-model",
+        socket_path=tmp_path / "model.sock",
         timeout=30,
     )
     assert (

@@ -33,6 +33,14 @@ export HEARTWOOD_UNUSED_MODEL_API_KEY="synthetic-unused-model-key"
 export LITELLM_LOCAL_MODEL_COST_MAP="True"
 export OPENHANDS_SUPPRESS_BANNER="1"
 
+if [[ -z "${HEARTWOOD_LOCAL_RUNTIME_SOCKET:-}" ]]; then
+  mkdir -p "${project}"
+  export HEARTWOOD_LOCAL_RUNTIME_PROFILE=stub-unix
+  exec "${heartwood_python}" "${script_dir}/qualify_runtime.py" \
+    --project "${project}" --log "${request_log}.runtime.log" \
+    --runtime "${script_dir}/start_local_runtime.sh" -- bash "${BASH_SOURCE[0]}"
+fi
+
 rm -rf "${project}"
 rm -f "${request_log}" "${audit_copy}" "${transcript}" \
   "${automatic_transcript}" "${risky_transcript}"
@@ -46,30 +54,6 @@ git config user.email heartwood@example.invalid
 git config user.name "Heartwood Test"
 git add .gitignore input
 git -c commit.gpgsign=false commit -m "Synthetic inputs" >/dev/null
-
-HEARTWOOD_LOCAL_RUNTIME_PROFILE=stub-loopback \
-  bash "${runtime_root}/images/generic/scripts/start_local_runtime.sh" &
-model_pid="$!"
-
-cleanup() {
-  kill "${model_pid}" >/dev/null 2>&1 || true
-  wait "${model_pid}" >/dev/null 2>&1 || true
-}
-trap cleanup EXIT
-
-"${heartwood_python}" - <<'PY'
-import socket
-import time
-
-deadline = time.time() + 60
-while time.time() < deadline:
-    try:
-        with socket.create_connection(("127.0.0.1", 8765), timeout=0.2):
-            raise SystemExit(0)
-    except OSError:
-        time.sleep(0.1)
-raise SystemExit("loopback model fixture did not become ready")
-PY
 
 heartwood models refresh heartwood | tee -a "${transcript}"
 heartwood models connect heartwood heartwood-managed-runtime \

@@ -221,7 +221,7 @@ A platform runs the published Heartwood artifact with the researcher's project a
 - **Required:** run the published image or native release without replacing its entrypoint, user, or bundled browser assets.
 - **Required:** provide persistent research files and state storage with native advisory locks; object-store and file-transfer mounts are not session stores unless qualified. Managed workers must not receive the protected state mount.
 - **Required:** keep model weights, credentials, and deployment secrets out of image layers and the project directory.
-- **Required:** run Heartwood-managed local model servers only where other operating-system users cannot reach their loopback ports.
+- **Required:** preserve the owner-only Unix socket and directory used by a Heartwood-managed local model server, and keep them outside worker access.
 - **Required:** keep local checkpoint signer sockets in owner-only directories outside worker access; production signing uses an independently authorized HTTPS service.
 - **Recommended:** back up the project storage and preserve it across compute recreation.
 - **Optional:** provide Jupyter where the platform offers the [notebook bridge](../use/notebooks.md).
@@ -230,9 +230,10 @@ A platform runs the published Heartwood artifact with the researcher's project a
 !!! info "Unavailable: signed artifacts and bills of materials"
     Releases carry build attestations, but release images and native assets are not yet signed and do not yet ship software bills of materials or third-party notices.
 
-!!! info "Unavailable: authenticated local model servers"
-    A Heartwood-managed model server listens on a fixed loopback port without authenticating the listener, so another user on a shared host can take the port and receive prompts.
-    Isolate this service from other operating-system users; loopback alone does not authenticate its identity.
+Heartwood-managed local inference uses filesystem ownership and permissions to authenticate its private Unix transport.
+The launcher supervises runtime availability; managed clients reject altered routes and have no TCP fallback.
+Same-identity processes and privileged host administrators remain outside this protection.
+An isolated worker requires a separately authorized outside inference route; the local runtime socket is not a worker mount or a platform API.
 
 See [Package the Shared Application](platform-integration.md#package-the-shared-application) and [Persist the Right Data](index.md#persist-the-right-data).
 

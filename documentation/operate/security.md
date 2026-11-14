@@ -75,9 +75,12 @@ The built-in workstation/container, Terra, and Carina adapters therefore do not 
 For local execution, other secrets in the Heartwood environment, credential files, and keyring entries remain subject to the same-identity limitations.
 The native worker instead starts with an explicit environment allowlist and receives only the outside provider transport's placeholder; ordinary remote execution without that transport does not separate model credentials from agent tools.
 
-A Heartwood-managed local model server listens on a fixed loopback port without authentication.
-Other users on the same host can send it requests and, while it is not listening, can take the port and receive prompts in its place.
-Run it only on hosts or allocations that other users cannot reach.
+A Heartwood-managed local model server uses a private Unix socket in an owner-only temporary directory outside the research project.
+The launcher and model clients validate directory ancestry, ownership, permissions and socket identity; managed requests have no TCP fallback.
+The logical model URL in policy and configuration identifies the private transport, not a listening TCP port.
+The launcher stops the interaction if its runtime exits, and llama.cpp slot inspection is disabled.
+These controls separate operating-system users; they do not isolate processes sharing the launcher's identity or protect against a privileged host administrator.
+Sandboxed workers cannot use this local socket: they require an independently authorized outside inference route, with no socket or credential mount into the worker.
 
 [OpenHands Agent Server](https://docs.openhands.dev/sdk/guides/agent-server/overview) and its [remote workspace](https://docs.openhands.dev/sdk/guides/agent-server/cloud-workspace) move the conversation, model client, and tools into a remote agent environment.
 That boundary isolates the caller from the agent workspace, but it does not by itself separate model authentication from tools running inside that agent environment.

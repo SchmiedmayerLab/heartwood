@@ -10,6 +10,16 @@ Heartwood images and the generic Linux package include managed inference softwar
 After a supported model is selected and downloaded or imported, the normal `heartwood` command verifies the files, plans context against available memory, starts the runtime, waits for readiness, and then opens the requested interface.
 Downloading and verification are separate costs: a cached model avoids network transfer but Heartwood still verifies its immutable source and file hashes before use.
 
+## Runtime Connection and Lifetime
+
+The launcher gives llama.cpp or vLLM a private Unix socket in an owner-only temporary directory outside the project.
+Readiness checks, model discovery and inference use that socket; no managed TCP listener is opened.
+The loopback URL retained in model settings is a logical route used by the SDK's private transport, not an address for direct HTTP clients.
+An altered managed route or missing socket prevents inference rather than selecting another listener.
+The launcher stops the interaction if the runtime exits and removes its temporary socket directory after shutdown.
+A replacement runtime requires a fresh interaction process; an active client's transport binding cannot switch to another socket or listener.
+Processes sharing the same operating-system identity retain that identity's access; use the managed worker deployment for an independently enforced execution boundary.
+
 ## Download and Start
 
 The guided path is:

@@ -171,7 +171,7 @@ Importing the same unchanged bundle again is safe: Heartwood fully verifies the 
 
 Before using project data, confirm that:
 
-- the active model route is loopback;
+- the active managed model uses the launcher's private Unix socket;
 - no hosted model credential is configured;
 - the platform independently denies outbound network traffic;
 - project and model storage meet the environment's handling requirements; and
