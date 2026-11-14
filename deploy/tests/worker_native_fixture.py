@@ -30,6 +30,7 @@ from openshell import SandboxClient, TlsConfig
 from openshell._proto import openshell_pb2 as pb
 from openshell._proto import sandbox_pb2 as policy_pb
 from worker_network_qualification import qualify_network
+from worker_telemetry import InfrastructureCollector
 
 from heartwood.gateway import SessionGateway
 from heartwood.gateway.worker_deployment import OpenShellWorkerDeployment
@@ -226,24 +227,86 @@ class NativeFixture:
     def cli_command(self, arguments: list[str], **environment: str) -> str:
         return command([str(self.cli), *arguments], env={**self.env, **environment})
 
-    def start(self) -> None:
-        tls = self.private / "tls"
-        command(
-            [
-                str(self.binary),
-                "generate-certs",
-                "--output-dir",
-                str(tls),
-                "--server-san",
-                "localhost",
-                "--server-san",
-                "127.0.0.1",
-                "--server-san",
-                "host.docker.internal",
+    def qualify_telemetry(self, worker_name: str, sandbox_id: str) -> dict[str, object]:
+        """Observe native attribution and an explicit exporter gap at the outside collector."""
+        collector = self.collector
+
+        def supervisor_records() -> list[dict[str, Any]]:
+            return [
+                item
+                for item in collector.observations()
+                if item["resource"].get("openshell.sandbox.id") == sandbox_id
             ]
+
+        collector.wait_for(lambda: bool(supervisor_records()))
+        for item in supervisor_records():
+            assert item["resource"].get("openshell.gateway.name") == self.identity
+        try:
+            collector.unavailable(True)
+            deadline = time.monotonic() + 90
+            # Native loss notifications accompany the next event batch. Keep a
+            # bounded source active until the exporter reports an actual loss.
+            while not collector.observed_loss(sandbox_id):
+                assert time.monotonic() < deadline, "Native exporter did not report lost records"
+                result = self.control.exec(
+                    worker_name,
+                    ["/bin/true"],
+                    workspace="default",
+                    timeout_seconds=15,
+                    no_login_shell=True,
+                )
+                assert result.exit_code == 0
+                time.sleep(0.5)
+        finally:
+            collector.unavailable(False)
+        result = self.control.exec(
+            worker_name,
+            ["/bin/true"],
+            workspace="default",
+            timeout_seconds=15,
+            no_login_shell=True,
         )
-        for path in tls.rglob("*"):
-            path.chmod(0o700 if path.is_dir() else 0o600)
+        assert result.exit_code == 0
+
+        def gaps() -> list[dict[str, Any]]:
+            return [
+                item
+                for item in collector.observations()
+                if item["record"].get("event_name") == "openshell.ocsf.gap"
+                and item["resource"].get("openshell.sandbox.id") == sandbox_id
+            ]
+
+        collector.wait_for(lambda: bool(gaps()))
+        for gap in gaps():
+            attributes = {item["key"]: item["value"] for item in gap["record"]["attributes"]}
+            assert int(attributes["openshell.ocsf.gap.dropped"]["int_value"]) > 0
+            assert int(attributes["openshell.ocsf.gap.since_unix_ms"]["int_value"]) > 0
+        native = supervisor_records()
+        identities = set()
+        for item in native:
+            if item["record"].get("event_name") == "openshell.ocsf.gap":
+                continue
+            record = json.loads(item["record"]["body"]["string_value"])
+            assert record["metadata"]["uid"]
+            identities.add(record["metadata"]["uid"])
+        assert identities
+        content = collector.path.read_text()
+        assert self.provider.credential not in content
+        assert self.sentinel not in content
+        return {
+            "transport": "native-otlp-mtls",
+            "unauthenticated_collector_client_rejected": True,
+            "sandbox_id": sandbox_id,
+            "gateway_id": self.identity,
+            "supervisor_records": len(native),
+            "unique_native_event_ids": len(identities),
+            "exporter_gap_records": len(gaps()),
+            "collection_complete": False,
+            "loss": "synthetic collector outage exhausted native retries",
+            "artifact": collector.path.name,
+        }
+
+    def start(self) -> None:
         controller = json.loads(command(["docker", "inspect", os.environ["HW_CONTROLLER_NAME"]]))[0]
         if self.network not in controller["NetworkSettings"]["Networks"]:
             command(
@@ -258,6 +321,29 @@ class NativeFixture:
         )
         self.ipv4 = ipaddress.IPv4Address(network["IPAddress"])
         self.ipv6 = ipaddress.IPv6Address(network["GlobalIPv6Address"])
+
+        tls = self.private / "tls"
+        command(
+            [
+                str(self.binary),
+                "generate-certs",
+                "--output-dir",
+                str(tls),
+                "--server-san",
+                "localhost",
+                "--server-san",
+                "127.0.0.1",
+                "--server-san",
+                "host.docker.internal",
+                "--server-san",
+                str(control_address),
+            ]
+        )
+        for path in tls.rglob("*"):
+            path.chmod(0o700 if path.is_dir() else 0o600)
+        self.collector = InfrastructureCollector(tls, self.output)
+        self.resources.callback(self.collector.close)
+        self.collector.verify_client_auth(tls)
 
         def q(value: object) -> str:
             return json.dumps(str(value))
@@ -280,6 +366,12 @@ signing_key_path = {q(tls / "jwt/signing.pem")}
 public_key_path = {q(tls / "jwt/public.pem")}
 kid_path = {q(tls / "jwt/kid")}
 gateway_id = {q(self.identity)}
+[openshell.gateway.otlp.ocsf]
+enabled = true
+endpoint = {q(f"https://{control_address}:{self.collector.port}")}
+ca_file = {q(tls / "ca.crt")}
+cert_file = {q(tls / "client/tls.crt")}
+key_file = {q(tls / "client/tls.key")}
 [openshell.drivers.docker]
 socket_path = "/var/run/docker.sock"
 supervisor_network_mode = "bridge"
@@ -373,6 +465,7 @@ additional_ca_bundle = {q(tls / "ca.crt")}
             ["gateway", "add", "https://127.0.0.1:19670", "--name", self.identity, "--local"]
         )
         self.provider = SyntheticProvider(tls)
+        self.collector.forbidden_values = (self.provider.credential, self.sentinel)
         self.resources.callback(self.provider.close)
         self.protected_canary.write_text(self.sentinel)
         self.protected_canary.chmod(0o600)

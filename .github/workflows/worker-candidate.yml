@@ -176,4 +176,6 @@ jobs:
             test-results/native-qualification/*/evidence.json
             test-results/native-qualification/*/cleanup.json
             test-results/native-qualification/*/gateway.log
+            test-results/native-qualification/*/infrastructure-otlp.jsonl
+            test-results/native-qualification/*/infrastructure-otlp-status.json
           retention-days: 14
