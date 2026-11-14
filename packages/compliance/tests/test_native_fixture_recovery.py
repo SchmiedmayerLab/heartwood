@@ -12,14 +12,13 @@ from types import ModuleType, SimpleNamespace
 from typing import cast
 from unittest.mock import MagicMock, patch
 
-import grpc
 import pytest
 
 _ROOT = Path(__file__).resolve().parents[3]
 
 
-def rpc_error(code: grpc.StatusCode) -> Exception:
-    error = grpc.RpcError()
+def rpc_error(native: ModuleType, code: object) -> Exception:
+    error = native.grpc.RpcError()
     error.code = lambda: code
     return cast(Exception, error)
 
@@ -51,7 +50,7 @@ def fixture_owner(*, known: bool = True) -> SimpleNamespace:
 
 def test_provisioning_retry_keeps_the_same_probe(native: ModuleType) -> None:
     owner = fixture_owner()
-    owner.control.delete.side_effect = [rpc_error(grpc.StatusCode.UNAVAILABLE), None]
+    owner.control.delete.side_effect = [rpc_error(native, native.grpc.StatusCode.UNAVAILABLE), None]
     with patch.object(native.time, "sleep"):
         native.NativeFixture.revoke_probes(owner)
     assert owner.control.delete.call_count == 2
@@ -78,7 +77,7 @@ def test_changed_probe_is_not_deleted(native: ModuleType, changed: str) -> None:
 def test_uncertain_create_waits_for_owned_identity(native: ModuleType) -> None:
     owner = fixture_owner(known=False)
     owner.control.get.side_effect = [
-        rpc_error(grpc.StatusCode.NOT_FOUND),
+        rpc_error(native, native.grpc.StatusCode.NOT_FOUND),
         owner.control.get.return_value,
     ]
     with patch.object(native.time, "sleep"):
@@ -89,7 +88,7 @@ def test_uncertain_create_waits_for_owned_identity(native: ModuleType) -> None:
 
 def test_unobserved_create_retains_reconciliation_state(native: ModuleType) -> None:
     owner = fixture_owner(known=False)
-    owner.control.get.side_effect = rpc_error(grpc.StatusCode.NOT_FOUND)
+    owner.control.get.side_effect = rpc_error(native, native.grpc.StatusCode.NOT_FOUND)
     with (
         patch.object(native.time, "monotonic", side_effect=[0, 0, 100]),
         patch.object(native.time, "sleep"),
