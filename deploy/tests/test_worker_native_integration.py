@@ -282,12 +282,19 @@ body={'model':'synthetic-boundary','messages':[{'role':'user','content':'synthet
 request=urllib.request.Request('https://host.docker.internal:19671/v1/chat/completions',
     data=json.dumps(body).encode(),
     headers={'Authorization':'Bearer '+key,'Content-Type':'application/json'})
+error_code=None
 try:
  with urllib.request.urlopen(request,timeout=10) as response:
   status=response.status
   response.read(1024*1024)
-except urllib.error.HTTPError as error: status=error.code
-print(json.dumps({'status':status,'placeholder_sha256':hashlib.sha256(key.encode()).hexdigest()}))
+except urllib.error.HTTPError as error:
+ status=error.code
+ body=error.read(16385)
+ assert len(body)<=16384, 'credential error response exceeds limit'
+ error_code=json.loads(body).get('error')
+ assert isinstance(error_code,str) and len(error_code)<=128
+print(json.dumps({'status':status,'error_code':error_code,
+                  'placeholder_sha256':hashlib.sha256(key.encode()).hexdigest()}))
 """
 
     def request() -> dict[str, JsonValue]:
@@ -309,7 +316,8 @@ print(json.dumps({'status':status,'placeholder_sha256':hashlib.sha256(key.encode
     while time.time() * 1000 <= fixture.credential_expires_at_ms + 100:
         time.sleep(0.1)
     after = request()
-    assert after["status"] == 403
+    assert after["status"] == 500
+    assert after["error_code"] == "credential_unavailable"
     assert after["placeholder_sha256"] == before["placeholder_sha256"]
     assert len(fixture.provider.observations) == 2
     _stop(application)
@@ -319,6 +327,8 @@ print(json.dumps({'status':status,'placeholder_sha256':hashlib.sha256(key.encode
             {
                 "credential_expires_at_ms": fixture.credential_expires_at_ms,
                 "retained_placeholder_denied": True,
+                "denial_status": after["status"],
+                "denial_code": after["error_code"],
                 "expired_request_reached_provider": False,
                 "outside_revocation_verified": True,
             },
