@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import base64
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -18,6 +19,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from heartwood.audit import LocalEd25519CheckpointSigner, checkpoint_public_key_fingerprint
 from heartwood.audit._anchored_signer import AnchoredCheckpointSigner
+from heartwood.audit._checkpoint import _canonical_checkpoint
 from heartwood.audit._records_s3 import CheckpointAuthorityScope, S3CheckpointRecords
 from heartwood.core_adapter import (
     BackendEvent,
@@ -30,7 +32,12 @@ from heartwood.core_adapter.checkpoint_evidence import (
     CheckpointEvidenceUnavailableError,
     SessionCheckpointEvidence,
 )
-from heartwood.schemas import AuditRetention
+from heartwood.schemas import (
+    AuditCheckpoint,
+    AuditCheckpointSignature,
+    AuditCheckpointStatement,
+    AuditRetention,
+)
 from heartwood.session import CommandKind, EventKind, SessionCommand
 from packages.audit.tests.records_fixtures import MemoryS3
 
@@ -251,4 +258,83 @@ def test_pending_required_evidence_cannot_be_downgraded(
     env.client.unavailable = False
     env.service.reconcile()
     assert env.backend.resolutions == [True]
+    env.service.close()
+
+
+@pytest.mark.parametrize("mode", ["required", "buffered"])
+@pytest.mark.parametrize("fault", ["unknown-key", "invalid-signature"])
+def test_invalid_signer_response_blocks_dispatch_until_retention_is_reconciled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: Literal["required", "buffered"],
+    fault: str,
+) -> None:
+    env = environment(tmp_path, mode)
+    command = pending_approval(env)
+    sign = env.authority.sign
+
+    def invalid_response(statement: AuditCheckpointStatement) -> AuditCheckpointSignature:
+        signature = sign(statement)
+        return signature.model_copy(
+            update=(
+                {"public_key_sha256": "sha256:" + "0" * 64}
+                if fault == "unknown-key"
+                else {"value": base64.b64encode(bytes(64)).decode("ascii")}
+            )
+        )
+
+    with monkeypatch.context() as patch:
+        patch.setattr(env.authority, "sign", invalid_response)
+        with pytest.raises(CheckpointEvidenceUnavailableError):
+            env.service.handle(command)
+    assert env.backend.resolutions == []
+    assert env.service.store.unresolved_command_ids() == (command.command_id,)
+    assert len(env.evidence.records.history()) == 1
+    env.service.reconcile()
+    env.service.handle(command)
+    assert env.backend.resolutions == [True]
+    assert len(env.evidence.records.history()) == 1
+    env.service.close()
+
+
+@pytest.mark.parametrize("mode", ["required", "buffered"])
+@pytest.mark.parametrize("fault", ["unknown-key", "invalid-signature", "local-rollback"])
+def test_retained_integrity_failure_blocks_a_later_approval(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: Literal["required", "buffered"],
+    fault: str,
+) -> None:
+    env = environment(tmp_path, mode)
+    command = pending_approval(env)
+    before_approval = env.service.store.verified_audit_export()
+    env.service._checkpoint_boundary(env.service.replay_events()[-1])
+    retained = next(
+        values[0] for key, values in env.client.objects.items() if "/checkpoints/" in key
+    )
+    original = retained.content
+    with monkeypatch.context() as patch:
+        if fault == "local-rollback":
+            patch.setattr(env.service.store, "verified_audit_export", lambda: before_approval)
+        else:
+            checkpoint = AuditCheckpoint.model_validate_json(original)
+            signature = checkpoint.signature.model_copy(
+                update=(
+                    {"public_key_sha256": "sha256:" + "0" * 64}
+                    if fault == "unknown-key"
+                    else {"value": base64.b64encode(bytes(64)).decode("ascii")}
+                )
+            )
+            retained.content = _canonical_checkpoint(
+                checkpoint.model_copy(update={"signature": signature})
+            ).encode()
+        with pytest.raises(CheckpointEvidenceUnavailableError):
+            env.service.handle(command)
+        assert env.backend.resolutions == []
+        assert env.service.store.unresolved_command_ids() == (command.command_id,)
+    retained.content = original
+    env.service.reconcile()
+    env.service.handle(command)
+    assert env.backend.resolutions == [True]
+    assert len(env.evidence.records.history()) == 2
     env.service.close()
