@@ -480,7 +480,7 @@ class DeterministicAgentBackend:
         if action_confirmation_mode not in {"always-confirm", "confirm-risky"}:
             msg = f"unsupported action confirmation mode: {action_confirmation_mode}"
             raise ValueError(msg)
-        self._action_confirmation_mode = action_confirmation_mode
+        self._action_confirmation_mode = "always-confirm"
         self._persistence_path = None if persistence_path is None else persistence_path.resolve()
         self._pending = self._load_pending()
         self._event_sink: BackendEventSink = lambda _events: None
@@ -523,7 +523,7 @@ class DeterministicAgentBackend:
 
     @property
     def action_confirmation_mode(self) -> str:
-        """Return the selected deterministic confirmation mode."""
+        """Return the effective deterministic confirmation mode."""
         return self._action_confirmation_mode
 
     @property
@@ -586,22 +586,6 @@ class DeterministicAgentBackend:
             ),
             BackendToolCallEvent(tool_call=self._pending),
         )
-        if self.action_confirmation_mode == "confirm-risky":
-            pending = self._pending
-            self._pending = None
-            self._persist_pending()
-            return (
-                *events,
-                BackendToolExecutionEvent(
-                    tool_execution=ToolExecution(
-                        tool_call_id=pending.tool_call_id,
-                        action_id=None,
-                        tool_name="heartwood.synthetic.noop",
-                        exit_code=0,
-                        summary=f"automatically executed low-risk action; session_id={session_id}",
-                    ),
-                ),
-            )
         self._persist_pending()
         action_group = self.pending_action_group(session_id=session_id)
         if action_group is None:  # pragma: no cover - pending action was just assigned
