@@ -117,8 +117,14 @@ SPDX-License-Identifier: MIT
 **OpenAI-compatible service**
 : A model endpoint implementing the relevant OpenAI API request and response shapes; compatibility does not imply operation by OpenAI.
 
+**OpenID Connect (OIDC)**
+: An identity protocol built on OAuth that supplies authenticated user claims; a gateway capability is not an OpenID Connect identity.
+
 **OpenHands**
 : The upstream agent SDK and coding-tool platform used by Heartwood for conversations and tool execution.
+
+**OpenShell**
+: The sandbox infrastructure used by Heartwood's native reference adapter for externally enforced worker restrictions and inference credential transport.
 
 **Pilot evaluation**
 : A bounded trial in which a small group of researchers uses one standard research environment so the deployment can record installation, workflow, reproducibility, and support evidence before a wider rollout.
@@ -127,10 +133,10 @@ SPDX-License-Identifier: MIT
 : Individually identifiable health information protected under applicable policy or law.
 
 **Project**
-: The process current directory and its descendants that Heartwood treats as the agent workspace.
+: The process current directory and its descendants that define the research-file boundary. Managed workers receive selected projections rather than the complete directory.
 
 **Project state**
-: Private non-secret configuration, sessions, models, Skills, logs, caches, runtime files, and audit artifacts under `.heartwood/`.
+: Private configuration, sessions, models, Skills, logs, caches, runtime files and audit artifacts in local `.heartwood/` or an operator-bound external directory; raw provider credentials are excluded.
 
 **Quantization**
 : A lower-precision model representation, such as AWQ, GPTQ, or FP8, used to reduce memory and storage requirements.
@@ -149,6 +155,9 @@ SPDX-License-Identifier: MIT
 
 **Semantic Versioning (SemVer)**
 : A major.minor.patch version scheme that communicates public-contract compatibility. Heartwood defines its pre-1.0 conventions in the support policy and platform contract.
+
+**Server-sent events (SSE)**
+: A one-way HTTP event stream from the gateway to an interface; Heartwood reconnects using an explicit event cursor.
 
 **SHA-256**
 : A cryptographic hash function Heartwood uses to verify that model files and other artifacts have not changed.
@@ -176,6 +185,9 @@ SPDX-License-Identifier: MIT
 
 **Wheel**
 : A prebuilt Python package file (`.whl`) that can be installed without running a source-build backend.
+
+**Workflow Description Language (WDL)**
+: A workflow language used by Terra to describe analysis tasks and their inputs, outputs and dependencies.
 
 **ZIP64**
 : An extension of the ZIP archive format that supports files and archives larger than the original ZIP size limits.

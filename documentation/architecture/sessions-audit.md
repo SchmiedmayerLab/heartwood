@@ -139,7 +139,9 @@ Unknown outcomes fail closed and are never converted into a successful result by
 ## Audit Integrity
 
 Audit records are chained so replay and export detect corruption, and any modification, reordering, or removal made without recomputing the chain.
-The chain uses no key, so a process that can write `.heartwood/`, including an approved agent command, can rewrite records and recompute it.
+The chain uses no key, so a process that can write canonical state can rewrite records and recompute it.
+In local mode, an approved same-identity agent command can reach `.heartwood/`; managed workers must be denied access to external state by the surrounding sandbox.
+The trusted gateway can still write its state, so external placement does not replace independently retained checkpoints.
 Only a signed checkpoint binds the history, and only as it stood when the checkpoint was signed.
 Each content-minimized audit record also authenticates the corresponding complete session event by hash; replay requires matching counts, sequence, type, time, chain link, and event hash.
 The recovery journal repairs a verified interrupted two-file append before replay, while tampered or unexplained mismatches fail closed.

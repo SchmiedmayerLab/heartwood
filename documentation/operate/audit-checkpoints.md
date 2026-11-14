@@ -10,11 +10,16 @@ Heartwood keeps a content-minimized, hash-chained audit record with each session
 An ordinary audit export supports project review.
 A signed checkpoint is the artifact a deployment can retain as authoritative evidence outside the agent-writable project.
 
+The command examples below use local project state.
+The standalone audit CLI does not accept the gateway's `--deployment` manifest; it must not be used as though it automatically selects protected external state.
+A managed operator integration must use the explicitly bound gateway's checkpoint methods and preserve the same identity, policy and writer-ownership checks.
+Checkpoint creation is not exposed as a gateway HTTP route.
+
 ## Choose the Right Artifact
 
 | Artifact | Use | Storage |
 |---|---|---|
-| Session replay | Inspect private conversation and action history | Private `.heartwood/` session state |
+| Session replay | Inspect private conversation and action history | Private session state in the bound state directory |
 | Scrubbed audit export | Review or transfer content-minimized operational events | Temporary reviewed destination |
 | Signed audit checkpoint | Preserve an authenticated export with deployment and retention metadata | Deployment-controlled records storage outside the project |
 
@@ -28,7 +33,7 @@ Heartwood separates project selection from deployment trust:
 
 | Scope | Default location | Contents |
 |---|---|---|
-| Project | `.heartwood/config.toml` | An optional approved signer profile name only |
+| Project | `config.toml` in the bound state directory | An optional approved signer profile name only |
 | Managed deployment | `/etc/heartwood/checkpoint-signers.toml` | Approved signer endpoints, trusted public keys, and the deployment default |
 | Workstation fallback | `~/.config/heartwood/checkpoint-signers.toml` | Explicit local development or offline signer profiles |
 | Signer credential | Separate owner-only file | Optional bearer token used only for the signer request |
@@ -93,7 +98,8 @@ heartwood audit signer default
 heartwood audit signer select stanford-records
 ```
 
-Only the selected profile name is written to `.heartwood/config.toml`.
+Only the selected profile name is written to `config.toml` in the bound state directory.
+That directory is local `.heartwood/` or the operator-bound external state root; signer keys and service credentials belong in neither.
 A deployment that permits no user choice should publish only one profile.
 
 ## Use the Explicit Local Fallback

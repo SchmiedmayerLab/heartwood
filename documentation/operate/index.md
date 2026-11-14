@@ -17,7 +17,7 @@ A Heartwood deployment combines a versioned application artifact with platform s
 | Layer | Heartwood Provides | Platform or Institution Provides |
 |---|---|---|
 | Application | CLI, browser, notebook bridge, gateway, OpenHands adapter, Skills, policy, audit | Artifact approval and release selection |
-| Project | Current-directory boundary and private `.heartwood/` state | Durable storage, permissions, backup, retention, and deletion |
+| Project | Research-file boundary and private state; managed launch binds state outside research files | Durable storage, permissions, backup, retention, and deletion |
 | Identity | Launch capability on every gateway API request, event stream, and WebSocket, credential-binding interfaces, content-safe status, and credential-boundary enforcement | User authentication, authorization, launch capability delivery, managed identity, secret delivery, and isolated model identities |
 | Models | Provider catalogs, Heartwood-managed inference planning, route-policy evaluation | Approved endpoints, agreements, accounts, quotas, and data eligibility |
 | Compute | llama.cpp/vLLM launch contracts and Slurm/provisioned adapters | CPU/GPU capacity, drivers, scheduler, isolation, and cost controls |
@@ -26,6 +26,7 @@ A Heartwood deployment combines a versioned application artifact with platform s
 
 Heartwood policy is defense in depth and does not replace network enforcement.
 The [Platform Contract](platform-contract.md) defines this boundary and each capability a platform supplies in detail.
+Use [Platform API and Access Requirements](platform-requirements.md) when requesting an integration from a platform operator.
 The browser service must remain on loopback or behind an authenticated platform proxy configured through the trusted ingress contract.
 
 ## Select an Artifact
@@ -41,7 +42,10 @@ Do not deploy moving `edge` tags for reproducible or controlled work.
 ## Persist the Right Data
 
 Mount or assign one dedicated project directory as the process current directory.
-Persist the project and `.heartwood/`; keep installation files, temporary runtime files, and job scratch separate.
+Persist research files and canonical state separately from installation files, temporary runtime files and job scratch.
+Local launches use project-local `.heartwood/`; managed launches use the operator-bound external state directory.
+Back up both the research files and the matching state, preserving their project identity.
+Workers receive selected input and Skill projections, never the canonical state mount.
 
 Do not pre-create `.heartwood/` with an incompatible layout.
 Opening the browser and running `heartwood doctor` are read-only; explicit project confirmation or the first mutating operation initializes state.
@@ -49,7 +53,8 @@ Opening the browser and running `heartwood doctor` are read-only; explicit proje
 ## Provide Model Connections
 
 A platform adapter can advertise managed connections and credential backends.
-Operator-supplied model manifests define non-secret connection metadata, while platform policy defines allowed catalog and completion endpoints, credential references, capability tiers, and action-confirmation modes.
+The model-manifest parser defines non-secret connection metadata but is not wired into deployment startup.
+Built-in connections and operator-configured compatible routes use platform policy for allowed endpoints, credential references, capability tiers and action-confirmation modes.
 
 Never add raw tokens to container layers, image labels, project configuration, command arguments, examples, or CI logs.
 The built-in Terra, Carina, and generic policies permit both action-review modes; a deployment that must forbid **Low-Risk Automation** needs a platform policy that omits it.
@@ -68,14 +73,15 @@ Before real data, use a synthetic project to verify:
 3. model discovery and a real agent response;
 4. an OpenHands-compatible structured tool proposal;
 5. grouped allow and reject behavior;
-6. tool execution confined to the project;
+6. the advertised execution boundary, including outside denial of protected state, control-plane access and unapproved egress for sandboxed workers;
 7. terminal, browser, and notebook parity where advertised;
 8. replay and scrubbed audit export;
-9. no secret values in configuration, events, logs, or exports; and
+9. no secret values in configuration, events, logs, or exports;
 10. ingress host, origin, forwarding, prefix, and source rejection behavior;
-11. the declared model-credential boundary and action-policy restriction; and
-12. enforced network behavior, including a no-network Heartwood-managed inference test when offline operation is claimed; and
-13. signed checkpoint creation, external retention, independent verification, and synthetic restore.
+11. the declared model-credential boundary and action-policy restriction;
+12. enforced network behavior, including a no-network Heartwood-managed inference test when offline operation is claimed;
+13. signed checkpoint creation, external retention, independent verification, and synthetic restore; and
+14. worker admission, restart, lost-response reconciliation and independently observed revocation before releasing writer ownership.
 
 Record live validation evidence outside public user documentation and never include protected data in a fixture or transcript.
 
