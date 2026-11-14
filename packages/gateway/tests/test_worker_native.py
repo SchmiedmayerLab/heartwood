@@ -37,7 +37,7 @@ from heartwood.gateway.worker_native import _NativeWorkerAttempt, native_worker_
 
 @pytest.fixture
 def deployment() -> Iterator[tuple[OpenShellWorkerDeployment, ProjectContext]]:
-    with TemporaryDirectory(prefix="worker-config-", dir="/private/tmp") as temporary:
+    with TemporaryDirectory(prefix="worker-config-", dir=Path("/tmp").resolve()) as temporary:
         root = Path(temporary)
         research = root / "research"
         research.mkdir()
