@@ -468,21 +468,32 @@ def test_openhands_context_loads_only_explicitly_verified_skills() -> None:
     assert str(Path.cwd()) not in suffix
 
 
-def test_terminal_tool_masks_all_configured_provider_environment_keys() -> None:
-    environment_profile = _remote_profile()
-    local_profile = _local_profile()
+def test_terminal_tool_uses_explicit_local_environment() -> None:
+    source = {
+        "PATH": "/research/bin",
+        "HF_TOKEN": "synthetic",
+        "OPENAI_API_KEY": "synthetic",
+        "HEARTWOOD_GATEWAY_CAPABILITY": "synthetic",
+        "HEARTWOOD_TERMINAL_ENV_ALLOWLIST": (
+            "RESEARCH_SETTING,OPENAI_API_KEY,HEARTWOOD_GATEWAY_CAPABILITY"
+        ),
+        "RESEARCH_SETTING": "retained",
+    }
+    assert _terminal_tool_params(_remote_profile(), env=source) == {
+        "inherit_environment": False,
+        "env": {"PATH": "/research/bin", "RESEARCH_SETTING": "retained"},
+    }
 
-    assert _terminal_tool_params(environment_profile, ("ANTHROPIC_API_KEY",)) == {
-        "env": {
-            "ANTHROPIC_API_KEY": "",
-            "HEARTWOOD_GATEWAY_CAPABILITY": "",
-            "OPENAI_API_KEY": "",
-        }
+
+def test_native_terminal_keeps_worker_environment_without_host_projection() -> None:
+    assert _terminal_tool_params(
+        _remote_profile(),
+        ("ANTHROPIC_API_KEY",),
+        env={"PATH": "/private/host/bin", "SSL_CERT_FILE": "/private/host/ca"},
+        remote_worker=True,
+    ) == {
+        "env": {"ANTHROPIC_API_KEY": "", "HEARTWOOD_GATEWAY_CAPABILITY": "", "OPENAI_API_KEY": ""}
     }
-    assert _terminal_tool_params(local_profile, ("OPENAI_API_KEY",)) == {
-        "env": {"HEARTWOOD_GATEWAY_CAPABILITY": "", "OPENAI_API_KEY": ""}
-    }
-    assert _terminal_tool_params(local_profile) == {"env": {"HEARTWOOD_GATEWAY_CAPABILITY": ""}}
 
 
 def test_openhands_defaults_are_quiet_offline_and_allow_deployment_override(
