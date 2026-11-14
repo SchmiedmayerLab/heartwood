@@ -86,7 +86,8 @@ flowchart TB
     class Services,Infrastructure planned
 ```
 
-In the figures on this page, green marks what Heartwood owns, blue marks what the platform owns, and dashed outlines mark what is not yet implemented.
+In the figures on this page, green marks what Heartwood owns, blue marks what the platform owns, and dashed outlines mark unavailable Heartwood integrations.
+An unavailable integration does not imply that the platform lacks the underlying service or infrastructure.
 The integration contract separates two independent platform capabilities, inference and platform services, on top of a hosting and access baseline.
 Inference connections are implemented; authenticated platform-service integration remains unavailable.
 Either capability can be absent or unavailable without breaking the other: a platform can supply models without services, services without models, or neither while Heartwood runs a standalone model route.
@@ -228,7 +229,7 @@ A platform runs the published Heartwood artifact with the researcher's project a
 - **Recommended:** verify the published release attestations before admitting an artifact.
 
 !!! info "Unavailable: signed artifacts and bills of materials"
-    Releases carry build attestations, but release images and native assets are not yet signed and do not yet ship software bills of materials or third-party notices.
+    Releases carry build attestations; separate artifact signatures, software bills of materials and third-party notice bundles are unavailable for release images and native assets.
 
 Heartwood-managed local inference uses filesystem ownership and permissions to authenticate its private Unix transport.
 The launcher supervises runtime availability; managed clients reject altered routes and have no TCP fallback.
@@ -472,7 +473,7 @@ Prediction quality and evidence reuse do not grant spending authority or replace
 
 !!! info "Unavailable: workload-prediction Skills and harness support"
     Workload-prediction Skills, runtime forecasting and budget projections are unavailable.
-    The existing research planner and experiment records provide integration points, but do not yet implement workload forecasting or complete resource-usage observations.
+    The research planner and experiment records provide integration points; workload forecasting and complete resource-usage observations are unavailable.
 
 #### Shared Plan and Budget Overview
 
@@ -915,7 +916,7 @@ Review `contract.json` first: it distinguishes current interfaces, draft platfor
 The individual schema and OpenAPI exporters remain available for narrower review.
 Request schemas use validation mode and response schemas use serialization mode, so their fields match the owning parser or serializer.
 The platform connection loader additionally checks endpoint normalization, credential-reference consistency, protocol requirements, and duplicate identities; JSON Schema validation alone does not perform those checks.
-The model-connection loader does not yet wire that manifest into startup; the separate project deployment loader already binds protected state and the policy ceiling.
+Model-connection manifest startup is unavailable; the separate project deployment loader binds protected state and the policy ceiling.
 
 The OpenAPI description includes all implemented REST operations, launch-token exchange, and server-sent events.
 The [Gateway API reference](../reference/gateway-api.md) provides client guidance for authentication, command envelopes, retries, approval targets and recovery.

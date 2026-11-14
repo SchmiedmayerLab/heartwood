@@ -8,7 +8,8 @@ SPDX-License-Identifier: MIT
 
 Heartwood keeps a content-minimized, hash-chained audit record with each session.
 An ordinary audit export supports project review.
-A signed checkpoint is the artifact a deployment can retain as authoritative evidence outside the agent-writable project.
+A signed checkpoint authenticates an export and its signed deployment statement for retention outside the agent-writable project.
+Its authority depends on independently trusted signing keys, signer authorization and the records system's controls.
 
 The command examples below use local project state.
 The standalone audit CLI does not accept the gateway's `--deployment` manifest; it must not be used as though it automatically selects protected external state.
@@ -26,6 +27,18 @@ Checkpoint creation is not exposed as a gateway HTTP route.
 A standard checkpoint contains `audit.jsonl` and `checkpoint.json`.
 Its signature covers the canonical audit digest, event count, terminal chain hash, session, deployment identifier, creation time, retention declaration, signer identity, key identifier, key version, algorithm, and public-key fingerprint.
 An operator can also include a verified project experiment export, as described below.
+
+### Evidence Boundaries
+
+Verification establishes integrity and authenticity of the retained checkpoint against the selected trusted key.
+It does not establish continuity between separate checkpoints, detect an omitted later checkpoint or prove that the signer independently observed the recorded actions.
+A valid local hash chain alone cannot rule out a rewritten history whose hashes were recomputed before signing.
+Worker-reported results remain claims unless the destination or outside control plane independently verifies them.
+
+Checkpoint creation is an explicit operator action; configuring a signer does not automatically publish checkpoints after approvals or session completion.
+Heartwood does not block action dispatch on independently retained checkpoint evidence.
+Signed retention dates do not prove that the records system enforced immutability, availability or deletion policy.
+Deployments requiring these guarantees need independently enforced controls and qualification beyond checkpoint signature verification.
 
 ## Understand Configuration Ownership
 
