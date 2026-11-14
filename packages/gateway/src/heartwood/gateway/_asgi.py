@@ -30,7 +30,10 @@ from heartwood.gateway._access import (
 from heartwood.gateway._diagnostics import diagnostic_for
 from heartwood.gateway._gateway import SessionGateway
 from heartwood.gateway._ingress import IngressPolicy, IngressRequestError
+from heartwood.gateway._lifecycle import GatewayClosedError
+from heartwood.gateway._project_activity import ProjectOwnershipError
 from heartwood.gateway._rest import RestGateway, RestRequest
+from heartwood.persistence import NativeLockUnavailableError
 from heartwood.session import JsonValue, SessionEvent, validate_session_id
 
 AsgiMessage = dict[str, object]
@@ -201,27 +204,41 @@ class GatewayAsgiApp:
         receive: AsgiReceive,
         send: AsgiSend,
     ) -> None:
-        await send(
-            {
-                "type": "http.response.start",
-                "status": 200,
-                "headers": [
-                    (b"content-type", b"text/event-stream"),
-                    (b"cache-control", b"no-store"),
-                    (b"x-content-type-options", b"nosniff"),
-                    (b"referrer-policy", b"no-referrer"),
-                    (b"x-accel-buffering", b"no"),
-                ],
-            }
-        )
-        stream, snapshot = await asyncio.to_thread(
-            partial(
-                self.gateway.open_event_stream,
-                session_id=session_id,
-                after_sequence=after_sequence,
-            )
-        )
         try:
+            stream, snapshot = await asyncio.to_thread(
+                partial(
+                    self.gateway.open_event_stream,
+                    session_id=session_id,
+                    after_sequence=after_sequence,
+                )
+            )
+        except GatewayClosedError as error:
+            await _send_json_response(send, status_code=503, body={"error": str(error)})
+            return
+        except ProjectOwnershipError as error:
+            await _send_json_response(send, status_code=409, body={"error": str(error)})
+            return
+        except NativeLockUnavailableError:
+            await _send_json_response(
+                send,
+                status_code=409,
+                body={"error": "project storage does not support required process locks"},
+            )
+            return
+        try:
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": 200,
+                    "headers": [
+                        (b"content-type", b"text/event-stream"),
+                        (b"cache-control", b"no-store"),
+                        (b"x-content-type-options", b"nosniff"),
+                        (b"referrer-policy", b"no-referrer"),
+                        (b"x-accel-buffering", b"no"),
+                    ],
+                }
+            )
             last_sequence = snapshot.projection.revision
             await _send_sse_events(
                 send,
@@ -251,8 +268,11 @@ class GatewayAsgiApp:
                         snapshot.events,
                         projection=snapshot.projection.safe_dict(),
                     )
+        except GatewayClosedError:
+            pass
         finally:
             stream.close()
+        await send({"type": "http.response.body", "body": b"", "more_body": False})
 
     async def _handle_websocket(
         self, scope: AsgiScope, receive: AsgiReceive, send: AsgiSend
@@ -279,13 +299,17 @@ class GatewayAsgiApp:
         ):
             await send({"type": "websocket.close", "code": 1008})
             return
-        stream, snapshot = await asyncio.to_thread(
-            partial(
-                self.gateway.open_event_stream,
-                session_id=route,
-                after_sequence=after,
+        try:
+            stream, snapshot = await asyncio.to_thread(
+                partial(
+                    self.gateway.open_event_stream,
+                    session_id=route,
+                    after_sequence=after,
+                )
             )
-        )
+        except (GatewayClosedError, ProjectOwnershipError, NativeLockUnavailableError):
+            await send({"type": "websocket.close", "code": 1012})
+            return
         try:
             last_sequence = snapshot.projection.revision
             await _send_websocket_events(
@@ -316,8 +340,11 @@ class GatewayAsgiApp:
                         snapshot.events,
                         projection=snapshot.projection.safe_dict(),
                     )
+        except GatewayClosedError:
+            pass
         finally:
             stream.close()
+        await send({"type": "websocket.close", "code": 1012})
 
     async def _authorize_socket(self, receive: AsgiReceive) -> bool:
         try:

@@ -14,7 +14,7 @@ import os
 import socket
 import uuid
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager, suppress
+from contextlib import ExitStack, contextmanager, suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -43,6 +43,7 @@ from heartwood.persistence import (
     NativeLockUnavailableError,
     append_private_bytes,
     fsync_directory,
+    native_file_lock,
     read_private_json,
     read_private_text,
     truncate_private_file,
@@ -67,6 +68,59 @@ class SessionRecoveryError(ValueError):
 
 class SessionStorageCapabilityError(SessionRecoveryError):
     """Raised when session storage cannot provide required durability semantics."""
+
+
+@contextmanager
+def session_writer_admission(root: Path, *, timeout: float = 5) -> Iterator[None]:
+    """Serialize writer admission and metadata changes against session maintenance."""
+    with ExitStack() as locks:
+        try:
+            locks.enter_context(
+                native_file_lock(root / ".writers.lock", timeout=timeout, reentrant=False)
+            )
+        except NativeLockUnavailableError as error:
+            if isinstance(error.__cause__, OSError) and not isinstance(
+                error.__cause__, FileLockTimeout
+            ):
+                raise SessionStorageCapabilityError(
+                    "session storage does not support required process locks"
+                ) from error
+            raise SessionOwnershipError(
+                "session writer admission is busy or held for maintenance"
+            ) from error
+        yield
+
+
+@contextmanager
+def session_maintenance(root: Path) -> Iterator[tuple[FileSessionStore, ...]]:
+    """Exclude session writers and catalog changes without rewriting their records."""
+    if root.is_symlink() or not root.is_dir():
+        raise SessionStoreBoundaryError("session maintenance requires an existing directory")
+    root = root.resolve()
+    with session_writer_admission(root, timeout=0), ExitStack() as locks:
+        stores: list[FileSessionStore] = []
+        for entry in sorted(root.iterdir()):
+            if entry.is_symlink():
+                raise SessionStoreBoundaryError("session maintenance cannot follow symbolic links")
+            if not entry.is_dir():
+                continue
+            store = FileSessionStore(root, entry.name)
+            try:
+                locks.enter_context(
+                    native_file_lock(store.writer_lock_path, timeout=0, reentrant=False)
+                )
+            except NativeLockUnavailableError as error:
+                if isinstance(error.__cause__, OSError) and not isinstance(
+                    error.__cause__, FileLockTimeout
+                ):
+                    raise SessionStorageCapabilityError(
+                        "session storage does not support required process locks"
+                    ) from error
+                raise SessionOwnershipError(
+                    "session maintenance requires all session writers to stop"
+                ) from error
+            stores.append(store)
+        yield tuple(stores)
 
 
 class FileSessionStore:
@@ -113,9 +167,13 @@ class FileSessionStore:
         return self._writer_lock is not None
 
     def acquire_writer(self) -> None:
-        """Acquire the exclusive session writer lease without waiting."""
+        """Acquire session ownership after bounded admission through the root lock."""
         if self._writer_lock is not None:
             return
+        with session_writer_admission(self.root):
+            self._acquire_writer()
+
+    def _acquire_writer(self) -> None:
         self._prepare_session_dir()
         if self.writer_lock_path.is_symlink():
             msg = f"session writer lock must not be a symbolic link: {self.session_id}"
@@ -179,7 +237,11 @@ class FileSessionStore:
     @contextmanager
     def snapshot(self) -> Iterator[None]:
         """Hold a stable paired view of the session event and audit logs."""
-        self._prepare_session_dir()
+        if self.session_dir.exists():
+            self._prepare_session_dir()
+        else:
+            with session_writer_admission(self.root):
+                self._prepare_session_dir()
         if self.snapshot_lock_path.is_symlink():
             raise SessionStoreBoundaryError(
                 f"session snapshot lock must not be a symbolic link: {self.session_id}"

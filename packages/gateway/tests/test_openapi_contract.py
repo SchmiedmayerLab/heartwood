@@ -256,7 +256,7 @@ def test_security_streaming_and_schema_modes_describe_the_current_transport() ->
     assert stream["x-sse-event"]["dataSchema"] == snapshot
     assert document["x-websocket"]["messageSchema"] == snapshot
     assert document["x-websocket"]["rejectedCloseCode"] == 1008
-    assert "409" not in stream["responses"]  # Backend opens after the stream begins.
+    assert "409" in stream["responses"]  # Project admission can reject before SSE headers.
     create = document["paths"]["/sessions"]["post"]
     assert create["requestBody"]["required"] is False
     assert command["requestBody"]["required"] is True

@@ -78,6 +78,7 @@ from heartwood.gateway import (
     ProjectConfig,
     ProjectConfigStore,
     ProjectContext,
+    ProjectOwnershipError,
     ProjectStateError,
     SessionGateway,
     SessionOwnershipError,
@@ -648,6 +649,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     except WorkspaceInspectionError as error:
         print(f"Project files unavailable: {error}", file=sys.stderr)
         return 64
+    except ProjectOwnershipError as error:
+        print(f"Project unavailable: {error}", file=sys.stderr)
+        return 75
     except (AuditCheckpointError, AuditIntegrityError, CheckpointSignerError) as error:
         print(f"Audit operation failed: {error}", file=sys.stderr)
         return 65

@@ -192,8 +192,22 @@ Downloads resolve repository metadata to an immutable revision before writing pr
 A portable transfer first verifies the selected model, records the exact payload and runtime configuration in a canonical manifest, and writes a reproducible uncompressed ZIP64 bundle.
 Import validates archive structure, path safety, sizes, and every SHA-256 digest before atomically publishing private files under `.heartwood/models/`.
 Existing destinations are reverified on retries, and incomplete staging is never selected.
+Cancellation and selection failure preserve verified, published cache files because another transfer may already use them.
+Only incomplete staging is removed during failure cleanup.
 
 The shared transfer manager owns byte progress, lifecycle, warnings, cancellation, and results for the terminal, browser, and notebook adapters.
+Gateway shutdown stops new model downloads and transfers, requests cooperative cancellation, and waits for their worker threads and final selection callbacks.
+Shutdown first closes admission to the gateway API and waits for accepted calls, including synchronous downloads and nested calls, to finish.
+If calls are still active after five seconds, shutdown reports a timeout and retains session ownership and credentials for the in-flight work; admission remains closed and shutdown can be retried.
+After shutdown starts, callers must use a new gateway instance for further work; REST requests to the stopped instance return `503`.
+The wait does not hold the gateway state lock, so a callback already in progress can finish.
+If model work remains active after the shutdown deadline, the gateway reports failure and retains its worker references for a later shutdown attempt.
+This does not stop a separately supervised inference runtime or establish project-wide migration exclusion.
+The native inference launcher holds project ownership while reading the selected model, staging files, supervising inference, and cleaning up.
+It writes a durable launch intent before spawning its inference child and removes that intent only after observing the child's exit.
+Interrupted launch or failed termination leaves the intent in place and prevents another native launch or migration staging, even if the launcher's process lease has disappeared.
+An unresolved intent requires operator reconciliation against the platform supervisor; a stale PID or absent launcher is not proof that inference has stopped.
+These controls cover the supervised child, not arbitrary descendants or independently launched inference services; complete runtime termination still requires platform qualification.
 An explicit license decision is required before import, and the request is bound to the SHA-256 identity of the exact manifest shown during review.
 Bundle integrity is not treated as source authorization or platform qualification: exact catalog identities are rehydrated from trusted local catalog metadata, while every other transferred model is marked unvalidated.
 Transferred models remain outside the repository-download registry, so an offline restart cannot silently turn an imported artifact into a network request.
@@ -347,6 +361,13 @@ An existing project-local state marker requires an explicit migration before thi
 This placement separates canonical configuration, sessions, audit records, Skills, runtime records, and model artifacts from research files; operating-system identities and worker mounts still enforce access.
 
 Project configuration writes use a project-scoped interprocess lock.
+Each gateway registers a native lifetime lease before serving calls for an initialized project or completing first initialization.
+Registration uses the existing project initialization lock, and distinct gateways keep independent leases so separate sessions remain concurrent.
+Successful shutdown releases the gateway lease only after accepted calls, model workers, and session services have drained; failed shutdown retains it.
+An internal maintenance context holds the initialization lock and every gateway lease before session staging can begin.
+Idle gateways therefore prevent staging, and new gateways cannot enter the project during staging.
+Process exit releases native ownership; an old empty lease file does not indicate a live gateway.
+These locks coordinate participating gateway processes, not older binaries or independently supervised inference runtimes, which must be stopped separately.
 Session mutation uses a separate interprocess lease for each session, owned by the gateway process that first handles a command.
 The lease remains active until that session service closes.
 

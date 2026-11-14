@@ -53,6 +53,8 @@ Repeating an export from unchanged model files and metadata produces the same bu
 
 Large models can take several minutes to verify and copy.
 The terminal and browser report byte progress and allow a transfer to be cancelled without publishing a partial bundle.
+Gateway shutdown also requests transfer cancellation and waits for the worker and any final model-selection callback.
+A timeout leaves shutdown incomplete; retry it after the worker finishes before moving project state.
 
 Move the completed `.heartwood-model.zip` file through the approved transfer process.
 Do not include provider credentials or unrelated `.heartwood/` state.
@@ -87,6 +89,8 @@ The import is bound to the exact manifest shown during review and stops if the b
 
 The import streams every file into private staging storage, checks its size and SHA-256 digest, verifies the runtime-specific model structure, and publishes it atomically under `.heartwood/models/`.
 It also selects the imported model through the normal project configuration path; no manual state edit is needed.
+Cancellation or a selection failure retains files that have already been fully verified and published in the model cache.
+A retry verifies those cached files again before selecting the model; incomplete staging is removed.
 
 ## 5. Verify and Start
 

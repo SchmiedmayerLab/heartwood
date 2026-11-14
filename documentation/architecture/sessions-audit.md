@@ -47,9 +47,25 @@ The first mutating command registers the session and creates private state.
 
 The gateway acquires an interprocess writer lease before mutating a session and retains it until that gateway closes the session service.
 If an OpenHands worker does not stop during shutdown, Heartwood keeps the lease instead of allowing another writer to mutate the session.
-A second process cannot reconcile or mutate that session until the owner exits.
+After shutdown succeeds, the closed session service rejects further commands and reconciliation and discards later backend event callbacks before acquiring a writer lease.
+Final events delivered during shutdown remain durable; this lifecycle fence does not establish remote worker identity or terminate an independently running worker.
+A second process cannot reconcile or mutate that session until the owner releases the lease or exits.
 Replay and live updates remain available through the interface connected to the owning gateway.
 Distinct sessions have independent leases.
+Writer admission and session-catalog changes briefly hold one admission lock for the session root.
+An internal maintenance context holds that gate while acquiring every existing session writer lock; an active writer prevents maintenance from starting.
+The context leaves writer metadata and historical records unchanged and releases its locks after failure or process exit.
+Gateway versions that do not use the admission lock must be stopped before maintenance.
+This excludes session writes only; project configuration, runtime activity, and model transfers require separate exclusion before a complete state migration.
+Internal migration staging first excludes gateway startup and acquires every registered gateway lifetime lease; any active gateway prevents staging.
+The native inference supervisor shares this ownership protocol, and an unresolved inference launch intent also prevents staging after a launcher crash.
+It then verifies paired session and audit histories and command receipts under the configuration and session locks and copies their original bytes into a private directory on the destination volume.
+The copy is verified again before a receipt records its file hashes and session heads.
+Pending append recovery, unresolved commands, corrupt records, symbolic links, and existing destinations prevent staging.
+Worker recovery state, writer metadata, and derived exports remain in the source; they are not promoted into canonical records.
+The staged copy is temporary and cannot be opened as a project; leaving the staging context removes it and leaves the original records in place.
+An abrupt process exit can leave an inert staging directory; a retry uses a fresh directory and never adopts an earlier partial copy.
+Staging neither switches a deployment binding nor authenticates historical records, and is not exposed as an operator migration command.
 Mutation acquires the writer lease before the paired-snapshot lock; recovery and replay never hold the snapshot lock while waiting for a writer lease.
 This fixed ordering prevents deadlock as new gateway workers and presentation adapters reuse the store.
 
