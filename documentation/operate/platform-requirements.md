@@ -158,7 +158,7 @@ Terra separates Reader, Writer and Owner roles from the ability to compute: requ
 Owner and sharing permissions are not baseline integration requirements.
 Workspace charges use its Terra billing project; even some read/copy operations can incur transfer costs. See [Terra workspace access controls](https://support.terra.bio/hc/en-us/articles/360025851892-Sharing-data-and-tools-with-workspace-access-controls).
 
-The public [Terra API specification](https://api.firecloud.org/api-docs.yaml) defines these workspace routes, relative to `/api/workspaces/{workspaceNamespace}/{workspaceName}`:
+The public [Terra API specification](https://api.firecloud.org/) defines these workspace routes, relative to `/api/workspaces/{workspaceNamespace}/{workspaceName}`:
 
 | Operation | Native method and relative path | Requested access |
 |---|---|---|
