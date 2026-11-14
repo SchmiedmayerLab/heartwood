@@ -169,6 +169,7 @@ jobs:
           name: worker-native-qualification-${{ github.sha }}
           path: |
             test-results/native-qualification/qualification.json
+            test-results/native-qualification/network.json
             test-results/native-qualification/qualification.log
             test-results/native-qualification/junit.xml
             test-results/native-qualification/*/evidence.json
