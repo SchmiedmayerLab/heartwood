@@ -19,11 +19,11 @@ from functools import cache
 from pathlib import Path
 from threading import Barrier, Event, Lock, Thread
 from types import SimpleNamespace
-from typing import Literal, cast
+from typing import Any, Literal, cast
 
 import pytest
 from litellm.types.utils import Delta, StreamingChoices
-from openhands.sdk import LLM, Agent, LLMStreamChunk, LocalConversation, Tool
+from openhands.sdk import LLM, Agent, LLMStreamChunk, LocalConversation, RemoteConversation, Tool
 from openhands.sdk.agent import base as agent_base
 from openhands.sdk.conversation import (
     BaseConversation,
@@ -37,6 +37,7 @@ from openhands.sdk.event import (
     MessageEvent,
     ObservationEvent,
     PauseEvent,
+    StreamingDeltaEvent,
     UserRejectObservation,
 )
 from openhands.sdk.event import (
@@ -2541,6 +2542,111 @@ def test_persisted_progress_is_published_before_the_run_finishes(tmp_path: Path)
     conversation.release.set()
     assert conversation.finished.wait(timeout=2)
     backend.close()
+
+
+@pytest.mark.parametrize(
+    ("signal_progress", "concurrent_event"), [(False, False), (True, False), (True, True)]
+)
+def test_remote_progress_reads_are_bounded_and_always_finish(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, signal_progress: bool, concurrent_event: bool
+) -> None:
+    from heartwood.gateway._remote_workspace import WorkerResponseBudget
+
+    monkeypatch.setattr(openhands_sdk_module, "_AGENT_PROGRESS_POLL_SECONDS", 0.01)
+    monkeypatch.setattr(
+        openhands_sdk_module,
+        "_AGENT_REMOTE_PROGRESS_FALLBACK_SECONDS",
+        60.0 if signal_progress else 0.3,
+    )
+    started, release, progress_published = Event(), Event(), Event()
+    emitted: list[BackendEvent] = []
+    reads: list[int] = []
+    branch: list[OpenHandsEvent] = []
+    budget = WorkerResponseBudget(max_responses=8)
+    status = ConversationExecutionStatus.RUNNING
+    conversation_id = uuid.uuid4()
+
+    def snapshot() -> SimpleNamespace:
+        budget.charge(0, new_response=True)
+        reads.append(len(branch))
+        result = SimpleNamespace(
+            id=conversation_id,
+            execution_status=status,
+            stats=ConversationStats(),
+            events=list(branch),
+        )
+        if concurrent_event and len(reads) == 1:
+            persisted = MessageEvent(
+                id="concurrent-message",
+                source="agent",
+                llm_message=Message(role="assistant", content=[TextContent(text="More progress.")]),
+            )
+            branch.append(persisted)
+            backend._handle_sdk_event(persisted)
+        return result
+
+    class SlowRemoteConversation(RemoteConversation):
+        def __init__(self) -> None:
+            self._id = conversation_id
+            self._state = cast(Any, SimpleNamespace(snapshot=snapshot))
+
+        async def arun(self) -> None:  # type: ignore[override]
+            nonlocal status
+            started.set()
+            while not release.is_set():
+                await asyncio.sleep(0.005)
+            # No callback: the final boundary must still reconcile persisted state.
+            branch.append(
+                MessageEvent(
+                    id="final-message",
+                    source="agent",
+                    llm_message=Message(role="assistant", content=[TextContent(text="Finished.")]),
+                )
+            )
+            status = ConversationExecutionStatus.FINISHED
+
+    conversation = SlowRemoteConversation()
+    backend = _backend(tmp_path, cast(ConversationFactory, lambda *_: conversation))
+
+    def publish(events: tuple[BackendEvent, ...]) -> None:
+        emitted.extend(events)
+        if any(
+            isinstance(event, BackendAgentMessageEvent)
+            and event.message == ("More progress." if concurrent_event else "Working.")
+            for event in events
+        ):
+            progress_published.set()
+
+    backend.bind_runtime(event_sink=publish, token_sink=lambda _delta: None)
+    try:
+        assert backend._start_run(session_id="session-1", conversation=conversation)
+        assert started.wait(2)
+        for _ in range(6):
+            backend._handle_sdk_event(StreamingDeltaEvent(content="transient"))
+            assert not backend.wait_for_idle(0.01)
+        if signal_progress:
+            assert reads == []
+        event = MessageEvent(
+            id="progress-message",
+            source="agent",
+            llm_message=Message(role="assistant", content=[TextContent(text="Working.")]),
+        )
+        branch.append(event)
+        if signal_progress:
+            backend._handle_sdk_event(event)
+        assert progress_published.wait(2)
+        assert len(reads) >= (2 if concurrent_event else 1)
+    finally:
+        release.set()
+        assert backend.wait_for_idle(2)
+        backend.close()
+    assert 2 <= len(reads) <= 8
+    assert any(isinstance(event, BackendExecutionSettledEvent) for event in emitted)
+    assert not any(isinstance(event, BackendErrorEvent) for event in emitted)
+    assert any(
+        isinstance(event, BackendAgentMessageEvent) and event.message == "Finished."
+        for event in emitted
+    )
 
 
 def test_synchronous_progress_sink_does_not_block_the_openhands_event_loop(
