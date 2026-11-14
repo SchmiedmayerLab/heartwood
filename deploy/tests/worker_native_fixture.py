@@ -30,6 +30,7 @@ from google.protobuf.json_format import MessageToDict
 from openshell import SandboxClient, TlsConfig
 from openshell._proto import openshell_pb2 as pb
 from openshell._proto import sandbox_pb2 as policy_pb
+from worker_model_profile import QualificationModelProfile
 from worker_network_qualification import qualify_network
 from worker_telemetry import InfrastructureCollector
 
@@ -68,6 +69,8 @@ class SyntheticProvider:
             ("terminal", {"command": TERMINAL_COMMAND}),
             ("finish", {"message": "Synthetic aggregate check completed."}),
         ]
+        self.scripts: dict[str, list[tuple[str, dict[str, Any]]]] = {}
+        self._request_lock = threading.Lock()
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -90,7 +93,6 @@ class SyntheticProvider:
                     body = json.loads(self.rfile.read(length))
                     if any(value in json.dumps(body) for value in owner.forbidden_values):
                         raise AssertionError("Outside secret reached the inference request")
-                    index = len(owner.observations)
                     authorized = secrets.compare_digest(
                         self.headers.get("Authorization", ""), "Bearer " + owner.credential
                     )
@@ -103,25 +105,46 @@ class SyntheticProvider:
                         self.send_header("Content-Length", "0")
                         self.end_headers()
                         return
-                    owner.observations.append(
-                        {"path": self.path, "authorized": authorized, "model": body.get("model")}
-                    )
+                    with owner._request_lock:
+                        routes = [
+                            marker
+                            for marker in owner.scripts
+                            if any(
+                                message.get("role") == "user"
+                                and marker in json.dumps(message.get("content"))
+                                for message in body.get("messages", [])
+                            )
+                        ]
+                        if owner.scripts and len(routes) != 1:
+                            raise ValueError("Inference request has no unique synthetic route")
+                        route = routes[0] if routes else None
+                        script = owner.scripts[route] if route is not None else owner.script
+                        index = sum(item.get("route") == route for item in owner.observations)
+                        owner.observations.append(
+                            {
+                                "path": self.path,
+                                "authorized": authorized,
+                                "model": body.get("model"),
+                                "route": route,
+                            }
+                        )
                     if (
                         not authorized
                         or self.path != "/v1/chat/completions"
-                        or index >= len(owner.script)
+                        or index >= len(script)
                     ):
                         self.send_error(403)
                         return
-                    name, arguments = owner.script[index]
+                    name, arguments = script[index]
                     if name not in [tool["function"]["name"] for tool in body.get("tools", [])]:
                         raise ValueError("required tool absent from native request")
+                    call_id = f"{route or 'synthetic'}-{index}"
                     call = {
-                        "id": f"synthetic-{index}",
+                        "id": call_id,
                         "type": "function",
                         "function": {"name": name, "arguments": json.dumps(arguments)},
                     }
-                    common = {"id": f"synthetic-{index}", "created": 1, "model": "synthetic"}
+                    common = {"id": call_id, "created": 1, "model": "synthetic"}
                     usage = {"prompt_tokens": 10, "completion_tokens": 10, "total_tokens": 20}
                     if body.get("stream"):
                         first = {
@@ -198,8 +221,33 @@ class SyntheticProvider:
 class NativeFixture:
     """Own one gateway and synthetic provider; Heartwood owns every actual attempt."""
 
-    def __init__(self, private: Path, output: Path, *, hostile: bool = False) -> None:
+    def __init__(
+        self,
+        private: Path,
+        output: Path,
+        *,
+        hostile: bool = False,
+        model_profile: QualificationModelProfile | None = None,
+        credential: str | None = None,
+        provider_deadline_seconds: int | None = None,
+    ) -> None:
         self.private, self.output = private, output
+        if (model_profile is None) != (credential is None):
+            raise ValueError("External qualification requires both a profile and a credential")
+        if provider_deadline_seconds is not None and (
+            type(provider_deadline_seconds) is not int or not 1 <= provider_deadline_seconds <= 600
+        ):
+            raise ValueError("Provider lifetime must be between one and 600 seconds")
+        self.provider_deadline_seconds = (
+            model_profile.deadline_seconds if model_profile else provider_deadline_seconds
+        )
+        self.inference_deadline: float | None = None
+        self.credential_expires_at_ms: int | None = None
+        self.model_profile = model_profile
+        self._inference_credential = credential
+        self.base_url = (
+            model_profile.base_url if model_profile else "https://host.docker.internal:19671/v1"
+        )
         self.hostile = hostile
         self.terminal_command = TERMINAL_COMMAND
         self.sentinel = secrets.token_urlsafe(32)
@@ -493,6 +541,9 @@ additional_ca_bundle = {q(tls / "ca.crt")}
         self.provider = SyntheticProvider(tls)
         self.collector.forbidden_values = (self.provider.credential, self.sentinel)
         self.resources.callback(self.provider.close)
+        if self._inference_credential is not None:
+            self.provider.forbidden_values += (self._inference_credential,)
+            self.collector.forbidden_values += (self._inference_credential,)
         self.protected_canary.write_text(self.sentinel)
         self.protected_canary.chmod(0o600)
         self.provider.forbidden_values += (self.sentinel,)
@@ -516,7 +567,7 @@ additional_ca_bundle = {q(tls / "ca.crt")}
                 "from pathlib import Path;import sys;print(Path(sys.executable).resolve())",
             ]
         ).strip()
-        profile = {
+        profile: dict[str, Any] = {
             "id": self.identity,
             "display_name": "Synthetic Qualification",
             "category": "inference",
@@ -542,24 +593,18 @@ additional_ca_bundle = {q(tls / "ca.crt")}
             ],
             "binaries": [interpreter],
         }
+        if self.model_profile is not None:
+            from urllib.parse import urlsplit
+
+            profile["endpoints"][0].update(
+                host=urlsplit(self.model_profile.base_url).hostname,
+                port=443,
+            )
         profile_path = self.output / "provider-profile.json"
         profile_path.write_text(json.dumps(profile, indent=2) + "\n")
         self.cli_command(["provider", "profile", "import", "--file", str(profile_path)])
         self.resources.callback(self.cli_command, ["provider", "profile", "delete", self.identity])
-        self.cli_command(
-            [
-                "provider",
-                "create",
-                "--name",
-                self.identity,
-                "--type",
-                self.identity,
-                "--credential",
-                "HEARTWOOD_QUALIFICATION_KEY",
-            ],
-            HEARTWOOD_QUALIFICATION_KEY=self.provider.credential,
-        )
-        self.resources.callback(self.cli_command, ["provider", "delete", self.identity])
+        self._create_inference_provider()
         self.policy = policy_pb.SandboxPolicy(
             version=1,
             filesystem=policy_pb.FilesystemPolicy(
@@ -580,6 +625,35 @@ additional_ca_bundle = {q(tls / "ca.crt")}
             landlock=policy_pb.LandlockPolicy(compatibility="hard_requirement"),
             process=policy_pb.ProcessPolicy(run_as_user="10001", run_as_group="10001"),
         )
+
+    def _create_inference_provider(self) -> None:
+        """Install authorization expiry before any worker can attach the provider."""
+        provider_arguments = [
+            "provider",
+            "create",
+            "--name",
+            self.identity,
+            "--type",
+            self.identity,
+            "--credential",
+            "HEARTWOOD_QUALIFICATION_KEY",
+        ]
+        if self.provider_deadline_seconds is not None:
+            self.inference_deadline = time.monotonic() + self.provider_deadline_seconds
+            self.credential_expires_at_ms = (
+                int(time.time() * 1000) + self.provider_deadline_seconds * 1000
+            )
+            provider_arguments.extend(
+                [
+                    "--credential-expires-at",
+                    f"HEARTWOOD_QUALIFICATION_KEY={self.credential_expires_at_ms}",
+                ]
+            )
+        self.cli_command(
+            provider_arguments,
+            HEARTWOOD_QUALIFICATION_KEY=self._inference_credential or self.provider.credential,
+        )
+        self.resources.callback(self.cli_command, ["provider", "delete", self.identity])
 
     def prepare_hostile(self, protected_state: Path) -> None:
         """Keep the writable-state canary in the actual bound application state."""
@@ -672,7 +746,12 @@ additional_ca_bundle = {q(tls / "ca.crt")}
         logs = subprocess.run(
             ["docker", "logs", self.identity], capture_output=True, text=True, timeout=15
         )
-        (self.output / "gateway.log").write_text(logs.stdout + logs.stderr)
+        rendered = logs.stdout + logs.stderr
+        if self._inference_credential is not None and self._inference_credential in rendered:
+            rendered = rendered.replace(self._inference_credential, "[redacted]")
+            (self.output / "gateway.log").write_text(rendered)
+            raise RuntimeError("Native gateway logs contained protected qualification content")
+        (self.output / "gateway.log").write_text(rendered)
         command(["docker", "stop", "--time", "20", observed["Id"]])
         command(["docker", "rm", observed["Id"]])
 
@@ -781,8 +860,8 @@ additional_ca_bundle = {q(tls / "ca.crt")}
             policy_path=policy_path,
             policy_file_sha256=hashlib.sha256(policy_path.read_bytes()).hexdigest(),
             profile_id="synthetic",
-            model="openai/synthetic-boundary",
-            model_endpoint="https://host.docker.internal:19671/v1/chat/completions",
+            model=self.model_profile.model if self.model_profile else "openai/synthetic-boundary",
+            model_endpoint=self.base_url + "/chat/completions",
             provider=self.identity,
             placeholder_env="HEARTWOOD_QUALIFICATION_KEY",
             inputs=inputs,

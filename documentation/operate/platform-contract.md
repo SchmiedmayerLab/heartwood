@@ -600,7 +600,10 @@ Cancellation can leave completed work and incurred charges; status and cost obse
 
 #### Outside Operation Admission
 
-A trusted embedding can supply `ExternalActionAdapter` to a managed `SessionService` and prepare an outside operation from a retained worker tool proposal with `propose_external_action`.
+A trusted embedding supplies a session-scoped `ExternalActionAdapter` through `SessionGateway(external_actions_factory=...)` and prepares an outside operation from a retained worker tool proposal with `SessionService.propose_external_action`.
+The gateway requires protected state and its owned native worker lifecycle for this binding.
+Supply the exact supported SDK `ClientToolSpec` definitions through `native_worker_plan_factory(client_tools=...)`; their canonical schemas are bound into the worker input identity and admitted independently of worker responses.
+The SDK registers these proposal tools in the worker; their acknowledgement does not execute or authorize a service action.
 The adapter resolves native service requests and immutable input references from deployment configuration; preparation must have no external effects.
 This optional boundary is disabled by default and is not installed by the built-in launchers.
 

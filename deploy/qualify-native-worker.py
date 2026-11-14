@@ -12,6 +12,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from uuid import uuid4
 
@@ -57,11 +58,31 @@ def controller_socket_group(image: str) -> str:
     ).strip()
 
 
-def qualify(worker: str, runtime: str, artifacts: Path, records: Path, output: Path) -> None:
+def qualify(
+    worker: str,
+    runtime: str,
+    artifacts: Path,
+    records: Path,
+    output: Path,
+    *,
+    model_profile: Path | None = None,
+) -> None:
     """Assemble the trusted controller and retain the installed test outcome."""
+    profile = None
+    if model_profile is not None:
+        from worker_model_profile import QualificationModelProfile
+
+        profile = QualificationModelProfile.load(model_profile)
+        if sys.stdin.isatty():
+            raise ValueError("Supply the qualification credential through protected stdin")
     source_paths = (
         ROOT / "deploy/qualify-native-worker.py",
+        ROOT / "deploy/worker_model_profile.py",
+        ROOT / "deploy/tests/test_worker_model_integration.py",
         ROOT / "deploy/tests/test_worker_native_integration.py",
+        ROOT / "deploy/tests/test_worker_external_integration.py",
+        ROOT / "deploy/tests/test_worker_pair_integration.py",
+        ROOT / "deploy/tests/external_service_fixture.py",
         ROOT / "deploy/tests/worker_native_fixture.py",
         ROOT / "deploy/tests/worker_telemetry.py",
         ROOT / "deploy/tests/worker_hostile_probe.py",
@@ -279,6 +300,11 @@ def qualify(worker: str, runtime: str, artifacts: Path, records: Path, output: P
         "OPENHANDS_SUPPRESS_BANNER": "1",
         "LITELLM_LOCAL_MODEL_COST_MAP": "True",
     }
+    if profile is not None:
+        profile_path = output / "requested-model-profile.json"
+        profile_path.write_text(json.dumps(profile.mapping(), indent=2) + "\n")
+        profile_path.chmod(0o600)
+        environment["HW_MODEL_QUALIFICATION_PROFILE"] = str(profile_path)
     # Check the operator transport before creating fixtures. Retain Docker's own
     # diagnosis rather than hiding it in several identical fixture exceptions.
     with (output / "controller-preflight.log").open("w") as log:
@@ -299,6 +325,8 @@ def qualify(worker: str, runtime: str, artifacts: Path, records: Path, output: P
             check=True,
             timeout=60,
         )
+    if profile is not None:
+        arguments.append("--interactive")
     for key, value in environment.items():
         arguments.extend(["--env", f"{key}={value}"])
     arguments.extend(
@@ -314,7 +342,15 @@ def qualify(worker: str, runtime: str, artifacts: Path, records: Path, output: P
             "no:cacheprovider",
             "-v",
             "--junitxml=" + str(output / "junit.xml"),
-            "/opt/qualification/tests/test_worker_native_integration.py",
+            *(
+                ["-s", "--tb=short", "/opt/qualification/tests/test_worker_model_integration.py"]
+                if profile is not None
+                else [
+                    "/opt/qualification/tests/test_worker_native_integration.py",
+                    "/opt/qualification/tests/test_worker_external_integration.py",
+                    "/opt/qualification/tests/test_worker_pair_integration.py",
+                ]
+            ),
         ]
     )
     run(
@@ -334,7 +370,12 @@ def qualify(worker: str, runtime: str, artifacts: Path, records: Path, output: P
     )
     try:
         with (output / "qualification.log").open("w") as log:
-            result = subprocess.run(arguments, stdout=log, stderr=subprocess.STDOUT)
+            result = subprocess.run(
+                arguments,
+                stdin=sys.stdin if profile is not None else subprocess.DEVNULL,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+            )
     finally:
         observed = json.loads(subprocess.check_output(["docker", "network", "inspect", network]))[0]
         if observed["Labels"].get("heartwood-qualification-owner") != name:
@@ -358,6 +399,8 @@ def qualify(worker: str, runtime: str, artifacts: Path, records: Path, output: P
         str(path.relative_to(ROOT)): digest(path) for path in source_paths
     }
     evidence = {
+        "qualification_kind": "capable-model-native" if profile else "synthetic-native",
+        "requested_model_profile": profile.mapping() if profile else None,
         "host": host,
         "controller_socket_group": socket_group,
         "qualification_sources": source_hashes,
@@ -381,6 +424,11 @@ if __name__ == "__main__":
     parser.add_argument("--gateway-artifacts", required=True, type=Path)
     parser.add_argument("--records-artifacts", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument(
+        "--model-profile",
+        type=Path,
+        help="Run explicit capable-model qualification; supply its credential through stdin",
+    )
     args = parser.parse_args()
     qualify(
         args.worker_image,
@@ -388,4 +436,5 @@ if __name__ == "__main__":
         args.gateway_artifacts,
         args.records_artifacts,
         args.output,
+        model_profile=args.model_profile,
     )

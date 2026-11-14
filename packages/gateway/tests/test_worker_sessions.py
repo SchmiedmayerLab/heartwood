@@ -6,14 +6,17 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
+from unittest.mock import Mock
 from uuid import uuid4
 
 import pytest
 from pydantic import AnyHttpUrl, SecretStr
 
+from heartwood.core_adapter.external_actions import ExternalActionAdapter
 from heartwood.core_adapter.worker_attempts import (
     WorkerAttemptError,
     WorkerAttemptIntent,
@@ -111,7 +114,12 @@ class Platform:
         return WorkerSessionPlan("sha256:" + "a" * 64, "b" * 64, "c" * 64, launch, connect, revoke)
 
 
-def configured_gateway(tmp_path: Path, platform: Platform) -> SessionGateway:
+def configured_gateway(
+    tmp_path: Path,
+    platform: Platform,
+    *,
+    external_actions_factory: Callable[[str], ExternalActionAdapter] | None = None,
+) -> SessionGateway:
     project_root = tmp_path / "project"
     project_root.mkdir()
     identity = uuid4()
@@ -125,7 +133,12 @@ def configured_gateway(tmp_path: Path, platform: Platform) -> SessionGateway:
         policy_endpoint="http://127.0.0.1:9999/v1/chat/completions",
         credential_kind="none",
     )
-    gateway = SessionGateway(project=project, worker_plan_factory=platform.prepare, env={})
+    gateway = SessionGateway(
+        project=project,
+        worker_plan_factory=platform.prepare,
+        env={},
+        external_actions_factory=external_actions_factory,
+    )
     platform.gateway = gateway
     gateway.config_store.save(
         replace(
@@ -400,3 +413,25 @@ def test_failed_revocation_retains_preparation_for_reconciliation(
     gateway.stop()
     assert released == [True]
     assert not service.store.owns_writer
+
+
+def test_gateway_binds_outside_adapter_once_per_owned_session(tmp_path: Path) -> None:
+    adapter = Mock()
+    factory = Mock(return_value=adapter)
+    gateway = configured_gateway(tmp_path, Platform(), external_actions_factory=factory)
+    try:
+        service = gateway._service("outside")
+        assert service._external_actions is adapter
+        assert gateway._service("outside") is service
+        factory.assert_called_once_with("outside")
+    finally:
+        gateway.stop()
+
+
+def test_outside_services_require_managed_worker_ownership(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="Outside services require"):
+        SessionGateway(
+            project=ProjectContext(tmp_path),
+            env={},
+            external_actions_factory=lambda _: cast(ExternalActionAdapter, Mock()),
+        )

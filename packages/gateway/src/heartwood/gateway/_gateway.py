@@ -48,6 +48,7 @@ from heartwood.core_adapter import (
     TokenDeltaSink,
 )
 from heartwood.core_adapter.checkpoint_evidence import SessionCheckpointEvidence
+from heartwood.core_adapter.external_actions import ExternalActionAdapter
 from heartwood.gateway._action_presentation import action_presentation
 from heartwood.gateway._action_settings import (
     ACTION_MODE_OPTIONS,
@@ -453,6 +454,7 @@ class SessionGateway:
         checkpoint_signer_factory: Callable[[CheckpointSignerProfile], CheckpointSigner]
         | None = None,
         checkpoint_evidence_factory: Callable[[str], SessionCheckpointEvidence] | None = None,
+        external_actions_factory: Callable[[str], ExternalActionAdapter] | None = None,
         subscription_provider: SubscriptionProvider | None = None,
         workspace_inspector: WorkspaceInspector | None = None,
         skill_source_registry: SkillSourceRegistry | None = None,
@@ -478,6 +480,13 @@ class SessionGateway:
             raise ValueError(
                 "Managed workers require protected state and the native gateway backend"
             )
+        if external_actions_factory is not None and (
+            self.project.protected_state is None
+            or worker_plan_factory is None
+            or service_factory is not None
+        ):
+            raise ValueError("Outside services require protected state and owned native workers")
+        self._external_actions_factory = external_actions_factory
         self._worker_plan_factory = worker_plan_factory
         self._worker_sessions: dict[int, ManagedWorkerSession] = {}
         self._project_activity = ProjectActivity(self.project)
@@ -2479,6 +2488,11 @@ class SessionGateway:
             env=self.env,
             worker_project_id=self.project.project_id,
             checkpoint_evidence=checkpoint_evidence,
+            external_actions=(
+                self._external_actions_factory(session_id)
+                if self._external_actions_factory is not None
+                else None
+            ),
             workflow_evaluator=ResearchStageEvaluator(
                 self.workspace_inspector,
                 parallel_review_preparer=self._parallel_review_preparer,

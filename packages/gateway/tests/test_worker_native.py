@@ -21,6 +21,7 @@ from unittest.mock import Mock
 from uuid import uuid4
 
 import pytest
+from openhands.sdk.tool.client_tool import ClientToolSpec
 
 from heartwood.core_adapter.worker_attempts import (
     WorkerAttemptError,
@@ -33,6 +34,7 @@ from heartwood.gateway.worker_control import NativeWorkerControl
 from heartwood.gateway.worker_deployment import OpenShellWorkerDeployment
 from heartwood.gateway.worker_inputs import WorkerInputManifest
 from heartwood.gateway.worker_native import _NativeWorkerAttempt, native_worker_plan_factory
+from heartwood.gateway.worker_sessions import WorkerSessionRequest
 
 
 @pytest.fixture
@@ -205,6 +207,7 @@ def test_native_connection_identity_cannot_change_after_preparation(
 def _attempt(settings: OpenShellWorkerDeployment, project: ProjectContext) -> _NativeWorkerAttempt:
     attempt = _NativeWorkerAttempt.__new__(_NativeWorkerAttempt)
     attempt.settings = settings
+    attempt._client_tools = ()
     assert project.project_id is not None
     intent = WorkerAttemptIntent(
         project_id=project.project_id,
@@ -321,3 +324,28 @@ def test_prior_process_attempt_cannot_trigger_automatic_revocation(
     with pytest.raises(WorkerAttemptError, match="this process"):
         attempt.revoke(WorkerAttemptRecord(phase="fenced", intent=intent))
     attempt.control.client.get.assert_not_called()
+
+
+def test_native_plan_captures_only_trusted_client_tool_specifications(
+    deployment: tuple[OpenShellWorkerDeployment, ProjectContext],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings, project = deployment
+    monkeypatch.setattr("heartwood.gateway.worker_native.require_worker_event_hooks", Mock())
+    monkeypatch.setattr("heartwood.gateway.worker_native.NativeWorkerControl", Mock())
+    attempt = Mock()
+    monkeypatch.setattr("heartwood.gateway.worker_native._NativeWorkerAttempt", attempt)
+    spec = ClientToolSpec(
+        name="propose_record",
+        description="Propose a record for outside review.",
+        parameters={"type": "object", "properties": {"record": {"type": "string"}}},
+    )
+    original = spec.model_dump(mode="json")
+    factory = native_worker_plan_factory(settings, project, client_tools=(spec,))
+    spec.parameters["properties"]["record"]["type"] = "number"
+    factory(cast(WorkerSessionRequest, SimpleNamespace(project=project)))
+    captured = attempt.call_args.kwargs["client_tools"]
+    assert len(captured) == 1
+    assert captured[0].model_dump(mode="json") == original
+    with pytest.raises(ValueError, match="names must be unique"):
+        native_worker_plan_factory(settings, project, client_tools=(spec, spec))
