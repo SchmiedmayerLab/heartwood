@@ -64,6 +64,7 @@ nav = [
         { "Testing and Evidence" = "architecture/testing.md" },
     ] },
     { "Reference" = [
+        { "Gateway API" = "reference/gateway-api.md" },
         { "Command Reference" = "reference/cli.md" },
         { "Configuration and State" = "reference/configuration.md" },
         { "Platform Capabilities" = "reference/capabilities.md" },

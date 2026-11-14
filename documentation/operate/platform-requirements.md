@@ -71,6 +71,7 @@ Use separate authenticated origins for mutually untrusted projects: different UR
 ### Gateway API Contract
 
 The complete route inventory, methods, request and response schemas, status codes and security scheme are generated from the owning contracts in `gateway.openapi.json`.
+The [Gateway API reference](../reference/gateway-api.md) explains command bodies, approval targets, retry behavior, error handling and streaming clients.
 The following are the principal integration surfaces, relative to the configured gateway base path:
 
 | Surface | Implemented API | Purpose |
@@ -198,6 +199,8 @@ Request Read for names, metadata and workflows; Copy is a separate permission fo
 Execute permits running workflows and aborting tasks; Write permits changes to files and workflows.
 Request only the selected capabilities and confirm endpoint-specific prerequisites with the operator.
 Admin, membership management and funding-source changes are not baseline requirements. See [Seven Bridges project permissions](https://docs.sevenbridges.com/docs/projects-and-members).
+These permissions apply at project scope; they are not per-file or per-task capabilities.
+Use a dedicated project and restricted outside adapter when the required authority must be narrower than the platform role.
 The platform retains the project billing binding; the worker must not select or modify it.
 Do not treat a file download URL or copied file as approval to export controlled data.
 
@@ -244,6 +247,8 @@ Do not include real research data or credentials in API examples, tickets or qua
 
 Export the complete machine-readable bundle using the [canonical exporter](platform-contract.md#generate-and-review-the-current-artifacts).
 Distribute `contract.json`, `gateway.openapi.json`, all referenced schemas and the upstream provenance/license files together.
+Include this requirements guide, the [Gateway API reference](../reference/gateway-api.md) and the [Platform Contract](platform-contract.md), along with the exact application source revision or released artifact digest.
+The material is suitable for integration and access review; it is not an assertion that the described draft services are deployed.
 The index identifies artifact hashes and whether each document describes a current contract, a draft message or an unchanged upstream specification.
 The operator deployment manifest and native worker profile remain implementation-specific inputs documented in the [CLI reference](../reference/cli.md#operator-commands); they are not exported portable platform schemas.
 
