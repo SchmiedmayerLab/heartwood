@@ -166,6 +166,11 @@ class FileSessionStore:
         """Return whether this store currently owns the session writer lease."""
         return self._writer_lock is not None
 
+    @property
+    def writer_identity(self) -> str | None:
+        """Identify this acquisition so released capabilities cannot revive on reacquisition."""
+        return self._writer_token if self.owns_writer else None
+
     def acquire_writer(self) -> None:
         """Acquire session ownership after bounded admission through the root lock."""
         if self._writer_lock is not None:

@@ -253,6 +253,11 @@ This initializes modules only; model clients, conversations, and tool executors 
 
 The adapter creates an OpenHands conversation with `OpenHandsAgentSettings`, the selected LiteLLM-compatible model profile, project workspace, Skills, persistence directory, and confirmation policy.
 It uses public typed OpenHands events and conversation state to derive lifecycle, unmatched actions, task progress, usage, and errors.
+For remote state, each reconciliation reads one native branch snapshot containing the conversation identity, active events, execution status, and reported usage.
+The adapter rejects a snapshot for another conversation and reports unavailable snapshots without exposing worker response content.
+It does not reconstruct the worker's event tree or mutate its context view; pending-action recovery belongs to the worker runtime.
+Local conversations retain the pinned SDK's existing state and context-repair path.
+Snapshot support does not enable remote execution by default or establish worker-attempt identity, authorization for external effects, or infrastructure isolation.
 OpenHands' privacy-safe failure classifications are translated into stable Heartwood diagnostics, and raw conversation-error detail is minimized at the OpenHands file-store boundary before persistence.
 OpenHands owns the agent loop, conversation persistence, coding tools, Task Tracker, and specialist execution.
 The gateway supplies a catalog-scoped Task adapter that reuses OpenHands orchestration while rejecting agents outside the executable catalog, supervising child interruption, and applying the same content-minimized persistence policy to parent and child conversations.
@@ -290,6 +295,24 @@ Qualification I/O runs outside the session command lock; dispatch then rechecks 
 This protects session transitions but does not provide a filesystem transaction against external programs changing project files.
 The gateway supplies one review-execution summary and exact revision-bound controls to the terminal, browser, and notebook.
 
+### Worker Attempt Ownership
+
+Managed worker launch intent and observed runtime bindings use the existing paired session and audit journal.
+The gateway issues a fresh attempt identity before dispatch, retaining the project, session, native conversation, image digest, deployment policy, sandbox policy, and input-manifest digest.
+Replacement preserves the native conversation identity and requires the previous attempt to be fenced with independently observed service-revocation evidence retained by the trusted launcher.
+Replaying a record does not grant a live capability or permit a local execution fallback.
+
+Each process-local admission capability belongs to one retained binding and session writer.
+The full worker workspace requires that capability and restricts requests and event connections to its observed origin and native conversation.
+Creation supplies the retained conversation identity; gateway-initiated forks require a separately authorized lifecycle and are rejected by this binding.
+Fencing closes its HTTP, event, and callback admission.
+In-flight HTTP responses and queued event messages are checked again before admission, and session callbacks require the same live capability.
+A capability cannot prove that a sandbox stopped or that service access was revoked.
+The sandbox control plane and outside services enforce those controls, and an unavailable or uncertain revocation blocks replacement.
+Attempt records and ordinary session/audit correlation contain no worker credentials.
+These internal launcher contracts do not launch sandboxes, verify an observer's evidence, or revoke service access themselves.
+The default remote factory remains disabled until its control-plane integration and the selected runtime satisfy the deployment qualification gates.
+
 ### Remote Response Admission
 
 The remote workspace adapter validates HTTP responses before the native SDK consumes them.
@@ -298,13 +321,28 @@ The complete returned registration set must match before any import can execute,
 The adapter uses the public workspace client property and HTTPX transport interface without changing SDK code or conversation orchestration.
 
 Responses are bounded, uncompressed UTF-8 JSON with unique object keys and finite numbers.
+Each workspace additionally permits at most 1,024 HTTP requests and 32 MiB of cumulative response bodies, including repeated history pages and requests that fail admission.
+Concurrent requests share that budget; resetting the HTTP client does not replenish it.
+Exhaustion or invalid response admission permanently closes the workspace's HTTP admission, including responses still in flight.
+Starting another workspace requires a new trusted execution decision; reconnecting is not a budget renewal.
+These limits bound received data and request count, not the SDK's exact memory consumption or execution inside the worker.
+Admission failure does not stop worker execution; the trusted launcher must revoke access and stop the worker through the independent sandbox control plane.
 HTTP requests through this client remain on the configured server origin; redirects, ambient proxies, and server-selected client tools are rejected.
 Remote agent metadata cannot select another agent implementation or enable the SDK’s client-side completion-log file writer.
 Errors expose a stable admission failure rather than worker response content.
 Resetting the workspace client retains the same admission policy.
 
-This adapter is not connected to the default local conversation factory.
-HTTP admission alone does not qualify remote execution: WebSocket input, remote-state projections, attempt fencing, independently authorized external effects, and infrastructure isolation require their own boundaries.
+The full worker workspace additionally requires the SDK's public connection and raw-message admission hooks before it can be constructed.
+It rejects an installed SDK without those hooks, including the pinned application SDK.
+The event connection permits only the configured origin's canonical conversation endpoint, without credentials in the URL, query parameters, fragments, redirects, ambient proxies, or compression.
+TLS uses the bundled certificate authorities with certificate and hostname verification; ambient certificate variables cannot replace that trust.
+The library bounds each message to 4 MiB and its receive queue to four frames.
+Connection attempts and received events share the workspace's 1,024-response and 32 MiB lifetime budget with HTTP traffic.
+Individual and full-state updates receive the same metadata checks as HTTP responses.
+Raw text passes the JSON admission rules and native event schema before callback delivery; binary messages, completion-log events, and rejected data cannot authorize local file writing or appear in admission errors.
+
+Neither workspace adapter is connected to the default local conversation factory.
+Hook availability alone does not qualify remote execution: the selected SDK/runtime set, remote-state projections, attempt fencing, independently authorized external effects, and infrastructure isolation require their own qualification.
 
 ### Research Specialist Catalog
 

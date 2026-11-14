@@ -17,11 +17,12 @@ import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
+from dataclasses import dataclass
 from importlib.metadata import version
 from pathlib import Path
 from threading import Event as ThreadEvent
 from threading import Lock, RLock, Thread, current_thread
-from typing import Any, Literal, TypedDict, cast
+from typing import Any, Literal, Protocol, TypedDict, cast, runtime_checkable
 
 os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 os.environ.setdefault("LOG_LEVEL", "ERROR")
@@ -32,6 +33,7 @@ from openhands.sdk.conversation import (
     BaseConversation,
     ConversationExecutionStatus,
     ConversationState,
+    RemoteConversation,
 )
 from openhands.sdk.conversation.conversation_stats import ConversationStats
 from openhands.sdk.event import (
@@ -139,6 +141,25 @@ from heartwood.schemas.evaluation import EvaluationRuntimeObservation
 from heartwood.schemas.project_paths import ProjectPathError, project_relative_path
 
 install_privacy_safe_retry_logging()
+
+
+class _BranchSnapshot(Protocol):
+    id: uuid.UUID
+    execution_status: ConversationExecutionStatus
+    stats: ConversationStats
+    events: Sequence[Event]
+
+
+@runtime_checkable
+class _SnapshotProvider(Protocol):
+    def snapshot(self) -> _BranchSnapshot: ...
+
+
+@dataclass(frozen=True)
+class _ConversationRead:
+    branch: tuple[Event, ...]
+    execution_status: ConversationExecutionStatus
+    usage: tuple[BackendUsage, ...]
 
 
 class OpenHandsSdkError(RuntimeError):
@@ -415,6 +436,11 @@ class OpenHandsSdkBackend:
         """Translate persisted OpenHands state not yet committed by Heartwood."""
         try:
             conversation = self._get_conversation()
+            return self._reconcile_conversation(
+                conversation,
+                session_id=session_id,
+                known_source_event_ids=known_source_event_ids,
+            )
         except Exception as error:
             backend_error = _backend_error(
                 error,
@@ -423,11 +449,6 @@ class OpenHandsSdkBackend:
             return (
                 () if backend_error.source_event_id in known_source_event_ids else (backend_error,)
             )
-        return self._reconcile_conversation(
-            conversation,
-            session_id=session_id,
-            known_source_event_ids=known_source_event_ids,
-        )
 
     def _reconcile_conversation(
         self,
@@ -437,7 +458,8 @@ class OpenHandsSdkBackend:
         known_source_event_ids: frozenset[str],
     ) -> tuple[BackendEvent, ...]:
         """Translate one already-owned conversation without reopening it."""
-        branch = tuple(_conversation_state(conversation).active_branch())
+        state = _conversation_read(conversation)
+        branch = state.branch
         actions_by_id, action_groups = self._action_resolution_context(branch)
         translated: list[BackendEvent] = []
         seen_source_event_ids = set(known_source_event_ids)
@@ -453,7 +475,7 @@ class OpenHandsSdkBackend:
                 translated.append(backend_event)
                 if backend_event.source_event_id is not None:
                     seen_source_event_ids.add(backend_event.source_event_id)
-        for state_event in self._state_events(conversation):
+        for state_event in self._state_events(conversation, state=state):
             if state_event.source_event_id in seen_source_event_ids:
                 continue
             translated.append(state_event)
@@ -471,10 +493,10 @@ class OpenHandsSdkBackend:
             conversation = self._get_conversation()
         except Exception:
             return None
-        state = _conversation_state(conversation)
+        state = _conversation_read(conversation)
         if state.execution_status != ConversationExecutionStatus.WAITING_FOR_CONFIRMATION:
             return None
-        return self._unmatched_action_group(conversation)
+        return self._unmatched_action_group(state.branch)
 
     def submit_turn(self, *, session_id: str, prompt: str) -> tuple[BackendEvent, ...]:
         """Submit a user task and start or steer the active OpenHands run."""
@@ -541,7 +563,8 @@ class OpenHandsSdkBackend:
         if not approved:
             try:
                 conversation.reject_pending_actions("User rejected the pending action set")
-                _conversation_state(conversation).rebuild_view()
+                if not isinstance(conversation, RemoteConversation):
+                    _conversation_state(conversation).rebuild_view()
             except Exception as error:
                 return (_backend_error(error),)
             return (
@@ -863,8 +886,8 @@ class OpenHandsSdkBackend:
         self,
         conversation: BaseConversation,
     ) -> bool:
-        state = _conversation_state(conversation)
-        unmatched = ConversationState.get_unmatched_actions(state.active_branch())
+        state = _conversation_read(conversation)
+        unmatched = ConversationState.get_unmatched_actions(state.branch)
         if not any(
             isinstance(event.action, TaskAction)
             and not self._specialist_action_is_supported(event.action)
@@ -874,7 +897,8 @@ class OpenHandsSdkBackend:
         conversation.reject_pending_actions(
             "Heartwood rejected a specialist request outside the available catalog."
         )
-        state.rebuild_view()
+        if not isinstance(conversation, RemoteConversation):
+            _conversation_state(conversation).rebuild_view()
         return True
 
     def _handle_sdk_event(self, event: Event) -> None:
@@ -1118,6 +1142,9 @@ class OpenHandsSdkBackend:
 
     def _prepare_pending_action_view_repair(self, conversation: BaseConversation) -> None:
         """Detect the OpenHands cold-view omission for unmatched actions."""
+        if isinstance(conversation, RemoteConversation):
+            self._clear_pending_action_view_repair()
+            return
         state = _conversation_state(conversation)
         unmatched_actions = ConversationState.get_unmatched_actions(state.active_branch())
         view_action_ids = {
@@ -1211,21 +1238,19 @@ class OpenHandsSdkBackend:
                 source_event_id=f"openhands:{event.id}:subagent:{status.value}",
             )
             for event in ConversationState.get_unmatched_actions(
-                _conversation_state(conversation).active_branch()
+                _conversation_read(conversation).branch
             )
             if isinstance(event.action, TaskAction)
         )
 
     def _unmatched_action_group(
         self,
-        conversation: BaseConversation,
+        branch: Sequence[Event],
     ) -> PendingActionGroup | None:
         return pending_action_group(
             tuple(
                 self._proposed_tool_call(event)
-                for event in ConversationState.get_unmatched_actions(
-                    _conversation_state(conversation).active_branch()
-                )
+                for event in ConversationState.get_unmatched_actions(branch)
             )
         )
 
@@ -1251,11 +1276,13 @@ class OpenHandsSdkBackend:
     def _interrupted_outcome_error(
         self,
         conversation: BaseConversation,
+        *,
+        state: _ConversationRead | None = None,
     ) -> BackendErrorCode | None:
-        state = _conversation_state(conversation)
         if self._execution_in_flight():
             return None
-        unmatched_actions = ConversationState.get_unmatched_actions(state.active_branch())
+        state = _conversation_read(conversation) if state is None else state
+        unmatched_actions = ConversationState.get_unmatched_actions(state.branch)
         with self._run_lock:
             run_cancelled = self._run_cancelled.is_set()
         intentional_pause = (
@@ -1518,6 +1545,8 @@ class OpenHandsSdkBackend:
     def _state_events(
         self,
         conversation: BaseConversation | None = None,
+        *,
+        state: _ConversationRead | None = None,
     ) -> tuple[BackendEvent, ...]:
         if conversation is None:
             conversation = self._get_conversation()
@@ -1525,11 +1554,11 @@ class OpenHandsSdkBackend:
             run_failed = self._run_failed
             execution_active = self._execution_active
             run_cancelled = self._run_cancelled.is_set()
-        state = _conversation_state(conversation)
-        branch = state.active_branch()
+        state = _conversation_read(conversation) if state is None else state
+        branch = state.branch
         anchor = branch[-1].id if branch else str(conversation.id)
         unmatched_actions = ConversationState.get_unmatched_actions(branch)
-        unmatched_group = self._unmatched_action_group(conversation)
+        unmatched_group = self._unmatched_action_group(branch)
         lifecycle = _backend_lifecycle(state.execution_status)
         has_typed_conversation_error = any(
             isinstance(event, ConversationErrorEvent) for event in branch
@@ -1551,7 +1580,7 @@ class OpenHandsSdkBackend:
             )
         ):
             lifecycle = BackendLifecycle.RUNNING
-        outcome_error = self._interrupted_outcome_error(conversation)
+        outcome_error = self._interrupted_outcome_error(conversation, state=state)
         if run_failed or outcome_error is not None:
             lifecycle = BackendLifecycle.ERROR
         events: list[BackendEvent] = [
@@ -1600,7 +1629,7 @@ class OpenHandsSdkBackend:
                 for action in unmatched_actions
             )
         if not execution_active:
-            for usage in _usage(state):
+            for usage in state.usage:
                 events.append(
                     BackendUsageEvent(
                         usage=usage,
@@ -1727,11 +1756,29 @@ def _json_mapping(value: object) -> dict[str, JsonValue]:
 
 
 def _conversation_state(conversation: BaseConversation) -> ConversationState:
+    if isinstance(conversation, RemoteConversation):
+        raise OpenHandsSdkError("Remote execution state is owned by the worker")
     return cast(ConversationState, conversation.state)
 
 
+def _conversation_read(conversation: BaseConversation) -> _ConversationRead:
+    state = conversation.state
+    if not isinstance(state, ConversationState) and isinstance(state, _SnapshotProvider):
+        try:
+            snapshot = state.snapshot()
+            if snapshot.id != conversation.id:
+                raise OpenHandsSdkError("Conversation snapshot identity does not match")
+            return _ConversationRead(
+                tuple(snapshot.events), snapshot.execution_status, _usage(snapshot)
+            )
+        except Exception:
+            raise OpenHandsSdkError("Conversation snapshot is unavailable") from None
+    local = _conversation_state(conversation)
+    return _ConversationRead(tuple(local.active_branch()), local.execution_status, _usage(local))
+
+
 def _execution_status(conversation: BaseConversation) -> str:
-    return _conversation_state(conversation).execution_status.value
+    return conversation.state.execution_status.value
 
 
 def _analyzed_risk(
@@ -1843,7 +1890,7 @@ def _task_status(status: str) -> BackendTaskStatus:
     }.get(status, BackendTaskStatus.TODO)
 
 
-def _usage(state: ConversationState) -> tuple[BackendUsage, ...]:
+def _usage(state: ConversationState | _BranchSnapshot) -> tuple[BackendUsage, ...]:
     # A child can register its final metrics during projection. Freeze the native
     # values once so totals and per-purpose rows describe the same observation.
     stats = ConversationStats(

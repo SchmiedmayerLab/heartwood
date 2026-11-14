@@ -11,11 +11,14 @@ from __future__ import annotations
 import json
 import math
 from collections.abc import Mapping
+from threading import Lock
 from typing import Any
 
 import httpx
 from openhands.sdk.workspace import RemoteWorkspace
-from pydantic import Field, PrivateAttr
+from pydantic import ConfigDict, Field, PrivateAttr, model_validator
+
+from heartwood.core_adapter.worker_attempts import WorkerAttemptError, WorkerAttemptLease
 
 _MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 _MAX_JSON_DEPTH = 64
@@ -23,6 +26,74 @@ _MAX_JSON_DEPTH = 64
 
 class WorkerResponseError(ValueError):
     """A remote response failed admission before SDK deserialization."""
+
+
+class WorkerResponseBudget:
+    """Lifetime admission shared by a workspace's response transports."""
+
+    def __init__(
+        self,
+        *,
+        max_bytes: int = 32 * 1024 * 1024,
+        max_responses: int = 1024,
+        attempt: WorkerAttemptLease | None = None,
+    ) -> None:
+        if type(max_bytes) is not int or type(max_responses) is not int:
+            raise ValueError("worker response limits must be positive integers")
+        if max_bytes <= 0 or max_responses <= 0:
+            raise ValueError("worker response limits must be positive integers")
+        self._remaining_bytes = max_bytes
+        self._remaining_responses = max_responses
+        self._closed = False
+        self._lock = Lock()
+        self._attempt = attempt
+
+    @property
+    def attempt(self) -> WorkerAttemptLease | None:
+        """Return the trusted attempt shared by all transports using this budget."""
+        return self._attempt
+
+    def charge(self, size: int, *, new_response: bool = False) -> None:
+        """Charge received bytes or reserve a request before contacting the worker."""
+        if size < 0:
+            raise ValueError("worker response size must not be negative")
+        with self._lock:
+            if self._attempt is not None:
+                try:
+                    self._attempt.ensure_active()
+                except WorkerAttemptError:
+                    self._closed = True
+            if self._closed:
+                raise WorkerResponseError("worker response admission is closed")
+            if size > self._remaining_bytes or (new_response and not self._remaining_responses):
+                self._closed = True
+                if self._attempt is not None:
+                    self._attempt.fence()
+                raise WorkerResponseError("worker response budget exhausted")
+            self._remaining_bytes -= size
+            if new_response:
+                self._remaining_responses -= 1
+
+    def close(self) -> None:
+        """Refuse further admission without replenishing the lifetime budget."""
+        with self._lock:
+            self._closed = True
+            if self._attempt is not None:
+                self._attempt.fence()
+
+
+def _worker_origin(host: str) -> httpx.URL:
+    origin = httpx.URL(host)
+    if (
+        origin.scheme not in {"http", "https"}
+        or not origin.host
+        or origin.userinfo
+        or origin.path != "/"
+        or origin.query
+        or origin.fragment
+    ):
+        raise ValueError("worker host must be a complete server origin")
+    return origin.copy_with(path="/")
 
 
 class WorkerResponseTransport(httpx.BaseTransport):
@@ -34,21 +105,19 @@ class WorkerResponseTransport(httpx.BaseTransport):
         host: str,
         tool_modules: Mapping[str, str],
         transport: httpx.BaseTransport,
+        budget: WorkerResponseBudget | None = None,
     ) -> None:
-        self._origin = httpx.URL(host)
-        if (
-            self._origin.scheme not in {"http", "https"}
-            or not self._origin.host
-            or self._origin.userinfo
-            or self._origin.path != "/"
-            or self._origin.query
-            or self._origin.fragment
-        ):
-            raise ValueError("worker host must be a complete server origin")
+        self._origin = _worker_origin(host)
         self._tool_modules = dict(tool_modules)
         self._transport = transport
+        self._budget = budget if budget is not None else WorkerResponseBudget()
+        if self._budget.attempt is not None and self._origin != _worker_origin(
+            str(self._budget.attempt.runtime.endpoint)
+        ):
+            raise WorkerResponseError("worker origin does not match its retained binding")
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
+        self._budget.charge(0, new_response=True)
         if (
             request.url.scheme != self._origin.scheme
             or request.url.host != self._origin.host
@@ -56,7 +125,13 @@ class WorkerResponseTransport(httpx.BaseTransport):
             or request.url.userinfo
             or request.url.fragment
         ):
+            self._budget.close()
             raise WorkerResponseError("worker request left the configured origin")
+        try:
+            self._admit_request(request)
+        except WorkerResponseError:
+            self._budget.close()
+            raise
         request.headers["Accept-Encoding"] = "identity"
         response = self._transport.handle_request(request)
         try:
@@ -70,6 +145,7 @@ class WorkerResponseTransport(httpx.BaseTransport):
             stream = response.stream
             assert isinstance(stream, httpx.SyncByteStream)
             for chunk in stream:
+                self._budget.charge(len(chunk))
                 if len(body) + len(chunk) > _MAX_RESPONSE_BYTES:
                     raise WorkerResponseError("worker response exceeds the byte limit")
                 body.extend(chunk)
@@ -78,12 +154,51 @@ class WorkerResponseTransport(httpx.BaseTransport):
                 media_type = response.headers.get("content-type", "").split(";", 1)[0]
                 if media_type.strip().lower() != "application/json":
                     raise WorkerResponseError("worker response must be JSON")
-                _admit_json(content, self._tool_modules)
+                value = _admit_json(content, self._tool_modules)
+                attempt = self._budget.attempt
+                if (
+                    attempt is not None
+                    and request.url.path
+                    in {
+                        "/api/conversations",
+                        f"/api/conversations/{attempt.intent.conversation_id}",
+                        f"/api/conversations/{attempt.intent.conversation_id}/events/snapshot",
+                    }
+                    and (
+                        not isinstance(value, dict)
+                        or value.get("id") != str(attempt.intent.conversation_id)
+                    )
+                ):
+                    raise WorkerResponseError("worker returned another conversation identity")
             elif response.status_code != 204:
                 raise WorkerResponseError("worker response is empty")
+            self._budget.charge(0)
             return httpx.Response(response.status_code, headers=response.headers, content=content)
+        except WorkerResponseError:
+            self._budget.close()
+            raise
         finally:
             response.close()
+
+    def _admit_request(self, request: httpx.Request) -> None:
+        attempt = self._budget.attempt
+        if attempt is None:
+            return
+        identity = str(attempt.intent.conversation_id)
+        path = request.url.path
+        canonical = request.url.raw_path.split(b"?", 1)[0] == path.encode("utf-8")
+        if path == "/api/conversations" and request.method == "POST" and canonical:
+            value = _admit_json(request.content, self._tool_modules)
+            if isinstance(value, dict) and value.get("conversation_id") == identity:
+                return
+        prefix = f"/api/conversations/{identity}"
+        if (
+            canonical
+            and (path == prefix or path.startswith(prefix + "/"))
+            and path != prefix + "/fork"
+        ):
+            return
+        raise WorkerResponseError("worker request is outside its retained conversation")
 
     def close(self) -> None:
         self._transport.close()
@@ -102,9 +217,9 @@ def _reject_constant(_value: str) -> None:
     raise WorkerResponseError("worker JSON contains a nonfinite number")
 
 
-def _admit_json(content: bytes, tool_modules: Mapping[str, str]) -> None:
+def _admit_json(content: bytes, tool_modules: Mapping[str, str]) -> object:
     try:
-        value = json.loads(
+        value: object = json.loads(
             content.decode("utf-8"),
             object_pairs_hook=_unique_object,
             parse_constant=_reject_constant,
@@ -123,7 +238,12 @@ def _admit_json(content: bytes, tool_modules: Mapping[str, str]) -> None:
         elif isinstance(item, float) and not math.isfinite(item):
             raise WorkerResponseError("worker JSON contains a nonfinite number")
     if not isinstance(value, dict):
-        return
+        return value
+    _admit_metadata(value, tool_modules)
+    return value
+
+
+def _admit_metadata(value: dict[str, Any], tool_modules: Mapping[str, str]) -> None:
     registrations = value.get("tool_module_qualnames", {})
     if not isinstance(registrations, dict) or any(
         not isinstance(name, str) or not isinstance(module, str) or tool_modules.get(name) != module
@@ -157,12 +277,31 @@ def _reject_completion_logging(agent: dict[str, Any]) -> None:
 class AdmittedRemoteWorkspace(RemoteWorkspace):
     """Native workspace with caller-owned HTTP admission retained across resets."""
 
+    model_config = ConfigDict(arbitrary_types_allowed=True, hide_input_in_errors=True)
+    attempt: WorkerAttemptLease | None = Field(default=None, exclude=True, repr=False, frozen=True)
     tool_modules: tuple[tuple[str, str], ...] = Field(default=(), exclude=True, frozen=True)
     api_key: str | None = Field(default=None, exclude=True, repr=False, frozen=True)
     _admitted_client: httpx.Client | None = PrivateAttr(default=None)
+    _response_budget: WorkerResponseBudget = PrivateAttr(default_factory=WorkerResponseBudget)
+
+    @model_validator(mode="after")
+    def _bind_attempt_budget(self) -> AdmittedRemoteWorkspace:
+        if self.attempt is not None:
+            self.attempt.ensure_active()
+            if _worker_origin(self.host) != _worker_origin(str(self.attempt.runtime.endpoint)):
+                raise ValueError("worker host does not match its retained binding")
+            if self._response_budget.attempt is not self.attempt:
+                self._response_budget = WorkerResponseBudget(attempt=self.attempt)
+        return self
 
     @property
     def client(self) -> httpx.Client:
+        self._response_budget.charge(0)
+        if self.attempt is not None and _worker_origin(self.host) != _worker_origin(
+            str(self.attempt.runtime.endpoint)
+        ):
+            self._response_budget.close()
+            raise WorkerResponseError("worker host does not match its retained binding")
         if self._admitted_client is None:
             modules = dict(self.tool_modules)
             if len(modules) != len(self.tool_modules):
@@ -170,6 +309,7 @@ class AdmittedRemoteWorkspace(RemoteWorkspace):
             transport = WorkerResponseTransport(
                 host=self.host,
                 tool_modules=modules,
+                budget=self._response_budget,
                 transport=httpx.HTTPTransport(
                     trust_env=False, limits=httpx.Limits(max_connections=4)
                 ),

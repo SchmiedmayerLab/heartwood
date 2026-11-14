@@ -14,6 +14,7 @@ license = "MIT"
 authors = [{ name = "Stanford University and the project authors" }]
 dependencies = [
     "anthropic==0.120.2",
+    "certifi==2026.10.23",
     "filelock==3.32.2",
     "heartwood-adapters",
     "heartwood-audit",
@@ -32,6 +33,7 @@ dependencies = [
     "pydantic>=2.12",
     "tomli-w==1.2.0",
     "uv==0.13.7",
+    "websockets==16.1.1",
 ]
 
 [build-system]
