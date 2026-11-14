@@ -102,6 +102,97 @@ def test_approval_allowlist_rejects_extra_arguments_and_combined_commands(
     )
     assert runner.allowed_action("invoke_skill", {"name": "aggregate-export"}) == "invoke-skill"
     assert runner.allowed_action("invoke_skill", {"name": "unreviewed"}) is None
+    for command, identity in (
+        ("cat /inputs/summary.json", "inspect-input"),
+        (runner.TERMINAL_COMMAND, "aggregate-output"),
+    ):
+        assert (
+            runner.allowed_action(
+                "terminal", {"command": command, "is_input": False, "reset": False, "timeout": None}
+            )
+            == identity
+        )
+        for argument, value in (
+            ("is_input", True),
+            ("is_input", 0),
+            ("reset", 0),
+            ("timeout", 0),
+            ("timeout", 30),
+            ("extra", None),
+        ):
+            assert runner.allowed_action("terminal", {"command": command, argument: value}) is None
+    diagnostic = runner.action_diagnostic("private-tool", {"private-key": "private-value"})
+    assert "private" not in json.dumps(diagnostic)
+    assert diagnostic["recognized_identity"] is None
+    assert (
+        len(runner.action_diagnostic("terminal", {str(i): i for i in range(20)})["arguments"]) == 8
+    )
+
+
+@pytest.mark.usefixtures("profile_module")
+def test_approval_accepts_only_typed_advisory_metadata_from_sdk_events(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from openhands.sdk.event import ActionEvent
+    from openhands.sdk.llm import MessageToolCall
+    from openhands.sdk.security import SecurityRisk
+    from openhands.sdk.tool.builtins.invoke_skill import InvokeSkillAction
+    from openhands.tools.terminal import TerminalAction
+
+    root = Path(__file__).resolve().parents[3]
+    monkeypatch.syspath_prepend(str(root / "deploy/tests"))
+    runner = importlib.import_module("test_worker_model_integration")
+    for tool, action, executable, identity in (
+        (
+            "terminal",
+            TerminalAction(command="cat /inputs/summary.json"),
+            {"command": "cat /inputs/summary.json", "reset": False},
+            "inspect-input",
+        ),
+        (
+            "invoke_skill",
+            InvokeSkillAction(name="aggregate-export"),
+            {"name": "aggregate-export"},
+            "invoke-skill",
+        ),
+    ):
+        assert {"summary", "security_risk"}.isdisjoint(type(action).model_fields)
+        for risk in SecurityRisk:
+            raw = {**executable, "security_risk": risk.value, "summary": "Synthetic operation"}
+            event = ActionEvent(
+                action=action,
+                thought=[],
+                tool_name=tool,
+                tool_call_id="synthetic-call",
+                tool_call=MessageToolCall(
+                    id="synthetic-call", name=tool, arguments=json.dumps(raw), origin="completion"
+                ),
+                llm_response_id="synthetic-response",
+                security_risk=risk,
+                summary="Synthetic operation",
+            )
+            arguments = dict(runner._openhands_sdk._tool_arguments(event))
+            assert arguments == raw
+            assert runner.allowed_action(tool, arguments) == identity
+        invalid_metadata: tuple[dict[str, object], ...] = (
+            {"summary": None},
+            {"summary": 1},
+            {"summary": "x" * 1025},
+            {"security_risk": None},
+            {"security_risk": []},
+            {"security_risk": "INVALID"},
+            {"unknown": "metadata"},
+        )
+        for metadata in invalid_metadata:
+            assert runner.allowed_action(tool, {**executable, **metadata}) is None
+        assert runner.allowed_action(tool, {**executable, "summary": "x" * 1024}) == identity
+    assert (
+        runner.allowed_action(
+            "terminal",
+            {"command": "cat /inputs/summary.json; env", "summary": "Safe", "security_risk": "LOW"},
+        )
+        is None
+    )
 
 
 @pytest.mark.usefixtures("profile_module")
