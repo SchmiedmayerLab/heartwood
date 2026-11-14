@@ -16,6 +16,8 @@ COPY --from=records-qualification-tools /LICENSE.minio /LICENSE.mc /opt/qualific
 COPY deploy/tests/worker_network_*.py deploy/tests/worker_hostile_probe.py deploy/tests/worker_native_fixture.py deploy/tests/worker_telemetry.py deploy/tests/test_worker_native_integration.py /opt/qualification/tests/
 COPY deploy/tests/test_worker_external_integration.py /opt/qualification/tests/
 COPY deploy/tests/external_service_fixture.py /opt/qualification/deploy/tests/
+COPY deploy/tests/test_worker_model_integration.py /opt/qualification/tests/
+COPY deploy/worker_model_profile.py /opt/qualification/worker_model_profile.py
 COPY deploy/tests/checkpoint_records_integration.py deploy/tests/checkpoint_transport_integration.py /opt/qualification/deploy/tests/
 COPY --from=records-tls-fixture /tls_fixture.py /opt/qualification/packages/audit/tests/tls_fixture.py
 COPY images/worker/candidate/gateway.json /opt/qualification/gateway.json

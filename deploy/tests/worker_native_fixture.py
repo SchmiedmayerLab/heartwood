@@ -30,6 +30,7 @@ from google.protobuf.json_format import MessageToDict
 from openshell import SandboxClient, TlsConfig
 from openshell._proto import openshell_pb2 as pb
 from openshell._proto import sandbox_pb2 as policy_pb
+from worker_model_profile import QualificationModelProfile
 from worker_network_qualification import qualify_network
 from worker_telemetry import InfrastructureCollector
 
@@ -198,8 +199,23 @@ class SyntheticProvider:
 class NativeFixture:
     """Own one gateway and synthetic provider; Heartwood owns every actual attempt."""
 
-    def __init__(self, private: Path, output: Path, *, hostile: bool = False) -> None:
+    def __init__(
+        self,
+        private: Path,
+        output: Path,
+        *,
+        hostile: bool = False,
+        model_profile: QualificationModelProfile | None = None,
+        credential: str | None = None,
+    ) -> None:
         self.private, self.output = private, output
+        if (model_profile is None) != (credential is None):
+            raise ValueError("External qualification requires both a profile and a credential")
+        self.model_profile = model_profile
+        self._inference_credential = credential
+        self.base_url = (
+            model_profile.base_url if model_profile else "https://host.docker.internal:19671/v1"
+        )
         self.hostile = hostile
         self.terminal_command = TERMINAL_COMMAND
         self.sentinel = secrets.token_urlsafe(32)
@@ -493,6 +509,9 @@ additional_ca_bundle = {q(tls / "ca.crt")}
         self.provider = SyntheticProvider(tls)
         self.collector.forbidden_values = (self.provider.credential, self.sentinel)
         self.resources.callback(self.provider.close)
+        if self._inference_credential is not None:
+            self.provider.forbidden_values += (self._inference_credential,)
+            self.collector.forbidden_values += (self._inference_credential,)
         self.protected_canary.write_text(self.sentinel)
         self.protected_canary.chmod(0o600)
         self.provider.forbidden_values += (self.sentinel,)
@@ -516,7 +535,7 @@ additional_ca_bundle = {q(tls / "ca.crt")}
                 "from pathlib import Path;import sys;print(Path(sys.executable).resolve())",
             ]
         ).strip()
-        profile = {
+        profile: dict[str, Any] = {
             "id": self.identity,
             "display_name": "Synthetic Qualification",
             "category": "inference",
@@ -542,6 +561,13 @@ additional_ca_bundle = {q(tls / "ca.crt")}
             ],
             "binaries": [interpreter],
         }
+        if self.model_profile is not None:
+            from urllib.parse import urlsplit
+
+            profile["endpoints"][0].update(
+                host=urlsplit(self.model_profile.base_url).hostname,
+                port=443,
+            )
         profile_path = self.output / "provider-profile.json"
         profile_path.write_text(json.dumps(profile, indent=2) + "\n")
         self.cli_command(["provider", "profile", "import", "--file", str(profile_path)])
@@ -557,7 +583,7 @@ additional_ca_bundle = {q(tls / "ca.crt")}
                 "--credential",
                 "HEARTWOOD_QUALIFICATION_KEY",
             ],
-            HEARTWOOD_QUALIFICATION_KEY=self.provider.credential,
+            HEARTWOOD_QUALIFICATION_KEY=self._inference_credential or self.provider.credential,
         )
         self.resources.callback(self.cli_command, ["provider", "delete", self.identity])
         self.policy = policy_pb.SandboxPolicy(
@@ -672,7 +698,12 @@ additional_ca_bundle = {q(tls / "ca.crt")}
         logs = subprocess.run(
             ["docker", "logs", self.identity], capture_output=True, text=True, timeout=15
         )
-        (self.output / "gateway.log").write_text(logs.stdout + logs.stderr)
+        rendered = logs.stdout + logs.stderr
+        if self._inference_credential is not None and self._inference_credential in rendered:
+            rendered = rendered.replace(self._inference_credential, "[redacted]")
+            (self.output / "gateway.log").write_text(rendered)
+            raise RuntimeError("Native gateway logs contained protected qualification content")
+        (self.output / "gateway.log").write_text(rendered)
         command(["docker", "stop", "--time", "20", observed["Id"]])
         command(["docker", "rm", observed["Id"]])
 
@@ -781,8 +812,8 @@ additional_ca_bundle = {q(tls / "ca.crt")}
             policy_path=policy_path,
             policy_file_sha256=hashlib.sha256(policy_path.read_bytes()).hexdigest(),
             profile_id="synthetic",
-            model="openai/synthetic-boundary",
-            model_endpoint="https://host.docker.internal:19671/v1/chat/completions",
+            model=self.model_profile.model if self.model_profile else "openai/synthetic-boundary",
+            model_endpoint=self.base_url + "/chat/completions",
             provider=self.identity,
             placeholder_env="HEARTWOOD_QUALIFICATION_KEY",
             inputs=inputs,

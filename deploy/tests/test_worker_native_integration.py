@@ -168,7 +168,11 @@ def _application(
     profile = ModelProfile(
         profile_id=settings.profile_id,
         model=settings.model,
-        base_url="https://host.docker.internal:19671/v1",
+        base_url=fixture.base_url,
+        max_input_tokens=fixture.model_profile.max_input_tokens if fixture.model_profile else None,
+        max_output_tokens=fixture.model_profile.max_output_tokens
+        if fixture.model_profile
+        else None,
         policy_endpoint=settings.model_endpoint,
         credential_kind="environment",
         api_key_env="SYNTHETIC_MODEL_KEY",

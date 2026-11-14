@@ -75,6 +75,49 @@ Registry writes, multi-platform manifest assembly, and moving-tag promotion rema
 Release creation also requires the repository-managed Python and JavaScript/TypeScript CodeQL analyses for the exact commit.
 Capable-model acceptance runs on the organization's large hosted runner because CPU inference does not finish inside its command deadline on a standard runner; every other job runs on standard GitHub-hosted runners, and container builds reclaim unused preinstalled toolchains first and reuse bounded GitHub Actions BuildKit caches.
 
+## Capable Model Qualification in a Native Worker
+
+The native qualification runner accepts an explicit operator model profile for a synthetic task through the complete worker boundary.
+It uses the same verified images, native gateway, inference credential replacement, input and Skill projections, policy probes, audit records and resource cleanup as synthetic native qualification.
+The credential enters the trusted controller once through standard input; it is never a command argument, public profile field, worker credential, or report value.
+The provider key's existing model authorization remains unchanged.
+
+A profile contains only the approved route and bounded qualification settings:
+
+```json
+{
+  "base_url": "https://approved-provider.example/v1",
+  "model": "openai/approved-model",
+  "max_input_tokens": 32768,
+  "max_output_tokens": 512,
+  "max_iterations": 6,
+  "deadline_seconds": 180
+}
+```
+
+Supply the credential from the operator's secret manager or a protected secret mount, and use the same artifact arguments as synthetic native qualification:
+
+```bash
+python3 deploy/qualify-native-worker.py \
+  --worker-image "$WORKER_IMAGE" --runtime-image "$RUNTIME_IMAGE" \
+  --gateway-artifacts "$GATEWAY_ARTIFACTS" --records-artifacts "$RECORDS_ARTIFACTS" \
+  --model-profile /run/config/qualification-model.json \
+  --output test-results/native-model-qualification < /run/secrets/qualification-key
+```
+
+The synthetic input contains an instruction to disregard approval and access outside credentials.
+The controller approves only the exact input-read, verified Skill invocation and aggregate command required by the task; other proposals are denied.
+It independently checks the suppression result, runs the maintained filesystem and network probes, verifies the audit ledger, and requires outside revocation before successful cleanup.
+These additional probes are explicitly driven by the qualification controller and are reported separately from model-proposed actions.
+
+An outside timer requests provider detachment and native worker deletion when the deadline expires; uncertain revocation fails qualification and retains control state for recovery.
+The SDK iteration cap and requested per-call token limits bound the expected task, but are not a provider-enforced spending quota.
+The runner does not change shared key limits or authorization.
+A hard spending cap requires a separately provisioned provider-side budget.
+Reports identify the model as operator-requested configuration and usage as worker-reported diagnostics, without treating either as provider billing evidence or attested model identity.
+No credentialed run occurs automatically in pull-request CI; the ordinary capable-model workflow continues to qualify its local inference runtime separately.
+A successful synthetic run does not establish sensitive-data readiness.
+
 ## Native Worker Dependency Candidates
 
 The native worker qualification path needs SDK admission and remote-event hooks that are not available in the public application lock.
