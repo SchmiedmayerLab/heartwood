@@ -142,10 +142,9 @@ def test_positive_controls_do_not_erase_worker_traffic(
 def test_sandbox_replacement_invalidates_network_evidence(
     qualification: ModuleType, changed: str
 ) -> None:
-    protocol = pytest.importorskip(
-        "openshell._proto.openshell_pb2",
-        reason="Native SDK admission checks run in the candidate qualification environment",
-    )
+    if importlib.util.find_spec("openshell") is None:
+        pytest.skip("Native SDK admission checks run in the candidate qualification environment")
+    protocol = importlib.import_module("openshell._proto.openshell_pb2")
 
     def sandbox(*, modified: bool) -> SimpleNamespace:
         return SimpleNamespace(
