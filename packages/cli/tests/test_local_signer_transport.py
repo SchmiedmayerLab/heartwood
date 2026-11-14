@@ -177,3 +177,62 @@ def test_socket_path_cannot_redirect_through_an_untrusted_ancestor(
         local_checkpoint_signer_socket(endpoint),
     ):
         pytest.fail("followed a directory symlink")
+
+
+def test_socket_replaced_during_connect_receives_no_credentials(
+    setup: LocalCheckpointSignerSetup, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = local_checkpoint_socket_path(setup.endpoint)
+    with local_checkpoint_signer_socket(setup.endpoint) as listener:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as replacement:
+            connect = socket.socket.connect
+
+            def replace_after_connect(connection: socket.socket, address: str) -> None:
+                connect(connection, address)
+                path.rename(path.with_suffix(".old"))
+                replacement.bind(str(path))
+                path.chmod(0o600)
+                replacement.listen()
+
+            monkeypatch.setattr(socket.socket, "connect", replace_after_connect)
+            with pytest.raises(CheckpointSignerError, match="socket is unavailable or insecure"):
+                RemoteCheckpointSigner(
+                    endpoint=setup.endpoint,
+                    allow_local_socket=True,
+                    authorization_token="synthetic-token",
+                    timeout_seconds=1,
+                ).sign(statement())
+            listener.settimeout(1)
+            connection, _ = listener.accept()
+            with connection:
+                connection.settimeout(1)
+                assert connection.recv(1) == b""
+            replacement.settimeout(0.1)
+            with pytest.raises(TimeoutError):
+                replacement.accept()
+        replacement_identity = path.stat().st_ino
+    assert path.stat().st_ino == replacement_identity
+
+
+def test_signer_shutdown_accepts_an_already_removed_socket(
+    setup: LocalCheckpointSignerSetup,
+) -> None:
+    path = local_checkpoint_socket_path(setup.endpoint)
+    with local_checkpoint_signer_socket(setup.endpoint):
+        path.unlink()
+    assert not path.exists()
+
+
+def test_signer_rejects_a_writable_ancestor(setup: LocalCheckpointSignerSetup) -> None:
+    path = local_checkpoint_socket_path(setup.endpoint)
+    ancestor = path.parent.parent
+    ancestor.chmod(0o777)
+    try:
+        with (
+            pytest.raises(ValueError, match="must not be writable by other users"),
+            local_checkpoint_signer_socket(setup.endpoint),
+        ):
+            pytest.fail("accepted an untrusted ancestor")
+        assert not path.exists()
+    finally:
+        ancestor.chmod(0o700)
