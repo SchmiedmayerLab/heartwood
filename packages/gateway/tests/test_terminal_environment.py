@@ -6,7 +6,10 @@
 
 """Local deployment settings reach terminals without unrelated credentials."""
 
+import shlex
 import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
@@ -55,3 +58,26 @@ def test_deployment_can_explicitly_extend_environment() -> None:
 def test_invalid_environment_extension_is_rejected() -> None:
     with pytest.raises(ValueError, match="comma-separated variable names"):
         terminal_environment({"HEARTWOOD_TERMINAL_ENV_ALLOWLIST": "SECRET=synthetic"})
+
+
+def test_runtime_script_path_reaches_terminal(tmp_path: Path) -> None:
+    runtime_root = tmp_path / "runtime with spaces"
+    runtime_root.mkdir()
+    (runtime_root / "analysis.py").write_text(
+        "from pathlib import Path\nPath('summary.json').write_text('{}')\n"
+    )
+    child = subprocess.run(
+        ["/bin/sh", "-c", f'{shlex.quote(sys.executable)} "$HEARTWOOD_RUNTIME_ROOT"/analysis.py'],
+        cwd=tmp_path,
+        env=terminal_environment(
+            {
+                "HEARTWOOD_RUNTIME_ROOT": str(runtime_root),
+                "HEARTWOOD_UNUSED_MODEL_API_KEY": "synthetic-unused-model-key",
+            }
+        ),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert child.returncode == 0, child.stderr
+    assert (tmp_path / "summary.json").read_text() == "{}"
