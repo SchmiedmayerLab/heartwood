@@ -3408,9 +3408,10 @@ def _runtime_resource_root() -> Path:
     packaged = module_dir / "_bundled"
     if packaged.is_dir():
         return packaged
-    source_root = module_dir.parents[4]
-    if source_root / "packages/gateway/src/heartwood/gateway" == module_dir:
-        return source_root
+    if len(module_dir.parents) > 4:
+        source_root = module_dir.parents[4]
+        if source_root / "packages/gateway/src/heartwood/gateway" == module_dir:
+            return source_root
     raise RuntimeError("Gateway package is missing bundled runtime resources")
 
 
