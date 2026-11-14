@@ -19,7 +19,7 @@ flowchart LR
     Web["Browser interface"] --> Ingress["Validated gateway ingress"]
     Ingress --> Gateway
     Notebook["Notebook bridge"] --> Gateway
-    Gateway --> Project["Project and .heartwood state"]
+    Gateway --> Project["Research project and bound private state"]
     Gateway --> Policy["Platform, model, and action policy"]
     Gateway --> Skills["Verified and project Skills"]
     Gateway --> Adapter["OpenHands SDK adapter"]
@@ -83,7 +83,9 @@ The storage adapter supplies only storage observations; the native launcher comb
 
 ### Project Context
 
-`ProjectContext.current()` resolves the process current directory and reserves `.heartwood/` beneath it.
+`ProjectContext.current()` resolves the process current directory and reserves `.heartwood/` beneath it for local launches.
+An operator deployment binds the exact research directory to an external state root and policy ceiling before the managed gateway opens stores.
+The worker receives selected projections, not that canonical state or the complete research directory.
 No interface accepts a separate public workspace path.
 
 ### Startup Plan
@@ -235,7 +237,7 @@ Every successful path converges on the same project-local selection, resource pl
 
 Downloads resolve repository metadata to an immutable revision before writing project state.
 A portable transfer first verifies the selected model, records the exact payload and runtime configuration in a canonical manifest, and writes a reproducible uncompressed ZIP64 bundle.
-Import validates archive structure, path safety, sizes, and every SHA-256 digest before atomically publishing private files under `.heartwood/models/`.
+Import validates archive structure, path safety, sizes, and every SHA-256 digest before atomically publishing private files under `models/` in the bound state directory.
 Existing destinations are reverified on retries, and incomplete staging is never selected.
 Cancellation and selection failure preserve verified, published cache files because another transfer may already use them.
 Only incomplete staging is removed during failure cleanup.
@@ -262,7 +264,7 @@ Transferred models remain outside the repository-download registry, so an offlin
 The curated `heartwood-skills` source owns complete Agent Skill validation and deterministic catalog artifacts.
 Heartwood pins one exact source revision for bundled content and uses deployment-owned TUF roots for additional connected or offline sources.
 
-The gateway refreshes signed metadata, projects catalog entries for every interface, binds explicit approval to the reviewed tree digest, and atomically activates the complete verified directory under `.heartwood/skills/`.
+The gateway refreshes signed metadata, projects catalog entries for every interface, binds explicit approval to the reviewed tree digest, and atomically activates the complete verified directory under `skills/` in the bound state directory.
 It reapplies signed revocations and revalidates source metadata and installed content before supplying active roots to OpenHands.
 Local directories use the same complete-tree verifier and content-addressed store but remain visibly unreviewed.
 See [Skill Trust and Distribution](skills.md) for the trust and ownership boundaries.
@@ -361,6 +363,8 @@ These internal launcher contracts do not launch sandboxes, verify an observer's 
 Native worker selection is explicit and requires qualified runtime dependencies; ordinary launch does not silently switch execution modes.
 After an uncertain creation response, revocation may resolve the uniquely named sandbox only when its full project and attempt ownership match this process's retained intent.
 Cleanup verifies native worker absence and removes only owned staging resources before releasing the session writer.
+If provisioning is still unresolved, deletion can require retry while the attempt remains fenced and the writer remains owned.
+A control-plane absence response alone is insufficient when the container runtime still retains attempt resources; never release ownership or repeat creation to bypass that discrepancy.
 The native deletion API is name-scoped rather than an atomic expected-generation deletion; unique attempt names and outside identity checks do not replace control-plane authorization.
 A prior process's attempt or changed native connection identity requires explicit outside reconciliation rather than automatic deletion against potentially different infrastructure.
 

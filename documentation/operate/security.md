@@ -13,10 +13,18 @@ It is not a security boundary on its own and does not confer institutional appro
 
 ### Project Files
 
-OpenHands tools execute with the permissions of the Heartwood process.
-Heartwood supplies the project directory as the agent workspace, and the file editor rejects paths outside the project and inside `.heartwood/`.
-Terminal commands are not confined: an approved command can read anything the user can read and can change `.heartwood/` state, including project settings, installed Skills, and session and audit files.
-Review commands that touch `.heartwood/` as changes to Heartwood's own controls, and let the operating system, container, or platform enforce stronger isolation when required.
+In local execution, OpenHands tools execute with the permissions of the Heartwood process.
+Heartwood supplies the project directory as the local agent workspace, and the file editor rejects paths outside the project and inside `.heartwood/`.
+Local terminal commands are not confined: an approved command can read anything the user can read and can change `.heartwood/` state, including project settings, installed Skills, and session and audit files.
+Review commands that touch local `.heartwood/` as changes to Heartwood's own controls.
+
+Managed native execution requires an explicit operator-owned deployment binding and qualified worker dependencies.
+The complete worker runs behind the sandbox boundary, receives selected read-only input and verified Skill projections, and keeps its writable workspace, home and temporary files inside the sandbox.
+Canonical state, deployment authority, provider credentials, management sockets and signing material remain outside its mounts and process identity.
+The gateway independently checks attempt identity, admits untrusted responses and retains approval authority; the sandbox and outside services enforce filesystem, process and network restrictions.
+An uncertain revocation fences the attempt and retains writer ownership until reconciliation establishes that its resources are gone.
+This path does not silently replace local execution and does not establish sensitive-data readiness merely by starting a worker.
+See the [platform isolation requirements](platform-contract.md#agent-isolation) and [native qualification limits](../architecture/testing.md#installed-native-integration).
 
 Use a dedicated project directory and least-privilege mounts.
 Do not run Heartwood as a privileged container or from a broad shared root.
@@ -34,7 +42,7 @@ Confirm data eligibility for the exact endpoint, account, model, and deployment 
 
 ### Runtime Caches
 
-The supported GPU runtime no longer depends on `diskcache`; its optional outlines cache uses typed SQLite records and remains disabled by default.
+The supported GPU runtime does not depend on `diskcache`; its optional outlines cache uses typed SQLite records and remains disabled by default.
 Other runtime and model caches are private to the runtime user and separate from the agent workspace.
 
 Do not enable the unbounded outlines disk cache, share runtime caches between users or trust domains, or place cache directories inside an agent-writable project without a deployment-specific review.
@@ -64,11 +72,15 @@ Heartwood reports one of three effective boundaries for the active model route:
 Application scrubbing is not process isolation.
 OpenHands' local model client and coding tools run under the same Heartwood operating-system identity, so environment filtering cannot prevent every same-identity memory, process, or inherited-resource access path.
 The built-in workstation/container, Terra, and Carina adapters therefore do not claim platform-isolated model credentials.
-Only the selected model credential is scrubbed; other secrets in the Heartwood environment, credential files, and keyring entries remain readable by terminal commands.
+For local execution, other secrets in the Heartwood environment, credential files, and keyring entries remain subject to the same-identity limitations.
+The native worker instead starts with an explicit environment allowlist and receives only the outside provider transport's placeholder; ordinary remote execution without that transport does not separate model credentials from agent tools.
 
-A Heartwood-managed local model server listens on a fixed loopback port without authentication.
-Other users on the same host can send it requests and, while it is not listening, can take the port and receive prompts in its place.
-Run it only on hosts or allocations that other users cannot reach.
+A Heartwood-managed local model server uses a private Unix socket in an owner-only temporary directory outside the research project.
+The launcher and model clients validate directory ancestry, ownership, permissions and socket identity; managed requests have no TCP fallback.
+The logical model URL in policy and configuration identifies the private transport, not a listening TCP port.
+The launcher stops the interaction if its runtime exits, and llama.cpp slot inspection is disabled.
+These controls separate operating-system users; they do not isolate processes sharing the launcher's identity or protect against a privileged host administrator.
+Sandboxed workers cannot use this local socket: they require an independently authorized outside inference route, with no socket or credential mount into the worker.
 
 [OpenHands Agent Server](https://docs.openhands.dev/sdk/guides/agent-server/overview) and its [remote workspace](https://docs.openhands.dev/sdk/guides/agent-server/cloud-workspace) move the conversation, model client, and tools into a remote agent environment.
 That boundary isolates the caller from the agent workspace, but it does not by itself separate model authentication from tools running inside that agent environment.
@@ -77,8 +89,15 @@ Heartwood uses the upstream OpenHands credential and model transports without tr
 Use **Review Every Action** for an API key, ChatGPT subscription, mounted secret, or managed identity unless the active platform explicitly reports a qualified platform-isolated boundary.
 **Low-Risk Automation** classifies actions from the model's own risk label and a small set of fixed command patterns, so a model that follows injected instructions can label an unsafe command low risk.
 Use it only when every file, dataset, and page the agent reads is trusted.
-Removing a saved provider credential revokes model access independently of the action policy.
+Removing a credential from Heartwood's saved settings does not invalidate copies held by running processes or revoke the key at its issuer.
+For sandbox provider access, require acknowledged outside detachment or verified worker revocation; neither undoes requests already forwarded upstream.
 Changing the action policy never broadens model authorization.
+
+Credential rotation is separate from revocation.
+After an ordinary static provider update, a running process can retain a reference to the previous value; launch a new process to receive the updated reference.
+For deployments that need value-only rotation without replacing the worker, the provider profile can explicitly enable OpenShell's `stable_placeholder` capability before launch.
+Qualify that mode against the deployed gateway and supervisor, wait for the update's readiness receipt, and independently verify that acknowledged detachment prevents retained references from reaching the provider.
+Updating a stored value alone does not establish that the previous upstream key is safe to retire.
 
 Platform isolation is distinct from institutional approval.
 A separate service identity or platform proxy can enforce a technical credential boundary, while data eligibility still depends on the provider agreement, institutional controls, and reviewed deployment.
@@ -104,7 +123,8 @@ A trusted identity assertion is an additional route marker, not a bearer secret 
 ### Launch Capability
 
 Ingress validation confirms the route, not the caller.
-A loopback bind is reachable by every process running as the same operating-system user, including the agent's own terminal, so the gateway additionally requires a process-lifetime launch capability on every API request, server-sent event stream, and WebSocket.
+A loopback bind alone does not authenticate a caller; local same-identity tools can reach it.
+The gateway requires a process-lifetime launch capability on every API request, server-sent event stream and WebSocket, including deployments that also deny direct worker access through network isolation.
 `heartwood gateway serve` generates the secret at startup and prints one launch link only after owning a listening socket.
 Gateway request access logging is disabled so launch tokens do not enter access logs.
 The launch token is carried in a URL fragment, which the browser removes before exchanging it through `POST /launch`; it is never sent in an HTTP URL.
@@ -160,7 +180,9 @@ Project state can select only a profile already approved by that registry.
 Heartwood verifies a remote signature and its pinned signer identity before publishing a checkpoint.
 A production signing service must independently authorize the requested deployment and retention claims, use a principal unavailable to agent tools, and keep KMS/HSM credentials outside the Heartwood process.
 An owner-only bearer-token file remains accessible to other processes running as that owner unless the platform supplies a stronger sandbox.
-The bundled local signer is an authenticated loopback-only development and offline fallback; its owner-only file permissions protect against other operating-system users but not compromise of the same user account.
+The bundled local signer is a development and offline fallback using an owner-only Unix socket and bearer authentication.
+The client validates socket ownership, permissions and its protected directory before transmitting the token.
+These controls protect against other operating-system users, but not compromise of the same user account.
 See [Audit Checkpoints and Retention](audit-checkpoints.md).
 
 ## Deployment Security Checklist

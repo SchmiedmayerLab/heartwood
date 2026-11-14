@@ -157,7 +157,7 @@ They exclude private project state and return a nonzero status for unavailable, 
 | `heartwood audit checkpoint ... [--include-experiments]` | Create a signed audit bundle outside the project, optionally retaining the exact project experiment export |
 | `heartwood audit verify-checkpoint BUNDLE [--public-key KEY]` | Verify a checkpoint against the active profile or an independently trusted public key |
 | `heartwood signer init-local` | Initialize the explicit development and offline signer fallback outside the project |
-| `heartwood signer serve-local` | Run the initialized signer as an authenticated loopback service |
+| `heartwood signer serve-local` | Run the initialized signer on its owner-only Unix socket |
 
 These commands support deployment automation and diagnostics.
 Researchers should normally use `heartwood` with `--interface` when needed.

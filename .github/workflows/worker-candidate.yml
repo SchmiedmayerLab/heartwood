@@ -1,0 +1,181 @@
+# This source file is part of the Heartwood open-source project
+# SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+# SPDX-License-Identifier: MIT
+
+name: Worker Dependency Candidate
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/worker-candidate.yml
+      - deploy/build-worker-candidate.py
+      - deploy/qualify-native-worker.py
+      - deploy/tests/worker_native_fixture.py
+      - deploy/tests/test_worker_native_integration.py
+      - deploy/tests/worker_network_*.py
+      - deploy/tests/worker_hostile_probe.py
+      - images/worker/candidate/**
+      - packages/**
+      - vendor/heartwood-skills
+      - pyproject.toml
+      - LICENSE.md
+      - images/Dockerfile
+      - images/worker/launch.py
+      - images/worker/config.json
+      - images/worker/smoke.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  gateway:
+    name: Build the pinned gateway candidate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    concurrency:
+      group: worker-gateway-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          submodules: true
+      - name: Install pinned build tools
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          version: 0.13.7
+          python-version: 3.12.15
+      - name: Restore gateway build cache
+        uses: actions/cache@v6.1.0
+        with:
+          path: test-results/gateway-cache
+          key: gateway-linux-amd64-${{ hashFiles('images/worker/candidate/gateway.json', 'images/worker/candidate/docker-provisioning.patch') }}
+          restore-keys: gateway-linux-amd64-
+      - name: Build from verified upstream inputs
+        run: >-
+          uv run --no-project --python 3.12.15 deploy/build-worker-candidate.py
+          --gateway --output test-results/gateway-candidate --cache test-results/gateway-cache
+      - name: Retain gateway qualification artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: worker-gateway-candidate-${{ github.sha }}
+          path: |
+            test-results/gateway-candidate/bin/
+            test-results/gateway-candidate/deploy/
+            test-results/gateway-candidate/LICENSE.openshell
+            test-results/gateway-candidate/gateway-build-record.json
+          include-hidden-files: true
+          retention-days: 14
+
+  build:
+    name: Verify candidate wheel reproducibility
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          submodules: true
+      - name: Install pinned build tools
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          version: 0.13.7
+          python-version: 3.12.15
+      - name: Build twice from verified sources
+        run: |
+          uv run --no-project --python 3.12.15 deploy/build-worker-candidate.py --output test-results/worker-candidate/first
+          uv run --no-project --python 3.12.15 deploy/build-worker-candidate.py --output test-results/worker-candidate/second
+          cmp test-results/worker-candidate/first/build-record.json test-results/worker-candidate/second/build-record.json
+          uv run --no-project --python 3.12.15 deploy/build-worker-candidate.py \
+            --application --output test-results/worker-candidate/application-first
+          uv run --no-project --python 3.12.15 deploy/build-worker-candidate.py \
+            --application --output test-results/worker-candidate/application-second
+          cmp test-results/worker-candidate/application-first/application-build-record.json \
+            test-results/worker-candidate/application-second/application-build-record.json
+      - name: Verify the candidate environment lock
+        run: |
+          bash images/worker/candidate/runtime.sh compile test-results/worker-candidate/first
+          git diff --exit-code -- images/worker/candidate/runtime-requirements.txt
+      - name: Install the candidate qualification environment
+        run: >-
+          bash images/worker/candidate/runtime.sh install test-results/worker-candidate/first
+          test-results/worker-candidate/application-first test-results/worker-candidate/environment
+      - name: Test the installed application and worker candidate
+        env:
+          OPENHANDS_SUPPRESS_BANNER: '1'
+          LITELLM_LOCAL_MODEL_COST_MAP: 'True'
+        run: |
+          test-results/worker-candidate/environment/bin/python -I -m pytest --no-cov -q
+      - name: Retain qualification artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: worker-dependency-candidate-${{ github.sha }}
+          path: |
+            test-results/worker-candidate/first/
+            test-results/worker-candidate/application-first/
+          retention-days: 14
+
+  native:
+    name: Qualify the installed native worker
+    needs: [gateway, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          submodules: true
+      - name: Download candidate wheels
+        uses: actions/download-artifact@v8
+        with:
+          name: worker-dependency-candidate-${{ github.sha }}
+          path: test-results/worker-candidate
+      - name: Download the pinned gateway build
+        uses: actions/download-artifact@v8
+        with:
+          name: worker-gateway-candidate-${{ github.sha }}
+          path: test-results/gateway-candidate
+      - name: Build and check candidate images
+        run: |
+          mkdir -p test-results/worker-candidate/image
+          cp -R test-results/worker-candidate/first test-results/worker-candidate/image/sdk
+          cp -R test-results/worker-candidate/application-first test-results/worker-candidate/image/application
+          for target in worker runtime; do
+            docker buildx build --load --file images/Dockerfile --target "$target-image" \
+              --build-arg HEARTWOOD_DEPENDENCY_PROFILE=candidate \
+              --build-arg "HEARTWOOD_IMAGE_FLAVOR=$target" \
+              --build-arg "HEARTWOOD_REVISION=$GITHUB_SHA" \
+              --build-context worker-qualification-artifacts=test-results/worker-candidate/image \
+              --tag "heartwood-$target:qualification" .
+          done
+          python3 images/worker/smoke.py heartwood-worker:qualification
+          docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+            heartwood-runtime:qualification heartwood --help
+      - name: Run native lifecycle and protected-state qualification
+        run: >-
+          python3 deploy/qualify-native-worker.py
+          --worker-image heartwood-worker:qualification
+          --runtime-image heartwood-runtime:qualification
+          --gateway-artifacts test-results/gateway-candidate
+          --output test-results/native-qualification
+      - name: Retain synthetic qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: worker-native-qualification-${{ github.sha }}
+          path: |
+            test-results/native-qualification/qualification.json
+            test-results/native-qualification/network.json
+            test-results/native-qualification/qualification.log
+            test-results/native-qualification/controller-preflight.log
+            test-results/native-qualification/junit.xml
+            test-results/native-qualification/*/evidence.json
+            test-results/native-qualification/*/cleanup.json
+            test-results/native-qualification/*/gateway.log
+            test-results/native-qualification/*/infrastructure-otlp.jsonl
+            test-results/native-qualification/*/infrastructure-otlp-status.json
+          retention-days: 14

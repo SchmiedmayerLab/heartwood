@@ -8,70 +8,42 @@
 set -euo pipefail
 
 model_path="${HEARTWOOD_LOCAL_MODEL_PATH:?HEARTWOOD_LOCAL_MODEL_PATH is required}"
-port="${HEARTWOOD_LOCAL_RUNTIME_PORT:-8765}"
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-log_file="$(mktemp "${TMPDIR:-/tmp}/heartwood-llama-smoke.XXXXXX.log")"
-
-HEARTWOOD_LOCAL_MODEL_PATH="${model_path}" \
-HEARTWOOD_LOCAL_MODEL_CONTEXT=256 \
-HEARTWOOD_LOCAL_MODEL_THREADS=2 \
-HEARTWOOD_LOCAL_RUNTIME_PORT="${port}" \
-  bash "${script_dir}/start_local_runtime.sh" >"${log_file}" 2>&1 &
-runtime_pid="$!"
-
+heartwood_python="${HEARTWOOD_PYTHON:-python}"
+project="$(mktemp -d "${TMPDIR:-/tmp}/heartwood-llama-smoke.XXXXXX")"
+log_file="${project}/runtime.log"
 cleanup() {
   status="$?"
-  kill "${runtime_pid}" >/dev/null 2>&1 || true
-  wait "${runtime_pid}" >/dev/null 2>&1 || true
   if [ "${status}" -ne 0 ]; then
-    printf 'Heartwood-managed inference runtime log:\n' >&2
     tail -n 200 "${log_file}" >&2 || true
   fi
   rm -f "${log_file}"
+  rmdir "${project}"
   return "${status}"
 }
 trap cleanup EXIT
 
-HEARTWOOD_LOCAL_RUNTIME_PORT="${port}" python - <<'PY'
-import json
+export HEARTWOOD_LOCAL_MODEL_CONTEXT=256
+export HEARTWOOD_LOCAL_MODEL_THREADS=2
+"${heartwood_python}" "${script_dir}/qualify_runtime.py" \
+  --project "${project}" --log "${log_file}" \
+  --runtime "${script_dir}/start_local_runtime.sh" -- "${heartwood_python}" - <<'PYTHON'
 import os
-import time
-import urllib.error
-import urllib.request
+from heartwood.gateway._managed_inference import managed_inference_client
 
-port = int(os.environ["HEARTWOOD_LOCAL_RUNTIME_PORT"])
-deadline = time.time() + 180
-last_error = None
-while time.time() < deadline:
-    try:
-        with urllib.request.urlopen(
-            f"http://127.0.0.1:{port}/health", timeout=2
-        ) as response:
-            if response.status == 200:
-                break
-    except (OSError, urllib.error.URLError) as error:
-        last_error = error
-        time.sleep(0.2)
-else:
-    raise SystemExit(f"llama-server did not become ready: {last_error}")
-
-payload = json.dumps(
-    {
-        "model": "heartwood-managed-runtime",
+with managed_inference_client(os.environ, timeout=60) as client:
+    response = client.post("chat/completions", json={
+        "model": os.environ.get("HEARTWOOD_MANAGED_MODEL_ALIAS", "heartwood-managed-runtime"),
         "messages": [{"role": "user", "content": "Once upon a time"}],
         "max_tokens": 4,
         "temperature": 0,
-    }
-).encode()
-request = urllib.request.Request(
-    f"http://127.0.0.1:{port}/v1/chat/completions",
-    data=payload,
-    headers={"Content-Type": "application/json"},
-)
-with urllib.request.urlopen(request, timeout=60) as response:
-    result = json.load(response)
-choices = result.get("choices")
-if not isinstance(choices, list) or not choices:
-    raise SystemExit(f"llama-server returned no completion choices: {result}")
+    })
+    response.raise_for_status()
+    choices = response.json().get("choices")
+    if not isinstance(choices, list) or not choices:
+        raise SystemExit("llama-server returned no completion choices")
+    slots = client.get("http://127.0.0.1:8765/slots")
+    if slots.status_code != 501 or slots.json().get("error", {}).get("type") != "not_supported_error":
+        raise SystemExit("llama-server slot inspection must be disabled")
 print("Mounted Heartwood-managed inference smoke: ok")
-PY
+PYTHON

@@ -28,7 +28,7 @@ Heartwood reuses OpenHands for the agent loop and coding tools, then adds projec
 
 ## What Heartwood Provides
 
-- A current-directory project boundary with private configuration, models, sessions, and audit state under `.heartwood/`.
+- A current-directory research boundary, with local `.heartwood/` state or an explicit operator binding to protected external state.
 - Full-screen and plain terminal interfaces, a browser interface, and a notebook bridge over one shared session contract.
 - Read-only file and change inspection alongside clear review of complete OpenHands action sets before execution.
 - Model connections for institution-managed environments, ChatGPT sign-in, hosted APIs, OpenAI-compatible services, and models managed by Heartwood.
@@ -93,7 +93,7 @@ Specialists use the active model and verified Skills, remain advisory without pr
 - **Containers** are the recommended workstation setup.
 - **Terra** uses images that preserve Terra's Jupyter and persistent-disk behavior.
 - **Stanford Carina** uses the versioned native installer and Slurm for Heartwood-managed GPU inference.
-- **Operator-managed research environments** follow the deployment and platform-integration guidance.
+- **Operator-managed research environments** follow the deployment contract and platform API and access requirements in the documentation for their selected artifact.
 
 Choose the stable or prerelease documentation link at the top of this README for the corresponding platform walkthroughs.
 
@@ -103,9 +103,11 @@ The [preview documentation](https://schmiedmayerlab.github.io/heartwood/preview/
 
 Begin with synthetic or non-sensitive files. Installing Heartwood does not make a computer, model provider, or research platform suitable for controlled data. The deploying institution remains responsible for identity, storage, networking, model-provider agreements, dataset permissions, retention, and export controls.
 
-Agent tools run with the permissions of the Heartwood process. Review proposed action sets and use an appropriate platform sandbox when the project requires a stronger operating-system boundary.
+Local agent tools run with the permissions of the Heartwood process.
+Managed native execution places the complete worker inside a sandbox and keeps canonical state, credentials and approval authority outside it; this requires explicit operator configuration and qualification of the exact deployment.
+Review proposed action sets and select the execution mode appropriate to the data.
 
-Heartwood is under active pre-1.0 development. The [stable documentation](https://schmiedmayerlab.github.io/heartwood/) describes the currently released security boundaries; prerelease behavior is documented separately. Planned work is tracked in [GitHub Issues](https://github.com/SchmiedmayerLab/heartwood/issues) and the [Heartwood Project](https://github.com/orgs/SchmiedmayerLab/projects/2).
+Use the documentation matching the installed release to assess its supported interfaces and security boundaries.
 
 ## Contributing
 

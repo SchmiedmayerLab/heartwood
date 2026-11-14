@@ -8,8 +8,8 @@
 set -euo pipefail
 
 profile="${HEARTWOOD_LOCAL_RUNTIME_PROFILE:-llama-cpp-cpu}"
-host="${HEARTWOOD_LOCAL_RUNTIME_HOST:-127.0.0.1}"
-port="${HEARTWOOD_LOCAL_RUNTIME_PORT:-8765}"
+socket_path="${HEARTWOOD_LOCAL_RUNTIME_SOCKET:?HEARTWOOD_LOCAL_RUNTIME_SOCKET is required}"
+heartwood_python="${HEARTWOOD_PYTHON:-python}"
 request_log="${HEARTWOOD_MODEL_REQUEST_LOG:-/tmp/heartwood-local-model-requests.jsonl}"
 model_path="${HEARTWOOD_LOCAL_MODEL_PATH:-}"
 model_alias="${HEARTWOOD_MANAGED_MODEL_ALIAS:-heartwood-managed-runtime}"
@@ -18,16 +18,21 @@ n_ctx="${HEARTWOOD_LOCAL_MODEL_CONTEXT:-32768}"
 n_threads="${HEARTWOOD_LOCAL_MODEL_THREADS:-${default_threads}}"
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
-if [[ "${host}" != "127.0.0.1" && "${host}" != "localhost" && "${host}" != "::1" ]]; then
-  echo "managed runtime must bind to loopback, got ${host}" >&2
-  exit 64
-fi
+"${heartwood_python}" - <<'PYTHON'
+import os
+from heartwood.gateway._managed_inference import runtime_socket_path
+from heartwood.persistence import require_private_socket_parent
+path = runtime_socket_path(os.environ)
+require_private_socket_parent(path)
+if path.exists() or path.is_symlink():
+    raise SystemExit("runtime socket path already exists")
+PYTHON
+umask 077
 
 case "${profile}" in
-  stub-loopback)
-    exec python "${script_dir}/local_model_stub.py" \
-      --host "${host}" \
-      --port "${port}" \
+  stub-unix)
+    exec "${heartwood_python}" "${script_dir}/local_model_stub.py" \
+      --socket "${socket_path}" \
       --request-log "${request_log}"
     ;;
   llama-cpp-cpu)
@@ -43,8 +48,8 @@ case "${profile}" in
       --model "${model_path}" \
       --jinja \
       --alias "${model_alias}" \
-      --host "${host}" \
-      --port "${port}" \
+      --host "${socket_path}" \
+      --no-slots \
       --ctx-size "${n_ctx}" \
       --threads "${n_threads}"
     ;;

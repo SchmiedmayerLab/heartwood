@@ -11,6 +11,12 @@ Normal users do not set a Heartwood home, workspace, state root, model root, or 
 
 ## Project Layout
 
+The paths below describe local launches.
+With an [operator deployment](../start/project.md#operator-bound-external-state), replace the `.heartwood/` prefix with the external state directory bound by the manifest.
+The layout and owning stores remain the same; the research directory does not select that binding.
+Only `heartwood gateway serve --deployment` consumes this manifest; ordinary local commands do not automatically select managed state.
+Canonical state is accessible to the trusted gateway and must not be mounted into a sandboxed worker.
+
 | Path | Contents |
 |---|---|
 | `.heartwood/config.toml` | Non-secret platform, model, action, policy, audit-signer profile, and Heartwood-managed model selection |
@@ -55,7 +61,8 @@ Built-in provider profiles use environment-style names such as `OPENAI_API_KEY`,
 The name identifies a secret source; it is not the secret.
 
 On a supported workstation, an explicitly remembered value is stored by the operating-system keyring under a project-scoped account.
-Containers and managed platforms normally use process entry, a mounted secret file, or managed identity.
+Local containers and platform adapters can use process entry, a mounted secret file or managed identity.
+A sandboxed worker instead receives the selected inference placeholder; real provider credentials and secret-source configuration remain outside its environment and mounts.
 
 ## ChatGPT Account State
 
@@ -144,6 +151,6 @@ Do not delete internal lock, command-receipt, or recovery-journal files.
 
 Session audit logs and generated exports remain private project state.
 An authoritative checkpoint, deployment signer registry, signer credential, private signing key, and independently trusted public key must resolve outside the project.
-Use deployment records storage for checkpoint retention; `.heartwood/` is not an authoritative archive.
+Use deployment records storage for checkpoint retention; neither local `.heartwood/` nor operator-bound state is an authoritative archive.
 
 See [Audit Checkpoints and Retention](../operate/audit-checkpoints.md) for signing, verification, and key-management responsibilities.

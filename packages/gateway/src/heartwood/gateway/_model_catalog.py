@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -20,6 +21,7 @@ from urllib.parse import urlsplit
 
 from pydantic import ValidationError
 
+from heartwood.gateway._managed_inference import managed_inference_client, require_managed_base_url
 from heartwood.gateway._model_settings import CredentialKind, ModelProfile
 from heartwood.gateway._openhands_models import (
     OpenHandsModelError,
@@ -410,8 +412,12 @@ class ModelCatalogService:
         ]
         | None = None,
         cache_ttl_seconds: int = 300,
+        env: Mapping[str, str] | None = None,
     ) -> None:
-        self._openai_lister = openai_lister or _list_openai_models
+        self._env = dict(os.environ if env is None else env)
+        self._openai_lister = openai_lister or (
+            lambda connection, api_key: _list_openai_models(connection, api_key, env=self._env)
+        )
         self._anthropic_lister = anthropic_lister or _list_anthropic_models
         self._subscription_lister = subscription_lister or _list_subscription_models
         self._compatibility = compatibility or _model_compatibility
@@ -688,6 +694,8 @@ def _connection_from_manifest(value: ModelConnectionManifest) -> ModelConnection
 def _list_openai_models(
     connection: ModelConnection,
     api_key: str | None,
+    *,
+    env: Mapping[str, str] | None = None,
 ) -> Sequence[ProviderModel]:
     module = import_module("openai")
     options: dict[str, object] = {
@@ -697,6 +705,9 @@ def _list_openai_models(
     }
     if connection.base_url is not None:
         options["base_url"] = connection.base_url
+    if connection.connection_id == "heartwood":
+        require_managed_base_url(connection.base_url)
+        options["http_client"] = managed_inference_client(os.environ if env is None else env)
     client = module.OpenAI(**options)
     try:
         return tuple(

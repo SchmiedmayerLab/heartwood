@@ -2812,7 +2812,8 @@ def test_user_selected_model_plan_persists_across_gateway_restart(
     restarted.env["HEARTWOOD_LOCAL_RUNTIME_ARTIFACT_ID"] = choice.model_id
     active_models = cast(list[dict[str, object]], restarted.model_artifacts()["models"])
     active = next(model for model in active_models if model["model_id"] == choice.model_id)
-    assert active["active"] is True
+    # A caller-supplied activity flag cannot authenticate a running inference service.
+    assert active["active"] is False
     assert selected["license_posture"] == choice.license_posture
     assert selected["minimum_resource_envelope"] == choice.minimum_resource_envelope
     assert selected["recommended_resource_envelope"] == choice.recommended_resource_envelope

@@ -5,7 +5,7 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Deterministic loopback stub used by the generic image smoke test."""
+"""Deterministic private-socket stub used by the generic image smoke test."""
 
 from __future__ import annotations
 
@@ -15,12 +15,14 @@ import os
 import re
 import shlex
 import sys
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from collections.abc import Sequence
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
+from socketserver import UnixStreamServer
 from typing import ClassVar, cast
 
 
-def _tool_result_failed(messages: list[object]) -> bool:
+def _tool_result_failed(messages: Sequence[object]) -> bool:
     serialized = json.dumps(messages).lower()
     exit_codes = {
         int(code)
@@ -414,7 +416,7 @@ class LocalModelHandler(BaseHTTPRequestHandler):
                 "content": "Synthetic Heartwood-managed model response.",
             }
             finish_reason = "stop"
-        response = {
+        response: dict[str, object] = {
             "id": "chatcmpl-heartwood-managed-runtime",
             "object": "chat.completion",
             "model": "heartwood-managed-runtime",
@@ -461,14 +463,17 @@ class LocalModelHandler(BaseHTTPRequestHandler):
 
 
 def main() -> int:
-    """Run the loopback stub."""
+    """Run the private-socket stub."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--socket", type=Path, required=True)
     parser.add_argument("--request-log", type=Path, required=True)
     args = parser.parse_args()
     LocalModelHandler.request_log = args.request_log
-    server = HTTPServer((args.host, args.port), LocalModelHandler)
+    from heartwood.persistence import require_private_socket_parent
+
+    require_private_socket_parent(args.socket)
+    os.umask(0o077)
+    server = UnixStreamServer(str(args.socket), LocalModelHandler)
     try:
         server.serve_forever()
     finally:

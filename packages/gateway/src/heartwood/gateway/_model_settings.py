@@ -317,7 +317,7 @@ MODEL_PRESETS: tuple[ModelPreset, ...] = (
         credential_kind="none",
         base_url="http://127.0.0.1:8765/v1",
         policy_endpoint="http://127.0.0.1:8765/v1/chat/completions",
-        description="The loopback inference service supervised by Heartwood.",
+        description="The private inference service supervised by Heartwood.",
     ),
     ModelPreset(
         preset_id="openai",

@@ -91,7 +91,7 @@ SPDX-License-Identifier: MIT
 : A managed service that controls cryptographic keys and performs authorized operations such as checkpoint signing without exposing private key material to Heartwood.
 
 **Launch capability**
-: The process-lifetime secret that every Heartwood gateway API request, event stream, and WebSocket must carry, delivered through a one-time launch link or a platform proxy header.
+: The process-lifetime secret required for protected Heartwood gateway API requests, event streams, and WebSockets, obtained through a one-time launch exchange or supplied by an authenticated platform proxy.
 
 **Large language model (LLM)**
 : The model used by the agent to interpret requests, reason, produce text, and propose tools.
@@ -108,6 +108,9 @@ SPDX-License-Identifier: MIT
 **Model transfer bundle**
 : A reproducible Heartwood ZIP64 artifact containing one model's immutable source metadata, runtime settings, selected files, and per-file SHA-256 digests for verified import into another project.
 
+**Mutual TLS (mTLS)**
+: Transport Layer Security configured so both the client and server authenticate with certificates trusted by the other side.
+
 **OAuth**
 : A standard authorization protocol that lets a user grant account access without giving Heartwood the account password.
 
@@ -117,8 +120,20 @@ SPDX-License-Identifier: MIT
 **OpenAI-compatible service**
 : A model endpoint implementing the relevant OpenAI API request and response shapes; compatibility does not imply operation by OpenAI.
 
+**Open Cybersecurity Schema Framework (OCSF)**
+: A shared schema for security events, used by the reference sandbox infrastructure to describe observed activity.
+
+**OpenID Connect (OIDC)**
+: An identity protocol built on OAuth that supplies authenticated user claims; a gateway capability is not an OpenID Connect identity.
+
 **OpenHands**
 : The upstream agent SDK and coding-tool platform used by Heartwood for conversations and tool execution.
+
+**OpenShell**
+: The sandbox infrastructure used by Heartwood's native reference adapter for externally enforced worker restrictions and inference credential transport.
+
+**OpenTelemetry Protocol (OTLP)**
+: A standard protocol for exporting telemetry such as logs, metrics and traces to a collector.
 
 **Pilot evaluation**
 : A bounded trial in which a small group of researchers uses one standard research environment so the deployment can record installation, workflow, reproducibility, and support evidence before a wider rollout.
@@ -127,10 +142,10 @@ SPDX-License-Identifier: MIT
 : Individually identifiable health information protected under applicable policy or law.
 
 **Project**
-: The process current directory and its descendants that Heartwood treats as the agent workspace.
+: The process current directory and its descendants that define the research-file boundary. Managed workers receive selected projections rather than the complete directory.
 
 **Project state**
-: Private non-secret configuration, sessions, models, Skills, logs, caches, runtime files, and audit artifacts under `.heartwood/`.
+: Private configuration, sessions, models, Skills, logs, caches, runtime files and audit artifacts in local `.heartwood/` or an operator-bound external directory; raw provider credentials are excluded.
 
 **Quantization**
 : A lower-precision model representation, such as AWQ, GPTQ, or FP8, used to reduce memory and storage requirements.
@@ -149,6 +164,9 @@ SPDX-License-Identifier: MIT
 
 **Semantic Versioning (SemVer)**
 : A major.minor.patch version scheme that communicates public-contract compatibility. Heartwood defines its pre-1.0 conventions in the support policy and platform contract.
+
+**Server-sent events (SSE)**
+: A one-way HTTP event stream from the gateway to an interface; Heartwood reconnects using an explicit event cursor.
 
 **SHA-256**
 : A cryptographic hash function Heartwood uses to verify that model files and other artifacts have not changed.
@@ -176,6 +194,9 @@ SPDX-License-Identifier: MIT
 
 **Wheel**
 : A prebuilt Python package file (`.whl`) that can be installed without running a source-build backend.
+
+**Workflow Description Language (WDL)**
+: A workflow language used by Terra to describe analysis tasks and their inputs, outputs and dependencies.
 
 **ZIP64**
 : An extension of the ZIP archive format that supports files and archives larger than the original ZIP size limits.

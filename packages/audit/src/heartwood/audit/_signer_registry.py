@@ -83,7 +83,7 @@ class CheckpointSignerProfile:
                 endpoint=self.endpoint,
                 authorization_token=self.authorization_token(),
                 timeout_seconds=self.timeout_seconds,
-                allow_insecure_loopback=self.mode == "development",
+                allow_local_socket=self.mode == "development",
                 transport=transport,
             )
         )
@@ -297,12 +297,12 @@ def _profile_from_mapping(
     )
     if profile.mode == "development" and profile.authorization_token_file is None:
         raise CheckpointSignerError("development signer profiles require an authorization token")
-    if profile.mode == "production" and profile.endpoint.startswith("http://"):
+    if profile.mode == "production" and not profile.endpoint.startswith("https://"):
         raise CheckpointSignerError("production signer profiles must use HTTPS")
     RemoteCheckpointSigner(
         endpoint=profile.endpoint,
         timeout_seconds=profile.timeout_seconds,
-        allow_insecure_loopback=profile.mode == "development",
+        allow_local_socket=profile.mode == "development",
     )
     return profile
 

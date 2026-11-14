@@ -13,6 +13,7 @@ requires-python = ">=3.12"
 license = "MIT"
 authors = [{ name = "Stanford University and the project authors" }]
 dependencies = [
+    "httpx==0.28.1",
     "heartwood-gateway",
     "heartwood-schemas",
     "heartwood-session",
@@ -36,3 +37,6 @@ packages = ["src/heartwood"]
 heartwood-gateway = { workspace = true }
 heartwood-schemas = { workspace = true }
 heartwood-session = { workspace = true }
+
+[tool.hatch.build.targets.wheel.force-include]
+"../../fixtures/synthetic" = "heartwood/cli/_bundled/fixtures/synthetic"

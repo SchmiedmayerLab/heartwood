@@ -106,6 +106,11 @@ from heartwood.core_adapter import (
     pending_action_group,
 )
 from heartwood.gateway._access import CAPABILITY_ENVIRONMENT
+from heartwood.gateway._managed_inference import (
+    ManagedInferenceError,
+    configure_managed_inference,
+    require_managed_base_url,
+)
 from heartwood.gateway._model_settings import ModelProfile, ModelSettingsError
 from heartwood.gateway._openhands_failures import (
     backend_error as _backend_error,
@@ -301,12 +306,14 @@ class OpenHandsSdkBackend:
         worker_context: Callable[[], WorkerConversationContext] | None = None,
         structured_task_outcomes: bool = False,
         review_batch_authorizer: ReviewBatchAuthorizer | None = None,
+        managed_inference: bool = False,
     ) -> None:
         profile.validate()
         if action_confirmation_mode not in {"always-confirm", "confirm-risky"}:
             msg = f"unsupported action confirmation mode: {action_confirmation_mode}"
             raise OpenHandsSdkError(msg)
         self.profile = profile
+        self._managed_inference = managed_inference
         self._action_confirmation_mode = action_confirmation_mode
         self.workspace = workspace.resolve()
         self.skills_dir = skills_dir.resolve()
@@ -359,6 +366,11 @@ class OpenHandsSdkBackend:
     @property
     def configuration_error(self) -> str | None:
         """Return a safe preflight error before recording a route decision."""
+        if self._managed_inference:
+            try:
+                require_managed_base_url(self.profile.base_url)
+            except ManagedInferenceError as error:
+                return str(error)
         try:
             request_endpoint = request_endpoint_for_model(
                 self.profile.model,
@@ -827,15 +839,22 @@ class OpenHandsSdkBackend:
         token_callback: Callable[[LLMStreamChunk], None],
     ) -> BaseConversation:
         _configure_upstream_defaults(self.env)
+        managed_api_key = None
+        if self._managed_inference:
+            require_managed_base_url(self.profile.base_url)
+            managed_api_key = configure_managed_inference(
+                os.environ if self.env is None else self.env
+            )
         self.workspace.mkdir(parents=True, exist_ok=True)
         self.persistence_dir.mkdir(parents=True, exist_ok=True)
         skills = _load_session_skills(self.skills_dir, self.installed_skill_roots)
         self._register_specialized_agents()
         options = _llm_options(
             self.profile,
-            api_key=self.profile.resolve_api_key(self.env),
+            api_key=managed_api_key or self.profile.resolve_api_key(self.env),
             extra_body=self._llm_extra_body,
             native_tool_calling=self._native_tool_calling,
+            managed_inference=self._managed_inference,
         )
         if self.profile.auth_type == "subscription":
             for key in (
@@ -920,6 +939,8 @@ class OpenHandsSdkBackend:
         return agent
 
     def _worker_profile_error(self) -> str | None:
+        if self._managed_inference:
+            return "Managed local inference requires an outside authenticated worker route"
         if (
             self.profile.auth_type != "api_key"
             or self.profile.credential_kind == "managed-identity"
@@ -2122,12 +2143,17 @@ def _llm_options(
     api_key: str | None,
     extra_body: Mapping[str, object],
     native_tool_calling: bool | None = None,
+    managed_inference: bool = False,
 ) -> dict[str, Any]:
     """Build the complete OpenHands LLM configuration for one model profile."""
     options: dict[str, Any] = {
         "model": profile.model,
         "usage_id": "agent",
-        "api_key": "local-model" if profile.credential_kind == "none" else api_key,
+        "api_key": (
+            "local-model"
+            if profile.credential_kind == "none" and not managed_inference
+            else api_key
+        ),
         "base_url": profile.base_url,
         "api_version": profile.api_version,
         "aws_region_name": profile.aws_region_name,
@@ -2141,6 +2167,9 @@ def _llm_options(
         "native_tool_calling": native_tool_calling,
         **_llm_resilience_options(profile),
     }
+    if managed_inference:
+        require_managed_base_url(profile.base_url)
+        options["api_mode"] = "chat"
     if profile.is_local:
         options.update(input_cost_per_token=0.0, output_cost_per_token=0.0)
     return {key: value for key, value in options.items() if value is not None}

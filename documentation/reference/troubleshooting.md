@@ -58,7 +58,8 @@ On Carina, use an approved writable project directory below `/projects`.
 ### `HW-PROJECT-002` — Project Setup Needs Attention
 
 Run `heartwood` from the intended project and confirm **Use this project**.
-If `.heartwood/` already exists but has no valid state marker, move it aside only after confirming it does not contain needed state; do not let Heartwood overwrite an unknown directory.
+If local `.heartwood/` already exists but has no valid state marker, preserve it and investigate its contents before any migration or replacement.
+For a managed deployment, have the operator verify the manifest, project UUID and external state path; do not delete markers or fall back to project-local state.
 
 ### `HW-PROJECT-003` — Choose a Dedicated Project Directory
 
@@ -121,7 +122,7 @@ Do not edit the archive or its manifest.
 
 For a checksum, size, or file-list mismatch, obtain a new bundle from the connected source project.
 For an interrupted import, rerun the unchanged command; Heartwood discards incomplete private staging before retrying.
-For an existing model mismatch, use a clean project or investigate why `.heartwood/models/` changed.
+For an existing model mismatch, investigate changes to `models/` under the bound state directory before attempting recovery.
 For a runtime warning, install a compatible Heartwood release or choose a model supported by the destination compute.
 
 ## Agent Runtime
@@ -330,8 +331,9 @@ Do not work around a proxy failure by binding the gateway publicly without authe
 
 If Heartwood reports that a session is active in another process, stop the terminal, browser server, or notebook kernel that owns it and try again.
 Do not remove `.writer.lock` or `.writer.json`; the operating-system lock determines ownership, and Heartwood reclaims stale metadata after the prior process has exited.
-If Heartwood reports that the project storage does not support required process locks, move the complete project to a native local, attached persistent, or qualified project filesystem.
-Do not move only `.heartwood/`, and do not use an object-store mount as session storage.
+If Heartwood reports that state storage does not support required process locks, preserve the research files and matching state before migrating to a native local, attached persistent or qualified filesystem.
+A managed migration must also preserve the project identity and update the operator binding explicitly.
+Do not substitute a state directory from another project or use an object-store mount as session storage.
 
 A completed request can be retried with the same command identifier and content without repeating model or tool work.
 If Heartwood reports that a command was interrupted after acceptance, replay the session and verify the project files and audit records before continuing.
@@ -351,7 +353,9 @@ Do not edit an audit line, remove a recovery journal, or recreate a missing hash
 
 A checkpoint output, signer registry, trusted public key, signer credential, and local fallback key must be outside the Heartwood project.
 Run `heartwood audit signer list` to confirm that a deployment registry is available and that the expected profile is active.
-For the explicit offline fallback, keep `heartwood signer serve-local` running and confirm that its registry endpoint, profile, key fingerprint, and owner-only token still agree.
+For the explicit offline fallback, keep `heartwood signer serve-local` running and confirm that its Unix socket endpoint, profile, key fingerprint, and owner-only token still agree.
+The socket and its immediate directory must be owner-only, owned by the current user, and outside the project; directory symlinks are rejected.
+If startup reports an existing socket, confirm that no signer is using it before removing a stale socket and restarting the service.
 Use a new output directory, a valid retention date on or after checkpoint creation, and storage that supports native process-shared locks.
 Verify a restored bundle with the active deployment profile or an independently retained public key before relying on it.
 

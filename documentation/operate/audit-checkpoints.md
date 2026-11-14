@@ -8,13 +8,19 @@ SPDX-License-Identifier: MIT
 
 Heartwood keeps a content-minimized, hash-chained audit record with each session.
 An ordinary audit export supports project review.
-A signed checkpoint is the artifact a deployment can retain as authoritative evidence outside the agent-writable project.
+A signed checkpoint authenticates an export and its signed deployment statement for retention outside the agent-writable project.
+Its authority depends on independently trusted signing keys, signer authorization and the records system's controls.
+
+The command examples below use local project state.
+The standalone audit CLI does not accept the gateway's `--deployment` manifest; it must not be used as though it automatically selects protected external state.
+A managed operator integration must use the explicitly bound gateway's checkpoint methods and preserve the same identity, policy and writer-ownership checks.
+Checkpoint creation is not exposed as a gateway HTTP route.
 
 ## Choose the Right Artifact
 
 | Artifact | Use | Storage |
 |---|---|---|
-| Session replay | Inspect private conversation and action history | Private `.heartwood/` session state |
+| Session replay | Inspect private conversation and action history | Private session state in the bound state directory |
 | Scrubbed audit export | Review or transfer content-minimized operational events | Temporary reviewed destination |
 | Signed audit checkpoint | Preserve an authenticated export with deployment and retention metadata | Deployment-controlled records storage outside the project |
 
@@ -22,13 +28,44 @@ A standard checkpoint contains `audit.jsonl` and `checkpoint.json`.
 Its signature covers the canonical audit digest, event count, terminal chain hash, session, deployment identifier, creation time, retention declaration, signer identity, key identifier, key version, algorithm, and public-key fingerprint.
 An operator can also include a verified project experiment export, as described below.
 
+### Evidence Boundaries
+
+Verification establishes integrity and authenticity of the retained checkpoint against the selected trusted key.
+It does not establish continuity between separate checkpoints, detect an omitted later checkpoint or prove that the signer independently observed the recorded actions.
+A valid local hash chain alone cannot rule out a rewritten history whose hashes were recomputed before signing.
+Worker-reported results remain claims unless the destination or outside control plane independently verifies them.
+
+Checkpoint creation is an explicit operator action; configuring a signer does not automatically publish checkpoints after approvals or session completion.
+Heartwood does not block action dispatch on independently retained checkpoint evidence.
+Signed retention dates do not prove that the records system enforced immutability, availability or deletion policy.
+Deployments requiring these guarantees need independently enforced controls and qualification beyond checkpoint signature verification.
+
+## Infrastructure Telemetry
+
+Keep Heartwood's canonical decisions and signed checkpoints distinct from outside observations of sandbox activity.
+The reference infrastructure supports OpenShell's native OCSF export through OTLP to an existing authenticated collector.
+Configure the gateway's `openshell.gateway.otlp.ocsf` section with `enabled`, the exact collector `endpoint`, and operator-controlled `ca_file`, `cert_file` and `key_file` paths.
+The infrastructure supplies export configuration to its supervisors; collector credentials and management access stay outside workers.
+Require a collector that validates the client certificate, and restrict its network route and retained data to authorized operators.
+
+Correlate `openshell.gateway.name` and `openshell.sandbox.id` with the outside worker-attempt binding, and preserve native event identifiers for deduplication.
+Infrastructure events can contain sensitive operational metadata; apply the deployment's access, retention and export policy to them.
+They do not independently prove the scientific correctness of a worker's results or replace the canonical decision record.
+
+Delivery is best effort and can repeat records after a lost response.
+The native `openshell.ocsf.gap` event reports dropped records through `openshell.ocsf.gap.dropped` and `openshell.ocsf.gap.since_unix_ms` on a subsequent exported batch.
+Absence of a gap event does not prove complete collection, especially during inactivity, collector rejection or abrupt teardown.
+Monitor collector availability, rejected exports and retention independently, and retain explicit unknown or missing intervals.
+Heartwood does not gate dispatch on OTLP collector health; any requirement to stop work when infrastructure observation is unavailable needs outside deployment enforcement.
+See [Infrastructure Telemetry qualification](../architecture/testing.md#infrastructure-telemetry) for the synthetic loss and ledger-preservation checks.
+
 ## Understand Configuration Ownership
 
 Heartwood separates project selection from deployment trust:
 
 | Scope | Default location | Contents |
 |---|---|---|
-| Project | `.heartwood/config.toml` | An optional approved signer profile name only |
+| Project | `config.toml` in the bound state directory | An optional approved signer profile name only |
 | Managed deployment | `/etc/heartwood/checkpoint-signers.toml` | Approved signer endpoints, trusted public keys, and the deployment default |
 | Workstation fallback | `~/.config/heartwood/checkpoint-signers.toml` | Explicit local development or offline signer profiles |
 | Signer credential | Separate owner-only file | Optional bearer token used only for the signer request |
@@ -93,12 +130,13 @@ heartwood audit signer default
 heartwood audit signer select stanford-records
 ```
 
-Only the selected profile name is written to `.heartwood/config.toml`.
+Only the selected profile name is written to `config.toml` in the bound state directory.
+That directory is local `.heartwood/` or the operator-bound external state root; signer keys and service credentials belong in neither.
 A deployment that permits no user choice should publish only one profile.
 
 ## Use the Explicit Local Fallback
 
-Development and offline environments can run the bundled loopback-only signer service.
+Development and offline environments can run the bundled signer on a private Unix socket.
 Initialize it from any Heartwood project; its material is written outside that project by default:
 
 ```bash
@@ -120,9 +158,13 @@ Then select it in the project that will create the checkpoint:
 heartwood audit signer select local-development
 ```
 
-The local service accepts authenticated loopback requests only.
-Its private key, token, and user registry live under your account, so processes running as your user, including approved agent commands, can read them or replace the registry; verification through that registry is not independent of the account.
-The client does not authenticate the loopback listener, so on a shared host another user who takes the signer port while the service is stopped can capture the authorization token.
+The local service accepts bearer-authenticated requests through the registry's `unix:///` endpoint only.
+The socket must belong to the current operating-system user, have owner-only permissions, and reside in an owner-only directory with trusted, non-symlink ancestors.
+The client validates this protected path before connecting and rechecks the socket identity before sending any token or request bytes.
+The server refuses to replace an existing socket path; after an abnormal shutdown, an operator must confirm the signer has stopped before removing its stale socket.
+There is no TCP fallback.
+Keep the socket, key, token and registry outside the research directory and every worker mount.
+These files remain accessible to unsandboxed processes running as the same user, so verification through this registry is not independent of the account.
 It is an explicit development and offline fallback, not the production default and not a substitute for KMS/HSM access controls or independent authorization.
 
 ## Verify and Checkpoint a Session

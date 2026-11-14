@@ -8,25 +8,26 @@
 
 from __future__ import annotations
 
-import json
 import os
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
 import time
-import urllib.request
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal, cast
 
+import httpx
 from packaging.version import InvalidVersion, Version
 
 from heartwood.adapters.platform import select_platform_adapter
 from heartwood.cli._model_snapshot import verify_snapshot
 from heartwood.gateway import (
+    MANAGED_RUNTIME_SOCKET_ENV,
     LocalContextPlan,
     ManagedRuntimeActivity,
     ModelSnapshot,
@@ -40,6 +41,8 @@ from heartwood.gateway import (
     discover_slurm_gpu_partitions,
     estimate_local_runtime_memory,
     inspect_gpu_environment,
+    managed_inference_client,
+    managed_inference_socket,
     managed_model_token_budgets,
     managed_runtime_activity,
     minimum_compute_capability_for_model,
@@ -581,12 +584,18 @@ def _run_command(command: Sequence[str]) -> int:
 
 
 def _run_runtime(options: LaunchOptions, env: Mapping[str, str]) -> int:
-    with managed_runtime_activity(options.project) as activity:
-        return _run_supervised_runtime(options, env, activity)
+    with (
+        managed_runtime_activity(options.project) as activity,
+        managed_inference_socket(options.project.root) as socket_path,
+    ):
+        return _run_supervised_runtime(options, env, activity, socket_path)
 
 
 def _run_supervised_runtime(
-    options: LaunchOptions, env: Mapping[str, str], activity: ManagedRuntimeActivity
+    options: LaunchOptions,
+    env: Mapping[str, str],
+    activity: ManagedRuntimeActivity,
+    socket_path: Path,
 ) -> int:
     started = time.monotonic()
     selection = _local_model_selection(options.project, env)
@@ -613,6 +622,7 @@ def _run_supervised_runtime(
         print(f"{_runtime_label(runtime_kind)} executable is unavailable: {runtime_executable}")
         return 69
     runtime_env = _runtime_environment(env, project=options.project)
+    runtime_env[MANAGED_RUNTIME_SOCKET_ENV] = str(socket_path)
     if runtime_kind == "vllm":
         runtime_env["VLLM_USE_FLASHINFER_SAMPLER"] = "0"
     try:
@@ -680,6 +690,7 @@ def _run_supervised_runtime(
                     runtime_executable,
                     staged_source,
                     selection,
+                    socket_path=socket_path,
                     enforce_eager=_use_eager_vllm(selection, runtime_env),
                 ),
                 stdout=log_file,
@@ -692,6 +703,7 @@ def _run_supervised_runtime(
         if not _wait_for_runtime(
             runtime,
             model_id=model_id,
+            socket_path=socket_path,
             timeout=options.startup_timeout,
         ):
             elapsed = int(time.monotonic() - started)
@@ -712,13 +724,13 @@ def _run_supervised_runtime(
             f"{_runtime_label(runtime_kind)} is ready after "
             f"{int(time.monotonic() - started)} seconds."
         )
-        runtime_env["HEARTWOOD_LOCAL_RUNTIME_ACTIVE"] = "1"
         runtime_env["HEARTWOOD_LOCAL_RUNTIME_ARTIFACT_ID"] = selection.artifact_id
         _stage(5, 6, "Validate the shared Heartwood setup")
         setup_code = _ensure_setup(
             options,
             runtime_env,
             context_window=selection.context_window,
+            runtime=runtime,
         )
         if setup_code != 0:
             return setup_code
@@ -729,6 +741,7 @@ def _run_supervised_runtime(
             interaction,
             env=runtime_env,
             cwd=options.project.root,
+            runtime=runtime,
         )
     finally:
         if runtime is not None:
@@ -749,12 +762,34 @@ def _run_interaction(
     *,
     env: Mapping[str, str],
     cwd: Path,
+    runtime: subprocess.Popen[str] | None = None,
 ) -> int:
+    process: subprocess.Popen[str] | None = None
     try:
-        return subprocess.run(command, check=False, env=env, cwd=cwd).returncode
+        if runtime is None:
+            return subprocess.run(command, check=False, env=env, cwd=cwd).returncode
+        if runtime.poll() is not None:
+            print("Managed inference exited; Heartwood interaction was not started.")
+            return 70
+        process = subprocess.Popen(command, env=env, cwd=cwd, text=True)
+        while runtime.poll() is None:
+            try:
+                return process.wait(timeout=0.1)
+            except subprocess.TimeoutExpired:
+                pass
+        print("Managed inference exited; Heartwood interaction stopped.")
+        return 70
     except KeyboardInterrupt:
         print("\nHeartwood stopped.")
         return 130
+    finally:
+        if process is not None and process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
 
 
 def _interaction_command(
@@ -811,6 +846,7 @@ def _runtime_command(
     model: Path,
     selection: LocalRuntimeSelection,
     *,
+    socket_path: Path,
     enforce_eager: bool = False,
 ) -> tuple[str, ...]:
     if selection.runtime == "llama-cpp":
@@ -823,9 +859,8 @@ def _runtime_command(
             "--alias",
             selection.model_id,
             "--host",
-            "127.0.0.1",
-            "--port",
-            "8765",
+            str(socket_path),
+            "--no-slots",
             "--ctx-size",
             str(selection.context_window),
         )
@@ -835,10 +870,8 @@ def _runtime_command(
         str(executable),
         "serve",
         str(model),
-        "--host",
-        "127.0.0.1",
-        "--port",
-        "8765",
+        "--uds",
+        str(socket_path),
         "--served-model-name",
         selection.model_id,
         "--max-model-len",
@@ -1174,8 +1207,8 @@ def _runtime_environment(
         "HEARTWOOD_PLATFORM",
         "HEARTWOOD_PLATFORM_HOME",
         "HEARTWOOD_LOCAL_MODEL_CONTEXT",
-        "HEARTWOOD_LOCAL_RUNTIME_ACTIVE",
         "HEARTWOOD_LOCAL_RUNTIME_ARTIFACT_ID",
+        MANAGED_RUNTIME_SOCKET_ENV,
         "LOCAL_SCRATCH_JOB",
         "SLURM_JOB_ID",
         "SLURM_JOB_PARTITION",
@@ -1203,21 +1236,29 @@ def _wait_for_runtime(
     runtime: subprocess.Popen[str],
     *,
     model_id: str,
+    socket_path: Path,
     timeout: float = 600,
 ) -> bool:
     started = time.monotonic()
     deadline = time.monotonic() + timeout
     next_update = started + 15
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     while time.monotonic() < deadline:
         if runtime.poll() is not None:
             return False
         try:
-            with opener.open("http://127.0.0.1:8765/v1/models", timeout=2) as response:
-                payload = json.load(response)
-                if response.status == 200 and _catalog_contains_model(payload, model_id):
-                    return True
-        except (OSError, ValueError):
+            metadata = socket_path.lstat()
+            if not stat.S_ISSOCK(metadata.st_mode) or metadata.st_uid != os.geteuid():
+                return False
+            socket_path.chmod(0o600)
+            with managed_inference_client(
+                {MANAGED_RUNTIME_SOCKET_ENV: str(socket_path)}, timeout=2
+            ) as client:
+                response = client.get("models")
+                if response.status_code == 200 and _catalog_contains_model(
+                    response.json(), model_id
+                ):
+                    return runtime.poll() is None
+        except (OSError, ValueError, httpx.HTTPError):
             pass
         now = time.monotonic()
         if now >= next_update:
@@ -1242,6 +1283,7 @@ def _ensure_setup(
     env: Mapping[str, str] | None = None,
     *,
     context_window: int | None = None,
+    runtime: subprocess.Popen[str] | None = None,
 ) -> int:
     runtime_env = _runtime_environment(
         os.environ if env is None else env,
@@ -1282,12 +1324,9 @@ def _ensure_setup(
             "--non-interactive",
             "--yes",
         )
-        setup_code = subprocess.run(
-            setup_command,
-            check=False,
-            env=runtime_env,
-            cwd=options.project.root,
-        ).returncode
+        setup_code = _run_interaction(
+            setup_command, env=runtime_env, cwd=options.project.root, runtime=runtime
+        )
         if setup_code != 0:
             return setup_code
     if context_window is not None:
@@ -1298,12 +1337,9 @@ def _ensure_setup(
         "heartwood.cli",
         "doctor",
     )
-    return subprocess.run(
-        doctor_command,
-        check=False,
-        env=runtime_env,
-        cwd=options.project.root,
-    ).returncode
+    return _run_interaction(
+        doctor_command, env=runtime_env, cwd=options.project.root, runtime=runtime
+    )
 
 
 def _persist_effective_context(store: ProjectConfigStore, context_window: int) -> None:
