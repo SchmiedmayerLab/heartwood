@@ -90,6 +90,7 @@ def test_substituted_native_artifacts_are_rejected_before_docker(
     records_manifest_path.write_text(json.dumps(records_manifest))
     records_builder = builder.with_name("build-records-fixture.py")
     records_builder.write_text("synthetic reviewed records builder")
+    records_sha256 = {name: digest(records / name) for name in files}
     records_build = {
         "purpose": "qualification-only",
         "architecture": "amd64",
@@ -97,16 +98,16 @@ def test_substituted_native_artifacts_are_rejected_before_docker(
         "builder_sha256": digest(records_builder),
         "builder_image": records_manifest["builder"],
         "sources": records_manifest["sources"],
-        "files": {name: digest(records / name) for name in files},
+        "files": records_sha256,
     }
     if changed == "missing-cli":
         del binaries_sha256["openshell"]
     elif changed == "records-missing-file":
-        del records_build["files"]["bin/minio"]
+        del records_sha256["bin/minio"]
     elif changed == "records-architecture":
         records_build["architecture"] = "arm64"
     elif changed == "records-path":
-        records_build["files"]["../outside"] = "substituted"
+        records_sha256["../outside"] = "substituted"
     else:
         target = {
             "manifest": manifest_path,
