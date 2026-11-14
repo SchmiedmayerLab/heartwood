@@ -1554,6 +1554,23 @@ class SessionService:
                 translated.append(self._record_confirmation_request(event))
             elif isinstance(event, BackendConfirmationResolutionEvent):
                 tool_call = event.tool_call
+                if event.approved and not self._approval_recorded(event.action_group_id):
+                    # Only a recorded decision approves an action; a backend that reports
+                    # execution without one has left review and is not trusted further.
+                    if self._worker_lease is not None:
+                        self._worker_lease.fence()
+                    translated.append(
+                        self._record_event(
+                            EventKind.ERROR_RECORDED,
+                            {
+                                "reason": "action executed without a recorded review decision",
+                                "tool_call_id": tool_call.tool_call_id,
+                                "group_id": event.action_group_id,
+                                **source_payload,
+                            },
+                        )
+                    )
+                    continue
                 translated.append(
                     self._record_event(
                         EventKind.CONFIRMATION_RESOLVED,
@@ -1767,6 +1784,14 @@ class SessionService:
                 ),
                 live=False,
             )
+        )
+
+    def _approval_recorded(self, group_id: str) -> bool:
+        return any(
+            event.kind == EventKind.APPROVAL_RECORDED
+            and event.payload.get("group_id") == group_id
+            and event.payload.get("decision") == "approved"
+            for event in self.replay_events()
         )
 
     def _known_source_event_ids_locked(self) -> set[str]:
