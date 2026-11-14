@@ -40,4 +40,4 @@ jobs:
           curl --proto '=https' --tlsv1.2 -sSfLO "${base}/${asset}"
           echo "${GITLEAKS_SHA256}  ${asset}" | sha256sum --check -
           tar -xzf "${asset}" gitleaks
-          ./gitleaks git . --no-banner --redact --exit-code 1
+          ./gitleaks git . --log-opts HEAD --no-banner --redact --exit-code 1
