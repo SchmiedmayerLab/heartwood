@@ -574,6 +574,15 @@ def _build_parser() -> argparse.ArgumentParser:
     signer_serve.add_argument("--profile")
     signer_serve.add_argument("--private-key", type=Path)
 
+    project_operations = subparsers.add_parser("project", help="Explicit project state operations.")
+    project_commands = project_operations.add_subparsers(dest="project_command", required=True)
+    migrate = project_commands.add_parser("migrate", help="Move local state to protected storage.")
+    migrate.add_argument("--deployment", type=Path, required=True)
+    migrate.add_argument("--backup", type=Path, required=True)
+    recover = project_commands.add_parser("recover-migration", help="Recover a state migration.")
+    recover.add_argument("--deployment", type=Path, required=True)
+    recover.add_argument("--rollback", action="store_true")
+
     gateway = subparsers.add_parser("gateway", help="Advanced gateway operations.")
     gateway_subparsers = gateway.add_subparsers(dest="gateway_command", metavar="<gateway-command>")
     gateway_serve = gateway_subparsers.add_parser(
@@ -670,6 +679,26 @@ def _main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
     project = ProjectContext.current()
+    if args.command == "project":
+        from heartwood.gateway._project_migration import (
+            migrate_project_state,
+            recover_project_migration,
+        )
+
+        try:
+            if args.project_command == "migrate":
+                journal = migrate_project_state(
+                    deployment=args.deployment, workspace=project.root, backup=args.backup
+                )
+            else:
+                journal = recover_project_migration(
+                    deployment=args.deployment, workspace=project.root, rollback=args.rollback
+                )
+        except (OSError, ValueError) as error:
+            print(f"Project migration stopped: {error}", file=sys.stderr)
+            return 64
+        print(f"Migration evidence: {journal}")
+        return 0
     if args.port is not None and (args.port < 1 or args.port > 65_535):
         parser.error("--port must be between 1 and 65535")
     if args.plain and args.interface != "terminal":
