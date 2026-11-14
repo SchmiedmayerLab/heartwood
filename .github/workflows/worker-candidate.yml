@@ -32,7 +32,7 @@ jobs:
   gateway:
     name: Build the pinned gateway candidate
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 120
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7

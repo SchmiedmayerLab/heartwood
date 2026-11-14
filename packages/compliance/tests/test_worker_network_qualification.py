@@ -194,7 +194,7 @@ def hostile_probe() -> ModuleType:
     return module
 
 
-@pytest.mark.parametrize("code", [401, 404, 500])
+@pytest.mark.parametrize("code", [303, 307, 308, 401, 404, 500])
 def test_hostile_probe_requires_policy_denial(hostile_probe: ModuleType, code: int) -> None:
     with (
         patch.object(

@@ -247,6 +247,10 @@ def test_native_workflow_and_protected_state_restore(infrastructure: NativeFixtu
         assert fixture.provider.canary_requests == 2
         events = service.replay_events()
         assert not any(event.kind == EventKind.ERROR_RECORDED for event in events)
+        executions = [event for event in events if event.kind == EventKind.TOOL_EXECUTION_RECORDED]
+        assert len(executions) == 2
+        assert all(event.payload["exit_code"] == 0 for event in executions)
+        assert fixture.provider.redirect_requests == int(fixture.hostile)
         for decision in [event for event in events if event.kind == EventKind.APPROVAL_RECORDED]:
             calls = decision.payload["tool_call_ids"]
             assert isinstance(calls, list)
@@ -305,7 +309,7 @@ print(json.dumps(result))
             )
             assert hostile.exit_code == 0, hostile.stderr
             hostile_checks = json.loads(hostile.stdout)
-            assert len(hostile_checks) == 7
+            assert len(hostile_checks) == 9
             assert all(value is True for value in hostile_checks.values())
         service.audit_log.verify()
         _stop(application)
@@ -317,6 +321,7 @@ print(json.dumps(result))
             "worker_claims": hostile_checks,
             "outside_canary_positive_controls": fixture.provider.canary_requests,
             "forbidden_provider_requests": 0,
+            "allowed_endpoint_redirect_requests": fixture.provider.redirect_requests,
             "outside_state_unchanged": True,
             "worker_image": fixture.worker,
             "gateway_image": fixture.gateway_image,

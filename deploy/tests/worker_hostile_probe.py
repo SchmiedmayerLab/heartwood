@@ -14,8 +14,19 @@ import argparse
 import errno
 import json
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
+
+
+def require_policy_denial(request: str | urllib.request.Request) -> None:
+    """Do not confuse transport failure or an available route with policy enforcement."""
+    try:
+        with urllib.request.urlopen(request, timeout=8):
+            raise AssertionError("Forbidden provider path was reachable")
+    except urllib.error.HTTPError as error:
+        if error.code != 403:
+            raise AssertionError("Provider path failed without a policy denial") from error
 
 
 def probe(protected: str, credential: str, endpoint: str) -> dict[str, bool]:
@@ -46,13 +57,32 @@ def probe(protected: str, credential: str, endpoint: str) -> dict[str, bool]:
         else:
             raise AssertionError("Forbidden resource was writable")
         checks[name] = True
-    try:
-        with urllib.request.urlopen(endpoint, timeout=8):
-            raise AssertionError("Forbidden provider path was reachable")
-    except urllib.error.HTTPError as error:
-        if error.code != 403:
-            raise AssertionError("Provider path failed without a policy denial") from error
+    require_policy_denial(endpoint)
     checks["provider-path-denied"] = True
+    inference = urllib.parse.urljoin(endpoint, "/v1/chat/completions")
+    require_policy_denial(
+        urllib.request.Request(
+            inference,
+            data=b"{}",
+            headers={
+                "Content-Type": "application/json",
+                "X-Heartwood-Qualification-Probe": "redirect",
+            },
+        )
+    )
+    checks["redirect-path-denied"] = True
+    require_policy_denial(
+        urllib.request.Request(
+            inference,
+            headers={
+                "Connection": "Upgrade",
+                "Upgrade": "websocket",
+                "Sec-WebSocket-Version": "13",
+                "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==",
+            },
+        )
+    )
+    checks["unapproved-upgrade-denied"] = True
     return checks
 
 
