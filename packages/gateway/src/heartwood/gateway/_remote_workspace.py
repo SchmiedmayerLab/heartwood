@@ -10,11 +10,13 @@ from __future__ import annotations
 
 import json
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from datetime import datetime
 from threading import Lock
 from typing import Any
 
 import httpx
+from openhands.sdk.agent.base import AgentBase
 from openhands.sdk.tool.client_tool import ClientToolSpec
 from openhands.sdk.workspace import RemoteWorkspace
 from pydantic import ConfigDict, Field, PrivateAttr, model_validator
@@ -23,6 +25,9 @@ from heartwood.core_adapter.worker_attempts import WorkerAttemptError, WorkerAtt
 
 _MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 _MAX_JSON_DEPTH = 64
+
+# The gateway's agent as sent to the worker and as serialized without secrets.
+AgentContract = tuple[dict[str, Any], dict[str, Any]]
 
 
 class WorkerResponseError(ValueError):
@@ -108,10 +113,12 @@ class WorkerResponseTransport(httpx.BaseTransport):
         transport: httpx.BaseTransport,
         budget: WorkerResponseBudget | None = None,
         client_tools: Sequence[ClientToolSpec] = (),
+        agent: Callable[[], AgentContract | None] = lambda: None,
     ) -> None:
         self._origin = _worker_origin(host)
         self._tool_modules = dict(tool_modules)
         self._client_tools = _client_tool_contract(client_tools)
+        self._agent = agent
         self._transport = transport
         self._budget = budget if budget is not None else WorkerResponseBudget()
         if self._budget.attempt is not None and self._origin != _worker_origin(
@@ -157,7 +164,7 @@ class WorkerResponseTransport(httpx.BaseTransport):
                 media_type = response.headers.get("content-type", "").split(";", 1)[0]
                 if media_type.strip().lower() != "application/json":
                     raise WorkerResponseError("worker response must be JSON")
-                value = _admit_json(content, self._tool_modules, self._client_tools)
+                value = _admit_json(content, self._tool_modules, self._client_tools, self._agent())
                 attempt = self._budget.attempt
                 if (
                     attempt is not None
@@ -194,7 +201,9 @@ class WorkerResponseTransport(httpx.BaseTransport):
         path = request.url.path
         canonical = request.url.raw_path.split(b"?", 1)[0] == path.encode("utf-8")
         if path == "/api/conversations" and request.method == "POST" and canonical:
-            value = _admit_json(request.content, self._tool_modules, self._client_tools)
+            value = _admit_json(
+                request.content, self._tool_modules, self._client_tools, self._agent()
+            )
             if isinstance(value, dict) and value.get("conversation_id") == identity:
                 return
         prefix = f"/api/conversations/{identity}"
@@ -224,7 +233,10 @@ def _reject_constant(_value: str) -> None:
 
 
 def _admit_json(
-    content: bytes, tool_modules: Mapping[str, str], client_tools: Mapping[str, str] | None = None
+    content: bytes,
+    tool_modules: Mapping[str, str],
+    client_tools: Mapping[str, str] | None = None,
+    agent: AgentContract | None = None,
 ) -> object:
     try:
         value: object = json.loads(
@@ -247,7 +259,7 @@ def _admit_json(
             raise WorkerResponseError("worker JSON contains a nonfinite number")
     if not isinstance(value, dict):
         return value
-    _admit_metadata(value, tool_modules, client_tools)
+    _admit_metadata(value, tool_modules, client_tools, agent)
     return value
 
 
@@ -286,10 +298,56 @@ def _admit_client_tools(value: object, expected: Mapping[str, str]) -> None:
         seen.add(spec.name)
 
 
+def _same_agent(returned: object, sent: object, redacted: object) -> bool:
+    # Requests omit unset fields that responses carry as null, so the two are equivalent.
+    if isinstance(sent, dict):
+        redacted = redacted if isinstance(redacted, dict) else sent
+        return isinstance(returned, dict) and all(
+            _same_agent(returned.get(key), sent.get(key), redacted.get(key))
+            for key in returned.keys() | sent.keys()
+        )
+    if isinstance(sent, list):
+        redacted = redacted if isinstance(redacted, list) else sent
+        return (
+            isinstance(returned, list)
+            and len(returned) == len(sent) == len(redacted)
+            and all(map(_same_agent, returned, sent, redacted))
+        )
+    if type(returned) is type(sent) and returned == sent:
+        return True
+    # Only a secret serializes differently; the worker may redact or omit its value.
+    return sent != redacted and (
+        returned is None or (type(returned) is type(redacted) and returned == redacted)
+    )
+
+
+def _with_server_context(returned: object, agent: AgentContract) -> AgentContract:
+    """Accept the two prompt-context values the agent server replaces in its responses."""
+    context = returned.get("agent_context") if isinstance(returned, dict) else None
+    if not isinstance(context, dict) or not isinstance(agent[0].get("agent_context"), dict):
+        return agent
+    owned: dict[str, Any] = {}
+    started = context.get("current_datetime")
+    if isinstance(started, str) and len(started) <= 64:
+        try:
+            datetime.fromisoformat(started)
+        except ValueError:
+            pass
+        else:
+            owned["current_datetime"] = started
+    if context.get("skills") == []:
+        owned["skills"] = []
+    sent, redacted = (
+        {**side, "agent_context": {**side["agent_context"], **owned}} for side in agent
+    )
+    return sent, redacted
+
+
 def _admit_metadata(
     value: dict[str, Any],
     tool_modules: Mapping[str, str],
     client_tools: Mapping[str, str] | None = None,
+    agent: AgentContract | None = None,
 ) -> None:
     registrations = value.get("tool_module_qualnames", {})
     if not isinstance(registrations, dict) or any(
@@ -298,26 +356,13 @@ def _admit_metadata(
     ):
         raise WorkerResponseError("worker tool registrations are not authorized")
     _admit_client_tools(value.get("client_tools"), client_tools or {})
-    agent = value.get("agent")
-    if agent is not None:
-        if not isinstance(agent, dict) or agent.get("kind") != "Agent":
-            raise WorkerResponseError("worker agent kind is not authorized")
-        _reject_completion_logging(agent)
-
-
-def _reject_completion_logging(agent: dict[str, Any]) -> None:
-    # RemoteConversation installs a local file-writing callback when any returned
-    # LLM enables completion logging. Worker metadata cannot grant that authority.
-    pending: list[Any] = [agent]
-    while pending:
-        item = pending.pop()
-        if isinstance(item, dict):
-            setting = item.get("log_completions")
-            if setting is not None and setting is not False:
-                raise WorkerResponseError("worker-selected completion logging is not authorized")
-            pending.extend(item.values())
-        elif isinstance(item, list):
-            pending.extend(item)
+    # The SDK deserializes a returned agent, and constructing its models can contact
+    # the configured model route, so only the gateway's own agent is admitted.
+    returned = value.get("agent")
+    if returned is not None and (
+        agent is None or not _same_agent(returned, *_with_server_context(returned, agent))
+    ):
+        raise WorkerResponseError("worker agent is not authorized")
 
 
 class AdmittedRemoteWorkspace(RemoteWorkspace):
@@ -331,6 +376,7 @@ class AdmittedRemoteWorkspace(RemoteWorkspace):
     _admitted_client: httpx.Client | None = PrivateAttr(default=None)
     _response_budget: WorkerResponseBudget = PrivateAttr(default_factory=WorkerResponseBudget)
     _client_tool_specs: tuple[str, ...] | None = PrivateAttr(default=None)
+    _agent_contract: AgentContract | None = PrivateAttr(default=None)
 
     @model_validator(mode="after")
     def _bind_attempt_budget(self) -> AdmittedRemoteWorkspace:
@@ -349,6 +395,13 @@ class AdmittedRemoteWorkspace(RemoteWorkspace):
         """Copy the captured native specifications without sharing mutable schemas."""
         return [ClientToolSpec.model_validate_json(spec) for spec in self._client_tool_specs or ()]
 
+    def authorize_agent(self, agent: AgentBase) -> None:
+        """Bind the agent this workspace sends; worker metadata may return no other."""
+        self._agent_contract = (
+            agent.model_dump(mode="json", context={"expose_secrets": True}),
+            agent.model_dump(mode="json"),
+        )
+
     @property
     def client(self) -> httpx.Client:
         self._response_budget.charge(0)
@@ -365,6 +418,7 @@ class AdmittedRemoteWorkspace(RemoteWorkspace):
                 host=self.host,
                 tool_modules=modules,
                 client_tools=self.authorized_client_tools,
+                agent=lambda: self._agent_contract,
                 budget=self._response_budget,
                 transport=httpx.HTTPTransport(
                     trust_env=False, limits=httpx.Limits(max_connections=4)

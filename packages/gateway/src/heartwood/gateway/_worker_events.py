@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 import ssl
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from uuid import UUID
 
@@ -33,6 +33,7 @@ from heartwood.core_adapter.worker_attempts import WorkerAttemptLease
 from heartwood.gateway._remote_workspace import (
     _MAX_RESPONSE_BYTES,
     AdmittedRemoteWorkspace,
+    AgentContract,
     WorkerResponseBudget,
     WorkerResponseError,
     _admit_json,
@@ -59,9 +60,11 @@ class WorkerEventAdmission:
         tool_modules: Mapping[str, str],
         budget: WorkerResponseBudget,
         client_tools: Sequence[ClientToolSpec] = (),
+        agent: Callable[[], AgentContract | None] = lambda: None,
     ) -> None:
         self._origin = _worker_origin(host)
         self._budget = budget
+        self._agent = agent
         self._tool_modules = dict(tool_modules)
         self._client_tools = _client_tool_contract(client_tools)
         if budget.attempt is not None and self._origin != _worker_origin(
@@ -145,7 +148,8 @@ class WorkerEventAdmission:
             self._budget.charge(len(content), new_response=True)
             if len(content) > _MAX_RESPONSE_BYTES:
                 raise ValueError
-            value = _admit_json(content, self._tool_modules, self._client_tools)
+            agent = self._agent()
+            value = _admit_json(content, self._tool_modules, self._client_tools, agent)
             if not isinstance(value, dict) or value.get("kind") == "LLMCompletionLogEvent":
                 raise ValueError
             event = Event.model_validate(value)
@@ -153,7 +157,7 @@ class WorkerEventAdmission:
                 metadata = event.value if event.key == FULL_STATE_KEY else {event.key: event.value}
                 if not isinstance(metadata, dict):
                     raise ValueError
-                _admit_metadata(metadata, self._tool_modules, self._client_tools)
+                _admit_metadata(metadata, self._tool_modules, self._client_tools, agent)
                 attempt = self._budget.attempt
                 if (
                     attempt is not None
@@ -197,6 +201,7 @@ class AdmittedWorkerWorkspace(AdmittedRemoteWorkspace):
                 tool_modules=dict(self.tool_modules),
                 budget=self._response_budget,
                 client_tools=self.authorized_client_tools,
+                agent=lambda: self._agent_contract,
             )
         return self._event_admission
 

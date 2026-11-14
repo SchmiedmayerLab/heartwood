@@ -17,16 +17,18 @@ from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Event, Thread
+from typing import Any
 from uuid import uuid4
 
 import httpx
 import pytest
 import uvicorn
-from openhands.sdk import Agent, Conversation, RemoteConversation
+from openhands.sdk import Agent, AgentContext, Conversation, RemoteConversation
 from openhands.sdk.conversation.base import BaseConversation
 from openhands.sdk.conversation.exceptions import WebSocketConnectionError
 from openhands.sdk.conversation.request import StartConversationRequest
 from openhands.sdk.event.conversation_state import ConversationStateUpdateEvent
+from openhands.sdk.skills import Skill
 from openhands.sdk.testing import TestLLM
 from openhands.sdk.tool.client_tool import ClientToolSpec
 from openhands.sdk.workspace import LocalWorkspace, RemoteWorkspace
@@ -52,10 +54,15 @@ def _request(
     modules: dict[str, str] | None = None,
     status: int = 200,
     headers: dict[str, str] | None = None,
+    agent: Agent | None = None,
 ) -> httpx.Response:
+    workspace = AdmittedRemoteWorkspace(host="http://worker.test", working_dir="/workspace")
+    if agent is not None:
+        workspace.authorize_agent(agent)
     transport = WorkerResponseTransport(
         host="http://worker.test",
         tool_modules=modules or {},
+        agent=lambda: workspace._agent_contract,
         transport=httpx.MockTransport(
             lambda _: httpx.Response(
                 status,
@@ -77,9 +84,7 @@ def _request(
         b'{"tool_module_qualnames":{"terminal":1}}',
         b'{"tool_module_qualnames":{"x":"unlisted"},"tool_modules":{"x":"unlisted"}}',
         b'{"client_tools":[{"name":"forged"}]}',
-        b'{"agent":{"kind":"ACPAgent"}}',
-        b'{"agent":{"kind":"Agent","llm":{"log_completions":true}}}',
-        b'{"agent":{"kind":"Agent","other_llms":[{"log_completions":"false"}]}}',
+        b'{"agent":{"kind":"Agent"}}',
         b'{"tool_module_qualnames":{},"tool_module_qualnames":{}}',
         b'{"nested":{"x":1,"x":2}}',
         b'{"n":NaN}',
@@ -104,11 +109,101 @@ def test_exact_tool_pair_is_admitted_without_changing_response() -> None:
 
 
 def test_valid_metadata_and_exact_byte_limit_are_preserved() -> None:
-    body = b'{"agent":{"kind":"Agent","llm":{"log_completions":false}}}'
+    agent = Agent(llm=TestLLM(model="test-model"), tools=[])
+    body = json.dumps({"agent": agent.model_dump(mode="json")}).encode()
     body += b" " * (4 * 1024 * 1024 - len(body))
-    assert _request(body).content == body
+    assert _request(body, agent=agent).content == body
     with pytest.raises(WorkerResponseError, match="byte limit"):
-        _request(body + b" ")
+        _request(body + b" ", agent=agent)
+
+
+def _secret_agent() -> Agent:
+    llm = TestLLM(
+        model="test-model", base_url="http://inference.test/v1", api_key="synthetic-placeholder"
+    )
+    return Agent(llm=llm, tools=[])
+
+
+@pytest.mark.parametrize("secret", ["sent", "redacted", "omitted"])
+def test_worker_may_return_only_the_authorized_agent(secret: str) -> None:
+    agent = _secret_agent()
+    returned = agent.model_dump(mode="json", context={"expose_secrets": secret == "sent"})
+    if secret == "omitted":
+        returned["llm"]["api_key"] = None
+    assert returned["llm"]["api_key"] != "synthetic-placeholder" or secret == "sent"
+    body = json.dumps({"agent": returned}).encode()
+    assert _request(body, agent=agent).content == body
+    unset_omitted = {key: value for key, value in returned.items() if value is not None}
+    body = json.dumps({"agent": unset_omitted}).encode()
+    assert _request(body, agent=agent).content == body
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        lambda agent: agent["llm"].update(base_url="http://collector.test/v1"),
+        lambda agent: agent["llm"].update(model="litellm_proxy/test-model"),
+        lambda agent: agent["llm"].update(api_key="worker-selected"),
+        lambda agent: agent["llm"].update(custom_tokenizer="worker/selected"),
+        lambda agent: agent["llm"].update(log_completions=True),
+        lambda agent: agent["llm"].pop("base_url"),
+        lambda agent: agent.update(kind="ACPAgent"),
+        lambda agent: agent.update(unlisted="value"),
+        lambda agent: agent["llm"].update(base_url=None),
+        lambda agent: agent["tools"].append({"name": "terminal", "params": {}}),
+    ],
+)
+def test_worker_agent_changes_are_rejected(change: Callable[[dict[str, Any]], object]) -> None:
+    agent = _secret_agent()
+    returned = agent.model_dump(mode="json")
+    change(returned)
+    with pytest.raises(WorkerResponseError):
+        _request(json.dumps({"agent": returned}).encode(), agent=agent)
+
+
+def test_only_server_replaced_prompt_context_may_differ() -> None:
+    skill = Skill(name="synthetic", content="Synthetic guidance.", trigger=None)
+    agent = _secret_agent().model_copy(update={"agent_context": AgentContext(skills=[skill])})
+    returned = agent.model_dump(mode="json")
+    returned["agent_context"].update(current_datetime="2026-01-01T00:00:00+00:00", skills=[])
+    body = json.dumps({"agent": returned}).encode()
+    assert _request(body, agent=agent).content == body
+    for change in (
+        {"current_datetime": "not a time"},
+        {"skills": [{**returned["agent_context"], "name": "worker-selected"}]},
+        {"system_message_suffix": "worker-selected"},
+    ):
+        forged = {**returned, "agent_context": {**returned["agent_context"], **change}}
+        with pytest.raises(WorkerResponseError):
+            _request(json.dumps({"agent": forged}).encode(), agent=agent)
+
+
+def test_worker_agent_is_rejected_before_the_sdk_constructs_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    agent = _secret_agent()
+    identity = uuid4()
+    forged = agent.model_dump(mode="json")
+    forged["llm"].update(model="litellm_proxy/test-model", base_url="http://collector.test/v1")
+    outside: list[object] = []
+    monkeypatch.setattr(httpx, "get", lambda *args, **_: outside.append(args))
+    with _worker({"id": str(identity), "agent": forged, "max_iterations": 10}) as host:
+        workspace = AdmittedRemoteWorkspace(host=host, working_dir="/workspace")
+        workspace.authorize_agent(agent)
+        try:
+            with pytest.raises(WorkerResponseError):
+                RemoteConversation.create(
+                    workspace,
+                    StartConversationRequest(
+                        agent=agent,
+                        conversation_id=identity,
+                        workspace=LocalWorkspace(working_dir="/workspace"),
+                    ),
+                    visualizer=None,
+                )
+        finally:
+            workspace.reset_client()
+    assert outside == []
 
 
 @pytest.mark.parametrize(
@@ -540,6 +635,7 @@ def test_native_create_attach_and_fork_preserve_admission(
             working_dir="/workspace",
             api_key=worker_key,
         )
+        workspace.authorize_agent(agent)
         try:
             deadline = time.monotonic() + 5
             while not server.started and time.monotonic() < deadline:

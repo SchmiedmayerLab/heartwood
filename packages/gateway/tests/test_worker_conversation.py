@@ -13,11 +13,15 @@ from typing import Literal, cast
 from unittest.mock import MagicMock
 
 import pytest
+from fastapi.testclient import TestClient
+from openhands.agent_server.api import create_app
+from openhands.agent_server.config import Config
 from openhands.sdk.conversation import RemoteConversation
 from openhands.sdk.conversation.request import StartConversationRequest
 from openhands.sdk.event import StreamingDeltaEvent
 from openhands.sdk.security import AlwaysConfirm
 from openhands.sdk.skills import Skill
+from openhands.sdk.workspace import LocalWorkspace
 from pydantic import SecretStr
 
 import heartwood.gateway._openhands_sdk as adapter
@@ -28,6 +32,7 @@ from heartwood.gateway._openhands_sdk import (
     OpenHandsSdkError,
     WorkerConversationContext,
 )
+from heartwood.gateway._remote_workspace import WorkerResponseError, _admit_metadata
 from heartwood.gateway._specialist_task import HeartwoodSpecialistToolSet
 from heartwood.gateway._specialists import SpecialistCatalog, load_specialist_catalog
 from heartwood.gateway._worker_events import AdmittedWorkerWorkspace
@@ -139,6 +144,48 @@ def test_remote_request_reuses_agent_contract_without_resolving_host_credentials
     with pytest.raises(WorkerAttemptError):
         callbacks[0](StreamingDeltaEvent(content="stale delta"))
     assert deltas == ["synthetic delta"]
+    backend.close()
+
+
+def test_pinned_agent_server_returns_the_agent_admission_expects(
+    tmp_path: Path, context: WorkerConversationContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    requests: list[StartConversationRequest] = []
+    remote = cast(RemoteConversation, MagicMock(spec=RemoteConversation))
+
+    def create(
+        _workspace: AdmittedWorkerWorkspace, request: StartConversationRequest, **_: object
+    ) -> RemoteConversation:
+        requests.append(request)
+        return remote
+
+    monkeypatch.setattr(RemoteConversation, "create", create)
+    backend = _backend(tmp_path, context, structured_task_outcomes=True)
+    backend.bind_runtime(event_sink=lambda _events: None, token_sink=lambda _delta: None)
+    backend._get_conversation()
+    workspace = tmp_path / "worker-workspace"
+    workspace.mkdir()
+    request = requests[0].model_copy(update={"workspace": LocalWorkspace(working_dir=workspace)})
+    server = create_app(
+        Config(
+            session_api_keys=[],
+            conversations_path=tmp_path / "worker-conversations",
+            workspace_path=workspace,
+        )
+    )
+    with TestClient(server) as client:
+        response = client.post(
+            "/api/conversations",
+            content=request.model_dump_json(context={"expose_secrets": True}, exclude_none=True),
+            headers={"Content-Type": "application/json"},
+        )
+    assert response.status_code == 201
+    returned = response.json()["agent"]
+    contract = context.workspace._agent_contract
+    _admit_metadata({"agent": returned}, {}, None, contract)
+    returned["condenser"]["llm"]["base_url"] = "http://collector.test/v1"
+    with pytest.raises(WorkerResponseError):
+        _admit_metadata({"agent": returned}, {}, None, contract)
     backend.close()
 
 
