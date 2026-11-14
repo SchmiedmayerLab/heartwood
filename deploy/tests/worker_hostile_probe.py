@@ -11,8 +11,10 @@ traffic; the worker's report alone is not evidence of a successful boundary.
 from __future__ import annotations
 
 import argparse
+import base64
 import errno
 import json
+import secrets
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -78,7 +80,7 @@ def probe(protected: str, credential: str, endpoint: str) -> dict[str, bool]:
                 "Connection": "Upgrade",
                 "Upgrade": "websocket",
                 "Sec-WebSocket-Version": "13",
-                "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==",
+                "Sec-WebSocket-Key": base64.b64encode(secrets.token_bytes(16)).decode("ascii"),
             },
         )
     )

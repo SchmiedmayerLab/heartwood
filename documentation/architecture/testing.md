@@ -171,6 +171,9 @@ The outside fixture checks actual state canaries and provider traffic before and
 The allowed synthetic endpoint redirects a request to a forbidden path; qualification requires observing the redirect request outside the worker and no request at its destination.
 The same POST-only profile rejects an unapproved WebSocket upgrade; this does not qualify a separately enabled WebSocket endpoint or its message rules.
 Tool execution must succeed independently of the scripted conversation's completion status.
+The installed suite runs direct IPv4, mapped IPv6, native IPv6, TCP and UDP probes against controlled listeners on a disposable dual-stack Docker network.
+A separate outside client must reach each listener before and after the worker attempt; timeouts and unreachable destinations cannot pass as policy denials.
+The supervisor retains its supported bridge configuration, and workers retain `network=none`; the additional network connects only the trusted controller namespace and its outside client.
 Injected instructions appear in synthetic input and tool output, but deterministic provider responses do not establish resistance to model-driven prompt injection.
 
 The candidate workflow builds the gateway and dependency wheels independently, then assembles the shared worker and runtime images for native integration.
