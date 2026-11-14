@@ -771,6 +771,11 @@ def test_openhands_security_configuration_never_automatically_authorizes_risk_hi
     assert all(policy.should_confirm(risk) for risk in SecurityRisk)
 
 
+def test_openhands_security_configuration_rejects_an_unknown_confirmation_mode() -> None:
+    with pytest.raises(ValueError, match="unsupported action confirmation mode"):
+        _security_configuration(cast(Literal["always-confirm", "confirm-risky"], "never-confirm"))
+
+
 def test_typed_event_translation_covers_messages_tools_tasks_and_errors(
     tmp_path: Path,
 ) -> None:

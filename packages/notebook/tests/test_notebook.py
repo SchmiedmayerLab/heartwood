@@ -366,6 +366,40 @@ def test_notebook_groups_every_pending_member_under_one_action_set() -> None:
     )
 
 
+def test_notebook_review_shows_commands_and_paths_without_model_summaries() -> None:
+    command = "python summarize.py --output summary.json"
+    path = "results/summary.txt"
+    projection = SessionProjection(
+        session_id="summaryless-review",
+        event_count=4,
+        revision=3,
+        pending_approval=ProjectionApprovalGroup(
+            group_id="action-set-synthetic",
+            actions=(
+                _approval_action(
+                    "command", tool_name="terminal", summary="", arguments={"command": command}
+                ),
+                _approval_action(
+                    "edit",
+                    tool_name="file_editor",
+                    summary="",
+                    arguments={"command": "create", "path": path},
+                ),
+            ),
+        ),
+    )
+    review = next(
+        section
+        for section in build_widget_spec(build_view_model(projection))
+        if section.title == "Action Review"
+    )
+    rendered = "\n".join(review.items)
+    assert f"$ {command}" in rendered
+    assert path in rendered
+    assert '"command": "create"' in rendered
+    assert "Model-provided summary:" not in rendered
+
+
 def test_notebook_renders_catalog_specialist_approval_details() -> None:
     action = _approval_action(
         "task-1",
