@@ -11,14 +11,17 @@ from __future__ import annotations
 import os
 import shlex
 import shutil
+import signal
 import stat
 import subprocess
 import sys
 import tempfile
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
+from types import FrameType
 from typing import Literal, cast
 
 import httpx
@@ -587,8 +590,24 @@ def _run_runtime(options: LaunchOptions, env: Mapping[str, str]) -> int:
     with (
         managed_runtime_activity(options.project) as activity,
         managed_inference_socket(options.project.root) as socket_path,
+        _termination_exits(),
     ):
         return _run_supervised_runtime(options, env, activity, socket_path)
+
+
+@contextmanager
+def _termination_exits() -> Iterator[None]:
+    """Unwind on SIGTERM or SIGHUP so supervision stops and confirms its child."""
+
+    def stop(signum: int, _frame: FrameType | None) -> None:
+        raise SystemExit(128 + signum)
+
+    previous = {signum: signal.signal(signum, stop) for signum in (signal.SIGTERM, signal.SIGHUP)}
+    try:
+        yield
+    finally:
+        for signum, handler in previous.items():
+            signal.signal(signum, handler)
 
 
 def _run_supervised_runtime(
