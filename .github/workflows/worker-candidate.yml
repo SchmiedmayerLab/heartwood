@@ -129,6 +129,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
         with:
+          submodules: 'true'
           persist-credentials: false
       - name: Restore records build cache
         uses: actions/cache@v6.1.0

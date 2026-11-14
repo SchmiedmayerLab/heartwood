@@ -18,11 +18,9 @@ import json
 import os
 import secrets
 import socket
-import ssl
 import subprocess
 import threading
 import time
-import urllib.request
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
@@ -61,6 +59,10 @@ from heartwood.session import CommandKind, EventKind, SessionCommand
 
 
 class QualificationClient(S3RecordsClient, Protocol):
+    def list_buckets(self, **kwargs: object) -> Mapping[str, Any]: ...
+
+    def close(self) -> None: ...
+
     def create_bucket(self, **kwargs: object) -> Mapping[str, Any]: ...
 
     def put_bucket_policy(self, **kwargs: object) -> Mapping[str, Any]: ...
@@ -120,24 +122,31 @@ class ObjectStore:
         self._wait_ready()
 
     def _wait_ready(self) -> None:
+        exceptions = importlib.import_module("botocore.exceptions")
         deadline = time.monotonic() + 30
-        while True:
-            if self.process.poll() is not None:
-                raise RuntimeError("synthetic object store exited before readiness")
-            try:
-                with urllib.request.urlopen(
-                    self.endpoint + "/minio/health/live",
-                    timeout=1,
-                    context=ssl.create_default_context(cafile=str(self.certificates / "ca.crt"))
-                    if self.certificates
-                    else None,
-                ) as result:
-                    if result.status == 200:
-                        break
-            except OSError:
+        client = self.client()
+        try:
+            while True:
+                if self.process.poll() is not None:
+                    raise RuntimeError("synthetic object store exited before readiness")
+                try:
+                    # A live HTTP listener can precede storage and IAM initialization.
+                    client.list_buckets()
+                    return
+                except exceptions.ClientError as error:
+                    if error.response.get("Error", {}).get("Code") != "XMinioServerNotInitialized":
+                        raise
+                except (
+                    exceptions.EndpointConnectionError,
+                    exceptions.ConnectTimeoutError,
+                    exceptions.ReadTimeoutError,
+                ):
+                    pass
                 if time.monotonic() >= deadline:
                     raise TimeoutError("synthetic object store did not become ready") from None
                 time.sleep(0.1)
+        finally:
+            client.close()
 
     def stop(self) -> None:
         if self.process.poll() is None:

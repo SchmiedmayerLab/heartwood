@@ -620,6 +620,97 @@ def _restore(
     assert [path.name for path in decoy.iterdir()] == ["untrusted.txt"]
 
 
+@pytest.mark.parametrize("shutdown_pending", [False, True], ids=["denied", "shutdown-pending"])
+def test_native_unapproved_action_does_not_execute(
+    infrastructure: NativeFixture, shutdown_pending: bool
+) -> None:
+    fixture = infrastructure
+    terminal = "printf unapproved > /workspace/unapproved.txt"
+    fixture.provider.script = [("terminal", {"command": terminal})]
+    application = _application(fixture, retain_checkpoints=True)
+    service = application._service("composition")
+    try:
+        _submit(application, CommandKind.CHAT, {"prompt": "Synthetic action-denial check."})
+        backend = service.backend
+        assert isinstance(backend, OpenHandsSdkBackend)
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            service.reconcile()
+            group = backend.pending_action_group(session_id="composition")
+            if group is not None and any(
+                event.kind == EventKind.CONFIRMATION_REQUESTED
+                and isinstance(request := event.payload.get("request"), dict)
+                and request.get("group_id") == group.group_id
+                for event in service.replay_events()
+            ):
+                break
+            time.sleep(0.1)
+        else:
+            raise AssertionError("Native action was not presented for review")
+        assert group is not None
+        assert len(group.actions) == 1
+        assert group.actions[0].tool_name == "terminal"
+        assert group.actions[0].arguments.get("command") == terminal
+        attempt = service.worker_attempt()
+        assert attempt is not None
+        assert attempt.runtime is not None
+        worker_name = f"hw-{attempt.intent.attempt_id.hex[:16]}"
+        assert len(fixture.provider.observations) == 1
+
+        def require_absent() -> None:
+            observation = fixture.control.exec(
+                worker_name,
+                ["/usr/bin/test", "!", "-e", "/workspace/unapproved.txt"],
+                workspace="default",
+                timeout_seconds=15,
+                no_login_shell=True,
+            )
+            assert observation.exit_code == 0, observation.stderr
+
+        require_absent()
+        if not shutdown_pending:
+            _submit(
+                application,
+                CommandKind.DENY,
+                {"target_type": "action-set", "target_id": group.group_id},
+            )
+            assert backend.wait_for_idle(30)
+            conversation = backend._conversation
+            assert conversation is not None
+            assert conversation.state.snapshot().execution_status.value == "idle"
+            assert backend.pending_action_group(session_id="composition") is None
+            assert len(fixture.provider.observations) == 1
+            require_absent()
+        _stop(application)
+        _assert_revoked(service)
+        assert len(fixture.provider.observations) == 1
+        assert fixture.evidence is not None
+        history = fixture.evidence("composition").records.history()
+        assert len(history) == (1 if shutdown_pending else 2)
+        service.audit_log.verify()
+        _restore(fixture, application.project, "composition", service.store.audit_path)
+        (fixture.output / "evidence.json").write_text(
+            json.dumps(
+                {
+                    "worker_image": fixture.worker,
+                    "gateway_image": fixture.gateway_image,
+                    "attempt_id": str(attempt.intent.attempt_id),
+                    "shutdown_while_pending": shutdown_pending,
+                    "unapproved_effect_absent": True,
+                    "model_continuation_absent": True,
+                    "retained_checkpoints": len(history),
+                    "revoked_before_writer_release": True,
+                    "restore_without_execution": True,
+                    "sensitive_data_ready": False,
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+    finally:
+        _stop(application)
+
+
 def test_lost_create_retains_writer_until_native_revocation(
     infrastructure: NativeFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
