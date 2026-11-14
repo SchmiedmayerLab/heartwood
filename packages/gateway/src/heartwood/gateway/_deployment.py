@@ -43,6 +43,13 @@ class ProjectDeployment:
 
 def load_project_deployment(path: Path, *, project_root: Path) -> ProjectDeployment:
     """Read a bounded operator manifest and reject missing or conflicting authority."""
+    return _read_project_deployment(path, project_root=project_root, validate_state=True)
+
+
+def _read_project_deployment(
+    path: Path, *, project_root: Path, validate_state: bool
+) -> ProjectDeployment:
+    """Validate operator authority independently of state during explicit migration."""
     workspace = project_root.resolve(strict=True)
     if not path.is_absolute() or path.is_symlink():
         raise ProjectStateError("deployment manifest must be an absolute non-symlink path")
@@ -103,7 +110,8 @@ def load_project_deployment(path: Path, *, project_root: Path) -> ProjectDeploym
                 )
             validate_evidence_deployment(evidence, project)
         # Fail before opening gateway stores, including when legacy state is present.
-        project.state_exists()
+        if validate_state:
+            project.state_exists()
         return ProjectDeployment(project=project, policy=policy, worker=worker, evidence=evidence)
     except ProjectStateError:
         raise

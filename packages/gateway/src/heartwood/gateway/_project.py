@@ -261,6 +261,24 @@ class ProjectContext:
             raise ProjectStateError(".heartwood/.state.lock must be a regular file")
 
     def _validate_state_root(self) -> None:
+        fence = self.root / ".heartwood-migration.json"
+        if fence.exists() or fence.is_symlink():
+            if self.protected_state is None:
+                raise ProjectStateError("project state was retired; use its operator deployment")
+            try:
+                receipt = read_private_json(self.state_root / "migration.json")
+                if (
+                    receipt.get("schema_version") != "heartwood.project-migration.v1"
+                    or receipt.get("workspace") != str(self.root)
+                    or receipt.get("project_id") != str(self.project_id)
+                    or receipt.get("state_root") != str(self.state_root)
+                    or receipt.get("phase") != "complete"
+                ):
+                    raise ValueError("invalid completion receipt")
+            except (OSError, ValueError) as error:
+                raise ProjectStateError(
+                    "protected state migration requires operator recovery"
+                ) from error
         if self.protected_state is not None:
             legacy_marker = self.root / ".heartwood" / "state.json"
             if legacy_marker.exists() or legacy_marker.is_symlink():
