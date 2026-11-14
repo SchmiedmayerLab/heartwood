@@ -96,7 +96,7 @@ If the account should no longer be used, run `heartwood models forget openai-sub
 
 The selected model uses a credential, but the active platform provides application scrubbing rather than a separate model-only credential boundary.
 Select **Review Every Action**, or choose a credential-free model route.
-Low-Risk Automation becomes available for a secret-backed route only when the platform adapter reports live-qualified isolation.
+Low-Risk Automation remains unavailable for every route; credential isolation does not qualify automatic tool execution.
 
 Application scrubbing still keeps the credential out of supported tool inputs, project state, browser and notebook output, session events, logs, and audit exports.
 It does not isolate same-identity process memory or every operating-system resource.

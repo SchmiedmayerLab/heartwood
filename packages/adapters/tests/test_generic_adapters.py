@@ -63,7 +63,7 @@ def test_carina_platform_adapter_conforms_and_defaults_to_local_only() -> None:
     assert detection.confidence > 0.0
     assert adapter.data_mounts() == ()
     assert policy.platform_id == "carina"
-    assert policy.allowed_action_confirmation_modes == ("always-confirm", "confirm-risky")
+    assert policy.allowed_action_confirmation_modes == ("always-confirm",)
     assert policy.credential_allowlist == ()
     assert capabilities.interfaces == ("terminal",)
     assert capabilities.scheduler == "slurm"

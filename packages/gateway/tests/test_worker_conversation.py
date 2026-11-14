@@ -9,13 +9,14 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 from unittest.mock import MagicMock
 
 import pytest
 from openhands.sdk.conversation import RemoteConversation
 from openhands.sdk.conversation.request import StartConversationRequest
 from openhands.sdk.event import StreamingDeltaEvent
+from openhands.sdk.security import AlwaysConfirm
 from openhands.sdk.skills import Skill
 from pydantic import SecretStr
 
@@ -51,6 +52,7 @@ def _backend(
     *,
     specialist_catalog: SpecialistCatalog | None = None,
     structured_task_outcomes: bool = False,
+    mode: Literal["always-confirm", "confirm-risky"] = "always-confirm",
 ) -> OpenHandsSdkBackend:
     profile = ModelProfile(
         profile_id="synthetic",
@@ -70,11 +72,16 @@ def _backend(
         env={"REAL_PROVIDER_KEY": "synthetic-real-secret"},
         specialist_catalog=specialist_catalog,
         structured_task_outcomes=structured_task_outcomes,
+        action_confirmation_mode=mode,
     )
 
 
+@pytest.mark.parametrize("mode", ["always-confirm", "confirm-risky"])
 def test_remote_request_reuses_agent_contract_without_resolving_host_credentials(
-    tmp_path: Path, context: WorkerConversationContext, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    context: WorkerConversationContext,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: Literal["always-confirm", "confirm-risky"],
 ) -> None:
     requests: list[StartConversationRequest] = []
     callbacks: list[Callable[[object], None]] = []
@@ -94,7 +101,7 @@ def test_remote_request_reuses_agent_contract_without_resolving_host_credentials
 
     monkeypatch.setattr(RemoteConversation, "create", create)
     monkeypatch.setattr(ModelProfile, "resolve_api_key", reject_credential_lookup)
-    backend = _backend(tmp_path, context, structured_task_outcomes=True)
+    backend = _backend(tmp_path, context, structured_task_outcomes=True, mode=mode)
     deltas: list[str] = []
     backend.bind_runtime(event_sink=lambda _events: None, token_sink=deltas.append)
     assert backend._get_conversation() is remote
@@ -102,6 +109,8 @@ def test_remote_request_reuses_agent_contract_without_resolving_host_credentials
     assert len(requests) == 1
     request = requests[0]
     serialized = request.model_dump_json(context={"expose_secrets": True})
+    decoded = StartConversationRequest.model_validate_json(serialized)
+    assert isinstance(decoded.confirmation_policy, AlwaysConfirm)
     assert "synthetic-inference-placeholder" in serialized
     assert "synthetic-real-secret" not in serialized
     assert str(tmp_path) not in serialized

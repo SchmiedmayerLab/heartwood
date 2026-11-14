@@ -826,7 +826,7 @@ Both sides must preserve these properties.
 
 !!! warning "Qualify the selected execution mode"
     The managed implementation binds approvals to reviewed contents and keeps canonical authority outside the worker, but its guarantees require the complete qualified deployment.
-    Local execution still shares process authority; Low-Risk Automation retains the limitations described in [Security and Controlled Data](security.md#model-credential-isolation).
+    Local execution still shares process authority; registered action sets require review, and credential isolation retains the limits described in [Security and Controlled Data](security.md#model-credential-isolation).
     A green schema check, a running sandbox, or an allowed network hostname does not prove these properties, tenant authorization, data eligibility or institutional approval.
 
 ## Failure States

@@ -647,7 +647,14 @@ class HeartwoodTerminalApp(App[None]):
         action_log.clear()
         for index, action in enumerate(actions, 1):
             risk_label, risk_style = _risk_presentation(action.risk)
-            summary = terminal_safe_text(action.summary or action_tool_label(action.tool_name))
+            details = action.details
+            summary = terminal_safe_text(
+                f"$ {details.command}"
+                if details.kind == "terminal"
+                else f"{details.operation} {details.path or 'path unavailable'}"
+                if details.kind == "file-editor"
+                else action_tool_label(action.tool_name)
+            )
             tool_label = terminal_safe_text(action_tool_label(action.tool_name))
             heading = Text()
             heading.append(
@@ -656,15 +663,17 @@ class HeartwoodTerminalApp(App[None]):
             )
             heading.append(f"   {tool_label} · ", style="dim")
             heading.append(risk_label, style=risk_style)
-            details: list[Text | str] = [heading]
+            rendered: list[Text | str] = [heading]
+            if action.summary:
+                rendered.append("   Model-provided summary: " + terminal_safe_text(action.summary))
             if action.arguments:
-                details.extend(
+                rendered.extend(
                     (
                         "   Exact arguments:",
                         *(f"     {line}" for line in format_action_arguments(action.arguments)),
                     )
                 )
-            for detail in details:
+            for detail in rendered:
                 action_log.write(detail)
         action_log.scroll_home(animate=False)
         composer.disabled = True

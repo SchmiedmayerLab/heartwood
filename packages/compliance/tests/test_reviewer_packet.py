@@ -58,7 +58,7 @@ def test_reviewer_packet_uses_synthetic_fixtures_and_scrubbed_audit(tmp_path: Pa
     assert "`confirm-risky`" in packet_text
     assert "platform controls remain authoritative for network egress" in packet_text
     assert "In-boundary model endpoint" not in packet_text
-    assert "Allowed action-confirmation modes: `always-confirm, confirm-risky`" in packet_text
+    assert "Allowed action-confirmation modes: `always-confirm`" in packet_text
     assert "participant-level prompt must not appear" not in audit_text
     assert '"content_chars":40' in audit_text
     assert '"session_event_hash":"sha256:' in audit_text
@@ -67,7 +67,7 @@ def test_reviewer_packet_uses_synthetic_fixtures_and_scrubbed_audit(tmp_path: Pa
     assert "provider agreement" in limitations_text
     assert "application-layer route policy" in limitations_text
     assert "unattended operation" in limitations_text
-    assert "`always-confirm` is the default" in limitations_text
+    assert "`always-confirm` is the required" in limitations_text
     assert "release-scoped" in limitations_text
     assert "Jupyter-style proxy smoke" in limitations_text
     assert "live validation evidence is release- and platform-specific" in limitations_text

@@ -422,12 +422,27 @@ async function runApprovedTask(page, task, taskSpec) {
       .getByRole("region", { name: /^Review \d+ actions?$/u })
       .last();
     await expect(approval).toBeVisible({ timeout: 60_000 });
-    await expect(approval.getByText(summary, { exact: true })).toBeVisible();
     const objective = taskSpec.approvalObjectives?.[index];
     if (objective) {
+      await expect(approval.getByText(summary, { exact: true })).toBeVisible();
       await expect(
         approval.getByText(objective, { exact: true }),
       ).toBeVisible();
+    } else {
+      await expect(
+        approval.getByText(`Model-provided summary: ${summary}`, {
+          exact: true,
+        }),
+      ).toBeVisible();
+      const actions = approval.locator(".approval-batch-list > li");
+      await expect(actions).not.toHaveCount(0);
+      for (const action of await actions.all()) {
+        const command = action.locator(".approval-action-command");
+        await expect(command).toHaveText(/^\$ .+/u);
+        await expect(
+          action.locator(".approval-action-heading strong"),
+        ).toHaveText(await command.innerText());
+      }
     }
     if (
       taskSpec.captureApproval === true &&
