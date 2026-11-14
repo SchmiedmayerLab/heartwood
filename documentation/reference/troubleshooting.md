@@ -353,7 +353,9 @@ Do not edit an audit line, remove a recovery journal, or recreate a missing hash
 
 A checkpoint output, signer registry, trusted public key, signer credential, and local fallback key must be outside the Heartwood project.
 Run `heartwood audit signer list` to confirm that a deployment registry is available and that the expected profile is active.
-For the explicit offline fallback, keep `heartwood signer serve-local` running and confirm that its registry endpoint, profile, key fingerprint, and owner-only token still agree.
+For the explicit offline fallback, keep `heartwood signer serve-local` running and confirm that its Unix socket endpoint, profile, key fingerprint, and owner-only token still agree.
+The socket and its immediate directory must be owner-only, owned by the current user, and outside the project; directory symlinks are rejected.
+If startup reports an existing socket, confirm that no signer is using it before removing a stale socket and restarting the service.
 Use a new output directory, a valid retention date on or after checkpoint creation, and storage that supports native process-shared locks.
 Verify a restored bundle with the active deployment profile or an independently retained public key before relying on it.
 

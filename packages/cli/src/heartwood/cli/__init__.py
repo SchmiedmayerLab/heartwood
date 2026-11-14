@@ -22,7 +22,6 @@ from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
-from urllib.parse import urlsplit
 
 import uvicorn
 
@@ -95,6 +94,8 @@ from heartwood.gateway import (
     inspect_deployment,
     load_checkpoint_signer_registry,
     load_project_deployment,
+    local_checkpoint_signer_socket,
+    local_checkpoint_socket_path,
     model_source_options,
     user_checkpoint_signer_registry_path,
 )
@@ -564,16 +565,13 @@ def _build_parser() -> argparse.ArgumentParser:
     signer_init.add_argument("--directory", type=Path)
     signer_init.add_argument("--profile", default="local-development")
     signer_init.add_argument("--key-version", default="v1")
-    signer_init.add_argument("--port", type=int, default=8771)
     signer_serve = signer_subparsers.add_parser(
         "serve-local",
-        help="Run an initialized signer on the loopback interface.",
+        help="Run an initialized signer on its private Unix socket.",
     )
     signer_serve.add_argument("--registry", type=Path)
     signer_serve.add_argument("--profile")
     signer_serve.add_argument("--private-key", type=Path)
-    signer_serve.add_argument("--host", choices=("127.0.0.1", "::1"))
-    signer_serve.add_argument("--port", type=int)
 
     gateway = subparsers.add_parser("gateway", help="Advanced gateway operations.")
     gateway_subparsers = gateway.add_subparsers(dest="gateway_command", metavar="<gateway-command>")
@@ -725,7 +723,6 @@ def _main(argv: Sequence[str] | None = None) -> int:
             directory=args.directory,
             profile_id=args.profile,
             key_version=args.key_version,
-            port=args.port,
         )
     if args.command == "signer" and args.signer_command == "serve-local":
         registry = (
@@ -738,8 +735,6 @@ def _main(argv: Sequence[str] | None = None) -> int:
             registry=registry,
             profile_id=args.profile,
             private_key=args.private_key,
-            host=args.host,
-            port=args.port,
         )
     configured_gateway: SessionGateway | None = None
     if args.command is None:
@@ -2448,7 +2443,6 @@ def _handle_local_signer_init(
     directory: Path | None,
     profile_id: str,
     key_version: str,
-    port: int,
 ) -> int:
     root = (
         user_checkpoint_signer_registry_path(os.environ).parent
@@ -2459,7 +2453,6 @@ def _handle_local_signer_init(
     setup = initialize_local_checkpoint_signer(
         directory=root,
         profile_id=profile_id,
-        endpoint=f"http://127.0.0.1:{port}/v1/checkpoints/sign",
         key_version=key_version,
     )
     print(
@@ -2487,8 +2480,6 @@ def _handle_local_signer_serve(
     registry: CheckpointSignerRegistry,
     profile_id: str | None,
     private_key: Path | None,
-    host: str | None,
-    port: int | None,
 ) -> int:
     if registry.source is not None:
         _require_deployment_owned_cli_path(
@@ -2510,21 +2501,11 @@ def _handle_local_signer_serve(
             profile.authorization_token_file,
             label="checkpoint signer authorization token",
         )
-    configured_endpoint = urlsplit(profile.endpoint)
-    configured_host = configured_endpoint.hostname
-    configured_port = configured_endpoint.port
-    if configured_host is None or configured_port is None:
-        raise CheckpointSignerError("local signer registry endpoint must include a host and port")
-    selected_host = configured_host if host is None else host
-    selected_port = configured_port if port is None else port
-    if selected_host not in {"127.0.0.1", "::1"}:
-        raise CheckpointSignerError("local signer must bind a loopback host")
-    host_url = f"[{selected_host}]" if ":" in selected_host else selected_host
-    expected_endpoint = f"http://{host_url}:{selected_port}/v1/checkpoints/sign"
-    if configured_endpoint != urlsplit(expected_endpoint):
-        raise CheckpointSignerError(
-            "local signer host and port do not match the deployment registry"
-        )
+    try:
+        socket_path = local_checkpoint_socket_path(profile.endpoint)
+    except ValueError as error:
+        raise CheckpointSignerError(str(error)) from error
+    _require_deployment_owned_cli_path(project, socket_path, label="local signer socket")
     if private_key is None:
         if registry.source is None:
             raise CheckpointSignerError(
@@ -2547,16 +2528,22 @@ def _handle_local_signer_serve(
     token = profile.authorization_token()
     if token is None:  # pragma: no cover - registry validation enforces this
         raise CheckpointSignerError("local signer authorization token is unavailable")
-    print(f"Local checkpoint signer: {expected_endpoint}")
+    print(f"Local checkpoint signer: {profile.endpoint}")
     print("Keep this process running while creating checkpoints.")
-    uvicorn.run(
-        LocalCheckpointSignerApp(signer, authorization_token=token),
-        host=selected_host,
-        port=selected_port,
-        log_level="warning",
-        access_log=False,
-        proxy_headers=False,
-    )
+    try:
+        with local_checkpoint_signer_socket(profile.endpoint) as listener:
+            uvicorn.run(
+                LocalCheckpointSignerApp(signer, authorization_token=token),
+                fd=listener.fileno(),
+                log_level="warning",
+                access_log=False,
+                proxy_headers=False,
+            )
+    except (OSError, ValueError) as error:
+        raise CheckpointSignerError(
+            "local signer socket cannot be served; "
+            "verify its private directory and existing listener"
+        ) from error
     return 0
 
 

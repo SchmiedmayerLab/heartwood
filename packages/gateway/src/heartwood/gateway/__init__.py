@@ -26,6 +26,8 @@ from heartwood.audit import (
     discover_checkpoint_signer_registry,
     initialize_local_checkpoint_signer,
     load_checkpoint_signer_registry,
+    local_checkpoint_signer_socket,
+    local_checkpoint_socket_path,
     user_checkpoint_signer_registry_path,
 )
 from heartwood.core_adapter import (
@@ -407,6 +409,8 @@ __all__ = [
     "load_model_connections",
     "load_model_snapshot_catalog",
     "load_project_deployment",
+    "local_checkpoint_signer_socket",
+    "local_checkpoint_socket_path",
     "managed_model_native_tool_calling",
     "managed_model_parsers_compatible",
     "managed_model_reasoning_parser",
