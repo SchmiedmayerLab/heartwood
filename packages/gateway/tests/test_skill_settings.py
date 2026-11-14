@@ -83,7 +83,7 @@ def test_manager_refreshes_installs_and_audits_exact_catalog_revision(tmp_path: 
     assert installed.source == "installed"
     assert installed.source_revision == _SOURCE_REVISION
     assert manager.active_skill_roots() == (
-        manager.store.artifact_path(manager.store.records()[0]).parent,
+        manager.store.artifact_path(manager.store.records()[0]),
     )
     audit = AuditLog(tmp_path / "audit.jsonl").read()
     assert [record.event_type for record in audit] == [
@@ -311,6 +311,24 @@ def test_manager_reverifies_signed_source_before_runtime_activation(tmp_path: Pa
 
     client.failure = SkillCatalogError("signed metadata expired")
     with pytest.raises(SkillSettingsError, match="signed metadata expired"):
+        manager.active_skill_roots()
+
+
+def test_manager_refuses_unexpected_content_next_to_a_verified_skill(tmp_path: Path) -> None:
+    entry, archive = _catalog_skill(tmp_path)
+    manager = _manager(tmp_path, client=_CatalogClient(_snapshot(entry), archive))
+    manager.install_catalog(
+        entry.name,
+        source_id=None,
+        expected_tree_sha256=entry.tree_sha256,
+        approved=True,
+    )
+    artifact = manager.store.artifact_path(manager.store.records()[0])
+    shutil.copytree(_skills_root() / "baseline-model", artifact.parent / "baseline-model")
+
+    with pytest.raises(SkillSettingsError, match="contains unexpected content"):
+        manager.summaries()
+    with pytest.raises(SkillSettingsError, match="contains unexpected content"):
         manager.active_skill_roots()
 
 

@@ -125,6 +125,7 @@ The capability does not separate two people who share one operating-system accou
 A Skill can influence agent behavior and tool selection.
 Heartwood therefore accepts reviewed external packages only through deployment-approved TUF roots and verifies current signatures, expiry, rollback state, target hashes, the complete file manifest, declared policy, and OpenHands compatibility before installation.
 Approval is bound to the exact complete-tree digest shown to the researcher, installation is atomic, and a signed revocation prevents later activation.
+Sessions load each installed Skill only from its exact verified directory, and unverified content beside an active installed Skill stops Skill listing and starting agent sessions until it is removed.
 The advanced local-install route accepts source directories only inside the current project and outside reserved `.heartwood` state.
 
 These controls establish source authenticity and package integrity; they do not prove that instructions are safe for every dataset or task.

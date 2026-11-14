@@ -2381,7 +2381,7 @@ class SessionGateway:
             profile=profile,
             workspace=self.project.root,
             skills_dir=self.skill_manager.bundled_dir,
-            additional_skills_dirs=self.skill_manager.active_skill_roots(),
+            installed_skill_roots=self.skill_manager.active_skill_roots(),
             specialist_catalog=self._specialist_catalog(),
             persistence_dir=self.sessions_root / session_id / "openhands",
             conversation_key=f"{self.project.root}#{session_id}",
