@@ -33,6 +33,9 @@ jobs:
     name: Build the pinned gateway candidate
     runs-on: ubuntu-24.04
     timeout-minutes: 120
+    concurrency:
+      group: worker-gateway-${{ github.ref }}
+      cancel-in-progress: false
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7

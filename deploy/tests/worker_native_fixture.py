@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import os
 import secrets
@@ -28,6 +29,7 @@ from google.protobuf.json_format import MessageToDict
 from openshell import SandboxClient, TlsConfig
 from openshell._proto import openshell_pb2 as pb
 from openshell._proto import sandbox_pb2 as policy_pb
+from worker_network_qualification import qualify_network
 
 from heartwood.gateway import SessionGateway
 from heartwood.gateway.worker_deployment import OpenShellWorkerDeployment
@@ -201,6 +203,8 @@ class NativeFixture:
         self.cli = Path("/opt/qualification/bin/openshell")
         self.binary = self.cli.with_name("openshell-gateway")
         self.worker = os.environ["HW_WORKER_IMAGE"]
+        self.network = os.environ["HW_QUALIFICATION_NETWORK"]
+        self.controller_image = os.environ["HW_CONTROLLER_IMAGE"]
         self.gateway_image = os.environ["HW_GATEWAY_IMAGE"]
         self.images = json.loads(Path("/opt/qualification/gateway.json").read_text())["images"]
         self.env = {
@@ -241,9 +245,19 @@ class NativeFixture:
         for path in tls.rglob("*"):
             path.chmod(0o700 if path.is_dir() else 0o600)
         controller = json.loads(command(["docker", "inspect", os.environ["HW_CONTROLLER_NAME"]]))[0]
-        address = controller["NetworkSettings"]["Networks"]["bridge"]["IPAddress"]
-        if not address:
-            raise RuntimeError("Qualification controller needs a Docker bridge address")
+        if self.network not in controller["NetworkSettings"]["Networks"]:
+            command(
+                ["docker", "network", "connect", self.network, os.environ["HW_CONTROLLER_NAME"]]
+            )
+            controller = json.loads(
+                command(["docker", "inspect", os.environ["HW_CONTROLLER_NAME"]])
+            )[0]
+        network = controller["NetworkSettings"]["Networks"][self.network]
+        control_address = ipaddress.IPv4Address(
+            controller["NetworkSettings"]["Networks"]["bridge"]["IPAddress"]
+        )
+        self.ipv4 = ipaddress.IPv4Address(network["IPAddress"])
+        self.ipv6 = ipaddress.IPv6Address(network["GlobalIPv6Address"])
 
         def q(value: object) -> str:
             return json.dumps(str(value))
@@ -269,7 +283,7 @@ gateway_id = {q(self.identity)}
 [openshell.drivers.docker]
 socket_path = "/var/run/docker.sock"
 supervisor_network_mode = "bridge"
-host_gateway_ip = {q(address)}
+host_gateway_ip = {q(control_address)}
 grpc_endpoint = "https://host.docker.internal:19670"
 sandbox_label = {q(self.identity)}
 sandbox_runtime_image = {q(self.images["sandbox"])}
@@ -481,6 +495,57 @@ additional_ca_bundle = {q(tls / "ca.crt")}
                 raise AssertionError("Outside provider canary is unavailable")
         if self.protected_canary.read_text() != self.sentinel:
             raise AssertionError("Outside state canary changed")
+
+    def qualify_direct_network(self, worker: str) -> dict[str, object]:
+        """Verify actual dual-stack routes from a separate, unprivileged outside client."""
+        program = (
+            "import ipaddress,sys;sys.path.insert(0,'/opt/qualification/tests');"
+            "from worker_network_qualification import send_positive_controls;"
+            "send_positive_controls(ipaddress.IPv4Address(sys.argv[1]),"
+            "ipaddress.IPv6Address(sys.argv[2]),19672,19673)"
+        )
+
+        def peer() -> None:
+            command(
+                [
+                    "docker",
+                    "run",
+                    "--rm",
+                    "--network",
+                    self.network,
+                    "--read-only",
+                    "--cap-drop",
+                    "ALL",
+                    "--security-opt",
+                    "no-new-privileges",
+                    "--memory",
+                    "128m",
+                    "--pids-limit",
+                    "32",
+                    "--user",
+                    "10001:10001",
+                    "--entrypoint",
+                    PYTHON,
+                    self.controller_image,
+                    "-I",
+                    "-B",
+                    "-c",
+                    program,
+                    str(self.ipv4),
+                    str(self.ipv6),
+                ]
+            )
+
+        return qualify_network(
+            self.control,
+            worker,
+            workspace="default",
+            ipv4=self.ipv4,
+            ipv6=self.ipv6,
+            port=19672,
+            ipv6_port=19673,
+            peer=peer,
+        )
 
     def _stop_gateway(self) -> None:
         observed = json.loads(command(["docker", "inspect", self.identity]))[0]

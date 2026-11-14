@@ -138,7 +138,9 @@ def test_positive_controls_do_not_erase_worker_traffic(
             )
 
 
-@pytest.mark.parametrize("changed", ["id", "generation", "policy", "activation"])
+@pytest.mark.parametrize(
+    "changed", ["id", "generation", "policy", "activation", "claims", "dns", "tcp", "udp"]
+)
 def test_sandbox_replacement_invalidates_network_evidence(
     qualification: ModuleType, changed: str
 ) -> None:
@@ -163,13 +165,33 @@ def test_sandbox_replacement_invalidates_network_evidence(
 
     control = MagicMock()
     control.get.side_effect = [sandbox(modified=False), sandbox(modified=True)]
-    control.exec.return_value = SimpleNamespace(exit_code=0, stdout=json.dumps({}))
+    checks: dict[str, bool | str] = {
+        "allowed-dns": True,
+        "unlisted-dns-synthetic": True,
+        "unknown-host-tcp": "EACCES",
+        "ipv4-tcp": "EACCES",
+        "mapped-ipv6-tcp": "EACCES",
+        "direct-udp": "EACCES",
+        "native-ipv6-tcp": "EACCES",
+        "native-ipv6-udp": "EACCES",
+    }
+    if changed == "claims":
+        checks = {}
+    elif changed == "dns":
+        checks["allowed-dns"] = False
+    elif changed == "tcp":
+        checks["ipv4-tcp"] = "ECONNREFUSED"
+    elif changed == "udp":
+        checks["direct-udp"] = "policy-403"
+    control.exec.return_value = SimpleNamespace(exit_code=0, stdout=json.dumps(checks))
     with (
         patch.object(
             qualification, "outside_canaries", return_value=nullcontext(queue.SimpleQueue())
         ),
         patch.object(qualification, "positive_controls"),
-        pytest.raises(AssertionError, match="changed during the probe"),
+        pytest.raises(
+            AssertionError, match=r"changed during the probe|observations are incomplete"
+        ),
     ):
         qualification.qualify_network(
             control,

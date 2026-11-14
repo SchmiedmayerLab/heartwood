@@ -19,7 +19,7 @@ import queue
 import select
 import socket
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -68,6 +68,8 @@ def outside_canaries(port: int, ipv6_port: int) -> Iterator[queue.SimpleQueue[by
             for kind in (socket.SOCK_STREAM, socket.SOCK_DGRAM):
                 listener = socket.socket(family, kind)
                 listeners.append(listener)
+                if kind == socket.SOCK_STREAM:
+                    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 if family == socket.AF_INET6:
                     listener.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
                 listener.bind((host, local_port))
@@ -91,13 +93,13 @@ def outside_canaries(port: int, ipv6_port: int) -> Iterator[queue.SimpleQueue[by
             raise RuntimeError("Canary listener failed") from errors.get_nowait()
 
 
-def positive_controls(
+def send_positive_controls(
     ipv4: ipaddress.IPv4Address,
     ipv6: ipaddress.IPv6Address,
     port: int,
     ipv6_port: int,
-    observations: queue.SimpleQueue[bytes],
 ) -> None:
+    """Send the same bounded control traffic from a controller or independent peer."""
     token = b"synthetic-outside-positive-control"
     for family, address, target_port, kind in (
         (socket.AF_INET, str(ipv4), port, socket.SOCK_STREAM),
@@ -112,7 +114,22 @@ def positive_controls(
             connection.sendall(token)
             if connection.recv(16) != b"ACK":
                 raise AssertionError("Outside canary did not acknowledge the positive control")
-        if observations.get(timeout=5) != token:
+
+
+def positive_controls(
+    ipv4: ipaddress.IPv4Address,
+    ipv6: ipaddress.IPv6Address,
+    port: int,
+    ipv6_port: int,
+    observations: queue.SimpleQueue[bytes],
+    peer: Callable[[], None] | None = None,
+) -> None:
+    if peer is None:
+        send_positive_controls(ipv4, ipv6, port, ipv6_port)
+    else:
+        peer()
+    for _ in range(5):
+        if observations.get(timeout=5) != b"synthetic-outside-positive-control":
             raise AssertionError("Unexpected traffic during the outside positive control")
     if not observations.empty():
         raise AssertionError("Unexpected additional traffic during the outside positive controls")
@@ -129,6 +146,7 @@ def qualify_network(
     ipv6_port: int,
     allowed_host: str = "host.docker.internal",
     python: str = "/opt/heartwood/.venv/bin/python",
+    peer: Callable[[], None] | None = None,
 ) -> dict[str, object]:
     if ipv6.ipv4_mapped is not None:
         raise ValueError("The native IPv6 canary must not be an IPv4-mapped address")
@@ -146,7 +164,7 @@ def qualify_network(
         raise AssertionError("The sandbox does not have an active admitted configuration")
     program = Path(__file__).with_name("worker_network_probe.py").read_text()
     with outside_canaries(port, ipv6_port) as observations:
-        positive_controls(ipv4, ipv6, port, ipv6_port, observations)
+        positive_controls(ipv4, ipv6, port, ipv6_port, observations, peer)
         result = control.exec(
             sandbox,
             [
@@ -173,6 +191,17 @@ def qualify_network(
         if result.exit_code != 0:
             raise AssertionError("Worker network probe failed; a denial was not established")
         checks = json.loads(result.stdout)
+        dns = {"allowed-dns", "unlisted-dns-synthetic"}
+        tcp = {"unknown-host-tcp", "ipv4-tcp", "mapped-ipv6-tcp", "native-ipv6-tcp"}
+        udp = {"direct-udp", "native-ipv6-udp"}
+        if (
+            not isinstance(checks, dict)
+            or set(checks) != dns | tcp | udp
+            or any(checks[name] is not True for name in dns)
+            or any(checks[name] not in {"EACCES", "EPERM", "policy-403"} for name in tcp)
+            or any(checks[name] not in {"EACCES", "EPERM"} for name in udp)
+        ):
+            raise AssertionError("Worker network observations are incomplete or invalid")
         after = control.get(sandbox, workspace=workspace)
         if (
             before.id != after.id
@@ -185,7 +214,7 @@ def qualify_network(
             )
         # A second round proves the destinations stayed reachable throughout the
         # probe and detects any worker traffic queued before these controls.
-        positive_controls(ipv4, ipv6, port, ipv6_port, observations)
+        positive_controls(ipv4, ipv6, port, ipv6_port, observations, peer)
     if not observations.empty():
         raise AssertionError("The worker reached an outside canary")
     return {
@@ -196,6 +225,8 @@ def qualify_network(
         "network_probe_sha256": hashlib.sha256(program.encode()).hexdigest(),
         "network_checks": checks,
         "outside_positive_controls": 10,
+        "outside_control_origin": "peer" if peer is not None else "controller",
+        "canary_addresses": {"ipv4": str(ipv4), "ipv6": str(ipv6)},
         "forbidden_canary_requests": 0,
         "passed": True,
     }

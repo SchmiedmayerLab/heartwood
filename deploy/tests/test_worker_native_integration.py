@@ -291,6 +291,7 @@ print(json.dumps(result))
             no_login_shell=True,
         )
         assert observation.exit_code == 0, observation.stderr
+        network_evidence = fixture.qualify_direct_network(worker_name)
         hostile_checks = None
         if fixture.hostile:
             hostile = fixture.control.exec(
@@ -319,6 +320,7 @@ print(json.dumps(result))
         report = {
             "drill_id": "approved-hostile-terminal.v1" if fixture.hostile else "native-workflow.v1",
             "worker_claims": hostile_checks,
+            "direct_network": network_evidence,
             "outside_canary_positive_controls": fixture.provider.canary_requests,
             "forbidden_provider_requests": 0,
             "allowed_endpoint_redirect_requests": fixture.provider.redirect_requests,

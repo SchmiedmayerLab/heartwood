@@ -136,6 +136,9 @@ def qualify(worker: str, runtime: str, artifacts: Path, output: Path) -> None:
         ]
     )
     image_ids["controller"] = (output / "controller-image-id").read_text().strip()
+    network = name + "-network"
+    subnet_id = uuid4().hex[:10]
+    subnet = f"fd{subnet_id[:2]}:{subnet_id[2:6]}:{subnet_id[6:]}:1::/64"
     arguments = [
         "docker",
         "run",
@@ -170,6 +173,8 @@ def qualify(worker: str, runtime: str, artifacts: Path, output: Path) -> None:
     ]
     environment = {
         "HW_CONTROLLER_NAME": name,
+        "HW_CONTROLLER_IMAGE": image_ids["controller"],
+        "HW_QUALIFICATION_NETWORK": network,
         "HW_WORKER_IMAGE": image_ids["worker"],
         "HW_GATEWAY_IMAGE": image_ids["gateway"],
         "HW_QUALIFICATION_OUTPUT": str(output),
@@ -192,8 +197,43 @@ def qualify(worker: str, runtime: str, artifacts: Path, output: Path) -> None:
             "/opt/qualification/tests/test_worker_native_integration.py",
         ]
     )
-    with (output / "qualification.log").open("w") as log:
-        result = subprocess.run(arguments, stdout=log, stderr=subprocess.STDOUT)
+    run(
+        [
+            "docker",
+            "network",
+            "create",
+            "--driver",
+            "bridge",
+            "--ipv6",
+            "--subnet",
+            subnet,
+            "--label",
+            "heartwood-qualification-owner=" + name,
+            network,
+        ]
+    )
+    try:
+        with (output / "qualification.log").open("w") as log:
+            result = subprocess.run(arguments, stdout=log, stderr=subprocess.STDOUT)
+    finally:
+        observed = json.loads(subprocess.check_output(["docker", "network", "inspect", network]))[0]
+        if observed["Labels"].get("heartwood-qualification-owner") != name:
+            raise RuntimeError("Refusing cleanup of a network with changed ownership")
+        retained = bool(observed["Containers"])
+        if not retained:
+            run(["docker", "network", "rm", network])
+        (output / "network.json").write_text(
+            json.dumps(
+                {
+                    "id": observed["Id"],
+                    "name": network,
+                    "ipv6_subnet": subnet,
+                    "retained_for_attached_resources": retained,
+                },
+                indent=2,
+            )
+            + "\n"
+        )
     evidence = {
         "host": host,
         "qualification_sources": {
@@ -203,16 +243,18 @@ def qualify(worker: str, runtime: str, artifacts: Path, output: Path) -> None:
                 ROOT / "deploy/tests/test_worker_native_integration.py",
                 ROOT / "deploy/tests/worker_native_fixture.py",
                 ROOT / "deploy/tests/worker_hostile_probe.py",
+                ROOT / "deploy/tests/worker_network_probe.py",
+                ROOT / "deploy/tests/worker_network_qualification.py",
             )
         },
         "images": image_ids,
         "gateway_build": record,
         "returncode": result.returncode,
-        "passed": result.returncode == 0,
+        "passed": result.returncode == 0 and not retained,
         "sensitive_data_ready": False,
     }
     (output / "qualification.json").write_text(json.dumps(evidence, indent=2) + "\n")
-    if result.returncode:
+    if result.returncode or retained:
         raise RuntimeError("Native qualification failed; inspect qualification.log and junit.xml")
 
 
