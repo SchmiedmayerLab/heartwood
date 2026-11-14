@@ -162,6 +162,8 @@ The same manifest pins the supervisor, sandbox and Docker client image reference
 `images/worker/candidate/controller.Dockerfile` adds the verified gateway tools and pinned Docker client to the shared candidate runtime image.
 Supply `RUNTIME_IMAGE` and `DOCKER_CLIENT_IMAGE` as build arguments and the gateway output as the `worker-qualification-tools` named context.
 The controller remains outside the worker sandbox and needs an explicitly supplied Docker socket for native integration tests; the worker never receives that socket.
+The launcher reads the mounted socket's group inside Docker's Linux filesystem and grants that supplementary group only to the trusted controller.
+It verifies controller access before starting fixtures and retains transport failures in `controller-preflight.log`; it does not change host socket permissions.
 Gateway artifacts and upstream patches are qualification inputs, not published upstream releases or a supported production dependency channel.
 
 ### Installed Native Integration
