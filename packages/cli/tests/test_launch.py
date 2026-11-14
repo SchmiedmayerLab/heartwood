@@ -856,7 +856,8 @@ def test_launch_supervises_selected_vllm_and_opens_project_chat(
     )
 
     def interaction(command: Sequence[str], **kwargs: object) -> int:
-        assert isinstance(kwargs.pop("runtime"), FakeProcess)
+        runtime = kwargs.pop("runtime")
+        assert isinstance(runtime, FakeProcess)
         return completed(command, **kwargs).returncode
 
     monkeypatch.setattr("heartwood.cli._launch._run_interaction", interaction)
