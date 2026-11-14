@@ -27,6 +27,7 @@ A Heartwood deployment combines a versioned application artifact with platform s
 Heartwood policy is defense in depth and does not replace network enforcement.
 The [Platform Contract](platform-contract.md) defines this boundary and each capability a platform supplies in detail.
 Use [Platform API and Access Requirements](platform-requirements.md) when requesting an integration from a platform operator.
+Use the [Gateway API reference](../reference/gateway-api.md) and its generated OpenAPI contract when implementing a client or proxy.
 The browser service must remain on loopback or behind an authenticated platform proxy configured through the trusted ingress contract.
 
 ## Select an Artifact

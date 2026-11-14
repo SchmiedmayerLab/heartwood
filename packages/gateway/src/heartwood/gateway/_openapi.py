@@ -489,7 +489,9 @@ def gateway_openapi(*, api_version: str | None = None) -> dict[str, Any]:
                 "The gateway replaces client-supplied actor_id with the launching principal "
                 "(currently human). Command IDs support idempotent retries; conflicting reuse "
                 "is rejected. The payload is a generic JSON object; command-specific rules "
-                "are enforced by the gateway. Approval-content binding remains tracked in #158."
+                "are enforced by the gateway. Approval decisions bind the complete ordered "
+                "action set, including tools and exact structured arguments. Changed action "
+                "contents require a new decision."
             )
         paths.setdefault(operation.path, {})[operation.method.lower()] = description
 
@@ -544,12 +546,13 @@ def gateway_openapi(*, api_version: str | None = None) -> dict[str, Any]:
             "version": api_version if api_version is not None else version("heartwood-gateway"),
             "description": (
                 "Implemented per-project gateway operations. Set the server URL to the exact "
-                "browser-visible gateway base path. Every API and stream request requires a "
-                "capability and valid deployment ingress. The platform authenticates users; "
+                "browser-visible gateway base path. Protected API and stream requests require a "
+                "capability and valid deployment ingress; /launch exchanges a one-time token. "
+                "The platform authenticates users; "
                 "the current gateway records one human principal, not verified individual "
-                "identities. Platform estimates and budgets are planned contracts, not these "
-                "HTTP endpoints. Deployment-owned policy enforcement (#154) and exact action "
-                "approval binding (#158) remain separate implementation work. A valid request "
+                "identities. Platform estimates and budgets have draft schemas but no runtime "
+                "HTTP endpoints. An operator-bound deployment policy limits project preferences, "
+                "and approvals bind exact action contents. A valid request "
                 "schema, gateway capability, or researcher approval never grants platform "
                 "authorization. Request bodies are bounded to 1 MiB UTF-8."
             ),

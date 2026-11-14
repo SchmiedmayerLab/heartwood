@@ -21,9 +21,9 @@ Zensical builds that tree directly; there is no copied staging tree or duplicate
 Do not mix implementation progress, validation transcripts, future features, or issue discussions into user documentation.
 Track planned work in GitHub Issues and keep run-specific evidence in CI artifacts or pull requests.
 
-The [Platform Contract](../operate/platform-contract.md) is the one exception.
-It describes the complete contract so platforms can prepare for it, marks every unimplemented part with a `planned` callout that links the owning issue, and changes together with those issues.
-Use the `planned` callout only on that page.
+The [Platform Contract](../operate/platform-contract.md) also defines draft integration messages for platform partners.
+Identify their schema maturity and runtime availability explicitly, including in generated artifact descriptions.
+Describe unavailable capabilities as limitations; keep delivery plans, issue status and implementation history outside the contract.
 
 ## Writing Style
 

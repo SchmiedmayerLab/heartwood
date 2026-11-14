@@ -129,7 +129,7 @@ Changed arguments, substituted tools, or added actions require a different decis
 Advisory risk labels and presentation summaries are not execution authority and do not change this binding.
 The gateway and backend both compare the current binding before resolving a decision.
 This binds the proposed action content; it does not freeze files referenced by a command or establish an outside security boundary for local tool execution.
-Previously issued identifiers that only bound tool-call identifiers are not valid for new approvals; preserve their history and start a new session when an upgrade invalidates pending review.
+An approval identifier without the complete action-content binding is invalid; preserved history does not authorize new execution.
 
 Each OpenHands proposal becomes one `heartwood.action-record.v1` projection correlated by stable action and tool-call identifiers.
 The same record accumulates its group, decision, execution state, bounded result, and typed affected-path evidence across replay.

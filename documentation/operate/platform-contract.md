@@ -87,7 +87,8 @@ flowchart TB
 ```
 
 In the figures on this page, green marks what Heartwood owns, blue marks what the platform owns, and dashed outlines mark what is not yet implemented.
-Heartwood consumes two independent platform capabilities, inference and platform services, on top of a hosting and access baseline.
+The integration contract separates two independent platform capabilities, inference and platform services, on top of a hosting and access baseline.
+Inference connections are implemented; authenticated platform-service integration remains unavailable.
 Either capability can be absent or unavailable without breaking the other: a platform can supply models without services, services without models, or neither while Heartwood runs a standalone model route.
 
 ## Responsibilities
@@ -100,10 +101,10 @@ Either capability can be absent or unavailable without breaking the other: a pla
 | Approval | Binds each approval to the pending action set and accepts it only from an authorized interface | Enforces its own authorization on every operation, whether or not Heartwood approved it |
 | Policy | Evaluates model routes, review modes, and credentials against the active policy | Defines the restrictions every project on the platform must obey |
 | Inference | Selects an authorized route and excludes model credentials from model context, supported tool inputs and outputs, and exports; process isolation has the limitations below | Operates endpoints, backend translation, data-use agreements, eligibility, spend limits, and egress |
-| Platform services | Presents proposals, records state and evidence, and projects progress to every interface | Owns scheduling, quotas, cost, dataset entitlements, application services, and infrastructure policy |
-| Project and billing context | Uses the authorized platform context for planning and operation requests | Selects the platform project and billing or grant attribution through the launch flow |
-| Workload prediction | Agents and researchers develop workload assumptions, resource predictions, and uncertainty using research Skills and available evidence | Supplies authorized resource profiles and observed execution evidence where available |
-| Budgets and estimates | Helps the researcher compare structured estimates, revise plans, approve operations, and inspect the shared budget overview | Produces estimates and authoritative budget and approval records; owns spending thresholds, monitoring, reservations, accounting, and enforcement |
+| Platform services | Defines draft operation messages and offline conformance checks; authenticated service integration is unavailable | Owns scheduling, quotas, cost, dataset entitlements, application services, and infrastructure policy |
+| Project and billing context | Binds the local project through the operator deployment manifest; hosted identity and billing-context integration is unavailable | Selects the platform project and billing or grant attribution through the launch flow |
+| Workload prediction | Defines draft prediction messages; automated workload forecasting is unavailable | Supplies authorized resource profiles and observed execution evidence where available |
+| Budgets and estimates | Defines draft estimate, proposal and overview messages; runtime budget integration is unavailable | Produces estimates and authoritative budget and approval records; owns spending thresholds, monitoring, reservations, accounting, and enforcement |
 | Project storage | Keeps canonical state single-writer; managed launch binds it outside the research directory | Provides separate persistent research and protected-state storage with native advisory locks, backup and access enforcement |
 | Audit and provenance | Writes content-minimized session audit and experiment records, and requests signed checkpoints | Retains checkpoints, enforces retention and immutability, and keeps its own operation audit log |
 | Controlled data | Makes no compliance claim from compatibility | Decides data eligibility, agreements, egress controls, monitoring, and incident response |
@@ -116,7 +117,8 @@ Platform authentication does not replace gateway controls, and a Heartwood appro
 The working directory remains Heartwood's local project boundary.
 A platform project is the platform's authorization and resource context; its billing account or grant attribution is a separate platform-owned binding.
 The platform establishes that context through its authorized project-selection and launch flow.
-Heartwood consumes the context without choosing a billing account, assigning charges to a grant, or allowing agent-writable project preferences to change the binding.
+The draft launch-context contract represents this platform-owned binding; Heartwood does not consume it at runtime or choose a billing account.
+An integration must prevent agent-writable project preferences from changing the binding.
 Any change to that binding follows the platform's authorization process.
 Credentials and billing details that are not needed for planning stay outside the model context.
 
@@ -126,14 +128,14 @@ The configuration boundaries are the same in both launch modes:
 |---|---|---|
 | Working directory | Researcher's existing local project | Authorized persistent project selected by the platform |
 | Project preferences | Existing `.heartwood/config.toml` | Configuration in the operator-bound protected state directory; preferences may only narrow deployment policy |
-| Model connections | Existing local or configured provider routes | Deployment-supplied connection manifest with credential references |
+| Model connections | Existing local or configured provider routes | Built-in or explicitly configured routes; connection-manifest startup is unavailable |
 | Launch context | Omitted when no platform supplies one | Implemented project deployment binding; platform-issued billing and hosted identity context remains a separate draft capability |
-| MCP services | Optional; omitted when unavailable | Separate deployment-owned service profiles, independently discovered |
+| MCP services | Authenticated service integration unavailable | Draft deployment-owned service profiles and offline discovery checks |
 
 The implemented `heartwood.project-deployment.v1` manifest establishes local launch authority for the research directory, protected state and policy ceiling.
 It is distinct from the draft platform launch-context document below: it does not implement hosted identity, billing attribution or budget services.
 
-For example, a managed launch-context document is:
+For example, a draft managed launch-context document is:
 
 ```json
 {
@@ -337,8 +339,8 @@ Heartwood discovers models through a connection's catalog endpoint after checkin
 It currently consumes platform-managed inference through built-in connections, such as the [Stanford AI API Gateway](../models/connections.md#stanford-ai-api-gateway), and through [compatible services](../models/connections.md#other-compatible-services) that an operator configures.
 A route's credential boundary determines whether actions can run without review; secret-backed routes are application-scrubbed unless the platform demonstrates a [platform-isolated boundary](platform-integration.md#model-credential-isolation), which no current adapter claims.
 
-!!! info "Unavailable: platform-managed model routes"
-    Heartwood does not currently read a platform connection manifest, so each platform-managed route needs a platform adapter.
+!!! info "Unavailable: connection-manifest startup"
+    Deployment startup does not load a platform connection manifest; use a built-in adapter connection or an explicitly configured compatible route.
     It also relies on the OpenHands model table to choose a protocol, which does not recognize platform model aliases.
     The exported manifest describes deployment-owned connections and model aliases, but runtime startup does not consume those declarations.
 
@@ -915,6 +917,7 @@ The platform connection loader additionally checks endpoint normalization, crede
 The model-connection loader does not yet wire that manifest into startup; the separate project deployment loader already binds protected state and the policy ceiling.
 
 The OpenAPI description includes all implemented REST operations, launch-token exchange, and server-sent events.
+The [Gateway API reference](../reference/gateway-api.md) provides client guidance for authentication, command envelopes, retries, approval targets and recovery.
 Its `x-websocket` section describes the WebSocket transport using the same event/projection schema.
 Gateway HTTP authentication requires the capability header after ingress validation; capability cookies are not accepted.
 Browser WebSockets send `{ "type": "authenticate", "capability": "…" }` as their first frame within five seconds and before receiving events; trusted proxies may inject the capability header instead.
