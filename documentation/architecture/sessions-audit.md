@@ -102,6 +102,8 @@ A configured required-evidence gate must observe the authorization checkpoint be
 An interrupted authorization can resume only with the original decision, a live matching worker and renewed input, policy and expiry checks.
 Read-only reconciliation skips undispatched authorizations; it never converts observation into submission authority.
 Otherwise, the session rejects further mutation so a second approval or task cannot repeat an uncertain side effect.
+An action is recorded as approved only when the session holds a recorded decision for its action set.
+If a backend reports execution of an action without one, the session records an error instead of an approval and fences the worker attempt.
 After replaying and verifying the available evidence, continue in a new session.
 
 Each session event and its corresponding audit record are committed through a private recovery journal.
