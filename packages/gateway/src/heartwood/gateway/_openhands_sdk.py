@@ -155,10 +155,17 @@ install_privacy_safe_retry_logging()
 
 
 class _BranchSnapshot(Protocol):
-    id: uuid.UUID
-    execution_status: ConversationExecutionStatus
-    stats: ConversationStats
-    events: Sequence[Event]
+    @property
+    def id(self) -> uuid.UUID: ...
+
+    @property
+    def execution_status(self) -> ConversationExecutionStatus: ...
+
+    @property
+    def stats(self) -> ConversationStats: ...
+
+    @property
+    def events(self) -> Sequence[Event]: ...
 
 
 @runtime_checkable

@@ -1,0 +1,662 @@
+--- a/openhands-tools/openhands/tools/terminal/README.md
++++ b/openhands-tools/openhands/tools/terminal/README.md
+@@ -39,6 +39,13 @@
+ If bash cannot be found in PATH, the tool will raise a clear error asking you to provide an explicit `shell_path`.
+ 
+ ## Environment Configuration
++
++Set `inherit_environment=False` with an explicit `env` mapping to exclude the parent process environment.
++The setting survives terminal reset and pool recovery and applies to subprocess, tmux, and PowerShell backends.
++Backend-required prompt, terminal, and encoding variables may still be added.
++Strict tmux startup uses an empty tmux configuration; user shell startup files and same-identity resource access remain outside this environment-delivery guarantee.
++The default remains `True` for callers that require environment inheritance.
++
+ 
+ SDK clients can provide extra environment variables when creating the terminal
+ tool. These values are merged with the sanitized process environment and apply to
+--- a/openhands-tools/openhands/tools/terminal/definition.py
++++ b/openhands-tools/openhands/tools/terminal/definition.py
+@@ -294,6 +294,7 @@
+         executor: ToolExecutor | None = None,
+         *,
+         env: Mapping[str, str] | None = None,
++        inherit_environment: bool = True,
+     ) -> Sequence["TerminalTool"]:
+         """Initialize TerminalTool with executor parameters.
+ 
+@@ -311,7 +312,9 @@
+             shell_path: Path to the shell binary. On Unix this applies to the
+                        subprocess backend; on Windows it can point to a
+                        PowerShell executable.
+-            env: Extra environment variables to add to the terminal session.
++            inherit_environment: Inherit the process environment before applying env.
++                If False, only env and backend-required variables reach the shell.
++            env: Environment variables to set in the terminal session.
+                  These are client-controlled session settings and are not part
+                  of the LLM-facing TerminalAction schema.
+         """
+@@ -331,6 +334,7 @@
+                 terminal_type=terminal_type,
+                 shell_path=shell_path,
+                 env=env,
++                inherit_environment=inherit_environment,
+                 full_output_save_dir=conv_state.env_observation_persistence_dir,
+             )
+ 
+--- a/openhands-tools/openhands/tools/terminal/env.py
++++ b/openhands-tools/openhands/tools/terminal/env.py
+@@ -36,9 +36,11 @@
+     return normalized
+ 
+ 
+-def build_terminal_env(extra_env: Mapping[str, str] | None = None) -> dict[str, str]:
+-    """Return the sanitized process environment plus client-provided overrides."""
+-    env = sanitized_env()
++def build_terminal_env(
++    extra_env: Mapping[str, str] | None = None, *, inherit_environment: bool = True
++) -> dict[str, str]:
++    """Build a terminal environment, optionally excluding all process variables."""
++    env = sanitized_env() if inherit_environment else {}
+     normalized = normalize_terminal_env(extra_env)
+     if normalized:
+         env.update(normalized)
+--- a/openhands-tools/openhands/tools/terminal/impl.py
++++ b/openhands-tools/openhands/tools/terminal/impl.py
+@@ -73,6 +73,8 @@
+         env: Mapping[str, str] | None = None,
+         full_output_save_dir: str | None = None,
+         max_panes: int = DEFAULT_MAX_PANES,
++        *,
++        inherit_environment: bool = True,
+     ):
+         """Initialize TerminalExecutor with auto-detected or specified session type.
+ 
+@@ -86,7 +88,8 @@
+             shell_path: Path to the shell binary. On Unix this applies to the
+                        subprocess backend; on Windows it can point to a
+                        PowerShell executable.
+-            env: Extra environment variables to add to the terminal session.
++            inherit_environment: Include the process environment in terminal sessions.
++            env: Environment variables to set in the terminal session.
+             full_output_save_dir: Path to directory to save full output
+                                   logs and files, used when truncation is needed.
+             max_panes: Maximum number of concurrent panes in pool mode.
+@@ -97,6 +100,7 @@
+         self._no_change_timeout_seconds = no_change_timeout_seconds
+         self._terminal_type = terminal_type
+         self._env = normalize_terminal_env(env)
++        self._inherit_environment = inherit_environment
+         self._max_panes = max_panes
+         self.full_output_save_dir: str | None = full_output_save_dir
+ 
+@@ -122,6 +126,7 @@
+                 terminal_type=terminal_type,
+                 shell_path=shell_path,
+                 env=self._env,
++                inherit_environment=self._inherit_environment,
+             )
+             self._session.initialize()
+             logger.info(
+@@ -142,6 +147,7 @@
+             self._working_dir,
+             self._username,
+             env=self._env,
++            inherit_environment=self._inherit_environment,
+             max_panes=self._max_panes,
+         )
+         self._pool.initialize()
+@@ -420,6 +426,7 @@
+             terminal_type=None,
+             shell_path=self.shell_path,
+             env=self._env,
++            inherit_environment=self._inherit_environment,
+         )
+         self._session.initialize()
+ 
+--- a/openhands-tools/openhands/tools/terminal/terminal/factory.py
++++ b/openhands-tools/openhands/tools/terminal/terminal/factory.py
+@@ -8,6 +8,7 @@
+ 
+ from openhands.sdk.logger import get_logger
+ from openhands.sdk.utils import sanitized_env
++from openhands.tools.terminal.env import build_terminal_env
+ from openhands.tools.terminal.terminal.terminal_session import TerminalSession
+ 
+ 
+@@ -29,7 +30,9 @@
+         return False
+ 
+ 
+-def _get_powershell_command(explicit_shell_path: str | None = None) -> str | None:
++def _get_powershell_command(
++    explicit_shell_path: str | None = None, *, env: Mapping[str, str] | None = None
++) -> str | None:
+     """Return a usable PowerShell executable for the current platform."""
+     candidates = [explicit_shell_path] if explicit_shell_path else []
+     if platform.system() == "Windows":
+@@ -46,7 +49,7 @@
+                 capture_output=True,
+                 text=True,
+                 timeout=5.0,
+-                env=sanitized_env(),
++                env=sanitized_env() if env is None else dict(env),
+             )
+         except (subprocess.TimeoutExpired, FileNotFoundError, PermissionError, OSError):
+             continue
+@@ -61,10 +64,17 @@
+     no_change_timeout_seconds: int | None,
+     shell_path: str | None,
+     env: Mapping[str, str] | None,
++    inherit_environment: bool,
+ ) -> TerminalSession:
+     from openhands.tools.terminal.terminal.windows_terminal import WindowsTerminal
+ 
+-    resolved_shell_path = _get_powershell_command(shell_path)
++    resolved_shell_path = (
++        _get_powershell_command(shell_path)
++        if inherit_environment
++        else _get_powershell_command(
++            shell_path, env=build_terminal_env(env, inherit_environment=False)
++        )
++    )
+     if resolved_shell_path is None:
+         raise RuntimeError("PowerShell is not available on this system")
+ 
+@@ -73,6 +83,7 @@
+         username,
+         shell_path=resolved_shell_path,
+         env=env,
++        inherit_environment=inherit_environment,
+     )
+     return TerminalSession(terminal, no_change_timeout_seconds)
+ 
+@@ -84,6 +95,7 @@
+     terminal_type: Literal["tmux", "subprocess", "powershell"] | None = None,
+     shell_path: str | None = None,
+     env: Mapping[str, str] | None = None,
++    inherit_environment: bool = True,
+ ) -> TerminalSession:
+     """Create an appropriate terminal session based on system capabilities.
+ 
+@@ -110,7 +122,9 @@
+             from openhands.tools.terminal.terminal.tmux_terminal import TmuxTerminal
+ 
+             logger.info("Using forced TmuxTerminal")
+-            terminal = TmuxTerminal(work_dir, username, env=env)
++            terminal = TmuxTerminal(
++                work_dir, username, env=env, inherit_environment=inherit_environment
++            )
+             return TerminalSession(terminal, no_change_timeout_seconds)
+ 
+         if terminal_type == "powershell":
+@@ -121,6 +135,7 @@
+                 no_change_timeout_seconds,
+                 shell_path,
+                 env,
++                inherit_environment,
+             )
+ 
+         if terminal_type == "subprocess":
+@@ -136,13 +151,20 @@
+                     no_change_timeout_seconds,
+                     shell_path,
+                     env,
++                    inherit_environment,
+                 )
+             from openhands.tools.terminal.terminal.subprocess_terminal import (
+                 SubprocessTerminal,
+             )
+ 
+             logger.info("Using forced SubprocessTerminal")
+-            terminal = SubprocessTerminal(work_dir, username, shell_path, env=env)
++            terminal = SubprocessTerminal(
++                work_dir,
++                username,
++                shell_path,
++                env=env,
++                inherit_environment=inherit_environment,
++            )
+             return TerminalSession(terminal, no_change_timeout_seconds)
+ 
+         raise ValueError(f"Unknown session type: {terminal_type}")
+@@ -155,13 +177,16 @@
+             no_change_timeout_seconds,
+             shell_path,
+             env,
++            inherit_environment,
+         )
+ 
+     if _is_tmux_available():
+         from openhands.tools.terminal.terminal.tmux_terminal import TmuxTerminal
+ 
+         logger.info("Auto-detected: Using TmuxTerminal (tmux available)")
+-        terminal = TmuxTerminal(work_dir, username, env=env)
++        terminal = TmuxTerminal(
++            work_dir, username, env=env, inherit_environment=inherit_environment
++        )
+         return TerminalSession(terminal, no_change_timeout_seconds)
+ 
+     from openhands.tools.terminal.terminal.subprocess_terminal import (
+@@ -175,5 +200,7 @@
+     )
+     logger.warning(_tmux_warning)
+     warnings.warn(_tmux_warning, stacklevel=2)
+-    terminal = SubprocessTerminal(work_dir, username, shell_path, env=env)
++    terminal = SubprocessTerminal(
++        work_dir, username, shell_path, env=env, inherit_environment=inherit_environment
++    )
+     return TerminalSession(terminal, no_change_timeout_seconds)
+--- a/openhands-tools/openhands/tools/terminal/terminal/subprocess_terminal.py
++++ b/openhands-tools/openhands/tools/terminal/terminal/subprocess_terminal.py
+@@ -92,6 +92,7 @@
+         username: str | None = None,
+         shell_path: str | None = None,
+         env: Mapping[str, str] | None = None,
++        inherit_environment: bool = True,
+     ):
+         super().__init__(work_dir, username)
+         self.PS1 = CmdOutputMetadata.to_ps1_prompt()
+@@ -105,6 +106,7 @@
+         self._current_command_running = False
+         self.shell_path = shell_path
+         self._env = normalize_terminal_env(env)
++        self._inherit_environment = inherit_environment
+ 
+     # ------------------------- Lifecycle -------------------------
+ 
+@@ -145,7 +147,9 @@
+         logger.info(f"Using shell: {resolved_shell_path}")
+ 
+         # Inherit environment variables from the parent process
+-        env = build_terminal_env(self._env)
++        env = build_terminal_env(
++            self._env, inherit_environment=self._inherit_environment
++        )
+         # Disable interactive pagers (git, man, systemctl, ...) so commands that
+         # auto-launch `less` on a TTY don't capture the PTY and wedge the session.
+         env.setdefault("GIT_PAGER", "cat")
+--- a/openhands-tools/openhands/tools/terminal/terminal/tmux_pane_pool.py
++++ b/openhands-tools/openhands/tools/terminal/terminal/tmux_pane_pool.py
+@@ -92,6 +92,7 @@
+     username: str | None = None
+     env: Mapping[str, str] | None = None
+     max_panes: int = DEFAULT_MAX_PANES
++    inherit_environment: bool = True
+ 
+     # tmux handles
+     _server: libtmux.Server | None = field(default=None, init=False, repr=False)
+@@ -125,8 +126,9 @@
+             return
+ 
+         # Before building env, so the shells get the same locale as tmux.
+-        ensure_utf8_locale()
+-        env = build_terminal_env(self.env)
++        if self.inherit_environment:
++            ensure_utf8_locale()
++        env = build_terminal_env(self.env, inherit_environment=self.inherit_environment)
+         session_name = f"openhands-pool-{self.username}-{uuid.uuid4()}"
+         # Stale handles must not reach another pool after tmux restarts.
+         self._server, self._session = _new_owned_session(
+@@ -135,6 +137,7 @@
+             start_directory=self.work_dir,
+             x=TMUX_SESSION_WIDTH,
+             y=TMUX_SESSION_HEIGHT,
++            inherit_environment=self.inherit_environment,
+         )
+         for k, v in env.items():
+             self._session.set_environment(k, v)
+@@ -179,7 +182,9 @@
+         shell_command = ["/bin/bash"]
+         if self.username in ["root", "openhands"]:
+             shell_command = ["su", self.username, "-"]
+-        priority_prefix = process_priority_prefix(build_terminal_env(self.env))
++        priority_prefix = process_priority_prefix(
++            build_terminal_env(self.env, inherit_environment=self.inherit_environment)
++        )
+ 
+         window = self._session.new_window(
+             window_name=f"pane-{len(self._all_panes)}",
+@@ -201,6 +206,7 @@
+             work_dir=self.work_dir,
+             username=self.username,
+             env=self.env,
++            inherit_environment=self.inherit_environment,
+         )
+         terminal.server = self._server  # type: ignore[assignment]
+         terminal.session = self._session
+--- a/openhands-tools/openhands/tools/terminal/terminal/tmux_terminal.py
++++ b/openhands-tools/openhands/tools/terminal/terminal/tmux_terminal.py
+@@ -3,6 +3,8 @@
+ import logging
+ import os
+ import shlex
++import shutil
++import subprocess
+ import sys
+ import time
+ import uuid
+@@ -123,6 +125,7 @@
+     start_directory: str,
+     x: int,
+     y: int,
++    inherit_environment: bool = True,
+ ) -> tuple[libtmux.Server, libtmux.Session]:
+     """Create a tmux session on a fresh socket owned by this process.
+ 
+@@ -151,18 +154,59 @@
+             socket_name=None if fallback else socket_name,
+             socket_path=str(socket_dir / socket_name) if fallback else None,
+         )
+-        session = server.new_session(
+-            session_name=session_name,
+-            start_directory=start_directory,
+-            kill_session=True,
+-            x=x,
+-            y=y,
+-        )
++        if inherit_environment:
++            session = server.new_session(
++                session_name=session_name,
++                start_directory=start_directory,
++                kill_session=True,
++                x=x,
++                y=y,
++            )
++        else:
++            # libtmux has no subprocess environment argument. Start the owned
++            # server with the selected environment before attaching its API.
++            socket_path = str(socket_dir / socket_name)
++            server = libtmux.Server(socket_path=socket_path)
++            tmux = shutil.which("tmux")
++            if tmux is None:
++                raise RuntimeError("Tmux is not available on this system")
++            try:
++                subprocess.run(
++                    [
++                        tmux,
++                        "-S",
++                        socket_path,
++                        "-f",
++                        os.devnull,
++                        "new-session",
++                        "-d",
++                        "-s",
++                        session_name,
++                        "-c",
++                        start_directory,
++                        "-x",
++                        str(x),
++                        "-y",
++                        str(y),
++                    ],
++                    env=dict(env),
++                    check=True,
++                    capture_output=True,
++                    timeout=30,
++                )
++                session = server.sessions.get(session_name=session_name)
++                if session is None:
++                    raise RuntimeError("The terminal session did not start")
++            except BaseException:
++                with suppress(Exception):
++                    server.kill()
++                raise
+         mark_socket_owner(server)
+     # A tmux server starts with this process's environment rather than *env*,
+     # and new windows inherit it, so unset what sanitization removed.
+-    for key in os.environ.keys() - env.keys():
+-        server.unset_environment(key)
++    if inherit_environment:
++        for key in os.environ.keys() - env.keys():
++            server.unset_environment(key)
+     return server, session
+ 
+ 
+@@ -204,11 +248,13 @@
+         work_dir: str,
+         username: str | None = None,
+         env: Mapping[str, str] | None = None,
++        inherit_environment: bool = True,
+     ):
+         super().__init__(work_dir, username)
+         _install_libtmux_redaction_filter()
+         self.PS1 = CmdOutputMetadata.to_ps1_prompt()
+         self._env = normalize_terminal_env(env)
++        self._inherit_environment = inherit_environment
+ 
+     def initialize(self) -> None:
+         """Initialize the tmux terminal session."""
+@@ -216,8 +262,11 @@
+             return
+ 
+         # Before building env, so the shell gets the same locale as tmux.
+-        ensure_utf8_locale()
+-        env = build_terminal_env(self._env)
++        if self._inherit_environment:
++            ensure_utf8_locale()
++        env = build_terminal_env(
++            self._env, inherit_environment=self._inherit_environment
++        )
+         # Disable interactive pagers (git, man, systemctl, ...) so commands that
+         # auto-launch `less` on a TTY don't capture the pane and wedge the session.
+         env.setdefault("GIT_PAGER", "cat")
+@@ -238,6 +287,7 @@
+             start_directory=self.work_dir,
+             x=TMUX_SESSION_WIDTH,
+             y=TMUX_SESSION_HEIGHT,
++            inherit_environment=self._inherit_environment,
+         )
+         for k, v in env.items():
+             self.session.set_environment(k, v)
+--- a/openhands-tools/openhands/tools/terminal/terminal/windows_terminal.py
++++ b/openhands-tools/openhands/tools/terminal/terminal/windows_terminal.py
+@@ -80,6 +80,7 @@
+         username: str | None = None,
+         shell_path: str = "powershell.exe",
+         env: Mapping[str, str] | None = None,
++        inherit_environment: bool = True,
+     ):
+         super().__init__(work_dir, username)
+         self.process = None
+@@ -88,6 +89,7 @@
+         self.reader_thread = None
+         self.shell_path = shell_path
+         self._env = normalize_terminal_env(env)
++        self._inherit_environment = inherit_environment
+         self._command_running_event = threading.Event()
+         self._stop_reader = threading.Event()
+         self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+@@ -97,7 +99,9 @@
+         if self._initialized:
+             return
+ 
+-        env = build_terminal_env(self._env)
++        env = build_terminal_env(
++            self._env, inherit_environment=self._inherit_environment
++        )
+         env.setdefault("PYTHONIOENCODING", "utf-8")
+         env.setdefault("PYTHONUTF8", "1")
+ 
+--- /dev/null
++++ b/tests/tools/terminal/test_terminal_environment_selection.py
+@@ -0,0 +1,180 @@
++"""Explicit terminal environments exclude inherited values across lifecycle paths."""
++
++import shutil
++from types import SimpleNamespace
++from unittest.mock import MagicMock
++
++import pytest
++
++from openhands.tools.terminal.definition import TerminalAction, TerminalTool
++from openhands.tools.terminal.env import build_terminal_env
++from openhands.tools.terminal.impl import TerminalExecutor
++from openhands.tools.terminal.terminal import factory
++from openhands.tools.terminal.terminal.tmux_terminal import _new_owned_session
++from openhands.tools.terminal.terminal.windows_terminal import WindowsTerminal
++
++
++@pytest.mark.parametrize("inherit", [False, True])
++def test_environment_selection_preserves_default(monkeypatch, inherit):
++    monkeypatch.setenv("TERMINAL_TEST_SECRET", "synthetic")
++    selected = build_terminal_env(
++        {"PATH": "/usr/bin:/bin"}, inherit_environment=inherit
++    )
++    assert ("TERMINAL_TEST_SECRET" in selected) is inherit
++    assert selected["PATH"] == "/usr/bin:/bin"
++
++
++def test_terminal_subprocess_and_reset_exclude_inherited_tokens(tmp_path, monkeypatch):
++    tokens = [
++        "AWS_SECRET_ACCESS_KEY",
++        "GITHUB_TOKEN",
++        "HF_TOKEN",
++        "JUPYTERHUB_API_TOKEN",
++    ]
++    for key in tokens:
++        monkeypatch.setenv(key, "synthetic")
++    # The reset may select tmux when available; both modes must preserve the setting.
++    executor = TerminalExecutor(
++        str(tmp_path),
++        terminal_type="subprocess",
++        inherit_environment=False,
++        env={
++            "PATH": "/usr/bin:/bin",
++            "LANG": "C.UTF-8",
++            "RESEARCH_SETTING": "retained",
++        },
++    )
++    try:
++        for reset in [False, True]:
++            if reset:
++                executor.reset()
++            observation = executor(TerminalAction(command="env"))
++            assert observation.metadata.exit_code == 0
++            assert "RESEARCH_SETTING=retained" in observation.text
++            for key in tokens:
++                assert key + "=" not in observation.text
++    finally:
++        executor.close()
++
++
++def test_public_factory_propagates_selection(tmp_path):
++    state = SimpleNamespace(
++        workspace=SimpleNamespace(working_dir=str(tmp_path)),
++        env_observation_persistence_dir=None,
++    )
++    tools = TerminalTool.create(
++        state,
++        terminal_type="subprocess",
++        inherit_environment=False,
++        env={"PATH": "/usr/bin:/bin"},
++    )
++    try:
++        assert tools[0].executor._inherit_environment is False
++    finally:
++        tools[0].executor.close()
++
++
++@pytest.mark.parametrize("backend", ["tmux", "subprocess", "powershell"])
++def test_session_factory_propagates_selection(tmp_path, monkeypatch, backend):
++    monkeypatch.setattr(factory, "_is_tmux_available", lambda: True)
++    monkeypatch.setattr(
++        factory, "_get_powershell_command", lambda *args, **kwargs: "/bin/pwsh"
++    )
++    session = factory.create_terminal_session(
++        str(tmp_path), terminal_type=backend, inherit_environment=False
++    )
++    assert session.terminal._inherit_environment is False
++
++
++def test_windows_process_receives_only_selected_environment(tmp_path, monkeypatch):
++    monkeypatch.setenv("TERMINAL_TEST_SECRET", "synthetic")
++    terminal = WindowsTerminal(
++        str(tmp_path), env={"PATH": "/bin"}, inherit_environment=False
++    )
++
++    class Started(Exception):
++        pass
++
++    def launch(*args, **kwargs):
++        assert "TERMINAL_TEST_SECRET" not in kwargs["env"]
++        assert kwargs["env"]["PATH"] == "/bin"
++        raise Started
++
++    monkeypatch.setattr(
++        "openhands.tools.terminal.terminal.windows_terminal.subprocess.Popen", launch
++    )
++    with pytest.raises(Started):
++        terminal.initialize()
++
++
++def test_first_tmux_process_receives_selected_environment(tmp_path, monkeypatch):
++    monkeypatch.setenv("TERMINAL_TEST_SECRET", "synthetic")
++    monkeypatch.setenv("TMUX_TMPDIR", str(tmp_path))
++    server = MagicMock()
++    monkeypatch.setattr(
++        "openhands.tools.terminal.terminal.tmux_terminal.libtmux.Server",
++        lambda **kwargs: server,
++    )
++    monkeypatch.setattr(
++        "openhands.tools.terminal.terminal.tmux_terminal.shutil.which",
++        lambda name: "/bin/tmux",
++    )
++    launch = MagicMock()
++    monkeypatch.setattr(
++        "openhands.tools.terminal.terminal.tmux_terminal.subprocess.run", launch
++    )
++    env = {"PATH": "/bin", "LANG": "C.UTF-8"}
++    _new_owned_session(
++        env,
++        session_name="test",
++        start_directory=str(tmp_path),
++        x=80,
++        y=24,
++        inherit_environment=False,
++    )
++    assert launch.call_args.kwargs["env"] == env
++    assert launch.call_args.kwargs["timeout"] == 30
++    server.new_session.assert_not_called()
++
++
++def test_pool_recovery_retains_environment_selection(tmp_path, monkeypatch):
++    monkeypatch.setattr(
++        "openhands.tools.terminal.impl._is_tmux_available", lambda: True
++    )
++    pool_type = MagicMock()
++    monkeypatch.setattr("openhands.tools.terminal.impl.TmuxPanePool", pool_type)
++    executor = TerminalExecutor(
++        str(tmp_path), inherit_environment=False, env={"PATH": "/bin"}
++    )
++    first_pool = executor._pool
++    executor._recover_tmux_pool(first_pool)
++    assert pool_type.call_count == 2
++    for call in pool_type.call_args_list:
++        assert call.kwargs["inherit_environment"] is False
++        assert call.kwargs["env"] == {"PATH": "/bin"}
++    executor.close()
++
++
++@pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux executable unavailable")
++@pytest.mark.parametrize("pooled", [False, True])
++def test_tmux_commands_exclude_inherited_environment(tmp_path, monkeypatch, pooled):
++    monkeypatch.setenv("TERMINAL_TEST_SECRET", "synthetic")
++    env = {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "RESEARCH_SETTING": "retained"}
++    if pooled:
++        terminal = TerminalExecutor(
++            str(tmp_path), terminal_type="tmux", inherit_environment=False, env=env
++        )
++        execute = terminal
++    else:
++        terminal = factory.create_terminal_session(
++            str(tmp_path), terminal_type="tmux", inherit_environment=False, env=env
++        )
++        terminal.initialize()
++        execute = terminal.execute
++    try:
++        observation = execute(TerminalAction(command="env"))
++        assert observation.metadata.exit_code == 0
++        assert "TERMINAL_TEST_SECRET=" not in observation.text
++        assert "RESEARCH_SETTING=retained" in observation.text
++    finally:
++        terminal.close()
