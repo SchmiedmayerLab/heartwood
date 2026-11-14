@@ -285,6 +285,22 @@ On a scheduler-managed GPU platform, `--task-profile standard|powerful|maximum` 
 `--gpus` is an advanced constraint and must match a qualified catalog tensor-parallel configuration.
 Unattended operation requires separate `--yes-download` and `--yes-request-allocation` approvals; neither is implied by `--non-interactive` or another confirmation flag.
 
+## Project State Migration
+
+Run these commands from the research directory with an explicit operator deployment manifest:
+
+```sh
+heartwood project migrate --deployment /absolute/path/project.toml --backup /absolute/protected/original
+heartwood project recover-migration --deployment /absolute/path/project.toml
+heartwood project recover-migration --deployment /absolute/path/project.toml --rollback
+```
+
+Migration requires stopped project activity, a new target and backup, and verified source records.
+The backup parent must be on the research directory's filesystem; both external parents must already exist and be operator-controlled.
+Recovery resumes an interrupted publication by default.
+`--rollback` explicitly restores the original only while the protected target is unchanged, retaining both copies for operator inspection.
+See [Moving Existing Local State](../start/project.md#moving-existing-local-state) for storage and recovery requirements.
+
 ## Exit Status
 
 `0` indicates that the requested command completed successfully or an interactive cancellation changed no files.
