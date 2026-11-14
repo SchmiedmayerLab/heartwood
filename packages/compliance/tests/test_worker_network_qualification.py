@@ -142,6 +142,11 @@ def test_positive_controls_do_not_erase_worker_traffic(
 def test_sandbox_replacement_invalidates_network_evidence(
     qualification: ModuleType, changed: str
 ) -> None:
+    protocol = pytest.importorskip(
+        "openshell._proto.openshell_pb2",
+        reason="Native SDK admission checks run in the candidate qualification environment",
+    )
+
     def sandbox(*, modified: bool) -> SimpleNamespace:
         return SimpleNamespace(
             id="replacement" if modified and changed == "id" else "original",
@@ -151,7 +156,7 @@ def test_sandbox_replacement_invalidates_network_evidence(
                 ),
                 configuration_activated=not (modified and changed == "activation"),
                 configuration_admission=SimpleNamespace(
-                    state=qualification.openshell_pb2.CONFIGURATION_ADMISSION_STATE_ACCEPTED,
+                    state=protocol.CONFIGURATION_ADMISSION_STATE_ACCEPTED,
                     policy_hash="new-policy" if modified and changed == "policy" else "original",
                 ),
             ),

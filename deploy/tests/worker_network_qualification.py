@@ -22,9 +22,10 @@ import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from openshell import SandboxClient, TlsConfig
-from openshell._proto import openshell_pb2
+if TYPE_CHECKING:
+    from openshell import SandboxClient
 
 
 def serve_canary(
@@ -133,9 +134,12 @@ def qualify_network(
         raise ValueError("The native IPv6 canary must not be an IPv4-mapped address")
     before = control.get(sandbox, workspace=workspace)
     admission = before.status.configuration_admission
+    if admission is None:
+        raise AssertionError("The sandbox does not have an active admitted configuration")
+    from openshell._proto import openshell_pb2
+
     if (
-        admission is None
-        or admission.state != openshell_pb2.CONFIGURATION_ADMISSION_STATE_ACCEPTED
+        admission.state != openshell_pb2.CONFIGURATION_ADMISSION_STATE_ACCEPTED
         or not before.status.configuration_activated
         or not before.status.main_process_instance_id
     ):
@@ -211,6 +215,8 @@ def main() -> None:
     parser.add_argument("--ipv6-port", type=int, required=True)
     parser.add_argument("--allowed-host", default="host.docker.internal")
     args = parser.parse_args()
+    from openshell import SandboxClient, TlsConfig
+
     control = SandboxClient(
         args.gateway,
         tls=TlsConfig(ca_path=args.ca, cert_path=args.cert, key_path=args.key),
