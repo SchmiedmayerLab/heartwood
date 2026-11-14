@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import tomllib
 import zipfile
 from pathlib import Path
 from types import ModuleType
@@ -16,6 +17,80 @@ from types import ModuleType
 import pytest
 
 _ROOT = Path(__file__).resolve().parents[3]
+
+
+def test_gateway_stamp_preserves_registry_dependencies(builder: ModuleType, tmp_path: Path) -> None:
+    (tmp_path / "Cargo.toml").write_text('[workspace.package]\nversion = "0.0.0"\n')
+    (tmp_path / "Cargo.lock").write_text(
+        'version = 4\n[[package]]\nname = "openshell-core"\nversion = "0.0.0"\n'
+        '[[package]]\nname = "synthetic"\nversion = "10.0.0"\n'
+        'source = "registry+https://example.invalid/index"\nchecksum = "unchanged"\n'
+    )
+    builder._gateway_version(tmp_path, "0.1.8+heartwood.1")
+    packages = tomllib.loads((tmp_path / "Cargo.lock").read_text())["package"]
+    assert packages[0]["version"] == "0.1.8+heartwood.1"
+    assert packages[1] == {
+        "name": "synthetic",
+        "version": "10.0.0",
+        "source": "registry+https://example.invalid/index",
+        "checksum": "unchanged",
+    }
+
+
+def test_gateway_stamp_rejects_registry_zero_version(builder: ModuleType, tmp_path: Path) -> None:
+    metadata = '[workspace.package]\nversion = "0.0.0"\n'
+    (tmp_path / "Cargo.toml").write_text(metadata)
+    lock = (
+        'version = 4\n[[package]]\nname = "openshell-core"\nversion = "0.0.0"\n'
+        'source = "registry+https://example.invalid/index"\n'
+    )
+    (tmp_path / "Cargo.lock").write_text(lock)
+    with pytest.raises(ValueError, match="workspace versions"):
+        builder._gateway_version(tmp_path, "0.1.8+heartwood.1")
+    assert (tmp_path / "Cargo.toml").read_text() == metadata
+    assert (tmp_path / "Cargo.lock").read_text() == lock
+
+
+@pytest.mark.parametrize("invalid", ["image", "patch"])
+def test_gateway_rejects_changed_inputs_before_docker(
+    builder: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, invalid: str
+) -> None:
+    patch = builder._CONFIG / "reviewed.patch"
+    images = {"rust": "rust@sha256:" + "1" * 64}
+    manifest = {
+        "schema_version": 1,
+        "purpose": "qualification-only",
+        "images": images,
+        "patches": [{"path": patch.name, "sha256": hashlib.sha256(patch.read_bytes()).hexdigest()}],
+    }
+    if invalid == "image":
+        images["rust"] = "rust:latest"
+    else:
+        patch.write_text("substituted patch")
+    (builder._CONFIG / "gateway.json").write_text(json.dumps(manifest))
+    monkeypatch.setattr(
+        builder.subprocess,
+        "check_output",
+        lambda *_args, **_kwargs: pytest.fail("contacted Docker"),
+    )
+    with pytest.raises(ValueError, match=r"immutable digests|digest mismatch"):
+        builder.build_gateway(tmp_path / "output", tmp_path / "cache")
+    assert not (tmp_path / "output").exists()
+
+
+def test_source_cache_is_reverified_before_extraction(
+    builder: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    digest = "a" * 64
+    (cache / (digest + ".tar.gz")).write_bytes(b"substituted cache content")
+    monkeypatch.setattr(
+        builder.urllib.request, "urlopen", lambda *_args, **_kwargs: pytest.fail("downloaded")
+    )
+    with pytest.raises(ValueError, match="digest mismatch"):
+        builder._source({"sha256": digest}, tmp_path / "staging", cache=cache)
+    assert not (tmp_path / "staging").exists()
 
 
 @pytest.fixture
