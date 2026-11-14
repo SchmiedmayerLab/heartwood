@@ -433,6 +433,35 @@ def test_manager_enforces_platform_and_deployment_owned_controlled_data_approval
         )
 
 
+def test_installed_skill_reports_only_the_current_deployment_controlled_data_approval(
+    tmp_path: Path,
+) -> None:
+    entry, archive = _catalog_skill(tmp_path)
+    client = _CatalogClient(_snapshot(entry), archive)
+    approving = _manager(
+        tmp_path,
+        registry=SkillSourceRegistry(
+            sources=(_profile(tmp_path, "official", approved_digests=(entry.tree_sha256,)),)
+        ),
+        client=client,
+    )
+    approving.install_catalog(
+        entry.name, source_id=None, expected_tree_sha256=entry.tree_sha256, approved=True
+    )
+    assert approving.store.records()[0].controlled_data_ready
+
+    def installed(manager: SkillManager) -> bool:
+        return next(
+            summary.controlled_data_ready
+            for summary in manager.summaries()
+            if summary.source == "installed"
+        )
+
+    assert installed(approving)
+    # The same project state under a registry that never approved this digest.
+    assert not installed(_manager(tmp_path, client=client))
+
+
 @pytest.mark.parametrize(
     ("entry_update", "reason"),
     [

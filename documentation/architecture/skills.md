@@ -66,6 +66,7 @@ One project-scoped native lock serializes source refresh, download, activation, 
 Heartwood revalidates the signed source, installed tree, and matching activation event in the verified audit chain before exposing an active catalog Skill to OpenHands.
 Runtime selection rereads the installation index after refreshing signed sources, so a newly observed revocation excludes the package from that same selection.
 It also reevaluates tool, network, and platform compatibility for the current deployment, so project state moved between environments cannot activate an incompatible Skill.
+The projection likewise reports controlled-data approval for an installed Skill from the current deployment registry, not from the retained installation record.
 OpenHands receives only the exact directory of each verified installed Skill, so content written beside it cannot load as trusted context.
 Heartwood refuses to install a Skill whose content-addressed directory holds anything else, including a leftover from an interrupted installation.
 Such content beside an active installed Skill stops Skill listing and starting agent sessions until it is removed, and the error names the directory to clean up.
