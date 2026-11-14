@@ -23,7 +23,9 @@ const webRoot = path.join(packageRoot, "dist");
 const stateRoot = fs.mkdtempSync(
   path.join(os.tmpdir(), "heartwood-reference-analysis-"),
 );
-const socketRoot = fs.mkdtempSync(path.join(fs.realpathSync("/tmp"), "hw-model-"));
+const socketRoot = fs.mkdtempSync(
+  path.join(fs.realpathSync("/tmp"), "hw-model-"),
+);
 const runtimeSocket = path.join(socketRoot, "model.sock");
 const gatewayPort = process.env.HEARTWOOD_REFERENCE_GATEWAY_PORT || "4187";
 const origin = `http://127.0.0.1:${gatewayPort}`;
@@ -773,13 +775,22 @@ async function waitForUrl(url, socketPath) {
   let lastError;
   while (Date.now() < deadline) {
     try {
-      const response = socketPath
-        ? await new Promise((resolve, reject) => {
-            const request = http.get({ socketPath, path: new URL(url).pathname }, (incoming) => {
-              incoming.resume();
-              resolve({ ok: incoming.statusCode === 200, status: incoming.statusCode });
-            });
-            request.setTimeout(2_000, () => request.destroy(new Error("model request timed out")));
+      const response =
+        socketPath ?
+          await new Promise((resolve, reject) => {
+            const request = http.get(
+              { socketPath, path: new URL(url).pathname },
+              (incoming) => {
+                incoming.resume();
+                resolve({
+                  ok: incoming.statusCode === 200,
+                  status: incoming.statusCode,
+                });
+              },
+            );
+            request.setTimeout(2_000, () =>
+              request.destroy(new Error("model request timed out")),
+            );
             request.on("error", reject);
           })
         : await fetch(url);
