@@ -90,7 +90,7 @@ uv run --no-project --python 3.12.15 deploy/build-worker-candidate.py --output t
 The builder requires the uv version recorded in the source manifest and a new output directory.
 The conversation patch adds bounded remote-event admission, terminal failure propagation and explicit outside client-tool control.
 The sandbox patch exposes the native configuration-admission record needed to bind a worker to its admitted policy and process generation.
-The dependency patch updates the SDK's stale inference-client constraint, public imports and usage-cost handling after its MCP 2 migration.
+The dependency patch supplies the inference-client constraint, public imports and usage-cost handling required by the candidate SDK dependency graph.
 The local package version suffix distinguishes these reviewed candidates from upstream releases.
 Source revisions, patch digests and wheel records must accompany any qualification result that uses them.
 Promotion into the production dependency lock requires compatible upstream releases or an explicitly maintained patched dependency source, followed by integrated qualification of the exact resulting image.
