@@ -9,6 +9,8 @@ from __future__ import annotations
 import importlib
 import io
 import json
+import subprocess
+import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock
@@ -22,6 +24,23 @@ def profile_module(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
     root = Path(__file__).resolve().parents[3]
     monkeypatch.syspath_prepend(str(root / "deploy"))
     return importlib.import_module("worker_model_profile")
+
+
+def test_model_helpers_import_without_native_sdk() -> None:
+    root = Path(__file__).resolve().parents[3]
+    program = """
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+sys.path[:0] = [str(root), str(root / "deploy"), str(root / "deploy/tests")]
+sys.modules["openshell"] = None
+from test_worker_model_integration import allowed_action
+
+assert allowed_action("terminal", {"command": "cat /inputs/summary.json"}) == "inspect-input"
+assert allowed_action("terminal", {"command": "cat /inputs/summary.json; env"}) is None
+"""
+    subprocess.run([sys.executable, "-c", program, str(root)], check=True, timeout=60)
 
 
 @pytest.mark.parametrize(
