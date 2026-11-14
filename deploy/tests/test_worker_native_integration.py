@@ -57,6 +57,47 @@ def infrastructure(request: pytest.FixtureRequest) -> Iterator[NativeFixture]:
         (output / "cleanup.json").write_text('{"complete": true}\n')
 
 
+def test_failed_gateway_retains_logs_until_verified_cleanup() -> None:
+    output = Path(os.environ["HW_QUALIFICATION_OUTPUT"]) / "failed-gateway-cleanup"
+    output.mkdir(mode=0o700)
+    fixture = NativeFixture(output / "private", output)
+    container_id = command(
+        [
+            "docker",
+            "run",
+            "--detach",
+            "--name",
+            fixture.identity,
+            "--label",
+            "heartwood-qualification-owner=" + fixture.identity,
+            "--user",
+            "10001:10001",
+            "--cap-drop",
+            "ALL",
+            "--security-opt",
+            "no-new-privileges",
+            "--network",
+            "none",
+            "--read-only",
+            fixture.gateway_image,
+            "--invalid-qualification-option",
+        ]
+    ).strip()
+    try:
+        assert int(command(["docker", "wait", container_id])) != 0
+        fixture._stop_gateway()
+        assert "invalid-qualification-option" in (output / "gateway.log").read_text()
+        assert not command(
+            ["docker", "ps", "--all", "--filter", "id=" + container_id, "--format", "{{.ID}}"]
+        ).strip()
+        (output / "cleanup.json").write_text('{"complete": true}\n')
+    finally:
+        if command(
+            ["docker", "ps", "--all", "--filter", "id=" + container_id, "--format", "{{.ID}}"]
+        ).strip():
+            fixture._stop_gateway()
+
+
 def _application(fixture: NativeFixture) -> SessionGateway:
     root = fixture.private / "project"
     root.mkdir()

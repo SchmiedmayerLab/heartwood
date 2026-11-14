@@ -304,7 +304,6 @@ additional_ca_bundle = {q(tls / "ca.crt")}
         arguments = [
             "docker",
             "run",
-            "--rm",
             "--detach",
             "--name",
             self.identity,
@@ -313,7 +312,7 @@ additional_ca_bundle = {q(tls / "ca.crt")}
             "--user",
             f"{os.getuid()}:{os.getgid()}",
             "--group-add",
-            "0",
+            str(Path("/run/docker.sock").stat().st_gid),
             "--cap-drop",
             "ALL",
             "--security-opt",
@@ -555,7 +554,8 @@ additional_ca_bundle = {q(tls / "ca.crt")}
             ["docker", "logs", self.identity], capture_output=True, text=True, timeout=15
         )
         (self.output / "gateway.log").write_text(logs.stdout + logs.stderr)
-        command(["docker", "stop", "--time", "20", self.identity])
+        command(["docker", "stop", "--time", "20", observed["Id"]])
+        command(["docker", "rm", observed["Id"]])
 
     def create_probe(self, image: str) -> tuple[str, str]:
         """Retain a probe's identity before observing its startup or failure."""
