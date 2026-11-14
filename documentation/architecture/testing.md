@@ -140,6 +140,57 @@ The browser bundle is installed beside the candidate CLI from the existing front
 Missing CLI resources resolve only within the installed package or the exact editable checkout layout, never relative to the research project.
 Image construction and worker smoke checks do not establish native sandbox, provider-authorization or sensitive-data readiness.
 
+### Gateway Build
+
+The gateway candidate uses the pinned upstream source and focused Docker provisioning patch recorded in `images/worker/candidate/gateway.json`.
+Build it with the existing candidate builder:
+
+```bash
+uv run --no-project --python 3.12.15 deploy/build-worker-candidate.py \
+  --gateway --output test-results/gateway-candidate --cache test-results/gateway-cache
+```
+
+The output directory must be new and separate from the reusable cache directory.
+The builder verifies source, patch, CLI and build-tool archives, stamps a distinct local workspace version without changing registry dependencies, and uses locked Cargo dependencies inside a resource-bounded Linux container.
+Rust, CMake and image inputs are pinned; no mutable system-package installation is required.
+Cached archives are reverified before extraction.
+The resulting binary is packaged with the unchanged upstream gateway Dockerfile and checked for its expected version.
+The output retains binaries, the upstream license, packaging inputs, and a record binding source, manifest, lockfile, binary and image identities.
+These records establish build provenance; they do not claim byte-identical gateway builds or qualify untested architectures.
+
+The same manifest pins the supervisor, sandbox and Docker client image references used by native qualification.
+`images/worker/candidate/controller.Dockerfile` adds the verified gateway tools and pinned Docker client to the shared candidate runtime image.
+Supply `RUNTIME_IMAGE` and `DOCKER_CLIENT_IMAGE` as build arguments and the gateway output as the `worker-qualification-tools` named context.
+The controller remains outside the worker sandbox and needs an explicitly supplied Docker socket for native integration tests; the worker never receives that socket.
+Gateway artifacts and upstream patches are qualification inputs, not published upstream releases or a supported production dependency channel.
+
+### Installed Native Integration
+
+The candidate workflow builds the gateway and dependency wheels independently, then assembles the shared worker and runtime images for native integration.
+Run the same tests locally against those images and gateway artifacts:
+
+```bash
+python3 deploy/qualify-native-worker.py \
+  --worker-image heartwood-worker:qualification \
+  --runtime-image heartwood-runtime:qualification \
+  --gateway-artifacts test-results/gateway-candidate \
+  --output test-results/native-qualification
+```
+
+The command requires a local Linux Docker engine and a new output directory.
+It verifies gateway artifact digests, builds the outside controller, and runs the installed application without source overlays.
+The disposable gateway shares the controller's network namespace without publishing host ports; each worker still uses the native sandbox's isolated network.
+Only the outside controller and gateway receive the Docker management socket.
+The synthetic TLS provider uses a generated test credential and a fixed tool-call sequence; no external inference service or API key is needed.
+
+The workflow test uses Heartwood's production native launcher, independently admitted policy, read-only inputs and Skills, exact outside approvals, aggregate suppression, verified audit, and revocation before writer release.
+After shutdown it checks protected-state replay in a fresh process and rejects incorrect project identity and corrupted audit data.
+A separate fault test discards a successful native create response and requires a fenced attempt until outside revocation removes its containers and volumes.
+Test failure or failed cleanup prevents qualification; retained evidence must include the successful command exit and teardown results, not merely an individual assertion record.
+If revocation cannot settle, the local fixture retains its control state for reconciliation.
+CI retains only the selected synthetic evidence and logs, excluding private gateway state and generated credentials.
+These tests do not establish model-driven attack resistance, signed-checkpoint retention, tenant authorization, or institutional sensitive-data approval.
+
 ### Native Network Qualification
 
 `deploy/tests/worker_network_qualification.py` runs against an existing disposable sandbox through the native authenticated control API.
