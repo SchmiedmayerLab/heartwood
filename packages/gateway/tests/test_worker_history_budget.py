@@ -59,12 +59,13 @@ def test_native_attach_bounds_repeating_history_pages(monkeypatch: pytest.Monkey
     try:
         with pytest.raises(WorkerResponseError, match="budget exhausted"):
             conversation = RemoteConversation.attach(workspace, identity, visualizer=None)
-        assert len(requests) == 1024
+        admitted = len(requests)
+        assert 1024 <= admitted < 1200
         assert any("page_id=repeated" in path for path in requests)
         workspace.reset_client()
         with pytest.raises(WorkerResponseError, match="closed"):
             RemoteConversation.attach(workspace, identity, visualizer=None)
-        assert len(requests) == 1024
+        assert len(requests) == admitted
     finally:
         if conversation is not None:
             conversation.close()

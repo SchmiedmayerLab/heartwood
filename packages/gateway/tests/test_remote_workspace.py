@@ -311,13 +311,69 @@ def test_response_budget_requires_positive_integer_limits(
         WorkerResponseBudget(max_bytes=max_bytes, max_responses=max_responses)
 
 
+def test_slow_response_body_is_cut_off_at_the_response_deadline() -> None:
+    now = 0.0
+
+    class Trickle(httpx.SyncByteStream):
+        def __iter__(self) -> Iterator[bytes]:
+            nonlocal now
+            for _ in range(1000):
+                now += 30.0
+                yield b" "
+
+    budget = WorkerResponseBudget(clock=lambda: now)
+    transport = WorkerResponseTransport(
+        host="http://worker.test",
+        tool_modules={},
+        budget=budget,
+        clock=lambda: now,
+        transport=httpx.MockTransport(
+            lambda _: httpx.Response(
+                200, stream=Trickle(), headers={"Content-Type": "application/json"}
+            )
+        ),
+    )
+    with (
+        httpx.Client(transport=transport, base_url="http://worker.test") as client,
+        pytest.raises(WorkerResponseError, match="deadline"),
+    ):
+        client.get("/")
+    assert now <= 150.0
+    with pytest.raises(WorkerResponseError, match="closed"):
+        budget.charge(0)
+
+
+def test_response_budget_admits_a_long_run_and_fences_a_flood() -> None:
+    now = 0.0
+    budget = WorkerResponseBudget(clock=lambda: now)
+    for _ in range(4 * 60 * 60):
+        # One status poll each second and a full progress read every five.
+        now += 1.0
+        budget.charge(2048, new_response=True)
+        if now % 5 == 0:
+            budget.charge(1024 * 1024, new_response=True)
+
+    def flood() -> None:
+        nonlocal now
+        for _ in range(2048):
+            now += 0.01
+            budget.charge(2048, new_response=True)
+
+    with pytest.raises(WorkerResponseError, match="budget exhausted"):
+        flood()
+    now += 3600.0
+    with pytest.raises(WorkerResponseError, match="closed"):
+        budget.charge(0)
+
+
 @pytest.mark.parametrize(
     ("status", "body", "max_bytes", "max_responses"), [(200, b"{}", 4, 5), (204, b"", 4, 2)]
 )
-def test_lifetime_response_budget_is_not_refunded(
+def test_spent_response_budget_closes_admission_for_good(
     status: int, body: bytes, max_bytes: int, max_responses: int
 ) -> None:
     calls = []
+    now = 0.0
 
     def handle(request: httpx.Request) -> httpx.Response:
         calls.append(request)
@@ -327,7 +383,9 @@ def test_lifetime_response_budget_is_not_refunded(
         host="http://worker.test",
         tool_modules={},
         transport=httpx.MockTransport(handle),
-        budget=WorkerResponseBudget(max_bytes=max_bytes, max_responses=max_responses),
+        budget=WorkerResponseBudget(
+            max_bytes=max_bytes, max_responses=max_responses, clock=lambda: now
+        ),
     )
     with httpx.Client(transport=transport, base_url="http://worker.test") as client:
         assert client.get("/").content == body
@@ -426,16 +484,19 @@ def test_client_reset_does_not_renew_request_budget(monkeypatch: pytest.MonkeyPa
 
     monkeypatch.setattr(httpx, "HTTPTransport", lambda **_: httpx.MockTransport(handle))
     workspace = AdmittedRemoteWorkspace(host="http://worker.test", working_dir="/workspace")
-    try:
-        for _ in range(1024):
+
+    def spend() -> None:
+        for _ in range(1200):
             workspace.client.get("/")
             workspace.reset_client()
+
+    try:
         with pytest.raises(WorkerResponseError, match="budget exhausted"):
-            workspace.client.get("/")
+            spend()
         workspace.reset_client()
         with pytest.raises(WorkerResponseError, match="closed"):
             workspace.client.get("/")
-        assert len(calls) == 1024
+        assert 1024 <= len(calls) < 1200
     finally:
         workspace.reset_client()
 

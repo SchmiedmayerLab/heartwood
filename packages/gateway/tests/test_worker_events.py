@@ -99,7 +99,7 @@ def test_rejected_events_close_shared_admission_without_payloads(message: str | 
 
 def test_event_bytes_and_http_bodies_share_one_budget() -> None:
     message = _event()
-    budget = WorkerResponseBudget(max_bytes=len(message.encode()) + 2)
+    budget = WorkerResponseBudget(max_bytes=len(message.encode()) + 2, clock=lambda: 0.0)
     policy = WorkerEventAdmission(host="http://worker.test", tool_modules={}, budget=budget)
     policy.validate_message(message)
     transport = WorkerResponseTransport(
