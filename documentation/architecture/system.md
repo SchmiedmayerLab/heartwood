@@ -8,6 +8,10 @@ SPDX-License-Identifier: MIT
 
 The session gateway is the application boundary shared by every interaction surface.
 It is the only path from Heartwood interfaces to the OpenHands SDK backend.
+The adapter supplies an explicit tool list to the pinned SDK settings contract; it does not inherit the SDK's default execution or model-switching tools.
+Specialist tools enter that list only through the gateway's scoped specialist catalog, and automatic model routing remains disabled.
+OpenHands owns provider retries, with at most two total attempts for a local model call and three for a remote call.
+Timeouts and maximum retry waits remain bounded; the adapter does not add another retry loop around the SDK.
 
 ```mermaid
 flowchart LR
@@ -308,7 +312,23 @@ They are not treated as model-only isolation without an additional platform boun
 The selected adapter supplies environment detection, capabilities, ingress modes, model-credential boundary, data-mount declarations, credential allowlists, and default policy.
 Generic, Terra, and Carina behavior differs only through these boundaries and startup/runtime orchestration.
 
+A trusted embedding launcher can supply an immutable `deployment_policy` to `SessionGateway`.
+That profile is the default and the maximum authority for every project configuration read, write, update, and restore in that gateway.
+Project rules may narrow endpoint, credential, capability, and confirmation allowlists or raise the aggregate-count floor; they cannot disable default-deny egress or change platforms.
+Selecting a Custom API route does not add endpoints or credentials when a deployment policy is supplied.
+Malformed or broader persisted rules fail closed rather than silently changing the operator's policy.
+The ceiling is a constructor dependency, never selected by project content or an interface request.
+Launchers without that dependency retain the platform-default workflow and do not provide this deployment ceiling.
+This application admission control requires an independently confined worker and infrastructure egress enforcement to withstand a compromised execution process.
+
 ## Process Ownership
+
+An operator-owned project deployment manifest binds one opaque project identifier to an exact research directory, an external state directory, and a model-policy ceiling.
+The gateway verifies that binding against its launch directory before opening any project state.
+Project-local hints cannot select the binding, and copying the research directory does not authorize access to the original project's state.
+The manifest and state directory must remain outside the research directory; the external state directory is named by the project identifier.
+An existing project-local state marker requires an explicit migration before this launch mode can initialize external state.
+This placement separates canonical configuration, sessions, audit records, Skills, runtime records, and model artifacts from research files; operating-system identities and worker mounts still enforce access.
 
 Project configuration writes use a project-scoped interprocess lock.
 Session mutation uses a separate interprocess lease for each session, owned by the gateway process that first handles a command.

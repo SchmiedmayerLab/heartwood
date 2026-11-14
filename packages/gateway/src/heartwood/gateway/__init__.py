@@ -61,6 +61,7 @@ from heartwood.gateway._credentials import (
     CredentialStoreAvailability,
     CredentialStoreError,
 )
+from heartwood.gateway._deployment import ProjectDeployment, load_project_deployment
 from heartwood.gateway._diagnostics import (
     DiagnosticDefinition,
     diagnostic_catalog,
@@ -318,6 +319,7 @@ __all__ = [
     "ProjectConfigError",
     "ProjectConfigStore",
     "ProjectContext",
+    "ProjectDeployment",
     "ProjectStateError",
     "ProjectionActionOutcome",
     "ProjectionActionRecord",
@@ -398,6 +400,7 @@ __all__ = [
     "load_model_artifact_catalog",
     "load_model_connections",
     "load_model_snapshot_catalog",
+    "load_project_deployment",
     "managed_model_native_tool_calling",
     "managed_model_parsers_compatible",
     "managed_model_reasoning_parser",

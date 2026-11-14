@@ -16,6 +16,7 @@ import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from importlib.metadata import version
 from pathlib import Path
 from threading import Event as ThreadEvent
 from types import SimpleNamespace
@@ -24,8 +25,7 @@ import pytest
 from openhands.sdk import LLMStreamChunk, LocalConversation, Tool
 from openhands.sdk.conversation import BaseConversation
 from openhands.sdk.event import Event
-from openhands.sdk.llm import LLMResponse, Message, MessageToolCall, TextContent
-from openhands.sdk.llm.llm import LLMCallContext
+from openhands.sdk.llm import LLMCallContext, LLMResponse, Message, MessageToolCall, TextContent
 from openhands.sdk.llm.streaming import TokenCallbackType
 from openhands.sdk.security import AlwaysConfirm
 from openhands.sdk.settings import OpenHandsAgentSettings
@@ -109,7 +109,7 @@ def _configuration() -> EvaluationConfiguration:
         platform="generic",
         hardware=("cpu",),
         runtime="TestLLM",
-        openhands_version="1.46.0",
+        openhands_version=version("openhands-sdk"),
         precision="not-applicable",
         context_tokens=32768,
         output_tokens=4096,
@@ -202,7 +202,7 @@ def _gateway(
                     Tool(name=TerminalTool.name),
                     Tool(name=PROJECT_FILE_EDITOR_SPEC, params={"project_root": str(root)}),
                 ],
-                enable_switch_llm_tool=False,
+                enable_classify_and_switch_llm_tool=False,
                 tool_concurrency_limit=1,
             ).create_agent()
             conversation = LocalConversation(

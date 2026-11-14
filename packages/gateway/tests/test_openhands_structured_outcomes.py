@@ -76,7 +76,7 @@ def _conversation(
     agent = OpenHandsAgentSettings(
         llm=llm,
         tools=[Tool(name="FinishTool", params={"response_schema": response_schema})],
-        enable_switch_llm_tool=False,
+        enable_classify_and_switch_llm_tool=False,
     ).create_agent()
     # The settings factory installs an unstructured finish by default. Follow
     # the upstream preset's explicit replacement so it cannot shadow the schema.

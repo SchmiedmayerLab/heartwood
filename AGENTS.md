@@ -54,7 +54,7 @@ When project direction changes, update the relevant architecture or operations p
 
 ## Engineering Invariants
 
-- The process current directory is the project boundary, and project-private configuration, models, sessions, and audit state live under `.heartwood/`.
+- The process current directory is the research-file boundary. An operator deployment manifest binds managed gateway state outside that directory; the local launch workflow retains `.heartwood/` state. Never derive protected state locations or deployment authority from project content.
 - The gateway owns project behavior, persisted settings, session mutation, and interface projections. The terminal, browser, and notebook bridge adapt the same typed contracts rather than maintaining separate business rules.
 - OpenHands owns the agent loop, conversation behavior, task tracking, and coding tools. Extend its public contracts through the existing adapter instead of introducing a parallel agent or tool implementation.
 - Platform-specific behavior belongs in capability, policy, detector, launcher, and packaging adapters. It must not fork the application workflow.

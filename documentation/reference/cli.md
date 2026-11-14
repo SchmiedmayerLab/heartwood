@@ -172,6 +172,38 @@ Open that link once; it sets the capability cookie that every gateway API reques
 Automation can instead set `HEARTWOOD_GATEWAY_CAPABILITY` to a random token of at least 32 printable ASCII characters, such as the output of `openssl rand -hex 32`, before starting the gateway and send it in the `X-Heartwood-Capability` header; the gateway then prints no launch link.
 Restart the gateway to obtain a new link.
 
+An operator can bind canonical state and model policy outside the research directory:
+
+```bash
+heartwood gateway serve --deployment /etc/heartwood/projects/research.toml
+```
+
+The manifest uses this format, with deployment-specific canonical paths and approved endpoints:
+
+```toml
+schema_version = "heartwood.project-deployment.v1"
+project_id = "93d29ccd-6177-4817-9806-44ea579818c9"
+workspace = "/research/project"
+state_root = "/var/lib/heartwood/projects/93d29ccd-6177-4817-9806-44ea579818c9"
+
+[policy]
+policy_id = "deployment-models"
+platform_id = "generic"
+deny_egress_by_default = true
+allowed_model_endpoints = ["https://models.example.invalid/v1/chat/completions"]
+allowed_model_catalog_endpoints = ["https://models.example.invalid/v1/models"]
+allowed_capability_tiers = ["supervised"]
+allowed_action_confirmation_modes = ["always-confirm"]
+credential_allowlist = ["HEARTWOOD_CUSTOM_MODEL_API_KEY"]
+aggregate_count_floor = 20
+```
+
+Credential names are references; actual credentials never belong in this manifest.
+Launch from the manifest's exact research directory and use the detected platform identifier.
+Keep the manifest operator-owned and not writable by group or other users, and exclude it and the external state volume from worker mounts.
+Only a trusted launcher selects `--deployment`; no browser request or project-local hint can replace its policy or paths.
+See [Projects and Private State](../start/project.md#operator-bound-external-state) for path, ownership, and legacy-state requirements.
+
 `heartwood gateway serve` uses the detected platform's declared default ingress mode.
 Workstations and Carina default to direct loopback and refuse a non-loopback bind.
 A generic container can use a wildcard bind only when the operator explicitly declares loopback-only host publication.
