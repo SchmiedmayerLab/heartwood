@@ -37,7 +37,7 @@ One generator produces every variant from the same geometry and color tokens, so
 
 Surfaces are neutral; green marks the primary action and the brand, not the background.
 Caution states use orange, and errors use red.
-Documentation figures use green for what Heartwood owns, blue for what a platform owns, and dashed outlines for planned work.
+Documentation figures use green for what Heartwood owns, blue for what a platform owns, and dashed outlines for unavailable Heartwood integrations.
 The browser interface sets these values on the Grove design system's color variables, and the documentation sets them on the Zensical palette, so neither introduces another component library.
 
 ## Use the Mark
