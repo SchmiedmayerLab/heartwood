@@ -434,11 +434,15 @@ async function runApprovedTask(page, task, taskSpec) {
           exact: true,
         }),
       ).toBeVisible();
-      const command = approval.locator(".approval-action-command");
-      await expect(command).toHaveText(/^\$ .+/u);
-      await expect(
-        approval.locator(".approval-action-heading strong"),
-      ).toHaveText(await command.innerText());
+      const actions = approval.locator(".approval-batch-list > li");
+      await expect(actions).not.toHaveCount(0);
+      for (const action of await actions.all()) {
+        const command = action.locator(".approval-action-command");
+        await expect(command).toHaveText(/^\$ .+/u);
+        await expect(
+          action.locator(".approval-action-heading strong"),
+        ).toHaveText(await command.innerText());
+      }
     }
     if (
       taskSpec.captureApproval === true &&
