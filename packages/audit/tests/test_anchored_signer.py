@@ -6,10 +6,11 @@
 
 from __future__ import annotations
 
+import io
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 from uuid import UUID
 
 import pytest
@@ -19,7 +20,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from heartwood.audit import CheckpointSignerError, LocalEd25519CheckpointSigner
 from heartwood.audit._anchored_signer import AnchoredCheckpointSigner
 from heartwood.audit._checkpoint import AuditCheckpointError
-from heartwood.audit._continuity import RetainedCheckpoint
+from heartwood.audit._continuity import RetainedCheckpoint, checkpoint_context
 from heartwood.audit._log import canonical_audit_jsonl, prepare_audit_event, verify_audit_jsonl
 from heartwood.audit._records_s3 import CheckpointAuthorityScope, S3CheckpointRecords
 from heartwood.audit._signer import checkpoint_public_key_fingerprint
@@ -109,7 +110,12 @@ def candidate(
     context = AuditCheckpointContext(
         project_id=_PROJECT,
         publication_id=publication_id,
-        sequence=1 if previous is None else 2,
+        sequence=(
+            1
+            if previous is None
+            else checkpoint_context(previous.checkpoint.statement, previous.audit_content).sequence
+            + 1
+        ),
         previous_checkpoint_sha256=None if previous is None else previous.digest,
     )
     payload: dict[str, JsonValue] = {
@@ -352,3 +358,104 @@ def test_exact_statement_reconciliation_keeps_the_retained_signature(
     )
     assert retained == first
     assert len(environment.records.history()) == 1
+
+
+@pytest.mark.parametrize("fault", ["interrupted", "incomplete", "wrong-version"])
+def test_unverified_record_reads_close_streams_without_using_the_signing_key(
+    environment: Environment, monkeypatch: pytest.MonkeyPatch, fault: str
+) -> None:
+    statement, content = candidate()
+    environment.records.stage_audit(statement, content)
+    get_object = environment.client.get_object
+    opened: list[io.BytesIO] = []
+
+    class InterruptedBody(io.BytesIO):
+        def read(self, _size: int | None = -1) -> bytes:
+            raise OSError("synthetic interrupted records stream")
+
+    def incomplete_read(**kwargs: object) -> dict[str, Any]:
+        response = dict(get_object(**kwargs))
+        if fault == "interrupted":
+            response["Body"].close()
+            response["Body"] = InterruptedBody()
+        elif fault == "incomplete":
+            response["ContentLength"] += 1
+        else:
+            response["VersionId"] = "different-version"
+        opened.append(response["Body"])
+        return response
+
+    with monkeypatch.context() as patch:
+        patch.setattr(environment.client, "get_object", incomplete_read)
+        with pytest.raises(CheckpointSignerError):
+            environment.authority.sign(statement)
+    assert opened
+    assert all(body.closed for body in opened)
+    assert environment.signer.calls == 0
+    environment.authority.sign(statement)
+    assert environment.signer.calls == 1
+
+
+@pytest.mark.parametrize("fault", ["missing-marker", "repeated-marker"])
+def test_incomplete_version_listing_cannot_authorize_a_signature(
+    environment: Environment, monkeypatch: pytest.MonkeyPatch, fault: str
+) -> None:
+    statement, content = candidate()
+    environment.records.stage_audit(statement, content)
+    requests = []
+
+    def incomplete_listing(**kwargs: object) -> dict[str, Any]:
+        requests.append(kwargs)
+        response: dict[str, Any] = {"Versions": [], "DeleteMarkers": [], "IsTruncated": True}
+        if fault == "repeated-marker":
+            response.update(NextKeyMarker="page-one", NextVersionIdMarker="version-one")
+        return response
+
+    with monkeypatch.context() as patch:
+        patch.setattr(environment.client, "list_object_versions", incomplete_listing)
+        with pytest.raises(CheckpointSignerError):
+            environment.authority.sign(statement)
+    assert environment.signer.calls == 0
+    assert len(requests) == (2 if fault == "repeated-marker" else 1)
+    environment.authority.sign(statement)
+    assert environment.signer.calls == 1
+
+
+def test_paginated_retained_history_can_extend_without_omitting_a_predecessor(
+    environment: Environment, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    previous = anchor(environment)
+    for publication in ("second", "third"):
+        statement, content = candidate(previous, publication_id=publication)
+        environment.records.stage_audit(statement, content)
+        environment.authority.sign(statement)
+        previous = environment.records.history()[-1]
+    list_versions = environment.client.list_object_versions
+    requests = []
+
+    def pages(**kwargs: object) -> dict[str, Any]:
+        requests.append(kwargs)
+        response = dict(list_versions(**kwargs))
+        versions = response["Versions"]
+        if len(versions) > 1:
+            if "KeyMarker" in kwargs:
+                response["Versions"] = versions[1:]
+            else:
+                response.update(
+                    Versions=versions[:1],
+                    IsTruncated=True,
+                    NextKeyMarker=versions[0]["Key"],
+                    NextVersionIdMarker=versions[0]["VersionId"],
+                )
+        return response
+
+    with monkeypatch.context() as patch:
+        patch.setattr(environment.client, "list_object_versions", pages)
+        statement, content = candidate(previous, publication_id="fourth")
+        environment.records.stage_audit(statement, content)
+        signature = environment.authority.sign(statement)
+        history = environment.records.history()
+    assert len(history) == 4
+    assert history[-1].checkpoint.signature == signature
+    assert any("KeyMarker" in request for request in requests)
+    assert environment.signer.calls == 4
