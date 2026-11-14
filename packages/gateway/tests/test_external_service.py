@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import sqlite3
 from collections.abc import Iterator
@@ -15,21 +16,13 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 import pytest
 from fastmcp.server.auth.providers.jwt import RSAKeyPair
 from pydantic import AnyHttpUrl
 
-from deploy.tests.external_service_fixture import (
-    _AUDIENCE,
-    _INPUT,
-    _ISSUER,
-    RecordsAdapter,
-    SyntheticRecords,
-    records_client,
-    serve_records,
-)
 from heartwood.core_adapter import (
     BackendEventSink,
     BackendToolCallEvent,
@@ -46,6 +39,34 @@ from heartwood.core_adapter.external_actions import (
 )
 from heartwood.core_adapter.worker_attempts import WorkerAttemptIntent, WorkerRuntimeBinding
 from heartwood.session import CommandKind, EventKind, SessionCommand
+
+if TYPE_CHECKING:
+    from deploy.tests.external_service_fixture import (
+        _AUDIENCE,
+        _INPUT,
+        _ISSUER,
+        RecordsAdapter,
+        SyntheticRecords,
+        records_client,
+        serve_records,
+    )
+else:
+    # Load the shared fixture without exposing checkout application sources.
+    _spec = importlib.util.spec_from_file_location(
+        "external_service_fixture",
+        Path(__file__).resolve().parents[3] / "deploy/tests/external_service_fixture.py",
+    )
+    assert _spec is not None
+    assert _spec.loader is not None
+    _fixture = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(_fixture)
+    _AUDIENCE = _fixture._AUDIENCE
+    _INPUT = _fixture._INPUT
+    _ISSUER = _fixture._ISSUER
+    RecordsAdapter = _fixture.RecordsAdapter
+    SyntheticRecords = _fixture.SyntheticRecords
+    records_client = _fixture.records_client
+    serve_records = _fixture.serve_records
 
 
 class ProposalWorker(DeterministicAgentBackend):
