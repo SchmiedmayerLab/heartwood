@@ -62,6 +62,8 @@ def qualify(worker: str, runtime: str, artifacts: Path, records: Path, output: P
     source_paths = (
         ROOT / "deploy/qualify-native-worker.py",
         ROOT / "deploy/tests/test_worker_native_integration.py",
+        ROOT / "deploy/tests/test_worker_external_integration.py",
+        ROOT / "deploy/tests/external_service_fixture.py",
         ROOT / "deploy/tests/worker_native_fixture.py",
         ROOT / "deploy/tests/worker_telemetry.py",
         ROOT / "deploy/tests/worker_hostile_probe.py",
@@ -315,6 +317,7 @@ def qualify(worker: str, runtime: str, artifacts: Path, records: Path, output: P
             "-v",
             "--junitxml=" + str(output / "junit.xml"),
             "/opt/qualification/tests/test_worker_native_integration.py",
+            "/opt/qualification/tests/test_worker_external_integration.py",
         ]
     )
     run(

@@ -12,7 +12,7 @@ import shutil
 import subprocess
 import sys
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -20,6 +20,7 @@ from typing import Never
 from uuid import uuid4
 
 import pytest
+from openhands.sdk.tool.client_tool import ClientToolSpec
 from openshell._proto import openshell_pb2 as pb
 from pydantic import JsonValue
 from worker_native_fixture import PYTHON, NativeFixture, command
@@ -34,6 +35,7 @@ from heartwood.audit._continuity import RetainedCheckpoint, verify_checkpoint_ex
 from heartwood.compliance.replay_evidence import replay_evidence
 from heartwood.core_adapter import SessionService
 from heartwood.core_adapter.checkpoint_evidence import CheckpointEvidenceUnavailableError
+from heartwood.core_adapter.external_actions import ExternalActionAdapter
 from heartwood.core_adapter.worker_attempts import WorkerAttemptIntent, WorkerRuntimeBinding
 from heartwood.gateway import ProjectContext, SessionGateway
 from heartwood.gateway._model_settings import ModelProfile, ModelSettings
@@ -128,7 +130,13 @@ def test_records_transport_authorization() -> None:
                 (output / "cleanup.json").write_text('{"complete": true}\n')
 
 
-def _application(fixture: NativeFixture, *, retain_checkpoints: bool = False) -> SessionGateway:
+def _application(
+    fixture: NativeFixture,
+    *,
+    retain_checkpoints: bool = False,
+    external_actions_factory: Callable[[str], ExternalActionAdapter] | None = None,
+    client_tools: Sequence[ClientToolSpec] = (),
+) -> SessionGateway:
     root = fixture.private / "project"
     root.mkdir()
     (root / "summary.json").write_text(
@@ -149,7 +157,10 @@ def _application(fixture: NativeFixture, *, retain_checkpoints: bool = False) ->
     settings = fixture.deployment(inputs)
     application = SessionGateway(
         project=project,
-        worker_plan_factory=native_worker_plan_factory(settings, project),
+        worker_plan_factory=native_worker_plan_factory(
+            settings, project, client_tools=client_tools
+        ),
+        external_actions_factory=external_actions_factory,
         checkpoint_evidence_factory=fixture.bind_records(project) if retain_checkpoints else None,
         env={},
     )
@@ -205,7 +216,8 @@ def _assert_absent(attempt_id: str) -> None:
 
 def _stop(application: SessionGateway) -> None:
     """An uncertain stop must retain ownership until outside reconciliation settles."""
-    for _ in range(30):
+    deadline = time.monotonic() + 120
+    while time.monotonic() < deadline:
         try:
             application.stop()
             return
