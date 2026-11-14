@@ -119,6 +119,10 @@ A network allowlist for a hostname does not constrain which account, model, proj
 Specify whether the credential authorizes one model or an explicitly approved model set and test rejected alternatives accordingly.
 Demonstrate revocation independently of key rotation, including existing connections and in-flight calls.
 
+Heartwood-managed local inference uses an owner-only Unix socket and process supervision, without a TCP fallback.
+It is a local launcher facility, not a worker-accessible platform service.
+Using local model compute for an isolated worker requires a separately authenticated outside route; the reference deployment does not automatically bridge the local socket into its inference transport.
+
 ## Research Service APIs and Permissions
 
 Select these capabilities individually; inspection does not imply permission to execute, export data or change membership.

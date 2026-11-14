@@ -8,8 +8,8 @@
 set -euo pipefail
 
 model_path="${HEARTWOOD_LOCAL_MODEL_PATH:?HEARTWOOD_LOCAL_MODEL_PATH is required}"
-host="${HEARTWOOD_LOCAL_RUNTIME_HOST:-127.0.0.1}"
-port="${HEARTWOOD_LOCAL_RUNTIME_PORT:-8765}"
+socket_path="${HEARTWOOD_LOCAL_RUNTIME_SOCKET:?HEARTWOOD_LOCAL_RUNTIME_SOCKET is required}"
+heartwood_python="${HEARTWOOD_PYTHON:-python}"
 alias="${HEARTWOOD_MANAGED_MODEL_ALIAS:-heartwood-managed-runtime}"
 tool_parser="${HEARTWOOD_VLLM_TOOL_PARSER:-hermes}"
 reasoning_parser="${HEARTWOOD_VLLM_REASONING_PARSER:-}"
@@ -20,10 +20,16 @@ enforce_eager="${HEARTWOOD_VLLM_ENFORCE_EAGER:-0}"
 vllm="${HEARTWOOD_VLLM_EXECUTABLE:-/opt/heartwood-vllm/bin/heartwood-vllm}"
 flashinfer_sampler="${HEARTWOOD_VLLM_USE_FLASHINFER_SAMPLER:-0}"
 
-if [[ "${host}" != "127.0.0.1" && "${host}" != "localhost" && "${host}" != "::1" ]]; then
-  echo "vLLM must bind to loopback, got ${host}" >&2
-  exit 64
-fi
+"${heartwood_python}" - <<'PYTHON'
+import os
+from heartwood.gateway._managed_inference import runtime_socket_path
+from heartwood.persistence import require_private_socket_parent
+path = runtime_socket_path(os.environ)
+require_private_socket_parent(path)
+if path.exists() or path.is_symlink():
+    raise SystemExit("runtime socket path already exists")
+PYTHON
+umask 077
 if [[ ! -e "${model_path}" ]]; then
   echo "model path does not exist: ${model_path}" >&2
   exit 66
@@ -57,8 +63,7 @@ fi
 
 arguments=(
   serve "${model_path}"
-  --host "${host}"
-  --port "${port}"
+  --uds "${socket_path}"
   --served-model-name "${alias}"
   --max-model-len "${context}"
   --tensor-parallel-size "${tensor_parallel_size}"

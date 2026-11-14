@@ -13,6 +13,7 @@ requires-python = ">=3.12"
 license = "MIT"
 authors = [{ name = "Stanford University and the project authors" }]
 dependencies = [
+    "httpx==0.28.1",
     "heartwood-gateway",
     "heartwood-schemas",
     "heartwood-session",

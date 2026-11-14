@@ -385,7 +385,8 @@ def test_gpu_runtime_is_isolated_pinned_and_no_weight() -> None:
         assert package not in lock
         assert package.removesuffix("==") in exclusions
     assert "--hash=sha256:" in lock
-    assert 'host="${HEARTWOOD_LOCAL_RUNTIME_HOST:-127.0.0.1}"' in launcher
+    assert '--uds "${socket_path}"' in launcher
+    assert "require_private_socket_parent" in launcher
     assert "--enable-auto-tool-choice" in launcher
     assert 'tool_parser="${HEARTWOOD_VLLM_TOOL_PARSER:-hermes}"' in launcher
     assert 'reasoning_parser="${HEARTWOOD_VLLM_REASONING_PARSER:-}"' in launcher
@@ -542,7 +543,7 @@ def test_secured_vllm_wrapper_scopes_carina_multi_gpu_fallback(
     assert observed_environment["nccl"] == ("1" if expected_fallback else None)
 
 
-def test_vllm_launcher_enforces_loopback_and_tool_calling(tmp_path: Path) -> None:
+def test_vllm_launcher_enforces_private_socket_and_tool_calling(tmp_path: Path) -> None:
     model = tmp_path / "model"
     model.mkdir()
     arguments = tmp_path / "arguments.txt"
@@ -558,11 +559,15 @@ def test_vllm_launcher_enforces_loopback_and_tool_calling(tmp_path: Path) -> Non
     )
     executable.chmod(0o755)
     script = _repo_root() / "images/gpu/start_vllm.sh"
+    private = tmp_path / "private"
+    private.mkdir(mode=0o700)
     env = {
         **os.environ,
         "HEARTWOOD_LOCAL_MODEL_PATH": str(model),
         "HEARTWOOD_VLLM_EXECUTABLE": str(executable),
         "HEARTWOOD_MANAGED_MODEL_ALIAS": "test-model",
+        "HEARTWOOD_LOCAL_RUNTIME_SOCKET": str(private / "model.sock"),
+        "HEARTWOOD_PYTHON": sys.executable,
     }
 
     completed = subprocess.run(["bash", str(script)], env=env, check=False)
@@ -570,7 +575,9 @@ def test_vllm_launcher_enforces_loopback_and_tool_calling(tmp_path: Path) -> Non
     assert completed.returncode == 0
     values = arguments.read_text(encoding="utf-8").splitlines()
     assert values[:2] == ["serve", str(model)]
-    assert values[values.index("--host") + 1] == "127.0.0.1"
+    assert values[values.index("--uds") + 1] == str(private / "model.sock")
+    assert "--host" not in values
+    assert "--port" not in values
     assert values[values.index("--served-model-name") + 1] == "test-model"
     assert values[values.index("--tool-call-parser") + 1] == "hermes"
     assert environment.read_text(encoding="utf-8") == "0\n"
@@ -628,19 +635,23 @@ def test_vllm_launcher_enforces_loopback_and_tool_calling(tmp_path: Path) -> Non
     missing_reasoning_parser = subprocess.run(["bash", str(script)], env=env, check=False)
     assert missing_reasoning_parser.returncode == 64
 
-    env["HEARTWOOD_LOCAL_RUNTIME_HOST"] = "0.0.0.0"
+    env.pop("HEARTWOOD_LOCAL_RUNTIME_SOCKET")
     denied = subprocess.run(["bash", str(script)], env=env, check=False)
-    assert denied.returncode == 64
+    assert denied.returncode != 0
 
 
 def test_gpu_qualification_uses_isolated_heartwood_python() -> None:
     script = _read("images/gpu/coding_agent_e2e.sh")
     coding_agent = _read("images/generic/scripts/coding_agent_e2e.sh")
 
-    assert "command -v setsid" in script
-    assert 'setsid bash "${script_dir}/start_vllm.sh"' in script
-    assert 'kill -TERM -- "-${runtime_pid}"' in script
-    assert 'kill -KILL -- "-${runtime_pid}"' in script
+    assert (
+        '"${heartwood_python}" "${runtime_root}/images/generic/scripts/qualify_runtime.py"'
+        in script
+    )
+    supervisor = _read("images/generic/scripts/qualify_runtime.py")
+    assert "start_new_session=True" in supervisor
+    assert "os.killpg(runtime.pid, signal.SIGTERM)" in supervisor
+    assert "os.killpg(runtime.pid, signal.SIGKILL)" in supervisor
     system_python = re.compile(
         r"(?:^|[;&|]\s*|\bexec\s+)(?:/[^\s;|&]+/)?python(?:3(?:\.\d+)?)?\s",
         re.MULTILINE,
@@ -785,7 +796,7 @@ def test_carina_native_launch_requires_verified_synthetic_allocation() -> None:
     assert '"OPENAI_API_KEY"' not in launch_runtime
     assert '"--model-source"' in launch_runtime
     assert '"heartwood"' in launch_runtime
-    assert "127.0.0.1:8765/v1/models" in launch_runtime
+    assert "managed_inference_client(" in launch_runtime
     gpu_environment = _read("packages/gateway/src/heartwood/gateway/_gpu_environment.py")
     assert '"sinfo", "--noheader", "--format=%P|%G|%a|%m|%c"' in gpu_environment
     assert "_SLURM_EXPORTED_ENVIRONMENT" in launch_runtime
@@ -1221,7 +1232,7 @@ def test_isolated_smoke_uses_real_openhands_sdk_without_weights() -> None:
     assert "HEARTWOOD_BUNDLE_LOCAL_MODEL" not in compose
     assert "HEARTWOOD_AGENT_BACKEND" not in compose
     assert "image: heartwood-runtime-smoke:local" in compose
-    assert "HEARTWOOD_LOCAL_RUNTIME_PROFILE=stub-loopback" in smoke
+    assert "HEARTWOOD_LOCAL_RUNTIME_PROFILE=stub-unix" in smoke
     assert "HEARTWOOD_SMOKE_PROJECT:-/tmp/heartwood-offline-project" in smoke
     assert "HEARTWOOD_CAPABLE_PROJECT:-/tmp/heartwood-capable-project" in capable
     assert "coding-agent model must be outside disposable project data" in coding_agent
@@ -1229,7 +1240,8 @@ def test_isolated_smoke_uses_real_openhands_sdk_without_weights() -> None:
     assert "for state_directory in audit cache logs runtime sessions" in coding_agent
     assert 'find "${state_root}/${state_directory}"' in coding_agent
     assert 'rm -rf "${state_root}/sessions"' not in coding_agent
-    assert 'export HEARTWOOD_LOCAL_RUNTIME_ACTIVE="1"' in capable
+    assert "qualify_runtime.py" in capable
+    assert "HEARTWOOD_LOCAL_RUNTIME_ACTIVE" not in capable
     assert "HEARTWOOD_LOCAL_RUNTIME_ARTIFACT_ID" in capable
     assert 'workspace = Path.cwd() / ".heartwood" / "sessions"' in smoke
     assert 'cohort_path="${project}/cohort-summary.json"' in coding_agent
@@ -1627,9 +1639,7 @@ def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
     assert "/workspace/.heartwood/models/llama-cpp-stories260k-ci" in smoke
     assert "/home/jupyter/model-analysis/.heartwood/models/llama-cpp-stories260k-ci" in smoke
     assert smoke.count("local_inference_smoke.sh") == 2
-    assert 'f"http://127.0.0.1:{port}/health"' in _read(
-        "images/generic/scripts/local_inference_smoke.sh"
-    )
+    assert "managed_inference_client" in _read("images/generic/scripts/local_inference_smoke.sh")
     assert "run_capable_model" not in smoke
     assert "qwen25-7b-instruct-q4_k_m" in capable_workflow
     assert "runs-on: heartwood-ubuntu-large" in capable_workflow
@@ -1647,10 +1657,10 @@ def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
     assert "not 1 <= len(terminal_executions) <= 3" in qualification
     assert "not 1 <= len(tool_executions) <= 3" in qualification
     assert "&& cat cohort-summary.json" in coding_agent
-    assert 'f"http://127.0.0.1:{port}/health"' in capable_model
+    assert "qualify_runtime.py" in capable_model
     assert '"${runtime_artifact_id}" == ".."' in capable_model
     assert '"${runtime_artifact_id}" == */*' in capable_model
-    assert "llama.cpp runtime log (last 200 lines)" in capable_model
+    assert '--log "${runtime_log}"' in capable_model
     assert "artifact_path.read_text" in qualification
     assert "--jinja" in _read("images/generic/scripts/start_local_runtime.sh")
     assert '"source_participant_count": 24' in qualification

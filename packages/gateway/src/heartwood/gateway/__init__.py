@@ -109,6 +109,11 @@ from heartwood.gateway._local_models import (
     ModelRepositoryInspection,
     catalog_model_choices,
 )
+from heartwood.gateway._managed_inference import (
+    MANAGED_RUNTIME_SOCKET_ENV,
+    managed_inference_client,
+    managed_inference_socket,
+)
 from heartwood.gateway._model_artifacts import (
     LocalModelDownloadManager,
     ModelArtifact,
@@ -244,6 +249,7 @@ __all__ = [
     "ACTION_MODE_SCOPE_DESCRIPTION",
     "BUILT_IN_MODEL_CONNECTIONS",
     "DEFAULT_SESSION_ID",
+    "MANAGED_RUNTIME_SOCKET_ENV",
     "MODEL_PRESETS",
     "MODEL_SOURCE_OPTIONS",
     "ActionModeOption",
@@ -411,6 +417,8 @@ __all__ = [
     "load_project_deployment",
     "local_checkpoint_signer_socket",
     "local_checkpoint_socket_path",
+    "managed_inference_client",
+    "managed_inference_socket",
     "managed_model_native_tool_calling",
     "managed_model_parsers_compatible",
     "managed_model_reasoning_parser",

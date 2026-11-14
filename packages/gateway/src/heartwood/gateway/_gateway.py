@@ -312,6 +312,7 @@ class _ServiceConfiguration:
     action_settings: ActionSettings
     policy_profile: PolicyProfile
     local_model: LocalModelSelection | None
+    managed_inference: bool
 
 
 class _UnconfiguredAgentBackend:
@@ -512,7 +513,7 @@ class SessionGateway:
             if model_connections is not None
             else load_model_connections(None)
         )
-        self.model_catalog_service = model_catalog_service or ModelCatalogService()
+        self.model_catalog_service = model_catalog_service or ModelCatalogService(env=self.env)
         self._model_connections: dict[str, ModelConnection] = {}
         self._reload_model_connections()
         self.credential_store = credential_store or CredentialStore(
@@ -2426,6 +2427,7 @@ class SessionGateway:
             action_settings=action_settings,
             policy_profile=config.policy,
             local_model=config.local_model,
+            managed_inference=config.model_source == "heartwood",
         )
 
     def _default_service(
@@ -2446,6 +2448,7 @@ class SessionGateway:
             model_settings=configuration.model_settings,
             action_settings=configuration.action_settings,
             selected_model=configuration.local_model,
+            managed_inference=configuration.managed_inference,
             session_id=session_id,
             worker_context=worker_context if self._worker_plan_factory is not None else None,
         )
@@ -2522,6 +2525,7 @@ class SessionGateway:
         selected_model: LocalModelSelection | None,
         session_id: str,
         worker_context: Callable[[], WorkerConversationContext] | None = None,
+        managed_inference: bool = False,
     ) -> AgentBackend:
         backend_id = self.backend_id
         if backend_id in {"deterministic", "deterministic-local"}:
@@ -2557,6 +2561,7 @@ class SessionGateway:
             action_confirmation_mode=action_settings.confirmation_mode,
             env={} if worker_context is not None else self._credential_environment(strict=False),
             worker_context=worker_context,
+            managed_inference=managed_inference,
             llm_extra_body=managed_model_request_body(
                 selected_model.model_type if selected_model is not None else None
             ),

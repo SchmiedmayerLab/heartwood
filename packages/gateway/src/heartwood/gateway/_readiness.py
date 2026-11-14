@@ -8,21 +8,21 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import os
-import urllib.error
-import urllib.request
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, replace
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Literal, assert_never
 
+import httpx
+
 from heartwood.adapters.platform import select_platform_adapter
 from heartwood.gateway._action_presentation import action_mode_label
 from heartwood.gateway._credential_isolation import assess_credential_isolation
 from heartwood.gateway._diagnostics import diagnostic_for
+from heartwood.gateway._managed_inference import managed_inference_client
 from heartwood.gateway._model_catalog import (
     BUILT_IN_MODEL_CONNECTIONS,
     ModelCatalogError,
@@ -59,7 +59,6 @@ ModelSource = Literal[
 ]
 
 _STANFORD_ROOT = "https://aiapi-prod.stanford.edu/v1"
-_MANAGED_MODEL_CATALOG_URL = "http://127.0.0.1:8765/v1/models"
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -468,17 +467,15 @@ def managed_local_runtime_active(
     selection: LocalModelSelection,
     env: Mapping[str, str],
 ) -> bool:
-    """Confirm the selected model through inherited launch state or the loopback catalog."""
-    if (
-        env.get("HEARTWOOD_LOCAL_RUNTIME_ACTIVE") == "1"
-        and env.get("HEARTWOOD_LOCAL_RUNTIME_ARTIFACT_ID") == selection.artifact_id
-    ):
-        return True
+    """Confirm the selected model through its explicit private launch binding."""
+    if env.get("HEARTWOOD_LOCAL_RUNTIME_ARTIFACT_ID") != selection.artifact_id:
+        return False
     try:
-        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-        with opener.open(_MANAGED_MODEL_CATALOG_URL, timeout=0.5) as response:
-            payload = json.load(response)
-    except (OSError, ValueError, urllib.error.URLError):
+        with managed_inference_client(env, timeout=0.5) as client:
+            response = client.get("models")
+            response.raise_for_status()
+            payload = response.json()
+    except (OSError, ValueError, httpx.HTTPError):
         return False
     models = payload.get("data", []) if isinstance(payload, dict) else []
     return isinstance(models, list) and any(

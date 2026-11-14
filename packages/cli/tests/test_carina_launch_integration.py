@@ -252,7 +252,8 @@ def test_carina_launch_handoff_setup_and_cleanup(tmp_path: Path) -> None:
         import os
         import signal
         import sys
-        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        from http.server import BaseHTTPRequestHandler
+        from socketserver import ThreadingUnixStreamServer
         from pathlib import Path
 
         if sys.argv[1:] == ["__heartwood_verify_runtime__"]:
@@ -420,7 +421,10 @@ def test_carina_launch_handoff_setup_and_cleanup(tmp_path: Path) -> None:
             raise SystemExit(0)
 
         signal.signal(signal.SIGTERM, stop)
-        ThreadingHTTPServer(("127.0.0.1", 8765), Handler).serve_forever()
+        socket_path = sys.argv[sys.argv.index("--uds") + 1]
+        os.umask(0o077)
+        with ThreadingUnixStreamServer(socket_path, Handler) as server:
+            server.serve_forever()
         """,
     )
     (runtime_root / "bootstrap" / "bin").mkdir(parents=True)
