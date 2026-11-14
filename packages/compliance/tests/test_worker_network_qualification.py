@@ -266,3 +266,27 @@ def test_hostile_probe_cannot_pass_when_canary_is_reachable(hostile_probe: Modul
         pytest.raises(AssertionError, match="Forbidden provider path was reachable"),
     ):
         hostile_probe.probe("/outside/state", "/outside/key", "https://canary.invalid")
+
+
+def test_filesystem_only_probe_never_contacts_provider(hostile_probe: ModuleType) -> None:
+    with (
+        patch.object(
+            hostile_probe.Path, "read_bytes", side_effect=PermissionError(errno.EACCES, "denied")
+        ),
+        patch.object(
+            hostile_probe.Path, "write_text", side_effect=PermissionError(errno.EROFS, "denied")
+        ),
+        patch.object(
+            hostile_probe.urllib.request, "urlopen", side_effect=AssertionError("network access")
+        ),
+    ):
+        result = hostile_probe.probe_filesystem("/outside/state", "/outside/key")
+    assert set(result) == {
+        "protected-state-read",
+        "control-credential-read",
+        "container-control-read",
+        "input-write",
+        "skill-write",
+        "protected-state-write",
+    }
+    assert all(result.values())

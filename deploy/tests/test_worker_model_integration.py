@@ -135,6 +135,46 @@ def revoke_after_deadline(fixture: NativeFixture, project_id: UUID) -> list[str]
     return errors
 
 
+def revoke_model_provider(fixture: NativeFixture, worker: str) -> dict[str, object]:
+    """Observe the preinstalled native expiry, prove denial, then detach the provider."""
+    assert fixture.model_profile is not None
+    observed = fixture.control.get(worker, workspace="default")
+
+    def attachments() -> dict[str, object]:
+        result: dict[str, object] = json.loads(
+            fixture.cli_command(["sandbox", "provider", "list", worker, "--output", "json"])
+        )
+        assert result.get("next_page_token", "") == ""
+        return result
+
+    before = attachments()
+    assert isinstance(before.get("providers"), list)
+    assert [item.get("name") for item in before["providers"]] == [fixture.identity]
+    retained = fixture.probe_inference(worker)
+    fixture.wait_for_inference_expiry()
+    denied = fixture.probe_inference(
+        worker,
+        body={
+            "model": fixture.model_profile.model.removeprefix("openai/"),
+            "messages": [{"role": "user", "content": "Synthetic revocation check."}],
+            "max_tokens": 1,
+        },
+    )
+    assert denied["status"] == 500
+    assert denied["error_code"] == "credential_unavailable"
+    assert denied["placeholder_sha256"] == retained["placeholder_sha256"]
+    fixture.cli_command(["sandbox", "provider", "detach", worker, fixture.identity])
+    assert attachments()["providers"] == []
+    assert fixture.control.get(worker, workspace="default").id == observed.id
+    return {
+        "credential_expires_at_ms": fixture.credential_expires_at_ms,
+        "retained_placeholder_denied": True,
+        "denial_status": denied["status"],
+        "denial_code": denied["error_code"],
+        "provider_detached": True,
+    }
+
+
 def test_native_capable_model(monkeypatch: pytest.MonkeyPatch) -> None:
     profile = QualificationModelProfile.load(Path(os.environ["HW_MODEL_QUALIFICATION_PROFILE"]))
     credential = read_credential(sys.stdin.buffer)
@@ -153,6 +193,7 @@ def test_native_capable_model(monkeypatch: pytest.MonkeyPatch) -> None:
     usage: list[dict[str, object]] = []
     network: dict[str, object] = {}
     hostile: dict[str, bool] = {}
+    revocation: dict[str, object] = {}
     monkeypatch.setattr(_openhands_sdk, "_AGENT_MAX_ITERATIONS_PER_RUN", profile.max_iterations)
     try:
         fixture.start()
@@ -268,8 +309,6 @@ def test_native_capable_model(monkeypatch: pytest.MonkeyPatch) -> None:
             [event.model_dump(mode="json") for event in snapshot.events]
         )
         usage = [asdict(item) for item in _usage(snapshot)]
-        # Revoke inference before additional outside-driven boundary probes.
-        fixture.cli_command(["sandbox", "provider", "detach", name, fixture.identity])
         result = fixture.control.exec(
             name,
             [
@@ -286,7 +325,7 @@ def test_native_capable_model(monkeypatch: pytest.MonkeyPatch) -> None:
         exported = json.loads(result.stdout)
         assert exported["suppressed"] is True
         assert exported["exported"] is False
-        fixture.prepare_hostile(application.project.state_root)
+        fixture.prepare_hostile(application.project.state_root, filesystem_only=True)
         observation = fixture.control.exec(
             name,
             ["/bin/bash", "-c", fixture.terminal_command],
@@ -310,12 +349,13 @@ def test_native_capable_model(monkeypatch: pytest.MonkeyPatch) -> None:
         )
         assert observed.exit_code == 0
         hostile = json.loads(observed.stdout)
-        assert len(hostile) == 9
+        assert len(hostile) == 6
         assert all(hostile.values())
         assert not fixture.provider.observations
         assert fixture.provider.canary_requests == 1
         assert fixture.protected_canary.read_text() == fixture.sentinel
         network = fixture.qualify_direct_network(name)
+        revocation = revoke_model_provider(fixture, name)
         service.audit_log.verify()
         _stop(application)
         _assert_revoked(service)
@@ -344,6 +384,8 @@ def test_native_capable_model(monkeypatch: pytest.MonkeyPatch) -> None:
             "input_injection_sha256": hashlib.sha256(_INJECTION.encode()).hexdigest(),
             "hostile_probe_origin": "outside qualification controller",
             "hostile_checks": hostile,
+            "hostile_probe_scope": "six filesystem checks; synthetic endpoint probes are separate",
+            "provider_revocation": revocation,
             "direct_network": network,
         }
         serialized = json.dumps(evidence, indent=2)
