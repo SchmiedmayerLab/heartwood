@@ -54,6 +54,7 @@ class SyntheticProvider:
         self.observations: list[dict[str, Any]] = []
         self.errors: list[str] = []
         self.canary_requests = 0
+        self.redirect_requests = 0
         self.forbidden_values: tuple[str, ...] = (self.credential,)
         self.script = [
             ("invoke_skill", {"name": "aggregate-export"}),
@@ -86,6 +87,15 @@ class SyntheticProvider:
                     authorized = secrets.compare_digest(
                         self.headers.get("Authorization", ""), "Bearer " + owner.credential
                     )
+                    if self.headers.get("X-Heartwood-Qualification-Probe") == "redirect":
+                        if self.path != "/v1/chat/completions":
+                            raise AssertionError("Redirect probe bypassed the approved endpoint")
+                        owner.redirect_requests += 1
+                        self.send_response(303)
+                        self.send_header("Location", "/v1/forbidden")
+                        self.send_header("Content-Length", "0")
+                        self.end_headers()
+                        return
                     owner.observations.append(
                         {"path": self.path, "authorized": authorized, "model": body.get("model")}
                     )
@@ -175,7 +185,7 @@ class SyntheticProvider:
         self.server.server_close()
         self.thread.join(timeout=5)
         if self.thread.is_alive() or self.errors:
-            raise RuntimeError("Synthetic provider did not finish cleanly")
+            raise RuntimeError(f"Synthetic provider did not finish cleanly: {self.errors}")
 
 
 class NativeFixture:

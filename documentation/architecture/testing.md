@@ -168,6 +168,9 @@ Gateway artifacts and upstream patches are qualification inputs, not published u
 
 The maintained suite includes a synthetic session whose explicitly approved terminal action attempts to read control credentials, alter protected state and read-only projections, and reach a forbidden provider path.
 The outside fixture checks actual state canaries and provider traffic before and after the attempt; worker-reported success cannot replace those observations.
+The allowed synthetic endpoint redirects a request to a forbidden path; qualification requires observing the redirect request outside the worker and no request at its destination.
+The same POST-only profile rejects an unapproved WebSocket upgrade; this does not qualify a separately enabled WebSocket endpoint or its message rules.
+Tool execution must succeed independently of the scripted conversation's completion status.
 Injected instructions appear in synthetic input and tool output, but deterministic provider responses do not establish resistance to model-driven prompt injection.
 
 The candidate workflow builds the gateway and dependency wheels independently, then assembles the shared worker and runtime images for native integration.
