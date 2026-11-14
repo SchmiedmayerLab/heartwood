@@ -12,10 +12,10 @@ Heartwood does not fork the OpenHands agent loop or maintain a parallel coding-t
 
 ## In Scope
 
-- one current-directory project and private project-scoped state;
+- one current-directory research project and private state, with an explicit operator binding for protected external state;
 - terminal, browser, and notebook presentations over one gateway contract;
 - platform-aware model discovery and Heartwood-managed model planning;
-- OpenHands SDK conversations and tool execution;
+- OpenHands SDK conversations and tool execution, locally or through the explicitly selected native sandbox adapter;
 - OpenHands task tracking and bounded sequential research specialists;
 - [reviewed research stages](../use/research-workflows.md) with independent artifact checks and [experiment records](experiments.md);
 - grouped action review and deployment-constrained auto-approval;

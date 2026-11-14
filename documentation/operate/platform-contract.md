@@ -8,19 +8,19 @@ SPDX-License-Identifier: MIT
 
 A research platform can embed Heartwood as its research interaction layer without handing Heartwood its compute, identity, storage, or inference infrastructure.
 This contract defines that boundary: what Heartwood owns, what the platform owns, what a platform provides for each capability, and the security properties both sides must preserve.
-Use it to scope a platform integration, to review one, and as the list of what Heartwood asks a platform to provide.
+Use it to scope and review an integration.
+For an access request to a platform operator, start with [Platform API and Access Requirements](platform-requirements.md).
 
-!!! planned "This contract includes capabilities that are not yet implemented"
-    This page describes the complete contract so platforms can prepare for all of it.
-    Every part that current Heartwood does not implement is marked with a box like this one and links the GitHub issue that owns it.
-    A capability is supported only after the conformance evidence in [Validate a Platform](#validate-a-platform) exists for that exact platform.
-    The contract as a whole is tracked in [#150](https://github.com/SchmiedmayerLab/heartwood/issues/150) and scheduled in the [0.5.0 milestone](https://github.com/SchmiedmayerLab/heartwood/milestone/3).
+!!! info "Implementation and schema availability"
+    Current interfaces, draft schemas and unavailable runtime capabilities are distinguished below.
+    A schema describes a message; it does not enable the service, authorize a request or establish deployment qualification.
+    Support claims require evidence for the exact platform and artifact, as described in [Validate a Platform](#validate-a-platform).
 
 ## Reading the Contract
 
 There are two directions of interaction.
 A platform proxy serves Heartwood's existing gateway API to the researcher; Heartwood calls the platform's optional inference and research services using platform-authorized credentials.
-The gateway API description documents the first direction, while the published and planned connection, model, workload, estimate, and operation schemas describe the second.
+The gateway API description documents the first direction, while the current and draft connection, model, workload, estimate, and operation schemas describe the second.
 A schema describes a message, not permission to send it or evidence that its capability is available.
 
 Start with the responsibility table, then select the capabilities the platform will provide.
@@ -50,13 +50,13 @@ The Heartwood artifact-bundle version is separate from upstream protocol version
 | Part | What it covers | Status |
 |---|---|---|
 | [Hosting](#hosting) | Running the published artifact with a persistent project | Implemented |
-| [Access and identity](#access-and-identity) | Authenticated routing and the launch capability | Implemented for one person per gateway; verified per-user identity in [#164](https://github.com/SchmiedmayerLab/heartwood/issues/164) |
-| [Deployment policy](#deployment-policy) | Restrictions the platform imposes on every project | Partial; deployment-owned enforcement in [#154](https://github.com/SchmiedmayerLab/heartwood/issues/154) |
-| [Inference](#inference) | Model endpoints and authorized model discovery | Partial; platform-managed routes in [#151](https://github.com/SchmiedmayerLab/heartwood/issues/151) |
-| [Platform services](#platform-services) | Compute, data, and application tools through MCP | Not implemented; [#138](https://github.com/SchmiedmayerLab/heartwood/issues/138) and [#152](https://github.com/SchmiedmayerLab/heartwood/issues/152) |
-| [Agent isolation](#agent-isolation) | Keeping agent tools away from Heartwood's own controls | Not implemented; [#163](https://github.com/SchmiedmayerLab/heartwood/issues/163) |
-| [Controlled data](#controlled-data) | Read-only inputs, enforced egress denial, and reviewed release of outputs | Not implemented; [#129](https://github.com/SchmiedmayerLab/heartwood/issues/129) |
-| [Audit and provenance](#audit-and-provenance) | Signed checkpoints, retention, and operation references | Partial; [#160](https://github.com/SchmiedmayerLab/heartwood/issues/160) and [#128](https://github.com/SchmiedmayerLab/heartwood/issues/128) |
+| [Access and identity](#access-and-identity) | Authenticated routing and the launch capability | Implemented for one launching principal per gateway; per-user identity verification unavailable |
+| [Deployment policy](#deployment-policy) | Restrictions the platform imposes on every project | Operator-bound policy ceiling implemented; requires explicit managed launch and outside enforcement |
+| [Inference](#inference) | Model endpoints and authorized model discovery | Built-in and operator-configured routes; deployment connection-manifest startup unavailable |
+| [Platform services](#platform-services) | Compute, data, and application tools through MCP | Unavailable; draft service and operation schemas only |
+| [Agent isolation](#agent-isolation) | Keeping the complete worker away from Heartwood's controls | Native reference implementation; exact artifact and deployment qualification required |
+| [Controlled data](#controlled-data) | Read-only inputs, enforced egress denial, and reviewed release of outputs | Selected-input staging and native read-only mounts implemented; quarantine and steward-approved release unavailable |
+| [Audit and provenance](#audit-and-provenance) | Signed checkpoints, retention, and operation references | Checkpoint signing implemented; checkpoint continuity and platform publication unavailable |
 | [Contract artifacts](#contract-artifacts) | Schemas, API descriptions, and conformance checks | Versioned current/draft schema exports, gateway OpenAPI, and offline conformance checks |
 
 ## The Boundary
@@ -70,13 +70,13 @@ flowchart TB
     Identity["Platform: identity and project access"]
     Proxy["Platform: authenticated proxy"]
     Gateway["Heartwood: gateway, sessions, reviewed commands, projections, audit"]
-    Agent["Heartwood: OpenHands agent loop and project tools"]
+    Agent["Heartwood: agent loop and tools in the selected execution mode"]
     Inference["Platform: inference endpoint and authorized models"]
     Services["Platform: services for compute, data, and applications"]
     Infrastructure[("Platform: schedulers, storage, entitlements, quotas")]
     Researcher --> Identity --> Proxy --> Gateway --> Agent
-    Agent -- "model requests" --> Inference
-    Agent -. "reviewed tool calls" .-> Services
+    Agent -- "authorized inference route" --> Inference
+    Gateway -. "reviewed outside operations" .-> Services
     Services -.-> Infrastructure
     classDef heartwood fill:#0b694d26,stroke:#2b8268
     classDef platform fill:#3f5b7426,stroke:#6f8fae
@@ -96,7 +96,7 @@ Either capability can be absent or unavailable without breaking the other: a pla
 |---|---|---|
 | Researcher identity | Records the launching principal as the actor of every accepted command and ignores an actor claimed in a request | Authenticates the person, authorizes project access, and ends the session |
 | Gateway access | Requires the [launch capability](security.md#launch-capability) on every API request, event stream, and WebSocket, and validates the declared [ingress route](security.md#gateway-ingress) | Routes only authenticated users to the gateway, removes client-supplied forwarding and identity headers, terminates TLS, and delivers the capability |
-| Research session | Owns the OpenHands conversation, reviewed commands, and terminal, browser, and notebook projections | Keeps the gateway process, its project directory, and its network route available |
+| Research session | Owns canonical session records, reviewed commands and interface projections; delegates the agent loop to the admitted worker | Keeps the trusted gateway, authorized research files, protected state and network route available |
 | Approval | Binds each approval to the pending action set and accepts it only from an authorized interface | Enforces its own authorization on every operation, whether or not Heartwood approved it |
 | Policy | Evaluates model routes, review modes, and credentials against the active policy | Defines the restrictions every project on the platform must obey |
 | Inference | Selects an authorized route and excludes model credentials from model context, supported tool inputs and outputs, and exports; process isolation has the limitations below | Operates endpoints, backend translation, data-use agreements, eligibility, spend limits, and egress |
@@ -104,7 +104,7 @@ Either capability can be absent or unavailable without breaking the other: a pla
 | Project and billing context | Uses the authorized platform context for planning and operation requests | Selects the platform project and billing or grant attribution through the launch flow |
 | Workload prediction | Agents and researchers develop workload assumptions, resource predictions, and uncertainty using research Skills and available evidence | Supplies authorized resource profiles and observed execution evidence where available |
 | Budgets and estimates | Helps the researcher compare structured estimates, revise plans, approve operations, and inspect the shared budget overview | Produces estimates and authoritative budget and approval records; owns spending thresholds, monitoring, reservations, accounting, and enforcement |
-| Project storage | Keeps `.heartwood/` state single-writer with durable locking and recovery | Provides persistent, backed-up storage with native advisory locks |
+| Project storage | Keeps canonical state single-writer; managed launch binds it outside the research directory | Provides separate persistent research and protected-state storage with native advisory locks, backup and access enforcement |
 | Audit and provenance | Writes content-minimized session audit and experiment records, and requests signed checkpoints | Retains checkpoints, enforces retention and immutability, and keeps its own operation audit log |
 | Controlled data | Makes no compliance claim from compatibility | Decides data eligibility, agreements, egress controls, monitoring, and incident response |
 
@@ -125,10 +125,13 @@ The configuration boundaries are the same in both launch modes:
 | Input | Standalone project | Managed project |
 |---|---|---|
 | Working directory | Researcher's existing local project | Authorized persistent project selected by the platform |
-| Project preferences | Existing `.heartwood/config.toml` | The same file; preferences may only narrow deployment policy |
+| Project preferences | Existing `.heartwood/config.toml` | Configuration in the operator-bound protected state directory; preferences may only narrow deployment policy |
 | Model connections | Existing local or configured provider routes | Deployment-supplied connection manifest with credential references |
-| Launch context | Omitted when no platform supplies one | Platform-issued project/context identity and opaque billing binding |
+| Launch context | Omitted when no platform supplies one | Implemented project deployment binding; platform-issued billing and hosted identity context remains a separate draft capability |
 | MCP services | Optional; omitted when unavailable | Separate deployment-owned service profiles, independently discovered |
+
+The implemented `heartwood.project-deployment.v1` manifest establishes local launch authority for the research directory, protected state and policy ceiling.
+It is distinct from the draft platform launch-context document below: it does not implement hosted identity, billing attribution or budget services.
 
 For example, a managed launch-context document is:
 
@@ -149,9 +152,8 @@ This is a draft platform-issued document, not a new project preference or an aut
 Keep it and deployment restrictions outside agent-writable project state; possession of a copied document does not authenticate its issuer.
 Standalone launch continues to use its existing configuration and does not need a fabricated platform project or billing service.
 
-!!! planned "Not yet implemented: platform launch and budget context"
+!!! info "Unavailable: platform launch and budget context"
     Draft launch-context and budget schemas are available in the contract bundle; they do not enable deployment startup or budget services.
-    Hosted project launch is tracked in [#164](https://github.com/SchmiedmayerLab/heartwood/issues/164).
 
 ## Deployment Topologies
 
@@ -189,16 +191,15 @@ flowchart TB
 | Platform workspace | The platform, in the researcher's workspace | The platform proxy | Implemented for the terminal on Terra and Stanford Carina and the notebook on Terra |
 | Hosted per-project service | The platform, one gateway per researcher and project, started on demand | The institution's identity provider, verified by Heartwood | Not implemented |
 
-!!! planned "Not yet implemented: hosted per-project service"
+!!! info "Unavailable: hosted per-project service"
     Heartwood does not verify a person's identity itself, does not attribute commands to individual people, and has no supported deployment that starts, stops, and routes per-project gateways.
     The hosted topology verifies an OpenID Connect identity at ingress, derives the command actor from the verified subject, exchanges rather than forwards user tokens for platform calls, and reuses an existing spawner and proxy.
-    Tracked in [#164](https://github.com/SchmiedmayerLab/heartwood/issues/164).
 
 ### Hosted Lifecycle and Scaling
 
-For the planned hosted topology, the platform manages these lifecycle requirements:
+For a hosted integration, the platform manages these lifecycle requirements:
 
-- **Required:** preserve project files and private `.heartwood/` state across compute replacement, using storage that supports the session ownership locks.
+- **Required:** preserve research files and separately protected canonical state across compute replacement, using state storage that supports session ownership locks.
 - **Required:** route each researcher only to their authorized gateway and project context; separate gateways do not by themselves establish operating-system isolation or shared-project collaboration.
 - **Required:** determine idleness from agent and local-tool activity as well as client connections; closing a browser is not sufficient reason to terminate active work.
 - **Required:** drain or pause local work before a planned shutdown, preserve references to outstanding platform operations, and reconcile their status on restart before resubmitting anything.
@@ -209,28 +210,26 @@ The contract leaves virtual machines, containers, Kubernetes, and the choice of 
 Several isolated gateway instances can share worker capacity; a dedicated virtual machine per gateway is not required.
 Persistent storage and external jobs can remain allocated while gateway compute is stopped, so gateway shutdown does not establish that spending stopped.
 Size each deployment from measured gateway, SDK, and local-tool resource use; remote inference alone does not establish a minimum memory or CPU requirement.
-The reference platform foundation is tracked in [#191](https://github.com/SchmiedmayerLab/heartwood/issues/191); these lifecycle requirements do not claim implemented autoscaling or recovery orchestration.
+These requirements do not describe implemented autoscaling or recovery orchestration.
 
 ## Hosting
 
 A platform runs the published Heartwood artifact with the researcher's project as the working directory.
 
 - **Required:** run the published image or native release without replacing its entrypoint, user, or bundled browser assets.
-- **Required:** provide the project as a persistent directory; `.heartwood/` session storage needs native advisory locks, so object-store and file-transfer mounts are not session stores unless qualified.
+- **Required:** provide persistent research files and state storage with native advisory locks; object-store and file-transfer mounts are not session stores unless qualified. Managed workers must not receive the protected state mount.
 - **Required:** keep model weights, credentials, and deployment secrets out of image layers and the project directory.
 - **Required:** run Heartwood-managed local model servers and checkpoint signers only where other operating-system users cannot reach their loopback ports.
 - **Recommended:** back up the project storage and preserve it across compute recreation.
 - **Optional:** provide Jupyter where the platform offers the [notebook bridge](../use/notebooks.md).
 - **Recommended:** verify the published release attestations before admitting an artifact.
 
-!!! planned "Not yet implemented: signed artifacts and bills of materials"
+!!! info "Unavailable: signed artifacts and bills of materials"
     Releases carry build attestations, but release images and native assets are not yet signed and do not yet ship software bills of materials or third-party notices.
-    Tracked in [#48](https://github.com/SchmiedmayerLab/heartwood/issues/48).
 
-!!! planned "Not yet implemented: authenticated local servers"
+!!! info "Unavailable: authenticated local servers"
     A Heartwood-managed model server and the local checkpoint signer listen on fixed loopback ports without authenticating the listener, so another user on a shared host can take a port and receive prompts or signer tokens.
-    Heartwood will serve both over owner-only sockets or verify the listener before sending anything.
-    Tracked in [#161](https://github.com/SchmiedmayerLab/heartwood/issues/161) and [#162](https://github.com/SchmiedmayerLab/heartwood/issues/162).
+    Isolate these services from other operating-system users; loopback alone does not authenticate their identity.
 
 See [Package the Shared Application](platform-integration.md#package-the-shared-application) and [Persist the Right Data](index.md#persist-the-right-data).
 
@@ -302,11 +301,17 @@ A platform defines restrictions that every project on it must obey: the model an
 
 Heartwood builds each platform's default policy in its [platform adapter](platform-integration.md#define-policy-and-connections) and evaluates model routes, review modes, and credentials against it.
 
-!!! planned "Not yet implemented: deployment-owned enforcement"
-    Heartwood currently stores the active policy, the selected review mode, and model routes in the project's `.heartwood/config.toml`, and re-reads that file on every command.
-    An approved terminal command can rewrite it, so project state cannot enforce a platform restriction today.
-    Heartwood will build the policy from the platform on every load, let project configuration only narrow it, and journal on-disk changes to review modes and model settings.
-    Tracked in [#154](https://github.com/SchmiedmayerLab/heartwood/issues/154).
+The explicit managed launch path supplies an operator-owned project deployment manifest outside the research tree and canonical state.
+It binds the exact research directory, project UUID, protected state directory and policy ceiling before stores are opened.
+The state directory's final component must match the project UUID; mismatched, writable, symlinked or unavailable authority stops startup.
+Existing local state requires an explicit verified migration, never silent adoption or fallback.
+See [Operator-Bound External State](../start/project.md#operator-bound-external-state) and the [manifest reference](../reference/cli.md#operator-commands).
+
+Every project configuration read, update and restore is checked against the supplied ceiling.
+Project preferences can narrow allowed endpoints, credentials, capability tiers and confirmation modes, or increase the aggregate-count floor; they cannot broaden those permissions, disable default-deny egress or change platform identity.
+Research files do not select the ceiling or protected state path.
+Launchers without an explicit deployment binding retain local operation and do not acquire this managed guarantee.
+The platform still enforces filesystem, process and network restrictions outside the worker; application policy validation alone cannot constrain a compromised process.
 
 ## Inference
 
@@ -331,14 +336,13 @@ Heartwood discovers models through a connection's catalog endpoint after checkin
 It currently consumes platform-managed inference through built-in connections, such as the [Stanford AI API Gateway](../models/connections.md#stanford-ai-api-gateway), and through [compatible services](../models/connections.md#other-compatible-services) that an operator configures.
 A route's credential boundary determines whether actions can run without review; secret-backed routes are application-scrubbed unless the platform demonstrates a [platform-isolated boundary](platform-integration.md#model-credential-isolation), which no current adapter claims.
 
-!!! planned "Not yet implemented: platform-managed model routes"
+!!! info "Unavailable: platform-managed model routes"
     Heartwood does not currently read a platform connection manifest, so each platform-managed route needs a platform adapter.
     It also relies on the OpenHands model table to choose a protocol, which does not recognize platform model aliases.
-    Heartwood will load connections from a deployment-owned manifest outside the project, accept declared protocol, context window, and tool support for unrecognized aliases, and report unknown values as unknown.
-    Tracked in [#151](https://github.com/SchmiedmayerLab/heartwood/issues/151).
+    The exported manifest describes deployment-owned connections and model aliases, but runtime startup does not consume those declarations.
 
 A platform that describes its models should make the following metadata available for each model identity, reusing provider and SDK facts where available.
-The extension's placement and alias declarations remain part of the planned schema; this table does not prescribe a replacement model-list API.
+The extension's placement and alias declarations remain part of the draft schema; this table does not prescribe a replacement model-list API.
 
 | Field | Meaning | Level |
 |---|---|---|
@@ -354,12 +358,11 @@ For example, the SDK provider identifier `openai` alone does not select Chat Com
 MCP capability names such as `tools` retain their upstream meaning, and extension references identify the exact upstream revision.
 Backend protocol references identify the service's existing API and version, such as GA4GH TES, rather than defining a new execution format.
 
-!!! planned "Draft model metadata; runtime discovery remains separate"
+!!! info "Draft model metadata; runtime discovery remains separate"
     The upstream [model list](https://developers.openai.com/api/reference/resources/models/methods/list) already defines identity and lifecycle metadata, including ownership and creation time.
     It does not fully describe tool support, token limits, or platform-specific data eligibility.
     The model-metadata supplement reuses that identity and supplies missing declarations and exact-class eligibility observations.
     Its draft schema does not replace provider model discovery or the existing SDK capability lookup.
-    Tracked in [#150](https://github.com/SchmiedmayerLab/heartwood/issues/150) and [#151](https://github.com/SchmiedmayerLab/heartwood/issues/151).
 
 ### Realtime Voice
 
@@ -369,20 +372,17 @@ A platform can offer realtime speech models for an optional voice interface.
 - **Required:** state whether realtime audio is covered by the route's data-use agreements; text-route eligibility does not extend to audio.
 - **Recommended:** support a server-owned session in which Heartwood executes and approves every tool call.
 
-!!! planned "Not yet implemented: voice"
+!!! info "Unavailable: voice"
     Heartwood has no voice interface.
     An ephemeral browser credential is a convenience rather than an enforcement boundary, and speech never grants approval.
-    Tracked in [#139](https://github.com/SchmiedmayerLab/heartwood/issues/139).
 
 ## Platform Services
 
 Platform services let a researcher ask Heartwood to submit an analysis, request compute, attach an authorized dataset, or open a platform application through the research session.
 Services connect through the [Model Context Protocol](https://modelcontextprotocol.io/specification/) without a platform-specific agent loop.
 
-!!! planned "Not yet implemented: platform services"
+!!! info "Unavailable: platform services"
     Heartwood does not currently connect to MCP servers; it disables them in its OpenHands configuration and advertises no platform service.
-    One read-only research or platform metadata service comes first in [#138](https://github.com/SchmiedmayerLab/heartwood/issues/138).
-    Operations that change platform state follow in [#152](https://github.com/SchmiedmayerLab/heartwood/issues/152).
 
 ### Discovery and Authorization
 
@@ -396,6 +396,9 @@ Services connect through the [Model Context Protocol](https://modelcontextprotoc
 Heartwood treats annotations as hints from the server, not as authorization: a tool marked read-only still runs under Heartwood's review policy, and the platform still authorizes every call.
 
 ### Budget-Aware Planning
+
+This section describes the exported draft planning contract.
+Heartwood does not provide runtime workload prediction, budget discovery, estimation or the shared budget overview.
 
 A platform can expose budget information and workload estimation so the agent and researcher can plan within an existing allocation.
 The contract covers bounded interactive exploration, batch analysis, and model inference, including alternative runtime configurations.
@@ -429,10 +432,9 @@ Neither a workload prediction nor a price record establishes an enforcement guar
 An estimate is not an incurred-cost record, and a platform spending reservation is not a provider purchase commitment.
 Keep those meanings distinct when linking estimates and approval records to cost data.
 
-!!! planned "Design reference: FOCUS 1.5 proposals"
+!!! info "Design reference: FOCUS 1.5 proposals"
     The [SKU Price dataset](https://github.com/FinOps-Open-Cost-and-Usage-Spec/FOCUS_Spec/pull/2424) and [supported estimation features](https://github.com/FinOps-Open-Cost-and-Usage-Spec/FOCUS_Spec/pull/2595) are draft references, not a claim of final FOCUS 1.5 conformance or provider availability.
     Record the reviewed revisions and reassess the mapping against the ratified specification before declaring compatibility.
-    The standards mapping and remaining API contract belong to [#150](https://github.com/SchmiedmayerLab/heartwood/issues/150).
 
 The reviewed SKU Price reference is revision `005a30566a754db4e0f346d20c7063daba579080`; the supported-features reference is revision `a2f9f93cb618ab490b90098d0456dfcdb813c5e7`.
 These pins identify the design inputs even if a proposal changes.
@@ -453,7 +455,7 @@ The platform remains responsible for interpreting that evidence and calculating 
 #### Workload Prediction and Execution Evidence
 
 Research Skills guide workload decomposition and the questions needed to refine a prediction with the researcher.
-Three focused Skills cover interactive exploration, batch analysis, and model inference, using one shared workload-prediction and evidence contract.
+The draft contract distinguishes interactive exploration, batch analysis and model inference through shared workload-prediction and evidence records; dedicated prediction Skills are unavailable.
 The harness supplies the shared contracts and evidence needed to relate a prediction to its plan, platform cost estimate, researcher decisions, and observed execution.
 Workload observations and platform-reported charges remain distinct, so a prediction error is not confused with a pricing change.
 Researcher corrections and revised predictions preserve the assumptions and evidence used for the earlier estimate.
@@ -464,8 +466,8 @@ A benchmark or sample run proposed to improve a prediction is itself work subjec
 The agent cannot launch an unapproved experiment or treat unavailable measurements as evidence of zero consumption.
 Prediction quality and evidence reuse do not grant spending authority or replace platform constraints.
 
-!!! planned "Not yet implemented: workload-prediction Skills and harness support"
-    Workload prediction with researcher input and supporting Skills and harness mechanisms is tracked in [#190](https://github.com/SchmiedmayerLab/heartwood/issues/190).
+!!! info "Unavailable: workload-prediction Skills and harness support"
+    Workload-prediction Skills, runtime forecasting and budget projections are unavailable.
     The existing research planner and experiment records provide integration points, but do not yet implement workload forecasting or complete resource-usage observations.
 
 #### Shared Plan and Budget Overview
@@ -519,10 +521,8 @@ The document embeds reviewed estimate snapshots; each native request also carrie
 Reserializing or changing the reviewed document requires a new binding and decision.
 These helpers verify content consistency; the gateway and platform still authenticate the decision-maker, check current policy and estimate validity, and enforce limits at submission.
 
-!!! planned "Not yet implemented: budget discovery and workload estimation"
+!!! info "Unavailable: budget discovery and workload estimation"
     Draft budget and estimate schemas and synthetic examples are available; they do not enable runtime estimation or spending authority.
-    Read-only service access uses [#138](https://github.com/SchmiedmayerLab/heartwood/issues/138); platform execution uses [#152](https://github.com/SchmiedmayerLab/heartwood/issues/152).
-    Budget-aware research planning and the shared overview are tracked in [#190](https://github.com/SchmiedmayerLab/heartwood/issues/190); the reference platform foundation is tracked in [#191](https://github.com/SchmiedmayerLab/heartwood/issues/191).
 
 ### Operations That Change Platform State
 
@@ -659,17 +659,18 @@ A completed task can contain a tool result with `isError: true`; it does not est
 Expired or missing task state requires reconciliation with the platform operation identifier before resubmission.
 The checked-in [synthetic exchanges](#workload-examples) demonstrate both estimate paths and cancellation followed by continued backend work.
 
-!!! planned "Tasks runtime integration remains separate"
-    The installed SDK exposes the superseded experimental Tasks types; their presence does not establish support for this extension.
+!!! info "Tasks runtime integration remains separate"
+    SDK type availability does not establish Heartwood runtime support for this extension.
     The contract exports and offline checks use the pinned upstream schema directly.
-    Authenticated transport, polling, input handling, and reconciliation remain in #138 and #152.
+    Heartwood does not provide authenticated Tasks transport, polling, input handling or platform-operation reconciliation.
 
 The exported `mcp-tasks.SOURCE.txt` records interpretation boundaries where upstream prose and examples differ: flat task handles, the versioned missing-capability error code, and nested original results that may omit `resultType`.
 The checker accepts that nested example shape while requiring the outer result discriminator.
 Its timestamp ordering and nonnegative duration checks are additional Heartwood profile checks, not guarantees of the upstream schema.
 
-These are planned operation requirements in [#152](https://github.com/SchmiedmayerLab/heartwood/issues/152).
-Existing tool approvals require the content-binding fix in [#158](https://github.com/SchmiedmayerLab/heartwood/issues/158) before they can enforce this exact-proposal guarantee.
+These operation requirements describe the draft integration profile; Heartwood does not execute platform operations through it.
+Existing tool approvals bind the complete reviewed action contents; changed arguments, ordering or group membership invalidate that approval.
+This implemented action binding does not enable the draft platform-operation transport.
 
 ### Capability Families
 
@@ -716,32 +717,42 @@ The platform must authorize the selected inputs, verify the transferred manifest
 Do not mount the project or private state merely to provide task context: relevant instructions, verified Skills, and other permitted context require an explicit projection without credentials, signer material, or authority-bearing records.
 File digests establish content identity, not data eligibility or confidentiality; a file copied into a public project path still requires an authorized selection.
 
-!!! planned "Not yet implemented: isolated execution and quarantine"
-    Heartwood does not provision or verify read-only inputs, enforced egress denial, ephemeral execution, output quarantine, or steward-controlled release.
-    Tracked in [#129](https://github.com/SchmiedmayerLab/heartwood/issues/129).
-    Platform validation cases for this work are the Terra and BigQuery OMOP workflow in [#43](https://github.com/SchmiedmayerLab/heartwood/issues/43), guided dataset ingest in [#126](https://github.com/SchmiedmayerLab/heartwood/issues/126), and the standard research environment pilot in [#127](https://github.com/SchmiedmayerLab/heartwood/issues/127).
+!!! info "Qualification and controlled-data release remain separate"
+    The native launcher transfers verified inputs and Skills to read-only volumes and keeps the writable worker workspace separate.
+    Those controls do not establish encrypted storage, institutional data eligibility, a quarantine service or steward-authorized release.
 
 ## Agent Isolation
 
-Every guarantee above assumes agent tools cannot change the controls that govern them.
+The complete worker is untrusted: the agent server, conversation and model client, tools, scripts and subprocesses all belong inside the same externally enforced boundary.
+The gateway retains canonical state, policy evaluation, approvals and interface projections outside that boundary.
+The local execution mode still shares the gateway's operating-system identity and does not provide these managed isolation guarantees.
 
-- **Required:** keep platform credentials, service tokens, and signer material out of the environment and file system that agent tools can reach.
-- **Recommended:** run agent tools under an identity that can read and write project files but not `.heartwood/`, the gateway process, credentials, or signer material.
-- **Recommended:** keep the approval-deciding interfaces, the gateway and the researcher's browser, outside the agent's reach.
+For managed isolated execution, a platform must provide:
 
-Agent tools currently run with the gateway's operating-system identity.
-An approved command can read anything that identity can read and can change `.heartwood/` state, including project settings, installed Skills, and session and audit files.
+- **Required:** a sandbox with mandatory filesystem and process restrictions, resource limits, deny-by-default network enforcement and a control plane unavailable to the worker.
+- **Required:** selected read-only input and verified Skill projections, a private writable workspace, and no broad research-directory or protected-state mount.
+- **Required:** provider credentials, signing authority, launch capabilities, management sockets and peer-worker state outside worker access.
+- **Required:** independent authorization for privileged outside actions and output release, with no equivalent direct worker route that bypasses it.
+- **Required:** authenticated admission bound to project, session, attempt and runtime identity; a changed generation or configuration fences the old attempt.
+- **Required:** independently observed revocation before replacement or writer release; uncertain creation, cancellation or deletion requires reconciliation rather than duplicate execution.
+- **Required:** task-relevant context supplied as an explicit projection; copying a policy or signed record into context never grants its authority.
 
-!!! planned "Not yet implemented: separate tool identity"
-    Terminal and file-editor tools will run under a separate identity, with the boundary qualified per platform before any platform claims it.
-    Tracked in [#163](https://github.com/SchmiedmayerLab/heartwood/issues/163).
+The native reference adapter reuses OpenHands remote conversation, workspace and event contracts and the existing OpenShell sandbox and inference transport.
+A worker receives a provider placeholder; credential substitution and network policy enforcement occur outside it.
+Provider authorization must still enforce the approved account, model set, tenant and data eligibility, even when several models share one permitted hostname.
+Credential rotation is not revocation; verify detachment or worker termination separately.
 
-!!! planned "Not yet implemented: supporting agent-isolation controls"
-    - Terminals receive the Heartwood environment with only the project's configured model-credential variables and the capability masked, so other secrets pass through; an allowlist will replace that mask in [#155](https://github.com/SchmiedmayerLab/heartwood/issues/155).
-    - Low-Risk Automation decides from the model's own risk label; a deterministic allowlist will make that label advisory in [#157](https://github.com/SchmiedmayerLab/heartwood/issues/157).
-    - An approval binds to model-supplied tool-call identifiers; binding it to the reviewed content comes in [#158](https://github.com/SchmiedmayerLab/heartwood/issues/158).
+The Heartwood bindings retain project, session and attempt identities plus image, policy and input-manifest digests.
+Worker-reported events and output are untrusted evidence; they cannot create approvals, authorize platform operations or prove that the worker has stopped.
+The adapter rejects unsupported admission APIs and has no silent local fallback.
+Native selection is explicit and requires the compatible worker dependency build and a qualified provider route.
+A remote workspace alone does not establish provider-credential isolation.
 
-See [Threat Boundaries](security.md#threat-boundaries) for the current limits.
+OpenShell-specific names, policy objects and control credentials belong to this implementation profile, not to mandatory platform-facing messages.
+Other platform adapters must preserve the same authority, lifecycle and evidence requirements while reusing their native infrastructure contracts.
+The [worker ownership contract](../architecture/system.md#worker-attempt-ownership), [qualification workflow](../architecture/testing.md#installed-native-integration), and [security boundaries](security.md#threat-boundaries) describe the implementation and evidence limits.
+Implementation availability does not advertise platform-isolated credentials for every adapter or permit sensitive data.
+Qualification must cover the exact worker, gateway, provider authorization and surrounding infrastructure.
 
 ## Audit and Provenance
 
@@ -749,36 +760,40 @@ See [Threat Boundaries](security.md#threat-boundaries) for the current limits.
 - **Recommended:** enforce retention, immutability, and deletion for exported audit and experiment records.
 - **Required for platform services:** keep an audit log of operations performed through the contract, joinable to Heartwood's audit by operation reference.
 
-Heartwood's project-local audit and experiment records detect corruption but remain writable by the identity that runs the project.
+Heartwood's canonical audit and experiment records detect corruption; managed launch places them outside worker access, while local execution retains the same-identity limitations.
+External state placement does not make records immutable to the gateway or replace independently retained signed checkpoints.
 See [Audit Checkpoints and Retention](audit-checkpoints.md) and [Sessions and Audit](../architecture/sessions-audit.md#audit-integrity).
 
-!!! planned "Not yet implemented: tamper-resistant history and retained provenance"
-    Checkpoints do not yet reference earlier checkpoints, so a later checkpoint can sign rewritten history; continuity checks come in [#160](https://github.com/SchmiedmayerLab/heartwood/issues/160).
-    Experiment records are not yet published to platform storage; retention-locked publication comes in [#128](https://github.com/SchmiedmayerLab/heartwood/issues/128).
+!!! info "Unavailable: tamper-resistant history and retained provenance"
+    Checkpoints do not reference earlier checkpoints, so a later checkpoint can sign rewritten history.
+    Independent retention and verification remain necessary.
+    Heartwood does not publish experiment records to retention-locked platform storage.
 
 ## Security Requirements
 
+The diagram shows the managed worker boundary; local execution does not acquire it merely by using the same gateway API.
+
 ```mermaid
 flowchart TB
-    UI["Researcher's browser: Heartwood interface"]
+    UI["Researcher's authorized interface"]
     Proxy["Platform: authenticated proxy"]
-    Gateway["Heartwood gateway: capability, policy, approval"]
-    Tools["Agent tools: terminal, files, scripts, as the gateway's operating-system user"]
-    State[(".heartwood state and project files, writable by that user")]
-    Inference["Platform: inference endpoint"]
-    Services["Platform: services"]
-    UI -- "authenticated, with capability" --> Proxy --> Gateway
-    Gateway --> Tools
+    Gateway["Trusted gateway: policy, approvals, canonical records"]
+    Worker["Untrusted worker: agent server, model client, tools, subprocesses"]
+    State[("Protected state outside research files")]
+    Inputs[("Selected read-only inputs and verified Skills")]
+    Transport["Outside inference transport and credentials"]
+    Inference["Platform: authorized model endpoint"]
+    Services["Platform: independently authorized services"]
+    UI --> Proxy --> Gateway
+    Gateway -- "bound attempt and admitted events" --> Worker
     Gateway --> State
-    Tools -. "same identity" .-> State
-    Gateway -- "platform credential" --> Inference
-    Gateway -. "reviewed call" .-> Services
-    classDef heartwood fill:#0b694d26,stroke:#2b8268
+    Inputs --> Worker
+    Worker -- "provider placeholder" --> Transport --> Inference
+    Gateway -- "exact approved operation" --> Services
+    classDef trusted fill:#0b694d26,stroke:#2b8268
     classDef platform fill:#3f5b7426,stroke:#6f8fae
-    classDef planned stroke-dasharray: 5 5
-    class UI,Gateway,Tools,State heartwood
-    class Proxy,Inference,Services platform
-    class Services planned
+    class UI,Gateway,State trusted
+    class Proxy,Transport,Inference,Services platform
 ```
 
 Both sides must preserve these properties.
@@ -790,10 +805,10 @@ Both sides must preserve these properties.
 5. **Uncertain outcomes are reconciled.** A timeout or lost response is resolved by status, not by resubmitting an operation as though it were idempotent.
 6. **Egress is denied by default.** Heartwood policy denies undeclared model endpoints, and the platform network is the authoritative egress control.
 
-!!! planned "Not yet implemented: full enforcement of these properties"
-    Properties 1 through 3 hold only as far as [agent isolation](#agent-isolation) reaches today: Low-Risk Automation trusts the model's risk label, approvals bind to identifiers rather than content, unselected secrets reach terminals, and the policy lives in agent-writable project state.
-    Review Every Action and a platform that enforces restrictions outside the gateway's identity are the current mitigations.
-    Tracked in [#154](https://github.com/SchmiedmayerLab/heartwood/issues/154), [#155](https://github.com/SchmiedmayerLab/heartwood/issues/155), [#157](https://github.com/SchmiedmayerLab/heartwood/issues/157), [#158](https://github.com/SchmiedmayerLab/heartwood/issues/158), and [#163](https://github.com/SchmiedmayerLab/heartwood/issues/163).
+!!! warning "Qualify the selected execution mode"
+    The managed implementation binds approvals to reviewed contents and keeps canonical authority outside the worker, but its guarantees require the complete qualified deployment.
+    Local execution still shares process authority; Low-Risk Automation retains the limitations described in [Security and Controlled Data](security.md#model-credential-isolation).
+    A green schema check, a running sandbox, or an allowed network hostname does not prove these properties, tenant authorization, data eligibility or institutional approval.
 
 ## Failure States
 
@@ -809,7 +824,7 @@ A platform's failures must be distinguishable so every interface can show the sa
 | Rate limit | A rate-limit error with a retry interval when known | HW-AGENT-010 |
 | Denied or misconfigured model | A model or authorization error | HW-AGENT-011 |
 | Service temporarily unavailable | An unavailability error | HW-AGENT-012 |
-| Platform operation denied, failed, or of unknown outcome | The operation state and a reason | Not yet implemented; [#152](https://github.com/SchmiedmayerLab/heartwood/issues/152) |
+| Platform operation denied, failed, or of unknown outcome | The operation state and a reason | Runtime integration unavailable |
 
 See [Diagnostics and Troubleshooting](../reference/troubleshooting.md) for each code's recovery steps.
 
@@ -844,25 +859,44 @@ Missing or unknown eligibility remains unknown.
 | Artifact | Defines | Status |
 |---|---|---|
 | Capability manifest | What a platform supports, served at `GET /project/capabilities` | Implemented; see the [capability matrix](../reference/capabilities.md#current-capability-matrix) |
-| API body schemas | JSON Schemas for gateway request and response bodies, generated from the shared Pydantic contract | Implemented; internal, not published |
+| API body schemas | JSON Schemas for gateway request and response bodies, generated from the shared Pydantic contract | Included in generated gateway OpenAPI components |
 | Gateway OpenAPI description | The routes, methods, streams, and launch-capability security scheme a platform proxy serves | Generated from existing typed contracts with route conformance tests |
-| Platform connection manifest | Model connections a deployment supplies, as `heartwood.model-connections.v1` | Shared structural schema and explicit loader implemented; deployment startup wiring remains in #151 |
-| Deployment policy | Platform restrictions, as `heartwood.policy-profile.v1` | Schema implemented; not deployment-owned |
-| Model metadata | Missing protocol/capability declarations and exact route eligibility | Draft schema; runtime consumption in #151 |
+| Platform connection manifest | Model connections a deployment supplies, as `heartwood.model-connections.v1` | Shared structural schema and explicit loader implemented; deployment startup wiring unavailable |
+| Deployment policy | Platform restrictions, as `heartwood.policy-profile.v1` | Schema implemented; an operator project deployment can bind it as an immutable ceiling |
+| Model metadata | Missing protocol/capability declarations and exact route eligibility | Draft schema; runtime consumption unavailable |
 | MCP service and annotation profile | Deployment service references and four required upstream boolean hints | Draft configuration and annotation-subset schemas; no replacement MCP wire format |
 | MCP Tasks schema | Published asynchronous request/result messages | Unchanged upstream 2026-07-28 schema, license, and provenance; no runtime support claim |
 | Data-class vocabulary | Shared handling classes for routes and datasets | Exported vocabulary; classification grants no authority |
-| Launch and budget context | Authorized platform project, opaque billing binding, constraints, and budget observations | Draft schemas; runtime integration in #164 and #190 |
+| Launch and budget context | Authorized platform project, opaque billing binding, constraints, and budget observations | Draft schemas; runtime integration unavailable |
 | Plan and element estimates | Predictions and structured platform estimates with coverage, uncertainty, units, and validity | Draft schemas with cross-field validation and worked examples |
 | Approval and budget overview | Exact reviewed proposals, researcher decisions, platform authorization, and budget observations | Draft schemas; no accounting or enforcement engine |
-| Operation schemas | Exact native-request references, hard limits, backend observations, and audit references | Draft schemas; execution in #152 |
+| Operation schemas | Exact native-request references, hard limits, backend observations, and audit references | Draft schemas; execution unavailable |
 | Contract version | Bundle index, maturity, compatibility rules, and content digests | Exported as `contract.json` |
-| Conformance kit | Checks a platform runs on its integration responses | Offline model-catalog, MCP discovery, and captured Tasks exchange checks implemented; authenticated endpoint integration remains in #138 and #151 |
+| Conformance kit | Checks a platform runs on its integration responses | Offline model-catalog, MCP discovery, and captured Tasks exchange checks implemented; authenticated service integration unavailable |
 
-!!! planned "Contract artifacts do not enable planned runtime capabilities"
+!!! info "Contract artifacts and runtime availability"
     Current artifacts describe implemented parsers and routes; draft artifacts prepare the platform integration.
-    Authenticated endpoint integration and enforcement remain in #138, #151, #152, #154, and #158.
-    Budget-aware planning and the reference platform foundation remain in the 0.6.0 scope of #190 and #191.
+    Authenticated MCP, deployment-manifest model discovery and platform-operation integration are unavailable.
+    The implemented policy and approval bindings still require qualification inside the selected deployment boundary.
+
+### Runtime Bindings and Adapter Profiles
+
+The platform contract and worker implementation have different scopes.
+The gateway API remains the researcher-facing session interface; worker HTTP and event streams use the native SDK contracts behind the gateway's admission checks.
+Sandbox creation, inference credential substitution and resource revocation use the infrastructure's control plane rather than new gateway endpoints.
+
+| Binding | Authority and implementation |
+|---|---|
+| Research files and protected state | The operator project deployment loader validates the exact workspace, project UUID, external state directory and policy ceiling before opening state. The manifest is an operator input, not an agent-supplied API request. |
+| Complete worker attempt | The trusted launcher retains project/session/attempt identity, native conversation identity, image and policy digests, and the selected input manifest. Runtime identity and revocation require outside observation. |
+| Approved outside effects | The gateway binds the complete reviewed action contents; the destination service independently authorizes the native operation and supplies its authoritative result. Worker messages cannot replace either decision. |
+| Inference | Existing provider APIs and model identifiers remain unchanged. The outside transport supplies credentials and enforces routes; provider authorization separately enforces account, model and tenant scope. |
+| Native reference profile | `OpenShellWorkerDeployment` is the owning parser for the optional operator-selected Docker adapter. Its control paths and OpenShell identifiers are implementation-specific, not required fields in portable platform messages. |
+
+The contract bundle exports the shared gateway, policy and platform-message schemas; it does not currently export the complete operator project manifest or native reference profile as portable platform schemas.
+The [operator CLI reference](../reference/cli.md#operator-commands) documents those inputs and their filesystem authority checks.
+Do not infer authorization from JSON Schema validity, a copied deployment document, a provider placeholder or a worker-reported completion event.
+The [native integration checks](../architecture/testing.md#installed-native-integration) exercise these runtime bindings; they complement the artifact and response conformance checks below.
 
 ### Generate and Review the Current Artifacts
 
@@ -877,7 +911,7 @@ Review `contract.json` first: it distinguishes current interfaces, draft platfor
 The individual schema and OpenAPI exporters remain available for narrower review.
 Request schemas use validation mode and response schemas use serialization mode, so their fields match the owning parser or serializer.
 The platform connection loader additionally checks endpoint normalization, credential-reference consistency, protocol requirements, and duplicate identities; JSON Schema validation alone does not perform those checks.
-The loader does not yet wire a deployment-owned manifest into startup.
+The model-connection loader does not yet wire that manifest into startup; the separate project deployment loader already binds protected state and the policy ceiling.
 
 The OpenAPI description includes all implemented REST operations, launch-token exchange, and server-sent events.
 Its `x-websocket` section describes the WebSocket transport using the same event/projection schema.
@@ -934,17 +968,16 @@ These checks cover the pinned Tasks definitions and limited base-envelope requir
 A successful check does not authenticate the issuer, verify referenced document bytes, or determine whether an observation is still valid.
 Never interpret a parsed `authorized` field, tool hint, or researcher-decision record as an authorization token.
 
-### Related Runtime Controls
+### Runtime Conformance
 
-| Issue | Relationship to this contract | Evidence still required |
-|---|---|---|
-| [#154](https://github.com/SchmiedmayerLab/heartwood/issues/154) | Deployment-owned policy and project preferences have different authority | Project-file changes cannot widen deployed restrictions |
-| [#158](https://github.com/SchmiedmayerLab/heartwood/issues/158) | Approval refers to the exact proposal contents | Changed arguments or action groups cannot reuse an earlier approval |
-| [#155](https://github.com/SchmiedmayerLab/heartwood/issues/155), [#156](https://github.com/SchmiedmayerLab/heartwood/issues/156), [#163](https://github.com/SchmiedmayerLab/heartwood/issues/163) | Credentials, launch capabilities, and governing state stay outside tool authority | Environment, delivery, and process-isolation tests in the deployed boundary |
-| [#138](https://github.com/SchmiedmayerLab/heartwood/issues/138), [#151](https://github.com/SchmiedmayerLab/heartwood/issues/151) | MCP and inference are independent optional capabilities | Authenticated transport, discovery, policy interception, and failure handling |
-| [#152](https://github.com/SchmiedmayerLab/heartwood/issues/152), [#190](https://github.com/SchmiedmayerLab/heartwood/issues/190) | Reviewed execution and budget planning consume these contracts | Platform reauthorization, reconciliation, and shared researcher/agent projections |
+Schema validation and offline response checks do not establish runtime controls.
+An integration must independently demonstrate:
 
-Schema validation and deterministic conformance tests do not establish these runtime controls.
+- project preferences cannot widen the operator's policy ceiling;
+- approvals bind the complete reviewed action contents and reject changed arguments or action groups;
+- worker tools cannot reach credentials, launch capabilities, canonical state or management authority;
+- inference and platform services remain independent optional capabilities; and
+- external operations are reauthorized by the destination and uncertain outcomes are reconciled before retries.
 
 ## Validate a Platform
 
@@ -958,9 +991,6 @@ A platform integration advances through the evidence levels in [Testing and Evid
 Follow [Validate Conformance](platform-integration.md#validate-conformance) and [Validate the Deployment](index.md#validate-the-deployment) for the exact checks.
 Before a wider rollout, [record a standard environment](index.md#record-a-standard-environment), confirm the [deployment security checklist](security.md#deployment-security-checklist), and [run a pilot evaluation](index.md#run-a-pilot-evaluation).
 
-!!! planned "Not yet implemented: expansion checklist"
-    One maintained checklist for proposing a new platform, covering ownership, reuse of shared contracts, security and privacy review, and the evidence required before a support claim, is tracked in [#49](https://github.com/SchmiedmayerLab/heartwood/issues/49).
-
 ## What Heartwood Asks of a Platform
 
 | Area | Request | Level | Heartwood consumes it today |
@@ -968,18 +998,18 @@ Before a wider rollout, [record a standard environment](index.md#record-a-standa
 | Hosting | Run the published artifact with the project as a persistent working directory on storage with native advisory locks | Required | Yes |
 | Access | Authenticate users, restrict the gateway route to the proxy, strip client identity headers, and deliver the launch capability | Required for the browser | Yes |
 | Identity | One gateway per researcher and project, and a documented session expiry | Recommended | Yes |
-| Identity | OpenID Connect identity at ingress, and token exchange for platform calls | Recommended | No, [#164](https://github.com/SchmiedmayerLab/heartwood/issues/164) |
-| Policy | Exact model and catalog endpoints, permitted review modes, and credential references, denying egress by default | Required | Through a platform adapter; [#154](https://github.com/SchmiedmayerLab/heartwood/issues/154) |
-| Inference | Chat Completions with streaming and tool calls, Responses where available, and an authorized model list | Optional | Built-in and operator-configured routes; [#151](https://github.com/SchmiedmayerLab/heartwood/issues/151) |
-| Inference | Per-model protocols, context window, tool support, and permitted data classes | Required with inference | No, [#151](https://github.com/SchmiedmayerLab/heartwood/issues/151) |
+| Identity | OpenID Connect identity at ingress, and token exchange for platform calls | Recommended | Unavailable |
+| Policy | Exact endpoints, permitted review modes and credential references, denying egress by default | Required | Operator-bound ceiling implemented; infrastructure enforcement remains platform-owned |
+| Inference | Chat Completions with streaming and tool calls, Responses where available, and an authorized model list | Optional | Built-in and operator-configured routes |
+| Inference | Per-model protocols, context window, tool support, and permitted data classes | Required with inference | Unavailable |
 | Inference | Platform-held credentials and distinguishable failures | Required with inference | Yes |
-| Voice | Server-created realtime sessions and a statement of audio coverage | Optional | No, [#139](https://github.com/SchmiedmayerLab/heartwood/issues/139) |
-| Services | MCP Streamable HTTP with schemas, annotations, permissions, and per-call authorization | Optional | No, [#138](https://github.com/SchmiedmayerLab/heartwood/issues/138) |
-| Services | Proposals, idempotent operation identifiers, status, cancellation, and audit references | Required with operations | No, [#152](https://github.com/SchmiedmayerLab/heartwood/issues/152) |
-| Isolation | Credentials and signer material outside the agent tools' reach, and a separate tool identity where available | Recommended | No, [#163](https://github.com/SchmiedmayerLab/heartwood/issues/163) |
-| Controlled data | Eligibility decisions, read-only inputs, enforced egress denial, quarantine, and steward-approved release | Required for controlled data | No, [#129](https://github.com/SchmiedmayerLab/heartwood/issues/129) |
+| Voice | Server-created realtime sessions and a statement of audio coverage | Optional | Unavailable |
+| Services | MCP Streamable HTTP with schemas, annotations, permissions, and per-call authorization | Optional | Unavailable |
+| Services | Proposals, idempotent operation identifiers, status, cancellation, and audit references | Required with operations | Unavailable |
+| Isolation | Complete worker confinement; credentials, canonical state and signer authority outside it | Required for managed isolated execution | Native reference implementation; exact artifact and deployment qualification required |
+| Controlled data | Eligibility decisions, read-only inputs, enforced egress denial, quarantine, and steward-approved release | Required for controlled data | Input staging and native read-only mounts implemented; quarantine and steward-approved release unavailable |
 | Skills | Approved Skill sources in a deployment-owned registry | Optional | Yes |
-| Audit | A deployment-owned checkpoint signer, retention controls, and an operation audit log | Recommended | Signer and retention: yes |
+| Audit | A deployment-owned checkpoint signer, retention controls, and an operation audit log | Recommended | Signer integration and exports; retention is platform-owned |
 | Security | Network egress limited to approved endpoints | Recommended | Platform-enforced |
 | Evidence | A synthetic test environment and a named technical contact for live validation | Required for support | Yes |
 

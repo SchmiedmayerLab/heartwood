@@ -75,12 +75,31 @@ Application scrubbing keeps secrets out of supported tool inputs and persisted s
 Add a model source to `platform_isolated_model_sources` only when the adapter has `ci-and-live-synthetic` validation and the deployment demonstrates that terminal, file-editor, Task, and future supported tools cannot read that source's credentials.
 Qualification is source-specific: isolating an institution-managed gateway must not qualify a subscription, hosted-provider, or custom endpoint on the same platform.
 The selected profile must use the exact model-source identifier and a managed-identity binding; an environment variable or mounted credential file remains application-scrubbed even when another route on the platform is isolated.
-The validation must cover restart, every advertised interface, project and `.heartwood/` files, inherited process resources, logs, events, browser and notebook outputs, and audit exports.
+The validation must cover restart, every advertised interface, research files, local or operator-bound state, inherited process resources, logs, events, browser and notebook outputs, and audit exports.
 Model authorization and tool execution must remain independently revocable.
 
 OpenHands RemoteWorkspace is useful for isolating an agent environment from its caller.
 Because its Agent Server still owns both model orchestration and tools, it is not a model-only credential boundary without an additional platform control.
 Prefer a platform-native model proxy or separately authorized service identity over a Heartwood-managed secret store.
+
+## Protected State and Worker Execution
+
+Managed launch must bind the exact research directory, project UUID, external state root and policy ceiling through the existing operator deployment parser.
+Keep that manifest outside research files and canonical state, with operator-owned parents and no worker access.
+Project preferences can narrow the ceiling; platform detection and project files cannot establish deployment authority.
+See [Operator-Bound External State](../start/project.md#operator-bound-external-state).
+
+A worker adapter confines the complete agent server, model client, tools and subprocesses.
+Reuse native infrastructure for sandbox creation, mandatory filesystem and network controls, resource limits and inference credential delivery.
+The reference adapter uses OpenShell and the native OpenHands remote contracts; those product-specific control objects are not mandatory platform-facing schemas.
+Keep the trusted gateway, canonical records, approvals, signing authority and management sockets outside the worker.
+Supply only selected read-only inputs and verified Skills, with separate writable work storage.
+
+Bind each attempt to its project, session, image, effective policy and input manifest before admitting events.
+Observe admission and revocation through the outside control plane, independently of worker reports.
+Retain fenced ownership when creation or deletion has an uncertain outcome and reconcile before replacement.
+Use the existing [worker ownership contract](../architecture/system.md#worker-attempt-ownership) and [native integration checks](../architecture/testing.md#installed-native-integration).
+A sandbox does not independently qualify provider model authorization, data eligibility or output release.
 
 ## Package the Shared Application
 

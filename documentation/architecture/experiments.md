@@ -48,7 +48,7 @@ The notebook exposes the same collection and export through `session.experiment_
 
 The start and outcome are committed with their workflow transitions in the existing paired session and audit journal.
 Their content-minimized fingerprints are included in the security audit; the full scientific records remain project-private.
-Project queries rebuild `.heartwood/experiments.jsonl` from those verified source events using idempotent appends.
+Project queries rebuild `experiments.jsonl` in the bound state directory from those verified source events using idempotent appends.
 Rebuilding never reads newer artifact contents or repeats model calls or tool actions.
 
 The gateway exposes `experiment_records()` and `export_experiments()` for project-wide inspection and export.
@@ -161,7 +161,8 @@ Independent Result Verification separately captures an isolated Python process t
 That execution witness supplements the stage record; it does not turn package metadata into binary or platform attestation.
 The gateway, `heartwood experiments environment`, browser export, and `NotebookSession.verification_environment()` share the same metadata capture.
 The terminal and notebook accept an explicitly selected analysis interpreter; the browser export describes server Python and does not execute arbitrary client-supplied executables.
-Independent Result Verification separately reconstructs a wheel-only `pylock.toml` with uv in a fresh `.heartwood/runtime/` environment through a reviewed tool action.
+The local Independent Result Verification workflow reconstructs a wheel-only `pylock.toml` with uv in a fresh `.heartwood/runtime/` environment through a reviewed tool action.
+That local workflow is not permission to expose protected runtime state to a sandboxed worker; remote execution requires separately qualified workspace and evidence handling.
 Its execution witness binds the original lock and inputs to the observed environment artifact, then guards that artifact before analysis execution.
 Package installation uses a private lock snapshot and cache without inherited credentials, installer overrides, source builds, or automatic interpreter downloads.
 Metadata probing and analysis execution also exclude inherited environment variables so Python startup hooks do not receive provider credentials.
@@ -170,8 +171,9 @@ An explicit `ExperimentEnvironment` can instead identify a declared container or
 
 ## Persistence and Recovery
 
-Records live in `.heartwood/experiments.jsonl` and use the existing private JSON Lines append journal and native file locks.
-Project initialization registers the experiment formats in `.heartwood/state.json` without rewriting existing session, audit, or experiment records.
+Records live in `experiments.jsonl` under the bound state directory and use the existing private JSON Lines append journal and native file locks.
+The directory is local `.heartwood/` or the operator-bound external state root.
+Project initialization registers the experiment formats in that directory's `state.json` without rewriting existing session, audit, or experiment records.
 Supported older project manifests are upgraded atomically; unknown or altered format declarations are rejected rather than relabeled.
 A hash chain detects modification or reordering within the available record history.
 Exact event retries do not append a second record; changed retries and invalid transitions are rejected.

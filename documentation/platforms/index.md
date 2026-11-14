@@ -32,4 +32,7 @@ Terra images are AMD64 single-platform Docker manifests because Terra image auto
 - Use the [native installer](carina.md) on Stanford Carina; containers are not the normal interactive path there.
 - Follow [Add a Platform](../operate/platform-integration.md) when deploying into another managed environment.
 
-Every path uses the process current directory as the project and `.heartwood/` inside that project for private state.
+The process current directory identifies the research project.
+The local installation paths use `.heartwood/` inside it for private state.
+An explicit [operator deployment](../start/project.md#operator-bound-external-state) binds canonical state outside research files and can select the native worker adapter.
+Installing a platform image alone does not enable worker sandboxing or establish sensitive-data readiness.
