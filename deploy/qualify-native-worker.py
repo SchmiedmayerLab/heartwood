@@ -237,6 +237,8 @@ def qualify(worker: str, runtime: str, artifacts: Path, output: Path) -> None:
     # Check the operator transport before creating fixtures. Retain Docker's own
     # diagnosis rather than hiding it in several identical fixture exceptions.
     with (output / "controller-preflight.log").open("w") as log:
+        log.write(f"Supplementary Docker socket group: {socket_group}\n")
+        log.flush()
         subprocess.run(
             [
                 *arguments,
