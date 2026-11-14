@@ -39,6 +39,7 @@ Installation, schema conformance, live validation and institutional approval are
 | Sandboxed worker → inference transport → provider | Existing provider API and model identity | Outside transport controls routing and credentials; provider controls account, model and tenant authorization |
 | Trusted service adapter → platform | Existing platform APIs, optionally exposed through the draft MCP integration profile | Platform authenticates each call and enforces project, dataset, compute and billing permissions |
 | Trusted launcher → sandbox infrastructure | Existing infrastructure control API | Operator owns admission, policy, runtime identity and observed revocation |
+| Trusted gateway → signer and records service | Authenticated checkpoint-signing interface and versioned object-storage API | Independent signer authorizes checkpoint publication; records service enforces scoped access and retention |
 
 The sandbox management API is not an agent tool or a researcher-facing Heartwood API.
 OpenShell control objects are specific to the reference adapter; a platform is not required to expose them as portable integration messages.
@@ -222,13 +223,16 @@ Request these permissions separately:
 
 | Principal | Required authority | Boundary |
 |---|---|---|
-| Trusted gateway | Request signing only for its authorized deployment and policy | No signing key, key administration or records-retention administration |
-| Signing service | Use the selected signing key and independently authorize each request | Private key stays in the service or its KMS/HSM; worker cannot invoke it |
-| Records publisher | Publish evidence only to the approved destination | Separate from research-output publication; no retention bypass or deletion authority |
+| Trusted gateway | Stage candidate audit and experiment records, read retained history, and request signing for its bound scope | No checkpoint-ordinal publication, signing key, key administration or records-policy administration |
+| Signing service | Independently authorize the fixed scope, read candidates and complete retained history, sign and conditionally publish checkpoints | Private key stays in the service or its KMS/HSM; worker cannot invoke it; no retention bypass or deletion authority |
 | Independent verifier | Read retained versions, signatures and retention metadata | No write, signing or key-administration permission |
 | Worker | No signing or records-service authority | Neither credentials nor network access to these services |
 
 The operator must confirm the platform-specific API actions that implement these roles; this is an access requirement, not a portable IAM policy or an automatically provisioned integration.
+For the implemented S3-compatible adapter, provide version listing, exact-version reads and retention metadata, with conditional writes limited to each identity's prefixes.
+The bucket must enforce versioning, COMPLIANCE retention and create-only publication independently of the client.
+The [records permissions contract](audit-checkpoints.md#records-permissions-and-retention) maps these operations to S3 permissions and identifies the required policy checks.
+An arbitrary signing endpoint that returns a valid signature is insufficient for managed evidence: the independently authorized service must retain the checkpoint before returning it.
 Retain the association between Heartwood project/session identifiers, platform operation identifiers, key versions and the independently stored records.
 Define how loss of signing, retention or external telemetry is detected and which work must stop; a local record or signed retention date alone does not prove outside collection or enforcement.
 
@@ -251,6 +255,8 @@ Signed checkpoint export does not establish immutable retention or continuity be
 Automatic externally anchored evidence uses the deployment manifest's `evidence` table with complete worker isolation, an approved signer registry and a separately authorized records identity.
 Provide the exact records service origin, scoped permissions, retention policy and credential source described in [managed evidence configuration](audit-checkpoints.md#configure-managed-evidence).
 Managed checkpoint creation requires a trusted integration with the bound gateway methods; there is no checkpoint-creation HTTP route, and the standalone audit CLI does not consume the deployment manifest.
+Required evidence mode blocks the reviewed action while signing or retained-history verification is unavailable.
+Buffered mode allows ordinary work during an eligible service outage with a visible evidence gap; outside operations and outside-result disclosure still require retained evidence.
 These limitations prevent treating a successful synthetic sandbox run as sensitive-data approval.
 
 ## Information to Return
@@ -287,3 +293,17 @@ Validate captured model and service responses with the existing offline conforma
 Then qualify the exact artifact in the synthetic environment: ingress rejection, permission denial, action-content binding, worker admission/revocation, inference authorization, persistence and restore, and safe handling of lost responses.
 Require both successful authorized operations and rejected unauthorized controls; a failed request alone can indicate a broken service rather than effective policy.
 Record the available capabilities and unresolved limitations against that deployment, following [Validate a Platform](platform-contract.md#validate-a-platform).
+
+For each selected capability, return both an authorized positive control and the corresponding rejected alternative:
+
+| Capability | Authorized control | Rejected or interrupted control |
+|---|---|---|
+| Gateway access | Owning researcher reaches the declared route and reconnects to the event stream | Another principal, invalid capability, wrong origin or direct upstream connection cannot enter |
+| Inference | Approved model and identity complete a bounded synthetic tool call | Disallowed model or tenant, direct credential access and revoked worker route fail |
+| Data access | Selected synthetic input is readable through its approved staging route | Unselected resources, writes to read-only inputs and unauthorized export fail |
+| Workflow execution | Exact reviewed request yields a correlated native operation | Changed inputs or project, expired approval and replay with conflicting content fail; lost replies reconcile without resubmission |
+| Retained evidence | Independently authorized checkpoint is readable and verifies after restore | Wrong-scope signer requests, unauthorized publication, replacement or deletion fail; required-mode outage prevents dispatch |
+| Worker lifecycle | Outside controller admits and subsequently revokes the exact attempt | Worker cannot reach protected state or management authority; uncertain deletion does not release ownership |
+
+For capabilities without a Heartwood runtime integration, platform-side evidence establishes the native service behavior only.
+It does not establish end-to-end Heartwood support.

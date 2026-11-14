@@ -611,6 +611,8 @@ It submits the exact verified input bytes without reopening worker paths.
 The trusted adapter must bound reads, exclude credentials from the reviewable request, and resolve input references without granting worker-selected filesystem access.
 
 The decision and submission intent are committed through the paired session and audit journal before contacting the service.
+With a bound evidence controller, the authorization must also be independently retained before submission, including when ordinary session evidence uses buffered mode.
+After an evidence outage, recovery rechecks the proposal's inputs, policy, expiry, destination and current worker authority before proceeding.
 The private session retains review content; the audit records operation identifiers, digests, decisions, and status without copying request or input payloads.
 A worker acknowledgement or completion event cannot settle the separately identified outside operation.
 
@@ -638,6 +640,7 @@ The adapter's disclosure check must enforce the researcher's entitlement and dat
 Sender labels are descriptive metadata and never establish approval or authenticated identity.
 
 The paired journal retains the decision and delivery intent before sending the reviewed snapshot through the native conversation message and run APIs.
+When an evidence controller is bound, result disclosure requires an independently retained authorization checkpoint even in buffered mode.
 Result data is untrusted context; the worker retains its enforced tool and network restrictions.
 The operational audit records release and operation identifiers, digests, actor, command, and phase without copying the result.
 A submitted result means the native delivery path accepted it; it does not establish that the worker used it correctly or completed subsequent work.
@@ -902,6 +905,7 @@ Sandbox creation, inference credential substitution and resource revocation use 
 | Research files and protected state | The operator project deployment loader validates the exact workspace, project UUID, external state directory and policy ceiling before opening state. The manifest is an operator input, not an agent-supplied API request. |
 | Complete worker attempt | The trusted launcher retains project/session/attempt identity, native conversation identity, image and policy digests, and the selected input manifest. Runtime identity and revocation require outside observation. |
 | Approved outside effects | The gateway binds the complete reviewed action contents; the destination service independently authorizes the native operation and supplies its authoritative result. Worker messages cannot replace either decision. |
+| Retained audit evidence | The deployment's `evidence` table selects a fixed records scope, approved signer and required or buffered behavior. Gateway credentials stage candidates; independent signing authority publishes checkpoint ordinals. Required dispatch waits for verified outside retention. |
 | Inference | Existing provider APIs and model identifiers remain unchanged. The outside transport supplies credentials and enforces routes; provider authorization separately enforces account, model and tenant scope. |
 | Native reference profile | `OpenShellWorkerDeployment` is the owning parser for the optional operator-selected Docker adapter. Its control paths and OpenShell identifiers are implementation-specific, not required fields in portable platform messages. |
 
@@ -1022,7 +1026,7 @@ Before a wider rollout, [record a standard environment](index.md#record-a-standa
 | Isolation | Complete worker confinement; credentials, canonical state and signer authority outside it | Required for managed isolated execution | Native reference implementation; exact artifact and deployment qualification required |
 | Controlled data | Eligibility decisions, read-only inputs, enforced egress denial, quarantine, and steward-approved release | Required for controlled data | Input staging and native read-only mounts implemented; quarantine and steward-approved release unavailable |
 | Skills | Approved Skill sources in a deployment-owned registry | Optional | Yes |
-| Audit | A deployment-owned checkpoint signer, retention controls, and an operation audit log | Recommended | Signer integration and exports; retention is platform-owned |
+| Audit | A deployment-owned checkpoint signer, retention controls, and an operation audit log | Recommended; required when managed evidence is selected | Explicit exports and automatic evidence gates implemented; signer authorization and storage policy require independent qualification |
 | Security | Network egress limited to approved endpoints | Recommended | Platform-enforced |
 | Evidence | A synthetic test environment and a named technical contact for live validation | Required for support | Yes |
 

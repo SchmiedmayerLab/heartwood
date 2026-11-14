@@ -58,6 +58,9 @@ The records adapter uses conditional publication, version-aware reads and COMPLI
 The records system must independently enforce storage authorization and retention.
 Gateway credentials may stage candidates and read retained evidence; only the independently authorized signer may publish checkpoint ordinals.
 Neither credential nor trusted signing roots belong in worker access.
+The `AnchoredCheckpointSigner` library composes the existing signer and records interfaces for this independent authority.
+It is not a deployed production signing service: the operator supplies authenticated service hosting, caller-to-scope authorization, key custody and storage policy enforcement.
+The gateway's `evidence` configuration does not provision or confer those controls.
 
 An outside approval is first recorded as authorized, then checkpointed, then marked submitting before the native call.
 A retained authorization can resume only after current input, policy, expiry, destination and worker authority checks.

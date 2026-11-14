@@ -175,6 +175,12 @@ Normal project exports remain replaceable by the project owner.
 Where authoritative evidence is required, create a signed checkpoint outside the project and verify it against a public key obtained through a separate trusted channel.
 The signature authenticates the supplied checkpoint statement and audit content; it does not enforce retention, establish institutional approval, or prove that no events were removed before checkpoint creation.
 
+Managed evidence additionally compares each checkpoint with the complete independently retained history and rejects changes to an already retained audit prefix.
+The gateway can stage candidate records but must not have permission to publish checkpoint ordinals; that authority belongs to the independently authorized signer.
+The records system must enforce scoped identities, create-only publication and retention outside the application.
+Required mode stops dispatch while that evidence is unavailable; buffering ordinary work must not bypass evidence required for outside effects or result disclosure.
+Neither mode proves the completeness of activity after the last retained checkpoint or turns worker-reported results into independently observed facts.
+
 Managed deployments keep the checkpoint signer registry, trusted public keys, service credentials, and private signing keys outside every agent project.
 Project state can select only a profile already approved by that registry.
 Heartwood verifies a remote signature and its pinned signer identity before publishing a checkpoint.
