@@ -123,10 +123,15 @@ def write_private_text_atomic(
     )
 
 
-def write_private_json_atomic(path: Path, payload: Mapping[str, object]) -> None:
+def write_private_json_atomic(
+    path: Path,
+    payload: Mapping[str, object],
+    *,
+    secure_parent: bool = True,
+) -> None:
     """Atomically replace an owner-only canonical JSON object."""
     content = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True) + "\n"
-    write_private_text_atomic(path, content)
+    write_private_text_atomic(path, content, secure_parent=secure_parent)
 
 
 def append_private_bytes(path: Path, content: bytes) -> None:
