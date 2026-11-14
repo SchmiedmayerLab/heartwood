@@ -70,7 +70,6 @@ def qualify(worker: str, runtime: str, artifacts: Path, output: Path) -> None:
         ROOT / "images/worker/candidate/symlink-workspace.Dockerfile",
         ROOT / "images/worker/candidate/controller.Dockerfile",
     )
-    source_hashes = {str(path.relative_to(ROOT)): digest(path) for path in source_paths}
     artifacts, output = artifacts.resolve(), output.resolve()
     if "," in str(artifacts) or "," in str(output):
         raise ValueError("Docker paths must not contain commas")
@@ -101,6 +100,7 @@ def qualify(worker: str, runtime: str, artifacts: Path, output: Path) -> None:
         or digest(prebuilt) != record["binaries"]["openshell-gateway"]
     ):
         raise ValueError("Gateway packaging inputs differ from their build record")
+    source_hashes = {str(path.relative_to(ROOT)): digest(path) for path in source_paths}
     image_ids = {}
     for name, image in (("worker", worker), ("runtime", runtime)):
         image_ids[name] = subprocess.check_output(
