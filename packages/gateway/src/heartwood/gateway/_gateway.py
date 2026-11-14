@@ -166,6 +166,11 @@ from heartwood.gateway._subscriptions import (
     SubscriptionProvider,
 )
 from heartwood.gateway._workspace import WorkspaceInspector
+from heartwood.gateway.worker_sessions import (
+    ManagedWorkerSession,
+    WorkerPlanFactory,
+    WorkerSessionRequest,
+)
 from heartwood.model_policy import ModelPolicyEngine
 from heartwood.persistence import DurableFileError, write_private_text_atomic
 from heartwood.schemas import (
@@ -231,6 +236,7 @@ from heartwood.skills import (
 )
 
 if TYPE_CHECKING:
+    from heartwood.gateway._openhands_sdk import WorkerConversationContext
     from heartwood.gateway._research_evaluation import ParallelReviewPreparer
     from heartwood.gateway._specialists import SpecialistCatalog
 
@@ -449,10 +455,21 @@ class SessionGateway:
         skill_source_registry: SkillSourceRegistry | None = None,
         parallel_review_preparer: ParallelReviewPreparer | None = None,
         deployment_policy: PolicyProfile | None = None,
+        worker_plan_factory: WorkerPlanFactory | None = None,
         backend_id: str = "auto",
     ) -> None:
         prepare_openhands_import()
         self.project = ProjectContext.current() if project is None else project
+        if worker_plan_factory is not None and (
+            self.project.protected_state is None
+            or service_factory is not None
+            or backend_id not in {"auto", "openhands", "openhands-sdk"}
+        ):
+            raise ValueError(
+                "Managed workers require protected state and the native gateway backend"
+            )
+        self._worker_plan_factory = worker_plan_factory
+        self._worker_sessions: dict[int, ManagedWorkerSession] = {}
         self._project_activity = ProjectActivity(self.project)
         self._operations = GatewayOperations(on_enter=self._project_activity.acquire_existing)
         self.sessions_root = self.project.sessions_dir
@@ -749,12 +766,13 @@ class SessionGateway:
                     # The next service must construct its SDK with the persisted
                     # workflow's structured finish contract, not a cached default.
                     close_service = True
-                    self._services.pop(command.session_id, None)
-                    self._service_configurations.pop(command.session_id, None)
                 return result
             finally:
                 if close_service:
-                    service.close()
+                    self._close_service(service)
+                    if self._services.get(command.session_id) is service:
+                        self._services.pop(command.session_id, None)
+                        self._service_configurations.pop(command.session_id, None)
 
     @gateway_operation
     def sessions(self) -> SessionListResponse:
@@ -2361,7 +2379,7 @@ class SessionGateway:
         configuration = self._service_configuration()
         service = self._services.get(session_id)
         if service is not None and self._service_configurations.get(session_id) != configuration:
-            service.close()
+            self._close_service(service)
             self._services.pop(session_id, None)
             self._service_configurations.pop(session_id, None)
             with self._stream_lock:
@@ -2419,11 +2437,19 @@ class SessionGateway:
     ) -> SessionService:
         from heartwood.gateway._research_evaluation import ResearchStageEvaluator
 
+        worker: ManagedWorkerSession | None = None
+
+        def worker_context() -> WorkerConversationContext:
+            if worker is None:
+                raise ValueError("Managed worker session is unavailable")
+            return worker.context()
+
         backend = self._backend(
             model_settings=configuration.model_settings,
             action_settings=configuration.action_settings,
             selected_model=configuration.local_model,
             session_id=session_id,
+            worker_context=worker_context if self._worker_plan_factory is not None else None,
         )
         service = SessionService.local_default(
             self.sessions_root,
@@ -2445,6 +2471,25 @@ class SessionGateway:
                 delta=delta,
             ),
         )
+        if self._worker_plan_factory is not None:
+            from heartwood.gateway._openhands_sdk import OpenHandsSdkBackend
+
+            if isinstance(backend, OpenHandsSdkBackend):
+                assert backend.specialist_catalog is not None
+                worker = ManagedWorkerSession(
+                    service,
+                    WorkerSessionRequest(
+                        project=self.project,
+                        session_id=session_id,
+                        profile=backend.profile,
+                        policy=service.policy_profile,
+                        action_confirmation_mode=configuration.action_settings.confirmation_mode,
+                        skills=self.skill_manager,
+                        specialists=backend.specialist_catalog,
+                    ),
+                    self._worker_plan_factory,
+                )
+                self._worker_sessions[id(service)] = worker
         if self._parallel_review_preparer is not None:
             from heartwood.gateway._openhands_sdk import OpenHandsSdkBackend
             from heartwood.gateway._workflow_review_execution import bind_workflow_review_execution
@@ -2478,6 +2523,7 @@ class SessionGateway:
         action_settings: ActionSettings,
         selected_model: LocalModelSelection | None,
         session_id: str,
+        worker_context: Callable[[], WorkerConversationContext] | None = None,
     ) -> AgentBackend:
         backend_id = self.backend_id
         if backend_id in {"deterministic", "deterministic-local"}:
@@ -2511,7 +2557,8 @@ class SessionGateway:
                 and configured_profile.api_key_env is not None
             ),
             action_confirmation_mode=action_settings.confirmation_mode,
-            env=self._credential_environment(strict=False),
+            env={} if worker_context is not None else self._credential_environment(strict=False),
+            worker_context=worker_context,
             llm_extra_body=managed_model_request_body(
                 selected_model.model_type if selected_model is not None else None
             ),
@@ -2625,7 +2672,7 @@ class SessionGateway:
             return active_service.replay_events()
         finally:
             if close_service:
-                active_service.close()
+                self._close_service(active_service)
 
     def _snapshot_from_events_locked(
         self,
@@ -2932,7 +2979,7 @@ class SessionGateway:
         errors: list[Exception] = []
         for session_id, service in services:
             try:
-                service.close()
+                self._close_service(service)
             except Exception as error:
                 failed[session_id] = service
                 configuration = configurations.get(session_id)
@@ -2953,6 +3000,14 @@ class SessionGateway:
         self._service_configurations = failed_configurations
         if errors:
             raise ExceptionGroup("unable to close all session services", errors)
+
+    def _close_service(self, service: SessionService) -> None:
+        worker = self._worker_sessions.get(id(service))
+        if worker is None:
+            service.close()
+        else:
+            worker.close()
+            self._worker_sessions.pop(id(service), None)
 
     @_serialized_state
     def _save_model_selection(self, source: str | None, settings: ModelSettings) -> None:

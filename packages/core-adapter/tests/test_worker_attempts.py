@@ -365,3 +365,50 @@ def test_restored_backend_cannot_emit_unbound_tokens(
         assert tokens == []
     finally:
         restored.close()
+
+
+def test_outside_runtime_observation_fences_changed_generation(service: SessionService) -> None:
+    lease = _activate(service)
+    generation = lease.runtime.generation
+    observations: list[WorkerRuntimeBinding] = []
+
+    def observe(runtime: WorkerRuntimeBinding) -> None:
+        observations.append(runtime)
+        if runtime.generation != generation:
+            raise RuntimeError("synthetic private control-plane detail")
+
+    lease.require_runtime_observation(observe)
+    lease.ensure_active()
+    assert observations == [lease.runtime, lease.runtime]
+    generation = "replacement"
+    with (
+        pytest.raises(WorkerAttemptError, match="runtime observation") as error,
+        lease.admit_callback(),
+    ):
+        pytest.fail("Changed generation reached the outside callback")
+    assert "private" not in str(error.value)
+    assert not lease.active
+    generation = lease.runtime.generation
+    with pytest.raises(WorkerAttemptError, match="closed"):
+        lease.ensure_active()
+
+
+def test_outside_runtime_observer_cannot_be_replaced(service: SessionService) -> None:
+    lease = _activate(service)
+    lease.require_runtime_observation(lambda _runtime: None)
+    with pytest.raises(WorkerAttemptError, match="cannot be replaced"):
+        lease.require_runtime_observation(lambda _runtime: None)
+
+
+def test_outside_observer_cannot_reopen_fenced_admission(service: SessionService) -> None:
+    lease = _activate(service)
+    lease.fence()
+    with pytest.raises(WorkerAttemptError, match="closed"):
+        lease.require_runtime_observation(lambda _runtime: pytest.fail("Fenced observer invoked"))
+
+
+def test_fencing_during_outside_observation_prevents_callback(service: SessionService) -> None:
+    lease = _activate(service)
+    with pytest.raises(WorkerAttemptError, match="closed"):
+        lease.require_runtime_observation(lambda _runtime: lease.fence())
+    assert not lease.active

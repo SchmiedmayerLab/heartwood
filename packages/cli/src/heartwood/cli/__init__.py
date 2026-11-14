@@ -2629,8 +2629,17 @@ def _handle_serve(
         )
     except IngressConfigurationError as error:
         raise SystemExit(f"{diagnostic.code}: {error}") from error
+    worker_plan_factory = None
+    if deployment is not None and deployment.worker is not None:
+        from heartwood.gateway.worker_native import native_worker_plan_factory
+
+        worker_plan_factory = native_worker_plan_factory(deployment.worker, project)
     app = GatewayAsgiApp(
-        SessionGateway(project=project, deployment_policy=deployment.policy)
+        SessionGateway(
+            project=project,
+            deployment_policy=deployment.policy,
+            worker_plan_factory=worker_plan_factory,
+        )
         if deployment is not None
         else SessionGateway(project=project),
         static_dir=web_root,

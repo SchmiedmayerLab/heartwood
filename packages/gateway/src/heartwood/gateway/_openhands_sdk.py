@@ -368,6 +368,8 @@ class OpenHandsSdkBackend:
             return "OpenHands could not inspect the active model request path"
         if request_endpoint != self.profile.policy_endpoint:
             return "The active model profile request path does not match OpenHands"
+        if self._worker_context is not None:
+            return self._worker_profile_error()
         if self.profile.auth_type == "subscription":
             try:
                 if not OpenHandsOpenAISubscription().credential_available():
@@ -917,6 +919,16 @@ class OpenHandsSdkBackend:
             )
         return agent
 
+    def _worker_profile_error(self) -> str | None:
+        if (
+            self.profile.auth_type != "api_key"
+            or self.profile.credential_kind == "managed-identity"
+            or self.profile.aws_profile_name is not None
+            or self.profile.aws_region_name is not None
+        ):
+            return "Worker inference requires an explicit API-key route"
+        return None
+
     def _worker_conversation_factory(
         self,
         callback: Callable[[Event], None],
@@ -927,13 +939,8 @@ class OpenHandsSdkBackend:
         context = self._worker_context()
         lease = context.workspace.attempt
         lease.ensure_active()
-        if (
-            self.profile.auth_type != "api_key"
-            or self.profile.credential_kind == "managed-identity"
-            or self.profile.aws_profile_name is not None
-            or self.profile.aws_region_name is not None
-        ):
-            raise OpenHandsSdkError("Worker inference requires an explicit API-key route")
+        if reason := self._worker_profile_error():
+            raise OpenHandsSdkError(reason)
         placeholder = context.inference_placeholder.get_secret_value()
         if not placeholder or len(placeholder) > 4096 or any(c in placeholder for c in "\0\r\n"):
             raise OpenHandsSdkError("Worker inference placeholder is invalid")

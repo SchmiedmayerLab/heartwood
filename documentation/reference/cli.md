@@ -209,6 +209,48 @@ Keep the manifest operator-owned and not writable by group or other users, and e
 Only a trusted launcher selects `--deployment`; no browser request or project-local hint can replace its policy or paths.
 See [Projects and Private State](../start/project.md#operator-bound-external-state) for path, ownership, and legacy-state requirements.
 
+A qualified operator deployment can add the following worker selection.
+Replace the example identities and hashes with independently qualified values; the effective policy hash must not be learned from the same worker whose admission is being decided.
+The policy file is native sandbox-policy JSON, while `native_config_home` contains the native CLI's registered gateway metadata and mutual TLS files.
+All native tools, configuration and the local Docker socket must have trusted ownership and paths outside research files and project state.
+If the socket grants group write access, the operator must explicitly set `docker_socket_group` to its trusted numeric group ID.
+Membership in that group grants Docker control-plane authority; never add a worker identity to it.
+A changed group or world-writable socket is rejected.
+
+```toml
+[worker]
+driver = "openshell-docker"
+gateway = "research-workers"
+native_config_home = "/etc/heartwood/native"
+openshell_cli = "/opt/heartwood/bin/openshell"
+docker_cli = "/opt/heartwood/bin/docker"
+docker_host = "unix:///run/docker.sock"
+workspace = "research"
+image_digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+sandbox_policy_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+policy_path = "/etc/heartwood/native/worker-policy.json"
+policy_file_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+profile_id = "approved-research"
+model = "provider/approved-model"
+model_endpoint = "https://models.example.invalid/v1/chat/completions"
+provider = "approved-research"
+placeholder_env = "HEARTWOOD_CUSTOM_MODEL_API_KEY"
+cpu = "1"
+memory = "2Gi"
+
+[worker.inputs]
+schema_version = "heartwood.worker-inputs.v1"
+files = []
+```
+
+The selected application profile must match the configured profile, model and endpoint, and remain allowed by the deployment policy.
+Each selected input entry declares a project-relative `path`, `sha256` and `size_bytes`; an empty selection transfers no research files.
+The launcher projects verified Skills separately and binds the complete selection to the retained worker attempt.
+Provider attachments supply placeholders, not real inference secrets, to the worker.
+The qualified inference endpoint must independently enforce approved models and tenant scope; this manifest does not add a model router or override provider authorization.
+Unavailable native dependencies, unsupported admission hooks, mismatched observed policy or failed outside revocation stop the operation without local fallback.
+Stopping an uncertain worker requires outside reconciliation; do not delete its records or release its writer merely because a client disconnected.
+
 `heartwood gateway serve` uses the detected platform's declared default ingress mode.
 Workstations and Carina default to direct loopback and refuse a non-loopback bind.
 A generic container can use a wildcard bind only when the operator explicitly declares loopback-only host publication.
