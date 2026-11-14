@@ -159,7 +159,8 @@ Use the platform's [API reference](https://api.firecloud.org/) to select the sup
 Terra workflows use WDL and Cromwell; provide the approved workflow revision and its configured inputs rather than a new execution format. See [Terra workflow execution](https://support.terra.bio/hc/en-us/articles/360036379771-Overview-Running-workflows-in-Terra).
 
 Request a synthetic workspace identifier, authorized principal and a declared permission set.
-Terra separates Reader, Writer and Owner roles from the ability to compute: request Reader for inspection, Writer only for selected mutations, and Can-compute for workflow or interactive-compute launch.
+Terra separates Reader, Writer and Owner roles from the ability to compute: request Reader for inspection, and Writer with Can-compute for workflow or interactive-compute launch.
+Writer also permits changes to workspace tables and workflow configurations; it is broader than submission-only access, so use a dedicated integration workspace when that additional authority is unacceptable in a shared workspace.
 Owner and sharing permissions are not baseline integration requirements.
 Workspace charges use its Terra billing project; even some read/copy operations can incur transfer costs. See [Terra workspace access controls](https://support.terra.bio/hc/en-us/articles/360025851892-Sharing-data-and-tools-with-workspace-access-controls).
 
@@ -170,7 +171,7 @@ The public [Terra API specification](https://api.firecloud.org/) defines these w
 | Inspect data-table types | `GET /entities` | Selected workspace metadata |
 | Inspect workflow configurations | `GET /methodconfigs` | Approved configuration metadata |
 | Inspect submission history | `GET /submissions` | Authorized workflow history |
-| Submit the reviewed configuration | `POST /submissions` | Explicit compute authorization in the bound workspace |
+| Submit the reviewed configuration | `POST /submissions` | Writer with Can-compute in the bound workspace |
 | Monitor the submission | `GET /submissions/{submissionId}` | Authorized submission state |
 | Read workflow execution metadata | `GET /submissions/{submissionId}/workflows/{workflowId}` | Authorized metadata; outputs may need separate storage access |
 | Request abort | `DELETE /submissions/{submissionId}` | Explicit abort permission; observe terminal status afterward |
@@ -208,6 +209,29 @@ Use a dedicated project and restricted outside adapter when the required authori
 The platform retains the project billing binding; the worker must not select or modify it.
 Do not treat a file download URL or copied file as approval to export controlled data.
 
+## Audit and Records Access
+
+The platform's records service is a separate authority from research storage and workflow execution.
+Provide the signer endpoint, its authentication mechanism, approved deployment identifier, public verification keys and key-version identifiers, and the applicable retention policy.
+The implemented signer interface is `POST /v1/checkpoints/sign`, accepting `heartwood.audit-checkpoint-sign-request.v1` and returning `heartwood.audit-checkpoint-signature.v1` over authenticated HTTPS.
+It is an outside service interface, not a route on the Heartwood gateway.
+See [Audit Checkpoints and Retention](audit-checkpoints.md) for exact registry fields, algorithms and verification behavior.
+
+For independently retained evidence, identify the records destination, supported versioning and immutable-retention controls, authorized publishers and readers, and restoration procedure.
+Request these permissions separately:
+
+| Principal | Required authority | Boundary |
+|---|---|---|
+| Trusted gateway | Request signing only for its authorized deployment and policy | No signing key, key administration or records-retention administration |
+| Signing service | Use the selected signing key and independently authorize each request | Private key stays in the service or its KMS/HSM; worker cannot invoke it |
+| Records publisher | Publish evidence only to the approved destination | Separate from research-output publication; no retention bypass or deletion authority |
+| Independent verifier | Read retained versions, signatures and retention metadata | No write, signing or key-administration permission |
+| Worker | No signing or records-service authority | Neither credentials nor network access to these services |
+
+The operator must confirm the platform-specific API actions that implement these roles; this is an access requirement, not a portable IAM policy or an automatically provisioned integration.
+Retain the association between Heartwood project/session identifiers, platform operation identifiers, key versions and the independently stored records.
+Define how loss of signing, retention or external telemetry is detected and which work must stop; a local record or signed retention date alone does not prove outside collection or enforcement.
+
 ## Worker and Sensitive-Data Controls
 
 The entire worker, including the model client, tools and subprocesses, belongs inside the externally enforced boundary.
@@ -242,6 +266,7 @@ A platform team can return the following non-secret configuration and supporting
 | Network | Proxy origin/base path, gateway access restrictions, approved egress destinations and outside enforcement |
 | Compute | Supported worker architecture, isolation mechanism, control-plane owner, image policy and resource limits |
 | Operations | Workflow/app revisions, billing binding, status/cancellation behavior and lost-response reconciliation |
+| Records | Signer endpoint and identity, verification keys, retention destination and policy, publisher/verifier permissions and restore procedure |
 | Evidence | Synthetic test procedure, audit correlation, revocation checks, deployment limitations and institutional approval owner |
 
 Send identifiers and secret-manager references through the integration documentation; deliver credentials through the approved secret provisioning channel.

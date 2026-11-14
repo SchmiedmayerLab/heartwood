@@ -80,10 +80,10 @@ flowchart TB
     Services -.-> Infrastructure
     classDef heartwood fill:#0b694d26,stroke:#2b8268
     classDef platform fill:#3f5b7426,stroke:#6f8fae
-    classDef planned stroke-dasharray: 5 5
+    classDef unavailable stroke-dasharray: 5 5
     class Gateway,Agent heartwood
     class Identity,Proxy,Inference,Services,Infrastructure platform
-    class Services,Infrastructure planned
+    class Services,Infrastructure unavailable
 ```
 
 In the figures on this page, green marks what Heartwood owns, blue marks what the platform owns, and dashed outlines mark unavailable Heartwood integrations.
@@ -181,10 +181,10 @@ flowchart TB
     end
     classDef heartwood fill:#0b694d26,stroke:#2b8268
     classDef platform fill:#3f5b7426,stroke:#6f8fae
-    classDef planned stroke-dasharray: 5 5
+    classDef unavailable stroke-dasharray: 5 5
     class W2,P2,H2 heartwood
     class P1,H1 platform
-    class H1,H2 planned
+    class H1,H2 unavailable
     style Hosted stroke-dasharray: 5 5
 ```
 
@@ -794,11 +794,13 @@ flowchart TB
     Gateway --> State
     Inputs --> Worker
     Worker -- "provider placeholder" --> Transport --> Inference
-    Gateway -- "exact approved operation" --> Services
+    Gateway -. "exact approved operation" .-> Services
     classDef trusted fill:#0b694d26,stroke:#2b8268
     classDef platform fill:#3f5b7426,stroke:#6f8fae
+    classDef unavailable stroke-dasharray: 5 5
     class UI,Gateway,State trusted
     class Proxy,Transport,Inference,Services platform
+    class Services unavailable
 ```
 
 Both sides must preserve these properties.
