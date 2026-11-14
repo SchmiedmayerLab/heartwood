@@ -73,33 +73,46 @@ mkdir -m 700 "${project}"
   # This trap is scoped to the subshell; the parent EXIT trap still removes the workspace.
   trap cleanup_services EXIT
   HEARTWOOD_WEB_LOG="${workspace}/web.log" "${runtime}/heartwood/bin/python" - <<'PY'
-import http.cookiejar
 import json
 import os
 import re
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
 log = Path(os.environ["HEARTWOOD_WEB_LOG"])
-opener = urllib.request.build_opener(
-    urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())
-)
+opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+origin = "http://127.0.0.1:18767"
 deadline = time.time() + 60
 last_error = None
 page = None
+capability = None
 while time.time() < deadline:
     try:
-        if page is None:
-            match = re.search(r"http://127\.0\.0\.1:18767/launch\?token=\S+", log.read_text())
+        if capability is None:
+            match = re.search(r"http://127\.0\.0\.1:18767/#launch=\S+", log.read_text())
             if match is None:
                 raise OSError("launch link was not printed yet")
-            with opener.open(match.group(0), timeout=2) as response:
+            fragment = urllib.parse.urlsplit(match.group(0)).fragment
+            token = urllib.parse.parse_qs(fragment)["launch"][0]
+            request = urllib.request.Request(
+                f"{origin}/launch",
+                data=json.dumps({"token": token}).encode(),
+                headers={"Content-Type": "application/json", "Origin": origin},
+                method="POST",
+            )
+            with opener.open(request, timeout=2) as response:
+                capability = json.load(response)["capability"]
+        if page is None:
+            with opener.open(f"{origin}/", timeout=2) as response:
                 page = response.read().decode()
-        with opener.open(
-            "http://127.0.0.1:18767/project/startup?interface=web", timeout=2
-        ) as response:
+        request = urllib.request.Request(
+            f"{origin}/project/startup?interface=web",
+            headers={"X-Heartwood-Capability": capability},
+        )
+        with opener.open(request, timeout=2) as response:
             startup = json.load(response)
         if "<title>Heartwood</title>" in page and startup["interface"] == "web":
             break
