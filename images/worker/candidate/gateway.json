@@ -15,7 +15,7 @@
     },
     {
       "path": "gateway-delete-retry.patch",
-      "sha256": "2c6ff8223ef1e9c43320c7d9964e14e4754f605a7fa2e041b9c7f2083def66d2"
+      "sha256": "f708cdf3e00e57b6bbda7dfcdbca46b47efc72aed20fc63c3aa767223debe493"
     }
   ],
   "images": {
