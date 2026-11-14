@@ -100,7 +100,7 @@ def test_local_signer_service_fails_closed_on_invalid_protocol_inputs(tmp_path: 
 
     assert _request(app, path="/unknown", headers=auth)[0] == 404
     assert _request(app, body=b"{", headers=auth)[0] == 422
-    assert _request(app, client=None, headers=auth)[0] == 403
+    assert _request(app, client="127.0.0.1", headers=auth)[0] == 403
     assert (
         _request(
             app,
@@ -144,7 +144,7 @@ def _request(
     path: str = "/v1/checkpoints/sign",
     body: bytes = b"",
     headers: list[tuple[bytes, bytes]] | None = None,
-    client: str | None = "127.0.0.1",
+    client: str | None = None,
 ) -> tuple[int, dict[str, object]]:
     received: Iterator[dict[str, object]] = iter(
         ({"type": "http.request", "body": body, "more_body": False},)

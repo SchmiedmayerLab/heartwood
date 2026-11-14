@@ -104,7 +104,7 @@ A deployment that permits no user choice should publish only one profile.
 
 ## Use the Explicit Local Fallback
 
-Development and offline environments can run the bundled loopback-only signer service.
+Development and offline environments can run the bundled signer on a private Unix socket.
 Initialize it from any Heartwood project; its material is written outside that project by default:
 
 ```bash
@@ -126,9 +126,13 @@ Then select it in the project that will create the checkpoint:
 heartwood audit signer select local-development
 ```
 
-The local service accepts authenticated loopback requests only.
-Its private key, token, and user registry live under your account, so processes running as your user, including approved agent commands, can read them or replace the registry; verification through that registry is not independent of the account.
-The client does not authenticate the loopback listener, so on a shared host another user who takes the signer port while the service is stopped can capture the authorization token.
+The local service accepts bearer-authenticated requests through the registry's `unix:///` endpoint only.
+The socket must belong to the current operating-system user, have owner-only permissions, and reside in an owner-only directory with trusted, non-symlink ancestors.
+The client validates this protected path before connecting and rechecks the socket identity before sending any token or request bytes.
+The server refuses to replace an existing socket path; after an abnormal shutdown, an operator must confirm the signer has stopped before removing its stale socket.
+There is no TCP fallback.
+Keep the socket, key, token and registry outside the research directory and every worker mount.
+These files remain accessible to unsandboxed processes running as the same user, so verification through this registry is not independent of the account.
 It is an explicit development and offline fallback, not the production default and not a substitute for KMS/HSM access controls or independent authorization.
 
 ## Verify and Checkpoint a Session

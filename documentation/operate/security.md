@@ -177,7 +177,9 @@ Project state can select only a profile already approved by that registry.
 Heartwood verifies a remote signature and its pinned signer identity before publishing a checkpoint.
 A production signing service must independently authorize the requested deployment and retention claims, use a principal unavailable to agent tools, and keep KMS/HSM credentials outside the Heartwood process.
 An owner-only bearer-token file remains accessible to other processes running as that owner unless the platform supplies a stronger sandbox.
-The bundled local signer is an authenticated loopback-only development and offline fallback; its owner-only file permissions protect against other operating-system users but not compromise of the same user account.
+The bundled local signer is a development and offline fallback using an owner-only Unix socket and bearer authentication.
+The client validates socket ownership, permissions and its protected directory before transmitting the token.
+These controls protect against other operating-system users, but not compromise of the same user account.
 See [Audit Checkpoints and Retention](audit-checkpoints.md).
 
 ## Deployment Security Checklist
