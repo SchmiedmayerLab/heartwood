@@ -275,6 +275,86 @@ def test_missing_binding_never_selects_tcp() -> None:
         managed_inference_client({})
 
 
+@pytest.mark.parametrize("asynchronous", [False, True])
+def test_replaced_socket_cannot_receive_inference_or_rebind_the_process(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, asynchronous: bool
+) -> None:
+    prepare_openhands_import()
+    import litellm
+
+    monkeypatch.setattr(litellm, "client_session", None)
+    monkeypatch.setattr(litellm, "aclient_session", None)
+    monkeypatch.setattr("heartwood.gateway._managed_inference._binding", None)
+    with (
+        managed_inference_socket(tmp_path) as path,
+        socket.socket(socket.AF_UNIX) as original,
+        socket.socket(socket.AF_UNIX) as replacement,
+    ):
+        original.bind(str(path))
+        path.chmod(0o600)
+        original.listen()
+        env = {MANAGED_RUNTIME_SOCKET_ENV: str(path)}
+        configure_managed_inference(env)
+        client = cast(httpx.Client, litellm.client_session)
+        async_client = cast(httpx.AsyncClient, litellm.aclient_session)
+        try:
+            path.rename(path.with_suffix(".old"))
+            replacement.bind(str(path))
+            path.chmod(0o600)
+            replacement.listen()
+            replacement.settimeout(0.1)
+            if asynchronous:
+                with pytest.raises(ManagedInferenceError, match="identity changed"):
+                    asyncio.run(async_client.post(MANAGED_MODEL_BASE_URL + "/chat/completions"))
+            else:
+                with pytest.raises(ManagedInferenceError, match="identity changed"):
+                    client.post(MANAGED_MODEL_BASE_URL + "/chat/completions")
+            with pytest.raises(ManagedInferenceError, match="binding cannot change"):
+                configure_managed_inference(env)
+            assert litellm.client_session is client
+            assert litellm.aclient_session is async_client
+            with pytest.raises(TimeoutError):
+                replacement.accept()
+        finally:
+            client.close()
+            asyncio.run(async_client.aclose())
+
+
+@pytest.mark.parametrize("existing_transport", ["client_session", "aclient_session"])
+def test_managed_inference_preserves_an_existing_sdk_transport(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, existing_transport: str
+) -> None:
+    prepare_openhands_import()
+    import litellm
+
+    monkeypatch.setattr(litellm, "client_session", None)
+    monkeypatch.setattr(litellm, "aclient_session", None)
+    monkeypatch.setattr("heartwood.gateway._managed_inference._binding", None)
+    with (
+        managed_inference_socket(tmp_path) as path,
+        socket.socket(socket.AF_UNIX) as listener,
+        httpx.Client() as existing,
+    ):
+        listener.bind(str(path))
+        path.chmod(0o600)
+        listener.listen()
+        listener.settimeout(0.1)
+        monkeypatch.setattr(litellm, existing_transport, existing)
+        with pytest.raises(ManagedInferenceError, match="cannot replace an existing SDK transport"):
+            configure_managed_inference({MANAGED_RUNTIME_SOCKET_ENV: str(path)})
+        assert getattr(litellm, existing_transport) is existing
+        with pytest.raises(TimeoutError):
+            listener.accept()
+
+
+def test_managed_socket_cannot_be_created_inside_the_project() -> None:
+    with (
+        pytest.raises(ManagedInferenceError, match="must be outside the project"),
+        managed_inference_socket(Path("/tmp").resolve()),
+    ):
+        pytest.fail("exposed the managed socket to the project")
+
+
 @pytest.mark.parametrize(
     "base_url",
     [MANAGED_MODEL_BASE_URL + "/", "http://localhost:8765/v1", "http://127.0.0.1:9000/v1"],
