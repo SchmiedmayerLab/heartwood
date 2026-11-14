@@ -2597,20 +2597,22 @@ def test_remote_progress_reads_are_bounded_and_always_finish(
             self._id = conversation_id
             self._state = cast(Any, SimpleNamespace(snapshot=snapshot))
 
-        async def arun(self) -> None:  # type: ignore[override]
-            nonlocal status
-            started.set()
-            while not release.is_set():
-                await asyncio.sleep(0.005)
-            # No callback: the final boundary must still reconcile persisted state.
-            branch.append(
-                MessageEvent(
-                    id="final-message",
-                    source="agent",
-                    llm_message=Message(role="assistant", content=[TextContent(text="Finished.")]),
-                )
+    async def run_remote(_conversation: SlowRemoteConversation) -> None:
+        nonlocal status
+        started.set()
+        while not release.is_set():
+            await asyncio.sleep(0.005)
+        # No callback: the final boundary must still reconcile persisted state.
+        branch.append(
+            MessageEvent(
+                id="final-message",
+                source="agent",
+                llm_message=Message(role="assistant", content=[TextContent(text="Finished.")]),
             )
-            status = ConversationExecutionStatus.FINISHED
+        )
+        status = ConversationExecutionStatus.FINISHED
+
+    monkeypatch.setattr(SlowRemoteConversation, "arun", run_remote)
 
     conversation = SlowRemoteConversation()
     backend = _backend(tmp_path, cast(ConversationFactory, lambda *_: conversation))
