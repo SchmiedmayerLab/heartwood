@@ -28,9 +28,6 @@ from uuid import uuid4
 
 import grpc
 from google.protobuf.json_format import MessageToDict
-from openshell import SandboxClient, TlsConfig
-from openshell._proto import openshell_pb2 as pb
-from openshell._proto import sandbox_pb2 as policy_pb
 from worker_model_profile import QualificationModelProfile
 from worker_network_qualification import qualify_network
 from worker_telemetry import InfrastructureCollector
@@ -382,6 +379,9 @@ class NativeFixture:
         }
 
     def start(self) -> None:
+        from openshell import SandboxClient, TlsConfig
+        from openshell._proto import sandbox_pb2 as policy_pb
+
         controller = json.loads(command(["docker", "inspect", os.environ["HW_CONTROLLER_NAME"]]))[0]
         if self.network not in controller["NetworkSettings"]["Networks"]:
             command(
@@ -817,6 +817,8 @@ print(json.dumps(result))
 
     def create_probe(self, image: str) -> tuple[str, str]:
         """Retain a probe's identity before observing its startup or failure."""
+        from openshell._proto import openshell_pb2 as pb
+
         name = "probe-" + uuid4().hex[:12]
         self.probes[name] = None
         created = self.control.create(
@@ -839,6 +841,8 @@ print(json.dumps(result))
 
     def qualify_policy(self) -> str:
         """Admit a disposable probe before selecting the production launch policy hash."""
+        from openshell._proto import openshell_pb2 as pb
+
         name, sandbox_id = self.create_probe(self.worker)
         try:
             ready = self.control.wait_ready(name, workspace="default", timeout_seconds=90)
