@@ -15,13 +15,13 @@ import threading
 import time
 from dataclasses import asdict
 from pathlib import Path
+from uuid import UUID
 
 import pytest
 from test_worker_native_integration import _application, _assert_revoked, _stop, _submit
 from worker_model_profile import QualificationModelProfile, read_credential
 from worker_native_fixture import PYTHON, TERMINAL_COMMAND, NativeFixture
 
-from heartwood.core_adapter import SessionService
 from heartwood.gateway import _openhands_sdk
 from heartwood.gateway._openhands_sdk import OpenHandsSdkBackend, _usage
 from heartwood.session import CommandKind, EventKind
@@ -42,30 +42,53 @@ def allowed_action(tool: str, arguments: dict[str, object]) -> str | None:
     return None
 
 
-def revoke_after_deadline(fixture: NativeFixture, service: SessionService) -> list[str]:
-    """Revoke from outside without trusting the worker's own status or response."""
-    attempt = service.worker_attempt()
-    if attempt is None or attempt.runtime is None:
-        return ["WorkerBindingUnavailable"]
-    name = "hw-" + attempt.intent.attempt_id.hex[:16]
-    try:
-        observed = fixture.control.get(name, workspace="default")
-        if observed.id != attempt.runtime.sandbox_id or dict(observed.labels) != {
-            "heartwood.project": str(attempt.intent.project_id),
-            "heartwood.attempt": str(attempt.intent.attempt_id),
-        }:
-            raise RuntimeError("Qualification worker identity changed")
-    except Exception as error:
-        return [type(error).__name__]
+def revoke_after_deadline(fixture: NativeFixture, project_id: UUID) -> list[str]:
+    """Clean up native resources without acquiring the application's command lock.
+
+    Credential expiry is installed before worker admission and remains effective
+    even if no runtime exists yet or this outside cleanup cannot reach the gateway.
+    """
     errors = []
     try:
-        fixture.cli_command(["sandbox", "provider", "detach", name, fixture.identity])
+        workers = fixture.control.list_all(
+            workspace="default", label_selector=f"heartwood.project={project_id}"
+        )
     except Exception as error:
-        errors.append(type(error).__name__)
-    try:
-        fixture.control.delete(name, workspace="default", timeout_seconds=15)
-    except Exception as error:
-        errors.append(type(error).__name__)
+        return [type(error).__name__]
+    for observed in workers:
+        try:
+            attempt_id = UUID(observed.labels["heartwood.attempt"])
+            current = fixture.control.get(observed.name, workspace="default")
+            if (
+                dict(observed.labels)
+                != {
+                    "heartwood.project": str(project_id),
+                    "heartwood.attempt": str(attempt_id),
+                }
+                or observed.name != "hw-" + attempt_id.hex[:16]
+                or current.id != observed.id
+                or dict(current.labels) != dict(observed.labels)
+            ):
+                raise RuntimeError("Qualification worker identity changed")
+        except Exception as error:
+            errors.append(type(error).__name__)
+            continue
+        try:
+            fixture.cli_command(
+                [
+                    "sandbox",
+                    "provider",
+                    "detach",
+                    observed.name,
+                    fixture.identity,
+                ]
+            )
+        except Exception as error:
+            errors.append(type(error).__name__)
+        try:
+            fixture.control.delete(observed.name, workspace="default", timeout_seconds=15)
+        except Exception as error:
+            errors.append(type(error).__name__)
     return errors
 
 
@@ -97,9 +120,15 @@ def test_native_capable_model(monkeypatch: pytest.MonkeyPatch) -> None:
 
         def deadline() -> None:
             expired.set()
-            deadline_errors.extend(revoke_after_deadline(fixture, service))
+            assert application.project.project_id is not None
+            deadline_errors.extend(revoke_after_deadline(fixture, application.project.project_id))
 
-        timer = threading.Timer(profile.deadline_seconds, deadline)
+        assert fixture.inference_deadline is not None
+        remaining = fixture.inference_deadline - time.monotonic()
+        if remaining <= 0:
+            expired.set()
+            raise TimeoutError("Native inference authorization expired during setup")
+        timer = threading.Timer(remaining, deadline)
         timer.start()
         _submit(
             application,
@@ -236,6 +265,8 @@ def test_native_capable_model(monkeypatch: pytest.MonkeyPatch) -> None:
             "usage_diagnostic": usage,
             "usage_authority": "worker-reported; not billing evidence",
             "provider_spend_cap": "unavailable; shared key authorization unchanged",
+            "credential_expires_at_ms": fixture.credential_expires_at_ms,
+            "deadline_enforcement": "native credential expiry before worker admission",
             "outside_deadline_expired": expired.is_set(),
             "deadline_errors": deadline_errors,
             "accepted_actions": accepted,

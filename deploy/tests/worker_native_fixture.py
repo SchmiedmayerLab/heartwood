@@ -207,10 +207,20 @@ class NativeFixture:
         hostile: bool = False,
         model_profile: QualificationModelProfile | None = None,
         credential: str | None = None,
+        provider_deadline_seconds: int | None = None,
     ) -> None:
         self.private, self.output = private, output
         if (model_profile is None) != (credential is None):
             raise ValueError("External qualification requires both a profile and a credential")
+        if provider_deadline_seconds is not None and (
+            type(provider_deadline_seconds) is not int or not 1 <= provider_deadline_seconds <= 600
+        ):
+            raise ValueError("Provider lifetime must be between one and 600 seconds")
+        self.provider_deadline_seconds = (
+            model_profile.deadline_seconds if model_profile else provider_deadline_seconds
+        )
+        self.inference_deadline: float | None = None
+        self.credential_expires_at_ms: int | None = None
         self.model_profile = model_profile
         self._inference_credential = credential
         self.base_url = (
@@ -572,20 +582,7 @@ additional_ca_bundle = {q(tls / "ca.crt")}
         profile_path.write_text(json.dumps(profile, indent=2) + "\n")
         self.cli_command(["provider", "profile", "import", "--file", str(profile_path)])
         self.resources.callback(self.cli_command, ["provider", "profile", "delete", self.identity])
-        self.cli_command(
-            [
-                "provider",
-                "create",
-                "--name",
-                self.identity,
-                "--type",
-                self.identity,
-                "--credential",
-                "HEARTWOOD_QUALIFICATION_KEY",
-            ],
-            HEARTWOOD_QUALIFICATION_KEY=self._inference_credential or self.provider.credential,
-        )
-        self.resources.callback(self.cli_command, ["provider", "delete", self.identity])
+        self._create_inference_provider()
         self.policy = policy_pb.SandboxPolicy(
             version=1,
             filesystem=policy_pb.FilesystemPolicy(
@@ -606,6 +603,35 @@ additional_ca_bundle = {q(tls / "ca.crt")}
             landlock=policy_pb.LandlockPolicy(compatibility="hard_requirement"),
             process=policy_pb.ProcessPolicy(run_as_user="10001", run_as_group="10001"),
         )
+
+    def _create_inference_provider(self) -> None:
+        """Install authorization expiry before any worker can attach the provider."""
+        provider_arguments = [
+            "provider",
+            "create",
+            "--name",
+            self.identity,
+            "--type",
+            self.identity,
+            "--credential",
+            "HEARTWOOD_QUALIFICATION_KEY",
+        ]
+        if self.provider_deadline_seconds is not None:
+            self.inference_deadline = time.monotonic() + self.provider_deadline_seconds
+            self.credential_expires_at_ms = (
+                int(time.time() * 1000) + self.provider_deadline_seconds * 1000
+            )
+            provider_arguments.extend(
+                [
+                    "--credential-expires-at",
+                    f"HEARTWOOD_QUALIFICATION_KEY={self.credential_expires_at_ms}",
+                ]
+            )
+        self.cli_command(
+            provider_arguments,
+            HEARTWOOD_QUALIFICATION_KEY=self._inference_credential or self.provider.credential,
+        )
+        self.resources.callback(self.cli_command, ["provider", "delete", self.identity])
 
     def prepare_hostile(self, protected_state: Path) -> None:
         """Keep the writable-state canary in the actual bound application state."""

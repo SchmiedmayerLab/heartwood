@@ -110,7 +110,11 @@ The controller approves only the exact input-read, verified Skill invocation and
 It independently checks the suppression result, runs the maintained filesystem and network probes, verifies the audit ledger, and requires outside revocation before successful cleanup.
 These additional probes are explicitly driven by the qualification controller and are reported separately from model-proposed actions.
 
-An outside timer requests provider detachment and native worker deletion when the deadline expires; uncertain revocation fails qualification and retains control state for recovery.
+Before any worker can attach, the controller gives its disposable native provider credential an expiry matching the qualification deadline.
+OpenShell enforces that expiry during credential delivery and request-time resolution, including when worker startup is late or the application command is blocked.
+The deadline includes setup after provider creation; an expired setup cannot begin inference.
+An independent outside timer also discovers this project's native workers and requests provider detachment and deletion without acquiring the application's command lock.
+Uncertain cleanup fails qualification and retains control state for recovery; expiry does not cancel a request already accepted by the upstream provider.
 The SDK iteration cap and requested per-call token limits bound the expected task, but are not a provider-enforced spending quota.
 The runner does not change shared key limits or authorization.
 A hard spending cap requires a separately provisioned provider-side budget.

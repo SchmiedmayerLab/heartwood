@@ -105,38 +105,43 @@ def test_approval_allowlist_rejects_extra_arguments_and_combined_commands(
 
 
 @pytest.mark.usefixtures("profile_module")
-@pytest.mark.parametrize("failure", [None, "detach", "identity", "binding"])
-def test_deadline_revokes_only_the_bound_native_worker(
+@pytest.mark.parametrize("failure", [None, "detach", "identity", "pending"])
+def test_deadline_uses_native_ownership_without_waiting_for_application_startup(
     monkeypatch: pytest.MonkeyPatch, failure: str | None
 ) -> None:
     root = Path(__file__).resolve().parents[3]
     monkeypatch.syspath_prepend(str(root))
     monkeypatch.syspath_prepend(str(root / "deploy/tests"))
     runner = importlib.import_module("test_worker_model_integration")
-    attempt = SimpleNamespace(
-        intent=SimpleNamespace(project_id=uuid4(), attempt_id=uuid4()),
-        runtime=SimpleNamespace(sandbox_id="bound-worker"),
+    project_id, attempt_id = uuid4(), uuid4()
+    name = "hw-" + attempt_id.hex[:16]
+    worker = SimpleNamespace(
+        id="bound-worker",
+        name=name,
+        labels={
+            "heartwood.project": str(project_id),
+            "heartwood.attempt": str(attempt_id),
+        },
     )
-    service = MagicMock()
-    service.worker_attempt.return_value = None if failure == "binding" else attempt
     fixture = MagicMock()
     fixture.identity = "qualification-provider"
+    fixture.control.list_all.return_value = [] if failure == "pending" else [worker]
     fixture.control.get.return_value = SimpleNamespace(
         id="replacement" if failure == "identity" else "bound-worker",
-        labels={
-            "heartwood.project": str(attempt.intent.project_id),
-            "heartwood.attempt": str(attempt.intent.attempt_id),
-        },
+        labels=worker.labels,
     )
     if failure == "detach":
         fixture.cli_command.side_effect = RuntimeError("synthetic secret must not appear")
-    errors = runner.revoke_after_deadline(fixture, service)
-    if failure in {"binding", "identity"}:
+    errors = runner.revoke_after_deadline(fixture, project_id)
+    fixture.control.list_all.assert_called_once_with(
+        workspace="default",
+        label_selector=f"heartwood.project={project_id}",
+    )
+    if failure in {"pending", "identity"}:
         fixture.cli_command.assert_not_called()
         fixture.control.delete.assert_not_called()
-        assert errors
+        assert errors == (["RuntimeError"] if failure == "identity" else [])
     else:
-        name = "hw-" + attempt.intent.attempt_id.hex[:16]
         fixture.cli_command.assert_called_once_with(
             ["sandbox", "provider", "detach", name, fixture.identity]
         )
@@ -179,3 +184,40 @@ def test_gateway_log_leak_is_redacted_and_fails_qualification(
     assert fixture._inference_credential not in str(failure.value)
     assert (tmp_path / "gateway.log").read_text() == "[redacted]"
     assert inspect.call_count == 1
+
+
+@pytest.mark.usefixtures("profile_module")
+@pytest.mark.parametrize("lifetime", [None, 30])
+def test_native_provider_expiry_is_installed_before_worker_admission(
+    monkeypatch: pytest.MonkeyPatch, lifetime: int | None
+) -> None:
+    root = Path(__file__).resolve().parents[3]
+    monkeypatch.syspath_prepend(str(root))
+    monkeypatch.syspath_prepend(str(root / "deploy/tests"))
+    module = importlib.import_module("worker_native_fixture")
+    fixture = module.NativeFixture.__new__(module.NativeFixture)
+    fixture.identity = "synthetic-owner"
+    fixture.provider_deadline_seconds = lifetime
+    fixture.inference_deadline = None
+    fixture.credential_expires_at_ms = None
+    fixture._inference_credential = "synthetic-qualification-secret"
+    fixture.resources = MagicMock()
+    fixture.cli_command = MagicMock()
+    monkeypatch.setattr(module.time, "monotonic", lambda: 10.0)
+    monkeypatch.setattr(module.time, "time", lambda: 100.0)
+    fixture._create_inference_provider()
+    arguments = fixture.cli_command.call_args.args[0]
+    assert fixture.cli_command.call_args.kwargs == {
+        "HEARTWOOD_QUALIFICATION_KEY": "synthetic-qualification-secret"
+    }
+    assert "synthetic-qualification-secret" not in arguments
+    if lifetime is None:
+        assert "--credential-expires-at" not in arguments
+        assert fixture.inference_deadline is None
+    else:
+        assert arguments[-2:] == ["--credential-expires-at", "HEARTWOOD_QUALIFICATION_KEY=130000"]
+        assert fixture.inference_deadline == 40.0
+        assert fixture.credential_expires_at_ms == 130000
+    fixture.resources.callback.assert_called_once_with(
+        fixture.cli_command, ["provider", "delete", "synthetic-owner"]
+    )
