@@ -75,7 +75,6 @@ def qualify(worker: str, runtime: str, artifacts: Path, records: Path, output: P
         ROOT / "deploy/build-records-fixture.py",
         ROOT / "images/worker/candidate/records.json",
     )
-    source_hashes = {str(path.relative_to(ROOT)): digest(path) for path in source_paths}
     artifacts, records, output = artifacts.resolve(), records.resolve(), output.resolve()
     if any("," in str(path) for path in (artifacts, records, output)):
         raise ValueError("Docker paths must not contain commas")
@@ -130,6 +129,7 @@ def qualify(worker: str, runtime: str, artifacts: Path, records: Path, output: P
     for name, expected in records_build["files"].items():
         if digest(records / name) != expected:
             raise ValueError("Records artifact digest mismatch")
+    source_hashes = {str(path.relative_to(ROOT)): digest(path) for path in source_paths}
     image_ids = {}
     for name, image in (("worker", worker), ("runtime", runtime)):
         image_ids[name] = subprocess.check_output(
@@ -222,6 +222,8 @@ def qualify(worker: str, runtime: str, artifacts: Path, records: Path, output: P
             "worker-qualification-tools=" + str(artifacts),
             "--build-context",
             "records-qualification-tools=" + str(records),
+            "--build-context",
+            "records-tls-fixture=" + str(ROOT / "packages/audit/tests"),
             "--iidfile",
             str(output / "controller-image-id"),
             str(ROOT),
