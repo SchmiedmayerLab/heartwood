@@ -166,6 +166,10 @@ Gateway artifacts and upstream patches are qualification inputs, not published u
 
 ### Installed Native Integration
 
+The maintained suite includes a synthetic session whose explicitly approved terminal action attempts to read control credentials, alter protected state and read-only projections, and reach a forbidden provider path.
+The outside fixture checks actual state canaries and provider traffic before and after the attempt; worker-reported success cannot replace those observations.
+Injected instructions appear in synthetic input and tool output, but deterministic provider responses do not establish resistance to model-driven prompt injection.
+
 The candidate workflow builds the gateway and dependency wheels independently, then assembles the shared worker and runtime images for native integration.
 Run the same tests locally against those images and gateway artifacts:
 

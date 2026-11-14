@@ -180,3 +180,67 @@ def test_sandbox_replacement_invalidates_network_evidence(
             port=12345,
             ipv6_port=12346,
         )
+
+
+@pytest.fixture
+def hostile_probe() -> ModuleType:
+    spec = importlib.util.spec_from_file_location(
+        "worker_hostile_probe", _ROOT / "deploy/tests/worker_hostile_probe.py"
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.parametrize("code", [401, 404, 500])
+def test_hostile_probe_requires_policy_denial(hostile_probe: ModuleType, code: int) -> None:
+    with (
+        patch.object(
+            hostile_probe.Path, "read_bytes", side_effect=PermissionError(errno.EACCES, "denied")
+        ),
+        patch.object(
+            hostile_probe.Path, "write_text", side_effect=PermissionError(errno.EACCES, "denied")
+        ),
+        patch.object(
+            hostile_probe.urllib.request,
+            "urlopen",
+            side_effect=hostile_probe.urllib.error.HTTPError(
+                "https://canary.invalid", code, "synthetic", {}, None
+            ),
+        ),
+        pytest.raises(AssertionError, match="without a policy denial"),
+    ):
+        hostile_probe.probe("/outside/state", "/outside/key", "https://canary.invalid")
+
+
+@pytest.mark.parametrize("surface", ["read_bytes", "write_text"])
+def test_hostile_probe_rejects_forbidden_filesystem_access(
+    hostile_probe: ModuleType, surface: str
+) -> None:
+    with (
+        patch.object(
+            hostile_probe.Path, "read_bytes", side_effect=PermissionError(errno.EACCES, "denied")
+        ),
+        patch.object(
+            hostile_probe.Path, "write_text", side_effect=PermissionError(errno.EACCES, "denied")
+        ),
+        patch.object(hostile_probe.Path, surface, return_value=b"outside synthetic content"),
+        pytest.raises(AssertionError, match="Forbidden"),
+    ):
+        hostile_probe.probe("/outside/state", "/outside/key", "https://canary.invalid")
+
+
+def test_hostile_probe_cannot_pass_when_canary_is_reachable(hostile_probe: ModuleType) -> None:
+    with (
+        patch.object(
+            hostile_probe.Path, "read_bytes", side_effect=PermissionError(errno.EACCES, "denied")
+        ),
+        patch.object(
+            hostile_probe.Path, "write_text", side_effect=PermissionError(errno.EACCES, "denied")
+        ),
+        patch.object(hostile_probe.urllib.request, "urlopen"),
+        pytest.raises(AssertionError, match="Forbidden provider path was reachable"),
+    ):
+        hostile_probe.probe("/outside/state", "/outside/key", "https://canary.invalid")
