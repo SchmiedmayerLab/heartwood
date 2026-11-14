@@ -887,13 +887,13 @@ def test_projects_isolate_configuration_sessions_and_artifacts(tmp_path: Path) -
     second = _gateway(tmp_path / "second-project")
 
     first_session = first.create_session("First project session")
-    first.select_action_confirmation_mode("confirm-risky")
+    first.configure_model_source("heartwood")
     (first.project.models_dir / "project-marker").write_text("first\n", encoding="utf-8")
 
     assert first.sessions() == {"sessions": [first_session]}
     assert second.sessions() == {"sessions": []}
-    assert first.action_settings()["confirmation_mode"] == "confirm-risky"
-    assert second.action_settings()["confirmation_mode"] == "always-confirm"
+    assert first.model_settings()["model_source"] == "heartwood"
+    assert second.model_settings()["model_source"] is None
     assert not (second.project.models_dir / "project-marker").exists()
     assert first.project.config_path != second.project.config_path
 
@@ -991,7 +991,7 @@ def test_project_setting_change_waits_for_another_gateway_turn(tmp_path: Path) -
 
     def select_mode() -> None:
         selection_started.set()
-        writer.select_action_confirmation_mode("confirm-risky")
+        writer.configure_model_source("heartwood")
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         command_future = executor.submit(reader.handle, command)
@@ -1007,7 +1007,7 @@ def test_project_setting_change_waits_for_another_gateway_turn(tmp_path: Path) -
         assert selection_future is not None
         selection_future.result(timeout=2)
 
-    assert writer.action_settings()["confirmation_mode"] == "confirm-risky"
+    assert writer.model_settings()["model_source"] == "heartwood"
     reader.stop()
     writer.stop()
     assert closed.is_set()
@@ -1206,7 +1206,7 @@ def test_configuration_handoff_closes_a_worker_without_holding_the_stream_lock(
     )
     writer = SessionGateway(project=project, env={}, backend_id="deterministic")
     reader._service("session-one")
-    writer.select_action_confirmation_mode("confirm-risky")
+    writer.configure_model_source("heartwood")
 
     with ThreadPoolExecutor(max_workers=1) as executor:
         projection = executor.submit(
@@ -1971,8 +1971,12 @@ def test_rest_reads_and_selects_action_confirmation_mode(tmp_path: Path) -> None
 
     assert initial.status_code == 200
     assert initial.body["confirmation_mode"] == "always-confirm"
-    assert selected.status_code == 200
-    assert selected.body["confirmation_mode"] == "confirm-risky"
+    assert selected.status_code == 422
+    assert "risk hints cannot authorize execution" in str(selected.body)
+    assert (
+        rest.handle(RestRequest(method="GET", path="/settings/actions")).body["confirmation_mode"]
+        == "always-confirm"
+    )
 
 
 def test_rest_rejects_malformed_action_confirmation_selection(tmp_path: Path) -> None:

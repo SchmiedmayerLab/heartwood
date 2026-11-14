@@ -93,7 +93,7 @@ class TerraPlatformAdapter:
                 "https://api.openai.com/v1/models",
             ),
             allowed_capability_tiers=("supervised", "experimental"),
-            allowed_action_confirmation_modes=("always-confirm", "confirm-risky"),
+            allowed_action_confirmation_modes=("always-confirm",),
             credential_allowlist=self.credential_allowlist(),
             notes=(
                 "Terra baseline for loopback, OpenAI, and Anthropic model routes; workspace, "

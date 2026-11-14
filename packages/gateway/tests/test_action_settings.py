@@ -59,13 +59,15 @@ def test_shared_action_presentation_handles_unknown_states_and_control_text() ->
     assert display_safe_text("\U000e0001") == r"\U000e0001"
 
 
-def test_gateway_exposes_only_the_two_supported_modes_and_persists_selection(
+def test_gateway_exposes_review_and_rejects_unqualified_automation(
     tmp_path: Path,
 ) -> None:
     gateway = SessionGateway(project=ProjectContext(tmp_path), env={})
 
     initial = gateway.action_settings()
-    selected = gateway.select_action_confirmation_mode("confirm-risky")
+    with pytest.raises(ActionSettingsError, match="Low-Risk Automation is unavailable"):
+        gateway.select_action_confirmation_mode("confirm-risky")
+    selected = gateway.select_action_confirmation_mode("always-confirm")
 
     assert initial["confirmation_mode"] == "always-confirm"
     modes = initial["modes"]
@@ -95,9 +97,9 @@ def test_gateway_exposes_only_the_two_supported_modes_and_persists_selection(
     assert initial["presentation"] == {
         "other_tool_label_template": "{tool_name} Action",
         "risk_labels": {
-            "high": "High Risk",
-            "low": "Low Risk",
-            "medium": "Medium Risk",
+            "high": "Advisory High Risk",
+            "low": "Advisory Low Risk",
+            "medium": "Advisory Medium Risk",
             "unknown": "Not Classified",
         },
         "state_labels": {
@@ -118,8 +120,8 @@ def test_gateway_exposes_only_the_two_supported_modes_and_persists_selection(
         "unknown_risk_label": "Not Classified",
         "unknown_tool_label": "Tool Action",
     }
-    assert selected["confirmation_mode"] == "confirm-risky"
-    assert gateway.action_settings()["confirmation_mode"] == "confirm-risky"
+    assert selected["confirmation_mode"] == "always-confirm"
+    assert gateway.action_settings()["confirmation_mode"] == "always-confirm"
 
 
 def test_gateway_rejects_confirmation_mode_changes_while_work_is_active(
@@ -175,35 +177,11 @@ def test_gateway_rejects_confirmation_mode_blocked_by_deployment_policy(
     assert isinstance(modes, list)
     restricted = next(item for item in modes if item["mode"] == "confirm-risky")
     assert restricted["allowed"] is False
-    assert restricted["unavailable_reason"] == ("Unavailable under the active platform policy.")
+    assert restricted["unavailable_reason"] is not None
+    assert "Low-Risk Automation is unavailable" in restricted["unavailable_reason"]
 
-    with pytest.raises(ActionSettingsError, match="not allowed by platform policy"):
+    with pytest.raises(ActionSettingsError, match="Low-Risk Automation is unavailable"):
         gateway.select_action_confirmation_mode("confirm-risky")
-
-
-def test_cached_service_reloads_action_mode_changed_by_another_gateway(
-    tmp_path: Path,
-) -> None:
-    project = ProjectContext(tmp_path)
-    reader = SessionGateway(project=project, env={}, backend_id="deterministic")
-    writer = SessionGateway(project=project, env={}, backend_id="deterministic")
-    try:
-        writer.select_action_confirmation_mode("confirm-risky")
-
-        first = reader.handle(_chat_command("first"))
-        first_kinds = {str(event.kind) for event in first.events}
-        assert EventKind.TOOL_EXECUTION_RECORDED.value in first_kinds
-        assert EventKind.CONFIRMATION_REQUESTED.value not in first_kinds
-
-        writer.select_action_confirmation_mode("always-confirm")
-
-        second = reader.handle(_chat_command("second"))
-        second_kinds = {str(event.kind) for event in second.events}
-        assert EventKind.CONFIRMATION_REQUESTED.value in second_kinds
-        assert EventKind.TOOL_EXECUTION_RECORDED.value not in second_kinds
-    finally:
-        reader.stop()
-        writer.stop()
 
 
 def _chat_command(command_id: str) -> SessionCommand:
@@ -215,3 +193,29 @@ def _chat_command(command_id: str) -> SessionCommand:
         created_at="2026-07-25T00:00:00Z",
         payload={"prompt": "inspect the synthetic project"},
     )
+
+
+def test_saved_automation_preference_cannot_restore_automatic_dispatch(tmp_path: Path) -> None:
+    project = ProjectContext(tmp_path)
+    project.initialize()
+    gateway = SessionGateway(project=project, env={}, backend_id="deterministic")
+    gateway.config_store.save(gateway.config_store.load())
+    content = project.config_path.read_text().replace(
+        'confirmation_mode = "always-confirm"', 'confirmation_mode = "confirm-risky"'
+    )
+    project.config_path.write_text(content)
+    reopened = SessionGateway(project=ProjectContext(tmp_path), env={})
+    assert reopened.action_settings()["confirmation_mode"] == "always-confirm"
+    assert project.config_path.read_text() == content
+    automation = next(
+        option
+        for option in reopened.action_settings()["modes"]
+        if option["mode"] == "confirm-risky"
+    )
+    assert not automation["allowed"]
+    result = gateway.handle(_chat_command("legacy-preference"))
+    kinds = {event.kind for event in result.events}
+    assert EventKind.CONFIRMATION_REQUESTED in kinds
+    assert EventKind.TOOL_EXECUTION_RECORDED not in kinds
+    gateway.stop()
+    reopened.stop()

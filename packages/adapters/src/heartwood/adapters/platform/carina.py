@@ -75,10 +75,9 @@ class CarinaPlatformAdapter:
             allowed_model_endpoints=("http://127.0.0.1:8765/v1/chat/completions",),
             allowed_model_catalog_endpoints=("http://127.0.0.1:8765/v1/models",),
             allowed_capability_tiers=("supervised", "experimental"),
-            allowed_action_confirmation_modes=("always-confirm", "confirm-risky"),
+            allowed_action_confirmation_modes=("always-confirm",),
             credential_allowlist=(),
             notes=(
-                "Synthetic-only Carina policy with loopback inference; always-confirm is the "
-                "default and confirm-risky requires an explicit researcher selection."
+                "Synthetic-only Carina policy with loopback inference and review of every action."
             ),
         )

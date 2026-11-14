@@ -3421,6 +3421,16 @@ describe("App", () => {
     await waitFor(() => expect(heading).toHaveFocus());
     const approval = screen.getByRole("region", { name: "Review 2 actions" });
     expect(within(approval).getByRole("list")).toBeVisible();
+    const fileAction = within(approval).getAllByRole("listitem")[1];
+    if (!fileAction) throw new Error("file action is missing");
+    expect(fileAction.querySelector("strong")).toHaveTextContent(
+      "create cohort-summary.md",
+    );
+    expect(
+      within(fileAction).getByText(
+        "Model-provided summary: Write the aggregate cohort summary",
+      ),
+    ).toBeVisible();
     expect(
       within(approval).getByText(
         "Allow runs all of them once. Reject runs none.",

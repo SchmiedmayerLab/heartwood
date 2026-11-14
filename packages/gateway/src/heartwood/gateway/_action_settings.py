@@ -13,6 +13,11 @@ from typing import cast
 
 from heartwood.schemas import ActionConfirmationMode
 
+AUTOMATION_UNAVAILABLE_REASON = (
+    "Low-Risk Automation is unavailable: risk hints cannot authorize execution. "
+    "Review Every Action is required."
+)
+
 ACTION_MODE_SCOPE_DESCRIPTION = (
     "Shared by every Heartwood interface in this project and applied to future action sets."
 )
@@ -56,12 +61,9 @@ ACTION_MODE_OPTIONS: tuple[ActionModeOption, ...] = (
         mode="confirm-risky",
         command_value="auto-approve-low-risk",
         label="Low-Risk Automation",
-        description=(
-            "An action set continues automatically only when every action is low risk. "
-            "Any medium-, high-, or unclassified-risk action pauses the complete set for review."
-        ),
-        automatic_risks=("low",),
-        reviewed_risks=("medium", "high", "unknown"),
+        description=AUTOMATION_UNAVAILABLE_REASON,
+        automatic_risks=(),
+        reviewed_risks=("low", "medium", "high", "unknown"),
     ),
 )
 
@@ -89,6 +91,8 @@ class ActionSettings:
         if mode not in _CONFIRMATION_MODES:
             msg = f"unsupported action confirmation mode: {mode}"
             raise ActionSettingsError(msg)
+        if mode == "confirm-risky":
+            raise ActionSettingsError(AUTOMATION_UNAVAILABLE_REASON)
         updated = replace(self, confirmation_mode=mode)
         updated.validate()
         return updated
@@ -120,4 +124,5 @@ def action_settings_from_mapping(value: object) -> ActionSettings:
         confirmation_mode=cast(ActionConfirmationMode, mode),
     )
     settings.validate()
-    return settings
+    # Retained preferences cannot restore an unavailable authorization policy.
+    return replace(settings, confirmation_mode="always-confirm")

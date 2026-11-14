@@ -73,10 +73,15 @@ heartwood --session-id "${session_id}" allow | tee -a "${transcript}"
 heartwood --session-id "${rejected_session_id}" \
   --prompt "Propose the bounded synthetic action for rejection." | tee -a "${transcript}"
 heartwood --session-id "${rejected_session_id}" reject | tee -a "${transcript}"
-heartwood actions set auto-approve-low-risk | tee -a "${transcript}"
+if heartwood actions set auto-approve-low-risk 2>&1 | tee -a "${transcript}"; then
+  echo "unqualified automatic action approval was accepted" >&2
+  exit 1
+fi
 heartwood --session-id "${automatic_session_id}" \
   --prompt "Run the bounded low-risk automatic integration check." \
   | tee "${automatic_transcript}" | tee -a "${transcript}"
+heartwood --session-id "${automatic_session_id}" allow \
+  | tee -a "${automatic_transcript}" | tee -a "${transcript}"
 heartwood --session-id "${risky_session_id}" \
   --prompt "Propose the medium-risk network check for review." \
   | tee "${risky_transcript}" | tee -a "${transcript}"
@@ -125,12 +130,10 @@ grep -q "Project changes · Git" "${transcript}"
 grep -q "A  cohort-summary.json" "${transcript}"
 grep -q "Change · cohort-summary.json · available" "${transcript}"
 grep -Fq '[Succeeded] $' "${automatic_transcript}"
-if grep -q "as one OpenHands action set" "${automatic_transcript}"; then
-  echo "low-risk action unexpectedly required confirmation" >&2
-  exit 1
-fi
+grep -q "as one OpenHands action set" "${automatic_transcript}"
+grep -q "Low-Risk Automation is unavailable" "${transcript}"
 grep -q "run a medium-risk network command" "${risky_transcript}"
-grep -q "Terminal Command · Medium Risk" "${risky_transcript}"
+grep -q "Terminal Command · Advisory Medium Risk" "${risky_transcript}"
 grep -q "as one OpenHands action set" "${risky_transcript}"
 grep -q "Reject the complete set: /reject" "${risky_transcript}"
 grep -q "Action set rejected" "${risky_transcript}"
@@ -147,8 +150,8 @@ events = [
     for line in (workspace / session_id / "events.jsonl").read_text(encoding="utf-8").splitlines()
 ]
 kinds = {event["kind"] for event in events}
-if "confirmation.requested" in kinds:
-    raise SystemExit("low-risk automatic session contains a confirmation request")
+if not {"confirmation.requested", "approval.recorded"}.issubset(kinds):
+    raise SystemExit("low-risk hint bypassed action review")
 if not {"tool_call.proposed", "tool.execution.recorded"}.issubset(kinds):
     raise SystemExit(f"low-risk automatic session is incomplete: {sorted(kinds)}")
 approved_events = [
@@ -171,7 +174,7 @@ if (
 ):
     raise SystemExit(f"unexpected tool execution records: {executions}")
 decision = next(event for event in events if event["kind"] == "model_call.decision.recorded")
-if decision["payload"]["model_profile"]["action_confirmation_mode"] != "confirm-risky":
+if decision["payload"]["model_profile"]["action_confirmation_mode"] != "always-confirm":
     raise SystemExit("action confirmation mode was not recorded")
 PY
 "${heartwood_python}" - <<'PY'

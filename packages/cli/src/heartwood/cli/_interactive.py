@@ -522,8 +522,17 @@ def format_projection_lines(
         for index, action in enumerate(approval.actions, 1):
             tool_label = terminal_safe_text(action_tool_label(action.tool_name))
             risk_label = action_risk_label(action.risk)
-            summary = terminal_safe_text(action.summary) or tool_label
+            details = action.details
+            summary = terminal_safe_text(
+                f"$ {details.command}"
+                if details.kind == "terminal"
+                else f"{details.operation} {details.path or 'path unavailable'}"
+                if details.kind == "file-editor"
+                else action_tool_label(action.tool_name)
+            )
             lines.append(f"  {index}. {summary} [{tool_label} · {risk_label}]")
+            if action.summary:
+                lines.append(f"     Model-provided summary: {terminal_safe_text(action.summary)}")
             if action.details.kind == "task":
                 role = action.details.role_label or action.details.subagent_type
                 if role:

@@ -48,12 +48,13 @@ def test_unknown_and_known_threats_require_confirmation_with_production_policy()
         if item.category in ("injected", "network") or item.case_id.startswith("delete-results"):
             assert item.confirmation_required
     assert report.unknown_classifications >= len(corpus.probes) // 2
-    assert any(
-        not item.confirmation_required for item in report.measurements if not item.must_confirm
-    )
+    assert all(item.confirmation_required for item in report.measurements)
+    assert report.false_approvals == 0
+    opaque = next(item for item in report.measurements if item.case_id == "opaque-script-low")
+    assert opaque.confirmation_required
 
 
-def test_results_never_hide_review_required_actions_that_the_policy_permits() -> None:
+def test_fail_closed_policy_does_not_claim_useful_automation() -> None:
     corpus = action_risk_corpus()
     report = evaluate_action_risk(corpus, mode="confirm-risky")
     assessment = assess_action_risk(
@@ -61,15 +62,14 @@ def test_results_never_hide_review_required_actions_that_the_policy_permits() ->
         report,
         policy=ActionRiskPolicy(
             deployment="synthetic-strict",
-            maximum_unnecessary_confirmation_fraction=1,
+            maximum_unnecessary_confirmation_fraction=0,
             maximum_mean_latency_seconds=10,
         ),
     )
-    # An upstream improvement may eliminate current misses. Until then, every
-    # measured false approval must prevent a passing deployment assessment.
-    assert ("false-approval" in assessment.reasons) == (report.false_approvals > 0)
-    if report.false_approvals:
-        assert not assessment.passed
+    assert report.false_approvals == 0
+    assert report.unnecessary_confirmations > 0
+    assert not assessment.passed
+    assert "unnecessary-confirmation-limit" in assessment.reasons
 
 
 def test_exports_exclude_action_payloads_and_bind_the_actual_configuration() -> None:
@@ -77,7 +77,8 @@ def test_exports_exclude_action_payloads_and_bind_the_actual_configuration() -> 
     report = evaluate_action_risk(corpus, mode="confirm-risky")
     alternate = evaluate_action_risk(corpus, mode="always-confirm")
     assert report.corpus_fingerprint == corpus.fingerprint
-    assert report.analyzer_fingerprint != alternate.analyzer_fingerprint
+    assert report.analyzer_fingerprint == alternate.analyzer_fingerprint
+    assert report.confirmation_mode == alternate.confirmation_mode == "always-confirm"
     exported = report.model_dump_json()
     assert "example.invalid" not in exported
     assert "synthetic-project" not in exported

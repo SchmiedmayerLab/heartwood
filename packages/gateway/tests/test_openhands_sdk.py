@@ -55,7 +55,6 @@ from openhands.sdk.llm import (
 from openhands.sdk.llm.streaming import AnyTokenCallbackType, TokenCallbackType
 from openhands.sdk.security import (
     AlwaysConfirm,
-    ConfirmRisky,
     EnsembleSecurityAnalyzer,
     SecurityAnalyzerBase,
     SecurityRisk,
@@ -760,21 +759,15 @@ def test_token_and_tool_payload_edge_cases_remain_typed(tmp_path: Path) -> None:
     assert _observation_exit_code(_MetadataObservation(metadata={"exit_code": True})) is None
 
 
-def test_openhands_security_configuration_uses_upstream_policies() -> None:
-    analyzer, always = _security_configuration("always-confirm")
-    risk_analyzer, risky = _security_configuration("confirm-risky")
-
+@pytest.mark.parametrize("mode", ["always-confirm", "confirm-risky"])
+def test_openhands_security_configuration_never_automatically_authorizes_risk_hints(
+    mode: Literal["always-confirm", "confirm-risky"],
+) -> None:
+    analyzer, policy = _security_configuration(mode)
     assert isinstance(analyzer, EnsembleSecurityAnalyzer)
-    assert isinstance(risk_analyzer, EnsembleSecurityAnalyzer)
     assert analyzer.propagate_unknown is True
-    assert risk_analyzer.propagate_unknown is True
-    assert isinstance(always, AlwaysConfirm)
-    assert always.should_confirm(SecurityRisk.LOW) is True
-    assert isinstance(risky, ConfirmRisky)
-    assert risky.threshold == SecurityRisk.MEDIUM
-    assert risky.confirm_unknown is True
-    assert risky.should_confirm(SecurityRisk.LOW) is False
-    assert risky.should_confirm(SecurityRisk.UNKNOWN) is True
+    assert isinstance(policy, AlwaysConfirm)
+    assert all(policy.should_confirm(risk) for risk in SecurityRisk)
 
 
 def test_typed_event_translation_covers_messages_tools_tasks_and_errors(

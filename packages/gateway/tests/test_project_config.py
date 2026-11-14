@@ -164,13 +164,9 @@ def test_project_config_lock_is_reentrant_across_store_instances(tmp_path: Path)
     second = ProjectConfigStore(project, default)
 
     with first.locked():
-        updated = second.update(
-            lambda config: config.with_action_settings(
-                ActionSettings(confirmation_mode="confirm-risky")
-            )
-        )
+        updated = second.update(lambda config: config.with_audit_signer("test-records"))
 
-    assert updated.action_settings.confirmation_mode == "confirm-risky"
+    assert updated.audit_settings.signer_profile == "test-records"
     assert first.load() == updated
 
 
@@ -217,9 +213,7 @@ def test_project_config_updates_serialize_across_store_instances(tmp_path: Path)
         assert entered.wait(timeout=2)
         action_update = executor.submit(
             second.update,
-            lambda config: config.with_action_settings(
-                ActionSettings(confirmation_mode="confirm-risky")
-            ),
+            lambda config: config.with_audit_signer("test-records"),
         )
         release.set()
         model_update.result(timeout=2)
@@ -227,7 +221,7 @@ def test_project_config_updates_serialize_across_store_instances(tmp_path: Path)
 
     configured = first.load()
     assert configured.model_settings.active_profile == profile.profile_id
-    assert configured.action_settings.confirmation_mode == "confirm-risky"
+    assert configured.audit_settings.signer_profile == "test-records"
     assert project.config_lock_path.stat().st_mode & 0o777 == 0o600
 
 
@@ -251,9 +245,7 @@ def test_waiting_configuration_writer_revalidates_project_state(
         with native_file_lock(project.config_lock_path):
             pending = executor.submit(
                 store.save,
-                store.default.with_action_settings(
-                    ActionSettings(confirmation_mode="confirm-risky")
-                ),
+                store.default.with_audit_signer("test-records"),
             )
             assert waiting.wait(timeout=5)
             with native_file_lock(project.state_lock_path):

@@ -1494,13 +1494,16 @@ def test_actions_and_advanced_model_profile_persist_in_config_toml(
     ]
 
     assert _run(project, monkeypatch, model_args) == 0
-    assert _run(project, monkeypatch, ["actions", "set", "auto-approve-low-risk"]) == 0
+    with pytest.raises(SystemExit) as rejected:
+        _run(project, monkeypatch, ["actions", "set", "auto-approve-low-risk"])
+    assert rejected.value.code == 2
     assert _run(project, monkeypatch, ["models", "validate", "local-test"]) == 0
 
     contents = (project / ".heartwood" / "config.toml").read_text(encoding="utf-8")
-    output = capsys.readouterr().out
+    captured = capsys.readouterr()
+    output = captured.out + captured.err
     assert 'active_profile = "local-test"' in contents
-    assert 'confirmation_mode = "confirm-risky"' in contents
+    assert 'confirmation_mode = "always-confirm"' in contents
     assert "Profile: local-test" in output
     assert "Low-Risk Automation" in output
 
@@ -1513,7 +1516,9 @@ def test_cli_and_browser_gateway_observe_the_same_project_configuration(
     project = tmp_path / "analysis"
     catalog = _local_catalog()
 
-    assert _run(project, monkeypatch, ["actions", "set", "auto-approve-low-risk"]) == 0
+    with pytest.raises(SystemExit) as rejected:
+        _run(project, monkeypatch, ["actions", "set", "auto-approve-low-risk"])
+    assert rejected.value.code == 2
     capsys.readouterr()
 
     gateway = RealSessionGateway(
@@ -1524,7 +1529,7 @@ def test_cli_and_browser_gateway_observe_the_same_project_configuration(
     )
     browser = RestGateway(gateway)
     action_settings = browser.handle(RestRequest(method="GET", path="/settings/actions"))
-    assert action_settings.body["confirmation_mode"] == "confirm-risky"
+    assert action_settings.body["confirmation_mode"] == "always-confirm"
     assert (
         browser.handle(
             RestRequest(
