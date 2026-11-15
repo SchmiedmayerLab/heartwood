@@ -152,6 +152,8 @@ An approval identifier without the complete action-content binding is invalid; p
 Each OpenHands proposal becomes one `heartwood.action-record.v1` projection correlated by stable action and tool-call identifiers.
 The same record accumulates its group, decision, execution state, bounded result, and typed affected-path evidence across replay.
 Terminal, file-editor, Task, and other actions use typed variants, while the exact OpenHands arguments remain available for review.
+Gateway-issued outside operations and result releases use their own typed variants, which carry the destination or model route and the size, digest, and bounded preview of the content being sent.
+Each record states whether its summary was written by the model or issued by the gateway.
 Unknown outcomes fail closed and are never converted into a successful result by an interface.
 
 ## Audit Integrity

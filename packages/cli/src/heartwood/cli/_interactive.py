@@ -33,7 +33,10 @@ from heartwood.gateway import (
     action_mode_label,
     action_risk_label,
     action_state_label,
+    action_summary_label,
     action_tool_label,
+    outside_review_lines,
+    outside_review_title,
 )
 from heartwood.gateway import (
     display_safe_text as terminal_safe_text,
@@ -518,7 +521,14 @@ def format_projection_lines(
     approval = projection.pending_approval
     if approval is not None and include_pending_review:
         label = "action" if len(approval.actions) == 1 else "actions"
-        lines.append(f"Review {len(approval.actions)} {label} as one OpenHands action set:")
+        outside_title = (
+            outside_review_title(approval.actions[0]) if len(approval.actions) == 1 else None
+        )
+        lines.append(
+            f"Review {outside_title}:"
+            if outside_title
+            else f"Review {len(approval.actions)} {label} as one OpenHands action set:"
+        )
         for index, action in enumerate(approval.actions, 1):
             tool_label = terminal_safe_text(action_tool_label(action.tool_name))
             risk_label = action_risk_label(action.risk)
@@ -528,11 +538,14 @@ def format_projection_lines(
                 if details.kind == "terminal"
                 else f"{details.operation} {details.path or 'path unavailable'}"
                 if details.kind == "file-editor"
-                else action_tool_label(action.tool_name)
+                else outside_review_title(action) or action_tool_label(action.tool_name)
             )
             lines.append(f"  {index}. {summary} [{tool_label} · {risk_label}]")
+            lines.extend(f"     {line}" for line in outside_review_lines(action))
             if action.summary:
-                lines.append(f"     Model-provided summary: {terminal_safe_text(action.summary)}")
+                lines.append(
+                    f"     {action_summary_label(action)}: {terminal_safe_text(action.summary)}"
+                )
             if action.details.kind == "task":
                 role = action.details.role_label or action.details.subagent_type
                 if role:

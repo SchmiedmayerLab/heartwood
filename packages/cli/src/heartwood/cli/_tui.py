@@ -57,7 +57,10 @@ from heartwood.gateway import (
     SessionProjection,
     action_mode_label,
     action_risk_label,
+    action_summary_label,
     action_tool_label,
+    outside_review_lines,
+    outside_review_title,
 )
 from heartwood.gateway import (
     display_safe_text as terminal_safe_text,
@@ -637,11 +640,16 @@ class HeartwoodTerminalApp(App[None]):
         actions = approval.actions
         panel.display = True
         label = "action" if len(actions) == 1 else "actions"
+        outside_title = outside_review_title(actions[0]) if len(actions) == 1 else None
         self.query_one("#approval-title", Static).update(
-            f"Review Agent Actions · {len(actions)} {label.title()}"
+            f"Review {outside_title}"
+            if outside_title
+            else f"Review Agent Actions · {len(actions)} {label.title()}"
         )
         self.query_one("#approval-help", Static).update(
-            "These actions were proposed together. One decision applies to the complete set."
+            "Allow sends exactly this content once. Reject sends nothing."
+            if outside_title
+            else "These actions were proposed together. One decision applies to the complete set."
         )
         action_log = self.query_one("#approval-actions", RichLog)
         action_log.clear()
@@ -653,7 +661,7 @@ class HeartwoodTerminalApp(App[None]):
                 if details.kind == "terminal"
                 else f"{details.operation} {details.path or 'path unavailable'}"
                 if details.kind == "file-editor"
-                else action_tool_label(action.tool_name)
+                else outside_review_title(action) or action_tool_label(action.tool_name)
             )
             tool_label = terminal_safe_text(action_tool_label(action.tool_name))
             heading = Text()
@@ -664,8 +672,11 @@ class HeartwoodTerminalApp(App[None]):
             heading.append(f"   {tool_label} · ", style="dim")
             heading.append(risk_label, style=risk_style)
             rendered: list[Text | str] = [heading]
+            rendered.extend(f"   {line}" for line in outside_review_lines(action))
             if action.summary:
-                rendered.append("   Model-provided summary: " + terminal_safe_text(action.summary))
+                rendered.append(
+                    f"   {action_summary_label(action)}: " + terminal_safe_text(action.summary)
+                )
             if action.arguments:
                 rendered.extend(
                     (
