@@ -17,7 +17,6 @@ exclude-newer-span = "P7D"
 
 [options.exclude-newer-package]
 filelock = "2026-11-13T00:00:00Z"
-litellm = "2026-11-13T00:00:00Z"
 tornado = "2026-11-10T00:00:00Z"
 
 [manifest]
@@ -51,7 +50,7 @@ docs = [
     { name = "mike", git = "https://github.com/squidfunk/mike.git?rev=0f62791256ebeba60d20d2f1d8fe6ec3b7d1e2b3" },
     { name = "zensical", specifier = "==0.0.52" },
 ]
-worker = [{ name = "openhands-agent-server", path = "vendor/runtime-wheels/openhands_agent_server-1.62.0+heartwood.2-py3-none-any.whl" }]
+worker = [{ name = "openhands-agent-server", path = "vendor/runtime-wheels/openhands_agent_server-1.62.0+heartwood.3-py3-none-any.whl" }]
 
 [[package]]
 name = "agent-client-protocol"
@@ -1946,8 +1945,8 @@ requires-dist = [
     { name = "huggingface-hub", specifier = "==1.26.1" },
     { name = "keyring", specifier = "==25.7.0" },
     { name = "openai", specifier = "==2.53.0" },
-    { name = "openhands-sdk", path = "vendor/runtime-wheels/openhands_sdk-1.62.0+heartwood.2-py3-none-any.whl" },
-    { name = "openhands-tools", path = "vendor/runtime-wheels/openhands_tools-1.62.0+heartwood.2-py3-none-any.whl" },
+    { name = "openhands-sdk", path = "vendor/runtime-wheels/openhands_sdk-1.62.0+heartwood.3-py3-none-any.whl" },
+    { name = "openhands-tools", path = "vendor/runtime-wheels/openhands_tools-1.62.0+heartwood.3-py3-none-any.whl" },
     { name = "openshell", path = "vendor/runtime-wheels/openshell-0.1.8+heartwood.1-py3-none-any.whl" },
     { name = "packaging", specifier = "==26.3" },
     { name = "pydantic", specifier = ">=2.12" },
@@ -2054,7 +2053,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "openhands-sdk", path = "vendor/runtime-wheels/openhands_sdk-1.62.0+heartwood.2-py3-none-any.whl" },
+    { name = "openhands-sdk", path = "vendor/runtime-wheels/openhands_sdk-1.62.0+heartwood.3-py3-none-any.whl" },
     { name = "pydantic", specifier = ">=2.12" },
     { name = "pyyaml", specifier = ">=6.0.3" },
 ]
@@ -2929,15 +2928,14 @@ wheels = [
 
 [[package]]
 name = "litellm"
-version = "1.109.1"
+version = "1.108.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
-    { name = "anyio" },
     { name = "boto3" },
     { name = "certifi" },
     { name = "click" },
-    { name = "fastuuid", marker = "python_full_version < '3.15'" },
+    { name = "fastuuid" },
     { name = "filelock" },
     { name = "httpx", extra = ["http2"] },
     { name = "huggingface-hub" },
@@ -2955,15 +2953,15 @@ dependencies = [
     { name = "tokenizers" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/64/cc/6295db7faccd95aae86392e06531817e8ef2661b04805e95cfde56165a32/litellm-1.109.1.tar.gz", hash = "sha256:5b98ecccd93374b8ea1746ee98de16b505c0b5e6c0dfb7e8afec3d817d08d7c2", size = 25570168, upload-time = "2026-11-12T02:00:18.465Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/f3/e5/12c5184d984554d968cd8f8963b604e4759ffcdb8d5a63d3996529746bd1/litellm-1.108.3.tar.gz", hash = "sha256:b6ce7a78efbaff7214e731ba0769b156e05b150d05184def61913ee9ff0befb3", size = 21457171, upload-time = "2026-11-07T22:26:06.992Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/0c/1e/f83650f0840f47b4d48e7d3fcc49ee23f2b9ab27fb90937f0e1d9e0dbd5c/litellm-1.109.1-cp310-abi3-macosx_10_12_x86_64.whl", hash = "sha256:1fdf789757fc71c9a9ac183cd326b978782dfa9ebd44087c6603b5b963956841", size = 40565744, upload-time = "2026-11-12T01:59:54.804Z" },
-    { url = "https://files.pythonhosted.org/packages/16/10/9c973a582a29ace1b4437b0851b278f8b65a22c351ab3c3180d6bcebb0ec/litellm-1.109.1-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:1b2866219249186babe194d7e3f4af29095c0905a4c5712b62be662aa6a38fb7", size = 39911789, upload-time = "2026-11-12T01:59:58.373Z" },
-    { url = "https://files.pythonhosted.org/packages/af/20/d305f1243712131a79c7f069cdaad8be9f5a3746f09440576933ec55b6a9/litellm-1.109.1-cp310-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:1dcf31166d385e6eaaef7f5840ba88c4eac319d1aa2d3ec2787de981e07fcf11", size = 40353049, upload-time = "2026-11-12T02:00:01.288Z" },
-    { url = "https://files.pythonhosted.org/packages/30/5b/05ec8f224dd31cc294a5e0483fd6385d8991ffe4c0312978f5924ac053a5/litellm-1.109.1-cp310-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:1c8b4dd671fa0cd0850aa751678704ff77e595fb1e6085b2dc3be39ee19bdaaf", size = 41091727, upload-time = "2026-11-12T02:00:05.2Z" },
-    { url = "https://files.pythonhosted.org/packages/9d/93/80f9b16aea7a10ccc1bac561fd65130271a928b5a8f23a6a1e8b32ec349b/litellm-1.109.1-cp310-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:c84737897b6b459acd660fd7adb33e2d552c5d0b93c4a47b8cd4f5e299c93bac", size = 40482185, upload-time = "2026-11-12T02:00:08.516Z" },
-    { url = "https://files.pythonhosted.org/packages/2f/49/120f60c831983fccfddfaa8683e0bb75c2ba70ed62263acae44ddd360534/litellm-1.109.1-cp310-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:b94080b0436c471e686735d10fd1069c151cf8b9816d823a1450419573f30e46", size = 41180765, upload-time = "2026-11-12T02:00:11.814Z" },
-    { url = "https://files.pythonhosted.org/packages/44/82/dfd6aa8ac212f5c2c7576079c92b97fcb666f3da521f47c813d1ee02e195/litellm-1.109.1-cp310-abi3-win_amd64.whl", hash = "sha256:738fd2465e24460f03a8c5ff33dc57c3fdfad88ff489811d718ee6ba3c5ad900", size = 41985493, upload-time = "2026-11-12T02:00:15.416Z" },
+    { url = "https://files.pythonhosted.org/packages/2a/8e/45520278f600465f8e3d155e604ba17b4a10688e7be45260f8c0f673591b/litellm-1.108.3-cp310-abi3-macosx_10_12_x86_64.whl", hash = "sha256:8267641fce3803bb7a56bd6ff046d4919bbd079c96c9d9c1c4c43fdf96d5244c", size = 35863180, upload-time = "2026-11-07T22:25:38.857Z" },
+    { url = "https://files.pythonhosted.org/packages/52/15/b45ffb4cd6f82e26b37eba73a3c9191677186f8de61fe145a886eaa30590/litellm-1.108.3-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:9955cc7a29b3060bb791a90cefb6d10df2f0cf63ea720c9d3a26bc8d253eae43", size = 34971257, upload-time = "2026-11-07T22:25:43.822Z" },
+    { url = "https://files.pythonhosted.org/packages/53/90/a4bc7b59649537dec77a659affab8f8b8c5eec5af6402008a15ecc294112/litellm-1.108.3-cp310-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:ffd746c20138a078c451a851a68c85da43d67e114001e4a4cd4082953de5494d", size = 35474892, upload-time = "2026-11-07T22:25:47.069Z" },
+    { url = "https://files.pythonhosted.org/packages/77/48/deba4c906336f0c9569e00800f9c5a82ac14326d79254bdc0e58d743d6e2/litellm-1.108.3-cp310-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:4ac55c4a80be5b131659b1f42487de96fed69c6717745953c74fede1d6a5113c", size = 36341841, upload-time = "2026-11-07T22:25:50.484Z" },
+    { url = "https://files.pythonhosted.org/packages/44/ce/dab82ec6e7706339642bea58ff01811e48507c6cef1bdead42cd390d480a/litellm-1.108.3-cp310-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:46a78bfe948a25cd678acc8a1ed442775688e2b60bda6ac2166ae5b48b747d08", size = 35603914, upload-time = "2026-11-07T22:25:57.199Z" },
+    { url = "https://files.pythonhosted.org/packages/2b/6a/129d6b210e25ce6fa3a1eb119ee78968547861d9887575e3b159a2ff67a3/litellm-1.108.3-cp310-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:e74f7a0df27ac03eb2280e23c5a72a52a0d64260a96b0da3f95be60ae872469b", size = 36406511, upload-time = "2026-11-07T22:26:00.27Z" },
+    { url = "https://files.pythonhosted.org/packages/a4/57/852070eb90b57d21f7707d57384e9bc8da26d8478a081d0088164343561e/litellm-1.108.3-cp310-abi3-win_amd64.whl", hash = "sha256:efdd0d6c57c9814673ee9c491c428945fd58ffb84842557759d2209403dc033e", size = 37013327, upload-time = "2026-11-07T22:26:03.825Z" },
 ]
 
 [[package]]
@@ -3736,8 +3734,8 @@ wheels = [
 
 [[package]]
 name = "openhands-agent-server"
-version = "1.62.0+heartwood.2"
-source = { path = "vendor/runtime-wheels/openhands_agent_server-1.62.0+heartwood.2-py3-none-any.whl" }
+version = "1.62.0+heartwood.3"
+source = { path = "vendor/runtime-wheels/openhands_agent_server-1.62.0+heartwood.3-py3-none-any.whl" }
 dependencies = [
     { name = "aiosqlite" },
     { name = "alembic" },
@@ -3754,7 +3752,7 @@ dependencies = [
     { name = "wsproto" },
 ]
 wheels = [
-    { filename = "openhands_agent_server-1.62.0+heartwood.2-py3-none-any.whl", hash = "sha256:5e44be26da5a17b967e33ea87dcefa3e1df49103612c383becaa29bb4f17ab7d" },
+    { filename = "openhands_agent_server-1.62.0+heartwood.3-py3-none-any.whl", hash = "sha256:6aa09b754ee07ae63cdb274eafc8b8bd73585f545ed65954b8f9c9bf0e2ba792" },
 ]
 
 [package.metadata]
@@ -3778,8 +3776,8 @@ provides-extras = ["posthog"]
 
 [[package]]
 name = "openhands-sdk"
-version = "1.62.0+heartwood.2"
-source = { path = "vendor/runtime-wheels/openhands_sdk-1.62.0+heartwood.2-py3-none-any.whl" }
+version = "1.62.0+heartwood.3"
+source = { path = "vendor/runtime-wheels/openhands_sdk-1.62.0+heartwood.3-py3-none-any.whl" }
 dependencies = [
     { name = "agent-client-protocol" },
     { name = "certifi" },
@@ -3802,7 +3800,7 @@ dependencies = [
     { name = "websockets" },
 ]
 wheels = [
-    { filename = "openhands_sdk-1.62.0+heartwood.2-py3-none-any.whl", hash = "sha256:5d0ce4aeee3badcab4ae5a654de6cfe5328147eabc7896bc09384b3de517d94d" },
+    { filename = "openhands_sdk-1.62.0+heartwood.3-py3-none-any.whl", hash = "sha256:926a57328eb4d526ce7edce5b97a889bcf0b01b40b91cf97da5eabadd29c86f5" },
 ]
 
 [package.metadata]
@@ -3818,7 +3816,7 @@ requires-dist = [
     { name = "httpx", extras = ["socks"], specifier = ">=0.28.1" },
     { name = "joserfc", specifier = ">=1.7.7" },
     { name = "jsonschema", specifier = ">=4.26.0" },
-    { name = "litellm", specifier = ">=1.109.1,<1.110" },
+    { name = "litellm", specifier = ">=1.108.3,<1.109" },
     { name = "lmnr", specifier = ">=0.7.60,<0.8.0" },
     { name = "pillow", specifier = ">=13.0.0" },
     { name = "pydantic", specifier = ">=2.13.5" },
@@ -3834,8 +3832,8 @@ provides-extras = ["boto3", "toolshield", "vertex"]
 
 [[package]]
 name = "openhands-tools"
-version = "1.62.0+heartwood.2"
-source = { path = "vendor/runtime-wheels/openhands_tools-1.62.0+heartwood.2-py3-none-any.whl" }
+version = "1.62.0+heartwood.3"
+source = { path = "vendor/runtime-wheels/openhands_tools-1.62.0+heartwood.3-py3-none-any.whl" }
 dependencies = [
     { name = "binaryornot" },
     { name = "browser-use" },
@@ -3852,7 +3850,7 @@ dependencies = [
     { name = "tree-sitter-bash" },
 ]
 wheels = [
-    { filename = "openhands_tools-1.62.0+heartwood.2-py3-none-any.whl", hash = "sha256:965032e0f93cefee22f8782c4992a3a604cf1c357054294c55ae147a1cf34d55" },
+    { filename = "openhands_tools-1.62.0+heartwood.3-py3-none-any.whl", hash = "sha256:240742f7ed97ee02ac1baf25fa400ca8fd81f642c7dc41da9586a067f93b8697" },
 ]
 
 [package.metadata]

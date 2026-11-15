@@ -218,7 +218,6 @@ anyio==4.16.0 \
     #   groq
     #   httpx
     #   httpx2
-    #   litellm
     #   mcp
     #   openai
     #   py-key-value-aio
@@ -1018,7 +1017,7 @@ fastmcp-slim==4.1.6 \
     --hash=sha256:cd181b9b780161bbfdfc16ca6e417aaa8efd75d0a9ae961fdd20fa992d3d789f \
     --hash=sha256:d25691ae70a7f2b9d8197d6261bdd0f4b9ff33064087cd35c20539b0b48bb1ca
     # via fastmcp
-fastuuid==0.14.0 ; python_full_version < '3.15' \
+fastuuid==0.14.0 \
     --hash=sha256:05a8dde1f395e0c9b4be515b7a521403d1e8349443e7641761af07c7ad1624b1 \
     --hash=sha256:0737606764b29785566f968bd8005eace73d3666bd0862f33a760796e26d1ede \
     --hash=sha256:089c18018fdbdda88a6dafd7d139f8703a1e7c799618e33ea25eb52503d28a11 \
@@ -1669,15 +1668,15 @@ linkify-it-py==2.2.0 \
     --hash=sha256:3adc40eb5af300b2605fcfdb968c24e1d780a90f1f2221af7c15e5111e94d443 \
     --hash=sha256:907acd2d17ac1fbb9ddb62c8957ccbd6158cac602231a15c3b0cd1e215f03cee
     # via markdown-it-py
-litellm==1.109.1 \
-    --hash=sha256:1b2866219249186babe194d7e3f4af29095c0905a4c5712b62be662aa6a38fb7 \
-    --hash=sha256:1c8b4dd671fa0cd0850aa751678704ff77e595fb1e6085b2dc3be39ee19bdaaf \
-    --hash=sha256:1dcf31166d385e6eaaef7f5840ba88c4eac319d1aa2d3ec2787de981e07fcf11 \
-    --hash=sha256:1fdf789757fc71c9a9ac183cd326b978782dfa9ebd44087c6603b5b963956841 \
-    --hash=sha256:5b98ecccd93374b8ea1746ee98de16b505c0b5e6c0dfb7e8afec3d817d08d7c2 \
-    --hash=sha256:738fd2465e24460f03a8c5ff33dc57c3fdfad88ff489811d718ee6ba3c5ad900 \
-    --hash=sha256:b94080b0436c471e686735d10fd1069c151cf8b9816d823a1450419573f30e46 \
-    --hash=sha256:c84737897b6b459acd660fd7adb33e2d552c5d0b93c4a47b8cd4f5e299c93bac
+litellm==1.108.3 \
+    --hash=sha256:46a78bfe948a25cd678acc8a1ed442775688e2b60bda6ac2166ae5b48b747d08 \
+    --hash=sha256:4ac55c4a80be5b131659b1f42487de96fed69c6717745953c74fede1d6a5113c \
+    --hash=sha256:8267641fce3803bb7a56bd6ff046d4919bbd079c96c9d9c1c4c43fdf96d5244c \
+    --hash=sha256:9955cc7a29b3060bb791a90cefb6d10df2f0cf63ea720c9d3a26bc8d253eae43 \
+    --hash=sha256:b6ce7a78efbaff7214e731ba0769b156e05b150d05184def61913ee9ff0befb3 \
+    --hash=sha256:e74f7a0df27ac03eb2280e23c5a72a52a0d64260a96b0da3f95be60ae872469b \
+    --hash=sha256:efdd0d6c57c9814673ee9c491c428945fd58ffb84842557759d2209403dc033e \
+    --hash=sha256:ffd746c20138a078c451a851a68c85da43d67e114001e4a4cd4082953de5494d
     # via
     #   -r images/worker/candidate/runtime.in
     #   openhands-sdk
@@ -2436,17 +2435,17 @@ openapi-pydantic==0.6.0 \
     --hash=sha256:11f3ac6ad41521fc156381ec587246b0c0ecea523bd9565ed74d3e7fac9d91cd \
     --hash=sha256:8bd6d548a250da37db96f461bcd52b3468e8834ad7d6db14b00a6b2ebbd163a3
     # via fastmcp-slim
-openhands-agent-server==1.62.0+heartwood.2 \
-    --hash=sha256:5e44be26da5a17b967e33ea87dcefa3e1df49103612c383becaa29bb4f17ab7d
+openhands-agent-server==1.62.0+heartwood.3 \
+    --hash=sha256:6aa09b754ee07ae63cdb274eafc8b8bd73585f545ed65954b8f9c9bf0e2ba792
     # via -r images/worker/candidate/runtime.in
-openhands-sdk==1.62.0+heartwood.2 \
-    --hash=sha256:5d0ce4aeee3badcab4ae5a654de6cfe5328147eabc7896bc09384b3de517d94d
+openhands-sdk==1.62.0+heartwood.3 \
+    --hash=sha256:926a57328eb4d526ce7edce5b97a889bcf0b01b40b91cf97da5eabadd29c86f5
     # via
     #   -r images/worker/candidate/runtime.in
     #   openhands-agent-server
     #   openhands-tools
-openhands-tools==1.62.0+heartwood.2 \
-    --hash=sha256:965032e0f93cefee22f8782c4992a3a604cf1c357054294c55ae147a1cf34d55
+openhands-tools==1.62.0+heartwood.3 \
+    --hash=sha256:240742f7ed97ee02ac1baf25fa400ca8fd81f642c7dc41da9586a067f93b8697
     # via
     #   -r images/worker/candidate/runtime.in
     #   openhands-agent-server

@@ -144,14 +144,15 @@ The builder requires the uv version recorded in the source manifest and a new ou
 The conversation patch adds bounded remote-event admission, terminal failure propagation and explicit outside client-tool control.
 The terminal patch exposes explicit environment replacement across terminal backends and session resets, allowing the gateway to pass only documented task variables.
 The sandbox patch exposes the native configuration-admission record needed to bind a worker to its admitted policy and process generation.
-The dependency patch supplies the inference-client constraint, public imports and usage-cost handling required by the candidate SDK dependency graph.
+The dependency patch raises the file-lock requirement to its security-fixed release and admits the first inference-client release series that permits it.
 The local package version suffix distinguishes these reviewed candidates from upstream releases.
+Its base is the version the pinned source declares; that revision can follow the upstream release tag of the same number, so the recorded source revision, not the version, identifies the upstream code.
 Source revisions, patch digests and wheel records must accompany any qualification result that uses them.
 Changes to a patched SDK require a distinct local package version, reviewed source and patch digests, reproducible wheel hashes, and integrated qualification of the resulting application artifact.
 
 The candidate environment command compiles a separate hash-pinned dependency graph and installs it only into a new environment.
 It fixes the Python and package-manager versions, runtime hashes and isolated build dependencies, and checks installed-package consistency.
-The fixed release cutoff has explicit exceptions for the file-lock security update and the inference-client version required by the reviewed SDK patch.
+The fixed release cutoff has explicit exceptions for the file-lock security update and the first inference-client release that permits it.
 The lock includes test tools.
 The application builder archives the current Heartwood commit and its pinned Skill submodule, then builds wheels from that snapshot.
 The application builder verifies the same dependency pins as the default workspace and adds a local version suffix only to temporary Heartwood package metadata for qualification.
@@ -196,7 +197,8 @@ Image construction and worker smoke checks do not establish native sandbox, prov
 
 ### Gateway Build
 
-The gateway candidate uses the pinned upstream source and focused Docker provisioning patch recorded in `images/worker/candidate/gateway.json`.
+The gateway candidate uses the pinned upstream source and the Docker provisioning and deletion-retry patches recorded in `images/worker/candidate/gateway.json`.
+It exists only for qualification; an operator's gateway must separately provide the [behavior this evidence depends on](../operate/platform-requirements.md#gateway-behavior-behind-native-qualification).
 Build it with the existing candidate builder:
 
 ```bash
@@ -204,6 +206,7 @@ uv run --no-project --python 3.12.15 deploy/build-worker-candidate.py \
   --gateway --output test-results/gateway-candidate --cache test-results/gateway-cache
 ```
 
+The cache directory shares source archives and the Cargo registry between builds; compiled objects are kept per manifest, so changed source, patch or toolchain inputs never reuse earlier objects.
 Add `--gateway-tests` to run the upstream server deletion regressions before the binary build.
 The test container requires 12 GiB of memory and uses one Cargo job with optimization disabled only for the server package; the binary build retains its normal release profile and resource limits.
 A failed or empty test run prevents packaging; the exact test command and output remain in `gateway-test-command.json` and `gateway-tests.log`.

@@ -37,7 +37,7 @@ cd "$(dirname "${BASH_SOURCE[0]}")/../../.."
 release_cutoff=(
   --exclude-newer 2026-11-06T00:00:00Z
   --exclude-newer-package filelock=2026-11-13T00:00:00Z
-  --exclude-newer-package litellm=2026-11-13T00:00:00Z
+  --exclude-newer-package litellm=2026-11-08T00:00:00Z
 )
 if [[ "$operation" == compile ]]; then
   "$uv_bin" pip compile --no-config --python-version 3.12 --universal \
