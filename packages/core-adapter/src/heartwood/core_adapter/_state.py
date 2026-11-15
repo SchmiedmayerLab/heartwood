@@ -66,6 +66,10 @@ class SessionRecoveryError(ValueError):
     """Raised when an interrupted session commit cannot be recovered safely."""
 
 
+class SessionRecoveryRequiredError(RuntimeError):
+    """Raised when a read finds an interrupted commit that only the session writer completes."""
+
+
 class SessionStorageCapabilityError(SessionRecoveryError):
     """Raised when session storage cannot provide required durability semantics."""
 
@@ -498,13 +502,18 @@ class FileSessionStore:
         events, _audit_events, _verification = self._verified_records()
         return events
 
+    def verified_events(self) -> tuple[SessionEvent, ...]:
+        """Return one verified snapshot without writing; an interrupted commit is refused."""
+        events, _audit_events, _verification = self._verified_records(recover=False)
+        return events
+
     def verified_audit_export(self) -> tuple[str, AuditVerification]:
         """Return a stable canonical export after full paired-log verification."""
         _events, audit_events, verification = self._verified_records()
         return canonical_audit_jsonl(audit_events), verification
 
     def _verified_records(
-        self,
+        self, *, recover: bool = True
     ) -> tuple[tuple[SessionEvent, ...], tuple[AuditEvent, ...], AuditVerification]:
         if not self.session_dir.exists():
             verification = AuditLog(self.audit_path).verify(())
@@ -538,6 +547,11 @@ class FileSessionStore:
                             audit_events[-1].event_hash if audit_events else None
                         )
                         return events, audit_events, verification
+                if not recover:
+                    raise SessionRecoveryRequiredError(
+                        f"session {self.session_id} has an interrupted commit; "
+                        "opening or verifying the session in Heartwood completes it"
+                    )
                 if not self.owns_writer:
                     self.acquire_writer()
                     acquired_writer = True

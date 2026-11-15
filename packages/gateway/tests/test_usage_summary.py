@@ -23,6 +23,7 @@ from heartwood.core_adapter import (
     BackendLifecycle,
     BackendLifecycleEvent,
     DeterministicAgentBackend,
+    FileSessionStore,
     SessionService,
 )
 from heartwood.gateway import (
@@ -35,6 +36,7 @@ from heartwood.gateway import (
 from heartwood.gateway._research_evaluation import ResearchStageEvaluator
 from heartwood.gateway._usage_summary import _counts
 from heartwood.gateway.experiments import ExperimentRecorder
+from heartwood.persistence import SESSION_COMMIT_VERSION
 from heartwood.schemas import JsonValue
 from heartwood.schemas.usage import ProjectUsageSummary
 from heartwood.session import CommandKind, EventKind, SessionCommand, SessionEvent
@@ -136,6 +138,54 @@ def test_summary_reports_failed_verification_without_partial_counts(tmp_path: Pa
         ProjectUsageSummary.model_validate(
             {**summary.model_dump(), "counts": _empty_counts()}, strict=False
         )
+
+
+def test_summary_leaves_an_interrupted_commit_and_reports_it_as_incomplete(
+    tmp_path: Path,
+) -> None:
+    project = _synthetic_project(tmp_path)
+    session = project.sessions_dir / "alpha"
+    events = (session / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    audit = (session / "audit.jsonl").read_text(encoding="utf-8").splitlines()
+    # A crash between the pending journal and the paired appends leaves this state.
+    (session / ".pending-commit.json").write_text(
+        json.dumps(
+            {
+                "schema_version": SESSION_COMMIT_VERSION,
+                "session_event": json.loads(events[-1]),
+                "audit_event": json.loads(audit[-1]),
+            }
+        ),
+        encoding="utf-8",
+    )
+    (session / "events.jsonl").write_text("\n".join(events[:-1]) + "\n", encoding="utf-8")
+    (session / "audit.jsonl").write_text("\n".join(audit[:-1]) + "\n", encoding="utf-8")
+    before = _record_snapshot(tmp_path)
+
+    gateway = SessionGateway(project=project, env={})
+    try:
+        summary = gateway.usage_summary()
+    finally:
+        gateway.stop()
+
+    assert _record_snapshot(tmp_path) == before
+    assert summary.audit_verification == "incomplete"
+    assert summary.counts is None
+
+
+def test_summary_verifies_a_session_another_process_has_open(tmp_path: Path) -> None:
+    project = _synthetic_project(tmp_path)
+    owner = FileSessionStore(project.sessions_dir, "alpha")
+    owner.acquire_writer()
+    gateway = SessionGateway(project=project, env={})
+    try:
+        summary = gateway.usage_summary()
+    finally:
+        gateway.stop()
+        owner.release_writer()
+
+    assert summary.audit_verification == "verified"
+    assert summary.counts is not None
 
 
 def test_summary_requires_initialized_state_and_creates_none(tmp_path: Path) -> None:

@@ -13,6 +13,7 @@ import pytest
 
 from heartwood.cli import main
 from heartwood.gateway import ProjectContext, SessionGateway
+from heartwood.persistence import SESSION_COMMIT_VERSION
 from heartwood.schemas.usage import ProjectUsageSummary
 from heartwood.session import CommandKind, SessionCommand
 
@@ -70,6 +71,34 @@ def test_usage_summary_fails_without_partial_counts_when_history_is_damaged(
     document = json.loads(capsys.readouterr().out)
     assert document["audit_verification"] == "failed"
     assert document["counts"] is None
+
+
+def test_usage_summary_reports_an_interrupted_commit_separately_from_damage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    project = _project_with_one_turn(tmp_path)
+    session = project.sessions_dir / "session-1"
+    events = (session / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    audit = (session / "audit.jsonl").read_text(encoding="utf-8").splitlines()
+    (session / ".pending-commit.json").write_text(
+        json.dumps(
+            {
+                "schema_version": SESSION_COMMIT_VERSION,
+                "session_event": json.loads(events[-1]),
+                "audit_event": json.loads(audit[-1]),
+            }
+        ),
+        encoding="utf-8",
+    )
+    (session / "events.jsonl").write_text("\n".join(events[:-1]) + "\n", encoding="utf-8")
+    (session / "audit.jsonl").write_text("\n".join(audit[:-1]) + "\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    assert main(["usage", "summary"]) == 1
+    text = capsys.readouterr().out
+    assert "interrupted commit" in text
+    assert "verification failed" not in text
+    assert (session / ".pending-commit.json").exists()
 
 
 def test_usage_summary_requires_project_state_without_creating_it(

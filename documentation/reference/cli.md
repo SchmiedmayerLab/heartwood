@@ -156,6 +156,7 @@ Select the session with the top-level `--session-id`, for example `heartwood --s
 It reports sessions, turns, allowed and rejected action sets, workflow runs by phase, reproduction outcomes and experiment runs by status, with the release version, the platform identifier and a random summary identifier created with the project state.
 It copies no prompt, path, file name, session title, model output or record identifier.
 If any session's history fails verification, it reports the failure without counts and exits with status `1`.
+If a session has an interrupted commit, it reports the history as incomplete, again without counts and with status `1`, and leaves the commit for Heartwood to complete when the session is next opened or verified, for example with `heartwood audit verify`.
 `--json` prints the published `heartwood.project-usage-summary.v1` document; see [Run a Pilot Evaluation](../operate/index.md#run-a-pilot-evaluation).
 
 ## Project Inspection

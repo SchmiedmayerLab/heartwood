@@ -13,7 +13,7 @@ from collections.abc import Sequence
 from importlib.metadata import version
 from uuid import UUID
 
-from heartwood.core_adapter import FileSessionStore, SessionOwnershipError
+from heartwood.core_adapter import FileSessionStore, SessionRecoveryRequiredError
 from heartwood.core_adapter.workflow_provenance import workflow_experiment_events
 from heartwood.gateway._experiment_store import ExperimentStore
 from heartwood.gateway._project import ProjectContext, ProjectStateError
@@ -37,8 +37,9 @@ from heartwood.session import EventKind, SessionEvent, validate_session_id
 def project_usage_summary(project: ProjectContext, *, platform_id: str) -> ProjectUsageSummary:
     """Summarize recorded use without writing records or contacting a model route.
 
-    Every session's paired history is fully verified first; any failure reports no
-    counts. The summary copies no prompt, path, file name, title, output or identifier.
+    Every session's paired history is fully verified first; a failure, or an interrupted
+    commit that only the session writer may complete, reports no counts. The summary
+    copies no prompt, path, file name, title, output or identifier.
     """
     if not project.state_exists():
         raise ProjectStateError("project state is not initialized; there is no usage to summarize")
@@ -47,12 +48,14 @@ def project_usage_summary(project: ProjectContext, *, platform_id: str) -> Proje
     try:
         sessions = _verified_sessions(project)
         counts = _counts(project, sessions)
-    except (ValueError, OSError, SessionOwnershipError):
+    except (SessionRecoveryRequiredError, ValueError, OSError) as error:
         return ProjectUsageSummary(
             summary_id=summary_id,
             release_version=release_version,
             platform_id=platform_id,
-            audit_verification="failed",
+            audit_verification=(
+                "incomplete" if isinstance(error, SessionRecoveryRequiredError) else "failed"
+            ),
             counts=None,
         )
     return ProjectUsageSummary(
@@ -73,8 +76,8 @@ def _verified_sessions(project: ProjectContext) -> tuple[tuple[SessionEvent, ...
             session_id = validate_session_id(candidate.name)
         except ValueError:
             continue
-        # Replay verifies the complete paired session and audit history.
-        sessions.append(FileSessionStore(project.sessions_dir, session_id).replay_events())
+        # Verifies the complete paired session and audit history without recovering it.
+        sessions.append(FileSessionStore(project.sessions_dir, session_id).verified_events())
     return tuple(sessions)
 
 

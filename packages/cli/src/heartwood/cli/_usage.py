@@ -49,7 +49,12 @@ def _format_summary(summary: ProjectUsageSummary) -> str:
     ]
     counts = summary.counts
     if counts is None:
-        lines.append("  Audit history: verification failed; no counts are reported")
+        lines.append(
+            "  Audit history: incomplete; a session has an interrupted commit that Heartwood "
+            "completes when the session is next opened or verified. No counts are reported"
+            if summary.audit_verification == "incomplete"
+            else "  Audit history: verification failed; no counts are reported"
+        )
         return "\n".join(lines)
     workflows = ", ".join(
         f"{phase} {count}" for phase, count in counts.workflow_runs.model_dump().items()

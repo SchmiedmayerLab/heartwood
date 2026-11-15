@@ -83,7 +83,8 @@ class ProjectUsageSummary(_UsageRecord):
 
     The summary identifier is a random value created with the project state; it links
     summaries from one project without identifying the project, a person or a session.
-    A failed audit verification reports no counts rather than partial counts.
+    A failed audit verification, or a history left incomplete by an interrupted commit,
+    reports no counts rather than partial counts.
     """
 
     schema_version: Literal["heartwood.project-usage-summary.v1"] = (
@@ -102,7 +103,7 @@ class ProjectUsageSummary(_UsageRecord):
         pattern=r"^[a-z0-9-]{1,64}$",
         json_schema_extra={"pattern": r"^[a-z0-9-]{1,64}(?![\s\S])"},
     )
-    audit_verification: Literal["verified", "failed"]
+    audit_verification: Literal["verified", "incomplete", "failed"]
     counts: ProjectUsageCounts | None
 
     @model_validator(mode="after")
