@@ -3085,6 +3085,50 @@ def test_closed_backend_does_not_resurrect_its_conversation(tmp_path: Path) -> N
     assert events[0].error_code == BackendErrorCode.WORKER_STOPPED
 
 
+def test_conversation_is_created_without_the_conversation_lock_and_closed_if_superseded(
+    tmp_path: Path,
+) -> None:
+    conversation = _ControlledConversation()
+    creating, release = Event(), Event()
+
+    def factory(
+        _event_callback: Callable[[OpenHandsEvent], None],
+        _token_callback: Callable[[LLMStreamChunk], None],
+    ) -> BaseConversation:
+        # A worker launch journals through the session while this runs.
+        creating.set()
+        assert release.wait(timeout=5)
+        return cast(BaseConversation, conversation)
+
+    backend = _backend(tmp_path, factory)
+    created: list[object] = []
+    creator = Thread(target=lambda: created.append(_attempt(backend._get_conversation)))
+    creator.start()
+    try:
+        assert creating.wait(timeout=5)
+        # Commands take the conversation lock under the session command lock.
+        assert backend._conversation_lock.acquire(timeout=1)
+        backend._conversation_lock.release()
+        with pytest.raises(OpenHandsSdkError, match="starting"):
+            backend._get_conversation()
+        closing = Thread(target=backend.close)
+        closing.start()
+        closing.join(timeout=5)
+        assert not closing.is_alive()
+    finally:
+        release.set()
+        creator.join(timeout=5)
+    assert isinstance(created[0], OpenHandsSdkError)
+    assert conversation.closed
+
+
+def _attempt(call: Callable[[], object]) -> object:
+    try:
+        return call()
+    except Exception as error:
+        return error
+
+
 def test_backend_rejects_conversation_access_while_close_is_in_progress(
     tmp_path: Path,
 ) -> None:

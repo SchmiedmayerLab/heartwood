@@ -18,7 +18,7 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Literal, cast
 from uuid import UUID, uuid4
 
-from heartwood.core_adapter._facade import BackendErrorEvent, BackendEvent
+from heartwood.core_adapter._facade import BackendErrorCode, BackendErrorEvent, BackendEvent
 from heartwood.core_adapter._state import SessionRecoveryError
 from heartwood.core_adapter.external_actions import (
     ExternalActionAdapter,
@@ -249,7 +249,11 @@ def decide_external_result(
             _check_result_authority(service, proposal)
             if (
                 not service.backend.wait_for_idle(0)
-                or service.backend.pending_action_group(session_id=command.session_id) is not None
+                or service._worker_request(
+                    lambda: service.backend.pending_action_group(session_id=command.session_id),
+                    stale=None,
+                )
+                is not None
             ):
                 raise ExternalActionError("worker has unfinished execution or review")
             assert adapter is not None
@@ -297,8 +301,11 @@ def decide_external_result(
     phase: Literal["unknown", "submitted"]
     try:
         _check_result_authority(service, proposal)
-        stream = service.backend.submit_context(
-            session_id=command.session_id, content=proposal.message
+        stream = service._worker_request(
+            lambda: service.backend.submit_context(
+                session_id=command.session_id, content=proposal.message
+            ),
+            stale=(BackendErrorEvent(error_code=BackendErrorCode.WORKER_STOPPED),),
         )
         phase = (
             "unknown"

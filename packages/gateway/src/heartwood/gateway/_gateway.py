@@ -12,12 +12,12 @@ import hashlib
 import json
 import os
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from contextlib import AbstractContextManager, contextmanager, nullcontext, suppress
+from contextlib import AbstractContextManager, ExitStack, contextmanager, nullcontext, suppress
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from functools import wraps
 from pathlib import Path
-from threading import RLock
+from threading import Lock, RLock
 from typing import TYPE_CHECKING, Concatenate, Literal, Protocol, cast
 from uuid import uuid4
 
@@ -230,6 +230,8 @@ if TYPE_CHECKING:
     from heartwood.gateway._specialists import SpecialistCatalog
 
 _RESERVED_MODEL_PROFILE_IDS = {"heartwood"}
+# Decisions of one command, when its service is replaced before the command is accepted.
+_COMMAND_ATTEMPTS = 2
 _PROJECTED_COMMANDS = frozenset(
     {
         CommandKind.APPROVE.value,
@@ -513,9 +515,10 @@ class SessionGateway:
         self._checkpoint_signer_registry_override = checkpoint_signer_registry
         self._checkpoint_signer_registry_cache: CheckpointSignerRegistry | None = None
         self._checkpoint_signer_factory = checkpoint_signer_factory
-        # Lock order, outermost first: the state lock, the project-configuration lock, a
-        # session service's locks, then the stream lock. A backend read after a service's
-        # first holds none of them, so one session's worker cannot delay another session.
+        # Lock order, outermost first: a session's command lock, the state lock, the
+        # project-configuration lock, a session service's locks, then the stream lock. A
+        # backend read and a worker session's command hold neither the state nor the
+        # configuration lock, so one session's worker cannot delay another session.
         self._state_lock: AbstractContextManager[object] = RLock()
         self._stream_lock = RLock()
         self._stream_epoch = uuid4().hex
@@ -597,6 +600,9 @@ class SessionGateway:
         self._service_factory = service_factory
         self.session_catalog = SessionCatalog(self.sessions_root)
         self._services: dict[str, SessionService] = {}
+        # Serializes commands to one session; taken before every other gateway lock.
+        self._session_command_locks: dict[str, Lock] = {}
+        self._session_command_locks_lock = Lock()
         self._service_configurations: dict[str, _ServiceConfiguration] = {}
         self._streams = EventStreamHub()
         self._streaming_text: dict[str, str] = {}
@@ -691,129 +697,187 @@ class SessionGateway:
         return self._handle_command(command)
 
     def _handle_command(self, command: SessionCommand) -> SessionResult:
+        """Handle one command; a session's worker answers without the gateway's locks.
+
+        The gateway and configuration locks cover resolving the service and deciding
+        availability. A worker session's command runs after they are released, so a
+        stalled worker delays no other session or settings call; a local session's
+        command keeps both, so a settings change waits for its turn. Commands to one
+        session stay serialized, and a command refused because its service was replaced
+        meanwhile, which accepts nothing, is decided again with the current service.
+        """
         command_kind = str(command.kind)
         starting_workflow = (
             command_kind == CommandKind.WORKFLOW.value and command.payload.get("action") == "start"
         )
-        storage_only = command_kind == CommandKind.AUDIT_EXPORT.value or starting_workflow
-        reconciled = None if storage_only else self._reconcile_before_lock(command.session_id)
-        with self._state_lock, self.config_store.locked():
-            self._project_activity.initialize()
-            if command.session_id == DEFAULT_SESSION_ID:
-                self.session_catalog.default()
-            else:
-                self.session_catalog.ensure(command.session_id)
-            deployment_refusal = (
-                self._deployment_change_refusal()
-                if not storage_only and command_kind in _DISPATCH_COMMANDS
-                else None
-            )
-            fatal_unavailable_reason: str | None = None
-            if not storage_only and command_kind in _PROJECTED_COMMANDS:
-                persisted = FileSessionStore(
-                    self.sessions_root,
-                    command.session_id,
-                ).replay_events()
-                persisted_projection = project_session(
-                    persisted,
-                    session_id=command.session_id,
-                )
-                if (
-                    persisted_projection.lifecycle.status == SessionLifecycle.ERROR
-                    and not persisted_projection.lifecycle.can_steer
-                ):
-                    fatal_unavailable_reason = (
-                        f"{command_kind} is unavailable while the agent is "
-                        f"{persisted_projection.lifecycle.status}"
-                    )
-            close_service = False
-            if storage_only or fatal_unavailable_reason is not None:
-                service = self._services.get(command.session_id)
-                if service is None or fatal_unavailable_reason is not None:
-                    service = self._storage_service(command.session_id)
-                    close_service = True
-            else:
-                service = self._service(command.session_id)
-            try:
-                state_reconciled = not storage_only and fatal_unavailable_reason is None
-                all_events = (
-                    self._reconciled_session_events(
-                        session_id=command.session_id,
-                        service=service,
-                        reconciled=reconciled,
-                    )
-                    if state_reconciled
-                    else service.replay_events()
-                )
-                with self._stream_lock:
-                    projection = self._snapshot_from_events_locked(
-                        session_id=command.session_id,
-                        all_events=all_events,
-                    ).projection
-                    unavailable_reason = (
-                        fatal_unavailable_reason
-                        or deployment_refusal
-                        or (
-                            None
-                            if command_kind not in _PROJECTED_COMMANDS
-                            or command_kind in projection.available_commands
-                            else (
-                                f"{command_kind} is unavailable while the agent is "
-                                f"{projection.lifecycle.status}"
+        if command_kind == CommandKind.AUDIT_EXPORT.value or starting_workflow:
+            with self._state_lock, self.config_store.locked():
+                return self._handle_stored_command(command, starting_workflow=starting_workflow)
+        with self._session_commands(command.session_id):
+            for attempt in range(_COMMAND_ATTEMPTS):
+                reconciled = self._reconcile_before_lock(command.session_id)
+                with ExitStack() as locks:
+                    locks.enter_context(self._state_lock)
+                    locks.enter_context(self.config_store.locked())
+                    admitted = self._admit_command_locked(command, reconciled)
+                    if isinstance(admitted, SessionResult):
+                        return admitted
+                    service, unavailable_reason, state_reconciled, streaming = admitted
+                    if id(service) in self._worker_sessions:
+                        locks.close()
+                    try:
+                        result = (
+                            service.handle(command, reconcile_before_command=not state_reconciled)
+                            if unavailable_reason is None
+                            else service.handle(
+                                command,
+                                unavailable_reason=unavailable_reason,
+                                reconcile_before_command=not state_reconciled,
                             )
                         )
-                    )
-                    streaming_started = (
-                        unavailable_reason is None and command_kind in _STREAMING_COMMANDS
-                    )
-                    streaming_was_active = command.session_id in self._streaming_active
-                    if streaming_started:
-                        self._streaming_active.add(command.session_id)
-                try:
-                    result = (
-                        service.handle(
-                            command,
-                            reconcile_before_command=not state_reconciled,
+                    except Exception as error:
+                        self._end_command_stream(command.session_id, streaming)
+                        replaced = (
+                            isinstance(error, RuntimeError)
+                            and self._services.get(command.session_id) is not service
+                            and service.store.command_record(command.command_id) is None
                         )
-                        if unavailable_reason is None
-                        else service.handle(
-                            command,
-                            unavailable_reason=unavailable_reason,
-                            reconcile_before_command=not state_reconciled,
+                        if replaced and attempt + 1 < _COMMAND_ATTEMPTS:
+                            continue
+                        raise
+                    if result.replayed:
+                        if streaming == "started":
+                            with self._stream_lock:
+                                self._streaming_active.discard(command.session_id)
+                    else:
+                        self._publish_committed_events(
+                            session_id=command.session_id, events=result.events
                         )
-                    )
-                except Exception:
-                    if streaming_started and not streaming_was_active:
-                        with self._stream_lock:
-                            self._streaming_active.discard(command.session_id)
-                            if self._streaming_text.pop(command.session_id, None) is not None:
-                                self._advance_stream_revision(command.session_id)
-                                self._streams.notify(session_id=command.session_id)
-                    raise
-                if result.replayed:
-                    if streaming_started and not streaming_was_active:
-                        with self._stream_lock:
-                            self._streaming_active.discard(command.session_id)
-                else:
-                    self._publish_committed_events(
-                        session_id=command.session_id,
-                        events=result.events,
-                    )
-                if (
-                    starting_workflow
-                    and not result.replayed
-                    and any(event.kind == EventKind.WORKFLOW_UPDATED for event in result.events)
-                ):
-                    # The next service must construct its SDK with the persisted
-                    # workflow's structured finish contract, not a cached default.
-                    close_service = True
-                return result
-            finally:
-                if close_service:
-                    self._close_service(service)
-                    if self._services.get(command.session_id) is service:
-                        self._services.pop(command.session_id, None)
-                        self._service_configurations.pop(command.session_id, None)
+                    return result
+        raise AssertionError("unreachable")  # pragma: no cover
+
+    @contextmanager
+    def _session_commands(self, session_id: str) -> Iterator[None]:
+        with self._session_command_locks_lock:
+            lock = self._session_command_locks.setdefault(session_id, Lock())
+        with lock:
+            yield
+
+    def _admit_command_locked(
+        self, command: SessionCommand, reconciled: SessionService | None
+    ) -> SessionResult | tuple[SessionService, str | None, bool, str | None]:
+        """Resolve the live service and the command's availability under the state lock.
+
+        A command a fatal session state refuses is recorded here with a storage service.
+        Otherwise this returns the service, the refusal reason, whether the service was
+        reconciled, and whether the command started streaming transient text.
+        """
+        command_kind = str(command.kind)
+        self._ensure_session_locked(command.session_id)
+        deployment_refusal = (
+            self._deployment_change_refusal() if command_kind in _DISPATCH_COMMANDS else None
+        )
+        if command_kind in _PROJECTED_COMMANDS:
+            persisted_projection = project_session(
+                FileSessionStore(self.sessions_root, command.session_id).replay_events(),
+                session_id=command.session_id,
+            )
+            if (
+                persisted_projection.lifecycle.status == SessionLifecycle.ERROR
+                and not persisted_projection.lifecycle.can_steer
+            ):
+                return self._handle_stored_command(
+                    command,
+                    unavailable_reason=(
+                        f"{command_kind} is unavailable while the agent is "
+                        f"{persisted_projection.lifecycle.status}"
+                    ),
+                )
+        service = self._service(command.session_id)
+        all_events = self._reconciled_session_events(
+            session_id=command.session_id, service=service, reconciled=reconciled
+        )
+        with self._stream_lock:
+            projection = self._snapshot_from_events_locked(
+                session_id=command.session_id, all_events=all_events
+            ).projection
+            unavailable_reason = deployment_refusal or (
+                None
+                if command_kind not in _PROJECTED_COMMANDS
+                or command_kind in projection.available_commands
+                else (
+                    f"{command_kind} is unavailable while the agent is "
+                    f"{projection.lifecycle.status}"
+                )
+            )
+            streaming: str | None = None
+            if unavailable_reason is None and command_kind in _STREAMING_COMMANDS:
+                streaming = (
+                    "continued" if command.session_id in self._streaming_active else "started"
+                )
+                self._streaming_active.add(command.session_id)
+        # A first read skipped under the lock is the service's own to perform.
+        state_reconciled = service is reconciled or self._read_under_lock(service)
+        return service, unavailable_reason, state_reconciled, streaming
+
+    def _ensure_session_locked(self, session_id: str) -> None:
+        self._project_activity.initialize()
+        if session_id == DEFAULT_SESSION_ID:
+            self.session_catalog.default()
+        else:
+            self.session_catalog.ensure(session_id)
+
+    def _end_command_stream(self, session_id: str, streaming: str | None) -> None:
+        if streaming != "started":
+            return
+        with self._stream_lock:
+            self._streaming_active.discard(session_id)
+            if self._streaming_text.pop(session_id, None) is not None:
+                self._advance_stream_revision(session_id)
+                self._streams.notify(session_id=session_id)
+
+    def _handle_stored_command(
+        self,
+        command: SessionCommand,
+        *,
+        starting_workflow: bool = False,
+        unavailable_reason: str | None = None,
+    ) -> SessionResult:
+        """Handle a command that only reads or writes durable state, under the state lock."""
+        self._ensure_session_locked(command.session_id)
+        service = None if unavailable_reason is not None else self._services.get(command.session_id)
+        close_service = service is None
+        if service is None:
+            service = self._storage_service(command.session_id)
+        try:
+            # Earlier durable events are published before the command's own.
+            self._publish_committed_events(
+                session_id=command.session_id, events=service.replay_events()
+            )
+            result = (
+                service.handle(command, reconcile_before_command=True)
+                if unavailable_reason is None
+                else service.handle(
+                    command, unavailable_reason=unavailable_reason, reconcile_before_command=True
+                )
+            )
+            if not result.replayed:
+                self._publish_committed_events(session_id=command.session_id, events=result.events)
+            if (
+                starting_workflow
+                and not result.replayed
+                and any(event.kind == EventKind.WORKFLOW_UPDATED for event in result.events)
+            ):
+                # The next service must construct its SDK with the persisted
+                # workflow's structured finish contract, not a cached default.
+                close_service = True
+            return result
+        finally:
+            if close_service:
+                self._close_service(service)
+                if self._services.get(command.session_id) is service:
+                    self._services.pop(command.session_id, None)
+                    self._service_configurations.pop(command.session_id, None)
 
     @gateway_operation
     def sessions(self) -> SessionListResponse:
@@ -2458,15 +2522,19 @@ class SessionGateway:
             )
 
     def _reconcile_before_lock(self, session_id: str) -> SessionService | None:
-        """Read a served session's backend before the state lock is taken.
+        """Read a session's backend before the state lock is taken.
 
         The session's worker answers this read, so it must not delay other sessions or
-        settings. A service's first read can launch its worker and stays under the lock,
-        as does the first read of a service that replaces this one meanwhile.
+        settings. That includes a service's first read, which can launch its worker; a
+        session whose journal suffices gets no service, and one that only records a
+        fatal state is read under the lock by a storage service.
         """
         with self._state_lock:
+            self._project_activity.initialize()
             service = self._services.get(session_id)
-        if service is None or not service.backend_opened:
+            if service is None and self._session_reconciler_locked(session_id)[0] == "service":
+                service = self._service(session_id)
+        if service is None:
             return None
         try:
             service.reconcile()
@@ -2491,52 +2559,63 @@ class SessionGateway:
         service: SessionService | None = None,
         reconciled: SessionService | None = None,
     ) -> tuple[SessionEvent, ...]:
-        """Resolve the service and reconcile durable state without holding the stream lock."""
+        """Resolve the service and reconcile durable state without holding the stream lock.
+
+        A service read before the lock is not read again. A worker session's first read,
+        which can launch its worker, is left to that session, outside this lock.
+        """
         self._project_activity.initialize()
-        if service is None:
-            store = FileSessionStore(
-                self.sessions_root,
-                session_id,
-            )
-            persisted_events = store.replay_events()
-            persisted_projection = project_session(
-                persisted_events,
-                session_id=session_id,
-            )
-            lifecycle = persisted_projection.lifecycle.status
-            unresolved_command_ids = store.unresolved_command_ids()
-            if (
-                lifecycle
-                not in {
-                    SessionLifecycle.RUNNING,
-                    SessionLifecycle.PAUSED,
-                    SessionLifecycle.WAITING_FOR_CONFIRMATION,
-                }
-                and not unresolved_command_ids
-                and session_id not in self._services
-            ):
-                return persisted_events
-            close_service = False
-            if (
-                lifecycle == SessionLifecycle.ERROR
-                and not persisted_projection.lifecycle.can_steer
-                and unresolved_command_ids
-                and session_id not in self._services
-            ):
-                active_service = self._storage_service(session_id)
-                close_service = True
-            else:
-                active_service = self._service(session_id)
-        else:
+        close_service = False
+        if service is not None:
             active_service = service
-            close_service = False
+        else:
+            reconciler, persisted = self._session_reconciler_locked(session_id)
+            if reconciler == "journal":
+                return persisted
+            close_service = reconciler == "storage"
+            active_service = (
+                self._storage_service(session_id) if close_service else self._service(session_id)
+            )
         try:
-            if active_service is not reconciled:
+            if active_service is not reconciled and self._read_under_lock(active_service):
                 active_service.reconcile()
             return active_service.replay_events()
         finally:
             if close_service:
                 self._close_service(active_service)
+
+    def _read_under_lock(self, service: SessionService) -> bool:
+        """Return whether reading this service cannot launch a worker."""
+        return service.backend_opened or id(service) not in self._worker_sessions
+
+    def _session_reconciler_locked(
+        self, session_id: str
+    ) -> tuple[Literal["journal", "storage", "service"], tuple[SessionEvent, ...]]:
+        """Return what reconciles a session, its journal alone, a storage or a live service."""
+        if session_id in self._services:
+            return "service", ()
+        store = FileSessionStore(self.sessions_root, session_id)
+        persisted = store.replay_events()
+        persisted_projection = project_session(persisted, session_id=session_id)
+        lifecycle = persisted_projection.lifecycle.status
+        unresolved_command_ids = store.unresolved_command_ids()
+        if (
+            lifecycle
+            not in {
+                SessionLifecycle.RUNNING,
+                SessionLifecycle.PAUSED,
+                SessionLifecycle.WAITING_FOR_CONFIRMATION,
+            }
+            and not unresolved_command_ids
+        ):
+            return "journal", persisted
+        if (
+            lifecycle == SessionLifecycle.ERROR
+            and not persisted_projection.lifecycle.can_steer
+            and unresolved_command_ids
+        ):
+            return "storage", persisted
+        return "service", persisted
 
     def _snapshot_from_events_locked(
         self,

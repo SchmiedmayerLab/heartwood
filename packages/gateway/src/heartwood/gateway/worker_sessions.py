@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
-from threading import Lock, Thread
+from threading import Event, Lock, Thread
 from typing import TYPE_CHECKING
 
 from heartwood.core_adapter import SessionService
@@ -59,6 +59,8 @@ class WorkerSessionPlan:
 
 
 WorkerPlanFactory = Callable[[WorkerSessionRequest], WorkerSessionPlan]
+# How long a close waits for a launch or a prompt revocation already in progress.
+_CLOSE_WAIT_SECONDS = 30.0
 # Revokes an attempt whose owning gateway process ended, without that process's launch state.
 WorkerReconciler = Callable[[WorkerAttemptRecord], WorkerRevocationEvidence]
 
@@ -81,6 +83,8 @@ class ManagedWorkerSession:
         self._launched: WorkerAttemptIntent | None = None
         self._revocation: Thread | None = None
         self._revocation_lock = Lock()
+        self._launch_settled = Event()
+        self._launch_settled.set()
         self._closing = False
         self._context: WorkerConversationContext | None = None
         # This owner reaches a worker only through `context`, so it may replace a revoked one.
@@ -108,7 +112,15 @@ class ManagedWorkerSession:
         if decision.decision != "allow":
             raise WorkerAttemptError("worker launch is denied by session policy")
         plan = self._prepare(self._request)
-        self._plan = plan
+        with self._revocation_lock:
+            self._plan, closing = plan, self._closing
+            if not closing:
+                self._launch_settled.clear()
+        if closing:
+            # A close that began during preparation found no plan to release.
+            if plan.release_preparation is not None:
+                plan.release_preparation()
+            raise WorkerAttemptError("worker session closed before launch")
 
         def launch(intent: WorkerAttemptIntent) -> WorkerRuntimeBinding:
             self._launched = intent
@@ -125,7 +137,16 @@ class ManagedWorkerSession:
             if self._launched is not None:
                 self._revoke_promptly()
             raise
+        finally:
+            # A close waiting for this launch now revokes it, or this thread stops below.
+            self._launch_settled.set()
         lease.on_fenced(self._revoke_promptly)
+        with self._revocation_lock:
+            closing = self._closing
+        if closing:
+            with suppress(Exception):
+                self._service.fence_worker_attempt(attempt_id=lease.intent.attempt_id)
+            raise WorkerAttemptError("worker session closed during launch")
         try:
             context = plan.connect(lease)
             if (
@@ -160,17 +181,27 @@ class ManagedWorkerSession:
             self._service.revoke_worker(self._plan.revoke)
 
     def close(self) -> None:
-        """Keep ownership until outside revocation and native client shutdown succeed."""
+        """Keep ownership until outside revocation and native client shutdown succeed.
+
+        A launch or prompt revocation still in progress after a bounded wait leaves the
+        session owned, and the close can be retried; the caller's locks are never held
+        for longer than that wait.
+        """
         with self._revocation_lock:
             self._closing = True
-            revocation = self._revocation
+        if not self._launch_settled.wait(_CLOSE_WAIT_SECONDS):
+            raise WorkerAttemptError("worker launch is still in progress")
+        with self._revocation_lock:
+            revocation, plan = self._revocation, self._plan
         if revocation is not None:
-            revocation.join()
-        if self._plan is not None:
+            revocation.join(_CLOSE_WAIT_SECONDS)
+            if revocation.is_alive():
+                raise WorkerAttemptError("worker revocation is still in progress")
+        if plan is not None:
             # An attempt retained by another owner is left for start-up reconciliation.
             current = self._service.worker_attempt()
             if current is not None and current.intent == self._launched:
-                self._service.revoke_worker(self._plan.revoke)
-            if self._plan.release_preparation is not None:
-                self._plan.release_preparation()
+                self._service.revoke_worker(plan.revoke)
+            if plan.release_preparation is not None:
+                plan.release_preparation()
         self._service.close()

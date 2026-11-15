@@ -17,8 +17,9 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
-from threading import Lock, RLock, get_ident
+from threading import Condition, Lock, RLock, Thread, current_thread, get_ident
 from typing import assert_never, cast
 from uuid import UUID, uuid4
 
@@ -161,6 +162,10 @@ class CommandConflictError(ValueError):
 
 # Reads repeated because the journal advanced under them before the observation is dropped.
 _BACKEND_READ_ATTEMPTS = 3
+# What a command records for a worker answer that arrived after its attempt was closed.
+_WORKER_STOPPED: tuple[BackendEvent, ...] = (
+    BackendErrorEvent(error_code=BackendErrorCode.WORKER_STOPPED),
+)
 
 
 class _FairLock:
@@ -223,6 +228,19 @@ class _FairLock:
     def __exit__(self, *_: object) -> None:
         self.release()
 
+    # A condition waits with this lock released at every depth and then restores the depth.
+    def _release_save(self) -> int:
+        depth, self._depth = self._depth, 1
+        self.release()
+        return depth
+
+    def _acquire_restore(self, depth: int) -> None:
+        self.acquire()
+        self._depth = depth
+
+    def _is_owned(self) -> bool:
+        return self._owner == get_ident()
+
 
 class SessionService:
     """Core session service shared by every interaction surface."""
@@ -259,10 +277,18 @@ class SessionService:
         # Lock order, outermost first: the gateway state lock, the worker control lock,
         # the command lock, the worker lease lock, then the stream lock an event or token
         # sink takes. A worker response budget takes its own lock and then the lease lock.
-        # A backend read after the first holds none of them, and fencing a lease needs
-        # only the lease lock. The command lock is granted in request order, so reads that
-        # follow one another cannot keep a command, fencing or revocation waiting.
+        # A backend read holds none of them; the first read holds only the open lock, which
+        # no other lock is held with. A command keeps others from journaling until it
+        # completes, but releases the command lock while the worker answers, so fencing,
+        # revocation and their journal records never wait for a worker request. The command
+        # lock is granted in request order, so reads that follow one another cannot keep a
+        # command, fencing or revocation waiting.
         self._command_lock = _FairLock()
+        # A condition needs only the acquire, release and wait protocol that the lock implements.
+        self._command_changed = Condition(self._command_lock)  # type: ignore[arg-type]
+        self._command_thread: Thread | None = None
+        self._request_threads: set[Thread] = set()
+        self._open_lock = Lock()
         self._worker_control_lock = RLock()
         self._worker_control_active = False
         self._closed = False
@@ -386,7 +412,9 @@ class SessionService:
             raise CommandConflictError("The gateway actor is reserved for automatic review")
         command_kind = _kind_value(command.kind)
         reconciling = command_kind != CommandKind.AUDIT_EXPORT.value and reconcile_before_command
-        with self._backend_reconciled(lambda: reconciling) as observed:
+        with self._backend_reconciled(lambda: reconciling) as observed, self._command_running():
+            if self._closing:
+                raise RuntimeError("Session service is closed")
             if reconciling:
                 reconciled = (*observed, *self._recover_approval_commands_locked(command))
             elif (
@@ -507,7 +535,10 @@ class SessionService:
         while not self.store.unresolved_command_ids() and any(
             event.kind == EventKind.CONFIRMATION_REQUESTED for event in requested
         ):
-            group = self.backend.pending_action_group(session_id=self.store.session_id)
+            group = self._worker_request(
+                lambda: self.backend.pending_action_group(session_id=self.store.session_id),
+                stale=None,
+            )
             if group is None or self._automatic_review_locked(group) is None:
                 break
             command = SessionCommand(
@@ -690,7 +721,9 @@ class SessionService:
         elif command_kind in {CommandKind.APPROVE.value, CommandKind.DENY.value}:
             events.extend(self._handle_action_decision(command, automatic=automatic))
         elif command_kind == CommandKind.PAUSE.value:
-            backend_events = self.backend.pause(session_id=command.session_id)
+            backend_events = self._worker_request(
+                lambda: self.backend.pause(session_id=command.session_id), stale=_WORKER_STOPPED
+            )
             if not any(isinstance(event, BackendErrorEvent) for event in backend_events):
                 events.append(
                     self._record_event(
@@ -700,7 +733,10 @@ class SessionService:
                 )
             events.extend(self._translate_backend_events(backend_events))
         elif command_kind == CommandKind.RESUME.value:
-            pending_group = self.backend.pending_action_group(session_id=command.session_id)
+            pending_group = self._worker_request(
+                lambda: self.backend.pending_action_group(session_id=command.session_id),
+                stale=None,
+            )
             if pending_group is not None:
                 events.append(
                     self._record_event(
@@ -721,7 +757,10 @@ class SessionService:
                     )
                 events.extend(authorization_events)
                 if authorized:
-                    backend_events = self.backend.resume(session_id=command.session_id)
+                    backend_events = self._worker_request(
+                        lambda: self.backend.resume(session_id=command.session_id),
+                        stale=_WORKER_STOPPED,
+                    )
                     if not any(isinstance(event, BackendErrorEvent) for event in backend_events):
                         events.append(
                             self._record_event(
@@ -754,7 +793,7 @@ class SessionService:
             recovery_failed = self._has_failed_approval_recovery_locked()
             return not recovery_failed
 
-        with self._backend_reconciled(readable) as observed:
+        with self._backend_reconciled(readable) as observed, self._command_running():
             events = (*observed, *self._recover_approval_commands_locked())
             if not recovery_failed:
                 # A status read can journal a request before the backend's own callback does.
@@ -780,7 +819,7 @@ class SessionService:
         read against, because an interleaved command, callback or lifecycle change can
         make observed state stale; source-event identities deduplicate the rest. The
         first read opens the backend, which can launch a worker and journal its attempt
-        through this service, so that read alone runs under the lock.
+        through this service, so first reads run one at a time.
         """
         observed: tuple[BackendEvent, ...] = ()
         observed_head: int | None = None
@@ -788,6 +827,7 @@ class SessionService:
         attempts = _BACKEND_READ_ATTEMPTS
         while True:
             with self._command_lock:
+                self._await_command_locked()
                 if self._closed:
                     raise RuntimeError("Session service is closed")
                 self.store.acquire_writer()
@@ -801,32 +841,95 @@ class SessionService:
                 ):
                     yield ()
                     return
-                if not current:
-                    if self._backend_opened and not attempts:
-                        # The writers that keep advancing the journal own what they recorded.
-                        yield ()
-                        return
-                    known = frozenset(self._known_source_event_ids_locked())
-                    if not self._backend_opened:
-                        observed = self.backend.reconcile(
-                            session_id=self.store.session_id, known_source_event_ids=known
-                        )
-                        self._backend_opened = current = True
                 if current:
                     yield tuple(self._translate_backend_events(observed, live=False))
                     return
+                if not attempts:
+                    # The writers that keep advancing the journal own what they recorded.
+                    yield ()
+                    return
+                known = frozenset(self._known_source_event_ids_locked())
+                opened = self._backend_opened
             attempts -= 1
-            observed = self.backend.reconcile(
-                session_id=self.store.session_id, known_source_event_ids=known
-            )
+            if opened:
+                observed = self.backend.reconcile(
+                    session_id=self.store.session_id, known_source_event_ids=known
+                )
+            else:
+                with self._open_lock:
+                    observed = self.backend.reconcile(
+                        session_id=self.store.session_id, known_source_event_ids=known
+                    )
+                    self._backend_opened = True
             observed_head, observed_lease = head, lease
 
+    def _await_command_locked(self) -> None:
+        """Wait, with the command lock released, until no other command is in progress."""
+        while (owner := self._command_thread) is not None and current_thread() not in {
+            owner,
+            *self._request_threads,
+        }:
+            self._command_changed.wait()
+
+    @contextmanager
+    def _command_running(self) -> Iterator[None]:
+        """Keep other writers from journaling until this command's records are complete."""
+        if self._command_thread is current_thread():
+            yield
+            return
+        self._command_thread = current_thread()
+        try:
+            yield
+        finally:
+            self._command_thread = None
+            self._command_changed.notify_all()
+
+    def _worker_request[Result](self, request: Callable[[], Result], *, stale: Result) -> Result:
+        """Run one request to a session's worker with the command lock released.
+
+        The command stays in progress, so no other command, read or callback journals
+        meanwhile, while fencing and revocation can. If the attempt's admission closes
+        while the worker answers, its answer is discarded, ``stale`` is returned, and
+        later requests of the command are not sent.
+        """
+        if self._worker_lease is None or self._command_thread is not current_thread():
+            return request()
+        lease = self._worker_lease
+        if self._worker_admission_error_locked() is not None:
+            # Admission closed during an earlier request of this command.
+            return stale
+        outcome: list[tuple[Result] | BaseException] = []
+
+        def answer() -> None:
+            try:
+                result: tuple[Result] | BaseException = (request(),)
+            except BaseException as error:
+                result = error
+            with self._command_changed:
+                outcome.append(result)
+                self._command_changed.notify_all()
+
+        helper = Thread(target=answer, name="heartwood-worker-request", daemon=True)
+        self._request_threads.add(helper)
+        try:
+            helper.start()
+            while not outcome:
+                self._command_changed.wait()
+        finally:
+            self._request_threads.discard(helper)
+        if isinstance(outcome[0], BaseException):
+            raise outcome[0]
+        if self._worker_lease is not lease or self._worker_admission_error_locked() is not None:
+            return stale
+        return outcome[0][0]
+
     def close(self) -> None:
-        """Release backend resources."""
+        """Release backend resources once the command in progress has completed."""
         with self._control_worker():
             with self._command_lock:
                 if self._closed:
                     return
+                self._await_command_locked()
                 self._closing = True
             try:
                 self.backend.close()
@@ -848,6 +951,7 @@ class SessionService:
     def propose_external_action(self, source_event_id: str) -> SessionEvent:
         """Prepare review of a retained worker proposal through a trusted service adapter."""
         with self._command_lock:
+            self._await_command_locked()
             events = propose_external_action_locked(self, source_event_id)
         self._event_sink(events)
         return events[-1]
@@ -885,6 +989,7 @@ class SessionService:
     def propose_external_result(self, operation_id: UUID) -> SessionEvent:
         """Prepare separate review before outside content can enter worker/model context."""
         with self._command_lock:
+            self._await_command_locked()
             events = propose_external_result_locked(self, operation_id)
         self._event_sink(events)
         return events[-1]
@@ -892,6 +997,7 @@ class SessionService:
     def reconcile_external_actions(self) -> tuple[SessionEvent, ...]:
         """Query retained outside operation IDs without reviving a worker or submitting work."""
         with self._command_lock:
+            self._await_command_locked()
             if self._closed:
                 raise ExternalActionError("session is closed")
             self.store.acquire_writer()
@@ -899,10 +1005,11 @@ class SessionService:
             adapter = self._external_actions
             if adapter is None:
                 return ()
-            emitted = (
-                *observe_external_actions_locked(self, adapter),
-                *self._recover_external_approvals_locked(),
-            )
+            with self._command_running():
+                emitted = (
+                    *observe_external_actions_locked(self, adapter),
+                    *self._recover_external_approvals_locked(),
+                )
         if emitted:
             self._event_sink(emitted)
         return emitted
@@ -1205,6 +1312,7 @@ class SessionService:
     ) -> ReviewExecutionPlan | None:
         """Recheck a consented review without holding session locks during qualification I/O."""
         with self._command_lock:
+            self._await_command_locked()
             self._require_review_owner(cancelled)
             self._recover_pending_commit_locked()
             current = workflow_run(self.replay_events())
@@ -1239,6 +1347,7 @@ class SessionService:
         if evaluator.prepare_review(current.binding, current.stage_id) != snapshot:
             raise ValueError("Parallel review files changed during qualification")
         with self._command_lock:
+            self._await_command_locked()
             self._require_review_owner(cancelled)
             if workflow_run(
                 self.replay_events()
@@ -1281,7 +1390,13 @@ class SessionService:
                 "content": prompt,
             },
         )
-        if self.backend.pending_action_group(session_id=command.session_id) is not None:
+        if (
+            self._worker_request(
+                lambda: self.backend.pending_action_group(session_id=command.session_id),
+                stale=None,
+            )
+            is not None
+        ):
             return (
                 user_event,
                 self._record_event(
@@ -1298,7 +1413,10 @@ class SessionService:
         )
         if not authorized:
             return (user_event, *authorization_events)
-        stream = self.backend.submit_turn(session_id=command.session_id, prompt=prompt)
+        stream = self._worker_request(
+            lambda: self.backend.submit_turn(session_id=command.session_id, prompt=prompt),
+            stale=_WORKER_STOPPED,
+        )
         return (user_event, *authorization_events, *self._translate_backend_events(stream))
 
     def _authorize_backend(
@@ -1464,7 +1582,9 @@ class SessionService:
         if outside is not None:
             return decide_external_action(self, command, outside)
         approved = _kind_value(command.kind) == CommandKind.APPROVE.value
-        pending_group = self.backend.pending_action_group(session_id=command.session_id)
+        pending_group = self._worker_request(
+            lambda: self.backend.pending_action_group(session_id=command.session_id), stale=None
+        )
         if pending_group is None or pending_group.group_id != action_group_id:
             return (
                 self._record_event(
@@ -1564,10 +1684,13 @@ class SessionService:
                     tuple(action.tool_call_id for action in pending_group.actions),
                 )
             )
-        backend_events = self.backend.resolve_confirmation(
-            session_id=command.session_id,
-            action_group_id=action_group_id,
-            approved=approved,
+        backend_events = self._worker_request(
+            lambda: self.backend.resolve_confirmation(
+                session_id=command.session_id,
+                action_group_id=action_group_id,
+                approved=approved,
+            ),
+            stale=_WORKER_STOPPED,
         )
         events.extend(self._translate_backend_events(backend_events))
         if not _backend_confirmation_resolved(
@@ -1899,6 +2022,7 @@ class SessionService:
         if not stream:
             return
         with self._command_lock:
+            self._await_command_locked()
             if self._closed or (self._worker_lease is not None and not self._worker_lease.active):
                 return
             self.store.acquire_writer()
@@ -1908,8 +2032,9 @@ class SessionService:
                 self._worker_record is not None and self._worker_lease is None
             ):
                 return
-            translated = self._translate_backend_events(stream)
-            events = (*translated, *self._review_automatically_locked(translated))
+            with self._command_running():
+                translated = self._translate_backend_events(stream)
+                events = (*translated, *self._review_automatically_locked(translated))
         if events:
             self._event_sink(events)
 
@@ -2058,7 +2183,10 @@ class SessionService:
             if intent is None:
                 continue
             if not _approval_intent_finished(events, intent):
-                pending_group = self.backend.pending_action_group(session_id=self.store.session_id)
+                pending_group = self._worker_request(
+                    lambda: self.backend.pending_action_group(session_id=self.store.session_id),
+                    stale=None,
+                )
                 matches = (
                     pending_group is not None
                     and pending_group.group_id == intent.group_id
@@ -2093,10 +2221,14 @@ class SessionService:
                                 intent.command_id, intent.group_id, intent.tool_call_ids
                             )
                         )
-                    backend_events = self.backend.resolve_confirmation(
-                        session_id=self.store.session_id,
-                        action_group_id=intent.group_id,
-                        approved=intent.approved,
+                    backend_events = self._worker_request(
+                        partial(
+                            self.backend.resolve_confirmation,
+                            session_id=self.store.session_id,
+                            action_group_id=intent.group_id,
+                            approved=intent.approved,
+                        ),
+                        stale=_WORKER_STOPPED,
                     )
                     translated = self._translate_backend_events(backend_events)
                     recovered.extend(translated)
@@ -2226,8 +2358,11 @@ class SessionService:
         recovered.append(
             self._record_dispatch_started(intent.command_id, intent.group_id, intent.tool_call_ids)
         )
-        backend_events = self.backend.resolve_confirmation(
-            session_id=self.store.session_id, action_group_id=intent.group_id, approved=True
+        backend_events = self._worker_request(
+            lambda: self.backend.resolve_confirmation(
+                session_id=self.store.session_id, action_group_id=intent.group_id, approved=True
+            ),
+            stale=_WORKER_STOPPED,
         )
         recovered.extend(self._translate_backend_events(backend_events))
 

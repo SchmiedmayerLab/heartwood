@@ -36,6 +36,8 @@ _MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 # A snapshot carries the whole active branch in one response, so it alone may be larger.
 _MAX_SNAPSHOT_BYTES = 16 * 1024 * 1024
 _MAX_RESPONSE_SECONDS = 120.0
+# How often a request waiting for its response observes that its attempt was fenced.
+_FENCE_OBSERVATION_SECONDS = 0.05
 _MAX_JSON_DEPTH = 64
 # Parsed values, not bytes, decide the memory a response costs: an empty object takes
 # three bytes of JSON and about a hundred bytes once parsed and validated. This bound
@@ -181,6 +183,13 @@ class WorkerResponseBudget:
             if self._attempt is not None:
                 self._attempt.fence()
 
+    @property
+    def open(self) -> bool:
+        """Observe whether admission is open, without contacting the control plane."""
+        with self._lock:
+            closed = self._closed
+        return not closed and (self._attempt is None or self._attempt.active)
+
 
 def _worker_origin(host: str) -> httpx.URL:
     origin = httpx.URL(host)
@@ -317,7 +326,7 @@ class WorkerResponseTransport(httpx.BaseTransport):
 
         Transport timeouts restart with every byte received, so a worker sending status
         lines, headers or chunk framing slowly would otherwise hold the caller, and the
-        locks it holds, without limit.
+        locks it holds, without limit. Once the attempt is fenced the caller stops waiting.
         """
         outcome: list[tuple[int, httpx.Headers, bytes] | BaseException] = []
 
@@ -329,10 +338,14 @@ class WorkerResponseTransport(httpx.BaseTransport):
 
         reader = Thread(target=read, name="heartwood-worker-response", daemon=True)
         reader.start()
-        reader.join(_MAX_RESPONSE_SECONDS)
+        deadline = time.monotonic() + _MAX_RESPONSE_SECONDS
+        while not outcome and self._budget.open and (remaining := deadline - time.monotonic()) > 0:
+            reader.join(min(remaining, _FENCE_OBSERVATION_SECONDS))
         if not outcome:
             # Closing the connection ends the abandoned read at its next byte or timeout.
             self._transport.close()
+            if not self._budget.open:
+                raise WorkerResponseError("worker response admission is closed")
             raise WorkerResponseError("worker response exceeded its deadline")
         if isinstance(outcome[0], BaseException):
             raise outcome[0]

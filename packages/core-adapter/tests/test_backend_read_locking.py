@@ -90,7 +90,7 @@ def _activate(service: SessionService) -> WorkerAttemptLease:
             }
         ),
     )
-    # The first read opens the backend under the command lock; later reads do not hold it.
+    # The first read opens the backend; no read holds the command lock.
     assert service.reconcile() == ()
     return lease
 

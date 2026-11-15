@@ -349,7 +349,13 @@ def handle_workflow_command(
         return (_error(service, "This workflow has ended; start a new session for another run"),)
     if not service.backend.wait_for_idle(0):
         return (_error(service, "Wait for the agent to settle, or pause it before continuing"),)
-    if service.backend.pending_action_group(session_id=command.session_id) is not None:
+    if (
+        service._worker_request(
+            lambda: service.backend.pending_action_group(session_id=command.session_id),
+            stale=None,
+        )
+        is not None
+    ):
         return (
             _error(service, "Resolve the pending tool actions before changing workflow stages"),
         )

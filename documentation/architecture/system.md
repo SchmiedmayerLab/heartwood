@@ -160,7 +160,7 @@ Fencing closes HTTP, event, and callback admission at once, including responses 
 
 The gateway fences an attempt when it observes an exhausted response budget, a missed request deadline, a failed admission or runtime observation, execution reported without a recorded decision, or session close.
 Fencing starts revocation on its own short-lived thread, so no control-plane call runs under a session lock or on a transport thread.
-Revocation waits for a session command in progress and is bounded by the control-plane timeouts: 15 seconds to observe the sandbox, 90 seconds for the delete request, and 90 seconds to observe its absence.
+Revocation does not wait for a session command whose worker request is in progress; it waits only for a control-plane launch of the same attempt to return, and is then bounded by the control-plane timeouts: 15 seconds to observe the sandbox, 90 seconds for the delete request, and 90 seconds to observe its absence.
 It deletes the sandbox through the control client connected at launch, stops the forwarder, rechecks the native configuration, requires Docker to report no attempt-owned worker container, and removes the attempt's volumes before the session records `revoked` with its evidence.
 Revocation is attempted once.
 If it fails, the attempt stays fenced and the writer stays owned, and the worker can keep running until the session closes, the gateway stops, or the next gateway start reconciles it.
@@ -196,8 +196,14 @@ Each such walk is bounded like any other, to 1,024 pages and 32 MiB of serialize
 A session's gateway memory for worker progress is therefore bounded by the retained branch, up to 16 MiB and 524,288 values; the SDK's cache, up to the 32 MiB its last complete walk admitted plus the events received over the event connection since then, which only the response budget's rate bounds until the run ends; and the response being admitted, at most about 70 MiB at the value limit.
 A routine read transfers the status, whose reported usage grows with the number of model calls up to the 4 MiB response limit, and the new events.
 The event connection has no deadline of its own: it is idle while a session waits for its researcher, its handshake is limited to ten seconds, and keepalive closes a connection whose peer stops answering.
-After the first backend read, which can launch the worker, reconciliation reads the worker without holding the session command lock or the gateway state lock.
-A command's own request to the worker still runs under both locks, within the request deadline.
+Reconciliation reads the worker without holding the session command lock or the gateway state lock, including a session's first read, which opens the conversation and can launch the worker.
+First reads of one session run one at a time; launch reads Skill and configuration state outside the gateway lock, and a change to either replaces the session's service, which revokes an attempt launched from the earlier state and launches again on the next read.
+A worker session's command runs without the gateway state and configuration locks and releases the session command lock while each of its requests to the worker is answered.
+Until the command's records are complete, no other command, read, or callback of that session journals, so its acceptance, events, and completion receipt stay together and a retried command waits and then replays its result instead of being sent again.
+Fencing and revocation journal during that wait; a worker answer that arrives after its attempt's admission closed is discarded, the command records that the worker stopped, and it sends no further request.
+A request waiting for its response ends as soon as its attempt is fenced, without waiting for the deadline.
+Closing a session waits for its command in progress, for at most 30 seconds for a launch or a prompt revocation already under way, and holds no lock that revocation needs; a close that cannot finish leaves the session owned and can be retried.
+A local session's commands keep the gateway locks, so a project setting change from another gateway waits for its turn; a worker session's command does not hold them, and a setting change applies to its next command.
 
 ### Response and Event Admission
 

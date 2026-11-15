@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
-from threading import Event
+from threading import Event, Thread, Timer
 from time import monotonic, sleep
 from typing import Literal, cast
 from unittest.mock import Mock
@@ -852,3 +852,111 @@ def test_connection_failure_after_prompt_revocation_keeps_its_own_error(
     finally:
         gateway.stop()
     assert platform.calls.count("revoke") == 1
+
+
+@pytest.mark.parametrize("revocation", ["finishes", "stalls"])
+def test_close_waits_a_bounded_time_for_prompt_revocation_and_holds_none_of_its_locks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, revocation: str
+) -> None:
+    monkeypatch.setattr("heartwood.gateway.worker_sessions._CLOSE_WAIT_SECONDS", 1.0)
+    platform = Platform()
+    gateway = configured_gateway(tmp_path, platform)
+    service = gateway._service("session-worker")
+    backend = service.backend
+    assert isinstance(backend, OpenHandsSdkBackend)
+    assert backend._worker_context is not None
+    lease = backend._worker_context().workspace.attempt
+    started, release = Event(), Event()
+    worker = gateway._worker_sessions[id(service)]
+    assert worker._plan is not None
+    revoke = worker._plan.revoke
+
+    def stalled(record: WorkerAttemptRecord) -> WorkerRevocationEvidence:
+        started.set()
+        assert release.wait(timeout=10)
+        return revoke(record)
+
+    worker._plan = replace(worker._plan, revoke=stalled)
+    try:
+        lease.fence()
+        assert started.wait(timeout=10)
+        if revocation == "finishes":
+            # The revocation needs the session's locks while the close waits under the gateway's.
+            Timer(0.2, release.set).start()
+        began = monotonic()
+        if revocation == "stalls":
+            with pytest.raises(ExceptionGroup, match="unable to close"):
+                gateway.stop()
+            assert monotonic() - began < 5
+            assert bool(service.store.owns_writer)
+            release.set()
+            assert _settles(service, "revoked")
+        gateway.stop()
+        assert monotonic() - began < 5
+    finally:
+        release.set()
+        gateway.stop()
+    assert _settles(service, "revoked")
+    assert not service.store.owns_writer
+
+
+@pytest.mark.parametrize("launch", ["finishes", "stalls"])
+def test_close_during_launch_revokes_it_once_it_returns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, launch: str
+) -> None:
+    monkeypatch.setattr("heartwood.gateway.worker_sessions._CLOSE_WAIT_SECONDS", 1.0)
+    platform = Platform()
+    gateway = configured_gateway(tmp_path, platform)
+    launching, release = Event(), Event()
+    prepare = platform.prepare
+
+    def slow_prepare(request: WorkerSessionRequest) -> WorkerSessionPlan:
+        plan = prepare(request)
+
+        def slow_launch(intent: WorkerAttemptIntent) -> WorkerRuntimeBinding:
+            launching.set()
+            assert release.wait(timeout=10)
+            return plan.launch(intent)
+
+        return replace(plan, launch=slow_launch)
+
+    gateway._worker_plan_factory = slow_prepare
+    service = gateway._service("session-worker")
+    backend = service.backend
+    assert isinstance(backend, OpenHandsSdkBackend)
+    assert backend._worker_context is not None
+    context = backend._worker_context
+    worker = gateway._worker_sessions[id(service)]
+    failures: list[BaseException] = []
+
+    def open_context() -> None:
+        try:
+            context()
+        except BaseException as error:
+            failures.append(error)
+
+    opening = Thread(target=open_context, daemon=True)
+    opening.start()
+    try:
+        assert launching.wait(timeout=10)
+        began = monotonic()
+        if launch == "stalls":
+            with pytest.raises(WorkerAttemptError, match="launch is still in progress"):
+                worker.close()
+            release.set()
+            opening.join(timeout=10)
+        else:
+            Timer(0.2, release.set).start()
+        # The close revokes what the launch created, and the launch connects nothing.
+        worker.close()
+        assert monotonic() - began < 5
+        opening.join(timeout=10)
+        assert not opening.is_alive()
+        assert isinstance(failures[0], WorkerAttemptError)
+        assert "connect" not in platform.calls
+        assert platform.calls.count("revoke") == 1
+        assert _settles(service, "revoked")
+    finally:
+        release.set()
+        gateway.stop()
+    assert not service.store.owns_writer
