@@ -27,6 +27,17 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from openshell import SandboxClient
 
+# Outside listeners standing for services on the worker's host, and an outside forward proxy.
+HOST_SERVICES = {
+    "researcher-gateway": 19674,
+    "records-service": 19675,
+    "signer": 19676,
+    "browser-origin": 19677,
+}
+ALTERNATE_PROXY_PORT = 19678
+_HOST_PORTS = (*HOST_SERVICES.values(), ALTERNATE_PROXY_PORT)
+_POSITIVE_CONTROLS = 5 + len(_HOST_PORTS)
+
 
 def serve_canary(
     listener: socket.socket,
@@ -61,11 +72,12 @@ def outside_canaries(port: int, ipv6_port: int) -> Iterator[queue.SimpleQueue[by
     listeners: list[socket.socket] = []
     threads: list[threading.Thread] = []
     try:
-        for family, host, local_port in (
-            (socket.AF_INET, "0.0.0.0", port),
-            (socket.AF_INET6, "::", ipv6_port),
+        for family, host, local_port, kinds in (
+            (socket.AF_INET, "0.0.0.0", port, (socket.SOCK_STREAM, socket.SOCK_DGRAM)),
+            (socket.AF_INET6, "::", ipv6_port, (socket.SOCK_STREAM, socket.SOCK_DGRAM)),
+            *((socket.AF_INET, "0.0.0.0", item, (socket.SOCK_STREAM,)) for item in _HOST_PORTS),
         ):
-            for kind in (socket.SOCK_STREAM, socket.SOCK_DGRAM):
+            for kind in kinds:
                 listener = socket.socket(family, kind)
                 listeners.append(listener)
                 if kind == socket.SOCK_STREAM:
@@ -107,6 +119,7 @@ def send_positive_controls(
         (socket.AF_INET, str(ipv4), port, socket.SOCK_DGRAM),
         (socket.AF_INET6, str(ipv6), ipv6_port, socket.SOCK_STREAM),
         (socket.AF_INET6, str(ipv6), ipv6_port, socket.SOCK_DGRAM),
+        *((socket.AF_INET, str(ipv4), item, socket.SOCK_STREAM) for item in _HOST_PORTS),
     ):
         with socket.socket(family, kind) as connection:
             connection.settimeout(5)
@@ -128,7 +141,7 @@ def positive_controls(
         send_positive_controls(ipv4, ipv6, port, ipv6_port)
     else:
         peer()
-    for _ in range(5):
+    for _ in range(_POSITIVE_CONTROLS):
         if observations.get(timeout=5) != b"synthetic-outside-positive-control":
             raise AssertionError("Unexpected traffic during the outside positive control")
     if not observations.empty():
@@ -183,6 +196,8 @@ def qualify_network(
                 str(ipv6_port),
                 "--allowed-host",
                 allowed_host,
+                *(f"--service={name}={item}" for name, item in HOST_SERVICES.items()),
+                f"--proxy-port={ALTERNATE_PROXY_PORT}",
             ],
             workspace=workspace,
             timeout_seconds=45,
@@ -192,7 +207,16 @@ def qualify_network(
             raise AssertionError("Worker network probe failed; a denial was not established")
         checks = json.loads(result.stdout)
         dns = {"allowed-dns", "unlisted-dns-synthetic"}
-        tcp = {"unknown-host-tcp", "ipv4-tcp", "mapped-ipv6-tcp", "native-ipv6-tcp"}
+        tcp = {
+            "unknown-host-tcp",
+            "ipv4-tcp",
+            "mapped-ipv6-tcp",
+            "native-ipv6-tcp",
+            "metadata-ipv4-tcp",
+            "metadata-ipv6-tcp",
+            "alternate-proxy-tcp",
+            *(f"{name}-tcp" for name in HOST_SERVICES),
+        }
         udp = {"direct-udp", "native-ipv6-udp"}
         if (
             not isinstance(checks, dict)
@@ -218,13 +242,16 @@ def qualify_network(
     if not observations.empty():
         raise AssertionError("The worker reached an outside canary")
     return {
-        "drill_id": "dns-and-direct-egress.v1",
+        "drill_id": "dns-and-direct-egress.v2",
         "sandbox_id": before.id,
         "generation": before.status.main_process_instance_id,
         "policy_sha256": admission.policy_hash,
         "network_probe_sha256": hashlib.sha256(program.encode()).hexdigest(),
         "network_checks": checks,
-        "outside_positive_controls": 10,
+        "outside_positive_controls": 2 * _POSITIVE_CONTROLS,
+        "host_service_ports": HOST_SERVICES,
+        "alternate_proxy_port": ALTERNATE_PROXY_PORT,
+        "metadata_positive_control": "unavailable; requires a cloud host",
         "outside_control_origin": "peer" if peer is not None else "controller",
         "canary_addresses": {"ipv4": str(ipv4), "ipv6": str(ipv6)},
         "forbidden_canary_requests": 0,

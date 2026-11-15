@@ -69,6 +69,9 @@ class SyntheticProvider:
             ("finish", {"message": "Synthetic aggregate check completed."}),
         ]
         self.scripts: dict[str, list[tuple[str, dict[str, Any]]]] = {}
+        # A case can hold each reply until it releases this event; `held` reports a waiting reply.
+        self.hold: threading.Event | None = None
+        self.held = threading.Event()
         self._request_lock = threading.Lock()
         owner = self
 
@@ -127,6 +130,10 @@ class SyntheticProvider:
                                 "route": route,
                             }
                         )
+                    if owner.hold is not None:
+                        owner.held.set()
+                        if not owner.hold.wait(120):
+                            raise TimeoutError("held synthetic reply was not released")
                     if (
                         not authorized
                         or self.path != "/v1/chat/completions"
@@ -227,6 +234,14 @@ _CONFINEMENT = (
     "PidMode",
     "IpcMode",
     "UsernsMode",
+    "CgroupnsMode",
+    "Devices",
+    "DeviceRequests",
+    "DeviceCgroupRules",
+    "NanoCpus",
+    "Memory",
+    "PidsLimit",
+    "ReadonlyRootfs",
 )
 
 

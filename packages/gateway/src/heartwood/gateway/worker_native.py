@@ -117,6 +117,8 @@ def _volume_settings(
         workspace=settings.workspace,
         image_digest=image_digest,
         protected_paths=(project.root, project.state_root, settings.native_config_home),
+        cpu=settings.cpu,
+        memory=settings.memory,
     )
 
 

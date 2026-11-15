@@ -163,3 +163,32 @@ def test_native_server_consumes_fixed_profile(
     assert config.registered_marketplaces == []
     assert config.workspace_path == Path("/workspace")
     assert config.conversations_path.is_relative_to("/home/heartwood/.local/state/worker")
+
+
+def test_agent_commands_do_not_inherit_the_attempt_key(
+    launcher: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_module = pytest.importorskip("openhands.agent_server.config")
+    terminal = pytest.importorskip("openhands.tools.terminal.env")
+    for name in tuple(os.environ):
+        monkeypatch.delenv(name)
+    for name, value in launcher.worker_environment({"SESSION_API_KEY": "a" * 43}).items():
+        monkeypatch.setenv(name, value)
+    # The server publishes its key under the indexed name for in-process callers, as it does
+    # in the worker before any conversation starts; registering the name restores it afterwards.
+    config = config_module.load_config(_ROOT / "images/worker/config.json")
+    monkeypatch.setenv("OH_SESSION_API_KEYS_0", "")
+    config_module.export_session_api_key(config)
+    monkeypatch.setenv("OH_SESSION_API_KEYS_1", "b" * 43)
+    assert os.environ["OH_SESSION_API_KEYS_0"] == "a" * 43
+    for environment in (
+        terminal.build_terminal_env(),
+        terminal.build_terminal_env({"SESSION_API_KEY": "c" * 43}),
+    ):
+        assert environment["HOME"] == "/home/heartwood"
+        assert not [
+            name
+            for name in environment
+            if name == "SESSION_API_KEY" or name.startswith("OH_SESSION_API_KEYS_")
+        ]

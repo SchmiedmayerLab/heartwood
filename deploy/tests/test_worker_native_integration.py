@@ -576,6 +576,27 @@ print(json.dumps(result))
             no_login_shell=True,
         )
         assert observation.exit_code == 0, observation.stderr
+        # The key authenticates only this worker's agent server, whose start-up environment
+        # code running as the worker user may read; only the outcome is retained.
+        key_reader = """import os
+from pathlib import Path
+assert os.getuid()==10001
+readable=False
+for entry in Path('/proc').iterdir():
+ if not entry.name.isdecimal() or int(entry.name)==os.getpid(): continue
+ try: names=[item.partition(b'=')[0] for item in (entry/'environ').read_bytes().split(b'\\0')]
+ except OSError: continue
+ readable=readable or b'SESSION_API_KEY' in names
+print('readable' if readable else 'unreadable')
+"""
+        key_observation = fixture.control.exec(
+            worker_name,
+            [PYTHON, "-I", "-B", "-c", key_reader],
+            workspace="default",
+            timeout_seconds=30,
+            no_login_shell=True,
+        )
+        assert key_observation.exit_code == 0, key_observation.stderr
         network_evidence = fixture.qualify_direct_network(worker_name)
         hostile_checks = None
         if fixture.hostile:
@@ -595,7 +616,7 @@ print(json.dumps(result))
             )
             assert hostile.exit_code == 0, hostile.stderr
             hostile_checks = json.loads(hostile.stdout)
-            assert len(hostile_checks) == 9
+            assert len(hostile_checks) == 10
             assert all(value is True for value in hostile_checks.values())
         service.audit_log.verify()
         ledger_before_telemetry_outage = service.store.audit_path.read_bytes()
@@ -658,6 +679,7 @@ print(json.dumps(result))
         report = {
             "drill_id": "approved-hostile-terminal.v1" if fixture.hostile else "native-workflow.v1",
             "worker_claims": hostile_checks,
+            "attempt_key_procfs": key_observation.stdout.strip(),
             "direct_network": network_evidence,
             "infrastructure_telemetry": telemetry,
             "retained_evidence": retained_evidence,

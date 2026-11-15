@@ -73,6 +73,36 @@ def test_http_denial_does_not_prove_udp_denial(probe: ModuleType) -> None:
             probe.denied_connection("127.0.0.1", 80, socket.AF_INET, socket.SOCK_DGRAM, "canary")
 
 
+def test_tunnel_request_through_an_outside_proxy_requires_a_denial(probe: ModuleType) -> None:
+    with patch.object(probe.socket, "socket") as factory:
+        connection = factory.return_value.__enter__.return_value
+        connection.recv.return_value = b"HTTP/1.1 403 Forbidden\r\n"
+        assert (
+            probe.denied_connection(
+                "127.0.0.1",
+                3128,
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+                "approved.invalid:443",
+                method="CONNECT approved.invalid:443",
+            )
+            == "policy-403"
+        )
+        assert connection.sendall.call_args.args[0].startswith(
+            b"CONNECT approved.invalid:443 HTTP/1.1\r\nHost: approved.invalid:443\r\n"
+        )
+        connection.recv.return_value = b"HTTP/1.1 200 Connection established\r\n"
+        with pytest.raises(AssertionError, match="did not receive a policy denial"):
+            probe.denied_connection(
+                "127.0.0.1",
+                3128,
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+                "approved.invalid:443",
+                method="CONNECT approved.invalid:443",
+            )
+
+
 @pytest.fixture
 def qualification() -> ModuleType:
     spec = importlib.util.spec_from_file_location(
@@ -138,8 +168,33 @@ def test_positive_controls_do_not_erase_worker_traffic(
             )
 
 
+def test_host_service_canaries_need_their_own_positive_controls(
+    qualification: ModuleType,
+) -> None:
+    observations: queue.SimpleQueue[bytes] = queue.SimpleQueue()
+    for _ in range(5):
+        observations.put(b"synthetic-outside-positive-control")
+    # Traffic after the five address-family controls is not an expected host-service control.
+    observations.put(b"unexpected worker traffic")
+    with patch.object(qualification.socket, "socket") as factory:
+        connection = factory.return_value.__enter__.return_value
+        connection.recv.return_value = b"ACK"
+        with pytest.raises(AssertionError, match="Unexpected"):
+            qualification.positive_controls(
+                ipaddress.IPv4Address("127.0.0.1"),
+                ipaddress.IPv6Address("::1"),
+                12345,
+                12346,
+                observations,
+            )
+    targets = {call.args[0] for call in connection.connect.call_args_list}
+    assert {("127.0.0.1", port) for port in qualification.HOST_SERVICES.values()} <= targets
+    assert ("127.0.0.1", qualification.ALTERNATE_PROXY_PORT) in targets
+
+
 @pytest.mark.parametrize(
-    "changed", ["id", "generation", "policy", "activation", "claims", "dns", "tcp", "udp"]
+    "changed",
+    ["id", "generation", "policy", "activation", "claims", "dns", "tcp", "udp", "service"],
 )
 def test_sandbox_replacement_invalidates_network_evidence(
     qualification: ModuleType, changed: str
@@ -174,6 +229,10 @@ def test_sandbox_replacement_invalidates_network_evidence(
         "direct-udp": "EACCES",
         "native-ipv6-tcp": "EACCES",
         "native-ipv6-udp": "EACCES",
+        "metadata-ipv4-tcp": "policy-403",
+        "metadata-ipv6-tcp": "EACCES",
+        "alternate-proxy-tcp": "policy-403",
+        **{f"{name}-tcp": "policy-403" for name in qualification.HOST_SERVICES},
     }
     if changed == "claims":
         checks = {}
@@ -183,6 +242,8 @@ def test_sandbox_replacement_invalidates_network_evidence(
         checks["ipv4-tcp"] = "ECONNREFUSED"
     elif changed == "udp":
         checks["direct-udp"] = "policy-403"
+    elif changed == "service":
+        del checks["metadata-ipv6-tcp"]
     control.exec.return_value = SimpleNamespace(exit_code=0, stdout=json.dumps(checks))
     with (
         patch.object(
@@ -290,3 +351,16 @@ def test_filesystem_only_probe_never_contacts_provider(hostile_probe: ModuleType
         "protected-state-write",
     }
     assert all(result.values())
+
+
+@pytest.mark.parametrize(
+    "name", ["SESSION_API_KEY", "OH_SESSION_API_KEYS_0", "OH_SESSION_API_KEYS_7"]
+)
+def test_hostile_probe_fails_when_an_agent_command_holds_the_attempt_key(
+    hostile_probe: ModuleType, monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    monkeypatch.delenv("SESSION_API_KEY", raising=False)
+    assert hostile_probe.probe_session_key() == {"session-key-environment-absent": True}
+    monkeypatch.setenv(name, "synthetic-attempt-key")
+    with pytest.raises(AssertionError, match="attempt key"):
+        hostile_probe.probe_session_key()

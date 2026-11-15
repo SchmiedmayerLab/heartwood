@@ -121,6 +121,7 @@ The synthetic run executes exactly the cases listed in `EXPECTED_CASES` in `depl
 - unapproved actions that must not run, after denial and at shutdown with a review pending;
 - an outside operation that requires retained authorization, approved, denied, pending, and with its reply lost;
 - the default sandbox review mode, in which a contained action is allowed by the gateway while an outside operation waits for the researcher;
+- a worker fenced while it waits for the model reply that proposes a contained action, after which the session reviews every action, the gateway decides nothing, the researcher's approval is refused, the action never runs, and the worker is revoked;
 - two workers whose authority and effects stay separate;
 - a derived image whose OCI working directory is a symbolic link, which must fail with an outside `WorkspaceValidationFailed` condition before the main process or any inference request;
 - a discarded create response, which must keep the attempt fenced and the writer owned until outside revocation removes the worker and volumes;
@@ -128,9 +129,12 @@ The synthetic run executes exactly the cases listed in `EXPECTED_CASES` in `depl
 - records transport authorization, and gateway logs retained until verified cleanup.
 
 The hostile session's approved command tries to read control credentials, change protected state and read-only projections, and reach a forbidden provider path.
+Its environment must hold neither `SESSION_API_KEY` nor any `OH_SESSION_API_KEYS_` variable; the workflow records whether code running as the worker user can read the key from the agent server's start-up environment, without retaining the key.
 The fixture compares state canaries and provider traffic before and after; worker-reported success cannot replace these observations.
 An allowed endpoint redirects to a forbidden path, and qualification requires the redirect request outside the worker and no request at its destination; an unapproved WebSocket upgrade must be refused.
 Direct IPv4, mapped IPv6, native IPv6, TCP, and UDP probes run against controlled listeners on a disposable dual-stack network, and an outside client must reach each listener before and after, so a timeout or unreachable route cannot pass as a denial.
+The worker also sends requests to listeners standing for the researcher gateway, the records service, the signer, and a browser origin on the worker's host, a tunnel request through an outside forward proxy, and requests to the cloud metadata addresses `169.254.169.254` and `fd00:ec2::254`.
+The metadata addresses have no listener on a local Docker host, so only an explicit denial passes there; a positive control for them requires a cloud host.
 
 With checkpoint evidence, a records outage must block the approved action until its authorization is retained, and command replay must not repeat the effect.
 The pinned synthetic records server rejects the conditional-write bucket policy, so replacement versions are detected and rejected without claiming full storage-policy qualification.
@@ -182,7 +186,7 @@ python deploy/tests/worker_network_qualification.py \
 ```
 
 The admitted policy must allow the `--allowed-host` name (default `host.docker.internal`) and deny the canary ports and unlisted destinations.
-The check requires explicit policy denial for direct IPv4, mapped IPv6, native IPv6, UDP, and an unlisted hostname; any canary traffic, listener failure, or change in sandbox identity, generation, or configuration invalidates the result.
+The check requires explicit policy denial for direct IPv4, mapped IPv6, native IPv6, UDP, an unlisted hostname, the host-service and outside-proxy listeners, and the metadata addresses; any canary traffic, listener failure, or change in sandbox identity, generation, or configuration invalidates the result.
 It does not create, delete, or change the sandbox, and does not qualify IPv6 inference or model authorization.
 
 ### Native Qualification Evidence
@@ -209,7 +213,7 @@ A run passes only when the tree matches its commit, both supplied images name th
 A reduced, extended, or skipped selection therefore fails, and adding, removing, or renaming a case requires changing `EXPECTED_CASES` in the same commit.
 
 `SHA256SUMS` covers the manifest, `junit.xml`, logs, and per-case evidence.
-Each worker case retains `worker-container.json`, the image, privilege, capabilities, security options, network, namespaces, and mounts Docker reported before admission was decided, without host paths, labels, or environment, so a rejected sandbox still shows its observed values.
+Each worker case retains `worker-container.json`, the image, privilege, capabilities, security options, network, namespaces, devices, resource limits, read-only root flag, and mounts Docker reported before admission was decided, without host paths, labels, or environment, so a rejected sandbox still shows its observed values.
 Private gateway state and generated credentials share the output directory and are excluded from the checksums and from retention.
 The worker candidate workflow verifies the evidence against its own commit and retains it for 90 days on the main branch and 14 days on pull requests.
 On the main branch, a separate Native Qualification job, which runs no candidate code, downloads the evidence, verifies it again, and attests `SHA256SUMS` with a GitHub build-provenance attestation.

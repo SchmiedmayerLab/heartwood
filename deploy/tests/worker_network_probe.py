@@ -7,6 +7,7 @@
 The outside test harness must first reach each supplied canary over the tested
 address family and transport, then verify that this probe sends it no traffic.
 This script alone cannot establish either of those outside observations.
+Cloud metadata addresses have no outside canary; only an explicit denial passes.
 """
 
 from __future__ import annotations
@@ -24,9 +25,11 @@ def denied_connection(
     family: socket.AddressFamily,
     transport: socket.SocketKind,
     hostname: str,
+    *,
+    method: str = "GET /canary",
 ) -> str:
     """Require an explicit denial, rather than a timeout or an unavailable route."""
-    request = (f"GET /canary HTTP/1.1\r\nHost: {hostname}\r\nConnection: close\r\n\r\n").encode(
+    request = (f"{method} HTTP/1.1\r\nHost: {hostname}\r\nConnection: close\r\n\r\n").encode(
         "ascii"
     )
     try:
@@ -53,10 +56,27 @@ def main() -> None:
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--ipv6-port", type=int, required=True)
     parser.add_argument("--allowed-host", default="host.docker.internal")
+    parser.add_argument(
+        "--service",
+        action="append",
+        default=[],
+        metavar="NAME=PORT",
+        help="An outside host service listening on the IPv4 canary address",
+    )
+    parser.add_argument("--proxy-port", type=int, help="An outside forward proxy on that address")
     args = parser.parse_args()
     if args.ipv6.ipv4_mapped is not None:
         parser.error("The native IPv6 canary must not be an IPv4-mapped address")
-    if any(not 1 <= port <= 65535 for port in (args.port, args.ipv6_port)):
+    services = {}
+    for service in args.service:
+        name, _, port = service.partition("=")
+        if not name.replace("-", "").isalnum() or not port.isdecimal() or name in services:
+            parser.error("Each service must be a unique NAME=PORT")
+        services[name] = int(port)
+    ports = (args.port, args.ipv6_port, *services.values())
+    if args.proxy_port is not None:
+        ports += (args.proxy_port,)
+    if any(not 1 <= port <= 65535 for port in ports):
         parser.error("Canary ports must be between 1 and 65535")
     if not args.allowed_host or any(char in args.allowed_host for char in "\r\n"):
         parser.error("The allowed hostname must be a nonempty single line")
@@ -125,6 +145,28 @@ def main() -> None:
     )
     for name, address, port, family, transport, hostname in cases:
         checks[name] = denied_connection(address, port, family, transport, hostname)
+    for name, port in services.items():
+        checks[f"{name}-tcp"] = denied_connection(
+            str(args.ipv4), port, socket.AF_INET, socket.SOCK_STREAM, args.allowed_host
+        )
+    for name, address, family in (
+        ("metadata-ipv4-tcp", "169.254.169.254", socket.AF_INET),
+        ("metadata-ipv6-tcp", "fd00:ec2::254", socket.AF_INET6),
+    ):
+        checks[name] = denied_connection(
+            address, 80, family, socket.SOCK_STREAM, "metadata.qualification.invalid"
+        )
+    if args.proxy_port is not None:
+        # A tunnel request through an outside proxy names the approved destination.
+        target = f"{args.allowed_host}:443"
+        checks["alternate-proxy-tcp"] = denied_connection(
+            str(args.ipv4),
+            args.proxy_port,
+            socket.AF_INET,
+            socket.SOCK_STREAM,
+            target,
+            method=f"CONNECT {target}",
+        )
     print(json.dumps(checks))
 
 
