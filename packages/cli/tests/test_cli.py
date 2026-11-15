@@ -1494,11 +1494,10 @@ def test_actions_and_advanced_model_profile_persist_in_config_toml(
     ]
 
     assert _run(project, monkeypatch, model_args) == 0
-    # Without a deployment manifest no command stores a review mode for later launches.
-    for mode in ("review-changes", "review-outside-effects", "auto-approve-low-risk"):
-        with pytest.raises(SystemExit) as rejected:
-            _run(project, monkeypatch, ["actions", "set", mode])
-        assert rejected.value.code == 2
+    # The command only shows the mode; no subcommand selects or stores one.
+    with pytest.raises(SystemExit) as rejected:
+        _run(project, monkeypatch, ["actions", "set", "review-changes"])
+    assert rejected.value.code == 2
     assert _run(project, monkeypatch, ["actions"]) == 0
     assert _run(project, monkeypatch, ["models", "validate", "local-test"]) == 0
 
@@ -1520,9 +1519,7 @@ def test_cli_and_browser_gateway_observe_the_same_project_configuration(
     project = tmp_path / "analysis"
     catalog = _local_catalog()
 
-    with pytest.raises(SystemExit) as rejected:
-        _run(project, monkeypatch, ["actions", "set", "review-outside-effects"])
-    assert rejected.value.code == 2
+    assert _run(project, monkeypatch, ["actions"]) == 0
     capsys.readouterr()
 
     gateway = RealSessionGateway(

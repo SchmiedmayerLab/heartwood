@@ -73,10 +73,6 @@ heartwood --session-id "${session_id}" allow | tee -a "${transcript}"
 heartwood --session-id "${rejected_session_id}" \
   --prompt "Propose the bounded synthetic action for rejection." | tee -a "${transcript}"
 heartwood --session-id "${rejected_session_id}" reject | tee -a "${transcript}"
-if heartwood actions set review-changes 2>&1 | tee -a "${transcript}"; then
-  echo "a project without a deployment manifest stored reduced action review" >&2
-  exit 1
-fi
 heartwood --session-id "${automatic_session_id}" \
   --prompt "Run the bounded low-risk automatic integration check." \
   | tee "${automatic_transcript}" | tee -a "${transcript}"
@@ -131,7 +127,6 @@ grep -q "A  cohort-summary.json" "${transcript}"
 grep -q "Change · cohort-summary.json · available" "${transcript}"
 grep -Fq '[Succeeded] $' "${automatic_transcript}"
 grep -q "as one OpenHands action set" "${automatic_transcript}"
-grep -q "the review mode is not stored" "${transcript}"
 grep -q "run a medium-risk network command" "${risky_transcript}"
 grep -q "Terminal Command · Advisory Medium Risk" "${risky_transcript}"
 grep -q "as one OpenHands action set" "${risky_transcript}"

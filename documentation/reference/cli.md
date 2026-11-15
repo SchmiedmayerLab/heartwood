@@ -32,13 +32,10 @@ heartwood [--session-id ID] [--interface terminal|web] [--plain] [--prompt TEXT]
 |---|---|
 | `heartwood doctor [--json]` | Inspect content-safe project, model, credential, policy, and compute readiness without changing state |
 | `heartwood setup` | Run model setup without opening a conversation |
-| `heartwood actions` | Show the action-review mode in use, the default, and each mode the deployment does not permit |
-| `heartwood actions set review-all` | You decide on every action set |
-| `heartwood actions set review-changes` | Heartwood allows project file views and plan updates; you decide on commands, file changes, and anything else |
-| `heartwood actions set review-outside-effects` | Actions inside the isolated worker run without asking; you decide on anything that leaves it |
+| `heartwood actions` | Show the action-review mode in use, the default, and each mode this launch cannot use, with the reason |
 
-`heartwood actions set` stores the mode in protected project state and requires a deployment manifest.
-Without one, select the mode in a running terminal or browser interface, or start with `--review-mode`; it applies until that process exits.
+Select the mode when starting with `--review-mode`, or in a running terminal (`/permissions`) or browser interface.
+Without a deployment manifest the selection applies until that process exits; with one, `gateway serve --deployment` stores it in protected project state.
 
 | Option | Purpose |
 |---|---|
