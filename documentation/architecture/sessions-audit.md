@@ -61,6 +61,9 @@ Missing generation, failed admission, interruption, or an uncertain create respo
 `revoke_worker` closes local admission before invoking the platform's revocation observer and records only returned evidence matching the retained attempt and runtime.
 A failed or uncertain revocation does not permit replacement.
 An attempt retained by an ended process can be fenced and revoked by a later owner of the session writer through the same `revoke_worker` contract.
+After recorded revocation, `prepare_worker_attempt` issues a new attempt identity for the same session and native conversation identity, unless the journal still holds an unsettled run, a pause, an unreviewed action, or a non-terminal outside operation or result release of the revoked worker.
+Commands to a session in that unsettled state are refused with the reason, and the session remains readable.
+A replacement worker receives none of the revoked worker's conversation state; events and tokens from the revoked attempt's callbacks are discarded because they do not hold the current lease.
 Launch, revocation, and service shutdown are serialized independently of command and event handling, so shutdown cannot release writer ownership while a launch may still return.
 Platform callbacks must bound their control-plane operations and must not wait for session shutdown or recursively start another worker lifecycle operation.
 These coordination methods do not install a platform launcher, terminate workers themselves, or infer infrastructure enforcement from a worker acknowledgement.

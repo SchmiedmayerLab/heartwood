@@ -74,7 +74,11 @@ The gateway independently checks attempt identity, admits untrusted responses an
 An uncertain revocation fences the attempt and retains writer ownership until reconciliation establishes that its resources are gone.
 The launcher deletes a worker that fails launch admission without waiting for the session to close, and the next managed gateway start deletes workers that an ended gateway process left running.
 Until that start, such a worker keeps its sandbox policy and provider attachment.
-Recorded worker absence relies on the sandbox gateway completing deletion as the qualified gateway does; Heartwood does not verify the registered gateway, so the operator must confirm the [gateway behavior behind native qualification](platform-requirements.md#gateway-behavior-behind-native-qualification).
+After revocation is recorded, a session can continue with a replacement worker in a new sandbox; it shares no credential, placeholder, conversation memory or workspace file with the revoked worker, and the session shows where the replacement began.
+Outside inspection rejects a worker container that is privileged, has added Linux capabilities, runs with unconfined seccomp, AppArmor or SELinux labeling, or shares the host process, IPC or user namespace.
+Recorded worker absence relies on the sandbox gateway completing deletion as the qualified gateway does.
+Heartwood requires the registered gateway to report a version that the operator declared in the deployment manifest, and refuses to launch or reconcile workers otherwise.
+That check compares a declaration with the gateway's self-report and does not verify its behavior, so the operator must still confirm the [gateway behavior behind native qualification](platform-requirements.md#gateway-behavior-behind-native-qualification).
 This path does not silently replace local execution and does not establish sensitive-data readiness merely by starting a worker.
 See the [platform isolation requirements](platform-contract.md#agent-isolation) and [native qualification limits](../architecture/testing.md#installed-native-integration).
 

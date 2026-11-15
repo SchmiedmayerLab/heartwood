@@ -58,7 +58,16 @@ def _container(volumes: WorkerVolumes, *, role: str = "worker") -> dict[str, Any
         ),
         "Config": {"Labels": {**volumes.labels, "heartwood.role": role}},
         "Image": _IMAGE,
-        "HostConfig": {"NetworkMode": "none", "Privileged": False},
+        "HostConfig": {
+            "NetworkMode": "none",
+            "Privileged": False,
+            "CapAdd": None,
+            "CapDrop": None,
+            "SecurityOpt": ["no-new-privileges"],
+            "PidMode": "",
+            "IpcMode": "private",
+            "UsernsMode": "",
+        },
         "State": {"Running": False, "ExitCode": 0},
         "Mounts": [
             {"Destination": f"/{mount}", "Name": name, "Type": "volume", "RW": False}
@@ -243,6 +252,65 @@ def test_worker_inspection_rejects_mounts_of_withheld_host_locations(
     monkeypatch.setattr(volumes, "command", Mock(return_value=json.dumps([observed]).encode()))
     with pytest.raises(WorkerAttemptError, match="withheld host location"):
         volumes.inspect_worker(observed["Name"].removeprefix("/"))
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("CapAdd", ["SYS_ADMIN"]),
+        ("CapAdd", ["NET_ADMIN", "SYS_PTRACE"]),
+        ("CapAdd", "SYS_ADMIN"),
+        ("SecurityOpt", ["seccomp=unconfined"]),
+        ("SecurityOpt", ["no-new-privileges", "apparmor=unconfined"]),
+        ("SecurityOpt", ["seccomp:unconfined"]),
+        ("SecurityOpt", ["label=disable"]),
+        ("SecurityOpt", ["label:disable"]),
+        ("SecurityOpt", "seccomp=unconfined"),
+        ("SecurityOpt", [None]),
+        ("PidMode", "host"),
+        ("PidMode", None),
+        ("IpcMode", "host"),
+        ("IpcMode", None),
+        ("UsernsMode", "host"),
+        ("UsernsMode", None),
+        ("CapAdd", ...),
+        ("SecurityOpt", ...),
+        ("PidMode", ...),
+        ("IpcMode", ...),
+        ("UsernsMode", ...),
+    ],
+)
+def test_worker_inspection_rejects_weakened_or_unobserved_confinement(
+    volumes: WorkerVolumes,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    value: object,
+) -> None:
+    observed = _container(volumes)
+    if value is ...:
+        del observed["HostConfig"][field]
+    else:
+        observed["HostConfig"][field] = value
+    monkeypatch.setattr(volumes, "command", Mock(return_value=json.dumps([observed]).encode()))
+    with pytest.raises(WorkerAttemptError, match="confinement"):
+        volumes.inspect_worker(observed["Name"].removeprefix("/"))
+
+
+@pytest.mark.parametrize(
+    "host",
+    [
+        {"CapAdd": [], "SecurityOpt": None},
+        {"SecurityOpt": [], "PidMode": "private", "IpcMode": "shareable"},
+        {"SecurityOpt": ["no-new-privileges:true", "seccomp=/etc/docker/profile.json"]},
+    ],
+)
+def test_worker_inspection_accepts_confined_runtime_defaults(
+    volumes: WorkerVolumes, monkeypatch: pytest.MonkeyPatch, host: dict[str, object]
+) -> None:
+    observed = _container(volumes)
+    observed["HostConfig"].update(host)
+    monkeypatch.setattr(volumes, "command", Mock(return_value=json.dumps([observed]).encode()))
+    volumes.inspect_worker(observed["Name"].removeprefix("/"))
 
 
 def test_protected_locations_must_be_canonical(volumes: WorkerVolumes) -> None:

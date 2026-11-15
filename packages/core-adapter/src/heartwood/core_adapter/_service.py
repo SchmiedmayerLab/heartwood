@@ -87,6 +87,7 @@ from heartwood.core_adapter.worker_attempts import (
     WorkerRuntimeBinding,
     current_worker_attempt,
     validate_worker_transition,
+    worker_replacement_blocker,
 )
 from heartwood.core_adapter.workflow_review import validate_parallel_review_plan
 from heartwood.core_adapter.workflow_runtime import (
@@ -1249,6 +1250,8 @@ class SessionService:
             previous = current_worker_attempt(self.replay_events())
             if previous is not None and previous.phase != "revoked":
                 raise WorkerAttemptError("previous worker access has not been revoked")
+            if previous is not None and (reason := self._worker_replacement_blocker_locked()):
+                raise WorkerAttemptError(f"worker replacement is unavailable: {reason}")
             if previous is None and any(
                 event.kind
                 in {
@@ -1360,6 +1363,11 @@ class SessionService:
         if current is None:
             return None
         lease = self._worker_lease
+        if current.phase == "revoked" and lease is None and not self._worker_attempt_created:
+            # Verified revocation lets this owner launch one replacement attempt, provided no
+            # retained run or review still depends on the revoked worker's conversation.
+            reason = self._worker_replacement_blocker_locked()
+            return None if reason is None else f"{reason}; continue in a new session"
         if (
             current.phase != "active"
             or lease is None
@@ -1368,6 +1376,18 @@ class SessionService:
             or self._worker_project_id != current.intent.project_id
         ):
             return "worker attempt requires trusted launcher reconciliation"
+        return None
+
+    def _worker_replacement_blocker_locked(self) -> str | None:
+        events = self.replay_events()
+        if reason := worker_replacement_blocker(events):
+            return reason
+        # Outside reviews and operations stay bound to the attempt that proposed them.
+        if any(not record.terminal for record in external_action_records(events).values()) or any(
+            record.phase not in {"denied", "expired", "withdrawn", "submitted"}
+            for record in external_result_records(events).values()
+        ):
+            return "an outside operation or result release of the revoked worker is unresolved"
         return None
 
     def _accept_worker_events(

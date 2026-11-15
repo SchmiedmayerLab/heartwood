@@ -1051,12 +1051,19 @@ def _handle_serve(
             )
         worker_plan_factory = worker_reconciler = None
         if deployment is not None and deployment.worker is not None:
+            from heartwood.gateway.worker_control import WorkerGatewayVersionError
             from heartwood.gateway.worker_native import (
                 native_worker_plan_factory,
                 native_worker_reconciler,
+                require_declared_gateway,
             )
 
             worker_plan_factory = native_worker_plan_factory(deployment.worker, project)
+            try:
+                require_declared_gateway(deployment.worker, project)
+            except WorkerGatewayVersionError as error:
+                code = diagnostic_for("worker-gateway-version").code
+                raise SystemExit(f"{code}: {error}") from error
             worker_reconciler = native_worker_reconciler(deployment.worker, project)
         gateway = (
             SessionGateway(

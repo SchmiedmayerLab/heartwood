@@ -240,6 +240,20 @@ Use a regular project file, not a symbolic link, and wait for any process writin
 The file must fit within the capture operation's byte limit.
 Retry capture before relying on its digest as execution evidence.
 
+## Managed Workers
+
+### `HW-WORKER-001` — Sandbox Gateway Version Is Not Declared as Qualified
+
+`heartwood gateway serve --deployment` read the version reported by the registered sandbox gateway, and it is not listed in the manifest's `gateway_versions`, or the version could not be read.
+Confirm that the gateway named in the manifest is running and reachable with its registered mutual TLS identity, and that it is the gateway your qualification evidence covers.
+If the gateway was upgraded or replaced, obtain evidence for the [behavior native qualification depends on](../operate/platform-requirements.md#gateway-behavior-behind-native-qualification) before adding its reported version to `gateway_versions`.
+Do not add a version only to make the check pass; the check compares your declaration with the gateway's own report and proves nothing about its behavior.
+The same condition after start stops the affected worker launch or reconciliation and leaves the attempt fenced.
+
+A session whose earlier worker was stopped and revoked shows "A new worker replaced the earlier one" when its next task starts a replacement.
+The replacement does not remember the earlier conversation and starts with an empty sandbox workspace; restate the context it needs.
+A session is refused instead when its earlier worker left a run, pause, action review or outside operation unsettled; inspect its record and continue in a new session.
+
 ## Managed Compute
 
 ### `HW-COMPUTE-001` — A Compute Allocation May Be Required

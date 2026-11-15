@@ -238,6 +238,7 @@ A changed group or world-writable socket is rejected.
 [worker]
 driver = "openshell-docker"
 gateway = "research-workers"
+gateway_versions = ["0.0.0+replace.with.qualified.version"]
 native_config_home = "/etc/heartwood/native"
 openshell_cli = "/opt/heartwood/bin/openshell"
 docker_cli = "/opt/heartwood/bin/docker"
@@ -260,6 +261,9 @@ schema_version = "heartwood.worker-inputs.v1"
 files = []
 ```
 
+`gateway_versions` is required and lists every version string that the registered sandbox gateway may report and that the operator has [qualification evidence](../operate/platform-requirements.md#gateway-behavior-behind-native-qualification) for.
+Serving stops with [`HW-WORKER-001`](troubleshooting.md#hw-worker-001-sandbox-gateway-version-is-not-declared-as-qualified) when the gateway reports another version or its version cannot be read.
+The value is a declaration checked against the gateway's self-report, not proof of how that gateway behaves.
 The selected application profile must match the configured profile, model and endpoint, and remain allowed by the deployment policy.
 Each selected input entry declares a project-relative `path`, `sha256` and `size_bytes`; an empty selection transfers no research files.
 The launcher projects verified Skills separately and binds the complete selection to the retained worker attempt.
@@ -269,6 +273,7 @@ Unavailable native dependencies, unsupported admission hooks, mismatched observe
 Stopping an uncertain worker requires outside reconciliation; do not delete its records or release its writer merely because a client disconnected.
 Before serving, the gateway revokes worker attempts that an earlier gateway process for the same deployment left unrevoked.
 It prints one line for each session whose revocation could not be observed; that attempt stays fenced and is retried at the next start.
+A session whose previous worker is recorded as revoked starts a replacement worker with its next task; the replacement has no memory of the earlier conversation and an empty workspace, and the session shows a notice where it began.
 
 The same manifest can select automatic checkpointing through an `evidence` table.
 Evidence configuration requires complete worker isolation and explicitly binds the records service, credential source, retention and approved production signer profile.

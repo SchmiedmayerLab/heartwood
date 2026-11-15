@@ -52,7 +52,11 @@ from heartwood.core_adapter.external_actions import (
     external_action_records,
 )
 from heartwood.core_adapter.external_results import ExternalResultRecord, external_result_records
-from heartwood.core_adapter.worker_attempts import WorkerRuntimeBinding
+from heartwood.core_adapter.worker_attempts import (
+    WorkerAttemptError,
+    WorkerRevocationEvidence,
+    WorkerRuntimeBinding,
+)
 from heartwood.schemas import AuditEvent, AuditRetention, JsonValue, PlatformOperationObservation
 from heartwood.session import CommandKind, EventKind, SessionCommand, SessionEvent
 from packages.audit.tests.records_fixtures import MemoryS3
@@ -274,6 +278,54 @@ def test_approval_is_paired_before_effect_and_retries_do_not_resubmit(setup: Set
     assert audit["proposal_sha256"] == record.proposal.sha256
     assert "synthetic input" not in str(audit)
     assert "synthetic-project-results" not in str(audit)
+
+
+@pytest.mark.parametrize("settled", [False, True])
+def test_unresolved_outside_review_is_not_handed_to_a_replacement_worker(
+    setup: Setup, tmp_path: Path, settled: bool
+) -> None:
+    service, worker, platform = setup
+    record = propose(service, worker)
+    if settled:
+        service.handle(command(service, record, approved=False))
+        assert latest(service).phase == "denied"
+    attempt = service.worker_attempt()
+    assert attempt is not None
+    service.fence_worker_attempt(attempt_id=attempt.intent.attempt_id)
+    service.record_worker_revocation(
+        WorkerRevocationEvidence(
+            attempt_id=attempt.intent.attempt_id,
+            sandbox_id="synthetic-worker",
+            observer_id="synthetic-control-plane",
+            evidence_sha256="d" * 64,
+            outcome="revoked",
+        )
+    )
+    service.close()
+    restored = SessionService.local_default(
+        tmp_path,
+        backend=Worker(),
+        worker_project_id=_PROJECT,
+        external_actions=platform,
+        clock=lambda: _NOW.isoformat(),
+    )
+    try:
+        if settled:
+            replacement = restored.prepare_worker_attempt(
+                image_digest=_IMAGE, sandbox_policy_sha256="b" * 64, input_manifest_sha256="c" * 64
+            )
+            assert replacement.attempt_id != attempt.intent.attempt_id
+        else:
+            with pytest.raises(WorkerAttemptError, match="outside operation"):
+                restored.prepare_worker_attempt(
+                    image_digest=_IMAGE,
+                    sandbox_policy_sha256="b" * 64,
+                    input_manifest_sha256="c" * 64,
+                )
+            assert latest(restored).phase == "proposed"
+        assert platform.submissions == []
+    finally:
+        restored.close()
 
 
 def test_denial_never_calls_service_and_is_terminal(setup: Setup) -> None:

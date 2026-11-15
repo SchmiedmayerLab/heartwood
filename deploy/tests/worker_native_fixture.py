@@ -18,8 +18,8 @@ import subprocess
 import threading
 import time
 import urllib.request
-from collections.abc import Callable
-from contextlib import ExitStack
+from collections.abc import Callable, Iterator
+from contextlib import ExitStack, contextmanager, suppress
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -38,6 +38,7 @@ from heartwood.gateway import ProjectContext, SessionGateway
 from heartwood.gateway.checkpoint_deployment import deployment_checkpoint_evidence
 from heartwood.gateway.worker_deployment import OpenShellWorkerDeployment
 from heartwood.gateway.worker_inputs import WorkerInputManifest
+from heartwood.gateway.worker_volumes import WorkerVolumes
 
 PYTHON = "/opt/heartwood/.venv/bin/python"
 TERMINAL_COMMAND = (
@@ -216,6 +217,63 @@ class SyntheticProvider:
             raise RuntimeError(f"Synthetic provider did not finish cleanly: {self.errors}")
 
 
+WORKER_CONTAINERS = "worker-container.json"
+_CONFINEMENT = (
+    "Privileged",
+    "CapAdd",
+    "CapDrop",
+    "SecurityOpt",
+    "NetworkMode",
+    "PidMode",
+    "IpcMode",
+    "UsernsMode",
+)
+
+
+def container_record(observed: dict[str, Any]) -> dict[str, Any]:
+    """Keep what Docker reports about a worker's confinement, without host paths or labels."""
+    host = observed.get("HostConfig")
+    mounts = observed.get("Mounts")
+    return {
+        "image": observed.get("Image"),
+        "host_config": {
+            name: host.get(name, "<absent>") if isinstance(host, dict) else "<absent>"
+            for name in _CONFINEMENT
+        },
+        "mounts": [
+            {
+                "type": mount.get("Type"),
+                "destination": mount.get("Destination"),
+                "read_write": mount.get("RW"),
+            }
+            for mount in (mounts if isinstance(mounts, list) else [])
+            if isinstance(mount, dict)
+        ],
+    }
+
+
+@contextmanager
+def retain_worker_containers(output: Path) -> Iterator[None]:
+    """Record each worker container as Docker reports it, before its admission is decided."""
+    inspect_worker = WorkerVolumes.inspect_worker
+    records: list[dict[str, Any]] = []
+
+    def recording(volumes: WorkerVolumes, name: str) -> None:
+        # A failed observation must not change the admission decision under qualification.
+        with suppress(Exception):
+            records.append(container_record(volumes._inspect("container", name)))
+            (output / WORKER_CONTAINERS).write_text(
+                json.dumps(records, indent=2, sort_keys=True) + "\n"
+            )
+        inspect_worker(volumes, name)
+
+    WorkerVolumes.inspect_worker = recording  # type: ignore[method-assign]
+    try:
+        yield
+    finally:
+        WorkerVolumes.inspect_worker = inspect_worker  # type: ignore[method-assign]
+
+
 class NativeFixture:
     """Own one gateway and synthetic provider; Heartwood owns every actual attempt."""
 
@@ -257,7 +315,9 @@ class NativeFixture:
         self.network = os.environ["HW_QUALIFICATION_NETWORK"]
         self.controller_image = os.environ["HW_CONTROLLER_IMAGE"]
         self.gateway_image = os.environ["HW_GATEWAY_IMAGE"]
-        self.images = json.loads(Path("/opt/qualification/gateway.json").read_text())["images"]
+        gateway = json.loads(Path("/opt/qualification/gateway.json").read_text())
+        self.images = gateway["images"]
+        self.gateway_version: str = gateway["version"]
         self.env = {
             key: value
             for key, value in os.environ.items()
@@ -381,6 +441,8 @@ class NativeFixture:
     def start(self) -> None:
         from openshell import SandboxClient, TlsConfig
         from openshell._proto import sandbox_pb2 as policy_pb
+
+        self.resources.enter_context(retain_worker_containers(self.output))
 
         controller = json.loads(command(["docker", "inspect", os.environ["HW_CONTROLLER_NAME"]]))[0]
         if self.network not in controller["NetworkSettings"]["Networks"]:
@@ -913,6 +975,7 @@ print(json.dumps(result))
         return OpenShellWorkerDeployment(
             driver="openshell-docker",
             gateway=self.identity,
+            gateway_versions=(self.gateway_version,),
             native_config_home=self.private / "config",
             openshell_cli=self.cli,
             docker_cli=docker,
