@@ -17,6 +17,7 @@ from openhands.sdk.testing import TestLLM
 
 from heartwood.core_adapter.research_workflows import research_workflows
 from heartwood.gateway import SkillSettingsError
+from heartwood.gateway._skill_settings import BUNDLED_SKILL_DIGESTS
 from heartwood.gateway._specialists import (
     SpecialistAvailability,
     SpecialistCapability,
@@ -25,6 +26,7 @@ from heartwood.gateway._specialists import (
     load_specialist_catalog,
     specialist_agent_factory,
 )
+from heartwood.skills import LocalSkillVerifier
 
 
 def test_specialist_fingerprint_tracks_behavior_but_not_installation_paths() -> None:
@@ -176,7 +178,7 @@ def test_catalog_rejects_unverified_skill(tmp_path: Path) -> None:
     source = _valid_definition().replace("skills: []", "skills:\n  - unknown-skill")
     (agents_dir / "bounded-reviewer.md").write_text(source, encoding="utf-8")
 
-    with pytest.raises(SpecialistCatalogError, match="unverified Skill"):
+    with pytest.raises(SpecialistCatalogError, match="unverified or unavailable Skill"):
         load_specialist_catalog(agents_dir, _skills_dir())
 
 
@@ -410,6 +412,35 @@ def test_specialist_skills_come_only_from_the_verified_bundled_selection(
     assert unaffected.fingerprint == _catalog().fingerprint
     with pytest.raises(SkillSettingsError, match="release"):
         load_specialist_catalog(_agents_dir(), bundled)
+
+
+def test_specialist_skills_follow_the_deployment_platform(tmp_path: Path) -> None:
+    bundled = tmp_path / "skills"
+    shutil.copytree(_skills_dir(), bundled)
+    skill_file = bundled / "baseline-model" / "SKILL.md"
+    skill_file.write_text(
+        skill_file.read_text(encoding="utf-8").replace(
+            'heartwood.platforms: "generic,terra"', 'heartwood.platforms: "terra"'
+        ),
+        encoding="utf-8",
+    )
+    digests = {
+        **BUNDLED_SKILL_DIGESTS,
+        "baseline-model": LocalSkillVerifier(bundled)
+        .inspect_manifest(bundled / "baseline-model")
+        .tree_sha256,
+    }
+
+    terra = load_specialist_catalog(
+        _agents_dir(), bundled, platform_id="terra", bundled_digests=digests
+    )
+    assert "baseline-model" in {
+        skill.name for role in terra.roles for skill in role.verified_skills
+    }
+    with pytest.raises(SpecialistCatalogError, match="unavailable Skill: baseline-model"):
+        load_specialist_catalog(
+            _agents_dir(), bundled, platform_id="carina", bundled_digests=digests
+        )
 
 
 def test_specialist_skills_are_loaded_from_their_own_directories() -> None:

@@ -6,6 +6,7 @@
 
 """Register image-owned advisory factories before starting the native worker server."""
 
+import os
 from pathlib import Path
 from runpy import run_module
 
@@ -15,10 +16,14 @@ from heartwood.gateway._specialists import load_specialist_catalog
 
 def main() -> None:
     """Keep specialist definitions and factory code in the immutable worker image."""
+    platform_id = os.environ.get("HEARTWOOD_SKILL_PLATFORM")
+    if platform_id is None:
+        raise SystemExit("worker launch requires the gateway's Skill platform")
     register_specialist_catalog(
         load_specialist_catalog(
             Path("/opt/heartwood/agents/verified"),
             Path("/opt/heartwood/vendor/heartwood-skills/skills"),
+            platform_id=platform_id,
         )
     )
     run_module("openhands.agent_server", run_name="__main__")

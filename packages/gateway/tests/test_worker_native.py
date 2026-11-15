@@ -452,7 +452,7 @@ class _Sandboxes:
         return self.get(name, workspace=workspace)
 
     def exec(self, name: str, command: list[str], **_options: object) -> SimpleNamespace:
-        assert command[-1] == self.settings.placeholder_env
+        assert command[-2:] == [self.settings.placeholder_env, "terra"]
         sandbox = self.get(name, workspace=self.settings.workspace)
         output = json.dumps(self.probe) if self.probe_output is None else self.probe_output
         self.after_probe(sandbox)
@@ -564,6 +564,8 @@ class _Native:
             input_manifest_sha256=self.attempt.plan().input_manifest_sha256,
         )
 
+    platform_id = "terra"
+
     @contextmanager
     def stage_worker_skills(
         self, *, project_root: Path, staging_parent: Path
@@ -646,6 +648,7 @@ def test_launch_binds_the_observed_runtime_and_admits_only_the_native_placeholde
     spec = native.sandboxes.spec
     assert list(spec.providers) == [native.settings.provider]
     assert native.settings.placeholder_env not in spec.environment
+    assert spec.environment["HEARTWOOD_SKILL_PLATFORM"] == "terra"
     lease = WorkerAttemptLease(native.record("active", runtime), owns_writer=lambda: True)
     context = native.attempt.connect(lease)
     assert context.inference_placeholder.get_secret_value() == _PLACEHOLDER

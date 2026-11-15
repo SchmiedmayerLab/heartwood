@@ -92,21 +92,21 @@ heartwood --session-id "${session_id}" changes cohort-summary.json \
   | tee -a "${transcript}"
 
 "${heartwood_python}" - <<'PY'
-import os
 from pathlib import Path
 
-from openhands.sdk.skills import load_skills_from_dir
+from heartwood.gateway import ProjectContext, SessionGateway
+from heartwood.gateway._skill_settings import load_verified_skills
 
-repository, knowledge, agent = load_skills_from_dir(
-    Path(os.environ["HEARTWOOD_RUNTIME_ROOT"])
-    / "vendor"
-    / "heartwood-skills"
-    / "skills"
-)
-names = set(repository) | set(knowledge) | set(agent)
+# Use the gateway's own selection so the installed bundled Skills are checked against the pin.
+gateway = SessionGateway(project=ProjectContext(Path.cwd()))
+try:
+    selected = gateway.skill_manager.active_skill_manifests()
+    names = {skill.name for skill in load_verified_skills(selected)}
+finally:
+    gateway.stop()
 expected = {"aggregate-export", "baseline-model", "omop-cohort-summary"}
-if not expected.issubset(names):
-    raise SystemExit(f"verified skills were not loaded by OpenHands: {sorted(names)}")
+if names != expected:
+    raise SystemExit(f"verified Skills were not selected for OpenHands: {sorted(names)}")
 PY
 
 test -s "${request_log}"

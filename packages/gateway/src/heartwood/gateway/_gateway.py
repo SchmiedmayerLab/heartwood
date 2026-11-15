@@ -2302,6 +2302,7 @@ class SessionGateway:
             _runtime_resource_root() / "agents" / "verified",
             self.skill_manager.bundled_dir,
             platform_id=self.skill_manager.platform_id,
+            bundled_digests=self.skill_manager.bundled_digests,
         )
         self._specialist_catalog_cache = catalog
         return catalog

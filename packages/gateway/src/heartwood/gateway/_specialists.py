@@ -29,7 +29,11 @@ from openhands.sdk.subagent import (
     load_agents_from_dir,
 )
 
-from heartwood.gateway._skill_settings import compatible_bundled_manifests, load_verified_skills
+from heartwood.gateway._skill_settings import (
+    BUNDLED_SKILL_DIGESTS,
+    compatible_bundled_manifests,
+    load_verified_skills,
+)
 
 
 class SpecialistCatalogError(ValueError):
@@ -140,7 +144,11 @@ class SpecialistCatalog:
 
 
 def load_specialist_catalog(
-    agents_dir: Path, skills_dir: Path, *, platform_id: str | None = None
+    agents_dir: Path,
+    skills_dir: Path,
+    *,
+    platform_id: str | None = None,
+    bundled_digests: Mapping[str, str] = BUNDLED_SKILL_DIGESTS,
 ) -> SpecialistCatalog:
     """Load OpenHands definitions and enforce Heartwood's narrower role boundary."""
     resolved_agents_dir = agents_dir.resolve()
@@ -163,7 +171,9 @@ def load_specialist_catalog(
     available_skills = {
         skill.name: skill
         for skill in load_verified_skills(
-            compatible_bundled_manifests(skills_dir, platform_id=platform_id)
+            compatible_bundled_manifests(
+                skills_dir, platform_id=platform_id, digests=bundled_digests
+            )
         )
     }
     roles = tuple(
@@ -248,7 +258,8 @@ def _specialist_role(
         skill = available_skills.get(skill_name)
         if skill is None:
             raise SpecialistCatalogError(
-                f"specialist {definition.name} references an unverified Skill: {skill_name}"
+                f"specialist {definition.name} references an unverified or unavailable Skill: "
+                f"{skill_name}"
             )
         verified_skills.append(skill)
     return SpecialistRole(

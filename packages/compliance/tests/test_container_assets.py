@@ -1283,7 +1283,9 @@ def test_isolated_smoke_uses_real_openhands_sdk_without_weights() -> None:
     assert "terminal failed" in reference_smoke
     assert "Tool terminal exit=" not in reference_smoke
     assert "audit export" in smoke
-    assert "load_skills_from_dir" in smoke
+    assert "load_skills_from_dir" not in smoke
+    assert "active_skill_manifests()" in smoke
+    assert "load_verified_skills(selected)" in smoke
     assert "start_agent_server" not in smoke
     assert "--local-model" not in smoke
     assert "model-call" not in smoke
