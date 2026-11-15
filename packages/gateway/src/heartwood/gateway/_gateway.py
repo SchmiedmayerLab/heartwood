@@ -2856,7 +2856,13 @@ def _starts_streaming_text(event: SessionEvent) -> bool:
 def _review_mode_unavailable_reason(
     mode: ActionReviewMode, *, allowed: Sequence[str], sandboxed: bool, credentials_isolated: bool
 ) -> str | None:
-    """Explain why the ceiling, execution boundary or credential boundary excludes a mode."""
+    """Explain why the execution boundary, ceiling or credential boundary excludes a mode.
+
+    A launch without isolated workers can never apply sandbox review, whatever its policy
+    lists, so that is the reason reported; the policy is named only where it is the limit.
+    """
+    if mode == "review-outside-effects" and not sandboxed:
+        return "Requires sessions that run in an isolated worker."
     if mode not in allowed:
         return "Not permitted by this deployment's policy."
     if mode != "review-all" and not sandboxed and not credentials_isolated:
@@ -2864,8 +2870,6 @@ def _review_mode_unavailable_reason(
             "Unavailable until the selected model route is credential-free or platform-isolated: "
             "a model credential is otherwise not isolated from the agent tool runtime."
         )
-    if mode == "review-outside-effects" and not sandboxed:
-        return "Requires sessions that run in an isolated worker."
     return None
 
 
