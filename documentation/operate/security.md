@@ -75,6 +75,9 @@ The gateway enforces everything that decides authority, independently of anythin
 
 An uncertain revocation keeps the attempt fenced and the session's writer ownership retained until outside reconciliation observes that its resources are gone.
 After a recorded revocation, the next task can start a replacement worker in a new sandbox; it shares no credential, placeholder, conversation memory or workspace file with the revoked worker.
+A gateway restarted with a changed worker image in its manifest continues a settled session in a replacement worker launched from that image; a session the earlier worker left waiting for review, running or paused is refused and continues in a new session.
+Rotating the provider credential in the sandbox gateway does not update a worker that is already attached: its next model request fails and Heartwood records the provider failure, so nothing runs with a stale route.
+After the gateway restarts and revokes that worker, the session continues in a replacement worker that attaches the rotated credential.
 The system architecture describes [attempt ownership](../architecture/system.md#worker-attempt-ownership) and the [response limits](../architecture/system.md#budgets-and-deadlines).
 
 ## Action Review

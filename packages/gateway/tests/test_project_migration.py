@@ -7,9 +7,11 @@
 from __future__ import annotations
 
 import errno
+import fcntl
 import json
 import os
 import shutil
+import threading
 import tomllib
 from collections.abc import Mapping
 from datetime import UTC, datetime
@@ -647,3 +649,97 @@ def test_migration_and_recovery_preserve_directory_modes_heartwood_does_not_own(
     migration.recover_project_migration(deployment=manifest, workspace=source.root, rollback=True)
     assert modes() == (0o775, 0o755)
     assert source.state_root.stat().st_mode & 0o777 == 0o700
+
+
+@pytest.mark.parametrize("boundary", ["staging", "publication"])
+def test_gateway_started_during_migration_is_refused_with_a_stable_diagnostic(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, boundary: str
+) -> None:
+    source, manifest, target, backup = _fixture(tmp_path)
+    reached, release = threading.Event(), threading.Event()
+    verify, rename = migration._verify_canonical, Path.rename
+
+    def hold() -> None:
+        reached.set()
+        assert release.wait(30)
+
+    def held_verification(project: ProjectContext, *, state_root: Path | None = None) -> None:
+        if boundary == "staging" and state_root is None:
+            hold()
+        verify(project, state_root=state_root)
+
+    def held_rename(path: Path, destination: Path) -> Path:
+        if boundary == "publication" and destination == target:
+            hold()
+        return rename(path, destination)
+
+    monkeypatch.setattr(migration, "_verify_canonical", held_verification)
+    monkeypatch.setattr(Path, "rename", held_rename)
+    outcome: list[BaseException | Path] = []
+
+    def migrate() -> None:
+        try:
+            outcome.append(
+                migration.migrate_project_state(
+                    deployment=manifest, workspace=source.root, backup=backup
+                )
+            )
+        except BaseException as error:
+            outcome.append(error)
+
+    worker = threading.Thread(target=migrate)
+    worker.start()
+    try:
+        assert reached.wait(30)
+        with pytest.raises(ProjectStateError, match="HW-PROJECT-004") as refused:
+            load_project_deployment(manifest, project_root=source.root)
+        assert "Traceback" not in str(refused.value)
+        if boundary == "staging":
+            # A local launch is excluded by the migration's project maintenance lease.
+            with pytest.raises(ProjectOwnershipError):
+                ProjectActivity(source).acquire_existing()
+    finally:
+        release.set()
+        worker.join(60)
+    assert len(outcome) == 1
+    assert isinstance(outcome[0], Path)
+    assert load_project_deployment(manifest, project_root=source.root).project.state_exists()
+
+
+_SYNTHETIC_FICLONE = 0x40049409
+
+
+@pytest.mark.parametrize("cloned", ["intact", "corrupt", "unsupported"])
+def test_model_artifacts_are_cloned_when_supported_and_always_verified(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cloned: str
+) -> None:
+    source, manifest, target, backup = _fixture(tmp_path)
+    copied: list[int] = []
+    copy = shutil.copyfileobj
+
+    def counted_copy(reader: BinaryIO, writer: BinaryIO, length: int = 0) -> None:
+        copied.append(1)
+        copy(reader, writer, length)
+
+    def clone(descriptor: int, request: int, source_descriptor: int) -> int:
+        assert request == _SYNTHETIC_FICLONE
+        if cloned == "unsupported":
+            raise OSError(errno.EOPNOTSUPP, "synthetic filesystem without clones")
+        content = os.pread(source_descriptor, 1 << 20, 0)
+        os.write(descriptor, content if cloned == "intact" else content[::-1] + b"!")
+        return 0
+
+    monkeypatch.setattr(fcntl, "FICLONE", _SYNTHETIC_FICLONE, raising=False)
+    monkeypatch.setattr(fcntl, "ioctl", clone)
+    monkeypatch.setattr(shutil, "copyfileobj", counted_copy)
+    if cloned == "corrupt":
+        with pytest.raises(ProjectStateError, match="differs from its original"):
+            migration.migrate_project_state(
+                deployment=manifest, workspace=source.root, backup=backup
+            )
+        assert source.state_exists()
+        assert not target.exists()
+        return
+    migration.migrate_project_state(deployment=manifest, workspace=source.root, backup=backup)
+    assert (target / "models" / "synthetic.gguf").read_bytes() == b"synthetic model bytes"
+    assert bool(copied) == (cloned == "unsupported")

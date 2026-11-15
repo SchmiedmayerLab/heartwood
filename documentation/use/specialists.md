@@ -39,6 +39,8 @@ Cancellation does not undo completed actions, and the model provider may still p
 Specialists are advisory.
 They see only the evidence the agent passes to them and cannot read files, run commands, use the network, or change the project.
 Each has a model-step limit and usage budget, uses the active model route, and can use only the verified Skills listed for it.
+In a deployment with an isolated worker, a specialist runs inside its parent's worker process and sandbox, with the parent's model route.
+It is not independently isolated: the sandbox, not the specialist's missing tools, is the boundary for anything that runs in that worker.
 
 The catalog also lists **Analysis Implementer** as not available.
 A specialist with project tools would need its own actions to appear in your review and to recover safely after a restart, which the OpenHands task interface does not provide.
