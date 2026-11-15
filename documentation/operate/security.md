@@ -107,7 +107,7 @@ List the modes explicitly, and list only `review-all` until a mode has passed th
 
 The gateway reads the ceiling from the manifest each time it loads the project.
 A project policy can list fewer modes; the modes in force are those both lists permit.
-A stored selection that the ceiling no longer permits stops the project from loading until the selection is reset or the manifest permits it.
+A stored selection that the ceiling no longer permits is replaced by `review-all` when the project loads, recorded in each session before its next model dispatch and reported as `HW-SETUP-003`.
 At decision time the ceiling is applied again, and any mode outside it, unknown, or not applicable to the session resolves to `review-all`.
 
 Without a deployment manifest, the built-in workstation and container, Terra and Carina policies permit `review-all` and `review-changes`.

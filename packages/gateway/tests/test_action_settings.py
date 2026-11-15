@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 from uuid import uuid4
@@ -354,16 +355,82 @@ def test_an_unconfigured_model_route_is_not_treated_as_isolated(tmp_path: Path) 
     gateway.stop()
 
 
-def test_a_stored_selection_the_manifest_no_longer_permits_stops_the_project(
+def test_a_stored_selection_the_manifest_no_longer_permits_narrows_to_review_all(
     tmp_path: Path,
 ) -> None:
     gateway = _managed_gateway(tmp_path, backend_id="deterministic")
     gateway.select_action_review_mode("review-changes")
+    gateway.handle(_chat(command_id="before"))
+    gateway.stop()
 
-    with pytest.raises(ProjectConfigError):
-        SessionGateway(
-            project=gateway.project, env={}, deployment_policy=_policy("review-all")
-        ).config_store.load()
+    narrowed = SessionGateway(
+        project=gateway.project,
+        env={},
+        deployment_policy=_policy("review-all"),
+        backend_id="deterministic",
+    )
+    try:
+        assert narrowed.action_settings()["review_mode"] == "review-all"
+        assert narrowed._service("session-main").action_review_mode() == "review-all"
+        labels = {option.mode: option.label for option in ACTION_MODE_OPTIONS}
+        for readiness in (
+            narrowed.project_readiness(),
+            narrowed.startup_plan(interface="web")["readiness"],
+        ):
+            checks = {str(check["check_id"]): check for check in readiness["checks"]}
+            assert checks["configuration"]["status"] == "pass"
+            review = checks["action-review"]
+            assert review["status"] == "warning"
+            assert review["code"] == "HW-SETUP-003"
+            assert labels["review-changes"] in str(review["summary"])
+            assert labels["review-all"] in str(review["summary"])
+            assert readiness["state"] != "recovery-required"
+
+        # The narrowed mode is recorded before the session's next model dispatch.
+        result = narrowed.handle(_chat(command_id="after"))
+        recorded = [
+            event.payload
+            for event in result.events
+            if event.kind == EventKind.POLICY_DECISION_RECORDED
+        ]
+        assert any(payload.get("action_review_mode") == "review-all" for payload in recorded)
+
+        # The researcher selects any permitted mode normally, which ends the warning.
+        narrowed.select_action_review_mode("review-all")
+        checks = {str(check["check_id"]): check for check in narrowed.project_readiness()["checks"]}
+        assert checks["action-review"]["status"] == "pass"
+    finally:
+        narrowed.stop()
+
+
+def test_readiness_reports_only_review_modes_the_manifest_permits(tmp_path: Path) -> None:
+    gateway = _managed_gateway(tmp_path, workers=True)
+    gateway.select_action_review_mode("review-outside-effects")
+    gateway.stop()
+
+    reopened = SessionGateway(
+        project=gateway.project,
+        env={},
+        deployment_policy=_policy("review-all"),
+        worker_plan_factory=_unused_worker_plan,
+    )
+    try:
+        for readiness in (
+            reopened.project_readiness(),
+            reopened.startup_plan(interface="web")["readiness"],
+        ):
+            checks = {str(check["check_id"]): check for check in readiness["checks"]}
+            label = next(
+                option.label for option in ACTION_MODE_OPTIONS if option.mode == "review-all"
+            )
+            assert str(checks["action-review"]["summary"]).endswith(f"{label} applies")
+            assert readiness["policy"]["action_review_modes"] == ["review-all"]
+    finally:
+        reopened.stop()
+
+
+def _readiness_checks(gateway: SessionGateway) -> dict[str, Mapping[str, object]]:
+    return {str(check["check_id"]): check for check in gateway.project_readiness()["checks"]}
 
 
 def test_a_launch_selection_obeys_every_limit_and_leaves_the_project_untouched(

@@ -79,10 +79,23 @@ If the migration was interrupted, run `heartwood project recover-migration --dep
 Run `heartwood setup` or open browser settings and choose a model connection.
 Do not repair `config.toml` by inserting a token or copying a profile from another platform.
 
+Under a deployment manifest, the same code reports stored settings the manifest's policy cannot narrow, such as a project destination list that shares no destination with the manifest's.
+`heartwood doctor --deployment` reports it, and `heartwood gateway serve --deployment` stops with it before serving the browser.
+
 ### `HW-SETUP-002`: Model and Policy Settings Do Not Agree
 
-Open setup and select the intended model connection again.
+Open setup and select a model connection the policy permits.
 This regenerates the non-secret model profile and matching platform policy as one update.
+
+When the summary names the deployment or platform policy, the policy that applies before each model call refuses the selected route, for example because its declared data destination is not in `allowed_data_destinations`, or its endpoint, capability tier or credential is not permitted.
+Readiness and selection apply the same effective policy as each model call, including the deployment manifest's ceiling, so selecting the same connection again is refused.
+Select a route the policy permits, or ask the operator, who alone can change a deployment's policy.
+
+### `HW-SETUP-003`: Stored Review Mode Is Not Permitted by the Deployment
+
+The deployment manifest's `allowed_action_review_modes` no longer lists the project's stored review mode, so Heartwood applies Review Every Action, which every policy permits.
+Each session records the change before its next model dispatch.
+Select any mode the deployment permits in `/permissions`, browser settings or with `--review-mode`; the selection replaces the stored mode and ends the warning.
 
 ## Models and Credentials
 
@@ -290,7 +303,8 @@ Add the qualified `[worker]` or `[evidence]` section, or remove the requirement 
 
 The gateway rereads the manifest before each command that can continue agent work.
 A change that only narrows the `[policy]` table applies immediately and is recorded in each session before its next model dispatch.
-Any other change, including a wider policy, a changed worker, evidence or project binding, or a narrower policy that excludes the project's stored review mode, stops further dispatch until the gateway restarts.
+A narrower policy that excludes the project's stored review mode applies Review Every Action, as [`HW-SETUP-003`](#hw-setup-003-stored-review-mode-is-not-permitted-by-the-deployment) describes.
+Any other change, including a wider policy or a changed worker, evidence or project binding, stops further dispatch until the gateway restarts.
 Pausing and rejecting remain available.
 Restart the gateway to apply the change under the operator's authority; restoring the earlier manifest does not resume dispatch in the running gateway.
 

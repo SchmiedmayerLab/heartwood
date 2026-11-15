@@ -76,6 +76,7 @@ from heartwood.gateway import (
     InterfaceKind,
     LaunchCapability,
     NativeLockUnavailableError,
+    ProjectConfigError,
     ProjectContext,
     ProjectOwnershipError,
     ProjectStateError,
@@ -86,8 +87,10 @@ from heartwood.gateway import (
     WorkspaceInspectionError,
     diagnostic_for,
     discover_checkpoint_signer_registry,
+    inspect_project_deployment,
     load_checkpoint_signer_registry,
     load_project_deployment,
+    narrowed_review_check,
 )
 from heartwood.session import CommandKind, EventKind, SessionEvent, validate_session_id
 
@@ -650,15 +653,25 @@ def _handle_doctor(
     *, project: ProjectContext, as_json: bool, deployment_path: Path | None = None
 ) -> int:
     # Inspection reads the binding and its policy; it launches no worker or evidence client.
-    gateway = (
-        SessionGateway(
-            deployment=load_project_deployment(deployment_path, project_root=project.root)
-        )
+    deployment = (
+        load_project_deployment(deployment_path, project_root=project.root)
         if deployment_path is not None
-        else SessionGateway(project=project)
+        else None
     )
-    readiness = gateway.deployment_readiness()
-    gateway.stop()
+    try:
+        gateway = (
+            SessionGateway(deployment=deployment)
+            if deployment is not None
+            else SessionGateway(project=project)
+        )
+    except ProjectConfigError:
+        if deployment is None:
+            raise
+        # The manifest no longer accepts the stored configuration, so no gateway starts.
+        readiness = inspect_project_deployment(deployment)
+    else:
+        readiness = gateway.deployment_readiness()
+        gateway.stop()
     print(json.dumps(readiness.safe_dict(), indent=2) if as_json else _format_readiness(readiness))
     return 1 if readiness.state == "recovery-required" else 0
 
@@ -1074,16 +1087,22 @@ def _handle_serve(
             except (WorkerAttemptError, ProjectStateError) as error:
                 raise SystemExit(f"Managed worker control is unavailable: {error}") from error
             worker_reconciler = native_worker_reconciler(deployment.worker, project)
-        gateway = (
-            SessionGateway(
-                deployment=deployment,
-                worker_plan_factory=worker_plan_factory,
-                worker_reconciler=worker_reconciler,
-                checkpoint_evidence_factory=checkpoint_evidence_factory,
+        try:
+            gateway = (
+                SessionGateway(
+                    deployment=deployment,
+                    worker_plan_factory=worker_plan_factory,
+                    worker_reconciler=worker_reconciler,
+                    checkpoint_evidence_factory=checkpoint_evidence_factory,
+                )
+                if deployment is not None
+                else SessionGateway(project=project)
             )
-            if deployment is not None
-            else SessionGateway(project=project)
-        )
+        except ProjectConfigError as error:
+            # The gateway stops with the diagnostic `heartwood doctor` reports for it.
+            raise SystemExit(f"{diagnostic_for('configuration').code}: {error}") from error
+        if (narrowed := narrowed_review_check(gateway.config_store)) is not None:
+            print(f"{diagnostic_for(narrowed.check_id).code}: {narrowed.summary}", file=sys.stderr)
         _select_launch_review_mode(gateway, review_mode)
         for session_id, check in gateway.reconcile_workers().items():
             print(

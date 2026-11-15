@@ -335,7 +335,7 @@ def test_manifest_and_preference_changes_during_a_session_are_journaled_before_d
         gateway.stop()
 
 
-def test_a_narrower_manifest_that_excludes_the_stored_selection_stops_dispatch(
+def test_a_narrower_manifest_that_excludes_the_stored_selection_applies_review_all(
     tmp_path: Path,
 ) -> None:
     manifest, workspace, record = _manifest(tmp_path)
@@ -353,10 +353,19 @@ def test_a_narrower_manifest_that_excludes_the_stored_selection_stops_dispatch(
         }
         _write(manifest, {**record, "policy": policy})
         result = gateway.handle(_command(CommandKind.CHAT, {"prompt": "Continue."}))
-        assert any(
+        assert not any(
             str(event.payload.get("reason")).startswith("HW-DEPLOY-004") for event in result.events
         )
-        assert not any(event.kind == EventKind.USER_MESSAGE_RECORDED for event in result.events)
+        # The narrowed mode is recorded before the next model dispatch, which proceeds.
+        kinds = [event.kind for event in result.events]
+        decision = next(
+            event for event in result.events if event.kind == EventKind.POLICY_DECISION_RECORDED
+        )
+        assert decision.payload["action_review_mode"] == "review-all"
+        assert kinds.index(EventKind.POLICY_DECISION_RECORDED) < kinds.index(
+            EventKind.MODEL_CALL_DECISION_RECORDED
+        )
+        assert gateway.action_settings()["review_mode"] == "review-all"
     finally:
         gateway.stop()
 

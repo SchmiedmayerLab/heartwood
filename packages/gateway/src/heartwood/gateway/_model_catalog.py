@@ -34,8 +34,14 @@ from heartwood.gateway._subscriptions import (
     OPENAI_SUBSCRIPTION_ENDPOINT,
     OpenHandsOpenAISubscription,
 )
-from heartwood.model_policy import PolicyInputError, normalize_endpoint
-from heartwood.schemas import ModelConnectionManifest, ModelConnectionsManifest, ModelDataHandling
+from heartwood.model_policy import ModelPolicyEngine, PolicyInputError, normalize_endpoint
+from heartwood.schemas import (
+    ModelCallDecision,
+    ModelConnectionManifest,
+    ModelConnectionsManifest,
+    ModelDataHandling,
+    PolicyProfile,
+)
 
 type ConnectionProtocol = Literal[
     "anthropic", "openai", "openai-compatible", "static", "subscription"
@@ -340,6 +346,30 @@ def route_data_handling(
     """Return the declared handling of the connection that owns a profile's route."""
     connection = matching_model_connection(profile, connections)
     return None if connection is None else connection.data_handling
+
+
+def route_policy_decision(
+    profile: ModelProfile,
+    policy: PolicyProfile,
+    connections: Iterable[ModelConnection],
+) -> ModelCallDecision:
+    """Return the policy decision for a profile's route, as each model call receives it.
+
+    Selection, validation and readiness share it, so none of them can admit a route
+    that the policy refuses before a model call.
+    """
+    return ModelPolicyEngine(policy).evaluate(
+        endpoint=profile.policy_endpoint,
+        capability_tier=profile.capability_tier,
+        credential_reference=profile.credential_reference,
+        data_handling=route_data_handling(profile, connections),
+        decision_id=f"model-profile-{profile.profile_id}",
+        purpose=(
+            "selected Heartwood-managed model"
+            if profile.profile_id == "heartwood"
+            else f"model profile {profile.profile_id}"
+        ),
+    )
 
 
 _DESTINATION_TEXT = {
