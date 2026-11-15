@@ -203,6 +203,7 @@ class SessionService:
         self._worker_lease: WorkerAttemptLease | None = None
         self._worker_attempt_created = False
         self._worker_replacement_admitted = False
+        self._decision_dispatched = False
         self.backend.bind_runtime(
             event_sink=self._accept_unbound_backend_events,
             token_sink=self._accept_unbound_backend_token,
@@ -433,18 +434,19 @@ class SessionService:
                 command_hash=command_hash,
                 first_sequence=first_sequence,
             )
+            self._decision_dispatched = False
             try:
                 requested = self._handle_new_command(
                     command, unavailable_reason=None, automatic=True
                 ).events
             except Exception:
                 # The operation that journaled the request has already succeeded. A decision the
-                # backend never received is withdrawn and the group waits for the researcher; one
-                # it may have acted on is recorded as an unknown outcome, never as not applied.
-                still_pending = self.backend.pending_action_group(session_id=self.store.session_id)
+                # backend never received is withdrawn and the group waits for the researcher; once
+                # the decision was handed to the backend, a run may have started even if the group
+                # still looks pending, so the outcome is unknown and never "not applied".
                 requested = (
                     self._record_review_not_applied(command.command_id, group.group_id)
-                    if still_pending is not None and still_pending.group_id == group.group_id
+                    if not self._decision_dispatched
                     else self._record_unknown_approval_outcome(
                         _ApprovalIntent(
                             command_id=command.command_id,
@@ -1871,6 +1873,8 @@ class SessionService:
             )
         )
         events.extend(self._checkpoint_boundary(events[-1]))
+        # From here the backend may act on the decision, whatever its state looks like later.
+        self._decision_dispatched = True
         backend_events = self.backend.resolve_confirmation(
             session_id=command.session_id,
             action_group_id=action_group_id,

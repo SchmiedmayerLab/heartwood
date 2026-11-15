@@ -12,7 +12,19 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from heartwood.core_adapter._facade import backend_error_is_fatal
-from heartwood.session import EventKind, SessionEvent
+from heartwood.core_adapter.action_review import AUTOMATIC_REVIEW_ACTOR
+from heartwood.session import CommandKind, EventKind, SessionEvent
+
+# Researcher commands that continue the agent and so end a pause; the gateway's own
+# decisions and anything the backend reports never do.
+_CONTINUING_COMMANDS = frozenset(
+    {
+        CommandKind.CHAT.value,
+        CommandKind.RESUME.value,
+        CommandKind.APPROVE.value,
+        CommandKind.WORKFLOW.value,
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,7 +34,7 @@ class SessionActivity:
     status: str
     """The last recorded run state; a recorded error alone never ends a run."""
     paused: bool
-    """A researcher pause that neither a resume nor a new run has ended."""
+    """A researcher pause that no later researcher command continuing the agent has ended."""
     fatal: bool
     """An error after which the session accepts no further work."""
     awaiting_review: frozenset[str]
@@ -58,7 +70,11 @@ def session_activity(events: Sequence[SessionEvent]) -> SessionActivity:
         payload = event.payload
         if event.kind == EventKind.AGENT_LIFECYCLE_UPDATED:
             status = str(payload.get("status"))
-            if status == "running":
+        elif event.kind == EventKind.COMMAND_RECEIVED:
+            if (
+                payload.get("command_kind") in _CONTINUING_COMMANDS
+                and payload.get("actor_id") != AUTOMATIC_REVIEW_ACTOR
+            ):
                 paused = False
         elif event.kind == EventKind.SESSION_PAUSED:
             status, paused = "paused", True

@@ -26,6 +26,8 @@ from heartwood.core_adapter import (
     BackendErrorCode,
     BackendErrorEvent,
     BackendEvent,
+    BackendLifecycle,
+    BackendLifecycleEvent,
     BackendToolCallEvent,
     BackendToolExecutionEvent,
     CommandConflictError,
@@ -46,6 +48,7 @@ from heartwood.core_adapter.action_review import (
 )
 from heartwood.core_adapter.external_actions import ExternalActionAdapter
 from heartwood.core_adapter.external_results import RESULT_PREFIX
+from heartwood.core_adapter.session_activity import session_activity
 from heartwood.core_adapter.worker_attempts import (
     WorkerAttemptIntent,
     WorkerRevocationEvidence,
@@ -799,6 +802,56 @@ def test_a_decision_the_backend_may_have_acted_on_is_never_reported_as_not_appli
     service.reconcile()
 
 
+def test_a_decision_raised_after_the_backend_started_the_run_is_an_unknown_outcome(
+    tmp_path: Path,
+) -> None:
+    """A run in progress keeps its actions unmatched, so the group can still look pending."""
+
+    class _StartsRun(_ScriptedBackend):
+        def resolve_confirmation(
+            self, *, session_id: str, action_group_id: str, approved: bool
+        ) -> tuple[BackendEvent, ...]:
+            del session_id
+            group = pending_action_group(self._group)
+            assert group is not None
+            assert group.group_id == action_group_id
+            assert approved
+            self.executed.extend(action.tool_call_id for action in group.actions)
+            return tuple(
+                BackendConfirmationResolutionEvent(
+                    tool_call=action, action_group_id=group.group_id, approved=True
+                )
+                for action in group.actions
+            )
+
+    backend = _StartsRun((_action("read-1", "read"),))
+    service = _service(tmp_path, backend, mode="review-changes")
+    translate = service._translate_backend_events
+
+    def fail_on_resolution(stream: tuple[BackendEvent, ...], **kwargs: bool) -> list[SessionEvent]:
+        if any(isinstance(event, BackendConfirmationResolutionEvent) for event in stream):
+            raise RuntimeError("journaling failed after dispatch")
+        return translate(stream, **kwargs)
+
+    service._translate_backend_events = fail_on_resolution  # type: ignore[method-assign]
+
+    result = service.handle(_command(CommandKind.CHAT, prompt="analyze the synthetic cohort"))
+
+    assert result.events[0].payload["actor_id"] == "human"
+    assert backend.executed == ["read-1"]
+    assert _pending(service) == ("read-1",)
+    assert _not_applied(service) == []
+    assert [
+        event.payload["command_id"]
+        for event in service.replay_events()
+        if event.kind == EventKind.ERROR_RECORDED
+        and event.payload.get("code") == BackendErrorCode.ACTION_OUTCOME_UNKNOWN.value
+    ] == [_approvals(service)[0].payload["command_id"]]
+    group_id = _approvals(service)[0].payload["group_id"]
+    assert isinstance(group_id, str)
+    assert service._approval_recorded(group_id)
+
+
 class _Surfacing(_ScriptedBackend):
     """Surface the next scripted group from a status read or from the pause itself."""
 
@@ -813,6 +866,84 @@ class _Surfacing(_ScriptedBackend):
     def pause(self, *, session_id: str) -> tuple[BackendEvent, ...]:
         del session_id
         return self._propose() if self.on_pause and not self._group else ()
+
+
+class _AfterPause(_ScriptedBackend):
+    """Surface a group only from a status read made after the researcher paused."""
+
+    paused = False
+    report_running = False
+
+    def pause(self, *, session_id: str) -> tuple[BackendEvent, ...]:
+        del session_id
+        self.paused = True
+        return ()
+
+    def reconcile(
+        self, *, session_id: str, known_source_event_ids: frozenset[str]
+    ) -> tuple[BackendEvent, ...]:
+        del session_id, known_source_event_ids
+        if not self.paused or self._group:
+            return ()
+        running = (
+            (BackendLifecycleEvent(lifecycle=BackendLifecycle.RUNNING, source_event_id="late"),)
+            if self.report_running
+            else ()
+        )
+        return (*running, *self._propose())
+
+
+@pytest.mark.parametrize("report_running", [False, True], ids=["request", "running-then-request"])
+def test_a_status_read_after_a_pause_never_decides_for_the_researcher(
+    tmp_path: Path, report_running: bool
+) -> None:
+    """Neither a request nor a run state the backend reports after the pause ends it."""
+    backend = _AfterPause((_action("read-1", "read"),))
+    backend.report_running = report_running
+    service = _service(tmp_path, backend, mode="review-changes")
+    service.handle(_command(CommandKind.PAUSE, "pause"))
+    assert _pending(service) == ()
+
+    service.reconcile()
+
+    assert _pending(service) == ("read-1",)
+    assert backend.executed == []
+    assert _approvals(service) == []
+    service.reconcile()
+    assert backend.executed == []
+    service.close()
+
+
+type _Entry = tuple[EventKind, dict[str, JsonValue]]
+
+
+def test_only_the_researcher_ends_a_pause() -> None:
+    def events(*entries: tuple[EventKind, dict[str, JsonValue]]) -> tuple[SessionEvent, ...]:
+        return tuple(
+            SessionEvent(
+                event_id=f"event-{sequence}",
+                session_id=_SESSION,
+                sequence=sequence,
+                kind=kind,
+                occurred_at="2026-01-01T00:00:00Z",
+                payload=payload,
+            )
+            for sequence, (kind, payload) in enumerate(entries)
+        )
+
+    paused: _Entry = (EventKind.SESSION_PAUSED, {})
+    running: _Entry = (EventKind.AGENT_LIFECYCLE_UPDATED, {"status": "running"})
+
+    def researcher(kind: str, actor: str = "human") -> tuple[EventKind, dict[str, JsonValue]]:
+        return (EventKind.COMMAND_RECEIVED, {"actor_id": actor, "command_kind": kind})
+
+    assert session_activity(events(paused, running)).paused
+    assert session_activity(events(paused, researcher("approve", AUTOMATIC_REVIEW_ACTOR))).paused
+    assert session_activity(events(paused, researcher("replay"), running)).paused
+    resumed: _Entry = (EventKind.SESSION_RESUMED, {})
+    assert not session_activity(events(paused, resumed)).paused
+    for kind in ("chat", "resume", "approve", "workflow"):
+        assert not session_activity(events(paused, researcher(kind), running)).paused
 
 
 @pytest.mark.parametrize("surfaced_by", ["status-read", "pause"])
