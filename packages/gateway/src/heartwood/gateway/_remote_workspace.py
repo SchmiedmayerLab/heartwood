@@ -18,6 +18,7 @@ from typing import Any
 
 import httpx
 from openhands.sdk.agent.base import AgentBase
+from openhands.sdk.event.conversation_state import FULL_STATE_KEY
 from openhands.sdk.tool.client_tool import ClientToolSpec
 from openhands.sdk.workspace import RemoteWorkspace
 from pydantic import ConfigDict, Field, PrivateAttr, model_validator
@@ -204,6 +205,19 @@ class WorkerResponseTransport(httpx.BaseTransport):
                     raise WorkerResponseError("worker response must be JSON")
                 value = _admit_json(content, self._tool_modules, self._client_tools, self._agent())
                 attempt = self._budget.attempt
+                if isinstance(value, dict):
+                    # Event pages and snapshots are replayed to the same callbacks as
+                    # socket messages, so their events pass the same admission.
+                    for events in (value.get("items"), value.get("events")):
+                        for event in events if isinstance(events, list) else ():
+                            if isinstance(event, dict):
+                                _admit_event(
+                                    event,
+                                    self._tool_modules,
+                                    self._client_tools,
+                                    self._agent(),
+                                    attempt,
+                                )
                 if (
                     attempt is not None
                     and (request.method, request.url.path)
@@ -401,6 +415,32 @@ def _admit_metadata(
         agent is None or not _same_agent(returned, *_with_server_context(returned, agent))
     ):
         raise WorkerResponseError("worker agent is not authorized")
+
+
+def _admit_event(
+    value: dict[str, Any],
+    tool_modules: Mapping[str, str],
+    client_tools: Mapping[str, str],
+    agent: AgentContract | None,
+    attempt: WorkerAttemptLease | None,
+) -> None:
+    """Reject events that would write completion logs or replace admitted state."""
+    kind = value.get("kind")
+    if kind == "LLMCompletionLogEvent":
+        raise WorkerResponseError("worker completion-log events are not authorized")
+    if kind != "ConversationStateUpdateEvent":
+        return
+    key, state = value.get("key"), value.get("value")
+    metadata = state if key == FULL_STATE_KEY else {key: state}
+    if not isinstance(metadata, dict):
+        raise WorkerResponseError("worker state update is not authorized")
+    _admit_metadata(metadata, tool_modules, client_tools, agent)
+    if (
+        attempt is not None
+        and (key == FULL_STATE_KEY or "id" in metadata)
+        and metadata.get("id") != str(attempt.intent.conversation_id)
+    ):
+        raise WorkerResponseError("worker returned another conversation identity")
 
 
 class AdmittedRemoteWorkspace(RemoteWorkspace):
