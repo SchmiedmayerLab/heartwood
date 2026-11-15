@@ -176,8 +176,9 @@ Each attempt's launch intent records stable identities of the sandbox control pl
 Launch refuses to proceed when either identity changed after preparation.
 Reconciliation observes the infrastructure named by the current deployment manifest only when both identities match the attempt's record; otherwise the attempt stays fenced with `HW-WORKER-002` and nothing is observed or removed, because absence on other infrastructure is not evidence of revocation.
 Attempt records are versioned: records written before launches retained these identities remain readable, name no infrastructure, and are never reconciled against the current one.
-After a creation request whose outcome is unknown, absence counts only once it has persisted for 60 seconds, so a sandbox the control plane creates late is still found and deleted, and the attempt is not recorded as `not-created`; reconciliation treats an attempt without a recorded runtime the same way.
-This bounds, but does not remove, the reliance on the control plane not completing a creation after that interval.
+After a creation request whose outcome is unknown, absence is observed for 60 seconds, so a sandbox the control plane creates late is found and deleted, and the attempt is recorded as revoked rather than `not-created`; reconciliation treats an attempt without a recorded runtime the same way.
+Absence then counts only when the control plane reports the attempt's unique name as not found to a deletion and a later observation; any other answer leaves the attempt fenced for a later retry.
+That a deletion by name also ends a creation the control plane has not completed yet is the sandbox gateway's deletion contract; Heartwood relies on it rather than on a fixed interval.
 The native forwarder runs under a small supervisor in its own process group, which ends the whole group when the gateway's end of a pipe closes, so no forwarder outlives the gateway process, however that process ends.
 OpenShell deletion is name-scoped rather than conditional on a generation; unique attempt names and identity checks do not replace control-plane authorization.
 

@@ -52,8 +52,8 @@ from heartwood.gateway.worker_volumes import (
     container_runtime_sha256,
 )
 
-# After a creation whose outcome is unknown, absence counts only once it has persisted this
-# long, so a creation the control plane completes late is still observed and deleted.
+# After a creation whose outcome is unknown, absence is observed for this long, then counts
+# only once observed again after the attempt's unique name was deleted.
 _CREATION_SETTLE_SECONDS = 60.0
 _CREATION_OBSERVATION_INTERVAL_SECONDS = 2.0
 
@@ -161,9 +161,11 @@ def _owned_sandbox(
     """Resolve the uniquely named sandbox only while it carries the complete attempt identity.
 
     With `settle`, a creation may still be completing, so absence is observed repeatedly
-    until it has persisted for the settle interval.
+    until it has persisted for the settle interval, and then counts only when observed
+    again after the attempt's unique name was deleted.
     """
     deadline = monotonic() + _CREATION_SETTLE_SECONDS
+    confirmed = not settle
     while True:
         try:
             observed = control.client.get(volumes.worker_name, workspace=control.settings.workspace)
@@ -171,14 +173,35 @@ def _owned_sandbox(
         except control.grpc.RpcError as error:
             if error.code() != control.grpc.StatusCode.NOT_FOUND:
                 raise WorkerAttemptError("native worker absence was not observed") from None
-        if not settle or monotonic() >= deadline:
+        if confirmed:
             return None
+        if monotonic() >= deadline:
+            _delete_unobserved(control, volumes)
+            confirmed = True
+            continue
         sleep(_CREATION_OBSERVATION_INTERVAL_SECONDS)
     if dict(observed.labels) != volumes.labels or (
         sandbox_id is not None and observed.id != sandbox_id
     ):
         raise WorkerAttemptError("native worker identity changed before revocation")
     return str(observed.id)
+
+
+def _delete_unobserved(control: NativeWorkerControl, volumes: WorkerVolumes) -> None:
+    """Delete the attempt's unique name, so a creation the control plane completes later ends.
+
+    Only a control plane that reports the name as absent confirms that nothing was created;
+    a deletion of a sandbox no observation identified leaves the attempt unresolved.
+    """
+    try:
+        control.client.delete(
+            volumes.worker_name, workspace=control.settings.workspace, timeout_seconds=90
+        )
+    except control.grpc.RpcError as error:
+        if error.code() == control.grpc.StatusCode.NOT_FOUND:
+            return
+        raise WorkerAttemptError("native worker absence was not confirmed") from None
+    raise WorkerAttemptError("native worker absence was not confirmed by its deletion")
 
 
 def _delete_sandbox(control: NativeWorkerControl, volumes: WorkerVolumes, sandbox_id: str) -> None:

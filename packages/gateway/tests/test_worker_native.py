@@ -1218,11 +1218,73 @@ def test_absence_after_an_unresolved_creation_is_recorded_only_once_it_persists(
         return get(name, workspace=workspace)
 
     monkeypatch.setattr(native.sandboxes, "get", counted)
+    deleted: list[float] = []
+    delete = native.sandboxes.delete
+
+    def counted_delete(name: str, *, workspace: str, **options: object) -> None:
+        deleted.append(monotonic())
+        delete(name, workspace=workspace, **options)
+
+    monkeypatch.setattr(native.sandboxes, "delete", counted_delete)
     reconcile = worker_native.native_worker_reconciler(native.settings, native.project)
     evidence = reconcile(native.record("fenced", None))
     assert evidence.outcome == "not-created"
     assert len(observed) > 2
-    assert observed[-1] - observed[0] >= 0.2
+    # Absence counts only once it has persisted and is observed again after the attempt's
+    # unique name was deleted.
+    assert len(deleted) == 1
+    assert deleted[0] - observed[0] >= 0.2
+    assert observed[-1] > deleted[0]
+
+
+def test_creation_completed_after_the_settle_interval_is_deleted_not_recorded_absent(
+    native: _Native, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(worker_native, "_CREATION_SETTLE_SECONDS", 0.05)
+    _create_lands_late(native, monkeypatch, after=10_000)
+    with pytest.raises(WorkerAttemptError, match="outside reconciliation"):
+        native.attempt.launch(native.intent)
+    delete, get = native.sandboxes.delete, native.sandboxes.get
+    landed: list[str] = []
+
+    def delete_races_creation(name: str, *, workspace: str, **options: object) -> None:
+        try:
+            delete(name, workspace=workspace, **options)
+        finally:
+            if not landed:
+                # The control plane completes the queued creation right after the delete.
+                landed.append(name)
+                native.sandboxes.place(
+                    name,
+                    {
+                        "heartwood.project": str(native.intent.project_id),
+                        "heartwood.attempt": str(native.intent.attempt_id),
+                    },
+                )
+
+    monkeypatch.setattr(native.sandboxes, "delete", delete_races_creation)
+    monkeypatch.setattr(native.sandboxes, "get", get)
+    evidence = native.attempt.revoke(native.record("fenced", None))
+    assert evidence.outcome == "revoked"
+    assert evidence.sandbox_id == "sandbox-1"
+    assert not native.sandboxes.running
+
+
+@pytest.mark.parametrize("answer", ["unavailable", "deleted-unseen"])
+def test_unconfirmed_absence_after_an_unresolved_creation_keeps_the_attempt_fenced(
+    native: _Native, monkeypatch: pytest.MonkeyPatch, answer: str
+) -> None:
+    monkeypatch.setattr(worker_native, "_CREATION_SETTLE_SECONDS", 0.05)
+
+    def delete(_name: str, **_options: object) -> None:
+        if answer == "unavailable":
+            raise native.sandboxes.error(native.sandboxes.grpc.StatusCode.UNAVAILABLE)
+        # The name named a sandbox no observation saw, so its identity is unknown.
+
+    monkeypatch.setattr(native.sandboxes, "delete", delete)
+    reconcile = worker_native.native_worker_reconciler(native.settings, native.project)
+    with pytest.raises(WorkerAttemptError, match="absence"):
+        reconcile(native.record("fenced", None))
 
 
 _GATEWAY_PROCESS = """import sys, time
