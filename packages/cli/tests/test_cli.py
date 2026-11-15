@@ -31,25 +31,21 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 
 from heartwood.adapters.platform import GenericPlatformAdapter
 from heartwood.cli import (
-    _MODEL_PREPARATION_ACTIVITY,
     __version__,
-    _configure_local_model,
     _consume_prompt,
-    _float_payload,
-    _format_transfer_bytes,
     _handle_replay,
-    _mapping_payload,
-    _run_with_progress,
     _submit_and_wait,
     _submit_with_progress,
     _supports_full_screen_terminal,
-    _wait_for_model_transfer,
     main,
 )
 from heartwood.cli._interactive import (
     InteractionResult,
     InteractiveSession,
 )
+from heartwood.cli._models import _MODEL_PREPARATION_ACTIVITY, _wait_for_model_transfer
+from heartwood.cli._progress import _format_transfer_bytes, _run_with_progress
+from heartwood.cli._setup import _configure_local_model
 from heartwood.gateway import (
     CheckpointSigner,
     CheckpointSignerProfile,
@@ -166,6 +162,7 @@ def _install_deterministic_gateway(
         )
 
     monkeypatch.setattr("heartwood.cli.SessionGateway", factory)
+    monkeypatch.setattr("heartwood.cli._setup.SessionGateway", factory)
 
 
 def _local_catalog(*, fail: bool = False) -> ModelCatalogService:
@@ -524,7 +521,7 @@ def test_bare_command_configures_session_token_and_opens_conversation(
     inputs = iter(["1", "4", "y", "1"])
     monkeypatch.setattr("sys.stdin", InteractiveInput())
     monkeypatch.setattr("builtins.input", lambda _prompt: next(inputs))
-    monkeypatch.setattr("heartwood.cli.getpass.getpass", lambda _prompt: "session-secret")
+    monkeypatch.setattr("heartwood.cli._setup.getpass.getpass", lambda _prompt: "session-secret")
     opened: list[ModelValidationResponse] = []
 
     def open_chat(
@@ -645,7 +642,7 @@ def test_setup_does_not_claim_a_process_only_credential_is_durable(
         openai_lister=lambda _connection, _api_key: (ProviderModel("gpt-synthetic"),)
     )
     _install_deterministic_gateway(monkeypatch, model_catalog_service=service)
-    monkeypatch.setattr("heartwood.cli.getpass.getpass", lambda _prompt: "session-secret")
+    monkeypatch.setattr("heartwood.cli._setup.getpass.getpass", lambda _prompt: "session-secret")
 
     code = _run(
         project,
@@ -741,6 +738,7 @@ def test_cli_startup_and_doctor_resolve_a_remembered_keyring_credential(
         )
 
     monkeypatch.setattr("heartwood.cli.SessionGateway", factory)
+    monkeypatch.setattr("heartwood.cli._setup.SessionGateway", factory)
 
     assert _run(project_root, monkeypatch, ["doctor"]) == 0
     assert "Readiness: ready" in capsys.readouterr().out
@@ -770,7 +768,7 @@ def test_tokenless_loopback_custom_setup_survives_restart_and_reconfiguration(
         model_catalog_service=ModelCatalogService(openai_lister=models),
     )
     monkeypatch.setattr(
-        "heartwood.cli.getpass.getpass",
+        "heartwood.cli._setup.getpass.getpass",
         lambda _prompt: pytest.fail("loopback setup must not request a token"),
     )
     setup = [
@@ -1013,7 +1011,7 @@ def test_setup_rolls_back_when_model_or_credential_input_closes(
     )
     _install_deterministic_gateway(monkeypatch, model_catalog_service=service)
     monkeypatch.setattr(
-        "heartwood.cli.getpass.getpass",
+        "heartwood.cli._setup.getpass.getpass",
         lambda _prompt: (_ for _ in ()).throw(EOFError),
     )
     token_project = tmp_path / "token-closed"
@@ -2354,9 +2352,9 @@ def test_local_signer_setup_uses_external_defaults_and_serves_without_key_argume
         observed["app"] = app
         observed.update(kwargs)
 
-    monkeypatch.setattr("heartwood.cli.uvicorn.run", run_server)
+    monkeypatch.setattr("heartwood.cli._audit.uvicorn.run", run_server)
     monkeypatch.setattr(
-        "heartwood.cli.local_checkpoint_signer_socket",
+        "heartwood.cli._audit.local_checkpoint_signer_socket",
         lambda _endpoint: nullcontext(SimpleNamespace(fileno=lambda: 77)),
     )
     assert (
@@ -2721,12 +2719,6 @@ def test_serve_uses_the_detected_platform_ingress_default(
 def test_cli_helpers_fail_closed_on_malformed_inputs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    with pytest.raises(TypeError, match="expected dataset payload"):
-        _mapping_payload([], "dataset")
-    with pytest.raises(TypeError, match="expected a numeric payload"):
-        _float_payload(True)
-    assert _float_payload(1) == 1.0
-
     monkeypatch.setattr("heartwood.cli.sys.stdin.isatty", lambda: True)
     monkeypatch.setattr("heartwood.cli.sys.stdout.isatty", lambda: True)
     monkeypatch.setenv("TERM", "xterm-256color")
