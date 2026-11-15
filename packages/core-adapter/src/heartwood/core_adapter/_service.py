@@ -161,6 +161,9 @@ class _FairLock:
     A thread that releases a Python lock can take it again before a waiting thread wakes,
     so reads that follow one another could keep a command, fencing or revocation waiting
     without bound. Releasing this lock hands it to the thread that has waited longest.
+    An asynchronous exception between queueing a waiter and handing it the lock can leave
+    the lock held; only the command lock uses this class, and the main thread does not take
+    it. From Python 3.14 the standard lock hands itself to a long waiter and can replace this class.
     """
 
     def __init__(self) -> None:
