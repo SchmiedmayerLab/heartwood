@@ -10,6 +10,7 @@ import asyncio
 import inspect
 import json
 import os
+import shutil
 import time
 import uuid
 from collections.abc import Callable, Sequence
@@ -133,6 +134,7 @@ from heartwood.gateway._openhands_sdk import (
     _tool_observation,
     _usage,
     _usage_source_event_id,
+    register_specialist_catalog,
 )
 from heartwood.gateway._specialist_task import HeartwoodSpecialistToolSet
 from heartwood.gateway._specialists import (
@@ -272,6 +274,38 @@ def test_bundled_tool_free_specialists_register_with_openhands(tmp_path: Path) -
         registered_definition = get_agent_factory(role.specialist_id).definition
         assert registered_definition.max_iteration_per_run == role.definition.max_iteration_per_run
         assert registered_definition.max_budget_per_run == role.definition.max_budget_per_run
+
+
+def test_specialist_registration_is_independent_of_the_installation_path(
+    tmp_path: Path,
+) -> None:
+    # Editable checkouts and installed wheels load the same release catalog from
+    # different paths, and one process can hold both, as a wheel-installed test run does.
+    installed = tmp_path / "_bundled"
+    shutil.copytree(_repository_root() / "agents" / "verified", installed / "agents" / "verified")
+    shutil.copytree(_verified_skills_root(), installed / "vendor" / "heartwood-skills" / "skills")
+    register_specialist_catalog(_specialist_catalog())
+
+    register_specialist_catalog(
+        load_specialist_catalog(
+            installed / "agents" / "verified", installed / "vendor" / "heartwood-skills" / "skills"
+        )
+    )
+
+    definition = installed / "agents" / "verified" / "research-planner.md"
+    definition.write_text(
+        definition.read_text(encoding="utf-8").replace(
+            "max_iteration_per_run: 12", "max_iteration_per_run: 13"
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(OpenHandsSdkError, match="conflicting definitions: research-planner"):
+        register_specialist_catalog(
+            load_specialist_catalog(
+                installed / "agents" / "verified",
+                installed / "vendor" / "heartwood-skills" / "skills",
+            )
+        )
 
 
 def test_tool_enabled_specialized_agents_fail_closed(tmp_path: Path) -> None:

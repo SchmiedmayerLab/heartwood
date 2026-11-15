@@ -235,7 +235,11 @@ def register_specialist_catalog(catalog: SpecialistCatalog) -> None:
         with _SPECIALIST_REGISTRATION_LOCK:
             registered_definition = _REGISTERED_HEARTWOOD_SPECIALISTS.get(definition.name)
             if registered_definition is not None:
-                if registered_definition != definition:
+                # The same release definition loads from a different path in a checkout and
+                # in an installed wheel; only its content identifies it, as in the fingerprint.
+                if registered_definition.model_dump(
+                    mode="json", exclude={"source"}
+                ) != definition.model_dump(mode="json", exclude={"source"}):
                     raise OpenHandsSdkError(
                         f"specialized agent name has conflicting definitions: {definition.name}"
                     )
