@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import shutil
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
@@ -18,7 +19,7 @@ from uuid import uuid4
 import pytest
 from pydantic import AnyHttpUrl, SecretStr
 
-from heartwood.core_adapter import FileSessionStore, SessionService
+from heartwood.core_adapter import FileSessionStore, SessionResult, SessionService
 from heartwood.core_adapter.external_actions import ExternalActionAdapter
 from heartwood.core_adapter.worker_attempts import (
     WorkerAttemptError,
@@ -37,6 +38,7 @@ from heartwood.gateway._worker_events import AdmittedWorkerWorkspace
 from heartwood.gateway.worker_sessions import WorkerSessionPlan, WorkerSessionRequest
 from heartwood.schemas import PolicyProfile
 from heartwood.session import CommandKind, EventKind, SessionCommand
+from heartwood.skills import SkillManifest
 
 
 class Platform:
@@ -900,11 +902,9 @@ def test_close_waits_a_bounded_time_for_prompt_revocation_and_holds_none_of_its_
     assert not service.store.owns_writer
 
 
-@pytest.mark.parametrize("launch", ["finishes", "stalls"])
-def test_close_during_launch_revokes_it_once_it_returns(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, launch: str
+def test_close_during_launch_returns_at_once_and_the_launch_revokes_and_closes(
+    tmp_path: Path,
 ) -> None:
-    monkeypatch.setattr("heartwood.gateway.worker_sessions._CLOSE_WAIT_SECONDS", 1.0)
     platform = Platform()
     gateway = configured_gateway(tmp_path, platform)
     launching, release = Event(), Event()
@@ -940,23 +940,145 @@ def test_close_during_launch_revokes_it_once_it_returns(
     try:
         assert launching.wait(timeout=10)
         began = monotonic()
-        if launch == "stalls":
-            with pytest.raises(WorkerAttemptError, match="launch is still in progress"):
-                worker.close()
-            release.set()
-            opening.join(timeout=10)
-        else:
-            Timer(0.2, release.set).start()
-        # The close revokes what the launch created, and the launch connects nothing.
-        worker.close()
-        assert monotonic() - began < 5
+        # The close does not wait for the control plane; the launch finishes it.
+        assert not worker.close()
+        assert monotonic() - began < 1
+        assert worker.closing
+        assert not worker.wait_closed(0.1)
+        assert bool(service.store.owns_writer)
+        release.set()
+        assert worker.wait_closed(10)
         opening.join(timeout=10)
         assert not opening.is_alive()
         assert isinstance(failures[0], WorkerAttemptError)
         assert "connect" not in platform.calls
         assert platform.calls.count("revoke") == 1
         assert _settles(service, "revoked")
+        assert not service.store.owns_writer
+        assert worker.close()
     finally:
         release.set()
         gateway.stop()
-    assert not service.store.owns_writer
+    assert platform.calls.count("revoke") == 1
+
+
+def _chat(command_id: str, session_id: str = "session-worker") -> SessionCommand:
+    return SessionCommand(
+        command_id=command_id,
+        session_id=session_id,
+        kind=CommandKind.CHAT,
+        created_at="2026-01-01T00:00:00Z",
+        payload={"prompt": "Continue the synthetic analysis."},
+    )
+
+
+def _local_skill(gateway: SessionGateway) -> Path:
+    source = gateway.project.root / "skills" / "community-summary"
+    bundled = Path(__file__).resolve().parents[3] / "vendor/heartwood-skills/skills"
+    shutil.copytree(bundled / "aggregate-export", source)
+    skill_file = source / "SKILL.md"
+    skill_file.write_text(
+        skill_file.read_text(encoding="utf-8")
+        .replace("name: aggregate-export", "name: community-summary")
+        .replace(
+            'heartwood.id: "heartwood.research.aggregate-export"',
+            'heartwood.id: "example.community-summary"',
+        ),
+        encoding="utf-8",
+    )
+    return source
+
+
+@pytest.mark.parametrize("change", ["model", "skill"])
+def test_settings_change_during_a_stalled_launch_revokes_it_and_relaunches_with_the_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+    monkeypatch.setattr("heartwood.gateway.worker_sessions._CLOSE_WAIT_SECONDS", 5.0)
+    platform = Platform()
+    gateway = configured_gateway(tmp_path, platform)
+    launching, release = Event(), Event()
+    prepare = platform.prepare
+    launched: list[tuple[SessionService, WorkerSessionRequest, tuple[SkillManifest, ...]]] = []
+
+    def slow_prepare(request: WorkerSessionRequest) -> WorkerSessionPlan:
+        launched.append(
+            (
+                gateway._services[request.session_id],
+                request,
+                request.skills.active_skill_manifests(),
+            )
+        )
+        plan = prepare(request)
+        if len(launched) > 1:
+            return plan
+
+        def slow_launch(intent: WorkerAttemptIntent) -> WorkerRuntimeBinding:
+            launching.set()
+            assert release.wait(timeout=10)
+            return plan.launch(intent)
+
+        return replace(plan, launch=slow_launch)
+
+    gateway._worker_plan_factory = slow_prepare
+    source = _local_skill(gateway) if change == "skill" else None
+    outcomes: list[object] = []
+
+    def chat() -> None:
+        try:
+            outcomes.append(gateway.handle(_chat("chat-during-launch")))
+        except BaseException as error:
+            outcomes.append(error)
+
+    command = Thread(target=chat, daemon=True)
+    command.start()
+    try:
+        assert launching.wait(timeout=10)
+        began = monotonic()
+        if source is None:
+            profile = gateway.settings_store.load().profile()
+            gateway.save_model_profile(replace(profile, model="openai/synthetic-updated"))
+            assert gateway.settings_store.load().profile().model == "openai/synthetic-updated"
+        else:
+            inspected = gateway.inspect_local_skill(source)
+            settings = gateway.install_local_skill(
+                source, expected_tree_sha256=inspected["tree_sha256"], approved=True
+            )
+            assert any(skill["name"] == "community-summary" for skill in settings["skills"])
+        # The saved change is reported without waiting for the launch under the state lock.
+        assert monotonic() - began < 2
+        assert gateway.session_projection(session_id="session-other").session_id == (
+            "session-other"
+        )
+        # The session whose close waits for its launch is read from its journal.
+        assert "session-worker" in gateway._releasing
+        gateway.session_projection(session_id="session-worker")
+        assert monotonic() - began < 2
+        release.set()
+        command.join(timeout=10)
+        assert not command.is_alive()
+        first = launched[0][0]
+        # The launch that finished after the change connects nothing and is revoked.
+        assert _settles(first, "revoked")
+        deadline = monotonic() + 10
+        while first.store.owns_writer and monotonic() < deadline:
+            sleep(0.01)
+        assert not first.store.owns_writer
+        # The command that waited for the launch reached no worker. It was decided again
+        # with the new service, or it was refused and the next command relaunches.
+        refused = outcomes[0]
+        assert isinstance(refused, SessionResult)
+        assert refused.events[-1].kind == EventKind.ERROR_RECORDED
+        if len(launched) == 1:
+            gateway.handle(_chat("chat-after-launch"))
+        assert len(launched) == 2
+        replacement, request, skills = launched[1]
+        assert replacement is not first
+        if source is None:
+            assert request.profile.model == "openai/synthetic-updated"
+        else:
+            assert len(skills) == len(launched[0][2]) + 1
+        assert platform.calls[:2] == ["prepare", "launch"]
+        assert platform.calls.count("connect") == 1
+    finally:
+        release.set()
+        gateway.stop()

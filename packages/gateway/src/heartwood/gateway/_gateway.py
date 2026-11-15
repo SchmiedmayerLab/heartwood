@@ -43,6 +43,7 @@ from heartwood.core_adapter import (
     DeterministicAgentBackend,
     FileSessionStore,
     PendingActionGroup,
+    SessionRecoveryError,
     SessionResult,
     SessionService,
     TokenDeltaSink,
@@ -50,7 +51,7 @@ from heartwood.core_adapter import (
 from heartwood.core_adapter.action_review import effective_review_mode, is_tightening
 from heartwood.core_adapter.checkpoint_evidence import SessionCheckpointEvidence
 from heartwood.core_adapter.external_actions import ExternalActionAdapter
-from heartwood.core_adapter.worker_attempts import current_worker_attempt
+from heartwood.core_adapter.worker_attempts import WorkerAttemptError, current_worker_attempt
 from heartwood.gateway._action_presentation import action_presentation
 from heartwood.gateway._action_settings import (
     ACTION_MODE_LAUNCH_SCOPE_DESCRIPTION,
@@ -232,6 +233,8 @@ if TYPE_CHECKING:
 _RESERVED_MODEL_PROFILE_IDS = {"heartwood"}
 # Decisions of one command, when its service is replaced before the command is accepted.
 _COMMAND_ATTEMPTS = 2
+# How long a command waits for its session's earlier worker service to finish closing.
+_RELEASE_WAIT_SECONDS = 10.0
 _PROJECTED_COMMANDS = frozenset(
     {
         CommandKind.APPROVE.value,
@@ -267,6 +270,13 @@ class GatewaySessionSnapshot:
 
     events: tuple[SessionEvent, ...]
     projection: SessionProjection
+
+
+class _SessionReleasingError(SessionRecoveryError):
+    """A session's earlier worker service is still closing, so no new service may start."""
+
+    def __init__(self, session_id: str) -> None:
+        super().__init__(f"session {session_id} is still closing its earlier worker; retry shortly")
 
 
 class _SerializedStateOwner(Protocol):
@@ -600,6 +610,9 @@ class SessionGateway:
         self._service_factory = service_factory
         self.session_catalog = SessionCatalog(self.sessions_root)
         self._services: dict[str, SessionService] = {}
+        # Worker services detached from the cache whose close finishes outside the state lock,
+        # with the configuration to restore if that close fails and the session stays owned.
+        self._releasing: dict[str, tuple[SessionService, _ServiceConfiguration | None]] = {}
         # Serializes commands to one session; taken before every other gateway lock.
         self._session_command_locks: dict[str, Lock] = {}
         self._session_command_locks_lock = Lock()
@@ -638,6 +651,7 @@ class SessionGateway:
                 self.local_model_manager.close,
                 self.model_transfer_manager.close,
                 self._reset_services,
+                self._finish_releases,
             ):
                 try:
                     close()
@@ -715,11 +729,17 @@ class SessionGateway:
                 return self._handle_stored_command(command, starting_workflow=starting_workflow)
         with self._session_commands(command.session_id):
             for attempt in range(_COMMAND_ATTEMPTS):
+                self._await_release(command.session_id)
                 reconciled = self._reconcile_before_lock(command.session_id)
                 with ExitStack() as locks:
                     locks.enter_context(self._state_lock)
                     locks.enter_context(self.config_store.locked())
-                    admitted = self._admit_command_locked(command, reconciled)
+                    try:
+                        admitted = self._admit_command_locked(command, reconciled)
+                    except _SessionReleasingError:
+                        if attempt + 1 < _COMMAND_ATTEMPTS:
+                            continue
+                        raise
                     if isinstance(admitted, SessionResult):
                         return admitted
                     service, unavailable_reason, state_reconciled, streaming = admitted
@@ -755,6 +775,15 @@ class SessionGateway:
                         )
                     return result
         raise AssertionError("unreachable")  # pragma: no cover
+
+    def _await_release(self, session_id: str) -> None:
+        """Wait, holding no gateway lock, a bounded time for the session's earlier worker."""
+        with self._state_lock:
+            self._settle_releases_locked()
+            released = self._releasing.get(session_id)
+            worker = None if released is None else self._worker_sessions.get(id(released[0]))
+        if worker is not None:
+            worker.wait_closed(_RELEASE_WAIT_SECONDS)
 
     @contextmanager
     def _session_commands(self, session_id: str) -> Iterator[None]:
@@ -2268,21 +2297,19 @@ class SessionGateway:
 
     @_serialized_state
     def _service(self, session_id: str) -> SessionService:
+        self._settle_releases_locked()
+        if session_id in self._releasing:
+            raise _SessionReleasingError(session_id)
         configuration = self._service_configuration()
         service = self._services.get(session_id)
         if service is not None and self._service_configurations.get(session_id) != configuration:
-            self._close_service(service)
+            closed = self._close_service(service)
             self._services.pop(session_id, None)
-            self._service_configurations.pop(session_id, None)
-            with self._stream_lock:
-                had_transient_state = (
-                    session_id in self._streaming_active or session_id in self._streaming_text
-                )
-                self._streaming_active.discard(session_id)
-                self._streaming_text.pop(session_id, None)
-                if had_transient_state:
-                    self._advance_stream_revision(session_id)
-                    self._streams.notify(session_id=session_id)
+            previous = self._service_configurations.pop(session_id, None)
+            self._discard_transient_state(session_id)
+            if not closed:
+                self._releasing[session_id] = (service, previous)
+                raise _SessionReleasingError(session_id)
             service = None
         if service is None:
             if self._service_factory is not None:
@@ -2573,9 +2600,14 @@ class SessionGateway:
             if reconciler == "journal":
                 return persisted
             close_service = reconciler == "storage"
-            active_service = (
-                self._storage_service(session_id) if close_service else self._service(session_id)
-            )
+            try:
+                active_service = (
+                    self._storage_service(session_id)
+                    if close_service
+                    else self._service(session_id)
+                )
+            except _SessionReleasingError:
+                return FileSessionStore(self.sessions_root, session_id).replay_events()
         try:
             if active_service is not reconciled and self._read_under_lock(active_service):
                 active_service.reconcile()
@@ -2591,7 +2623,11 @@ class SessionGateway:
     def _session_reconciler_locked(
         self, session_id: str
     ) -> tuple[Literal["journal", "storage", "service"], tuple[SessionEvent, ...]]:
-        """Return what reconciles a session, its journal alone, a storage or a live service."""
+        """Return what reconciles a session, its journal alone, a storage or a live service.
+
+        A session whose earlier worker service is still closing is read from its journal.
+        """
+        self._settle_releases_locked()
         if session_id in self._services:
             return "service", ()
         store = FileSessionStore(self.sessions_root, session_id)
@@ -2599,7 +2635,7 @@ class SessionGateway:
         persisted_projection = project_session(persisted, session_id=session_id)
         lifecycle = persisted_projection.lifecycle.status
         unresolved_command_ids = store.unresolved_command_ids()
-        if (
+        if session_id in self._releasing or (
             lifecycle
             not in {
                 SessionLifecycle.RUNNING,
@@ -2958,6 +2994,12 @@ class SessionGateway:
 
     @_serialized_state
     def _reset_services(self) -> None:
+        """Detach every cached service; a worker's close may finish outside the state lock.
+
+        A service whose close fails stays cached and owned, so a later reset or stop
+        retries it.
+        """
+        self._settle_releases_locked()
         services = tuple(self._services.items())
         failed: dict[str, SessionService] = {}
         configurations = dict(self._service_configurations)
@@ -2966,36 +3008,86 @@ class SessionGateway:
         failed_configurations: dict[str, _ServiceConfiguration] = {}
         errors: list[Exception] = []
         for session_id, service in services:
+            configuration = configurations.get(session_id)
             try:
-                self._close_service(service)
+                closed = self._close_service(service)
             except Exception as error:
                 failed[session_id] = service
-                configuration = configurations.get(session_id)
                 if configuration is not None:
                     failed_configurations[session_id] = configuration
                 errors.append(error)
-            else:
-                with self._stream_lock:
-                    had_transient_state = (
-                        session_id in self._streaming_active or session_id in self._streaming_text
-                    )
-                    self._streaming_active.discard(session_id)
-                    self._streaming_text.pop(session_id, None)
-                    if had_transient_state:
-                        self._advance_stream_revision(session_id)
-                        self._streams.notify(session_id=session_id)
+                continue
+            if not closed:
+                self._releasing[session_id] = (service, configuration)
+            self._discard_transient_state(session_id)
         self._services = failed
         self._service_configurations = failed_configurations
         if errors:
             raise ExceptionGroup("unable to close all session services", errors)
 
-    def _close_service(self, service: SessionService) -> None:
+    def _finish_releases(self) -> None:
+        """Wait a bounded time for deferred worker closes, then retry those that failed."""
+        with self._state_lock:
+            workers = [
+                self._worker_sessions[id(service)] for service, _ in self._releasing.values()
+            ]
+        for worker in workers:
+            worker.wait_closed()
+        with self._state_lock:
+            failed = self._settle_releases_locked()
+            errors: list[Exception] = [
+                WorkerAttemptError(f"worker close is still in progress for session {session_id}")
+                for session_id in self._releasing
+            ]
+            if failed:
+                try:
+                    self._reset_services()
+                except ExceptionGroup as group:
+                    errors.extend(group.exceptions)
+        if errors:
+            raise ExceptionGroup("unable to close all session services", errors)
+
+    def _settle_releases_locked(self) -> tuple[str, ...]:
+        """Forget closed worker services, and cache again those whose deferred close failed.
+
+        Returns the sessions cached again.
+        """
+        failed: list[str] = []
+        for session_id, (service, configuration) in tuple(self._releasing.items()):
+            worker = self._worker_sessions[id(service)]
+            if worker.closing:
+                continue
+            del self._releasing[session_id]
+            if worker.wait_closed(0):
+                self._worker_sessions.pop(id(service), None)
+                continue
+            self._services[session_id] = service
+            if configuration is not None:
+                self._service_configurations[session_id] = configuration
+            failed.append(session_id)
+        return tuple(failed)
+
+    def _discard_transient_state(self, session_id: str) -> None:
+        with self._stream_lock:
+            had_transient_state = (
+                session_id in self._streaming_active or session_id in self._streaming_text
+            )
+            self._streaming_active.discard(session_id)
+            self._streaming_text.pop(session_id, None)
+            if had_transient_state:
+                self._advance_stream_revision(session_id)
+                self._streams.notify(session_id=session_id)
+
+    def _close_service(self, service: SessionService) -> bool:
+        """Close a service; return false when its worker finishes the close on its own thread."""
         worker = self._worker_sessions.get(id(service))
         if worker is None:
             service.close()
-        else:
-            worker.close()
-            self._worker_sessions.pop(id(service), None)
+            return True
+        if not worker.close():
+            return False
+        self._worker_sessions.pop(id(service), None)
+        return True
 
     @_serialized_state
     def _save_model_selection(

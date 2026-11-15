@@ -53,8 +53,17 @@ class StallingBackend(DeterministicAgentBackend):
 
 
 class _Owner:
+    closing = False
+
     def __init__(self, service: SessionService) -> None:
-        self.close = service.close
+        self._service = service
+
+    def close(self) -> bool:
+        self._service.close()
+        return True
+
+    def wait_closed(self, _timeout: float | None = None) -> bool:
+        return True
 
 
 class _Gateway:

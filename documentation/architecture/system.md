@@ -202,7 +202,10 @@ A worker session's command runs without the gateway state and configuration lock
 Until the command's records are complete, no other command, read, or callback of that session journals, so its acceptance, events, and completion receipt stay together and a retried command waits and then replays its result instead of being sent again.
 Fencing and revocation journal during that wait; a worker answer that arrives after its attempt's admission closed is discarded, the command records that the worker stopped, and it sends no further request.
 A request waiting for its response ends as soon as its attempt is fenced, without waiting for the deadline.
-Closing a session waits for its command in progress, for at most 30 seconds for a launch or a prompt revocation already under way, and holds no lock that revocation needs; a close that cannot finish leaves the session owned and can be retried.
+Closing a session waits for its command in progress and holds no lock that revocation needs.
+A close that finds a launch or a prompt revocation of the session's worker under way does not wait for the control plane: that launch or revocation finishes the close when it returns, revoking any attempt the launch created before it connects.
+Until then the session stays owned, a read returns its journal, and a command waits at most 10 seconds and is otherwise refused as retryable; a setting or Skill change is saved and reported at once.
+A close that cannot finish leaves the session owned, and a later reset or the gateway stop retries it; the stop waits at most 30 seconds for each close still under way.
 A local session's commands keep the gateway locks, so a project setting change from another gateway waits for its turn; a worker session's command does not hold them, and a setting change applies to its next command.
 
 ### Response and Event Admission
