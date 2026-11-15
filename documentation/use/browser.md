@@ -101,6 +101,8 @@ One decision resolves the complete OpenHands action set: allowing runs every lis
 Completed action records show the correlated state, exit status, bounded result, and affected paths when OpenHands supplied reliable typed evidence.
 Keyboard focus moves to a newly proposed action set and returns to the task composer after the decision is resolved.
 
+A review of an [outside operation or result release](actions-audit.md#outside-operations-and-result-releases) has its own heading and a marked panel that shows what would be sent and where it goes without opening a disclosure.
+
 ## Inspect the Project
 
 The **Files** and **Changes** views are read-only.

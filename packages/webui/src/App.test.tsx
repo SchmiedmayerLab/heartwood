@@ -26,6 +26,7 @@ import {
   emptyProjection,
   genericCapabilities,
   syntheticAction,
+  syntheticOutsideOperation,
   syntheticEvents,
   syntheticProjection,
 } from "./test/fixtures";
@@ -3405,6 +3406,130 @@ describe("App", () => {
     );
   });
 
+  it("shows what an outside operation sends and where without expansion", async () => {
+    const client = new OutsidePendingClient(syntheticOutsideOperation());
+    render(<App client={client} initialSessionId="session-test" />);
+
+    const approval = await screen.findByRole("region", {
+      name: "Review outside operation",
+    });
+    expect(
+      within(approval).getByText(
+        "Allow sends this request to the service once. Reject sends nothing.",
+      ),
+    ).toBeVisible();
+    expect(within(approval).getByText("Leaves the sandbox")).toBeVisible();
+    expect(
+      within(approval).getByText(
+        "Gateway-provided summary: Submit synthetic analysis",
+      ),
+    ).toBeVisible();
+    expect(
+      within(approval).queryByText(/Model-provided summary/u),
+    ).not.toBeInTheDocument();
+    expect(within(approval).getByText("Service").nextSibling).toHaveTextContent(
+      "synthetic-service",
+    );
+    const destination = within(approval).getByText("Destination").nextSibling;
+    expect(destination).toHaveTextContent("synthetic-results");
+    expect(destination).toBeVisible();
+    expect(
+      within(approval).getByText(new RegExp(`synthetic-input · 42 bytes`, "u")),
+    ).toBeVisible();
+    const request = within(approval).getByLabelText(
+      "Request sent to the service",
+    );
+    expect(request).toBeVisible();
+    expect(request).toHaveTextContent('"cohort": "aggregate"');
+    expect(
+      within(approval).getByText("22 bytes of canonical JSON"),
+    ).toBeVisible();
+    expect(within(approval).getByText("a".repeat(64))).toBeVisible();
+    expect(
+      within(approval).getByText("Review valid until").nextSibling?.firstChild,
+    ).toHaveAttribute("datetime", "2026-01-01T00:05:00+00:00");
+    expect(within(approval).queryByText(/preview truncated/u)).toBeNull();
+    expect(
+      within(approval).getByText("Complete reviewed proposal"),
+    ).toBeVisible();
+
+    fireEvent.click(screen.getByLabelText("Allow 1 action once"));
+    await waitFor(() =>
+      expect(client.commands.map((command) => command.kind)).toEqual([
+        "approve",
+      ]),
+    );
+  });
+
+  it("states that a long outside result preview is truncated and offers all of it", async () => {
+    const preview = `{\n  "rows": [\n${'    "synthetic aggregate row",\n'.repeat(60)}`;
+    const client = new OutsidePendingClient(
+      syntheticAction({
+        toolCallId: "outside-result-synthetic",
+        actionId: "outside-result-synthetic",
+        toolName: "release_outside_result",
+        risk: "unknown",
+        summary: "Send reviewed outside result to the worker and its model",
+        summarySource: "gateway",
+        arguments: { content: { rows: ["synthetic final row"] } },
+        details: {
+          kind: "outside-result",
+          expiresAt: "2026-01-01T00:05:00+00:00",
+          modelRoute: {
+            endpoint: "https://model.invalid",
+            model_id: "synthetic-model",
+          },
+          content: {
+            preview,
+            truncated: true,
+            sizeBytes: 12345,
+            sha256: "b".repeat(64),
+          },
+        },
+      }),
+    );
+    render(<App client={client} initialSessionId="session-test" />);
+
+    const approval = await screen.findByRole("region", {
+      name: "Review outside result release",
+    });
+    expect(
+      within(approval).getByText("Leaves Heartwood for the model route"),
+    ).toBeVisible();
+    const route = within(approval).getByLabelText("Model route");
+    expect(route).toBeVisible();
+    expect(route).toHaveTextContent("https://model.invalid");
+    expect(route).toHaveTextContent("synthetic-model");
+    const content = within(approval).getByLabelText(
+      "Content sent to the worker and its model",
+    );
+    expect(content).toBeVisible();
+    expect(content).toHaveTextContent("synthetic aggregate row");
+    expect(
+      within(approval).getByText(
+        `${(12345).toLocaleString()} bytes of canonical JSON`,
+      ),
+    ).toBeVisible();
+    expect(within(approval).getByText("b".repeat(64))).toBeVisible();
+    expect(
+      within(approval).getByText(
+        new RegExp(
+          `preview truncated after the first ${preview.length.toLocaleString()} characters`,
+          "u",
+        ),
+      ),
+    ).toBeVisible();
+    expect(
+      within(approval).queryByText(/Model-provided summary/u),
+    ).not.toBeInTheDocument();
+    const complete = within(approval).getByText("Complete reviewed proposal");
+    expect(
+      within(approval).getByText(/synthetic final row/u),
+    ).not.toBeVisible();
+    fireEvent.click(complete);
+    expect(within(approval).getByText(/synthetic final row/u)).toBeVisible();
+  });
+
   it("presents a multi-action proposal as one explicit decision", async () => {
     const client = new BatchPendingClient();
     client.currentSettings = {
@@ -3558,6 +3683,33 @@ class PendingClient extends FakeClient {
       events: syntheticEvents(),
       projection,
     });
+  }
+}
+
+class OutsidePendingClient extends PendingClient {
+  constructor(private readonly action: ReturnType<typeof syntheticAction>) {
+    super();
+    this.currentSettings = {
+      ...settings(),
+      active_profile: "heartwood",
+      profiles: [localProfile()],
+    };
+  }
+
+  override replayEvents(sessionId: string): Promise<SessionProjectionResponse> {
+    this.replayCalls += 1;
+    const projection = syntheticProjection({
+      sessionId,
+      actions: [this.action],
+      pendingApproval: {
+        groupId: "action-set-session-test",
+        actions: [this.action],
+        decision: null,
+        decisionScope: "all",
+      },
+    });
+    this.projections.set(sessionId, projection);
+    return Promise.resolve({ events: syntheticEvents(), projection });
   }
 }
 

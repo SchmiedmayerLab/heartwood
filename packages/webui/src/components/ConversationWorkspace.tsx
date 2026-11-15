@@ -16,6 +16,7 @@ import {
   CirclePlay,
   CircleX,
   Clock3,
+  ExternalLink,
   ListChecks,
   LoaderCircle,
   MessageSquareText,
@@ -574,7 +575,116 @@ const actionHeading = (action: ProjectionActionRecord) => {
       action.summary
     );
   }
+  if (action.details.kind === "outside-operation") {
+    return `Outside operation to ${action.details.destination}: ${action.summary}`;
+  }
+  if (action.details.kind === "outside-result") {
+    return `Outside result release: ${action.summary}`;
+  }
   return action.summary;
+};
+
+const summarySourceLabel = (action: ProjectionActionRecord) =>
+  action.summarySource === "gateway" ?
+    "Gateway-provided summary"
+  : "Model-provided summary";
+
+const outsideReviewCopy = {
+  "outside-operation": {
+    title: "Outside operation",
+    heading: "Review outside operation",
+    introduction:
+      "Allow sends this request to the service once. Reject sends nothing.",
+    effect: "Leaves the sandbox",
+    contentLabel: "Request sent to the service",
+  },
+  "outside-result": {
+    title: "Outside result release",
+    heading: "Review outside result release",
+    introduction:
+      "Allow sends this content to the worker and its model once. Reject sends nothing.",
+    effect: "Leaves Heartwood for the model route",
+    contentLabel: "Content sent to the worker and its model",
+  },
+} as const;
+
+const outsideCopyFor = (action: ProjectionActionRecord | undefined) =>
+  (
+    action?.details.kind === "outside-operation" ||
+    action?.details.kind === "outside-result"
+  ) ?
+    outsideReviewCopy[action.details.kind]
+  : null;
+
+const OutsideReview = ({ action }: { action: ProjectionActionRecord }) => {
+  const details = action.details;
+  if (details.kind !== "outside-operation" && details.kind !== "outside-result")
+    return null;
+  const copy = outsideReviewCopy[details.kind];
+  const content =
+    details.kind === "outside-operation" ? details.request : details.content;
+  return (
+    <div className="approval-outside">
+      <p className="approval-outside-effect">
+        <ExternalLink aria-hidden="true" />
+        {copy.effect}
+      </p>
+      <dl>
+        {details.kind === "outside-operation" ?
+          <>
+            <dt>Service</dt>
+            <dd>{displaySafeText(details.serviceId)}</dd>
+            <dt>Destination</dt>
+            <dd>{displaySafeText(details.destination)}</dd>
+            <dt>Operation</dt>
+            <dd>{displaySafeText(action.toolName)}</dd>
+            <dt>Inputs</dt>
+            <dd>
+              {details.inputs.length === 0 ?
+                "None"
+              : <ul>
+                  {details.inputs.map((input) => (
+                    <li key={input.reference}>
+                      {displaySafeText(input.reference)} ·{" "}
+                      {input.sizeBytes.toLocaleString()} bytes · SHA-256{" "}
+                      {input.sha256}
+                    </li>
+                  ))}
+                </ul>
+              }
+            </dd>
+          </>
+        : <>
+            <dt>Model route</dt>
+            <dd>
+              <pre tabIndex={0} aria-label="Model route">
+                {displaySafeText(JSON.stringify(details.modelRoute, null, 2))}
+              </pre>
+            </dd>
+          </>
+        }
+        <dt>Content size</dt>
+        <dd>{content.sizeBytes.toLocaleString()} bytes of canonical JSON</dd>
+        <dt>Content SHA-256</dt>
+        <dd>{content.sha256}</dd>
+        <dt>Review valid until</dt>
+        <dd>
+          <time dateTime={details.expiresAt}>
+            {new Date(details.expiresAt).toLocaleString()}
+          </time>
+        </dd>
+      </dl>
+      <p>
+        {copy.contentLabel}
+        {content.truncated ?
+          ` (preview truncated after the first ${content.preview.length.toLocaleString()} characters; open “Complete reviewed proposal” for all of it)`
+        : null}
+      </p>
+      <pre tabIndex={0} aria-label={copy.contentLabel}>
+        {displaySafeText(content.preview)}
+      </pre>
+    </div>
+  );
 };
 
 const RuntimeStatus = ({
@@ -760,6 +870,8 @@ const ApprovalRequest = ({
     headingRef.current?.focus();
   }, [approval.groupId]);
   const countLabel = actionCountLabel(approval.actions.length);
+  const outsideCopy =
+    approval.actions.length === 1 ? outsideCopyFor(approval.actions[0]) : null;
   const allowLabel =
     approval.actions.length === 1 ? "Allow Once" : "Allow All Once";
   const rejectLabel = approval.actions.length === 1 ? "Reject" : "Reject All";
@@ -772,12 +884,13 @@ const ApprovalRequest = ({
       <div className="approval-copy">
         <div className="approval-introduction">
           <h2 id="action-review-heading" ref={headingRef} tabIndex={-1}>
-            Review {countLabel}
+            {outsideCopy?.heading ?? `Review ${countLabel}`}
           </h2>
           <p>
-            {approval.actions.length === 1 ?
-              "Allow runs it once. Reject skips it."
-            : "Allow runs all of them once. Reject runs none."}
+            {outsideCopy?.introduction ??
+              (approval.actions.length === 1 ?
+                "Allow runs it once. Reject skips it."
+              : "Allow runs all of them once. Reject runs none.")}
           </p>
         </div>
         <ol className="approval-batch-list" role="list">
@@ -789,6 +902,7 @@ const ApprovalRequest = ({
             const tool = actionToolLabel(control.toolName, actionPresentation);
             const specialist =
               control.details.kind === "task" ? control.details : null;
+            const outside = outsideCopyFor(control);
             return (
               <li key={control.toolCallId}>
                 <div className="approval-action-heading">
@@ -799,7 +913,7 @@ const ApprovalRequest = ({
                           control.details.kind === "file-editor"
                       ) ?
                         actionHeading(control)
-                      : (specialist?.roleLabel ?? tool),
+                      : (outside?.title ?? specialist?.roleLabel ?? tool),
                     )}
                   </strong>
                   <Badge className={risk.className} variant="outline">
@@ -808,19 +922,22 @@ const ApprovalRequest = ({
                 </div>
                 {control.summary ?
                   <p>
-                    Model-provided summary: {displaySafeText(control.summary)}
+                    {summarySourceLabel(control)}:{" "}
+                    {displaySafeText(control.summary)}
                   </p>
                 : null}
-                <div className="approval-action-meta">
-                  <span>{tool}</span>
-                  {specialist?.capability ?
-                    <span>
-                      {specialist.capability === "advisory" ?
-                        "Advisory review"
-                      : "Project actions"}
-                    </span>
-                  : null}
-                </div>
+                {outside === null ?
+                  <div className="approval-action-meta">
+                    <span>{tool}</span>
+                    {specialist?.capability ?
+                      <span>
+                        {specialist.capability === "advisory" ?
+                          "Advisory review"
+                        : "Project actions"}
+                      </span>
+                    : null}
+                  </div>
+                : <OutsideReview action={control} />}
                 {specialist?.prompt ?
                   <p className="approval-action-objective">
                     {displaySafeText(specialist.prompt)}
@@ -836,7 +953,11 @@ const ApprovalRequest = ({
                 : null}
                 {Object.keys(control.arguments).length > 0 ?
                   <details className="approval-details">
-                    <summary>Exact arguments</summary>
+                    <summary>
+                      {outside === null ?
+                        "Exact arguments"
+                      : "Complete reviewed proposal"}
+                    </summary>
                     <pre tabIndex={0} aria-label={`Arguments for ${tool}`}>
                       {displaySafeText(
                         JSON.stringify(control.arguments, null, 2),
