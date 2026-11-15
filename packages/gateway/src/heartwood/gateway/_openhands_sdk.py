@@ -23,7 +23,7 @@ from importlib.metadata import version
 from pathlib import Path
 from threading import Event as ThreadEvent
 from threading import Lock, RLock, Thread, current_thread
-from typing import Any, Literal, Protocol, TypedDict, cast, runtime_checkable
+from typing import Any, Literal, Protocol, TypedDict, cast
 
 os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 os.environ.setdefault("LOG_LEVEL", "ERROR")
@@ -125,6 +125,7 @@ from heartwood.gateway._openhands_models import (
     request_endpoint_for_model,
 )
 from heartwood.gateway._openhands_persistence import ContentMinimizedLocalFileStore
+from heartwood.gateway._remote_workspace import AdmittedRemoteWorkspace, WorkerBranch
 from heartwood.gateway._review_executor import (
     ReviewBatchAuthorizer,
     bind_review_executor,
@@ -156,23 +157,9 @@ from heartwood.skills import SkillManifest
 install_privacy_safe_retry_logging()
 
 
-class _BranchSnapshot(Protocol):
-    @property
-    def id(self) -> uuid.UUID: ...
-
-    @property
-    def execution_status(self) -> ConversationExecutionStatus: ...
-
+class _UsageSource(Protocol):
     @property
     def stats(self) -> ConversationStats: ...
-
-    @property
-    def events(self) -> Sequence[Event]: ...
-
-
-@runtime_checkable
-class _SnapshotProvider(Protocol):
-    def snapshot(self) -> _BranchSnapshot: ...
 
 
 @dataclass(frozen=True)
@@ -346,6 +333,7 @@ class OpenHandsSdkBackend:
         self._structured_task_outcomes = structured_task_outcomes
         self._review_batch_authorizer = review_batch_authorizer
         self._conversation: BaseConversation | None = None
+        self._worker_branch: WorkerBranch | None = None
         self._conversation_lock = RLock()
         self._conversation_closing = False
         self._closed = False
@@ -555,7 +543,7 @@ class OpenHandsSdkBackend:
         known_source_event_ids: frozenset[str],
     ) -> tuple[BackendEvent, ...]:
         """Translate one already-owned conversation without reopening it."""
-        state = _conversation_read(conversation)
+        state = self._read(conversation)
         branch = state.branch
         actions_by_id, action_groups = self._action_resolution_context(branch)
         translated: list[BackendEvent] = []
@@ -590,7 +578,7 @@ class OpenHandsSdkBackend:
             conversation = self._get_conversation()
         except Exception:
             return None
-        state = _conversation_read(conversation)
+        state = self._read(conversation)
         if state.execution_status != ConversationExecutionStatus.WAITING_FOR_CONFIRMATION:
             return None
         return self._unmatched_action_group(state.branch)
@@ -1035,6 +1023,30 @@ class OpenHandsSdkBackend:
         self._security_analyzer = analyzer
         return conversation
 
+    def _read(self, conversation: BaseConversation) -> _ConversationRead:
+        """Read the conversation's active branch, status and usage.
+
+        A worker's branch is read whole once and afterwards only after the admitted leaf.
+        """
+        if not isinstance(conversation, RemoteConversation):
+            local = _conversation_state(conversation)
+            return _ConversationRead(
+                tuple(local.active_branch()), local.execution_status, _usage(local)
+            )
+        try:
+            with self._conversation_lock:
+                if self._worker_branch is None:
+                    workspace = conversation.workspace
+                    if not isinstance(workspace, AdmittedRemoteWorkspace):
+                        raise OpenHandsSdkError("Worker reads require an admitted workspace")
+                    self._worker_branch = WorkerBranch(workspace, conversation.id)
+                branch = self._worker_branch
+            state = conversation.state
+            read = branch.read(lambda: (state.execution_status, state.stats))
+        except Exception:
+            raise OpenHandsSdkError("Worker conversation state is unavailable") from None
+        return _ConversationRead(read.events, read.execution_status, _usage(read))
+
     def _specialist_tool(self) -> Tool | None:
         if self.specialist_catalog is None:
             return None
@@ -1081,7 +1093,7 @@ class OpenHandsSdkBackend:
         self,
         conversation: BaseConversation,
     ) -> bool:
-        state = _conversation_read(conversation)
+        state = self._read(conversation)
         unmatched = ConversationState.get_unmatched_actions(state.branch)
         if not any(
             isinstance(event.action, TaskAction)
@@ -1446,9 +1458,7 @@ class OpenHandsSdkBackend:
                 ),
                 source_event_id=f"openhands:{event.id}:subagent:{status.value}",
             )
-            for event in ConversationState.get_unmatched_actions(
-                _conversation_read(conversation).branch
-            )
+            for event in ConversationState.get_unmatched_actions(self._read(conversation).branch)
             if isinstance(event.action, TaskAction)
         )
 
@@ -1490,7 +1500,7 @@ class OpenHandsSdkBackend:
     ) -> BackendErrorCode | None:
         if self._execution_in_flight():
             return None
-        state = _conversation_read(conversation) if state is None else state
+        state = self._read(conversation) if state is None else state
         unmatched_actions = ConversationState.get_unmatched_actions(state.branch)
         with self._run_lock:
             run_cancelled = self._run_cancelled.is_set()
@@ -1758,7 +1768,7 @@ class OpenHandsSdkBackend:
             run_failed = self._run_failed
             execution_active = self._execution_active
             run_cancelled = self._run_cancelled.is_set()
-        state = _conversation_read(conversation) if state is None else state
+        state = self._read(conversation) if state is None else state
         branch = state.branch
         anchor = branch[-1].id if branch else str(conversation.id)
         unmatched_actions = ConversationState.get_unmatched_actions(branch)
@@ -2000,22 +2010,6 @@ def _conversation_state(conversation: BaseConversation) -> ConversationState:
     return cast(ConversationState, conversation.state)
 
 
-def _conversation_read(conversation: BaseConversation) -> _ConversationRead:
-    state = conversation.state
-    if not isinstance(state, ConversationState) and isinstance(state, _SnapshotProvider):
-        try:
-            snapshot = state.snapshot()
-            if snapshot.id != conversation.id:
-                raise OpenHandsSdkError("Conversation snapshot identity does not match")
-            return _ConversationRead(
-                tuple(snapshot.events), snapshot.execution_status, _usage(snapshot)
-            )
-        except Exception:
-            raise OpenHandsSdkError("Conversation snapshot is unavailable") from None
-    local = _conversation_state(conversation)
-    return _ConversationRead(tuple(local.active_branch()), local.execution_status, _usage(local))
-
-
 def _execution_status(conversation: BaseConversation) -> str:
     return conversation.state.execution_status.value
 
@@ -2129,7 +2123,7 @@ def _task_status(status: str) -> BackendTaskStatus:
     }.get(status, BackendTaskStatus.TODO)
 
 
-def _usage(state: ConversationState | _BranchSnapshot) -> tuple[BackendUsage, ...]:
+def _usage(state: _UsageSource) -> tuple[BackendUsage, ...]:
     # A child can register its final metrics during projection. Freeze the native
     # values once so totals and per-purpose rows describe the same observation.
     stats = ConversationStats(

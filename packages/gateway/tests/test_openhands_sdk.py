@@ -19,11 +19,11 @@ from functools import cache
 from pathlib import Path
 from threading import Barrier, Event, Lock, Thread
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import cast
 
 import pytest
 from litellm.types.utils import Delta, StreamingChoices
-from openhands.sdk import LLM, Agent, LLMStreamChunk, LocalConversation, RemoteConversation, Tool
+from openhands.sdk import LLM, Agent, LLMStreamChunk, LocalConversation, Tool
 from openhands.sdk.agent import base as agent_base
 from openhands.sdk.conversation import (
     BaseConversation,
@@ -37,7 +37,6 @@ from openhands.sdk.event import (
     MessageEvent,
     ObservationEvent,
     PauseEvent,
-    StreamingDeltaEvent,
     UserRejectObservation,
 )
 from openhands.sdk.event import (
@@ -1136,66 +1135,6 @@ def test_openhands_status_mappings_are_exhaustive_and_fail_closed() -> None:
         "done": BackendTaskStatus.DONE,
     }
     assert _task_status("unknown-upstream-status") == BackendTaskStatus.TODO
-
-
-def test_reconciliation_uses_one_native_branch_snapshot(tmp_path: Path) -> None:
-    conversation = _ControlledConversation()
-    action = _terminal_action_event("snapshot-action", "snapshot-call", "printf synthetic")
-    calls = 0
-
-    def snapshot() -> SimpleNamespace:
-        nonlocal calls
-        calls += 1
-        assert calls == 1
-        return SimpleNamespace(
-            id=conversation.id,
-            execution_status=ConversationExecutionStatus.WAITING_FOR_CONFIRMATION,
-            stats=ConversationStats(),
-            events=[action],
-        )
-
-    conversation.state = cast(_ControlledState, SimpleNamespace(snapshot=snapshot))
-    backend = _backend(
-        tmp_path,
-        cast(ConversationFactory, lambda *_: conversation),
-    )
-    try:
-        events = backend.reconcile(session_id="session-1", known_source_event_ids=frozenset())
-        assert calls == 1
-        assert any(isinstance(event, BackendToolCallEvent) for event in events)
-        requests = [event for event in events if isinstance(event, BackendConfirmationRequestEvent)]
-        assert len(requests) == 1
-        assert requests[0].tool_call.tool_call_id == "snapshot-call"
-        assert not any(isinstance(event, BackendErrorEvent) for event in events)
-    finally:
-        backend.close()
-
-
-@pytest.mark.parametrize("wrong_identity", [False, True])
-def test_snapshot_failure_is_content_safe_and_never_projects_actions(
-    tmp_path: Path, wrong_identity: bool
-) -> None:
-    conversation = _ControlledConversation()
-
-    def snapshot() -> SimpleNamespace:
-        if not wrong_identity:
-            raise ValueError("synthetic-private-worker-content")
-        return SimpleNamespace(
-            id=uuid.uuid4(),
-            execution_status=ConversationExecutionStatus.WAITING_FOR_CONFIRMATION,
-            stats=ConversationStats(),
-            events=[_terminal_action_event("other-action", "other-call", "printf synthetic")],
-        )
-
-    conversation.state = cast(_ControlledState, SimpleNamespace(snapshot=snapshot))
-    backend = _backend(tmp_path, cast(ConversationFactory, lambda *_: conversation))
-    try:
-        events = backend.reconcile(session_id="session-1", known_source_event_ids=frozenset())
-        assert len(events) == 1
-        assert isinstance(events[0], BackendErrorEvent)
-        assert "synthetic-private-worker-content" not in repr(events)
-    finally:
-        backend.close()
 
 
 def test_public_conversation_state_projects_a_content_safe_error(
@@ -2725,113 +2664,6 @@ def test_persisted_progress_is_published_before_the_run_finishes(tmp_path: Path)
     conversation.release.set()
     assert conversation.finished.wait(timeout=2)
     backend.close()
-
-
-@pytest.mark.parametrize(
-    ("signal_progress", "concurrent_event"), [(False, False), (True, False), (True, True)]
-)
-def test_remote_progress_reads_are_bounded_and_always_finish(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, signal_progress: bool, concurrent_event: bool
-) -> None:
-    from heartwood.gateway._remote_workspace import WorkerResponseBudget
-
-    monkeypatch.setattr(openhands_sdk_module, "_AGENT_PROGRESS_POLL_SECONDS", 0.01)
-    monkeypatch.setattr(
-        openhands_sdk_module,
-        "_AGENT_REMOTE_PROGRESS_FALLBACK_SECONDS",
-        60.0 if signal_progress else 0.3,
-    )
-    started, release, progress_published = Event(), Event(), Event()
-    emitted: list[BackendEvent] = []
-    reads: list[int] = []
-    branch: list[OpenHandsEvent] = []
-    budget = WorkerResponseBudget(max_responses=8)
-    status = ConversationExecutionStatus.RUNNING
-    conversation_id = uuid.uuid4()
-
-    def snapshot() -> SimpleNamespace:
-        budget.charge(0, new_response=True)
-        reads.append(len(branch))
-        result = SimpleNamespace(
-            id=conversation_id,
-            execution_status=status,
-            stats=ConversationStats(),
-            events=list(branch),
-        )
-        if concurrent_event and len(reads) == 1:
-            persisted = MessageEvent(
-                id="concurrent-message",
-                source="agent",
-                llm_message=Message(role="assistant", content=[TextContent(text="More progress.")]),
-            )
-            branch.append(persisted)
-            backend._handle_sdk_event(persisted)
-        return result
-
-    class SlowRemoteConversation(RemoteConversation):
-        def __init__(self) -> None:
-            self._id = conversation_id
-            self._state = cast(Any, SimpleNamespace(snapshot=snapshot))
-
-    async def run_remote(_conversation: SlowRemoteConversation) -> None:
-        nonlocal status
-        started.set()
-        while not release.is_set():
-            await asyncio.sleep(0.005)
-        # No callback: the final boundary must still reconcile persisted state.
-        branch.append(
-            MessageEvent(
-                id="final-message",
-                source="agent",
-                llm_message=Message(role="assistant", content=[TextContent(text="Finished.")]),
-            )
-        )
-        status = ConversationExecutionStatus.FINISHED
-
-    monkeypatch.setattr(SlowRemoteConversation, "arun", run_remote)
-
-    conversation = SlowRemoteConversation()
-    backend = _backend(tmp_path, cast(ConversationFactory, lambda *_: conversation))
-
-    def publish(events: tuple[BackendEvent, ...]) -> None:
-        emitted.extend(events)
-        if any(
-            isinstance(event, BackendAgentMessageEvent)
-            and event.message == ("More progress." if concurrent_event else "Working.")
-            for event in events
-        ):
-            progress_published.set()
-
-    backend.bind_runtime(event_sink=publish, token_sink=lambda _delta: None)
-    try:
-        assert backend._start_run(session_id="session-1", conversation=conversation)
-        assert started.wait(2)
-        for _ in range(6):
-            backend._handle_sdk_event(StreamingDeltaEvent(content="transient"))
-            assert not backend.wait_for_idle(0.01)
-        if signal_progress:
-            assert reads == []
-        event = MessageEvent(
-            id="progress-message",
-            source="agent",
-            llm_message=Message(role="assistant", content=[TextContent(text="Working.")]),
-        )
-        branch.append(event)
-        if signal_progress:
-            backend._handle_sdk_event(event)
-        assert progress_published.wait(2)
-        assert len(reads) >= (2 if concurrent_event else 1)
-    finally:
-        release.set()
-        assert backend.wait_for_idle(2)
-        backend.close()
-    assert 2 <= len(reads) <= 8
-    assert any(isinstance(event, BackendExecutionSettledEvent) for event in emitted)
-    assert not any(isinstance(event, BackendErrorEvent) for event in emitted)
-    assert any(
-        isinstance(event, BackendAgentMessageEvent) and event.message == "Finished."
-        for event in emitted
-    )
 
 
 def test_synchronous_progress_sink_does_not_block_the_openhands_event_loop(

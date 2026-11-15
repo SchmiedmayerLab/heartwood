@@ -13,14 +13,19 @@ import math
 import re
 import time
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from threading import Lock, Thread, local
 from typing import Any
+from uuid import UUID
 
 import httpx
+from openhands.sdk.conversation.conversation_stats import ConversationStats
 from openhands.sdk.conversation.request import StartConversationRequest
+from openhands.sdk.conversation.state import ConversationExecutionStatus
 from openhands.sdk.event import Event
-from openhands.sdk.event.conversation_state import FULL_STATE_KEY
+from openhands.sdk.event.conversation_state import FULL_STATE_KEY, ConversationStateUpdateEvent
+from openhands.sdk.event.types import ROOT_PARENT_ID
 from openhands.sdk.tool.client_tool import ClientToolSpec
 from openhands.sdk.workspace import RemoteWorkspace
 from pydantic import ConfigDict, Field, PrivateAttr, ValidationError, model_validator
@@ -45,6 +50,10 @@ _JSON_STRING = re.compile(rb'"[^"\\]*(?:\\.[^"\\]*)*"')
 # so a worker cannot extend a walk by answering slowly.
 _MAX_HISTORY_PAGES = 1024
 _MAX_HISTORY_BYTES = 32 * 1024 * 1024
+# The most events the agent server returns in one history page.
+_HISTORY_PAGE_EVENTS = 100
+# A request carrying this extension receives the values admission parsed and validated.
+_ADMITTED = "heartwood.admitted"
 
 # The gateway's conversation request as sent to the worker and as serialized without secrets.
 RequestContract = tuple[dict[str, Any], dict[str, Any]]
@@ -236,6 +245,8 @@ class WorkerResponseTransport(httpx.BaseTransport):
         )
         request.extensions["timeout"] = timeout
         path = request.url.path
+        admitted: list[Event] = []
+        value: object = None
         try:
             status, headers, content = self._exchange(request)
             if content:
@@ -269,7 +280,7 @@ class WorkerResponseTransport(httpx.BaseTransport):
                                 )
                                 # The SDK validates a snapshot as one list and records an
                                 # error for every invalid event, so the first one ends here.
-                                _validate_event(event)
+                                admitted.append(_validate_event(event))
                     if path.endswith("/events/search"):
                         self._admit_history_page(request, value, len(content))
                 if (
@@ -292,7 +303,11 @@ class WorkerResponseTransport(httpx.BaseTransport):
             elif status != 204:
                 raise WorkerResponseError("worker response is empty")
             self._budget.charge(0)
-            return httpx.Response(status, headers=headers, content=content)
+            # The gateway's own reads take the admitted values, so nothing parses them twice.
+            extensions = (
+                {_ADMITTED: (value, tuple(admitted))} if request.extensions.get(_ADMITTED) else {}
+            )
+            return httpx.Response(status, headers=headers, content=content, extensions=extensions)
         except WorkerResponseError:
             self._budget.close()
             raise
@@ -353,8 +368,9 @@ class WorkerResponseTransport(httpx.BaseTransport):
         """End a history walk that repeats a page or outgrows what one read may retain."""
         requested = request.url.params.get("page_id")
         walk: dict[str, Any] | None = getattr(self._history, "walk", None)
-        if requested is None or walk is None:
-            # The SDK reads each history from its first page on the calling thread.
+        if walk is None or requested is None or requested != walk["next"]:
+            # Each history is read synchronously on the calling thread, from its first page
+            # or from a known event, and continues only with the page the worker named.
             walk = self._history.walk = {"pages": 0, "bytes": 0, "seen": {requested}}
         walk["pages"] += 1
         walk["bytes"] += size
@@ -369,6 +385,7 @@ class WorkerResponseTransport(httpx.BaseTransport):
         ):
             raise WorkerResponseError("worker history does not end within its bounds")
         walk["seen"].add(following)
+        walk["next"] = following
 
     def _admit_request(self, request: httpx.Request) -> None:
         attempt = self._budget.attempt
@@ -421,9 +438,9 @@ def _json_values(content: bytes) -> int:
     )
 
 
-def _validate_event(event: dict[str, Any]) -> None:
+def _validate_event(event: dict[str, Any]) -> Event:
     try:
-        Event.model_validate(event)
+        return Event.model_validate(event)
     except ValidationError:
         raise WorkerResponseError("worker event is not a native event") from None
 
@@ -699,3 +716,147 @@ class AdmittedRemoteWorkspace(RemoteWorkspace):
         client, self._admitted_client = self._admitted_client, None
         if client is not None:
             client.close()
+
+
+@dataclass(frozen=True, slots=True)
+class WorkerBranchRead:
+    """One admitted view of the worker's active branch, its status and its usage."""
+
+    events: tuple[Event, ...]
+    execution_status: ConversationExecutionStatus
+    stats: ConversationStats
+
+
+class WorkerBranch:
+    """The worker's active branch, read whole once and afterwards only after its leaf.
+
+    A later read must begin with the admitted leaf, unchanged, and every event after it
+    must name its predecessor as its parent, so a repeated, missing, reordered or
+    replaced event fences the attempt. The retained branch is bounded like the snapshot
+    that would carry it, so the conversation can always be attached from one snapshot.
+    """
+
+    def __init__(self, workspace: AdmittedRemoteWorkspace, conversation_id: UUID) -> None:
+        self._workspace = workspace
+        self._identity = str(conversation_id)
+        self._path = f"/api/conversations/{conversation_id}/events"
+        self._lock = Lock()
+        self._events: tuple[Event, ...] = ()
+        self._positions: dict[str, int] = {}
+        self._bytes = 0
+        self._values = 0
+
+    def read(
+        self, status: Callable[[], tuple[ConversationExecutionStatus, ConversationStats]]
+    ) -> WorkerBranchRead:
+        """Read events after the admitted leaf; ``status`` is read before them.
+
+        A status read first can only describe a prefix of the events read after it,
+        and an empty branch is read as one snapshot, which carries its own status.
+        """
+        try:
+            with self._lock:
+                base = self._events
+            if not base:
+                snapshot = self._snapshot()
+                self._extend((), snapshot.events)
+                return snapshot
+            execution_status, stats = status()
+            events = self._extend(base, self._after(base))
+            return WorkerBranchRead(events, execution_status, stats)
+        except WorkerResponseError:
+            self._workspace._response_budget.close()
+            raise
+
+    def _get(self, path: str, **params: str | int) -> tuple[dict[str, Any], tuple[Event, ...]]:
+        response = self._workspace.client.get(
+            self._path + path, params=params, extensions={_ADMITTED: True}
+        )
+        value, events = response.extensions.get(_ADMITTED, (None, ()))
+        field = "events" if path == "/snapshot" else "items"
+        if (
+            not isinstance(value, dict)
+            or not isinstance(value.get(field), list)
+            or len(value[field]) != len(events)
+        ):
+            raise WorkerResponseError("worker branch response is invalid")
+        return value, events
+
+    def _snapshot(self) -> WorkerBranchRead:
+        value, events = self._get("/snapshot")
+        try:
+            execution_status = ConversationExecutionStatus(value.get("execution_status"))
+            stats = ConversationStats.model_validate(value.get("stats"))
+        except ValueError:
+            raise WorkerResponseError("worker branch response is invalid") from None
+        branch = _require_chain(None, events, set())
+        if value.get("id") != self._identity or value.get("leaf_event_id") != (
+            branch[-1].id if branch else None
+        ):
+            raise WorkerResponseError("worker branch response is invalid")
+        return WorkerBranchRead(branch, execution_status, stats)
+
+    def _after(self, base: tuple[Event, ...]) -> tuple[Event, ...]:
+        leaf = base[-1]
+        events: list[Event] = []
+        seen: set[str] = set()
+        page, first = leaf.id, True
+        while True:
+            value, items = self._get("/search", page_id=page, limit=_HISTORY_PAGE_EVENTS)
+            # A page starts at the event it was requested from; the first is the leaf itself.
+            if not items or items[0].id != page or (first and items[0] != leaf):
+                raise WorkerResponseError("worker history does not continue the admitted branch")
+            new = _require_chain(
+                events[-1] if events else leaf, items[1:] if first else items, seen
+            )
+            with self._lock:
+                repeated = any(
+                    self._positions.get(event.id, len(base)) < len(base) for event in new
+                )
+            if repeated:
+                raise WorkerResponseError("worker history does not continue the admitted branch")
+            events.extend(new)
+            following = value.get("next_page_id")
+            if following is None:
+                return tuple(events)
+            page, first = following, False
+
+    def _extend(self, base: tuple[Event, ...], new: tuple[Event, ...]) -> tuple[Event, ...]:
+        """Retain the longer of two consistent reads; concurrent readers share one branch."""
+        candidate = (*base, *new)
+        with self._lock:
+            current = self._events
+            shorter, longer = sorted((current, candidate), key=len)
+            if longer[: len(shorter)] != shorter:
+                raise WorkerResponseError("worker branch changed between reads")
+            size, values = self._bytes, self._values
+            for event in longer[len(current) :]:
+                encoded = event.model_dump_json().encode()
+                size += len(encoded)
+                values += _json_values(encoded)
+            if size > _MAX_SNAPSHOT_BYTES or values > _MAX_JSON_VALUES:
+                raise WorkerResponseError("worker branch exceeds what a snapshot may carry")
+            for index in range(len(current), len(longer)):
+                self._positions[longer[index].id] = index
+            self._events, self._bytes, self._values = longer, size, values
+        return candidate
+
+
+def _require_chain(
+    previous: Event | None, events: Sequence[Event], seen: set[str]
+) -> tuple[Event, ...]:
+    """Return the branch events, each extending the branch from its predecessor once.
+
+    The worker's log also holds state updates, which name the branch tip as parent but
+    are not part of the branch.
+    """
+    branch: list[Event] = []
+    for event in events:
+        expected = (None, ROOT_PARENT_ID) if previous is None else (previous.id,)
+        if event.parent_id not in expected or event.id in seen:
+            raise WorkerResponseError("worker history does not continue the admitted branch")
+        seen.add(event.id)
+        if not isinstance(event, ConversationStateUpdateEvent):
+            branch.append(event)
+            previous = event
+    return tuple(branch)
