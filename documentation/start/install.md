@@ -41,13 +41,16 @@ Use this route only when changing Heartwood itself.
 It requires Git, [uv](https://docs.astral.sh/uv/), and Node.js for browser-interface work.
 
 ```bash
-git clone https://github.com/SchmiedmayerLab/heartwood.git
+git clone --recurse-submodules https://github.com/SchmiedmayerLab/heartwood.git
 cd heartwood
+uv run --no-project --python 3.12.15 deploy/build-worker-candidate.py --bootstrap
 uv sync --locked --all-groups --all-extras
 uv run heartwood --version
 ```
 
 The project uses the locked workspace rather than installing packages individually.
+Use uv 0.13.7 for the dependency bootstrap.
+The native archive and container include Heartwood's reviewed SDK builds; a registry-only installation cannot resolve those locally versioned dependencies.
 See the [Development Guide](../contribute/development.md) for tests and repository structure.
 
 ## Update or Remove Heartwood

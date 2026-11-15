@@ -2436,17 +2436,17 @@ openapi-pydantic==0.6.0 \
     --hash=sha256:11f3ac6ad41521fc156381ec587246b0c0ecea523bd9565ed74d3e7fac9d91cd \
     --hash=sha256:8bd6d548a250da37db96f461bcd52b3468e8834ad7d6db14b00a6b2ebbd163a3
     # via fastmcp-slim
-openhands-agent-server==1.62.0+heartwood.1 \
-    --hash=sha256:5635b0ef22176e088ea5faff87c27e098ee50f5d7cdb49bfee14e1d2540b82df
+openhands-agent-server==1.62.0+heartwood.2 \
+    --hash=sha256:5e44be26da5a17b967e33ea87dcefa3e1df49103612c383becaa29bb4f17ab7d
     # via -r images/worker/candidate/runtime.in
-openhands-sdk==1.62.0+heartwood.1 \
-    --hash=sha256:56713de560cee6d7be52d5847b23c2bee0e326620af5a76e1ffbbee955ea2c41
+openhands-sdk==1.62.0+heartwood.2 \
+    --hash=sha256:5d0ce4aeee3badcab4ae5a654de6cfe5328147eabc7896bc09384b3de517d94d
     # via
     #   -r images/worker/candidate/runtime.in
     #   openhands-agent-server
     #   openhands-tools
-openhands-tools==1.62.0+heartwood.1 \
-    --hash=sha256:e67a0f2aee248f310b315318e632793c2e2b321ef855539ecf6784d57a6cb938
+openhands-tools==1.62.0+heartwood.2 \
+    --hash=sha256:965032e0f93cefee22f8782c4992a3a604cf1c357054294c55ae147a1cf34d55
     # via
     #   -r images/worker/candidate/runtime.in
     #   openhands-agent-server

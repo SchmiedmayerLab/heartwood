@@ -13,11 +13,17 @@ Heartwood is a Python workspace with a TypeScript researcher web interface built
 ```bash
 git clone --recurse-submodules https://github.com/SchmiedmayerLab/heartwood.git
 cd heartwood
+uv run --no-project --python 3.12.15 deploy/build-worker-candidate.py --bootstrap
 uv sync --locked --all-groups --all-extras
 npm ci --prefix packages/webui
 ```
 
 Use the repository's pinned Python and Node dependency locks.
+The dependency builder requires uv 0.13.7 and prepares reviewed runtime wheels in `vendor/runtime-wheels/` before workspace resolution.
+It verifies upstream source and patch hashes, preserved licenses, reproducible wheel digests and the build record; subsequent bootstrap calls verify the existing files without replacing them.
+These locally versioned SDK wheels are distributed inside the native release archive and built through the shared container assembly.
+Installing individual Heartwood packages from a package registry without those wheels is not a supported installation route.
+If dependency verification fails, retain the failed files for inspection and use a clean checkout rather than bypassing hashes or overriding dependency constraints.
 Resolution ignores releases younger than seven days through uv's `exclude-newer` setting, npm's `min-release-age`, and the Dependabot cooldown; security updates are not delayed.
 Base images are pinned by digest, and third-party GitHub Actions use exact versions from immutable releases, with Dependabot proposing updates in the weekly group.
 Do not add a new language, agent implementation, UI stack, or service when an existing contract or upstream dependency can own the behavior.

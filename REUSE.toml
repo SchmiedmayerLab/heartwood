@@ -57,7 +57,7 @@ SPDX-FileCopyrightText = "2026 Stanford University and the project authors (see 
 SPDX-License-Identifier = "MIT"
 
 [[annotations]]
-path = ["images/worker/candidate/conversation-admission.patch", "images/worker/candidate/dependency-compatibility.patch"]
+path = ["images/worker/candidate/conversation-admission.patch", "images/worker/candidate/dependency-compatibility.patch", "images/worker/candidate/terminal-environment.patch"]
 precedence = "aggregate"
 SPDX-FileCopyrightText = ["2026 OpenHands contributors", "2026 Stanford University and the project authors (see CONTRIBUTORS.md)"]
 SPDX-License-Identifier = "MIT"

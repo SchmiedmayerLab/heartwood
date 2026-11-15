@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
 # SPDX-License-Identifier: MIT
 
-"""Build pinned dependency wheels and a gateway for native worker qualification."""
+"""Build maintained dependency wheels and a gateway for native worker qualification."""
 
 from __future__ import annotations
 
@@ -89,7 +89,7 @@ def _configuration(uv: str) -> tuple[dict[str, Any], bytes, Path]:
     """Verify the tool and shared build inputs before executing any build."""
     manifest_bytes = (_CONFIG / "sources.json").read_bytes()
     manifest = json.loads(manifest_bytes)
-    if manifest["schema_version"] != 1 or manifest["purpose"] != "qualification-only":
+    if manifest["schema_version"] != 1 or manifest["purpose"] != "maintained-dependencies":
         raise ValueError("Unsupported worker candidate manifest")
     version = subprocess.check_output([uv, "--version"], text=True).split()[1]
     if version != manifest["uv"]:
@@ -176,13 +176,34 @@ def build(output: Path, uv: str) -> None:
     if len(set(identities)) != len(wheels) or set(identities) != expected_identities:
         raise ValueError("Candidate wheel identities do not match the manifest")
     report = {
-        "purpose": "qualification-only",
+        "purpose": manifest["purpose"],
         "manifest_sha256": _digest(manifest_bytes),
         "python": manifest["python"],
         "uv": manifest["uv"],
         "wheels": {path.name: _digest(path.read_bytes()) for path in wheels},
     }
+    if report["wheels"] != manifest["wheels_sha256"]:
+        raise ValueError("Built dependency wheels differ from their reviewed digests")
     (output / "build-record.json").write_text(json.dumps(report, indent=2) + "\n")
+
+
+def bootstrap(output: Path, uv: str) -> None:
+    """Build missing dependencies or verify an existing release-owned wheel directory."""
+    manifest, manifest_bytes, _ = _configuration(uv)
+    if output.is_symlink():
+        raise ValueError("Runtime dependency directory must not be a symlink")
+    if not output.exists():
+        build(output, uv)
+        return
+    expected = manifest["wheels_sha256"]
+    actual = {path.name: _digest(path.read_bytes()) for path in output.glob("*.whl")}
+    if actual != expected:
+        raise ValueError(
+            "Runtime wheel digests differ from the source manifest; use a clean checkout"
+        )
+    record = json.loads((output / "build-record.json").read_text())
+    if record["manifest_sha256"] != _digest(manifest_bytes) or record["wheels"] != expected:
+        raise ValueError("Runtime dependency provenance differs from the source manifest")
 
 
 def _gateway_configuration() -> tuple[dict[str, Any], bytes]:
@@ -517,8 +538,11 @@ def build_application(output: Path, uv: str) -> None:
 def main() -> None:
     """Parse the artifact destination and build with the pinned tool version."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output", type=Path, required=True, help="New artifact output directory")
+    parser.add_argument("--output", type=Path, help="New artifact output directory")
     targets = parser.add_mutually_exclusive_group()
+    targets.add_argument(
+        "--bootstrap", action="store_true", help="Prepare or verify the workspace runtime wheels"
+    )
     targets.add_argument(
         "--application", action="store_true", help="Build the committed Heartwood application"
     )
@@ -533,6 +557,13 @@ def main() -> None:
     args = parser.parse_args()
     if args.gateway_tests and not args.gateway:
         parser.error("--gateway-tests is only valid with --gateway")
+    if args.bootstrap:
+        if args.cache is not None:
+            parser.error("--cache is only valid with --gateway")
+        bootstrap(args.output or _CONFIG.parents[2] / "vendor/runtime-wheels", args.uv)
+        return
+    if args.output is None:
+        parser.error("--output is required unless --bootstrap is selected")
     if args.gateway:
         if args.cache is None:
             parser.error("--gateway requires --cache")

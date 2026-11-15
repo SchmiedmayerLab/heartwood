@@ -46,3 +46,6 @@ htmlcov/
 node_modules/
 playwright-report/
 test-results/
+
+# Rebuilt, digest-pinned runtime dependencies
+/vendor/runtime-wheels/
