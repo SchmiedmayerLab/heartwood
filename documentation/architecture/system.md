@@ -123,7 +123,9 @@ Launch happens once per session service, on the session's first backend read:
 3. The session journals the attempt intent before any sandbox exists.
 4. The launcher connects to the registered OpenShell gateway with its mutual TLS identity, reads its info, and requires exactly one Docker compute driver that reports both [deletion capabilities](../operate/platform-requirements.md#gateway-behavior-behind-native-qualification) revocation evidence depends on.
    A missing capability or an unreadable report stops serving at start with `HW-WORKER-001`, and stops a later launch or reconciliation before any sandbox, volume, or deletion request.
-   The reported gateway version, driver, and capabilities are retained with the attempt's runtime binding and its revocation evidence; they are the gateway's own report, and Heartwood does not test the deletion behavior itself.
+   A launch refused this way reports `HW-WORKER-001` in the session and is recorded as revoked without a created worker.
+   The decision and the reported gateway version, driver, and capabilities are retained with the attempt: an accepted report in its runtime binding and revocation evidence, a refused one in its revocation evidence.
+   The capabilities are the gateway's own report; Heartwood does not test the deletion behavior itself.
 5. A short-lived preparation container copies the staged snapshots into two attempt-owned Docker volumes.
    It runs only the image's `chmod` with no network, a read-only root filesystem, all capabilities dropped except `FOWNER`, and `no-new-privileges`.
 6. OpenShell creates the sandbox with the pinned image digest, the operator's policy, the provider attachment, CPU and memory limits, and attempt labels.

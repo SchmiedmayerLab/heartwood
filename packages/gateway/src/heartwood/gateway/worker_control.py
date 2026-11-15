@@ -23,7 +23,11 @@ from time import monotonic
 from typing import Any
 from urllib.parse import urlsplit
 
-from heartwood.core_adapter.worker_attempts import WorkerAttemptError, WorkerGatewayReport
+from heartwood.core_adapter.worker_attempts import (
+    WorkerAttemptError,
+    WorkerGatewayCapabilityError,
+    WorkerGatewayReport,
+)
 from heartwood.gateway._deployment import validate_worker_deployment
 from heartwood.gateway._project import ProjectContext
 from heartwood.gateway.worker_deployment import OpenShellWorkerDeployment
@@ -38,10 +42,6 @@ REQUIRED_GATEWAY_CAPABILITIES = frozenset(
         "openshell.compute.delete-retries-deleting",
     }
 )
-
-
-class WorkerGatewayCapabilityError(WorkerAttemptError):
-    """The registered gateway did not report every deletion behavior worker evidence needs."""
 
 
 class NativeWorkerControl:
@@ -139,39 +139,42 @@ class NativeWorkerControl:
             timeout=15,
         )
         try:
-            reported = self._gateway_report()
+            self.gateway = self._gateway_report()
         except Exception:
-            reported = None
-        missing = REQUIRED_GATEWAY_CAPABILITIES.difference(
-            reported.capabilities if reported else ()
-        )
-        if reported is None or missing:
+            self.gateway = WorkerGatewayReport(decision="refused")
+        if self.gateway.decision != "accepted":
             self.close()
+            missing = REQUIRED_GATEWAY_CAPABILITIES.difference(self.gateway.capabilities)
             detail = (
-                f": version {reported.version} lacks {', '.join(sorted(missing))}"
-                if reported is not None
+                f": version {self.gateway.version} lacks {', '.join(sorted(missing))}"
+                if self.gateway.driver == "openshell/docker"
                 else ""
             )
             raise WorkerGatewayCapabilityError(
                 "registered sandbox gateway did not report the required deletion capabilities"
                 + detail
             )
-        self.gateway = reported
 
-    def _gateway_report(self) -> WorkerGatewayReport | None:
-        """Read the one Docker compute driver's negotiated capabilities from the gateway."""
+    def _gateway_report(self) -> WorkerGatewayReport:
+        """Decide on the one Docker compute driver's negotiated capabilities from the gateway."""
         info = self.client.gateway_info()
         drivers = [
             extension
             for extension in info.extensions
             if extension.kind == self.pb.EXTENSION_KIND_COMPUTE_DRIVER
         ]
-        if len(drivers) != 1 or drivers[0].implementation_name != "openshell/docker":
-            return None
+        driver = drivers[0] if len(drivers) == 1 else None
+        capabilities = tuple(driver.supported_capabilities) if driver is not None else ()
+        accepted = (
+            driver is not None
+            and driver.implementation_name == "openshell/docker"
+            and REQUIRED_GATEWAY_CAPABILITIES.issubset(capabilities)
+        )
         return WorkerGatewayReport(
+            decision="accepted" if accepted else "refused",
             version=info.gateway_version,
-            driver=drivers[0].implementation_name,
-            capabilities=tuple(drivers[0].supported_capabilities),
+            driver=driver.implementation_name if driver is not None else None,
+            capabilities=capabilities,
         )
 
     def policy(self) -> object:

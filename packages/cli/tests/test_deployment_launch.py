@@ -102,7 +102,7 @@ def test_explicit_worker_selection_reaches_native_factory_without_local_fallback
 ) -> None:
     from unittest.mock import Mock
 
-    from heartwood.gateway.worker_control import WorkerGatewayCapabilityError
+    from heartwood.core_adapter.worker_attempts import WorkerGatewayCapabilityError
 
     available = outcome == "serving"
 

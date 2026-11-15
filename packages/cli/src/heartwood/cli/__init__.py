@@ -1055,8 +1055,10 @@ def _handle_serve(
             )
         worker_plan_factory = worker_reconciler = None
         if deployment is not None and deployment.worker is not None:
-            from heartwood.core_adapter.worker_attempts import WorkerAttemptError
-            from heartwood.gateway.worker_control import WorkerGatewayCapabilityError
+            from heartwood.core_adapter.worker_attempts import (
+                WorkerAttemptError,
+                WorkerGatewayCapabilityError,
+            )
             from heartwood.gateway.worker_native import (
                 native_worker_plan_factory,
                 native_worker_reconciler,

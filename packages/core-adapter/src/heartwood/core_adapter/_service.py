@@ -92,6 +92,7 @@ from heartwood.core_adapter.worker_attempts import (
     WorkerAttemptRecord,
     WorkerControlPlane,
     WorkerControlPlaneError,
+    WorkerGatewayCapabilityError,
     WorkerRevocationEvidence,
     WorkerRuntimeBinding,
     current_worker_attempt,
@@ -308,6 +309,7 @@ class SessionService:
         self._worker_project_id = worker_project_id
         self._worker_lease: WorkerAttemptLease | None = None
         self._worker_attempt_created = False
+        self._worker_gateway_refused = False
         self._worker_replacement_admitted = False
         # Sets this process sent; a live read can still show one pending before its step starts.
         self._sent_group_ids: set[str] = set()
@@ -1098,6 +1100,10 @@ class SessionService:
                     self.fence_worker_attempt(attempt_id=intent.attempt_id)
                 if not isinstance(error, Exception):
                     raise
+                if isinstance(error, WorkerGatewayCapabilityError):
+                    # Refused before any sandbox request, so its own diagnostic stays accurate.
+                    self._worker_gateway_refused = True
+                    raise
                 raise WorkerAttemptError("worker launch requires outside reconciliation") from None
 
     def revoke_worker(
@@ -1290,6 +1296,9 @@ class SessionService:
             or lease.intent != current.intent
             or self._worker_project_id != current.intent.project_id
         ):
+            if self._worker_gateway_refused:
+                code = BackendErrorCode.WORKER_GATEWAY_INCAPABLE
+                return f"{code.value}: {backend_error_message(code)}"
             return "worker attempt requires trusted launcher reconciliation"
         return None
 

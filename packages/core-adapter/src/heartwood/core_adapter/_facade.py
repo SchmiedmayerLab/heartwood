@@ -64,6 +64,7 @@ class BackendErrorCode(StrEnum):
     PROVIDER_UNAVAILABLE = "HW-AGENT-012"
     SESSION_RUNTIME_INCOMPATIBLE = "HW-AGENT-013"
     UNKNOWN = "HW-AGENT-999"
+    WORKER_GATEWAY_INCAPABLE = "HW-WORKER-001"
 
 
 _FATAL_BACKEND_ERROR_CODES = frozenset(
@@ -114,6 +115,9 @@ def backend_error_message(code: BackendErrorCode) -> str:
             "and start a new session, or reopen it with the original Heartwood version"
         ),
         BackendErrorCode.UNKNOWN: "The agent runtime reported an error",
+        BackendErrorCode.WORKER_GATEWAY_INCAPABLE: (
+            "The sandbox gateway lacks a required deletion capability"
+        ),
     }[code]
 
 

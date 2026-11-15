@@ -302,7 +302,10 @@ Restart the gateway to apply the change under the operator's authority; restorin
 The message names the reported gateway version and each missing capability when the gateway answered.
 Confirm that the gateway named in the manifest is running and reachable with its registered mutual TLS identity.
 An upstream gateway release that does not provide both deletion behaviors is refused; register a gateway build that reports them.
-The same condition after start stops the affected worker launch or reconciliation before any sandbox, volume or deletion request and leaves the attempt fenced.
+The same condition after start stops the affected worker launch or reconciliation before any sandbox, volume or deletion request.
+A refused launch shows `HW-WORKER-001` in the session and needs no reconciliation: nothing was created, and the attempt is recorded as revoked together with what the gateway reported.
+The session cannot start another worker in the same gateway process; correct the gateway and restart `heartwood gateway serve`, which then replaces the attempt.
+A refused reconciliation leaves the attempt fenced until a later start-up succeeds.
 
 ### Managed Worker Control Is Unavailable
 

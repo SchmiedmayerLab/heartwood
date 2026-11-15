@@ -29,6 +29,7 @@ from heartwood.core_adapter.worker_attempts import (
     WorkerAttemptRecord,
     WorkerControlPlane,
     WorkerControlPlaneError,
+    WorkerGatewayCapabilityError,
     WorkerGatewayReport,
     WorkerRevocationEvidence,
     WorkerRuntimeBinding,
@@ -414,6 +415,9 @@ class _NativeWorkerAttempt:
             self._stop_unadmitted()
             self._preparation.close()
             if not isinstance(error, Exception):
+                raise
+            if isinstance(error, WorkerGatewayCapabilityError):
+                # Refused before any sandbox or volume request; the refusal is the diagnostic.
                 raise
             raise WorkerAttemptError(
                 "native worker launch requires outside reconciliation"

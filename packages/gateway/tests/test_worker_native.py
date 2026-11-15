@@ -38,6 +38,7 @@ from heartwood.core_adapter.worker_attempts import (
     WorkerAttemptRecord,
     WorkerControlPlane,
     WorkerControlPlaneError,
+    WorkerGatewayCapabilityError,
     WorkerGatewayReport,
     WorkerRuntimeBinding,
 )
@@ -47,7 +48,6 @@ from heartwood.gateway.worker_control import (
     REQUIRED_GATEWAY_CAPABILITIES,
     NativeWorkerControl,
     NativeWorkerForward,
-    WorkerGatewayCapabilityError,
 )
 from heartwood.gateway.worker_deployment import OpenShellWorkerDeployment
 from heartwood.gateway.worker_inputs import WorkerInputManifest
@@ -1083,21 +1083,48 @@ _DELETE_RETRY = "openshell.compute.delete-retries-deleting"
 _DELETE_AWAITS_PROVISIONING = "openshell.compute.delete-awaits-provisioning"
 
 
+_UNREADABLE = WorkerGatewayReport(decision="refused")
+
+
+def _refused(driver: str | None, *capabilities: str) -> WorkerGatewayReport:
+    return WorkerGatewayReport(
+        decision="refused", version=_GATEWAY_VERSION, driver=driver, capabilities=capabilities
+    )
+
+
 @pytest.mark.parametrize(
-    "drivers",
+    ("drivers", "recorded"),
     [
-        pytest.param(None, id="unreadable"),
-        pytest.param([], id="no-driver"),
-        pytest.param([("openshell/docker", ())], id="no-capabilities"),
-        pytest.param([("openshell/docker", (_DELETE_RETRY,))], id="no-provisioning-wait"),
-        pytest.param([("openshell/docker", (_DELETE_AWAITS_PROVISIONING,))], id="no-retry"),
-        pytest.param([("openshell/podman", _GATEWAY_CAPABILITIES)], id="other-driver"),
-        pytest.param([("openshell/docker", _GATEWAY_CAPABILITIES)] * 2, id="ambiguous"),
-        pytest.param([("openshell/docker", ("OpenShell.Compute.X",))], id="malformed"),
+        pytest.param(None, _UNREADABLE, id="unreadable"),
+        pytest.param([], _refused(None), id="no-driver"),
+        pytest.param(
+            [("openshell/docker", ())], _refused("openshell/docker"), id="no-capabilities"
+        ),
+        pytest.param(
+            [("openshell/docker", (_DELETE_RETRY,))],
+            _refused("openshell/docker", _DELETE_RETRY),
+            id="no-provisioning-wait",
+        ),
+        pytest.param(
+            [("openshell/docker", (_DELETE_AWAITS_PROVISIONING,))],
+            _refused("openshell/docker", _DELETE_AWAITS_PROVISIONING),
+            id="no-retry",
+        ),
+        pytest.param(
+            [("openshell/podman", _GATEWAY_CAPABILITIES)],
+            _refused("openshell/podman", *_GATEWAY_CAPABILITIES),
+            id="other-driver",
+        ),
+        pytest.param(
+            [("openshell/docker", _GATEWAY_CAPABILITIES)] * 2, _refused(None), id="ambiguous"
+        ),
+        pytest.param([("openshell/docker", ("OpenShell.Compute.X",))], _UNREADABLE, id="malformed"),
     ],
 )
 def test_gateway_without_deletion_capabilities_stops_launch_and_reconciliation(
-    native: _Native, drivers: list[tuple[str, tuple[str, ...]]] | None
+    native: _Native,
+    drivers: list[tuple[str, tuple[str, ...]]] | None,
+    recorded: WorkerGatewayReport,
 ) -> None:
     if drivers is None:
         native.sandboxes.version = None
@@ -1106,12 +1133,15 @@ def test_gateway_without_deletion_capabilities_stops_launch_and_reconciliation(
     with pytest.raises(WorkerGatewayCapabilityError, match="required deletion capabilities"):
         worker_native.require_gateway_capabilities(native.settings, native.project)
     assert native.sandboxes.closed
-    with pytest.raises(WorkerAttemptError, match="outside reconciliation"):
+    # The refusal keeps its diagnostic: nothing was created, so nothing needs reconciliation.
+    with pytest.raises(WorkerGatewayCapabilityError, match="required deletion capabilities"):
         native.attempt.launch(native.intent)
     assert native.attempt.control.client is None
-    assert native.attempt.control.gateway is None
     assert native.sandboxes.spec is None
     assert native.docker.volumes == {}
+    evidence = native.attempt.revoke(native.record("fenced", None))
+    assert evidence.outcome == "not-created"
+    assert evidence.gateway == recorded
 
     name = "hw-" + native.intent.attempt_id.hex[:16]
     native.sandboxes.place(name, {"heartwood.attempt": str(native.intent.attempt_id)})
@@ -1136,7 +1166,10 @@ def test_reported_capabilities_admit_any_gateway_version_and_are_recorded(
     native.sandboxes.version = version
     worker_native.require_gateway_capabilities(native.settings, native.project)
     expected = WorkerGatewayReport(
-        version=version, driver="openshell/docker", capabilities=_GATEWAY_CAPABILITIES
+        decision="accepted",
+        version=version,
+        driver="openshell/docker",
+        capabilities=_GATEWAY_CAPABILITIES,
     )
     runtime = native.attempt.launch(native.intent)
     assert runtime.gateway == expected
