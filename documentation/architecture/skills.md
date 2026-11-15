@@ -25,6 +25,8 @@ Release creation additionally verifies that the pinned revision is published on 
 Bundled Skills are governed by that Heartwood release; withdrawing bundled content requires a new Heartwood release.
 Heartwood also pins the complete-tree digest of each bundled Skill in its gateway source.
 Before it lists, loads, or projects bundled Skills, the gateway verifies that the bundled directory holds exactly the pinned Skill directories with those digests, and it refuses all three operations otherwise.
+Verification ignores no file inside a Skill directory, because a stray file such as cached bytecode for a helper module could execute with the Skill.
+Installations therefore must not write bytecode into the bundled Skill trees: the candidate image installs the Heartwood application wheels without bytecode compilation, and every image sets `PYTHONDONTWRITEBYTECODE`.
 Signed catalog revocations govern catalog-installed content and do not silently rewrite release-bundled content.
 
 Curated packages live directly under `skills/<skill-name>/`; directory names do not encode review or publication state.

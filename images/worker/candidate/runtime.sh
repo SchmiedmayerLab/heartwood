@@ -51,8 +51,7 @@ else
     "${release_cutoff[@]}" --find-links "$wheel_dir" --require-hashes \
     --build-constraints images/worker/candidate/build-requirements.txt --require-build-hashes \
     images/worker/candidate/runtime-requirements.txt
-  "$uv_bin" pip install --no-config --python "$target/bin/python" \
-    --no-index --no-deps --require-hashes --link-mode copy --find-links "$application_dir" \
-    --requirements "$application_dir/application-requirements.txt"
+  bash images/worker/candidate/install-application.sh \
+    "$uv_bin" "$target/bin/python" "$application_dir"
   "$uv_bin" pip check --python "$target/bin/python"
 fi
