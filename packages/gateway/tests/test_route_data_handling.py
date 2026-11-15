@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
@@ -21,6 +22,7 @@ from heartwood.gateway import (
     ModelConnection,
     ModelSettingsError,
     ProjectConfig,
+    ProjectConfigError,
     ProjectConfigStore,
     ProjectContext,
     ProviderModel,
@@ -261,3 +263,128 @@ def test_model_source_selection_keeps_a_data_destination_restriction(tmp_path: P
         persist_deployment_profile(project, model_source=source, env={})
         policy = ProjectConfigStore(project, config).load().policy
         assert policy.allowed_data_destinations == ("institution-managed",), source
+
+
+def test_replacing_the_active_profile_applies_the_destination_restriction(
+    tmp_path: Path,
+) -> None:
+    gateway = _gateway(tmp_path, deployment_policy=_policy(allowed_data_destinations=("provider",)))
+    try:
+        gateway.discover_models("openai", token=_OPENAI_TOKEN)
+        gateway.connect_model("openai", "provider-model")
+        active = gateway.settings_store.load().profile("openai")
+        moved = replace(
+            active,
+            base_url="https://custom.example/v1",
+            policy_endpoint="https://custom.example/v1/chat/completions",
+        )
+        with pytest.raises(ModelSettingsError, match="requires declared data handling"):
+            gateway.save_model_profile(moved)
+        assert gateway.settings_store.load().profile("openai") == active
+        assert cast(dict[str, object], gateway.model_settings()["data_handling"])["route"] == (
+            "OpenAI API"
+        )
+    finally:
+        gateway.stop()
+
+
+def test_profile_changes_that_keep_the_active_route_are_not_refused(tmp_path: Path) -> None:
+    gateway = _gateway(
+        tmp_path,
+        deployment_policy=_policy(allowed_data_destinations=("provider", "institution-managed")),
+    )
+    try:
+        gateway.discover_models("anthropic", token=_ANTHROPIC_TOKEN)
+        gateway.connect_model("anthropic", "claude-synthetic")
+        gateway.discover_models("openai", token=_OPENAI_TOKEN)
+        gateway.connect_model("openai", "provider-model")
+        gateway.config_store.update(
+            lambda config: replace(
+                config,
+                policy=config.policy.model_copy(
+                    update={"allowed_data_destinations": ("institution-managed",)}
+                ),
+            )
+        )
+        with pytest.raises(ModelSettingsError, match="does not permit the provider"):
+            gateway.select_model_profile("anthropic")
+        remaining = gateway.remove_model_profile("anthropic")
+        assert remaining["active_profile"] == "openai"
+    finally:
+        gateway.stop()
+
+
+def test_local_model_selection_applies_the_destination_restriction(tmp_path: Path) -> None:
+    gateway = _gateway(tmp_path, deployment_policy=_policy(allowed_data_destinations=("provider",)))
+    try:
+        model_id = "qwen25-7b-instruct-q4_k_m"
+        model_path = gateway.project.models_dir / model_id / "model.gguf"
+        model_path.parent.mkdir(parents=True)
+        model_path.write_bytes(b"synthetic")
+        with pytest.raises(ProjectConfigError, match="does not permit the same-compute"):
+            gateway.local_models.select_downloaded_local_model(
+                model_id, model_path, "llama-cpp-cpu"
+            )
+        assert gateway.config_store.load().local_model is None
+        assert gateway.model_settings()["active_profile"] is None
+    finally:
+        gateway.stop()
+
+
+def test_a_new_deployment_destination_list_narrows_existing_projects(tmp_path: Path) -> None:
+    gateway = _gateway(tmp_path, deployment_policy=_policy())
+    try:
+        gateway.discover_models("openai", token=_OPENAI_TOKEN)
+        gateway.connect_model("openai", "provider-model")
+    finally:
+        gateway.stop()
+
+    gateway = _gateway(
+        tmp_path, deployment_policy=_policy(allowed_data_destinations=("same-compute",))
+    )
+    try:
+        assert gateway.config_store.load().policy.allowed_data_destinations == ("same-compute",)
+        assert gateway.model_settings()["active_profile"] == "openai"
+        validation = gateway.validate_model_profile()
+        decision = cast(dict[str, object], validation["policy_decision"])
+        assert decision["decision"] == "deny"
+        gateway.handle(_command(CommandKind.CHAT, "after", prompt="Inspect the cohort"))
+        replayed = FileSessionStore(gateway.sessions_root, "session-1").replay_events()
+        assert [
+            cast(dict[str, object], event.payload["decision"])["decision"]
+            for event in replayed
+            if event.kind == EventKind.MODEL_CALL_DECISION_RECORDED
+        ] == ["deny"]
+        # The deployment list is applied on load, not copied into project state.
+        assert "allowed_data_destinations" not in gateway.project.config_path.read_text()
+    finally:
+        gateway.stop()
+
+    gateway = _gateway(tmp_path, deployment_policy=_policy(allowed_data_destinations=("provider",)))
+    try:
+        assert gateway.config_store.load().policy.allowed_data_destinations == ("provider",)
+        assert (
+            cast(dict[str, object], gateway.validate_model_profile()["policy_decision"])["decision"]
+            == "allow"
+        )
+    finally:
+        gateway.stop()
+
+
+def test_a_project_destination_list_stays_within_a_changed_deployment_list(
+    tmp_path: Path,
+) -> None:
+    project = _project(tmp_path)
+    narrowed = _policy(allowed_data_destinations=("provider",))
+    config = ProjectConfig(platform_id="generic", policy=narrowed)
+    ProjectConfigStore(project, config).save(config)
+
+    wider = _policy(allowed_data_destinations=("provider", "same-compute"))
+    store = ProjectConfigStore(project, config, deployment_policy=wider)
+    assert store.load().policy.allowed_data_destinations == ("provider",)
+
+    disjoint = _policy(allowed_data_destinations=("same-compute",))
+    default = ProjectConfig(platform_id="generic", policy=disjoint)
+    store = ProjectConfigStore(project, default, deployment_policy=disjoint)
+    with pytest.raises(ProjectConfigError, match="allowed_data_destinations"):
+        store.load()

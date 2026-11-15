@@ -503,10 +503,26 @@ class ProjectConfigStore:
             both = tuple(
                 mode for mode in permitted if mode in config.policy.allowed_action_review_modes
             )
+            # A destination list added to the manifest applies to existing projects the same
+            # way: a project without its own list takes the manifest's, and a project list keeps
+            # only what both permit. A project list the manifest no longer overlaps is refused.
+            destinations = self._deployment_policy.allowed_data_destinations
+            if destinations is not None:
+                requested = config.policy.allowed_data_destinations
+                destinations = tuple(
+                    destination
+                    for destination in destinations
+                    if requested is None or destination in requested
+                )
             config = replace(
                 config,
                 policy=config.policy.model_copy(
-                    update={"allowed_action_review_modes": both or ("review-all",)}
+                    update={
+                        "allowed_action_review_modes": both or ("review-all",),
+                        "allowed_data_destinations": (
+                            destinations or config.policy.allowed_data_destinations
+                        ),
+                    }
                 ),
             )
         self._validate_config(config)
@@ -560,6 +576,13 @@ class ProjectConfigStore:
         ):
             # Only a narrower project list is stored, so a later manifest change still applies.
             del policy["allowed_action_review_modes"]
+        if (
+            self._deployment_policy is not None
+            and isinstance(policy, dict)
+            and config.policy.allowed_data_destinations
+            == self._deployment_policy.allowed_data_destinations
+        ):
+            policy.pop("allowed_data_destinations", None)
         contents = tomli_w.dumps(payload)
         try:
             tomllib.loads(contents)

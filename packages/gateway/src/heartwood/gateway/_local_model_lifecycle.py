@@ -43,7 +43,11 @@ from heartwood.gateway._model_artifacts import (
 from heartwood.gateway._model_artifacts import (
     download_model_artifact as download_artifact,
 )
-from heartwood.gateway._model_settings import model_profile_from_preset
+from heartwood.gateway._model_settings import (
+    ModelSettings,
+    ModelSettingsError,
+    model_profile_from_preset,
+)
 from heartwood.gateway._model_snapshots import (
     ModelSnapshot,
     ModelSnapshotCatalog,
@@ -59,7 +63,11 @@ from heartwood.gateway._model_transfer import (
     model_transfer_identity,
 )
 from heartwood.gateway._project import ProjectContext
-from heartwood.gateway._project_config import LocalModelSelection, ProjectConfigStore
+from heartwood.gateway._project_config import (
+    LocalModelSelection,
+    ProjectConfigError,
+    ProjectConfigStore,
+)
 from heartwood.gateway._readiness import gpu_visible, managed_local_runtime_active
 from heartwood.schemas import (
     LocalModelImportResponse,
@@ -85,6 +93,7 @@ class LocalModelLifecycle:
         snapshot_catalog: ModelSnapshotCatalog,
         model_repository: HuggingFaceModelRepository,
         state_lock: AbstractContextManager[object],
+        authorize_selection: Callable[[ModelSettings], None],
         on_selection_changed: Callable[[], None],
     ) -> None:
         self.project = project
@@ -94,6 +103,7 @@ class LocalModelLifecycle:
         self.snapshot_catalog = snapshot_catalog
         self.model_repository = model_repository
         self._state_lock = state_lock
+        self._authorize_selection = authorize_selection
         self._on_selection_changed = on_selection_changed
         self._gpu_environment: GpuEnvironment | None = None
         self._verified_local_artifacts: set[tuple[Path, int, int, str]] = set()
@@ -603,10 +613,12 @@ class LocalModelLifecycle:
             max_input_tokens=input_capacity,
             max_output_tokens=output_budget,
         )
-        self.config_store.select_local_model(
-            selection,
-            settings=config.model_settings.with_profile(profile).selecting(profile.profile_id),
-        )
+        settings = config.model_settings.with_profile(profile).selecting(profile.profile_id)
+        try:
+            self._authorize_selection(settings)
+        except ModelSettingsError as error:
+            raise ProjectConfigError(str(error)) from error
+        self.config_store.select_local_model(selection, settings=settings)
         self._on_selection_changed()
 
     def _trusted_transferred_model_choice(self, choice: LocalModelChoice) -> LocalModelChoice:

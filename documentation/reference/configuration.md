@@ -97,6 +97,10 @@ Outside operations and result releases always wait for the researcher, in every 
 The built-in platform policies for local launches permit `review-all` and `review-changes`.
 Under a deployment manifest the project policy can only narrow the manifest's: endpoints, tiers, review modes, credential names, and data destinations must be subsets, a deployment's data-destination list cannot be removed, and the aggregate floor cannot be lower.
 The effective review ceiling is the intersection of the two lists; a project list equal to the manifest's is not stored, so a later manifest change applies.
+The gateway applies a manifest's `allowed_data_destinations` every time it loads the project, so adding or changing it applies to existing projects at the next start:
+a project without its own list uses the manifest's, and a project list keeps only the destinations both permit.
+A project list that shares no destination with the manifest's stops the gateway from loading the project until one of them changes.
+An active route outside the list stays selected, but model validation reports it as denied and each model call is refused until a permitted route is selected.
 
 ## Deployment Manifest
 

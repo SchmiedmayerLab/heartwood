@@ -539,6 +539,7 @@ class SessionGateway:
             model_repository=model_repository
             or HuggingFaceModelRepository(token=self.env.get("HF_TOKEN")),
             state_lock=self._state_lock,
+            authorize_selection=self._require_permitted_data_destination,
             on_selection_changed=self._reset_services,
         )
         self.local_model_manager = self.local_models.local_model_manager
@@ -1797,7 +1798,9 @@ class SessionGateway:
             raise ModelSettingsError(
                 f"model profile id is reserved by Heartwood: {profile.profile_id}"
             )
-        settings = self.settings_store.load().with_profile(profile)
+        current = self.settings_store.load()
+        settings = current.with_profile(profile)
+        self._require_permitted_data_destination(settings, previous=current)
         self.settings_store.save(settings)
         self._reset_services()
         return self.model_settings()
@@ -1817,9 +1820,12 @@ class SessionGateway:
         """Remove a profile and reset active services."""
         if profile_id in _RESERVED_MODEL_PROFILE_IDS:
             raise ModelSettingsError(f"model profile is managed by Heartwood: {profile_id}")
-        settings = self.settings_store.load().without_profile(profile_id)
+        current = self.settings_store.load()
+        settings = current.without_profile(profile_id)
         source = self.config_store.load().model_source
-        self._save_model_selection(None if source == profile_id else source, settings)
+        self._save_model_selection(
+            None if source == profile_id else source, settings, previous=current
+        )
         self._reset_services()
         return self.model_settings()
 
@@ -2777,8 +2783,14 @@ class SessionGateway:
             self._worker_sessions.pop(id(service), None)
 
     @_serialized_state
-    def _save_model_selection(self, source: str | None, settings: ModelSettings) -> None:
-        self._require_permitted_data_destination(settings)
+    def _save_model_selection(
+        self,
+        source: str | None,
+        settings: ModelSettings,
+        *,
+        previous: ModelSettings | None = None,
+    ) -> None:
+        self._require_permitted_data_destination(settings, previous=previous)
         if isinstance(self.settings_store, ProjectModelSettingsStore):
             self.settings_store.save_selection(source, settings)
             return
@@ -2792,10 +2804,22 @@ class SessionGateway:
             return None
         return route_data_handling(profile, self._model_connections.values())
 
-    def _require_permitted_data_destination(self, settings: ModelSettings) -> None:
-        """Refuse to select a route the policy's data-destination restriction excludes."""
+    def _require_permitted_data_destination(
+        self, settings: ModelSettings, *, previous: ModelSettings | None = None
+    ) -> None:
+        """Refuse to select a route the policy's data-destination restriction excludes.
+
+        A write given the `previous` settings is checked only when it changes the active
+        route, so editing or removing another profile never depends on the active one.
+        """
         allowed = self._policy_profile().allowed_data_destinations
         if allowed is None or settings.active_profile is None:
+            return
+        if (
+            previous is not None
+            and previous.active_profile == settings.active_profile
+            and previous.profile() == settings.profile()
+        ):
             return
         data_handling = self._route_data_handling(settings)
         if data_handling is None:
