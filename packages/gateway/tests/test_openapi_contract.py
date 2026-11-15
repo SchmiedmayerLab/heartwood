@@ -263,8 +263,6 @@ def test_security_streaming_and_schema_modes_describe_the_current_transport() ->
     request_ref = create["requestBody"]["content"]["application/json"]["schema"]["$ref"]
     request_schema = document["components"]["schemas"][request_ref.rsplit("/", 1)[1]]
     assert request_schema["additionalProperties"] is False
-    assert "#154" in document["info"]["description"]
-    assert "#158" in command["description"]
 
 
 def test_generation_is_deterministic_and_returns_independent_documents() -> None:

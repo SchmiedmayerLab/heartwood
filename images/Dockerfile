@@ -24,6 +24,10 @@ RUN npm run build
 
 FROM --platform=${HEARTWOOD_BASE_PLATFORM} ghcr.io/astral-sh/uv:0.13.7-python3.12-trixie-slim@sha256:d4a752dd52f42e0c508bb0b6a912f15922bb32e42f66af30671c3fdc0d759f21 AS uv-bin
 
+# A named build context replaces this placeholder only for explicit qualification builds.
+FROM scratch AS worker-qualification-artifacts
+COPY images/worker/candidate/sources.json /source-manifest.json
+
 FROM --platform=${HEARTWOOD_BASE_PLATFORM} ${HEARTWOOD_BASE_IMAGE} AS heartwood-runtime-base
 
 ARG TARGETARCH
@@ -41,6 +45,7 @@ ARG HEARTWOOD_GID=10001
 ARG HEARTWOOD_JUPYTER_PREFIX=/usr/local
 ARG HEARTWOOD_INSTALL_JUPYTER_KERNEL=false
 ARG HEARTWOOD_UV_PYTHON_PREFERENCE=system
+ARG HEARTWOOD_DEPENDENCY_PROFILE=locked
 
 LABEL org.opencontainers.image.title="Heartwood Runtime" \
     org.opencontainers.image.description="Heartwood CLI, web UI, notebook bridge, policy and audit controls, verified skills, OpenHands, and optional Heartwood-managed inference." \
@@ -48,6 +53,7 @@ LABEL org.opencontainers.image.title="Heartwood Runtime" \
     org.opencontainers.image.licenses="MIT" \
     org.heartwood.image.flavor="${HEARTWOOD_IMAGE_FLAVOR}" \
     org.heartwood.platform="${HEARTWOOD_PLATFORM}" \
+    org.heartwood.dependencies="${HEARTWOOD_DEPENDENCY_PROFILE}" \
     org.heartwood.platform.base="${HEARTWOOD_BASE_IMAGE}" \
     org.heartwood.platform.base.platform="${HEARTWOOD_BASE_PLATFORM}"
 
@@ -143,7 +149,25 @@ COPY documentation ./documentation
 COPY --from=webui-build /src/packages/webui/dist ./packages/webui/dist
 
 RUN --mount=type=cache,target=/root/.cache/uv \
-    UV_CACHE_DIR=/root/.cache/uv uv sync --locked --no-dev --all-extras --python 3.12
+    --mount=type=bind,from=worker-qualification-artifacts,target=/qualification,ro \
+    set -eu; \
+    export UV_CACHE_DIR=/root/.cache/uv; \
+    if [ "${HEARTWOOD_DEPENDENCY_PROFILE}" = "candidate" ]; then \
+      test "${HEARTWOOD_PLATFORM}" = "generic"; \
+      test "${HEARTWOOD_GPU_RUNTIME}" = "none"; \
+      bash images/worker/candidate/runtime.sh \
+        install /qualification/sdk /qualification/application /opt/heartwood/.venv; \
+      cli_resources="$(/opt/heartwood/.venv/bin/python -I -c 'import sysconfig; print(sysconfig.get_path("purelib"))')/heartwood/cli/_bundled/packages/webui"; \
+      install -d "${cli_resources}"; \
+      cp -R packages/webui/dist "${cli_resources}/dist"; \
+      install -d /opt/heartwood/qualification; \
+      cp /qualification/sdk/build-record.json /qualification/application/application-build-record.json \
+        /opt/heartwood/qualification/; \
+    elif [ "${HEARTWOOD_DEPENDENCY_PROFILE}" = "locked" ]; then \
+      uv sync --locked --no-dev --all-extras --python 3.12; \
+    else \
+      echo "unsupported dependency profile: ${HEARTWOOD_DEPENDENCY_PROFILE}" >&2; exit 64; \
+    fi
 
 RUN ln -sf /opt/heartwood/.venv/bin/heartwood /usr/local/bin/heartwood \
     && ln -sf /opt/heartwood/.venv/bin/python /usr/local/bin/heartwood-python \
@@ -173,6 +197,10 @@ LABEL org.opencontainers.image.version="${HEARTWOOD_VERSION}" \
 
 ENV HEARTWOOD_IMAGE_REVISION=${HEARTWOOD_REVISION}
 
+RUN if [ "${HEARTWOOD_DEPENDENCY_PROFILE}" = "candidate" ]; then \
+      /opt/heartwood/.venv/bin/python -I -c 'import json,sys; assert json.load(open("/opt/heartwood/qualification/application-build-record.json"))["commit"] == sys.argv[1], "candidate source revision mismatch"' "${HEARTWOOD_REVISION}"; \
+    fi
+
 FROM heartwood-image-metadata AS gpu-ci-validate
 
 RUN /opt/heartwood/images/gpu/verify_runtime.sh
@@ -183,7 +211,9 @@ USER root
 WORKDIR /opt/heartwood
 
 RUN --mount=type=cache,target=/root/.cache/uv \
-    UV_CACHE_DIR=/root/.cache/uv uv sync --locked --no-dev --all-extras --group worker --python 3.12
+    if [ "${HEARTWOOD_DEPENDENCY_PROFILE}" = "locked" ]; then \
+      UV_CACHE_DIR=/root/.cache/uv uv sync --locked --no-dev --all-extras --group worker --python 3.12; \
+    fi
 
 RUN install -d --mode=0755 /etc/heartwood
 COPY --chmod=0444 images/worker/config.json /etc/heartwood/worker.json

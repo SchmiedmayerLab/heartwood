@@ -13,6 +13,7 @@ import hashlib
 import json
 from dataclasses import asdict
 from pathlib import Path
+from uuid import UUID
 
 from heartwood.gateway import ProjectContext, SessionGateway
 from heartwood.session import compute_session_event_hash
@@ -38,8 +39,15 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("project", type=Path)
     parser.add_argument("session_id")
+    parser.add_argument("--protected-state", type=Path)
+    parser.add_argument("--project-id", type=UUID)
     arguments = parser.parse_args()
-    gateway = SessionGateway(project=ProjectContext(arguments.project), env={})
+    project = ProjectContext(
+        arguments.project,
+        protected_state=arguments.protected_state,
+        project_id=arguments.project_id,
+    )
+    gateway = SessionGateway(project=project, env={})
     try:
         print(json.dumps(replay_evidence(gateway, arguments.session_id), sort_keys=True))
     finally:

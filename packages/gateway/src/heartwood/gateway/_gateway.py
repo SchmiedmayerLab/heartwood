@@ -312,6 +312,7 @@ class _ServiceConfiguration:
     action_settings: ActionSettings
     policy_profile: PolicyProfile
     local_model: LocalModelSelection | None
+    managed_inference: bool
 
 
 class _UnconfiguredAgentBackend:
@@ -512,7 +513,7 @@ class SessionGateway:
             if model_connections is not None
             else load_model_connections(None)
         )
-        self.model_catalog_service = model_catalog_service or ModelCatalogService()
+        self.model_catalog_service = model_catalog_service or ModelCatalogService(env=self.env)
         self._model_connections: dict[str, ModelConnection] = {}
         self._reload_model_connections()
         self.credential_store = credential_store or CredentialStore(
@@ -524,13 +525,11 @@ class SessionGateway:
         self.subscription_provider = subscription_provider or OpenHandsOpenAISubscription()
         self.workspace_inspector = workspace_inspector or WorkspaceInspector(self.project)
         self._verified_local_artifacts: set[tuple[Path, int, int, str]] = set()
-        repository_root = _repository_root()
-        catalog_path = (
-            repository_root / "images" / "generic" / "local-runtime" / "model-catalog.toml"
-        )
+        resource_root = _runtime_resource_root()
+        catalog_path = resource_root / "images" / "generic" / "local-runtime" / "model-catalog.toml"
         self.artifact_catalog = artifact_catalog or load_model_artifact_catalog(catalog_path)
         snapshot_catalog_path = (
-            repository_root / "images" / "generic" / "local-runtime" / "snapshots.toml"
+            resource_root / "images" / "generic" / "local-runtime" / "snapshots.toml"
         )
         self.snapshot_catalog = snapshot_catalog or load_model_snapshot_catalog(
             snapshot_catalog_path
@@ -583,7 +582,7 @@ class SessionGateway:
             models_dir=self.model_cache_dir,
             on_import_ready=self._select_transferred_local_model,
         )
-        bundled_skills_dir = repository_root / "vendor" / "heartwood-skills" / "skills"
+        bundled_skills_dir = resource_root / "vendor" / "heartwood-skills" / "skills"
         if skill_source_registry is None:
             try:
                 skill_source_registry, _ = configured_skill_source_registry(self.env)
@@ -2428,6 +2427,7 @@ class SessionGateway:
             action_settings=action_settings,
             policy_profile=config.policy,
             local_model=config.local_model,
+            managed_inference=config.model_source == "heartwood",
         )
 
     def _default_service(
@@ -2448,6 +2448,7 @@ class SessionGateway:
             model_settings=configuration.model_settings,
             action_settings=configuration.action_settings,
             selected_model=configuration.local_model,
+            managed_inference=configuration.managed_inference,
             session_id=session_id,
             worker_context=worker_context if self._worker_plan_factory is not None else None,
         )
@@ -2524,6 +2525,7 @@ class SessionGateway:
         selected_model: LocalModelSelection | None,
         session_id: str,
         worker_context: Callable[[], WorkerConversationContext] | None = None,
+        managed_inference: bool = False,
     ) -> AgentBackend:
         backend_id = self.backend_id
         if backend_id in {"deterministic", "deterministic-local"}:
@@ -2559,6 +2561,7 @@ class SessionGateway:
             action_confirmation_mode=action_settings.confirmation_mode,
             env={} if worker_context is not None else self._credential_environment(strict=False),
             worker_context=worker_context,
+            managed_inference=managed_inference,
             llm_extra_body=managed_model_request_body(
                 selected_model.model_type if selected_model is not None else None
             ),
@@ -2580,7 +2583,7 @@ class SessionGateway:
         from heartwood.gateway._specialists import load_specialist_catalog
 
         catalog = load_specialist_catalog(
-            _repository_root() / "agents" / "verified",
+            _runtime_resource_root() / "agents" / "verified",
             self.skill_manager.bundled_dir,
         )
         self._specialist_catalog_cache = catalog
@@ -3405,8 +3408,16 @@ class SessionGateway:
                 return sum(item.stat().st_size for item in path.rglob("*") if item.is_file())
 
 
-def _repository_root() -> Path:
-    return Path(__file__).resolve().parents[5]
+def _runtime_resource_root() -> Path:
+    module_dir = Path(__file__).resolve().parent
+    packaged = module_dir / "_bundled"
+    if packaged.is_dir():
+        return packaged
+    if len(module_dir.parents) > 4:
+        source_root = module_dir.parents[4]
+        if source_root / "packages/gateway/src/heartwood/gateway" == module_dir:
+            return source_root
+    raise RuntimeError("Gateway package is missing bundled runtime resources")
 
 
 def _clears_streaming_text(event: SessionEvent) -> bool:

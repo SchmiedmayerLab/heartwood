@@ -10,9 +10,9 @@ import json
 import logging
 from dataclasses import replace
 from importlib.metadata import PackageNotFoundError
-from io import BytesIO
 from pathlib import Path
 
+import httpx
 import pytest
 
 from heartwood.adapters.platform import select_platform_adapter
@@ -50,34 +50,36 @@ def _store(project: ProjectContext, env: dict[str, str]) -> ProjectConfigStore:
     )
 
 
-def test_managed_runtime_activity_uses_exact_launch_state_or_loopback_catalog(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+@pytest.fixture
+def managed_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
+    def client(_env: object, *, timeout: float) -> httpx.Client:
+        return httpx.Client(
+            base_url="http://127.0.0.1:8765/v1/",
+            timeout=timeout,
+            transport=httpx.MockTransport(
+                lambda _request: httpx.Response(
+                    200,
+                    json={"data": [{"id": "heartwood-managed-model"}, {"id": "synthetic-model"}]},
+                )
+            ),
+        )
+
+    monkeypatch.setattr("heartwood.gateway._readiness.managed_inference_client", client)
+
+
+def test_managed_runtime_requires_private_transport_even_with_launch_metadata() -> None:
     selection = LocalModelSelection(
         artifact_id="synthetic-artifact",
         path=".heartwood/models/synthetic-artifact",
         model_id="heartwood-managed-model",
     )
-
-    assert managed_local_runtime_active(
+    assert not managed_local_runtime_active(
         selection,
         {
             "HEARTWOOD_LOCAL_RUNTIME_ACTIVE": "1",
             "HEARTWOOD_LOCAL_RUNTIME_ARTIFACT_ID": "synthetic-artifact",
         },
     )
-
-    class Opener:
-        def open(self, _url: str, *, timeout: float) -> BytesIO:
-            assert timeout == 0.5
-            return BytesIO(b'{"data":[{"id":"heartwood-managed-model"}]}')
-
-    monkeypatch.setattr(
-        "heartwood.gateway._readiness.urllib.request.build_opener",
-        lambda *_args: Opener(),
-    )
-
-    assert managed_local_runtime_active(selection, {})
 
 
 def test_readiness_reports_agent_dependency_failure_without_raising(
@@ -300,6 +302,7 @@ def test_malformed_project_state_and_configuration_require_recovery(tmp_path: Pa
     )
 
 
+@pytest.mark.usefixtures("managed_catalog")
 def test_ready_local_project_reports_selected_artifact(tmp_path: Path) -> None:
     project = _project(tmp_path)
     _configure_model(project, source="heartwood", env={})
@@ -467,6 +470,7 @@ def test_terra_baseline_persists_builtin_hosted_provider_routes(tmp_path: Path) 
     assert "transient-secret" not in persisted
 
 
+@pytest.mark.usefixtures("managed_catalog")
 def test_downloaded_local_model_requires_managed_runtime_before_setup(tmp_path: Path) -> None:
     project = _project(tmp_path)
     persist_deployment_profile(project, model_source="heartwood", env={})
@@ -492,6 +496,7 @@ def test_downloaded_local_model_requires_managed_runtime_before_setup(tmp_path: 
     assert running.state == "setup-required"
 
 
+@pytest.mark.usefixtures("managed_catalog")
 def test_carina_local_project_requires_and_validates_compute(tmp_path: Path) -> None:
     project = _project(tmp_path)
     carina = {"HEARTWOOD_PLATFORM": "carina"}

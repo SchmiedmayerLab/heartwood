@@ -15,7 +15,6 @@ runtime_root="${HEARTWOOD_RUNTIME_ROOT:-$(cd "${script_dir}/../.." && pwd)}"
 compatibility_matrix="${HEARTWOOD_GPU_COMPATIBILITY_MATRIX:-${script_dir}/compatibility.toml}"
 runtime_log="${HEARTWOOD_RUNTIME_LOG:-${project}/vllm.log}"
 runtime_metadata="${HEARTWOOD_QUALIFICATION_RUNTIME_METADATA:-${project}/gpu-runtime.json}"
-runtime_port="${HEARTWOOD_LOCAL_RUNTIME_PORT:-8765}"
 heartwood_python="${HEARTWOOD_PYTHON:-${runtime_root}/.venv/bin/python}"
 vllm_executable="${HEARTWOOD_VLLM_EXECUTABLE:-/opt/heartwood-vllm/bin/heartwood-vllm}"
 vllm_python="${HEARTWOOD_VLLM_PYTHON:-/opt/heartwood-vllm/bin/python}"
@@ -132,7 +131,6 @@ PY
 export HEARTWOOD_LOCAL_RUNTIME_PROFILE="vllm-cuda"
 export HEARTWOOD_LOCAL_MODEL_PATH="${model_path}"
 export HEARTWOOD_LOCAL_MODEL_CONTEXT="${context}"
-export HEARTWOOD_LOCAL_RUNTIME_PORT="${runtime_port}"
 export HEARTWOOD_VLLM_TENSOR_PARALLEL_SIZE="${tensor_parallel}"
 export HEARTWOOD_VLLM_TOOL_PARSER="${tool_parser}"
 export HEARTWOOD_VLLM_REASONING_PARSER="${reasoning_parser}"
@@ -143,57 +141,9 @@ export HEARTWOOD_QUALIFICATION_MODEL_REVISION="${revision}"
 export HEARTWOOD_QUALIFICATION_RUNTIME_METADATA="${runtime_metadata}"
 
 echo "Loading ${repository}; expected startup is approximately ${startup_min}-${startup_max} seconds."
-if ! command -v setsid >/dev/null 2>&1; then
-  echo "setsid is required to isolate the vLLM process group" >&2
-  exit 69
-fi
-setsid bash "${script_dir}/start_vllm.sh" >"${runtime_log}" 2>&1 &
-runtime_pid="$!"
-
-cleanup() {
-  status="$?"
-  trap - EXIT
-  kill -TERM -- "-${runtime_pid}" >/dev/null 2>&1 || true
-  for _ in {1..10}; do
-    if ! kill -0 "${runtime_pid}" >/dev/null 2>&1; then
-      break
-    fi
-    sleep 1
-  done
-  kill -KILL -- "-${runtime_pid}" >/dev/null 2>&1 || true
-  wait "${runtime_pid}" >/dev/null 2>&1 || true
-  if ((status != 0)) && [[ -f "${runtime_log}" ]]; then
-    echo "vLLM runtime log (last 240 lines):" >&2
-    tail -n 240 "${runtime_log}" >&2
-  fi
-  exit "${status}"
-}
-trap cleanup EXIT
-
-"${heartwood_python}" - "${runtime_port}" "${startup_max}" <<'PY'
-import sys
-import time
-import urllib.error
-import urllib.request
-
-port = int(sys.argv[1])
-deadline = time.time() + int(sys.argv[2]) + 120
-next_update = time.time() + 30
-last_error = None
-while time.time() < deadline:
-    try:
-        with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=2) as response:
-            if response.status == 200:
-                print("vLLM is ready; starting coding-agent acceptance.")
-                break
-    except (OSError, urllib.error.URLError) as error:
-        last_error = error
-    if time.time() >= next_update:
-        print("Still loading the model; Heartwood will continue when vLLM is ready.", flush=True)
-        next_update = time.time() + 30
-    time.sleep(1)
-else:
-    raise SystemExit(f"vLLM did not become ready before the qualification timeout: {last_error}")
-PY
-
-bash "${runtime_root}/images/generic/scripts/coding_agent_e2e.sh"
+export HEARTWOOD_PYTHON="${heartwood_python}"
+export HEARTWOOD_LOCAL_RUNTIME_ARTIFACT_ID="${snapshot_id}"
+exec "${heartwood_python}" "${runtime_root}/images/generic/scripts/qualify_runtime.py" \
+  --project "${project}" --log "${runtime_log}" --timeout "$((startup_max + 120))" \
+  --runtime "${script_dir}/start_vllm.sh" -- \
+  bash "${runtime_root}/images/generic/scripts/coding_agent_e2e.sh"

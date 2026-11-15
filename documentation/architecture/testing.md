@@ -75,6 +75,177 @@ Registry writes, multi-platform manifest assembly, and moving-tag promotion rema
 Release creation also requires the repository-managed Python and JavaScript/TypeScript CodeQL analyses for the exact commit.
 Capable-model acceptance runs on the organization's large hosted runner because CPU inference does not finish inside its command deadline on a standard runner; every other job runs on standard GitHub-hosted runners, and container builds reclaim unused preinstalled toolchains first and reuse bounded GitHub Actions BuildKit caches.
 
+## Native Worker Dependency Candidates
+
+The native worker qualification path needs SDK admission and remote-event hooks that are not available in the public application lock.
+`deploy/build-worker-candidate.py` builds a separate, explicitly versioned wheel set from immutable upstream source archives and reviewed patches in `images/worker/candidate/`.
+It verifies source, patch and build-tool hashes, uses a fixed source timestamp, preserves upstream licenses, and records each wheel digest.
+The candidate workflow repeats the build and requires byte-identical wheel records.
+Building these artifacts supports integration tests; it does not replace the application lock, install dependencies, publish upstream packages, or establish a supported deployment.
+
+```bash
+uv run --no-project --python 3.12.15 deploy/build-worker-candidate.py --output test-results/worker-candidate
+```
+
+The builder requires the uv version recorded in the source manifest and a new output directory.
+The conversation patch adds bounded remote-event admission, terminal failure propagation and explicit outside client-tool control.
+The sandbox patch exposes the native configuration-admission record needed to bind a worker to its admitted policy and process generation.
+The dependency patch supplies the inference-client constraint, public imports and usage-cost handling required by the candidate SDK dependency graph.
+The local package version suffix distinguishes these reviewed candidates from upstream releases.
+Source revisions, patch digests and wheel records must accompany any qualification result that uses them.
+Promotion into the production dependency lock requires compatible upstream releases or an explicitly maintained patched dependency source, followed by integrated qualification of the exact resulting image.
+
+The candidate environment command compiles a separate hash-pinned dependency graph and installs it only into a new environment.
+It fixes the Python and package-manager versions, runtime hashes and isolated build dependencies, and checks installed-package consistency.
+The fixed release cutoff has explicit exceptions for the file-lock security update and the inference-client version required by the reviewed SDK patch.
+The lock includes test tools.
+The application builder archives the current Heartwood commit and its pinned Skill submodule, then builds wheels from that snapshot.
+Only the temporary Heartwood package metadata receives the declared candidate dependency pins and local version suffix; source checkouts and public dependency metadata are unchanged.
+The pinned Skill catalog is built without source or metadata changes.
+The application record includes both source commits, wheel hashes and a hash-pinned installation manifest.
+Installation uses those local wheels without dependency resolution, then verifies that their declared dependencies are satisfied by the locked environment.
+Application files are copied rather than hard-linked to the package cache so bundled Skills retain the independent-file integrity requirement.
+
+```bash
+uv run --no-project --python 3.12.15 deploy/build-worker-candidate.py --application --output test-results/application-candidate
+bash images/worker/candidate/runtime.sh compile test-results/worker-candidate
+bash images/worker/candidate/runtime.sh install test-results/worker-candidate test-results/application-candidate test-results/worker-environment
+```
+
+Set `UV_BIN` when the pinned package manager is not on `PATH`.
+An existing environment is rejected to preserve installed work.
+The candidate workflow verifies lock regeneration and reproducible application builds, installs this environment and runs the Python suite with isolated imports against the packaged application and SDKs.
+This verifies package integration, not operating-system isolation or model-route eligibility; native deployment drills remain required.
+
+### Candidate Images
+
+The shared Dockerfile accepts an explicit `candidate` dependency profile for generic CPU qualification images.
+Supply the verified SDK artifacts under `sdk/` and application artifacts under `application/` in a separate named build context.
+The build installs them through the same candidate environment command, checks the application source commit against the image revision, and retains both build records in `/opt/heartwood/qualification/`.
+The normal locked profile remains the default.
+
+```bash
+docker buildx build --load --file images/Dockerfile --target worker-image \
+  --build-arg HEARTWOOD_DEPENDENCY_PROFILE=candidate \
+  --build-arg HEARTWOOD_IMAGE_FLAVOR=worker \
+  --build-arg HEARTWOOD_REVISION="$(git rev-parse HEAD)" \
+  --build-context worker-qualification-artifacts=test-results/image-candidate \
+  --tag heartwood-worker:qualification .
+```
+
+Use `runtime-image` with the same inputs for the controller application.
+Both targets retain the shared non-root runtime and browser build.
+The worker target retains the fixed launch restrictions.
+The browser bundle is installed beside the candidate CLI from the existing frontend build; fixture data is included in the CLI wheel.
+Missing CLI resources resolve only within the installed package or the exact editable checkout layout, never relative to the research project.
+Image construction and worker smoke checks do not establish native sandbox, provider-authorization or sensitive-data readiness.
+
+### Gateway Build
+
+The gateway candidate uses the pinned upstream source and focused Docker provisioning patch recorded in `images/worker/candidate/gateway.json`.
+Build it with the existing candidate builder:
+
+```bash
+uv run --no-project --python 3.12.15 deploy/build-worker-candidate.py \
+  --gateway --output test-results/gateway-candidate --cache test-results/gateway-cache
+```
+
+The output directory must be new and separate from the reusable cache directory.
+The builder verifies source, patch, CLI and build-tool archives, stamps a distinct local workspace version without changing registry dependencies, and uses locked Cargo dependencies inside a resource-bounded Linux container.
+Rust, CMake and image inputs are pinned; no mutable system-package installation is required.
+Cached archives are reverified before extraction.
+The resulting binary is packaged with the unchanged upstream gateway Dockerfile and checked for its expected version.
+The output retains binaries, the upstream license, packaging inputs, and a record binding source, manifest, lockfile, binary and image identities.
+These records establish build provenance; they do not claim byte-identical gateway builds or qualify untested architectures.
+
+The same manifest pins the supervisor, sandbox and Docker client image references used by native qualification.
+`images/worker/candidate/controller.Dockerfile` adds the verified gateway tools and pinned Docker client to the shared candidate runtime image.
+Supply `RUNTIME_IMAGE` and `DOCKER_CLIENT_IMAGE` as build arguments and the gateway output as the `worker-qualification-tools` named context.
+The controller remains outside the worker sandbox and needs an explicitly supplied Docker socket for native integration tests; the worker never receives that socket.
+The launcher reads the mounted socket's group inside Docker's Linux filesystem; the trusted controller and disposable gateway receive that supplementary group, while workers receive neither the group nor the socket.
+It verifies controller access before starting fixtures and retains transport failures in `controller-preflight.log`; it does not change host socket permissions.
+The disposable gateway retains startup logs until ownership-checked cleanup, including when its process exits before becoming healthy.
+Gateway artifacts and upstream patches are qualification inputs, not published upstream releases or a supported production dependency channel.
+
+### Installed Native Integration
+
+The maintained suite includes a synthetic session whose explicitly approved terminal action attempts to read control credentials, alter protected state and read-only projections, and reach a forbidden provider path.
+The outside fixture checks actual state canaries and provider traffic before and after the attempt; worker-reported success cannot replace those observations.
+The allowed synthetic endpoint redirects a request to a forbidden path; qualification requires observing the redirect request outside the worker and no request at its destination.
+The same POST-only profile rejects an unapproved WebSocket upgrade; this does not qualify a separately enabled WebSocket endpoint or its message rules.
+Tool execution must succeed independently of the scripted conversation's completion status.
+The installed suite runs direct IPv4, mapped IPv6, native IPv6, TCP and UDP probes against controlled listeners on a disposable dual-stack Docker network.
+A separate outside client must reach each listener before and after the worker attempt; timeouts and unreachable destinations cannot pass as policy denials.
+The supervisor retains its supported bridge configuration, and workers retain `network=none`; the additional network connects only the trusted controller namespace and its outside client.
+Injected instructions appear in synthetic input and tool output, but deterministic provider responses do not establish resistance to model-driven prompt injection.
+
+The candidate workflow builds the gateway and dependency wheels independently, then assembles the shared worker and runtime images for native integration.
+Run the same tests locally against those images and gateway artifacts:
+
+```bash
+python3 deploy/qualify-native-worker.py \
+  --worker-image heartwood-worker:qualification \
+  --runtime-image heartwood-runtime:qualification \
+  --gateway-artifacts test-results/gateway-candidate \
+  --output test-results/native-qualification
+```
+
+The command requires a local Linux Docker engine and a new output directory.
+It verifies gateway artifact digests, builds the outside controller, and runs the installed application without source overlays.
+The disposable gateway shares the controller's network namespace without publishing host ports; each worker still uses the native sandbox's isolated network.
+Only the outside controller and gateway receive the Docker management socket.
+The synthetic TLS provider uses a generated test credential and a fixed tool-call sequence; no external inference service or API key is needed.
+
+The workflow test uses Heartwood's production native launcher, independently admitted policy, read-only inputs and Skills, exact outside approvals, aggregate suppression, verified audit, and revocation before writer release.
+After shutdown it checks protected-state replay in a fresh process and rejects incorrect project identity and corrupted audit data.
+A derived image changes the OCI working directory to a symlink while preserving the parent worker and policy.
+The suite requires an explicit outside `WorkspaceValidationFailed` condition, no main-process start and no inference requests; the parent image must pass an independent admission control.
+The derived image digest and Dockerfile hash remain part of the qualification evidence.
+A separate fault test discards a successful native create response and requires a fenced attempt until outside revocation removes its containers and volumes.
+Test failure or failed cleanup prevents qualification; retained evidence must include the successful command exit and teardown results, not merely an individual assertion record.
+If revocation cannot settle, the local fixture retains its control state for reconciliation.
+CI retains only the selected synthetic evidence and logs, excluding private gateway state and generated credentials.
+These tests do not establish model-driven attack resistance, signed-checkpoint retention, tenant authorization, or institutional sensitive-data approval.
+
+### Infrastructure Telemetry
+
+The native fixture receives the existing OpenShell OCSF export through OTLP with mutual TLS at an outside test collector.
+An unauthenticated client must be rejected while an authenticated positive control succeeds.
+It checks the gateway and sandbox resource identifiers, retains native event identifiers, and rejects synthetic provider credentials or protected-state canaries before writing telemetry artifacts.
+The test collector is a qualification fixture; deployments use their existing authenticated telemetry service.
+
+During an injected collector outage, bounded harmless commands continue producing events until the supervisor reports a native export gap.
+The collector then resumes and must receive that sandbox's gap record with a positive dropped-record count and loss timestamp.
+Counting transport retries alone does not establish loss because the transport SDK and native exporter have separate retry loops.
+The canonical Heartwood audit must remain byte-for-byte unchanged during the telemetry fault and continue to verify afterward.
+
+Retain the OTLP records, bounded collector status, application evidence and verified cleanup together.
+Native event identifiers support deduplication after retries; receipt of a gap record establishes known loss, not complete capture of every other event.
+An exporter reports a gap with a subsequent event batch, so idle periods and abrupt teardown can leave loss unreported.
+The fixture marks collection incomplete after its deliberate outage; it does not qualify a production collector's retention, alerting or shutdown recovery.
+
+### Native Network Qualification
+
+`deploy/tests/worker_network_qualification.py` runs against an existing disposable sandbox through the native authenticated control API.
+Run it on a trusted Linux controller with IPv4 and native IPv6 addresses that reach its canary listeners; account for any container port mappings when supplying the addresses and ports.
+The controller needs the candidate SDK, its gateway client certificate, and network reachability to the gateway.
+The admitted policy must allow the hostname supplied through `--allowed-host` (default `host.docker.internal`) while denying the canary ports and unlisted destinations.
+The worker receives only the probe program and synthetic destination addresses, never the controller certificate or key.
+
+```bash
+python deploy/tests/worker_network_qualification.py \
+  --gateway "$GATEWAY_ADDRESS" --ca "$CA_PATH" --cert "$CLIENT_CERT_PATH" --key "$CLIENT_KEY_PATH" \
+  --sandbox "$SYNTHETIC_SANDBOX" --ipv4 "$CONTROLLER_IPV4" --ipv6 "$CONTROLLER_IPV6" \
+  --port 19672 --ipv6-port 19673
+```
+
+The check opens TCP and UDP canaries and independently reaches every tested transport before and after the worker probe.
+It requires explicit policy denial for direct IPv4, mapped IPv6, native IPv6, UDP, and an unlisted hostname; timeout, refused connection, and missing route do not qualify as denials.
+Unknown names may resolve to observation-only synthetic addresses without gaining connection permission.
+Any canary traffic from the probe, listener failure, or change in sandbox identity, process generation, or admitted configuration invalidates the result.
+The record binds the probe digest and observed native sandbox identity; retain it with the image and gateway build provenance.
+This command does not create or delete the sandbox, change its policy, qualify IPv6 inference, or establish model authorization or sensitive-data readiness.
+
 ## Research Evaluation Evidence
 
 Research evaluations distinguish connectivity, tool compatibility, workflow completion, artifact completeness, coding correctness, statistical correctness, policy adherence, and recovery.
@@ -194,8 +365,9 @@ Matching model-written metadata without an approved probe remains unverified.
 Conformance tests cover real tool execution, incompatible versions, fresh-output confinement, preserved experiment fingerprints, interface capture, restart, and content-minimized audit export.
 These bounded observations are not a sandbox or proof against an adversarial process changing and restoring files between observations.
 Fresh-process checks compare the gateway's persisted projection, event-chain identity, and verified audit identity without creating a model client.
+Managed deployments pass the operator-bound protected-state directory and project identity to that verifier; project content cannot select the replay source.
 
-The driver reserves a private result under `.heartwood/evaluations/` before starting model work.
+The driver reserves a private result in the bound state's `evaluations/` directory before starting model work (`.heartwood/evaluations/` for local projects).
 Before reviewing a pending group or assessing completion, it waits for the SDK worker's final publication and reconciles usage through the shared gateway.
 An early finished lifecycle cannot by itself trigger reproduction or finalize an evaluation.
 Workflow completion additionally requires passing artifact checks and, where required, independently witnessed reproduction; a final message alone is not evidence of completion.

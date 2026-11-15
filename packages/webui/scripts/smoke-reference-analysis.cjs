@@ -10,6 +10,7 @@
 
 const { spawn, spawnSync } = require("node:child_process");
 const fs = require("node:fs");
+const http = require("node:http");
 const os = require("node:os");
 const path = require("node:path");
 const { chromium, expect } = require("@playwright/test");
@@ -22,6 +23,10 @@ const webRoot = path.join(packageRoot, "dist");
 const stateRoot = fs.mkdtempSync(
   path.join(os.tmpdir(), "heartwood-reference-analysis-"),
 );
+const socketRoot = fs.mkdtempSync(
+  path.join(fs.realpathSync("/tmp"), "hw-model-"),
+);
+const runtimeSocket = path.join(socketRoot, "model.sock");
 const gatewayPort = process.env.HEARTWOOD_REFERENCE_GATEWAY_PORT || "4187";
 const origin = `http://127.0.0.1:${gatewayPort}`;
 const screenshotOption =
@@ -64,6 +69,7 @@ const runtimeEnvironment = Object.assign({}, process.env, {
     "reference-model-requests.jsonl",
   ),
   HEARTWOOD_RUNTIME_ROOT: repoRoot,
+  HEARTWOOD_LOCAL_RUNTIME_SOCKET: runtimeSocket,
   HEARTWOOD_TOOL_PYTHON: "python",
   LITELLM_LOCAL_MODEL_COST_MAP: "True",
   OPENHANDS_SUPPRESS_BANNER: "1",
@@ -100,14 +106,12 @@ async function main() {
     initializeGitProject();
     startProcess(pythonExecutable, [
       path.join(repoRoot, "images/generic/scripts/local_model_stub.py"),
-      "--host",
-      "127.0.0.1",
-      "--port",
-      "8765",
+      "--socket",
+      runtimeSocket,
       "--request-log",
       runtimeEnvironment.HEARTWOOD_MODEL_REQUEST_LOG,
     ]);
-    await waitForUrl("http://127.0.0.1:8765/v1/models");
+    await waitForUrl("http://127.0.0.1:8765/v1/models", runtimeSocket);
     runCli("models", "refresh", "heartwood");
     runCli("models", "connect", "heartwood", "heartwood-managed-runtime");
 
@@ -393,6 +397,7 @@ async function main() {
     if (browser) await browser.close();
     for (const child of processes.reverse()) terminateProcessGroup(child);
     await Promise.all(processes.map(waitForExit));
+    fs.rmSync(socketRoot, { recursive: true });
     if (process.env.HEARTWOOD_REFERENCE_PRESERVE_STATE !== "1") {
       fs.rmSync(stateRoot, { force: true, recursive: true });
     } else {
@@ -765,12 +770,30 @@ async function fetchJson(url) {
   return response.json();
 }
 
-async function waitForUrl(url) {
+async function waitForUrl(url, socketPath) {
   const deadline = Date.now() + 60_000;
   let lastError;
   while (Date.now() < deadline) {
     try {
-      const response = await fetch(url);
+      const response =
+        socketPath ?
+          await new Promise((resolve, reject) => {
+            const request = http.get(
+              { socketPath, path: new URL(url).pathname },
+              (incoming) => {
+                incoming.resume();
+                resolve({
+                  ok: incoming.statusCode === 200,
+                  status: incoming.statusCode,
+                });
+              },
+            );
+            request.setTimeout(2_000, () =>
+              request.destroy(new Error("model request timed out")),
+            );
+            request.on("error", reject);
+          })
+        : await fetch(url);
       if (response.ok) return;
       lastError = new Error(`${url} returned ${response.status}`);
     } catch (error) {

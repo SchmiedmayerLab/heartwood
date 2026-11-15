@@ -58,6 +58,15 @@ Worker conversation and command state is private, untrusted runtime data under t
 Its retention and deletion require deployment controls.
 An image, a loopback bind, and environment filtering alone do not establish isolation, independent approval enforcement, or sensitive-data readiness.
 
+### Installed Gateway Resources
+
+The gateway wheel includes the canonical model catalogs and manifests, reviewed specialist definitions and pinned bundled Skills through package build mappings.
+The installed gateway loads these resources from its own package directory.
+Editable source installations use the same repository resources; an installed package with missing resources fails instead of searching the research project or unrelated ancestor directories.
+The CLI wheel also includes synthetic fixture data; the shared image assembly supplies its compiled browser assets.
+A standalone CLI wheel without those browser assets requires an explicit web-root selection.
+The candidate workflow tests the installed wheels with isolated Python imports, including CLI and subprocess behavior.
+
 ## Package Ownership
 
 | Area | Package or Directory |

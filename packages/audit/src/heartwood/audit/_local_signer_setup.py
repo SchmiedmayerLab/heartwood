@@ -43,7 +43,6 @@ def initialize_local_checkpoint_signer(
     *,
     directory: Path,
     profile_id: str = "local-development",
-    endpoint: str = "http://127.0.0.1:8771/v1/checkpoints/sign",
     key_version: str = "v1",
 ) -> LocalCheckpointSignerSetup:
     """Create local signer material and write the deployment registry last."""
@@ -75,6 +74,7 @@ def initialize_local_checkpoint_signer(
         format=serialization.PublicFormat.SubjectPublicKeyInfo,
     )
     token = secrets.token_urlsafe(32)
+    endpoint = (root.resolve() / "checkpoint.sock").as_uri().replace("file:", "unix:", 1)
     payload = {
         "schema_version": "heartwood.checkpoint-signer-registry.v1",
         "default_profile": profile_id,

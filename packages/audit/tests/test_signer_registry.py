@@ -86,7 +86,6 @@ def test_registry_discovery_uses_one_authority_without_merging(tmp_path: Path) -
     system = initialize_local_checkpoint_signer(
         directory=tmp_path / "system",
         profile_id="system-local",
-        endpoint="http://127.0.0.1:8772/v1/checkpoints/sign",
     )
 
     discovered = discover_checkpoint_signer_registry(

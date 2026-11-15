@@ -44,7 +44,6 @@ replay="${HEARTWOOD_REPLAY_TRANSCRIPT:-${project}/heartwood-replay.txt}"
 report="${HEARTWOOD_QUALIFICATION_REPORT:-${project}/heartwood-qualification.json}"
 inference="${project}/qualification-inference.json"
 command_timeout="${HEARTWOOD_COMMAND_TIMEOUT:-900}"
-runtime_port="${HEARTWOOD_LOCAL_RUNTIME_PORT:-8765}"
 cohort_path="${project}/cohort-summary.json"
 exact_path="${project}/heartwood-exact-output.txt"
 rejected_path="${project}/heartwood-rejected-output.txt"
@@ -65,7 +64,6 @@ fi
 export HEARTWOOD_SESSION_ID="${session_id}"
 export HEARTWOOD_LOCAL_MODEL_PATH="${model_path}"
 export HEARTWOOD_MANAGED_MODEL_ALIAS="${HEARTWOOD_MANAGED_MODEL_ALIAS:-heartwood-managed-runtime}"
-export HEARTWOOD_LOCAL_RUNTIME_PORT="${runtime_port}"
 export HEARTWOOD_RUNTIME_ROOT="${runtime_root}"
 export LITELLM_LOCAL_MODEL_COST_MAP=True
 export OPENHANDS_SUPPRESS_BANNER=1
@@ -97,23 +95,18 @@ echo "Checking direct model inference..."
 import json
 import os
 import sys
-import urllib.request
+from heartwood.gateway._managed_inference import managed_inference_client
 
-payload = json.dumps(
-    {
+payload = {
         "model": os.environ["HEARTWOOD_MANAGED_MODEL_ALIAS"],
         "messages": [{"role": "user", "content": "Reply briefly that inference is ready."}],
         "max_tokens": 256,
         "temperature": 0,
     }
-).encode()
-request = urllib.request.Request(
-    f"http://127.0.0.1:{os.environ['HEARTWOOD_LOCAL_RUNTIME_PORT']}/v1/chat/completions",
-    data=payload,
-    headers={"Content-Type": "application/json"},
-)
-with urllib.request.urlopen(request, timeout=300) as response:
-    result = json.load(response)
+with managed_inference_client(os.environ, timeout=300) as client:
+    response = client.post("chat/completions", json=payload)
+    response.raise_for_status()
+    result = response.json()
 message = result["choices"][0]["message"]
 content = message.get("content") or message.get("reasoning_content")
 if not isinstance(content, str) or not content.strip():

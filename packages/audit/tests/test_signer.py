@@ -211,7 +211,7 @@ def test_remote_signer_rejects_unsafe_endpoints(endpoint: str) -> None:
         RemoteCheckpointSigner(endpoint=endpoint)
 
     with pytest.raises(CheckpointSignerError):
-        RemoteCheckpointSigner(endpoint=endpoint, allow_insecure_loopback=True)
+        RemoteCheckpointSigner(endpoint=endpoint, allow_local_socket=True)
 
 
 def test_remote_signer_bounds_endpoint_length() -> None:
@@ -221,16 +221,18 @@ def test_remote_signer_bounds_endpoint_length() -> None:
         )
 
 
-def test_remote_signer_allows_only_explicit_numeric_loopback_http() -> None:
+def test_local_signer_requires_explicit_socket_and_rejects_loopback_http() -> None:
     RemoteCheckpointSigner(
-        endpoint="http://127.0.0.1:8771/v1/checkpoints/sign",
-        allow_insecure_loopback=True,
+        endpoint="unix:///private/operator/checkpoint.sock", allow_local_socket=True
     )
-    with pytest.raises(CheckpointSignerError, match="HTTPS"):
-        RemoteCheckpointSigner(
-            endpoint="http://localhost:8771/v1/checkpoints/sign",
-            allow_insecure_loopback=True,
-        )
+    with pytest.raises(CheckpointSignerError):
+        RemoteCheckpointSigner(endpoint="unix:///private/operator/checkpoint.sock")
+    for host in ("127.0.0.1", "localhost", "[::1]"):
+        with pytest.raises(CheckpointSignerError, match="HTTPS"):
+            RemoteCheckpointSigner(
+                endpoint=f"http://{host}:8771/v1/checkpoints/sign",
+                allow_local_socket=True,
+            )
 
 
 def test_remote_signer_rejects_invalid_response_and_timeout() -> None:
