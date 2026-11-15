@@ -649,7 +649,7 @@ def test_launch_scrubs_resource_and_runtime_preflight_environments(
             options,
             env={
                 "HEARTWOOD_PLATFORM": "generic",
-                "PATH": "/usr/bin",
+                "PATH": str(tmp_path),
                 "OPENAI_API_KEY": "secret",
             },
         )
@@ -1156,6 +1156,19 @@ def test_available_gpu_memory_uses_least_available_visible_device(
     )
 
     assert _available_gpu_memory_bytes({"PATH": "/usr/bin"}) == 16 * 1024**3
+
+
+def test_available_gpu_memory_searches_only_the_supplied_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    nvidia_smi = tmp_path / "nvidia-smi"
+    nvidia_smi.write_text("#!/bin/sh\necho 8192\n", encoding="utf-8")
+    nvidia_smi.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path))
+
+    assert _available_gpu_memory_bytes({}) is None
+    assert _available_gpu_memory_bytes({"PATH": str(tmp_path)}) == 8 * 1024**3
 
 
 def test_runtime_resolution_and_gguf_directory_contract(

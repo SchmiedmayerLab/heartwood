@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -472,11 +473,29 @@ def test_slurm_discovery_retries_transient_scheduler_failures(
     assert partitions[0].gpu_count == 8
 
 
+def test_visible_gpu_discovery_searches_only_the_supplied_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    nvidia_smi = tmp_path / "nvidia-smi"
+    nvidia_smi.write_text(
+        "#!/bin/sh\necho '0, NVIDIA L4, 23034, 22000, 570.86.15, 8.9'\n",
+        encoding="utf-8",
+    )
+    nvidia_smi.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path))
+
+    assert discover_visible_gpus({}) == ()
+    assert [device.name for device in discover_visible_gpus({"PATH": str(tmp_path)})] == [
+        "NVIDIA L4"
+    ]
+
+
 def test_visible_gpu_discovery_handles_missing_malformed_and_failed_queries(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr("heartwood.gateway._gpu_environment.shutil.which", lambda *_a, **_k: None)
-    assert discover_visible_gpus({}) == ()
+    assert discover_visible_gpus({"PATH": "/usr/bin"}) == ()
 
     monkeypatch.setattr(
         "heartwood.gateway._gpu_environment.shutil.which",
@@ -490,13 +509,13 @@ def test_visible_gpu_discovery_handles_missing_malformed_and_failed_queries(
             stdout="malformed\nnot-an-index, T4, x, y, driver, bad\n",
         ),
     )
-    assert discover_visible_gpus({}) == ()
+    assert discover_visible_gpus({"PATH": "/usr/bin"}) == ()
 
     def fail(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
         raise subprocess.TimeoutExpired("nvidia-smi", 10)
 
     monkeypatch.setattr("heartwood.gateway._gpu_environment.subprocess.run", fail)
-    assert discover_visible_gpus({}) == ()
+    assert discover_visible_gpus({"PATH": "/usr/bin"}) == ()
 
 
 def test_slurm_discovery_ignores_malformed_rows_and_keeps_largest_capacity(

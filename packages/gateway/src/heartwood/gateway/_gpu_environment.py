@@ -242,7 +242,10 @@ def minimum_compute_capability_for_model(
 
 def discover_visible_gpus(env: Mapping[str, str]) -> tuple[GpuDevice, ...]:
     """Inspect visible NVIDIA devices without initializing CUDA."""
-    executable = shutil.which("nvidia-smi", path=env.get("PATH"))
+    executable_path = env.get("PATH")
+    if executable_path is None:
+        return ()
+    executable = shutil.which("nvidia-smi", path=executable_path)
     if executable is None:
         return ()
     fields = "index,name,memory.total,memory.free,driver_version,compute_cap"

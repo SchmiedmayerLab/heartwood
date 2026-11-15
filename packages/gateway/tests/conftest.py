@@ -34,6 +34,12 @@ from heartwood.schemas.parallel_reviews import (
 )
 
 
+@pytest.fixture(autouse=True)
+def hide_host_nvidia_device(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep GPU readiness independent of an NVIDIA device attached to the test host."""
+    monkeypatch.setattr("heartwood.gateway._readiness._NVIDIA_DEVICE", tmp_path / "nvidia0")
+
+
 @pytest.fixture
 def analysis_lock(tmp_path: Path) -> Path:
     """An offline wheel with real importable analysis code, absent from Heartwood itself."""

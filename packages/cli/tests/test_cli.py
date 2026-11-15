@@ -1038,6 +1038,7 @@ def test_carina_local_setup_rejects_an_unknown_model_without_saving_configuratio
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("HEARTWOOD_PLATFORM", "carina")
+    monkeypatch.setenv("PATH", str(tmp_path))
     project = tmp_path / "carina"
 
     assert (
@@ -1565,6 +1566,7 @@ def test_models_list_select_remove_and_artifacts_use_one_configuration(
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv("PATH", str(tmp_path))
     project = tmp_path / "analysis"
     first = [
         "models",
