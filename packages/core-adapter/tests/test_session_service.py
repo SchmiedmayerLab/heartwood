@@ -38,7 +38,6 @@ from heartwood.core_adapter import (
     BackendUsage,
     BackendUsageEvent,
     CommandConflictError,
-    DeterministicAgentBackend,
     FileSessionStore,
     LocalWorkspaceAgentBackend,
     PendingActionGroup,
@@ -1820,7 +1819,7 @@ def test_completed_receipt_must_match_persisted_event_range(tmp_path: Path) -> N
         service.handle(command)
 
 
-def test_task_records_route_decision_and_waits_for_action_confirmation(tmp_path: Path) -> None:
+def test_task_records_route_decision_and_waits_for_action_review(tmp_path: Path) -> None:
     service = SessionService.synthetic_default(tmp_path)
 
     result = service.handle(_command(CommandKind.CHAT, prompt="summarize the cohort"))
@@ -1856,62 +1855,6 @@ def test_task_records_route_decision_and_waits_for_action_confirmation(tmp_path:
         service.store.audit_path,
     ):
         assert stat.S_IMODE(path.stat().st_mode) == 0o600
-
-
-def test_legacy_confirmation_mode_is_recorded_as_mandatory_review(
-    tmp_path: Path,
-) -> None:
-    service = SessionService.local_default(
-        tmp_path,
-        session_id="session-synthetic-001",
-        backend=DeterministicAgentBackend(action_confirmation_mode="confirm-risky"),
-        env={},
-    )
-
-    result = service.handle(_command(CommandKind.CHAT, prompt="summarize the cohort"))
-
-    kinds = [event.kind for event in result.events]
-    assert EventKind.TOOL_CALL_PROPOSED.value in kinds
-    assert EventKind.TOOL_EXECUTION_RECORDED.value not in kinds
-    assert EventKind.CONFIRMATION_REQUESTED.value in kinds
-    profile = result.events[2].payload["model_profile"]
-    assert isinstance(profile, dict)
-    assert profile["action_confirmation_mode"] == "always-confirm"
-    approved = service.handle(
-        _command(
-            CommandKind.APPROVE, target_type="action-set", target_id=_pending_group_id(service)
-        )
-    )
-    assert any(event.kind == EventKind.TOOL_EXECUTION_RECORDED for event in approved.events)
-    service.close()
-
-
-def test_default_policy_rejects_unreviewed_backend_before_dispatch(
-    tmp_path: Path,
-) -> None:
-    class UnreviewedBackend(_RecordingBackend):
-        @property
-        def action_confirmation_mode(self) -> str:
-            return "confirm-risky"
-
-    backend = UnreviewedBackend(endpoint="https://model.local.invalid/v1/chat/completions")
-    service = SessionService.local_default(
-        tmp_path, session_id="session-synthetic-001", backend=backend, env={}
-    )
-    result = service.handle(_command(CommandKind.CHAT, prompt="summarize the cohort"))
-    decision = next(
-        event for event in result.events if event.kind == EventKind.MODEL_CALL_DECISION_RECORDED
-    )
-    recorded = decision.payload["decision"]
-    assert isinstance(recorded, dict)
-    assert recorded["decision"] == "deny"
-    assert result.events[-1].kind == EventKind.ERROR_RECORDED
-    assert backend.prompts == []
-    assert not any(
-        event.kind in {EventKind.TOOL_CALL_PROPOSED, EventKind.TOOL_EXECUTION_RECORDED}
-        for event in result.events
-    )
-    service.close()
 
 
 def test_approved_action_records_tool_execution(tmp_path: Path) -> None:
@@ -2723,10 +2666,6 @@ class _RecordingBackend:
     @property
     def credential_reference(self) -> str | None:
         return None
-
-    @property
-    def action_confirmation_mode(self) -> str:
-        return "always-confirm"
 
     @property
     def continuation_requires_model_authorization(self) -> bool:

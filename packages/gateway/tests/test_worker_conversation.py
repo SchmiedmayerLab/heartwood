@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
-from typing import Literal, cast
+from typing import cast
 from unittest.mock import MagicMock
 
 import pytest
@@ -54,7 +54,6 @@ def _backend(
     *,
     specialist_catalog: SpecialistCatalog | None = None,
     structured_task_outcomes: bool = False,
-    mode: Literal["always-confirm", "confirm-risky"] = "always-confirm",
 ) -> OpenHandsSdkBackend:
     profile = ModelProfile(
         profile_id="synthetic",
@@ -74,16 +73,13 @@ def _backend(
         env={"REAL_PROVIDER_KEY": "synthetic-real-secret"},
         specialist_catalog=specialist_catalog,
         structured_task_outcomes=structured_task_outcomes,
-        action_confirmation_mode=mode,
     )
 
 
-@pytest.mark.parametrize("mode", ["always-confirm", "confirm-risky"])
 def test_remote_request_reuses_agent_contract_without_resolving_host_credentials(
     tmp_path: Path,
     context: WorkerConversationContext,
     monkeypatch: pytest.MonkeyPatch,
-    mode: Literal["always-confirm", "confirm-risky"],
 ) -> None:
     requests: list[StartConversationRequest] = []
     callbacks: list[Callable[[object], None]] = []
@@ -103,7 +99,7 @@ def test_remote_request_reuses_agent_contract_without_resolving_host_credentials
 
     monkeypatch.setattr(RemoteConversation, "create", create)
     monkeypatch.setattr(ModelProfile, "resolve_api_key", reject_credential_lookup)
-    backend = _backend(tmp_path, context, structured_task_outcomes=True, mode=mode)
+    backend = _backend(tmp_path, context, structured_task_outcomes=True)
     deltas: list[str] = []
     backend.bind_runtime(event_sink=lambda _events: None, token_sink=deltas.append)
     assert backend._get_conversation() is remote

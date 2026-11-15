@@ -137,6 +137,7 @@ export interface ProjectionActionRecord {
   arguments: {
     [k: string]: JsonValue;
   };
+  automaticRule: string | null;
   decision: ("approved" | "rejected") | null;
   details: ProjectionActionDetails;
   groupId: string | null;

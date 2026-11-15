@@ -56,7 +56,7 @@ def _acceptance_files(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path]:
             "model_call.decision.recorded",
             {
                 "decision": {"decision": "allow"},
-                "model_profile": {"action_confirmation_mode": "always-confirm"},
+                "model_profile": {"action_review_mode": "review-all"},
             },
         ),
         _event(
@@ -111,7 +111,7 @@ def _acceptance_files(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path]:
             "model_call.decision.recorded",
             {
                 "decision": {"decision": "allow"},
-                "model_profile": {"action_confirmation_mode": "always-confirm"},
+                "model_profile": {"action_review_mode": "review-all"},
             },
         ),
         _event(

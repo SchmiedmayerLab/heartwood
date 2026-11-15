@@ -156,6 +156,9 @@ SPDX-License-Identifier: MIT
 **Research specialist**
 : A bounded OpenHands child agent that performs one focused planning or review task for the parent agent within inherited or narrower project, credential, model, network, policy, and confirmation boundaries.
 
+**Review mode**
+: The setting that selects which paused action sets the gateway allows under a named rule and which wait for the researcher: `review-all`, `review-changes`, or `review-outside-effects`.
+
 **Responses API**
 : OpenAI's current API shape for model responses, tool calls, and related agent interactions.
 

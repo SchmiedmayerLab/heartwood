@@ -101,7 +101,7 @@ class GenericPlatformAdapter:
                 "https://api.openai.com/v1/models",
             ),
             allowed_capability_tiers=("supervised", "experimental"),
-            allowed_action_confirmation_modes=("always-confirm",),
+            allowed_action_review_modes=("review-all", "review-changes"),
             credential_allowlist=self.credential_allowlist(),
             notes="Generic local policy for synthetic development and replay.",
         )

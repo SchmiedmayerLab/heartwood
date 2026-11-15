@@ -111,7 +111,6 @@ def _bundled_path(relative: Path) -> Path:
 
 _DEFAULT_WEB_ROOT = _bundled_path(Path("packages") / "webui" / "dist")
 _DEFAULT_FIXTURE_ROOT = _bundled_path(Path("fixtures") / "synthetic")
-_ACTION_MODE_ARGUMENTS = {option.command_value: option.mode for option in ACTION_MODE_OPTIONS}
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -233,7 +232,7 @@ def _build_parser() -> argparse.ArgumentParser:
     action_set = action_subparsers.add_parser(
         "set", help="Select an action-review mode allowed by platform policy."
     )
-    action_set.add_argument("mode", choices=tuple(_ACTION_MODE_ARGUMENTS))
+    action_set.add_argument("mode", choices=tuple(option.mode for option in ACTION_MODE_OPTIONS))
 
     configure_models(
         subparsers.add_parser(
@@ -743,10 +742,16 @@ def _handle_actions(
     gateway: SessionGateway,
     args: argparse.Namespace,
 ) -> int:
-    """Show or update the shared OpenHands action-review mode."""
+    """Show or update the action-review mode."""
     try:
         if getattr(args, "actions_command", None) == "set":
-            settings = gateway.select_action_confirmation_mode(_ACTION_MODE_ARGUMENTS[args.mode])
+            if gateway.action_settings()["scope"] == "launch":
+                parser.error(
+                    "this project has no deployment manifest, so the review mode is not stored; "
+                    "select it in a running Heartwood interface with /permissions or in the "
+                    "browser settings"
+                )
+            settings = gateway.select_action_review_mode(args.mode)
         else:
             settings = gateway.action_settings()
     except ActionSettingsError as error:
@@ -803,6 +808,7 @@ def _interactive_chat(gateway: SessionGateway, *, session_id: str, plain: bool =
 
         return run_terminal(session)
     print(f"Heartwood agent. Commands: {command_help()}.")
+    displayed_group_id: str | None = None
     while True:
         try:
             line = input("heartwood> ").strip()
@@ -814,6 +820,17 @@ def _interactive_chat(gateway: SessionGateway, *, session_id: str, plain: bool =
         if not line:
             continue
         directive = line.split(maxsplit=1)[0]
+        if line in {"/allow", "/reject"}:
+            # A bare decision applies to the action set this terminal printed.
+            if displayed_group_id is None:
+                projection = session.replay()
+                if (approval := projection.pending_approval) is not None:
+                    displayed_group_id = approval.group_id
+                    print("\n".join(format_projection_lines(projection)))
+                    print("Review the action set above, then repeat the decision.")
+                    continue
+            else:
+                line = f"{line} {shlex.quote(displayed_group_id)}"
         result = (
             _submit_with_progress(session, line)
             if not line.startswith("/") or directive in {"/allow", "/resume"}
@@ -824,6 +841,8 @@ def _interactive_chat(gateway: SessionGateway, *, session_id: str, plain: bool =
         if result.message:
             print(result.message)
         if result.projection is not None:
+            approval = result.projection.pending_approval
+            displayed_group_id = None if approval is None else approval.group_id
             after_sequence = (
                 None
                 if result.replace_transcript or not result.events

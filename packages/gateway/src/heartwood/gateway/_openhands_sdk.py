@@ -53,11 +53,9 @@ from openhands.sdk.llm import Metrics, content_to_str
 from openhands.sdk.security import (
     AlwaysConfirm,
     EnsembleSecurityAnalyzer,
-    LLMSecurityAnalyzer,
     PatternSecurityAnalyzer,
     PolicyRailSecurityAnalyzer,
     SecurityAnalyzerBase,
-    SecurityRisk,
 )
 from openhands.sdk.settings import (
     LLMSummarizingCondenserSettings,
@@ -66,6 +64,7 @@ from openhands.sdk.settings import (
 )
 from openhands.sdk.skills import Skill
 from openhands.sdk.subagent import AgentDefinition, register_agent_if_absent
+from openhands.sdk.tool.builtins import ThinkAction
 from openhands.sdk.tool.builtins.finish import FinishTool
 from openhands.sdk.tool.schema import Observation
 from openhands.sdk.workspace import LocalWorkspace
@@ -73,7 +72,7 @@ from openhands.tools import TaskTrackerTool, TerminalTool
 from openhands.tools.file_editor import FileEditorAction
 from openhands.tools.preset import TaskOutcome
 from openhands.tools.task import TaskAction, TaskObservation
-from openhands.tools.task_tracker import TaskTrackerObservation
+from openhands.tools.task_tracker import TaskTrackerAction, TaskTrackerObservation
 from openhands.tools.terminal import TerminalAction, TerminalObservation
 from pydantic import SecretStr
 
@@ -100,6 +99,7 @@ from heartwood.core_adapter import (
     BackendUsageEvent,
     PendingActionGroup,
     ProposedToolCall,
+    ReviewClass,
     TokenDeltaSink,
     ToolExecution,
     pending_action_group,
@@ -147,7 +147,7 @@ from heartwood.gateway._subscriptions import (
 )
 from heartwood.gateway._terminal_environment import terminal_environment
 from heartwood.gateway._worker_events import AdmittedWorkerWorkspace
-from heartwood.schemas import ActionConfirmationMode, JsonValue
+from heartwood.schemas import ActionReviewMode, JsonValue
 from heartwood.schemas.evaluation import EvaluationRuntimeObservation
 from heartwood.schemas.project_paths import ProjectPathError, project_relative_path
 
@@ -306,7 +306,6 @@ class OpenHandsSdkBackend:
         installed_skill_roots: Sequence[Path] = (),
         specialist_catalog: SpecialistCatalog | None = None,
         credential_environment_names: Sequence[str] = (),
-        action_confirmation_mode: ActionConfirmationMode = "always-confirm",
         env: Mapping[str, str] | None = None,
         llm_extra_body: Mapping[str, object] | None = None,
         native_tool_calling: bool | None = None,
@@ -317,12 +316,8 @@ class OpenHandsSdkBackend:
         managed_inference: bool = False,
     ) -> None:
         profile.validate()
-        if action_confirmation_mode not in {"always-confirm", "confirm-risky"}:
-            msg = f"unsupported action confirmation mode: {action_confirmation_mode}"
-            raise OpenHandsSdkError(msg)
         self.profile = profile
         self._managed_inference = managed_inference
-        self._action_confirmation_mode: ActionConfirmationMode = "always-confirm"
         self.workspace = workspace.resolve()
         self.skills_dir = skills_dir.resolve()
         self.installed_skill_roots = tuple(path.resolve() for path in installed_skill_roots)
@@ -430,11 +425,6 @@ class OpenHandsSdkBackend:
         return self.profile.credential_reference
 
     @property
-    def action_confirmation_mode(self) -> str:
-        """Return the selected OpenHands action-confirmation mode."""
-        return self._action_confirmation_mode
-
-    @property
     def continuation_requires_model_authorization(self) -> bool:
         """Return true because OpenHands may call the model after continuing."""
         return True
@@ -449,7 +439,7 @@ class OpenHandsSdkBackend:
             self._review_batch_authorizer = authorize
 
     def evaluation_observation(
-        self, *, platform: str, policy_fingerprint: str
+        self, *, platform: str, policy_fingerprint: str, action_review: ActionReviewMode
     ) -> EvaluationRuntimeObservation:
         """Inspect the actual SDK model object without issuing a model request."""
         state = self._get_conversation().state
@@ -505,7 +495,7 @@ class OpenHandsSdkBackend:
             model_options_fingerprint=hashlib.sha256(content.encode()).hexdigest(),
             platform=platform,
             policy_fingerprint=hashlib.sha256(security.encode()).hexdigest(),
-            action_confirmation=self._action_confirmation_mode,
+            action_review=action_review,
             max_input_tokens=llm.max_input_tokens,
             max_output_tokens=llm.max_output_tokens,
             tool_concurrency=state.agent.tool_concurrency_limit,
@@ -903,7 +893,7 @@ class OpenHandsSdkBackend:
             visualizer=None,
             delete_on_close=False,
         )
-        analyzer, confirmation_policy = _security_configuration(self._action_confirmation_mode)
+        analyzer, confirmation_policy = _security_configuration()
         self._security_analyzer = analyzer
         conversation.set_security_analyzer(analyzer)
         conversation.set_confirmation_policy(confirmation_policy)
@@ -990,7 +980,7 @@ class OpenHandsSdkBackend:
         agent = self._build_agent(
             LLM(**options), skills=list(context.skills), workspace=Path("/workspace")
         )
-        analyzer, confirmation = _security_configuration(self._action_confirmation_mode)
+        analyzer, confirmation = _security_configuration()
         request = StartConversationRequest(
             agent=agent,
             workspace=LocalWorkspace(working_dir="/workspace"),
@@ -1630,7 +1620,7 @@ class OpenHandsSdkBackend:
             if (
                 action is not None
                 and action_group is not None
-                and self._action_required_confirmation(action)
+                and not _runs_without_confirmation(action, action_group)
             ):
                 observation_events.extend(
                     self._confirmation_resolution_events(
@@ -1740,11 +1730,6 @@ class OpenHandsSdkBackend:
                 ),
             )
         return ()
-
-    def _action_required_confirmation(self, action: ActionEvent) -> bool:
-        if self.action_confirmation_mode == "always-confirm":
-            return True
-        return _analyzed_risk(self._security_analyzer, action) != SecurityRisk.LOW.value.lower()
 
     def _state_events(
         self,
@@ -1870,22 +1855,57 @@ def _tool_call(
     specialist_capability: Literal["advisory", "project-actions"] | None = None,
 ) -> ProposedToolCall:
     tool_name = event.tool_name or "unknown-tool"
-    risk_value = analyzed_risk or event.security_risk.value.lower()
-    risk = risk_value if risk_value in {"low", "medium", "high"} else "unknown"
+    risk = analyzed_risk if analyzed_risk in {"low", "medium", "high"} else "unknown"
     project_path = _project_path(event, workspace=workspace)
+    arguments = _tool_arguments(event)
     return ProposedToolCall(
         tool_call_id=event.tool_call_id,
         tool_name=tool_name,
         risk=cast(Any, risk),
         summary=_tool_summary(event, tool_name=tool_name),
-        arguments=_tool_arguments(event),
+        arguments=arguments,
         action_id=event.id,
         kind=_tool_kind(event),
+        review_class=_review_class(event, arguments=arguments, project_path=project_path),
         affected_paths=_affected_paths(event, project_path=project_path),
         project_path=project_path,
         specialist_label=specialist_label,
         specialist_capability=specialist_capability,
     )
+
+
+def _review_class(
+    event: ActionEvent,
+    *,
+    arguments: Mapping[str, JsonValue],
+    project_path: str | None,
+) -> ReviewClass:
+    """Classify what the typed action can affect, independently of any model-written text.
+
+    A file view counts as a project read only when the gateway resolved its path, through
+    symbolic links, to a public entry inside the project, and the reviewed arguments name
+    the same operation. Terminal commands are never classified by their text.
+    """
+    action = event.action
+    if isinstance(action, TaskTrackerAction):
+        return "plan"
+    if isinstance(action, FileEditorAction):
+        if (
+            action.command == "view"
+            and project_path is not None
+            and arguments.get("command") == "view"
+            and arguments.get("path") == action.path
+        ):
+            return "read"
+        return "workspace"
+    if isinstance(action, TerminalAction):
+        return "workspace"
+    return "other"
+
+
+def _runs_without_confirmation(action: ActionEvent, group: PendingActionGroup) -> bool:
+    """Match the one action OpenHands never pauses for: a lone note with no effect."""
+    return len(group.actions) == 1 and isinstance(action.action, ThinkAction)
 
 
 def _tool_summary(event: ActionEvent, *, tool_name: str) -> str:
@@ -2320,21 +2340,18 @@ def _terminal_tool_params(
     }
 
 
-def _security_configuration(
-    mode: ActionConfirmationMode,
-) -> tuple[SecurityAnalyzerBase, AlwaysConfirm]:
-    """Build the pinned OpenHands defense-in-depth analyzer and confirmation policy."""
+def _security_configuration() -> tuple[SecurityAnalyzerBase, AlwaysConfirm]:
+    """Build the deterministic OpenHands analyzers and the always-pausing policy.
+
+    The agent loop pauses before every action set in every review mode; the session
+    service alone decides which sets continue without the researcher. The analyzers
+    read only the typed action, never the model's own risk rating, and their result
+    can send an action to the researcher but never allow one.
+    """
     analyzer = EnsembleSecurityAnalyzer(
-        analyzers=[
-            PolicyRailSecurityAnalyzer(),
-            PatternSecurityAnalyzer(),
-            LLMSecurityAnalyzer(),
-        ],
+        analyzers=[PolicyRailSecurityAnalyzer(), PatternSecurityAnalyzer()],
         propagate_unknown=True,
     )
-    if mode not in {"always-confirm", "confirm-risky"}:
-        raise ValueError("unsupported action confirmation mode")
-    # Risk analyzers supply advisory labels, never automatic execution authority.
     return analyzer, AlwaysConfirm()
 
 

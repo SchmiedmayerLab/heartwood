@@ -472,13 +472,16 @@ const ActionHistory = ({
                         {displaySafeText(action.outcome.summary)}
                       </span>
                     : null}
-                    {action.groupId !== null ?
+                    {action.automaticRule !== null ?
+                      <span>
+                        Allowed automatically · rule{" "}
+                        {displaySafeText(action.automaticRule)}
+                      </span>
+                    : action.groupId !== null ?
                       <span>
                         Complete action set ·{" "}
                         {action.decision ?? "decision pending"}
                       </span>
-                    : action.decision !== null ?
-                      <span>{action.decision} by automatic policy</span>
                     : null}
                   </div>
                   {action.affectedPaths.length > 0 ?

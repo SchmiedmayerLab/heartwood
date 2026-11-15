@@ -196,6 +196,8 @@ def _application(
                 platform_id="generic",
                 allowed_model_endpoints=(profile.policy_endpoint,),
                 credential_allowlist=("SYNTHETIC_MODEL_KEY",),
+                # These compositions exercise researcher review of worker actions.
+                allowed_action_review_modes=("review-all",),
             ),
         )
     )

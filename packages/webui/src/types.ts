@@ -48,7 +48,7 @@ export interface SessionEvent {
   previous_event_hash: string | null;
 }
 
-export type ActionRisk = Api.ActionRisk;
+export type ActionRisk = Projection.ProjectionActionRecord["risk"];
 export type ActivityItem = Projection.ProjectionActivity;
 export type ConversationMessage = Projection.ProjectionMessage;
 export type ProjectionActionRecord = Projection.ProjectionActionRecord;
@@ -67,8 +67,8 @@ export type SessionProjection = Projection.SessionProjection;
 export type ProjectionCommand = SessionProjection["availableCommands"][number];
 
 export type {
-  ActionConfirmationMode,
-  ActionConfirmationRequest,
+  ActionReviewMode,
+  ActionReviewRequest,
   CredentialKind,
   CredentialStatus,
   CustomLocalModelDownloadRequest,

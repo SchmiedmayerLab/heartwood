@@ -117,16 +117,14 @@ def verify_run(
     ]
     if not routes or set(routes) != {"allow"}:
         raise ValueError(f"coding-agent model route was not consistently allowed: {routes}")
-    confirmation_modes = {
-        profile.get("action_confirmation_mode")
+    review_modes = {
+        profile.get("action_review_mode")
         for event in events
         if event.kind == "model_call.decision.recorded"
         and (profile := _mapping(event.payload.get("model_profile")))
     }
-    if confirmation_modes != {"always-confirm"}:
-        raise ValueError(
-            f"coding-agent session used unexpected confirmation modes: {confirmation_modes}"
-        )
+    if review_modes != {"review-all"}:
+        raise ValueError(f"coding-agent session used unexpected review modes: {review_modes}")
 
     cohort = json.loads(artifact_path.read_text(encoding="utf-8"))
     summary = cohort["summary"]

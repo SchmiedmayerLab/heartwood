@@ -55,12 +55,12 @@ Opening the browser and running `heartwood doctor` are read-only; explicit proje
 
 A platform adapter can advertise managed connections and credential backends.
 The model-manifest parser defines non-secret connection metadata but is not wired into deployment startup.
-Built-in connections and operator-configured compatible routes use platform policy for allowed endpoints, credential references, capability tiers and action-confirmation modes.
+Built-in connections and operator-configured compatible routes use platform policy for allowed endpoints, credential references, capability tiers and action-review modes.
 
 Never add raw tokens to container layers, image labels, project configuration, command arguments, examples, or CI logs.
-The built-in Terra, Carina and generic policies require **Review Every Action**.
-**Low-Risk Automation** is unavailable until a deterministic read-only action allowlist is qualified.
-Credential isolation does not authorize automatic tool execution.
+The built-in Terra, Carina and generic policies permit **Review Every Action** and, as a researcher opt-in, **Review Changes**.
+**Review Outside Effects** applies only to sessions in an admitted isolated worker under a deployment manifest.
+Credential isolation does not authorize automatic tool execution; see [Action Review](security.md#action-review).
 See [Security and Controlled Data](security.md#model-credential-isolation) for the distinction between application scrubbing and platform isolation.
 
 ## Validate the Deployment

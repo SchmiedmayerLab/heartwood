@@ -113,10 +113,10 @@ _REST_OPERATIONS = (
     ),
     _Operation(
         "PUT",
-        "/settings/actions/confirmation",
+        "/settings/actions/review",
         "Select an action review mode",
         api.ActionSettingsResponse,
-        api.ActionConfirmationRequest,
+        api.ActionReviewRequest,
         errors=(422,),
     ),
     _Operation(

@@ -40,7 +40,7 @@ The generic adapter remains the fallback when no managed platform evidence match
 
 ## Define Policy and Connections
 
-Provide a deny-by-default `PolicyProfile` containing exact model catalog and completion endpoints, allowed capability tiers, action-confirmation modes, and credential reference names.
+Provide a deny-by-default `PolicyProfile` containing exact model catalog and completion endpoints, allowed capability tiers, action-review modes, and credential reference names.
 Expose managed connection metadata without secret values.
 
 User-entered compatible endpoints must not silently widen managed-platform policy.

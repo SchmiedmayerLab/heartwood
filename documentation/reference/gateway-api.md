@@ -60,7 +60,7 @@ An advertised route does not grant authority to configure a forbidden model, ins
 | Commands | `POST /sessions/{session_id}/commands` | Command events and the current interface projection |
 | Events and projection | `GET /sessions/{session_id}/events`, `/events/stream`, `/projection`; WebSocket `/events` | Durable replay and live interface state |
 | Workspace | `GET /sessions/{session_id}/workspace/tree`, `/file`, `/changes`, `/diff` | Bounded project inspection; `file` and `diff` require a `path` query parameter |
-| Action settings | `GET /settings/actions`; `PUT /settings/actions/confirmation` | Review mode constrained by deployment policy |
+| Action settings | `GET /settings/actions`; `PUT /settings/actions/review` | Review mode in use, its default and scope, and selection within the deployment ceiling and execution boundary |
 | Model settings | `/settings/models` and its catalog, source, profile, connection, artifact, download and transfer operations | Model selection, validation and managed model files |
 | Credentials | `GET /settings/credentials`; `DELETE /settings/credentials/{connection_id}` | Credential status or removal of a saved binding; removal does not revoke a provider key |
 | Skills and specialists | `/settings/skills` inspection, install, refresh and removal operations; `GET /settings/specialists` | Available research capabilities and reviewed Skill installation |

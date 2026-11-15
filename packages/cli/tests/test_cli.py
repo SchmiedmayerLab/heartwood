@@ -716,7 +716,7 @@ def test_cli_startup_and_doctor_resolve_a_remembered_keyring_credential(
         model_catalog_service=catalog,
     )
     configured.configure_model_source("openai")
-    configured.select_action_confirmation_mode("always-confirm")
+    configured.select_action_review_mode("review-all")
     configured.discover_models(
         "openai",
         token="remembered-secret",
@@ -1492,18 +1492,22 @@ def test_actions_and_advanced_model_profile_persist_in_config_toml(
     ]
 
     assert _run(project, monkeypatch, model_args) == 0
-    with pytest.raises(SystemExit) as rejected:
-        _run(project, monkeypatch, ["actions", "set", "auto-approve-low-risk"])
-    assert rejected.value.code == 2
+    # Without a deployment manifest no command stores a review mode for later launches.
+    for mode in ("review-changes", "review-outside-effects", "auto-approve-low-risk"):
+        with pytest.raises(SystemExit) as rejected:
+            _run(project, monkeypatch, ["actions", "set", mode])
+        assert rejected.value.code == 2
+    assert _run(project, monkeypatch, ["actions"]) == 0
     assert _run(project, monkeypatch, ["models", "validate", "local-test"]) == 0
 
     contents = (project / ".heartwood" / "config.toml").read_text(encoding="utf-8")
     captured = capsys.readouterr()
     output = captured.out + captured.err
     assert 'active_profile = "local-test"' in contents
-    assert 'confirmation_mode = "always-confirm"' in contents
+    assert "\nreview_mode" not in contents
     assert "Profile: local-test" in output
-    assert "Low-Risk Automation" in output
+    assert "* Review Every Action" in output
+    assert "* Review Changes" not in output
 
 
 def test_cli_and_browser_gateway_observe_the_same_project_configuration(
@@ -1515,7 +1519,7 @@ def test_cli_and_browser_gateway_observe_the_same_project_configuration(
     catalog = _local_catalog()
 
     with pytest.raises(SystemExit) as rejected:
-        _run(project, monkeypatch, ["actions", "set", "auto-approve-low-risk"])
+        _run(project, monkeypatch, ["actions", "set", "review-outside-effects"])
     assert rejected.value.code == 2
     capsys.readouterr()
 
@@ -1527,13 +1531,13 @@ def test_cli_and_browser_gateway_observe_the_same_project_configuration(
     )
     browser = RestGateway(gateway)
     action_settings = browser.handle(RestRequest(method="GET", path="/settings/actions"))
-    assert action_settings.body["confirmation_mode"] == "always-confirm"
+    assert action_settings.body["review_mode"] == "review-all"
     assert (
         browser.handle(
             RestRequest(
                 method="PUT",
-                path="/settings/actions/confirmation",
-                body=json.dumps({"mode": "always-confirm"}),
+                path="/settings/actions/review",
+                body=json.dumps({"mode": "review-all"}),
             )
         ).status_code
         == 200

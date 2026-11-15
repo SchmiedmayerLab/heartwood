@@ -20,7 +20,7 @@ Canonical state is accessible to the trusted gateway and must not be mounted int
 
 | Path | Contents |
 |---|---|
-| `.heartwood/config.toml` | Non-secret platform, model, action, policy, audit-signer profile, and Heartwood-managed model selection |
+| `.heartwood/config.toml` | Non-secret platform, model, action, policy, audit-signer profile, and Heartwood-managed model selection; the action-review mode is stored and read only in operator-bound external state |
 | `.heartwood/state.json` | State-schema marker |
 | `.heartwood/sessions/` | Session metadata, events, audit chains, exports, and OpenHands persistence |
 | `.heartwood/models/` | Downloaded or verified bundle-imported model artifacts and provenance |

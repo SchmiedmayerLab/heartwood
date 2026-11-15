@@ -37,7 +37,8 @@ def _evaluation() -> ActionRiskEvaluation:
         analyzer_fingerprint="a" * 64,
         evaluated_at=datetime(2026, 9, 10, tzinfo=UTC),
         openhands_version="synthetic-test",
-        confirmation_mode="confirm-risky",
+        review_mode="review-changes",
+        contained=False,
         measurements=tuple(
             ActionRiskMeasurement(
                 case_id=probe.case_id,
@@ -57,12 +58,22 @@ def test_corpus_covers_threat_families_and_missing_model_risk() -> None:
     assert {probe.category for probe in corpus.probes} == {
         "benign",
         "ambiguous",
+        "boundary",
         "destructive",
         "encoded",
         "injected",
         "network",
+        "path-escape",
     }
-    assert {probe.tool for probe in corpus.probes} == {"terminal", "file_editor"}
+    assert {probe.tool for probe in corpus.probes} == {
+        "terminal",
+        "file_editor",
+        "task_tracker",
+        "task",
+    }
+    assert all(
+        probe.must_confirm for probe in corpus.probes if probe.case_id.startswith("inspect-changes")
+    )
     assert {probe.model_risk for probe in corpus.probes} == {"LOW", "UNKNOWN"}
     assert ActionRiskCorpus.model_validate_json(corpus.model_dump_json()) == corpus
 
@@ -102,7 +113,59 @@ def test_false_approval_and_unconfirmed_unknown_are_independent_failures() -> No
     report = report.model_copy(update={"measurements": tuple(items)})
     assert report.false_approvals == report.unknown_classifications == 1
     decision = assess_action_risk(action_risk_corpus(), report, policy=_policy())
-    assert set(decision.reasons) == {"false-approval", "unknown-not-confirmed"}
+    assert set(decision.reasons) == {
+        "false-approval",
+        "unknown-not-confirmed",
+        "model-label-dependent",
+    }
+
+
+def test_a_decision_that_follows_the_model_rating_fails_the_gate() -> None:
+    report = _evaluation()
+    items = list(report.measurements)
+    index = next(
+        i for i, item in enumerate(items) if not item.must_confirm and item.case_id.endswith("-low")
+    )
+    items[index] = items[index].model_copy(update={"confirmation_required": True})
+    report = report.model_copy(update={"measurements": tuple(items)})
+    decision = assess_action_risk(
+        action_risk_corpus(),
+        report,
+        policy=_policy().model_copy(update={"maximum_unnecessary_confirmation_fraction": 1}),
+    )
+    assert decision.reasons == ("model-label-dependent",)
+
+
+def test_labels_follow_the_evaluated_execution_boundary() -> None:
+    corpus = action_risk_corpus()
+    contained = _evaluation().model_copy(
+        update={
+            "review_mode": "review-outside-effects",
+            "contained": True,
+            "measurements": tuple(
+                ActionRiskMeasurement(
+                    case_id=probe.case_id,
+                    category=probe.category,
+                    must_confirm=probe.review_required(contained=True),
+                    observed_risk="LOW",
+                    confirmation_required=probe.review_required(contained=True),
+                    elapsed_seconds=0.001,
+                )
+                for probe in corpus.probes
+            ),
+        }
+    )
+    assert assess_action_risk(corpus, contained, policy=_policy()).passed
+    assert (
+        "label-mismatch"
+        in assess_action_risk(
+            corpus, contained.model_copy(update={"contained": False}), policy=_policy()
+        ).reasons
+    )
+    assert {probe.case_id for probe in corpus.probes if probe.must_confirm_contained} == {
+        "delegate-specialist-low",
+        "delegate-specialist-unknown",
+    }
 
 
 def test_benign_confirmation_fraction_and_latency_have_explicit_limits() -> None:

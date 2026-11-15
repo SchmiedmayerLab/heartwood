@@ -31,10 +31,16 @@ heartwood [--session-id ID] [--interface terminal|web] [--plain] [--prompt TEXT]
 | Command | Purpose |
 |---|---|
 | `heartwood doctor [--json]` | Inspect content-safe project, model, credential, policy, and compute readiness without changing state |
-| `heartwood setup` | Run model and action-policy setup without opening a conversation |
-| `heartwood actions` | Show action-review modes |
-| `heartwood actions set ask-every-time` | Require confirmation for every OpenHands action set |
-| `heartwood actions set auto-approve-low-risk` | Unavailable; the gateway requires Review Every Action |
+| `heartwood setup` | Run model setup without opening a conversation |
+| `heartwood actions` | Show the action-review mode in use, the default, and each mode the deployment does not permit |
+| `heartwood actions set review-all` | You decide on every action set |
+| `heartwood actions set review-changes` | Heartwood allows project file views and plan updates; you decide on commands, file changes, and anything else |
+| `heartwood actions set review-outside-effects` | Actions inside the isolated worker run without asking; you decide on anything that leaves it |
+
+`heartwood actions set` stores the mode in protected project state and requires a deployment manifest.
+Without one, select the mode in a running terminal or browser interface; it applies until that process exits.
+`review-outside-effects` is accepted only where sessions run in an isolated worker.
+See [Review Modes](../use/actions-audit.md#review-modes).
 
 For unattended setup, use `heartwood setup --non-interactive --yes` with explicit model-source and model identifiers.
 Use `--model-source heartwood` when Heartwood should download or import the model and supervise its runtime in the current environment.
@@ -122,8 +128,8 @@ See [Experiment Records](../architecture/experiments.md) for examples, evidence 
 
 | Command | Purpose |
 |---|---|
-| `heartwood allow` | Allow the complete pending action set once |
-| `heartwood reject` | Reject the complete pending action set |
+| `heartwood allow [ACTION_SET_ID]` | Allow the complete pending action set once |
+| `heartwood reject [ACTION_SET_ID]` | Reject the complete pending action set |
 | `heartwood pause` | Pause the selected session |
 | `heartwood resume` | Resume the selected session |
 | `heartwood replay` | Replay persisted events after audit verification |
@@ -198,11 +204,12 @@ deny_egress_by_default = true
 allowed_model_endpoints = ["https://models.example.invalid/v1/chat/completions"]
 allowed_model_catalog_endpoints = ["https://models.example.invalid/v1/models"]
 allowed_capability_tiers = ["supervised"]
-allowed_action_confirmation_modes = ["always-confirm"]
+allowed_action_review_modes = ["review-all", "review-changes", "review-outside-effects"]
 credential_allowlist = ["HEARTWOOD_CUSTOM_MODEL_API_KEY"]
 aggregate_count_floor = 20
 ```
 
+`allowed_action_review_modes` is the most permissive set of [review modes](../use/actions-audit.md#review-modes) the deployment permits; it must include `review-all` and defaults to all three.
 Credential names are references; actual credentials never belong in this manifest.
 Launch from the manifest's exact research directory and use the detected platform identifier.
 Keep the manifest operator-owned and not writable by group or other users, and exclude it and the external state volume from worker mounts.

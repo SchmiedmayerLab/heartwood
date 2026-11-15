@@ -16,6 +16,7 @@ from typing import Annotated, ClassVar, Literal, cast
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 from heartwood.core_adapter import backend_error_is_fatal
+from heartwood.core_adapter.action_review import AUTOMATIC_REVIEW_ACTOR
 from heartwood.core_adapter.external_actions import ExternalActionProposal, ExternalActionRecord
 from heartwood.core_adapter.external_results import (
     ExternalResultProposal,
@@ -208,6 +209,8 @@ class ProjectionActionRecord(_ProjectionRecord):
         "outcome-unknown",
     ]
     decision: Literal["approved", "rejected"] | None = None
+    automatic_rule: str | None = Field(default=None, serialization_alias="automaticRule")
+    """The review rule under which the gateway, not the researcher, allowed the action."""
     outcome: ProjectionActionOutcome | None = None
     proposed_sequence: int = Field(ge=0, serialization_alias="proposedSequence")
     updated_sequence: int = Field(ge=0, serialization_alias="updatedSequence")
@@ -664,6 +667,7 @@ def project_session(
                             "group_id": prior.group_id,
                             "state": prior.state,
                             "decision": prior.decision,
+                            "automatic_rule": prior.automatic_rule,
                             "outcome": prior.outcome,
                         }
                     )
@@ -738,7 +742,6 @@ def project_session(
                 actions[tool_call_id] = action.model_copy(
                     update={
                         "action_id": action.action_id or action_id,
-                        "decision": action.decision or "approved",
                         "state": "failed" if exit_code != 0 else "succeeded",
                         "outcome": outcome,
                         "updated_sequence": event.sequence,
@@ -806,6 +809,11 @@ def project_session(
                 if item
             )
             if group_id and decision is not None and tool_call_ids:
+                automatic_rule = (
+                    _string(_mapping(event.payload.get("review")).get("rule")) or None
+                    if event.payload.get("actor_id") == AUTOMATIC_REVIEW_ACTOR
+                    else None
+                )
                 group_actions = approval_group_actions.setdefault(group_id, [])
                 for tool_call_id in tool_call_ids:
                     if tool_call_id not in group_actions:
@@ -817,7 +825,7 @@ def project_session(
                             group_id=group_id,
                             decision=decision,
                             sequence=event.sequence,
-                        )
+                        ).model_copy(update={"automatic_rule": automatic_rule})
                 approval_group_decisions[group_id] = decision
                 approval_group_resolutions[group_id] = dict.fromkeys(tool_call_ids, decision)
                 _append_approval_message(
@@ -827,6 +835,7 @@ def project_session(
                     decision=decision,
                     action_count=len(tool_call_ids),
                     reported_resolutions=reported_resolutions,
+                    automatic_rule=automatic_rule,
                 )
                 lifecycle_status = SessionLifecycle.IDLE
         elif kind == EventKind.CONFIRMATION_RESOLVED.value:
@@ -1280,6 +1289,7 @@ def _append_approval_message(
     decision: Literal["approved", "denied"],
     action_count: int,
     reported_resolutions: set[str],
+    automatic_rule: str | None = None,
 ) -> None:
     if group_id in reported_resolutions:
         return
@@ -1291,11 +1301,17 @@ def _append_approval_message(
         role="trace",
         label="Approval",
         content=(
-            f"Action set approved ({action_count} {action_label})"
+            f"Action set allowed automatically ({action_count} {action_label})"
+            if automatic_rule is not None
+            else f"Action set approved ({action_count} {action_label})"
             if decision == "approved"
             else f"Action set rejected ({action_count} {action_label})"
         ),
-        detail="The decision applied to every action in the set.",
+        detail=(
+            f"Heartwood applied review rule {automatic_rule} to every action in the set."
+            if automatic_rule is not None
+            else "The decision applied to every action in the set."
+        ),
     )
 
 
@@ -1415,6 +1431,11 @@ def _activity_detail(event: SessionEvent) -> str:
             value
             for value in (
                 _string(event.payload.get("decision")),
+                (
+                    "automatic rule " + _string(_mapping(event.payload.get("review")).get("rule"))
+                    if event.payload.get("actor_id") == AUTOMATIC_REVIEW_ACTOR
+                    else ""
+                ),
                 _string(event.payload.get("group_id")),
             )
             if value

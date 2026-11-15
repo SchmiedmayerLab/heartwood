@@ -81,7 +81,6 @@ def _configured_project(
     root: Path,
     *,
     profile: ModelProfile,
-    confirmation_mode: str = "always-confirm",
 ) -> ProjectContext:
     project = ProjectContext(root)
     project.initialize()
@@ -95,12 +94,6 @@ def _configured_project(
         policy=platform.default_policy_profile(),
     )
     ProjectConfigStore(project, config).save(config)
-    if confirmation_mode == "confirm-risky":
-        project.config_path.write_text(
-            project.config_path.read_text().replace(
-                'confirmation_mode = "always-confirm"', 'confirmation_mode = "confirm-risky"'
-            )
-        )
     return project
 
 
@@ -144,13 +137,10 @@ def test_isolation_assessment_distinguishes_scrubbing_from_platform_isolation() 
 
     assert unconfigured.status == "not-configured"
     assert local.status == "not-required"
-    assert local.unattended_actions_allowed is True
     assert hosted.status == "review-required"
     assert hosted.boundary == "application-scrubbed"
-    assert hosted.unattended_actions_allowed is False
     assert isolated.status == "qualified"
     assert isolated.boundary == "platform-isolated"
-    assert isolated.unattended_actions_allowed is True
     assert same_platform_unisolated.status == "review-required"
 
 
@@ -193,7 +183,7 @@ def test_platform_isolation_requires_the_exact_managed_identity_profile() -> Non
     )
 
 
-def test_secret_backed_model_disables_low_risk_automation_across_interfaces(
+def test_secret_backed_model_reports_scrubbing_without_widening_review(
     tmp_path: Path,
 ) -> None:
     project = _configured_project(tmp_path, profile=_hosted_profile())
@@ -211,11 +201,10 @@ def test_secret_backed_model_disables_low_risk_automation_across_interfaces(
         isolation = model_settings["credential_isolation"]
         assert isolation["status"] == "review-required"
         assert isolation["boundary"] == "application-scrubbed"
-        low_risk = next(
-            mode for mode in action_settings["modes"] if mode["mode"] == "confirm-risky"
-        )
-        assert low_risk["allowed"] is False
-        assert "risk hints cannot authorize" in str(low_risk["unavailable_reason"])
+        assert action_settings["review_mode"] == "review-all"
+        assert not next(
+            mode for mode in action_settings["modes"] if mode["mode"] == "review-outside-effects"
+        )["allowed"]
         isolation_check = next(
             check for check in readiness.checks if check.check_id == "credential-isolation"
         )
@@ -223,8 +212,8 @@ def test_secret_backed_model_disables_low_risk_automation_across_interfaces(
         assert isolation_check.status == "warning"
         assert validation["credential_isolation"] == isolation
 
-        with pytest.raises(ActionSettingsError, match="risk hints cannot authorize"):
-            gateway.select_action_confirmation_mode("confirm-risky")
+        with pytest.raises(ActionSettingsError):
+            gateway.select_action_review_mode("review-outside-effects")
 
         exposed = json.dumps(
             {
@@ -236,71 +225,6 @@ def test_secret_backed_model_disables_low_risk_automation_across_interfaces(
         )
         assert _SECRET not in exposed
         assert _SECRET not in project.config_path.read_text(encoding="utf-8")
-    finally:
-        gateway.stop()
-
-
-def test_legacy_automation_preference_cannot_bypass_review_for_secret_route(
-    tmp_path: Path,
-) -> None:
-    project = _configured_project(
-        tmp_path,
-        profile=_hosted_profile(),
-        confirmation_mode="confirm-risky",
-    )
-    gateway = SessionGateway(
-        project=project,
-        env={"OPENAI_API_KEY": _SECRET},
-    )
-    try:
-        readiness = gateway.deployment_readiness()
-        isolation = next(
-            check for check in readiness.checks if check.check_id == "credential-isolation"
-        )
-
-        assert readiness.state == "ready"
-        assert isolation.status == "warning"
-        assert gateway.action_settings()["confirmation_mode"] == "always-confirm"
-        gateway._service_configuration()
-    finally:
-        gateway.stop()
-
-
-def test_credential_free_model_still_requires_action_review(tmp_path: Path) -> None:
-    project = _configured_project(tmp_path, profile=_local_profile())
-    gateway = SessionGateway(project=project, env={})
-    try:
-        with pytest.raises(ActionSettingsError, match="risk hints cannot authorize"):
-            gateway.select_action_confirmation_mode("confirm-risky")
-        readiness = gateway.deployment_readiness()
-        isolation = next(
-            check for check in readiness.checks if check.check_id == "credential-isolation"
-        )
-
-        assert gateway.action_settings()["confirmation_mode"] == "always-confirm"
-        assert isolation.status == "pass"
-        assert gateway.model_settings()["credential_isolation"]["status"] == "not-required"
-    finally:
-        gateway.stop()
-
-
-def test_legacy_automation_preference_is_safe_when_selecting_secret_route(
-    tmp_path: Path,
-) -> None:
-    project = _configured_project(
-        tmp_path,
-        profile=_local_profile(),
-        confirmation_mode="confirm-risky",
-    )
-    gateway = SessionGateway(project=project, env={"OPENAI_API_KEY": _SECRET})
-    settings = ModelSettings(
-        profiles=(_local_profile(), _hosted_profile()),
-        active_profile="openai",
-    )
-    try:
-        gateway._save_model_selection("openai", settings)
-        assert gateway.model_settings()["active_profile"] == "openai"
-        assert gateway.action_settings()["confirmation_mode"] == "always-confirm"
     finally:
         gateway.stop()
 

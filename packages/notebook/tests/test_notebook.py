@@ -642,9 +642,9 @@ def test_notebook_observes_shared_project_setup_and_action_settings(tmp_path: Pa
     )
 
     configured = session.configure_model_source("heartwood")
-    with pytest.raises(ActionSettingsError, match="risk hints cannot authorize"):
-        session.select_action_confirmation_mode("confirm-risky")
-    action_settings = session.select_action_confirmation_mode("always-confirm")
+    with pytest.raises(ActionSettingsError):
+        session.select_action_review_mode("review-outside-effects")
+    action_settings = session.select_action_review_mode("review-all")
 
     reopened = NotebookSession(
         project=project,
@@ -652,9 +652,9 @@ def test_notebook_observes_shared_project_setup_and_action_settings(tmp_path: Pa
         gateway=SessionGateway(project=project, env={}, backend_id="deterministic"),
     )
     assert configured["model_source"] == "heartwood"
-    assert action_settings["confirmation_mode"] == "always-confirm"
+    assert action_settings["review_mode"] == "review-all"
     assert reopened.model_settings()["model_source"] == "heartwood"
-    assert reopened.action_settings()["confirmation_mode"] == "always-confirm"
+    assert reopened.action_settings()["review_mode"] == "review-all"
     assert reopened.project_readiness()["project_root"] == str(tmp_path)
 
 
@@ -983,8 +983,8 @@ def test_notebook_renders_every_typed_action_and_automatic_decision() -> None:
         summary="Edit a file",
     ).model_copy(
         update={
-            "group_id": None,
             "decision": "approved",
+            "automatic_rule": "read.file-view",
             "state": "succeeded",
             "affected_paths": (
                 ProjectionAffectedPath(
@@ -1028,7 +1028,15 @@ def test_notebook_renders_every_typed_action_and_automatic_decision() -> None:
     rendered = "\n".join(sections["Agent Actions"])
 
     assert "Succeeded: unknown path unavailable" in rendered
-    assert "Decision: approved (automatic policy)" in rendered
+    assert "Allowed automatically (rule read.file-view)" in rendered
+    researcher = projection.model_copy(
+        update={"actions": (file_action.model_copy(update={"automatic_rule": None}),)}
+    )
+    assert "read.file-view" not in "\n".join(
+        item
+        for section in build_widget_spec(build_view_model(researcher))
+        for item in section.items
+    )
     assert "Paths: created results/summary.txt (file-editor-action)" in rendered
     assert "research-planner" in rendered
     assert "Use the fallback task summary" in rendered

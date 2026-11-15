@@ -37,7 +37,7 @@ _GATEWAY_METHODS = {
     ("GET", "/sessions/{session_id}"): "session",
     ("PATCH", "/sessions/{session_id}"): "rename_session",
     ("GET", "/settings/actions"): "action_settings",
-    ("PUT", "/settings/actions/confirmation"): "select_action_confirmation_mode",
+    ("PUT", "/settings/actions/review"): "select_action_review_mode",
     ("GET", "/settings/models"): "model_settings",
     ("GET", "/settings/credentials"): "credential_settings",
     ("DELETE", "/settings/credentials/{connection_id}"): "forget_credential",
@@ -83,7 +83,7 @@ _GATEWAY_METHODS = {
 _REQUEST_EXAMPLES: dict[str, dict[str, Any]] = {
     "SessionCreateRequest": {},
     "SessionRenameRequest": {"title": "Synthetic study"},
-    "ActionConfirmationRequest": {"mode": "always-confirm"},
+    "ActionReviewRequest": {"mode": "review-all"},
     "ModelDownloadRequest": {"model_id": "synthetic"},
     "ModelRepositoryRequest": {"repository": "synthetic/model"},
     "CustomLocalModelDownloadRequest": {"repository": "synthetic/model"},

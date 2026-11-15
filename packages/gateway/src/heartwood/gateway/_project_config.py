@@ -338,13 +338,11 @@ class ProjectConfig:
                 connection.validate()
         except (ActionSettingsError, ModelCatalogError, ModelSettingsError) as error:
             raise ProjectConfigError(str(error)) from error
-        if (
-            self.action_settings.confirmation_mode
-            not in self.policy.allowed_action_confirmation_modes
-        ):
-            raise ProjectConfigError(
-                "action confirmation mode is not allowed by the project policy"
-            )
+        if self.action_settings.review_mode not in {
+            None,
+            *self.policy.allowed_action_review_modes,
+        }:
+            raise ProjectConfigError("action review mode is not allowed by the project policy")
         if any(connection.source != "platform" for connection in self.additional_connections):
             raise ProjectConfigError("project connections must be platform-provided")
         connection_ids = [

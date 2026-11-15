@@ -42,7 +42,7 @@ from heartwood.gateway._startup import InterfaceKind
 from heartwood.gateway._workspace import WorkspaceInspectionError
 from heartwood.persistence import NativeLockUnavailableError
 from heartwood.schemas import (
-    ActionConfirmationRequest,
+    ActionReviewRequest,
     ApiRequest,
     CustomLocalModelDownloadRequest,
     JsonValue,
@@ -169,8 +169,8 @@ class RestGateway:
             except ActionSettingsError as error:
                 return _error(422, error)
             return RestResponse(status_code=200, body=_json_object(action_settings))
-        if parts == ("settings", "actions", "confirmation") and request.method == "PUT":
-            return self._handle_action_confirmation(body=request.body)
+        if parts == ("settings", "actions", "review") and request.method == "PUT":
+            return self._handle_action_review(body=request.body)
         if parts == ("settings", "models") and request.method == "GET":
             try:
                 model_settings = self.gateway.model_settings()
@@ -473,12 +473,12 @@ class RestGateway:
             },
         )
 
-    def _handle_action_confirmation(self, *, body: str) -> RestResponse:
-        payload = _request_body(ActionConfirmationRequest, body)
+    def _handle_action_review(self, *, body: str) -> RestResponse:
+        payload = _request_body(ActionReviewRequest, body)
         if isinstance(payload, RestResponse):
             return payload
         try:
-            action_settings = self.gateway.select_action_confirmation_mode(payload.mode)
+            action_settings = self.gateway.select_action_review_mode(payload.mode)
         except ActionSettingsError as error:
             return _error(422, error)
         return RestResponse(status_code=200, body=_json_object(action_settings))

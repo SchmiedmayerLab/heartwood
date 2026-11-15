@@ -12,6 +12,7 @@ from typing import Literal, Self
 
 from pydantic import AwareDatetime, Field, model_validator
 
+from heartwood.schemas._records import ActionReviewMode
 from heartwood.schemas.evaluation import (
     EvaluationIdentifier,
     EvaluationReason,
@@ -21,7 +22,16 @@ from heartwood.schemas.evaluation import (
 )
 
 type RiskLevel = Literal["LOW", "MEDIUM", "HIGH", "UNKNOWN"]
-type RiskCategory = Literal["benign", "ambiguous", "destructive", "encoded", "injected", "network"]
+type RiskCategory = Literal[
+    "benign",
+    "ambiguous",
+    "boundary",
+    "destructive",
+    "encoded",
+    "injected",
+    "network",
+    "path-escape",
+]
 
 
 class ActionRiskProbe(EvaluationRecord):
@@ -30,18 +40,27 @@ class ActionRiskProbe(EvaluationRecord):
     case_id: EvaluationIdentifier
     category: RiskCategory
     must_confirm: bool
-    tool: Literal["terminal", "file_editor"]
+    """Whether the researcher must decide when the action runs outside a sandbox."""
+    must_confirm_contained: bool = True
+    """Whether the researcher must decide even inside an admitted sandbox worker."""
+    tool: Literal["terminal", "file_editor", "task_tracker", "task"]
     command: str = Field(min_length=1, max_length=4096)
     path: str | None = Field(default=None, max_length=4096)
     file_text: str | None = Field(default=None, max_length=4096)
     model_risk: RiskLevel = "LOW"
 
+    def review_required(self, *, contained: bool) -> bool:
+        """Return the label that applies to the evaluated execution boundary."""
+        return self.must_confirm_contained if contained else self.must_confirm
+
     @model_validator(mode="after")
     def validate_action(self) -> Self:
         """Accept only supported typed action shapes, never executable callbacks."""
-        if self.tool == "terminal":
+        if self.tool != "file_editor":
             if self.path is not None or self.file_text is not None:
-                raise ValueError("Terminal probes cannot contain file-editor fields")
+                raise ValueError("Only file probes can contain file-editor fields")
+            if self.tool == "task_tracker" and self.command not in ("view", "plan"):
+                raise ValueError("Task-tracker probes require a view or plan command")
         elif self.path is None or self.command not in ("view", "create"):
             raise ValueError("File probes require a path and a view or create command")
         elif (self.command == "create") != (self.file_text is not None):
@@ -65,27 +84,29 @@ class ActionRiskCorpus(EvaluationRecord):
 
 
 class ActionRiskMeasurement(EvaluationRecord):
-    """Analyzer decision and timing without the original command or file contents."""
+    """Review decision and timing without the original command or file contents."""
 
     case_id: EvaluationIdentifier
     category: RiskCategory
     must_confirm: bool
     observed_risk: RiskLevel
     confirmation_required: bool
+    automatic_rule: EvaluationIdentifier | None = None
     elapsed_seconds: NonnegativeFloat
 
 
 class ActionRiskEvaluation(EvaluationRecord):
-    """One analyzer-only run, not a model's ability to predict action risk."""
+    """One run of the production review rules for a mode and execution boundary."""
 
-    schema_version: Literal["heartwood.action-risk-evaluation.v1"] = (
-        "heartwood.action-risk-evaluation.v1"
+    schema_version: Literal["heartwood.action-risk-evaluation.v2"] = (
+        "heartwood.action-risk-evaluation.v2"
     )
     corpus_fingerprint: Sha256
     analyzer_fingerprint: Sha256
     evaluated_at: AwareDatetime
     openhands_version: EvaluationIdentifier
-    confirmation_mode: Literal["always-confirm", "confirm-risky"]
+    review_mode: ActionReviewMode
+    contained: bool
     measurements: tuple[ActionRiskMeasurement, ...] = Field(min_length=1)
     model_calls: Literal[0] = 0
     reported_cost_usd: Literal[0] = 0
@@ -100,7 +121,7 @@ class ActionRiskEvaluation(EvaluationRecord):
 
     @property
     def false_approvals(self) -> int:
-        """Count actions requiring review that the policy would permit."""
+        """Count actions requiring the researcher that a review rule allowed."""
         return sum(
             item.must_confirm and not item.confirmation_required for item in self.measurements
         )

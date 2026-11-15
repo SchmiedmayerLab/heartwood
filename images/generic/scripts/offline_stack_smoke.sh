@@ -73,8 +73,8 @@ heartwood --session-id "${session_id}" allow | tee -a "${transcript}"
 heartwood --session-id "${rejected_session_id}" \
   --prompt "Propose the bounded synthetic action for rejection." | tee -a "${transcript}"
 heartwood --session-id "${rejected_session_id}" reject | tee -a "${transcript}"
-if heartwood actions set auto-approve-low-risk 2>&1 | tee -a "${transcript}"; then
-  echo "unqualified automatic action approval was accepted" >&2
+if heartwood actions set review-changes 2>&1 | tee -a "${transcript}"; then
+  echo "a project without a deployment manifest stored reduced action review" >&2
   exit 1
 fi
 heartwood --session-id "${automatic_session_id}" \
@@ -131,7 +131,7 @@ grep -q "A  cohort-summary.json" "${transcript}"
 grep -q "Change · cohort-summary.json · available" "${transcript}"
 grep -Fq '[Succeeded] $' "${automatic_transcript}"
 grep -q "as one OpenHands action set" "${automatic_transcript}"
-grep -q "Low-Risk Automation is unavailable" "${transcript}"
+grep -q "the review mode is not stored" "${transcript}"
 grep -q "run a medium-risk network command" "${risky_transcript}"
 grep -q "Terminal Command · Advisory Medium Risk" "${risky_transcript}"
 grep -q "as one OpenHands action set" "${risky_transcript}"
@@ -174,7 +174,7 @@ if (
 ):
     raise SystemExit(f"unexpected tool execution records: {executions}")
 decision = next(event for event in events if event["kind"] == "model_call.decision.recorded")
-if decision["payload"]["model_profile"]["action_confirmation_mode"] != "always-confirm":
+if decision["payload"]["model_profile"]["action_review_mode"] != "review-all":
     raise SystemExit("action confirmation mode was not recorded")
 PY
 "${heartwood_python}" - <<'PY'
@@ -206,7 +206,7 @@ if grep -Fq "Plan the supplied synthetic target-condition cohort workflow" "${au
   echo "specialist prompt or result leaked into the audit export" >&2
   exit 1
 fi
-heartwood actions set ask-every-time | tee -a "${transcript}"
+heartwood actions | tee -a "${transcript}"
 "${heartwood_python}" "${runtime_root}/images/generic/scripts/terra_jupyter_demo_smoke.py" \
   | tee -a "${transcript}"
 grep -q "Terra-style Jupyter demo smoke: ok" "${transcript}"

@@ -16,8 +16,8 @@ import {
 } from "./gatewayAccess";
 import { sessionProjectionResponseSchema } from "./projectionSchema";
 import type {
-  ActionConfirmationRequest,
-  ActionConfirmationMode,
+  ActionReviewRequest,
+  ActionReviewMode,
   ActionSettings,
   AuditExport,
   CommandKind,
@@ -120,9 +120,7 @@ export interface HeartwoodClient {
     observer: SessionStreamObserver,
   ): () => void;
   getActionSettings(): Promise<ActionSettings>;
-  selectActionConfirmationMode(
-    mode: ActionConfirmationMode,
-  ): Promise<ActionSettings>;
+  selectActionReviewMode(mode: ActionReviewMode): Promise<ActionSettings>;
   getModelSettings(): Promise<ModelSettings>;
   forgetCredential(connectionId: string): Promise<CredentialSettings>;
   startSubscriptionDeviceLogin(
@@ -371,14 +369,14 @@ export class GatewayClient implements HeartwoodClient {
     );
   }
 
-  async selectActionConfirmationMode(
-    mode: ActionConfirmationMode,
+  async selectActionReviewMode(
+    mode: ActionReviewMode,
   ): Promise<ActionSettings> {
-    const request: ActionConfirmationRequest = { mode };
+    const request: ActionReviewRequest = { mode };
     return parseJsonResponse<ActionSettings>(
       await authenticatedFetch(
         this.basePath,
-        this.url("/settings/actions/confirmation"),
+        this.url("/settings/actions/review"),
         {
           body: JSON.stringify(request),
           headers: { "Content-Type": "application/json" },

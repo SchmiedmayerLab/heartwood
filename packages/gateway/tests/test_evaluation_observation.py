@@ -124,10 +124,14 @@ def test_production_observation_needs_no_inference_and_omits_credentials(
         conversation_key="evaluation-observation-test",
         env={},
     )
-    try:
-        observation = backend.evaluation_observation(
-            platform="generic", policy_fingerprint="a" * 64
+
+    def observe() -> EvaluationRuntimeObservation:
+        return backend.evaluation_observation(
+            platform="generic", policy_fingerprint="a" * 64, action_review="review-all"
         )
+
+    try:
+        observation = observe()
         assert observation.source == "production"
         assert observation.request_model == "openai/local-model"
         assert observation.openhands_version == version("openhands-sdk")
@@ -136,23 +140,18 @@ def test_production_observation_needs_no_inference_and_omits_credentials(
         llm = backend._get_conversation().state.agent.llm
         llm.api_key = SecretStr("synthetic-secret-do-not-export")
         llm.extra_headers = {"Authorization": "synthetic-header-do-not-export"}
-        same = backend.evaluation_observation(platform="generic", policy_fingerprint="a" * 64)
+        same = observe()
         assert same == observation
         assert "synthetic-secret" not in same.model_dump_json()
         assert "synthetic-header" not in same.model_dump_json()
         llm.litellm_extra_body = {"chat_template_kwargs": {"enable_thinking": True}}
-        changed = backend.evaluation_observation(platform="generic", policy_fingerprint="a" * 64)
+        changed = observe()
         assert changed.model_options_fingerprint != observation.model_options_fingerprint
         assert "enable_thinking" not in changed.model_dump_json()
         llm.metrics.add_cost(0.01)
-        assert (
-            backend.evaluation_observation(platform="generic", policy_fingerprint="a" * 64)
-            == changed
-        )
+        assert observe() == changed
         backend._get_conversation().set_confirmation_policy(ConfirmRisky())
-        changed_policy = backend.evaluation_observation(
-            platform="generic", policy_fingerprint="a" * 64
-        )
+        changed_policy = observe()
         assert changed_policy.policy_fingerprint != changed.policy_fingerprint
     finally:
         backend.close()

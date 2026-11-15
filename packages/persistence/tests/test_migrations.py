@@ -52,7 +52,9 @@ _FIXTURES = Path(__file__).parent / "fixtures"
         (PROJECT_STATE_KIND, "project-state-v1.json", PROJECT_STATE_VERSION),
         (PROJECT_STATE_KIND, "project-state-v2.json", PROJECT_STATE_VERSION),
         (PROJECT_STATE_KIND, "project-state-v3.json", PROJECT_STATE_VERSION),
+        (PROJECT_STATE_KIND, "project-state-v4.json", PROJECT_STATE_VERSION),
         (PROJECT_CONFIG_KIND, "project-config-v1.json", PROJECT_CONFIG_VERSION),
+        (PROJECT_CONFIG_KIND, "project-config-v2.json", PROJECT_CONFIG_VERSION),
         (SESSION_EVENT_KIND, "session-event-v1.json", SESSION_EVENT_VERSION),
         (
             SESSION_METADATA_KIND,
@@ -95,8 +97,43 @@ def test_project_state_migration_records_each_owned_persistence_format() -> None
     )
 
     assert result.source_version == "heartwood.project-state.v1"
-    assert result.applied_versions == ("heartwood.project-state.v2", PROJECT_STATE_VERSION)
-    assert result.payload == _fixture("project-state-v3.json")
+    assert result.applied_versions == (
+        "heartwood.project-state.v2",
+        "heartwood.project-state.v3",
+        PROJECT_STATE_VERSION,
+    )
+    assert result.payload == _fixture("project-state-v4.json")
+
+
+def test_project_config_migration_keeps_complete_review_as_the_ceiling() -> None:
+    legacy = _fixture("project-config-v1.json")
+    policy = legacy["policy"]
+    assert isinstance(policy, dict)
+    policy["allowed_action_confirmation_modes"] = ["always-confirm", "confirm-risky"]
+
+    result = PERSISTENCE_MIGRATIONS.migrate(PROJECT_CONFIG_KIND, legacy)
+
+    assert result.payload == _fixture("project-config-v2.json")
+
+
+@pytest.mark.parametrize(
+    ("section", "field", "value"),
+    [
+        ("action", "confirmation_mode", "never-confirm"),
+        ("policy", "allowed_action_confirmation_modes", ["never-confirm"]),
+        ("policy", "allowed_action_confirmation_modes", "always-confirm"),
+    ],
+)
+def test_project_config_migration_rejects_unknown_review_settings(
+    section: str, field: str, value: object
+) -> None:
+    legacy = _fixture("project-config-v1.json")
+    target = legacy[section]
+    assert isinstance(target, dict)
+    target[field] = value
+
+    with pytest.raises(MigrationError, match="unsupported action"):
+        PERSISTENCE_MIGRATIONS.migrate(PROJECT_CONFIG_KIND, legacy)
 
 
 @pytest.mark.parametrize(

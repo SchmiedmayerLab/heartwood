@@ -102,7 +102,9 @@ def _action_mode_screen_is_ready(app: HeartwoodTerminalApp) -> bool:
 def _test_action_settings() -> ActionSettingsResponse:
     return {
         "schema_version": "heartwood.action-settings.v1",
-        "confirmation_mode": "always-confirm",
+        "review_mode": "review-all",
+        "default_mode": "review-all",
+        "scope": "launch",
         "scope_description": "Applies to this test project.",
         "presentation": {
             "risk_labels": {
@@ -133,13 +135,10 @@ def _test_action_settings() -> ActionSettingsResponse:
         "modes": [
             {
                 "allowed": True,
-                "automatic_risks": [],
-                "command_value": "ask-every-time",
+                "automatic": [],
                 "description": "Review every proposed action set.",
                 "label": "Review Every Action",
-                "mode": "always-confirm",
-                "recommended": True,
-                "reviewed_risks": ["low", "medium", "high", "unknown"],
+                "mode": "review-all",
                 "unavailable_reason": None,
             }
         ],
@@ -344,6 +343,19 @@ def test_plain_terminal_marks_bounded_action_output_as_truncated() -> None:
 
 
 def test_plain_terminal_renders_every_typed_action_and_automatic_decision() -> None:
+    automatic_action = _approval_action(
+        "view-1",
+        tool_name="file_editor",
+        summary="View a file",
+    ).model_copy(
+        update={"decision": "approved", "state": "succeeded", "automatic_rule": "read.file-view"}
+    )
+    researcher_action = automatic_action.model_copy(update={"automatic_rule": None})
+    assert format_action_record_lines(automatic_action) != format_action_record_lines(
+        researcher_action
+    )
+    assert any("read.file-view" in line for line in format_action_record_lines(automatic_action))
+
     file_action = _approval_action(
         "file-1",
         tool_name="file_editor",
@@ -383,7 +395,6 @@ def test_plain_terminal_renders_every_typed_action_and_automatic_decision() -> N
     )
 
     assert "[Succeeded] unknown path unavailable" in rendered
-    assert "decision approved (automatic policy)" in rendered
     assert "created results/summary.txt (file-editor-action)" in rendered
     assert "specialist research-planner" in rendered
     assert "Run a custom action" in rendered
@@ -545,7 +556,9 @@ def test_interactive_session_uses_gateway_commands_and_persisted_replay(
         session = InteractiveSession(gateway, session_id="terminal")
 
         task = session.submit("summarize the synthetic cohort")
-        locked = session.submit("/permissions auto-approve-low-risk")
+        locked = session.submit("/permissions review-changes")
+        tightened = session.submit("/permissions review-all")
+        stale = session.submit("/allow action-set-not-displayed")
         allowed = session.submit("/allow")
         session.wait_until_stable()
         invalid = session.submit("/allow")
@@ -558,7 +571,11 @@ def test_interactive_session_uses_gateway_commands_and_persisted_replay(
             for message in task.projection.conversation
         )
         assert locked.error
-        assert "resolve the pending action set" in (locked.message or "")
+        assert not tightened.error
+        assert stale.failed
+        assert not any(
+            str(event.kind) == EventKind.APPROVAL_RECORDED.value for event in stale.events
+        )
         assert not allowed.failed
         assert any(
             str(event.kind) == EventKind.CONFIRMATION_RESOLVED.value
@@ -580,15 +597,14 @@ def test_interactive_session_uses_gateway_commands_and_persisted_replay(
 
         action_settings = session.submit("/permissions")
         specialists = session.submit("/specialists")
-        selected = session.submit("/permissions auto-approve-low-risk")
+        selected = session.submit("/permissions review-outside-effects")
         assert "Review Every Action" in (action_settings.message or "")
-        assert "Low-Risk Automation" in (action_settings.message or "")
+        assert "/permissions review-changes" in (action_settings.message or "")
         assert "Research Planner" in (specialists.message or "")
         assert "Analysis Implementer" in (specialists.message or "")
         assert "Not available in this release" in (specialists.message or "")
         assert selected.failed
-        assert "risk hints cannot authorize execution" in (selected.message or "")
-        assert gateway.action_settings()["confirmation_mode"] == "always-confirm"
+        assert gateway.action_settings()["review_mode"] == "review-all"
     finally:
         gateway.stop()
 
@@ -1304,7 +1320,7 @@ def test_interaction_activity_matches_the_submitted_operation() -> None:
 
 
 def test_terminal_presentation_uses_researcher_facing_labels() -> None:
-    assert action_mode_label("always-confirm") == "Review Every Action"
+    assert action_mode_label("review-all") == "Review Every Action"
     assert action_mode_label("future-mode") == "future-mode"
     assert action_tool_label("file_editor") == "File Change"
     assert action_tool_label("task") == "Specialist Review"
@@ -1330,36 +1346,30 @@ def test_terminal_presentation_uses_researcher_facing_labels() -> None:
 
     selected_mode: ActionModeOptionResponse = {
         "allowed": True,
-        "automatic_risks": [],
-        "command_value": "ask-every-time",
+        "automatic": [],
         "description": "Review every proposed action set.",
         "label": "Review Every Action",
-        "mode": "always-confirm",
-        "recommended": True,
-        "reviewed_risks": ["low", "medium", "high", "unknown"],
+        "mode": "review-all",
         "unavailable_reason": None,
     }
     unavailable_mode: ActionModeOptionResponse = {
         "allowed": False,
-        "automatic_risks": ["low"],
-        "command_value": "auto-approve-low-risk",
-        "description": "Continue automatically only for low-risk action sets.",
-        "label": "Low-Risk Automation",
-        "mode": "confirm-risky",
-        "recommended": False,
-        "reviewed_risks": ["medium", "high", "unknown"],
-        "unavailable_reason": "Unavailable under the active platform policy.",
+        "automatic": ["sandbox.contained"],
+        "description": "Contained actions run without asking.",
+        "label": "Review Outside Effects",
+        "mode": "review-outside-effects",
+        "unavailable_reason": "Requires an isolated worker.",
     }
-    selected = _mode_option_prompt(selected_mode, selected="always-confirm")
-    unavailable = _mode_option_prompt(unavailable_mode, selected="always-confirm")
-    assert selected.plain == "● Review Every Action · Recommended"
-    assert unavailable.plain == "  Low-Risk Automation · Unavailable"
+    selected = _mode_option_prompt(selected_mode, selected="review-all", default="review-all")
+    unavailable = _mode_option_prompt(unavailable_mode, selected="review-all", default="review-all")
+    assert selected.plain == "● Review Every Action · Default"
+    assert unavailable.plain == "  Review Outside Effects · Unavailable"
     assert _unavailable_mode_summary((unavailable_mode,)) == (
-        "Low-Risk Automation unavailable: Unavailable under the active platform policy."
+        "Review Outside Effects unavailable: Requires an isolated worker."
     )
 
 
-def test_textual_terminal_cannot_select_unavailable_automation_with_arrow_keys(
+def test_textual_terminal_offers_only_modes_the_launch_can_apply(
     tmp_path: Path,
 ) -> None:
     gateway = SessionGateway(
@@ -1392,9 +1402,8 @@ def test_textual_terminal_cannot_select_unavailable_automation_with_arrow_keys(
             assert options.has_focus
             assert options.highlighted == 0
 
-            assert options.get_option_at_index(1).disabled
-            await pilot.press("down")
-            assert options.highlighted == 0
+            assert not options.get_option_at_index(1).disabled
+            assert options.get_option_at_index(2).disabled
             await pilot.press("enter")
             await _wait_for_tui(
                 pilot,
@@ -1402,7 +1411,7 @@ def test_textual_terminal_cannot_select_unavailable_automation_with_arrow_keys(
                 description="the review mode selection to close",
             )
 
-            assert gateway.action_settings()["confirmation_mode"] == "always-confirm"
+            assert gateway.action_settings()["review_mode"] == "review-all"
             assert "Review Every Action" in str(app.query_one("#status", Static).render())
             assert app.query_one("#composer", Input).has_focus
 
@@ -1516,7 +1525,7 @@ def test_textual_terminal_groups_multiple_actions_under_one_keyboard_decision() 
                 description="the grouped action decision to be submitted",
             )
 
-            assert session.submitted == ["/reject"]
+            assert session.submitted == ["/reject action-set-batch"]
             assert not app.query_one("#approval", Vertical).display
             assert not app.query_one("#composer", Input).disabled
 
