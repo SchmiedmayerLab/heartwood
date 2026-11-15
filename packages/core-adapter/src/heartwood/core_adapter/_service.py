@@ -117,6 +117,7 @@ class SessionService:
         self.env = os.environ if env is None else env
         self.clock: Callable[[], str] = _utc_now if clock is None else clock
         self._command_lock = RLock()
+        self._closed = False
         self._event_sink = event_sink or (lambda _events: None)
         self._token_sink = token_sink or (lambda _delta: None)
         self._known_source_event_ids: set[str] | None = None
@@ -203,6 +204,8 @@ class SessionService:
             )
             raise ValueError(msg)
         with self._command_lock:
+            if self._closed:
+                raise RuntimeError("Session service is closed")
             self.store.acquire_writer()
             self._recover_pending_commit_locked()
             command_kind = _kind_value(command.kind)
@@ -368,6 +371,8 @@ class SessionService:
     def reconcile(self) -> tuple[SessionEvent, ...]:
         """Commit OpenHands state not yet represented in the durable session."""
         with self._command_lock:
+            if self._closed:
+                raise RuntimeError("Session service is closed")
             self.store.acquire_writer()
             self._recover_pending_commit_locked()
             if self._has_failed_approval_recovery_locked():
@@ -383,8 +388,12 @@ class SessionService:
 
     def close(self) -> None:
         """Release backend resources."""
+        with self._command_lock:
+            if self._closed:
+                return
         self.backend.close()
         with self._command_lock:
+            self._closed = True
             self.store.release_writer()
 
     def admit_parallel_review(
@@ -907,6 +916,8 @@ class SessionService:
         if not stream:
             return
         with self._command_lock:
+            if self._closed:
+                return
             self.store.acquire_writer()
             self._recover_pending_commit_locked()
             events = tuple(self._translate_backend_events(stream))

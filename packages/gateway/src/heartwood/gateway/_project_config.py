@@ -391,10 +391,12 @@ class ProjectConfigStore:
         default: ProjectConfig,
         *,
         deployment_policy: PolicyProfile | None = None,
+        initialize_project: Callable[[], None] | None = None,
     ) -> None:
         self.project = project
         self.default = default
         self._deployment_policy = deployment_policy
+        self._initialize_project = initialize_project or project.initialize
         self._validate_config(default)
 
     def _validate_config(self, config: ProjectConfig) -> None:
@@ -452,8 +454,12 @@ class ProjectConfigStore:
     @contextmanager
     def locked(self) -> Iterator[None]:
         """Hold the reentrant cross-process project-configuration lock."""
-        self.project.initialize()
+        self._initialize_project()
         with native_file_lock(self.project.config_lock_path):
+            if not self.project.state_exists():
+                raise ProjectConfigError(
+                    "project state changed while waiting to write configuration"
+                )
             yield
 
     def _save_unlocked(self, config: ProjectConfig) -> None:

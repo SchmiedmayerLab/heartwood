@@ -11,7 +11,7 @@ import time
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
-from threading import Event
+from threading import Event, Thread
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -24,6 +24,8 @@ from heartwood.gateway import (
     ModelArtifactError,
     ModelSnapshot,
     ModelSnapshotCatalog,
+    ProjectContext,
+    SessionGateway,
     download_model_artifact,
     load_model_artifact_catalog,
     verify_model_artifact,
@@ -202,9 +204,176 @@ def test_artifact_metadata_rejects_floating_revisions() -> None:
         replace(artifact, source_revision="main").validate()
 
 
+@pytest.mark.parametrize("blocked_phase", ["download", "callback"])
+def test_gateway_shutdown_waits_for_model_workers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, blocked_phase: str
+) -> None:
+    artifact = _artifact(b"content")
+    gateway = SessionGateway(
+        project=ProjectContext(tmp_path),
+        env={},
+        backend_id="deterministic",
+        artifact_catalog=ModelArtifactCatalog(
+            schema_version="heartwood.local-model-catalog.v2", artifacts=(artifact,)
+        ),
+        snapshot_catalog=_empty_snapshot_catalog(),
+    )
+    entered, release, stopping, stopped = Event(), Event(), Event(), Event()
+    errors: list[Exception] = []
+    selected: list[str] = []
+
+    def download(
+        _artifact: ModelArtifact,
+        *,
+        cache_dir: Path,
+        progress_callback: Callable[[int, int], None],
+    ) -> Path:
+        if blocked_phase == "download":
+            entered.set()
+            assert release.wait(timeout=5)
+        installed = cache_dir / artifact.artifact_id / "model.gguf"
+        installed.parent.mkdir(parents=True, exist_ok=True)
+        installed.write_bytes(b"content")
+        progress_callback(len(b"content"), len(b"content"))
+        return installed
+
+    def on_ready(model_id: str, _path: Path, _runtime: str) -> None:
+        if blocked_phase == "callback":
+            entered.set()
+            assert release.wait(timeout=5)
+        with gateway._state_lock:
+            selected.append(model_id)
+
+    def stop() -> None:
+        stopping.set()
+        try:
+            gateway.stop()
+        except Exception as error:
+            errors.append(error)
+        finally:
+            stopped.set()
+
+    monkeypatch.setattr("heartwood.gateway._model_artifacts.download_model_artifact", download)
+    gateway.local_model_manager.on_ready = on_ready
+    gateway.local_model_manager.start(artifact.artifact_id)
+    worker = Thread(target=stop)
+    try:
+        assert entered.wait(timeout=2)
+        worker.start()
+        assert stopping.wait(timeout=2)
+        assert not stopped.wait(timeout=0.1)
+        release.set()
+        worker.join(timeout=2)
+        assert not worker.is_alive()
+        assert errors == []
+        assert selected == ([artifact.artifact_id] if blocked_phase == "callback" else [])
+    finally:
+        release.set()
+        if worker.ident is not None:
+            worker.join(timeout=6)
+
+
+def test_download_shutdown_retains_unfinished_worker_and_rejects_new_work(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifact = _artifact(b"content")
+    entered, release, finished = Event(), Event(), Event()
+    selected: list[str] = []
+
+    def download(
+        _artifact: ModelArtifact,
+        *,
+        cache_dir: Path,
+        progress_callback: Callable[[int, int], None],
+    ) -> Path:
+        del progress_callback
+        entered.set()
+        assert release.wait(timeout=5)
+        finished.set()
+        return cache_dir / "model.gguf"
+
+    monkeypatch.setattr("heartwood.gateway._model_artifacts.download_model_artifact", download)
+    manager = LocalModelDownloadManager(
+        artifact_catalog=ModelArtifactCatalog(
+            schema_version="heartwood.local-model-catalog.v2", artifacts=(artifact,)
+        ),
+        snapshot_catalog=_empty_snapshot_catalog(),
+        cache_dir=tmp_path,
+        on_ready=lambda model_id, _path, _runtime: selected.append(model_id),
+    )
+    manager.start(artifact.artifact_id)
+    try:
+        assert entered.wait(timeout=2)
+        with pytest.raises(TimeoutError, match="download"):
+            manager.close(timeout=0)
+        with pytest.raises(ModelArtifactError, match="closed"):
+            manager.start(artifact.artifact_id)
+        release.set()
+        manager.close(timeout=2)
+        assert finished.is_set()
+        assert selected == []
+        assert manager.statuses()[0].status == "error"
+        manager.close(timeout=0)
+    finally:
+        release.set()
+        assert finished.wait(timeout=2)
+
+
+def test_download_shutdown_cleans_staging_through_progress_cancellation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifact = _artifact(b"content")
+    entered, release = Event(), Event()
+    selected: list[str] = []
+
+    def downloader(**kwargs: object) -> str:
+        path = Path(str(kwargs["local_dir"])) / "model.gguf"
+        path.write_bytes(b"content")
+        progress_type = cast(type[Any], kwargs["tqdm_class"])
+        with progress_type(total=len(b"content")) as progress:
+            entered.set()
+            assert release.wait(timeout=5)
+            progress.update(len(b"content"))
+        return str(path)
+
+    def download(
+        model: ModelArtifact,
+        *,
+        cache_dir: Path,
+        progress_callback: Callable[[int, int], None],
+    ) -> Path:
+        return download_model_artifact(
+            model, cache_dir=cache_dir, downloader=downloader, progress_callback=progress_callback
+        )
+
+    monkeypatch.setattr("heartwood.gateway._model_artifacts.download_model_artifact", download)
+    manager = LocalModelDownloadManager(
+        artifact_catalog=ModelArtifactCatalog(
+            schema_version="heartwood.local-model-catalog.v2", artifacts=(artifact,)
+        ),
+        snapshot_catalog=_empty_snapshot_catalog(),
+        cache_dir=tmp_path,
+        on_ready=lambda model_id, _path, _runtime: selected.append(model_id),
+    )
+    manager.start(artifact.artifact_id)
+    try:
+        assert entered.wait(timeout=2)
+        manager.request_stop()
+        release.set()
+        manager.close(timeout=2)
+        assert manager.statuses()[0].status == "error"
+        assert selected == []
+        assert not any(path.is_dir() for path in tmp_path.iterdir())
+    finally:
+        release.set()
+        manager.close(timeout=2)
+
+
+@pytest.mark.parametrize("fail_first_start", [False, True])
 def test_background_manager_reports_ready_download(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    fail_first_start: bool,
 ) -> None:
     artifact = _artifact(b"content")
     catalog = ModelArtifactCatalog(
@@ -234,6 +403,17 @@ def test_background_manager_reports_ready_download(
         on_ready=lambda model_id, path, runtime: selected.append((model_id, path, runtime)),
     )
 
+    if fail_first_start:
+
+        def fail_start(_worker: object) -> None:
+            raise RuntimeError("synthetic worker startup failure")
+
+        with monkeypatch.context() as context:
+            context.setattr("threading.Thread.start", fail_start)
+            with pytest.raises(RuntimeError, match="startup failure"):
+                manager.start(artifact.artifact_id)
+        assert manager.statuses()[0].status == "error"
+
     assert manager.start(artifact.artifact_id).status == "downloading"
     deadline = time.monotonic() + 2
     while manager.statuses()[0].status == "downloading" and time.monotonic() < deadline:
@@ -245,6 +425,7 @@ def test_background_manager_reports_ready_download(
     assert manager.statuses()[0].path == str(installed)
     assert selected == [(artifact.artifact_id, installed, artifact.runtime_profile)]
     assert manager.start(artifact.artifact_id).status == "ready"
+    manager.close(timeout=2)
 
 
 def test_background_manager_exposes_in_progress_byte_count(

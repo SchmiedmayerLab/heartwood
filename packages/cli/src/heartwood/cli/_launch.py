@@ -28,6 +28,7 @@ from heartwood.adapters.platform import select_platform_adapter
 from heartwood.cli._model_snapshot import verify_snapshot
 from heartwood.gateway import (
     LocalContextPlan,
+    ManagedRuntimeActivity,
     ModelSnapshot,
     ProjectConfig,
     ProjectConfigStore,
@@ -40,6 +41,7 @@ from heartwood.gateway import (
     estimate_local_runtime_memory,
     inspect_gpu_environment,
     managed_model_token_budgets,
+    managed_runtime_activity,
     minimum_compute_capability_for_model,
     plan_local_context_window,
     verify_model_artifact,
@@ -579,6 +581,13 @@ def _run_command(command: Sequence[str]) -> int:
 
 
 def _run_runtime(options: LaunchOptions, env: Mapping[str, str]) -> int:
+    with managed_runtime_activity(options.project) as activity:
+        return _run_supervised_runtime(options, env, activity)
+
+
+def _run_supervised_runtime(
+    options: LaunchOptions, env: Mapping[str, str], activity: ManagedRuntimeActivity
+) -> int:
     started = time.monotonic()
     selection = _local_model_selection(options.project, env)
     _stage(1, 6, "Verify the selected Heartwood-managed model")
@@ -665,6 +674,7 @@ def _run_runtime(options: LaunchOptions, env: Mapping[str, str]) -> int:
                 6,
                 f"Start {_runtime_label(runtime_kind)}; first startup may take several minutes",
             )
+            activity.before_spawn()
             runtime = subprocess.Popen(
                 _runtime_command(
                     runtime_executable,
@@ -721,13 +731,15 @@ def _run_runtime(options: LaunchOptions, env: Mapping[str, str]) -> int:
             cwd=options.project.root,
         )
     finally:
-        if runtime is not None and runtime.poll() is None:
-            runtime.terminate()
-            try:
-                runtime.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                runtime.kill()
-                runtime.wait()
+        if runtime is not None:
+            if runtime.poll() is None:
+                runtime.terminate()
+                try:
+                    runtime.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    runtime.kill()
+                    runtime.wait()
+            activity.confirm_exit()
         if staged_model is not None:
             shutil.rmtree(staged_model, ignore_errors=True)
 

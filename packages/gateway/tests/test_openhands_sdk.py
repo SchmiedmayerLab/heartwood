@@ -1916,9 +1916,15 @@ def test_gateway_interface_handoff_preserves_real_sdk_session_exactly_once(
     audit = cli_gateway.audit_export("session-1")
     repeated_audit = cli_gateway.audit_export("session-1")
     cli_projection = cli_gateway.session_projection(session_id="session-1")
-    browser_persisted_projection = browser_gateway.persisted_session_projection(
-        session_id="session-1"
-    )
+    reader_llm = TestLLM.from_messages([])
+    browser_reader = _openhands_gateway(tmp_path, reader_llm, conversation_id=conversation_id)
+    try:
+        browser_persisted_projection = browser_reader.persisted_session_projection(
+            session_id="session-1"
+        )
+        assert reader_llm.call_count == 0
+    finally:
+        browser_reader.stop()
 
     assert replayed == repeated_replay
     assert [event.sequence for event in replayed] == list(range(len(replayed)))

@@ -156,6 +156,14 @@ class EventStreamHub:
         with self._lock:
             return len(self._streams.get(session_id, ()))
 
+    def close_all(self) -> None:
+        """Close and wake all connected streams after gateway admission stops."""
+        with self._lock:
+            streams = tuple(stream for group in self._streams.values() for stream in group)
+            self._streams.clear()
+        for stream in streams:
+            stream.close()
+
     def _remove(self, stream: GatewayEventStream) -> None:
         with self._lock:
             remaining = [
