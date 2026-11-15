@@ -3711,6 +3711,30 @@ describe("App", () => {
     expect(screen.getByText(planted)).toBeVisible();
   });
 
+  it("keeps project state readable when Skills cannot be verified", async () => {
+    const reason = "Bundled Skill does not match the release: baseline-model";
+    class DriftedSkillsClient extends FakeClient {
+      override getSkillSettings(): Promise<SkillSettings> {
+        return Promise.reject(new Error(reason));
+      }
+      override getSpecialistSettings(): Promise<SpecialistSettings> {
+        return Promise.reject(new Error(reason));
+      }
+    }
+    render(
+      <App
+        client={new DriftedSkillsClient()}
+        initialSessionId="session-test"
+      />,
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(reason);
+    fireEvent.click(screen.getByLabelText("Open action review settings"));
+    expect(
+      await screen.findByRole("radio", { name: /Review Every Action/u }),
+    ).toBeInTheDocument();
+  });
+
   it("presents the shared bounded specialist catalog", async () => {
     render(<App client={new FakeClient()} initialSessionId="session-test" />);
 

@@ -24,7 +24,9 @@ Packaging verifies that the initialized directory is clean and matches that gitl
 Release creation additionally verifies that the pinned revision is published on the protected `heartwood-skills/main` branch.
 Bundled Skills are governed by that Heartwood release; withdrawing bundled content requires a new Heartwood release.
 Heartwood also pins the complete-tree digest of each bundled Skill in its gateway source.
-Before it lists, loads, or projects bundled Skills, the gateway verifies that the bundled directory holds exactly the pinned Skill directories with those digests, and it refuses all three operations otherwise.
+Before it lists, loads, or projects bundled Skills, the gateway verifies that every pinned Skill directory is present with its pinned digest, and it refuses all three operations otherwise.
+Other entries in the bundled directory, such as `.DS_Store`, are never selected or loaded; the gateway logs them and `heartwood doctor` reports them.
+A mismatch fails `heartwood doctor` as `HW-SKILL-002`, the Skill and specialist settings return the cause instead of a server error, and the browser keeps the rest of the project readable.
 Verification ignores no file inside a Skill directory, because a stray file such as cached bytecode for a helper module could execute with the Skill.
 Installations therefore must not write bytecode into the bundled Skill trees: the candidate image installs the Heartwood application wheels without bytecode compilation, and every image sets `PYTHONDONTWRITEBYTECODE`.
 Signed catalog revocations govern catalog-installed content and do not silently rewrite release-bundled content.

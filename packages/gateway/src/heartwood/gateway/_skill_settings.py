@@ -509,6 +509,11 @@ class SkillManager:
         bundled = compatible_bundled_manifests(
             self.bundled_dir, platform_id=self.platform_id, digests=self.bundled_digests
         )
+        if unexpected := unexpected_bundled_entries(self.bundled_dir, self.bundled_digests):
+            _LOGGER.error(
+                "Unpinned entries in the bundled Skill directory are not loaded; remove: %s",
+                ", ".join(repr(str(path)) for path in unexpected),
+            )
         return (*bundled, *self._active_skill_manifests())
 
     def _active_skill_manifests(self) -> tuple[SkillManifest, ...]:
@@ -756,29 +761,34 @@ class SkillManager:
 def pinned_bundled_manifests(
     bundled_dir: Path, digests: Mapping[str, str] = BUNDLED_SKILL_DIGESTS
 ) -> tuple[SkillManifest, ...]:
-    """Verify that the bundled directory holds exactly the release-pinned Skill trees."""
-    entries = sorted(bundled_dir.iterdir()) if bundled_dir.is_dir() else []
-    names = {path.name for path in entries}
-    if names != set(digests):
-        differences = sorted(names.symmetric_difference(digests))
-        raise SkillSettingsError(
-            "Bundled Skills do not match the release: " + ", ".join(differences)
-        )
+    """Verify every release-pinned bundled Skill tree; unpinned entries are never selected."""
     verifier = LocalSkillVerifier(
         bundled_dir,
         review="repository-reviewed",
         require_repository_review=True,
     )
     manifests: list[SkillManifest] = []
-    for path in entries:
+    for name in sorted(digests):
+        path = bundled_dir / name
+        if not path.is_dir():
+            raise SkillSettingsError(f"Bundled Skill is missing from the release: {name}")
         try:
             manifest = verifier.inspect_manifest(path)
         except SkillVerificationError as error:
-            raise SkillSettingsError(f"Invalid bundled Skill {path.name}: {error}") from error
-        if manifest.tree_sha256 != digests[path.name]:
-            raise SkillSettingsError(f"Bundled Skill does not match the release: {path.name}")
+            raise SkillSettingsError(f"Invalid bundled Skill {name}: {error}") from error
+        if manifest.tree_sha256 != digests[name]:
+            raise SkillSettingsError(f"Bundled Skill does not match the release: {name}")
         manifests.append(manifest)
     return tuple(manifests)
+
+
+def unexpected_bundled_entries(
+    bundled_dir: Path, digests: Mapping[str, str] = BUNDLED_SKILL_DIGESTS
+) -> tuple[Path, ...]:
+    """Return entries in the bundled directory that are not release-pinned Skills."""
+    if not bundled_dir.is_dir():
+        return ()
+    return tuple(path for path in sorted(bundled_dir.iterdir()) if path.name not in digests)
 
 
 def compatible_bundled_manifests(

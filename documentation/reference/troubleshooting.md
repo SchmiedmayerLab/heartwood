@@ -247,7 +247,15 @@ Each installed Skill is stored alone in its content-addressed directory under th
 Something else in that directory, such as a directory written beside the Skill or a staging directory left by an interrupted installation, has no verified digest or activation record.
 Heartwood never loads it, and the verified Skill stays active.
 Remove each path named in the check summary, or under **Unverified content** in the Skill list, with an account that owns the Skill store.
-The same check reports an installation index that cannot be read; repair or restore the project state before you install or remove Skills.
+The same check fails when the installation index cannot be read or locked, because no conversation can select Skills until the project state is repaired or restored.
+
+### `HW-SKILL-002`: Bundled Skills Do Not Match This Release
+
+Heartwood pins the complete-tree digest of every Skill bundled with the release.
+A failing check names a bundled Skill that is missing or has changed; Skills and specialists stay unavailable until it is restored.
+In a source checkout, run `git submodule update --init` and discard local changes under `vendor/heartwood-skills`.
+In a native installation, reinstall the same release; in a container, use the published image unchanged.
+A warning names entries in the bundled Skill directory that are not part of the release, such as `.DS_Store`; Heartwood never loads them, and you can delete them.
 
 ## Managed Workers
 

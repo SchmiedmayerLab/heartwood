@@ -3464,6 +3464,69 @@ def test_gateway_confines_local_skill_sources_to_the_project(tmp_path: Path) -> 
         gateway.inspect_local_skill(project / ".heartwood" / "candidate")
 
 
+def test_bundled_skill_drift_is_diagnosed_without_server_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = _gateway(tmp_path / "project")
+    gateway.project.initialize()
+    bundled = tmp_path / "bundled"
+    shutil.copytree(gateway.skill_manager.bundled_dir, bundled)
+    gateway.skill_manager.bundled_dir = bundled
+    rest = RestGateway(gateway)
+
+    def bundled_check() -> dict[str, object]:
+        checks = cast(list[dict[str, object]], gateway.project_readiness()["checks"])
+        return next(check for check in checks if check["check_id"] == "bundled-skills")
+
+    assert bundled_check()["status"] == "pass"
+    (bundled / ".DS_Store").write_bytes(b"synthetic finder metadata")
+    stray = bundled_check()
+    assert stray["status"] == "warning"
+    assert stray["code"] == "HW-SKILL-002"
+    assert str(bundled / ".DS_Store") in cast(str, stray["summary"])
+    assert rest.handle(RestRequest(method="GET", path="/settings/specialists")).status_code == 200
+
+    skill_file = bundled / "baseline-model" / "SKILL.md"
+    skill_file.write_text(skill_file.read_text(encoding="utf-8") + "\nchanged\n")
+    drift = bundled_check()
+    assert drift["status"] == "fail"
+    assert "baseline-model" in cast(str, drift["summary"])
+    assert gateway.project_readiness()["state"] == "recovery-required"
+    # A gateway keeps its verified specialist catalog in memory; a new one must refuse.
+    restarted = _gateway(tmp_path / "project")
+    restarted.skill_manager.bundled_dir = bundled
+    for path in ("/settings/skills", "/settings/specialists"):
+        response = RestGateway(restarted).handle(RestRequest(method="GET", path=path))
+        assert response.status_code == 422
+        assert "baseline-model" in cast(str, response.body["error"])
+
+    def refuse(_command: SessionCommand) -> SessionResult:
+        raise SkillSettingsError("Bundled Skill does not match the release: baseline-model")
+
+    monkeypatch.setattr(gateway, "handle", refuse)
+    command = rest.handle(
+        RestRequest(
+            method="POST", path="/sessions/session-1/commands", body=_command(CommandKind.PAUSE)
+        )
+    )
+    assert command.status_code == 422
+    assert "baseline-model" in cast(str, command.body["error"])
+
+
+def test_unreadable_skill_index_fails_the_installed_skill_check(tmp_path: Path) -> None:
+    gateway = _gateway(tmp_path)
+    gateway.project.initialize()
+    gateway.skill_manager.store.root.mkdir(parents=True, exist_ok=True)
+    gateway.skill_manager.store.index_path.write_text("{", encoding="utf-8")
+
+    checks = cast(list[dict[str, object]], gateway.project_readiness()["checks"])
+    check = next(check for check in checks if check["check_id"] == "installed-skills")
+
+    assert check["status"] == "fail"
+    assert check["code"] == "HW-SKILL-001"
+
+
 def test_gateway_exposes_one_bounded_specialist_catalog(tmp_path: Path) -> None:
     gateway = _gateway(tmp_path)
 

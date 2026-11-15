@@ -232,6 +232,13 @@ _DIAGNOSTICS: dict[str, DiagnosticDefinition] = {
         "/reference/troubleshooting/#hw-skill-001-installed-skill-storage-needs-attention",
         "path-sensitive",
     ),
+    "bundled-skills": DiagnosticDefinition(
+        "HW-SKILL-002",
+        "Bundled Skills do not match this release",
+        "Restore the release's bundled Skills and remove the entries named in the summary.",
+        "/reference/troubleshooting/#hw-skill-002-bundled-skills-do-not-match-this-release",
+        "path-sensitive",
+    ),
     "worker-gateway-version": DiagnosticDefinition(
         "HW-WORKER-001",
         "Sandbox gateway version is not declared as qualified",

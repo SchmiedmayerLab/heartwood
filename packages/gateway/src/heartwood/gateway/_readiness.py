@@ -38,6 +38,12 @@ from heartwood.gateway._project_config import (
     ProjectConfigError,
     ProjectConfigStore,
 )
+from heartwood.gateway._skill_settings import (
+    BUNDLED_SKILL_DIGESTS,
+    SkillSettingsError,
+    pinned_bundled_manifests,
+    unexpected_bundled_entries,
+)
 from heartwood.gateway._subscriptions import (
     OPENAI_SUBSCRIPTION_CONNECTION_ID,
     OPENAI_SUBSCRIPTION_CREDENTIAL_REFERENCE,
@@ -214,6 +220,9 @@ def _agent_runtime_available(env: Mapping[str, str], *, platform_id: str) -> boo
 def inspect_deployment(
     project: ProjectContext,
     env: Mapping[str, str] | None = None,
+    *,
+    bundled_skills_dir: Path | None = None,
+    bundled_skill_digests: Mapping[str, str] = BUNDLED_SKILL_DIGESTS,
 ) -> DeploymentReadiness:
     """Inspect project setup without creating files or calling external services."""
     active_env = dict(os.environ if env is None else env)
@@ -285,6 +294,8 @@ def inspect_deployment(
             )
         )
 
+    if bundled_skills_dir is not None:
+        checks.append(_bundled_skill_check(bundled_skills_dir, bundled_skill_digests))
     if state_valid:
         checks.append(_installed_skill_check(project))
 
@@ -459,6 +470,22 @@ def inspect_deployment(
     )
 
 
+def _bundled_skill_check(bundled_dir: Path, digests: Mapping[str, str]) -> ReadinessCheck:
+    """Report release-bundled Skills that differ from the release pin."""
+    try:
+        pinned_bundled_manifests(bundled_dir, digests)
+    except SkillSettingsError as error:
+        return ReadinessCheck("bundled-skills", "fail", str(error))
+    if unexpected := unexpected_bundled_entries(bundled_dir, digests):
+        return ReadinessCheck(
+            "bundled-skills",
+            "warning",
+            "Unpinned entries in the bundled Skill directory are not loaded; remove: "
+            + ", ".join(str(path) for path in unexpected),
+        )
+    return ReadinessCheck("bundled-skills", "pass", "Bundled Skills match this release")
+
+
 def _installed_skill_check(project: ProjectContext) -> ReadinessCheck:
     """Report content that is stored beside an active installed Skill but never loaded."""
     store = SkillArtifactStore(project.skills_dir)
@@ -470,7 +497,7 @@ def _installed_skill_check(project: ProjectContext) -> ReadinessCheck:
             for path in store.unexpected_artifact_entries(record)
         )
     except (NativeLockUnavailableError, SkillStoreError) as error:
-        return ReadinessCheck("installed-skills", "warning", str(error))
+        return ReadinessCheck("installed-skills", "fail", str(error))
     if unexpected:
         return ReadinessCheck(
             "installed-skills",

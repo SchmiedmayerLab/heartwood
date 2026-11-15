@@ -260,15 +260,25 @@ export const App = ({ client, initialSessionId }: AppProps) => {
   }, [resolvedClient]);
 
   const loadProjectState = useCallback(async () => {
+    // Skill verification failures stay confined to Skills and specialists so the
+    // rest of the project remains readable while the gateway reports the cause.
+    const skillErrors: string[] = [];
+    const skillRead = <T,>(read: Promise<T>) =>
+      read.catch((caught: unknown) => {
+        skillErrors.push(errorMessage(caught));
+        return null;
+      });
     const [actions, models, artifacts, skills, specialists, startup] =
       await Promise.all([
         resolvedClient.getActionSettings(),
         resolvedClient.getModelSettings(),
         resolvedClient.getModelArtifacts(),
-        resolvedClient.getSkillSettings(),
-        resolvedClient.getSpecialistSettings(),
+        skillRead(resolvedClient.getSkillSettings()),
+        skillRead(resolvedClient.getSpecialistSettings()),
         resolvedClient.getStartupPlan(),
       ]);
+    const [skillError] = skillErrors;
+    if (skillError !== undefined) setError(skillError);
     return { actions, models, artifacts, skills, specialists, startup };
   }, [resolvedClient]);
 
