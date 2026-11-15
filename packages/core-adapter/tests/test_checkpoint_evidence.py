@@ -338,3 +338,70 @@ def test_retained_integrity_failure_blocks_a_later_approval(
     assert env.backend.resolutions == [True]
     assert len(env.evidence.records.history()) == 2
     env.service.close()
+
+
+@pytest.mark.parametrize("mode", ["required", "buffered"])
+def test_outage_retries_record_one_pending_event_per_boundary(
+    tmp_path: Path, mode: Literal["required", "buffered"]
+) -> None:
+    env = environment(tmp_path, mode)
+    command = pending_approval(env)
+    boundary = env.service.replay_events()[-1]
+    env.client.unavailable = True
+    if mode == "required":
+        with pytest.raises(CheckpointEvidenceUnavailableError):
+            env.service.handle(command)
+        for _ in range(3):
+            with pytest.raises(CheckpointEvidenceUnavailableError):
+                env.service.reconcile()
+            with pytest.raises(CheckpointEvidenceUnavailableError):
+                env.service.handle(command)
+    else:
+        for _ in range(3):
+            env.service._checkpoint_boundary(boundary)
+        # A stricter requirement for the same boundary is still recorded.
+        with pytest.raises(CheckpointEvidenceUnavailableError):
+            env.service._checkpoint_boundary(boundary, required=True)
+    pending = [
+        event.payload["mode"]
+        for event in env.service.replay_events()
+        if event.kind == EventKind.AUDIT_EVIDENCE_RECORDED
+    ]
+    assert pending == (["required"] if mode == "required" else ["buffered", "required"])
+    assert len(env.service.replay_events()) == len(env.service.audit_log.read())
+    env.client.unavailable = False
+    if mode == "required":
+        env.service.reconcile()
+        assert env.backend.resolutions == [True]
+    else:
+        env.service._checkpoint_boundary(boundary, required=True)
+    statuses = [
+        event.payload["status"]
+        for event in env.service.replay_events()
+        if event.kind == EventKind.AUDIT_EVIDENCE_RECORDED
+    ]
+    assert statuses == [*["pending"] * len(pending), "retained"]
+    env.service.close()
+
+
+def test_boundary_verifies_retained_history_once_before_and_once_after_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = environment(tmp_path)
+    env.service.handle(pending_approval(env))
+    for _ in range(3):
+        env.service._checkpoint_boundary(env.service._record_event(EventKind.SESSION_PAUSED, {}))
+    passes: list[int] = []
+    history = env.evidence.records.history
+
+    def counted() -> tuple[object, ...]:
+        retained = history()
+        passes.append(len(retained))
+        return retained
+
+    monkeypatch.setattr(env.evidence.records, "history", counted)
+    env.service._checkpoint_boundary(env.service._record_event(EventKind.SESSION_PAUSED, {}))
+    # The gateway verifies the predecessors, the signing authority verifies them
+    # independently, and the gateway then verifies the history including the new ordinal.
+    assert passes == [4, 4, 5]
+    env.service.close()

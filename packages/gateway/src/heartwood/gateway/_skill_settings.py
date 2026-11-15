@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final, Literal, Protocol
@@ -606,11 +606,19 @@ class SkillManager:
             summaries: list[SkillSummary] = []
             for record in records:
                 manifest = self.store.manifest(record)
+                profile = self._profiles.get(record.source_id)
                 summaries.append(
-                    SkillSummary.from_installed(
-                        record,
-                        manifest,
-                        compatibility_reason=self._compatibility_reason(manifest),
+                    replace(
+                        SkillSummary.from_installed(
+                            record,
+                            manifest,
+                            compatibility_reason=self._compatibility_reason(manifest),
+                        ),
+                        # The retained record describes the deployment that installed
+                        # the Skill; only the current registry decides this status.
+                        controlled_data_ready=record.source_kind == "catalog"
+                        and profile is not None
+                        and record.tree_sha256 in profile.controlled_data_approved_digests,
                     )
                 )
             return tuple(summaries)

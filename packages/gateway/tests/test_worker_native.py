@@ -11,12 +11,14 @@ from __future__ import annotations
 import hashlib
 import json
 import socket
-from collections.abc import Iterator
-from contextlib import ExitStack
+from collections.abc import Callable, Iterator
+from contextlib import ExitStack, contextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from threading import Thread
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 from unittest.mock import Mock
 from uuid import uuid4
 
@@ -26,15 +28,18 @@ from openhands.sdk.tool.client_tool import ClientToolSpec
 from heartwood.core_adapter.worker_attempts import (
     WorkerAttemptError,
     WorkerAttemptIntent,
+    WorkerAttemptLease,
     WorkerAttemptRecord,
+    WorkerRuntimeBinding,
 )
-from heartwood.gateway import ProjectContext, ProjectStateError
+from heartwood.gateway import ProjectContext, ProjectStateError, worker_native
 from heartwood.gateway._deployment import validate_worker_deployment
-from heartwood.gateway.worker_control import NativeWorkerControl
+from heartwood.gateway.worker_control import NativeWorkerControl, NativeWorkerForward
 from heartwood.gateway.worker_deployment import OpenShellWorkerDeployment
 from heartwood.gateway.worker_inputs import WorkerInputManifest
 from heartwood.gateway.worker_native import _NativeWorkerAttempt, native_worker_plan_factory
 from heartwood.gateway.worker_sessions import WorkerSessionRequest
+from heartwood.gateway.worker_volumes import WorkerVolumes
 
 
 @pytest.fixture
@@ -67,7 +72,15 @@ def deployment() -> Iterator[tuple[OpenShellWorkerDeployment, ProjectContext]]:
         cli.write_text("#!/bin/sh\nexit 1\n")
         cli.chmod(0o500)
         policy = root / "policy.json"
-        policy.write_text("{}")
+        policy.write_text(
+            json.dumps(
+                {
+                    "landlock": {"compatibility": "hard_requirement"},
+                    "process": {"run_as_user": "10001", "run_as_group": "10001"},
+                    "filesystem": {"read_only": ["/inputs", "/skills"]},
+                }
+            )
+        )
         policy.chmod(0o600)
         with socket.socket(socket.AF_UNIX) as daemon:
             daemon.bind(str(root / "docker.sock"))
@@ -349,3 +362,634 @@ def test_native_plan_captures_only_trusted_client_tool_specifications(
     assert captured[0].model_dump(mode="json") == original
     with pytest.raises(ValueError, match="names must be unique"):
         native_worker_plan_factory(settings, project, client_tools=(spec, spec))
+
+
+_PLACEHOLDER = "openshell:resolve:env:SYNTHETIC_PLACEHOLDER"
+_SKILL = b"synthetic skill"
+_CATALOG = "f" * 64
+
+
+class _Sandboxes:
+    """The control-plane observations one uniquely named sandbox can return."""
+
+    def __init__(self, settings: OpenShellWorkerDeployment) -> None:
+        self.settings = settings
+        self.pb = pytest.importorskip("openshell._proto.openshell_pb2")
+        self.grpc = pytest.importorskip("grpc")
+        self.spec: Any = None
+        self.sandbox: SimpleNamespace | None = None
+        self.deleted: list[str] = []
+        self.closed = False
+        self.probe: dict[str, object] = {
+            "files": {
+                "inputs": {},
+                "skills": {"synthetic/SKILL.md": hashlib.sha256(_SKILL).hexdigest()},
+            },
+            "uid": 10001,
+            "placeholder": _PLACEHOLDER,
+            "catalog": _CATALOG,
+        }
+        self.probe_output: str | None = None
+        self.after_probe: Callable[[SimpleNamespace], None] = lambda _sandbox: None
+
+    def place(self, name: str, labels: dict[str, str], *, sandbox_id: str = "sandbox-1") -> None:
+        self.sandbox = SimpleNamespace(
+            id=sandbox_id,
+            name=name,
+            labels=dict(labels),
+            phase=self.pb.SANDBOX_PHASE_READY,
+            status=SimpleNamespace(
+                main_process_instance_id="generation-1",
+                configuration_activated=True,
+                configuration_admission=SimpleNamespace(
+                    state=self.pb.CONFIGURATION_ADMISSION_STATE_ACCEPTED,
+                    policy_hash=self.settings.sandbox_policy_sha256,
+                ),
+            ),
+        )
+
+    def create(
+        self, *, workspace: str, name: str, spec: object, labels: dict[str, str]
+    ) -> SimpleNamespace:
+        assert workspace == self.settings.workspace
+        self.spec = spec
+        if self.sandbox is None:
+            self.place(name, labels)
+        assert self.sandbox is not None
+        return SimpleNamespace(id=self.sandbox.id)
+
+    def get(self, name: str, *, workspace: str) -> SimpleNamespace:
+        assert workspace == self.settings.workspace
+        if self.sandbox is None or self.sandbox.name != name:
+            raise self.error(self.grpc.StatusCode.NOT_FOUND)
+        return self.sandbox
+
+    def error(self, code: object) -> Exception:
+        error = self.grpc.RpcError()
+        error.code = lambda: code
+        return cast(Exception, error)
+
+    @property
+    def running(self) -> bool:
+        return self.sandbox is not None
+
+    def wait_ready(self, name: str, *, workspace: str, **_options: object) -> SimpleNamespace:
+        return self.get(name, workspace=workspace)
+
+    def exec(self, name: str, command: list[str], **_options: object) -> SimpleNamespace:
+        assert command[-1] == self.settings.placeholder_env
+        sandbox = self.get(name, workspace=self.settings.workspace)
+        output = json.dumps(self.probe) if self.probe_output is None else self.probe_output
+        self.after_probe(sandbox)
+        return SimpleNamespace(exit_code=0, stdout=output)
+
+    def delete(self, name: str, *, workspace: str, **_options: object) -> None:
+        self.get(name, workspace=workspace)
+        self.deleted.append(name)
+        self.sandbox = None
+
+    def wait_deleted(self, _name: str, **_options: object) -> None:
+        assert self.sandbox is None
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class _Docker:
+    """Attempt-owned Docker resources as the native CLI would list them."""
+
+    def __init__(self) -> None:
+        self.volumes: dict[str, dict[str, str]] = {}
+        self.containers: list[str] = []
+
+    def command(self, *arguments: str) -> bytes:
+        if arguments[:2] == ("container", "ls"):
+            return " ".join(self.containers).encode()
+        if arguments[:2] == ("volume", "ls"):
+            name = arguments[-1].removeprefix("name=^").removesuffix("$")
+            return name.encode() if name in self.volumes else b""
+        if arguments[:2] == ("volume", "inspect"):
+            return json.dumps([{"Labels": self.volumes[arguments[2]]}]).encode()
+        assert arguments[:2] == ("volume", "rm")
+        del self.volumes[arguments[2]]
+        return b""
+
+
+class _Forward:
+    def __init__(self, native: _Native) -> None:
+        self.native = native
+        self.active = False
+
+    def start(self) -> str:
+        self.active = True
+        return self.native.endpoint
+
+    def close(self) -> None:
+        if self.native.forward_stuck:
+            raise WorkerAttemptError("native forwarding output did not stop")
+        self.active = False
+
+
+class _Native:
+    """A prepared native attempt whose control plane, Docker, forwarder and API are local fakes."""
+
+    def __init__(
+        self,
+        settings: OpenShellWorkerDeployment,
+        project: ProjectContext,
+        monkeypatch: pytest.MonkeyPatch,
+        endpoint: str,
+    ) -> None:
+        self.settings = settings
+        self.project = project
+        self.endpoint = endpoint
+        self.sandboxes = _Sandboxes(settings)
+        self.docker = _Docker()
+        self.forwards: list[_Forward] = []
+        self.forward_stuck = False
+        self.inspection_error: WorkerAttemptError | None = None
+        project.state_root.mkdir(parents=True, mode=0o700)
+        monkeypatch.setattr("openshell.SandboxClient", lambda *_args, **_options: self.sandboxes)
+        monkeypatch.setattr(
+            WorkerVolumes, "command", lambda _volumes, *args: self.docker.command(*args)
+        )
+        monkeypatch.setattr(
+            WorkerVolumes, "stage", lambda volumes, sources: self._stage(volumes, sources)
+        )
+        monkeypatch.setattr(
+            WorkerVolumes, "inspect_worker", lambda volumes, name: self._inspect(volumes, name)
+        )
+        monkeypatch.setattr(worker_native, "NativeWorkerForward", self._forward)
+        self.attempt = _NativeWorkerAttempt(
+            settings,
+            cast(
+                WorkerSessionRequest,
+                SimpleNamespace(
+                    project=project,
+                    session_id="synthetic",
+                    profile=SimpleNamespace(
+                        profile_id=settings.profile_id,
+                        model=settings.model,
+                        policy_endpoint=settings.model_endpoint,
+                    ),
+                    skills=self,
+                    specialists=SimpleNamespace(fingerprint=_CATALOG),
+                ),
+            ),
+        )
+        assert project.project_id is not None
+        self.intent = WorkerAttemptIntent(
+            project_id=project.project_id,
+            session_id="synthetic",
+            attempt_id=uuid4(),
+            conversation_id=uuid4(),
+            image_digest=settings.image_digest,
+            gateway_policy_sha256="c" * 64,
+            sandbox_policy_sha256=settings.sandbox_policy_sha256,
+            input_manifest_sha256=self.attempt.plan().input_manifest_sha256,
+        )
+
+    @contextmanager
+    def stage_worker_skills(
+        self, *, project_root: Path, staging_parent: Path
+    ) -> Iterator[SimpleNamespace]:
+        assert project_root == self.project.root
+        skill = staging_parent / "skills" / "synthetic"
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_bytes(_SKILL)
+        yield SimpleNamespace(root=skill.parent, sha256="e" * 64, agent_skills=lambda: ())
+
+    def _stage(self, volumes: WorkerVolumes, sources: dict[str, Path]) -> None:
+        assert set(sources) == set(volumes.names)
+        for name in volumes.names.values():
+            self.docker.volumes[name] = {**volumes.labels, "heartwood.role": "projection"}
+
+    def _inspect(self, _volumes: WorkerVolumes, name: str) -> None:
+        assert name.endswith("-sandbox-1")
+        if self.inspection_error is not None:
+            raise self.inspection_error
+
+    def _forward(self, _control: NativeWorkerControl, _name: str) -> _Forward:
+        self.forwards.append(_Forward(self))
+        return self.forwards[-1]
+
+    def record(self, phase: str, runtime: WorkerRuntimeBinding | None) -> WorkerAttemptRecord:
+        return WorkerAttemptRecord.model_validate(
+            {"phase": phase, "intent": self.intent, "runtime": runtime}
+        )
+
+
+class _WorkerApiServer(ThreadingHTTPServer):
+    open_access = False
+
+
+class _WorkerApi(BaseHTTPRequestHandler):
+    def do_GET(self) -> None:
+        authenticated = bool(self.headers.get("X-Session-API-Key"))
+        open_access = cast(_WorkerApiServer, self.server).open_access
+        self.send_response(200 if authenticated or open_access else 401)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def log_message(self, format: str, *args: object) -> None:  # noqa: A002
+        del format, args
+
+
+@pytest.fixture
+def worker_api() -> Iterator[_WorkerApiServer]:
+    server = _WorkerApiServer(("127.0.0.1", 0), _WorkerApi)
+    thread = Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
+    thread.start()
+    try:
+        yield server
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+@pytest.fixture
+def native(
+    deployment: tuple[OpenShellWorkerDeployment, ProjectContext],
+    monkeypatch: pytest.MonkeyPatch,
+    worker_api: _WorkerApiServer,
+) -> _Native:
+    settings, project = deployment
+    return _Native(
+        settings, project, monkeypatch, f"http://127.0.0.1:{worker_api.server_address[1]}/"
+    )
+
+
+def test_launch_binds_the_observed_runtime_and_admits_only_the_native_placeholder(
+    native: _Native,
+) -> None:
+    runtime = native.attempt.launch(native.intent)
+    assert runtime.sandbox_id == "sandbox-1"
+    assert runtime.generation == "generation-1"
+    assert str(runtime.endpoint) == native.endpoint
+    assert native.sandboxes.deleted == []
+    spec = native.sandboxes.spec
+    assert list(spec.providers) == [native.settings.provider]
+    assert native.settings.placeholder_env not in spec.environment
+    lease = WorkerAttemptLease(native.record("active", runtime), owns_writer=lambda: True)
+    context = native.attempt.connect(lease)
+    assert context.inference_placeholder.get_secret_value() == _PLACEHOLDER
+    assert context.workspace.attempt is lease
+    with pytest.raises(WorkerAttemptError, match="cannot be repeated"):
+        native.attempt.launch(native.intent)
+
+
+@pytest.mark.parametrize(
+    "field", ["project_id", "session_id", "input_manifest_sha256", "sandbox_policy_sha256"]
+)
+def test_launch_refuses_an_intent_that_differs_from_preparation(
+    native: _Native, field: str
+) -> None:
+    changed: dict[str, object] = {
+        "project_id": uuid4(),
+        "session_id": "another-session",
+        "input_manifest_sha256": "0" * 64,
+        "sandbox_policy_sha256": "0" * 64,
+    }
+    with pytest.raises(WorkerAttemptError, match="outside reconciliation"):
+        native.attempt.launch(native.intent.model_copy(update={field: changed[field]}))
+    assert native.attempt.control.client is None
+    assert native.docker.volumes == {}
+    assert native.forwards == []
+
+
+def _change_admission(native: _Native, change: str) -> None:
+    sandboxes = native.sandboxes
+    assert native.project.project_id is not None
+    name = "hw-" + native.intent.attempt_id.hex[:16]
+    labels = {
+        "heartwood.project": str(native.project.project_id),
+        "heartwood.attempt": str(native.intent.attempt_id),
+    }
+    sandboxes.place(name, labels)
+    assert sandboxes.sandbox is not None
+    status = sandboxes.sandbox.status
+    if change == "policy":
+        status.configuration_admission.policy_hash = "0" * 64
+    elif change == "admission":
+        status.configuration_admission.state = (
+            sandboxes.pb.CONFIGURATION_ADMISSION_STATE_UNSPECIFIED
+        )
+    elif change == "activation":
+        status.configuration_activated = False
+    elif change == "generation":
+        status.main_process_instance_id = ""
+    elif change == "network":
+        native.inspection_error = WorkerAttemptError("network does not match admission")
+    else:
+        assert change == "restarted"
+
+        def restart(sandbox: SimpleNamespace) -> None:
+            sandbox.status.main_process_instance_id = "generation-2"
+
+        sandboxes.after_probe = restart
+
+
+@pytest.mark.parametrize(
+    "change", ["policy", "admission", "activation", "generation", "network", "restarted"]
+)
+def test_worker_that_fails_admission_is_stopped_and_never_bound(
+    native: _Native, change: str
+) -> None:
+    _change_admission(native, change)
+    with pytest.raises(WorkerAttemptError, match="outside reconciliation"):
+        native.attempt.launch(native.intent)
+    assert not native.sandboxes.running
+    assert native.sandboxes.deleted == ["hw-" + native.intent.attempt_id.hex[:16]]
+    assert not any(forward.active for forward in native.forwards)
+    assert bool(native.forwards) == (change == "restarted")
+    evidence = native.attempt.revoke(native.record("fenced", None))
+    assert evidence.outcome == "revoked"
+    assert evidence.sandbox_id == "sandbox-1"
+    assert native.docker.volumes == {}
+
+
+def test_lost_creation_and_deletion_responses_are_still_recorded_as_revoked(
+    native: _Native, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    create, delete = native.sandboxes.create, native.sandboxes.delete
+
+    def lost_create(
+        *, workspace: str, name: str, spec: object, labels: dict[str, str]
+    ) -> SimpleNamespace:
+        create(workspace=workspace, name=name, spec=spec, labels=labels)
+        raise TimeoutError("synthetic lost response")
+
+    def lost_delete(name: str, *, workspace: str, timeout_seconds: float) -> None:
+        delete(name, workspace=workspace, timeout_seconds=timeout_seconds)
+        raise TimeoutError("synthetic lost response")
+
+    monkeypatch.setattr(native.sandboxes, "create", lost_create)
+    monkeypatch.setattr(native.sandboxes, "delete", lost_delete)
+    with pytest.raises(WorkerAttemptError, match="outside reconciliation"):
+        native.attempt.launch(native.intent)
+    assert not native.sandboxes.running
+    evidence = native.attempt.revoke(native.record("fenced", None))
+    assert evidence.outcome == "revoked"
+    assert evidence.sandbox_id == "sandbox-1"
+    assert native.docker.volumes == {}
+
+
+def test_foreign_sandbox_under_the_attempt_name_is_never_deleted(native: _Native) -> None:
+    native.sandboxes.place("hw-" + native.intent.attempt_id.hex[:16], {"heartwood.attempt": "x"})
+    with pytest.raises(WorkerAttemptError, match="outside reconciliation"):
+        native.attempt.launch(native.intent)
+    assert native.sandboxes.deleted == []
+    assert native.sandboxes.running
+
+
+@pytest.mark.parametrize(
+    "change", ["uid", "extra-file", "hash", "raw-key", "catalog", "oversized", "not-json"]
+)
+def test_probe_mismatch_stops_the_worker_and_retains_no_placeholder(
+    native: _Native, change: str
+) -> None:
+    probe = native.sandboxes.probe
+    files = cast(dict[str, dict[str, str]], probe["files"])
+    if change == "uid":
+        probe["uid"] = 0
+    elif change == "extra-file":
+        files["inputs"]["unselected.csv"] = "0" * 64
+    elif change == "hash":
+        files["skills"]["synthetic/SKILL.md"] = "0" * 64
+    elif change == "raw-key":
+        probe["placeholder"] = "synthetic-provider-key"
+    elif change == "catalog":
+        probe["catalog"] = "0" * 64
+    elif change == "oversized":
+        native.sandboxes.probe_output = json.dumps({**probe, "padding": "x" * (1024 * 1024)})
+    else:
+        native.sandboxes.probe_output = "not json"
+    with pytest.raises(WorkerAttemptError, match="outside reconciliation"):
+        native.attempt.launch(native.intent)
+    assert native.forwards == []
+    assert not native.sandboxes.running
+    lease = cast(WorkerAttemptLease, SimpleNamespace(intent=native.intent))
+    with pytest.raises(WorkerAttemptError, match="does not match its launch"):
+        native.attempt.connect(lease)
+
+
+def test_worker_api_that_answers_without_authentication_is_stopped(
+    native: _Native, worker_api: _WorkerApiServer
+) -> None:
+    worker_api.open_access = True
+    with pytest.raises(WorkerAttemptError, match="outside reconciliation"):
+        native.attempt.launch(native.intent)
+    assert not native.sandboxes.running
+    assert [forward.active for forward in native.forwards] == [False]
+
+
+@pytest.mark.parametrize("change", ["generation", "policy", "replaced", "forward"])
+def test_runtime_observation_fences_a_changed_worker(native: _Native, change: str) -> None:
+    runtime = native.attempt.launch(native.intent)
+    lease = WorkerAttemptLease(native.record("active", runtime), owns_writer=lambda: True)
+    native.attempt.connect(lease)
+    lease.ensure_active()
+    sandbox = native.sandboxes.sandbox
+    assert sandbox is not None
+    if change == "generation":
+        sandbox.status.main_process_instance_id = "generation-2"
+    elif change == "policy":
+        sandbox.status.configuration_admission.policy_hash = "0" * 64
+    elif change == "replaced":
+        sandbox.id = "sandbox-2"
+    else:
+        native.forwards[0].active = False
+    with pytest.raises(WorkerAttemptError, match="observation closed"):
+        lease.ensure_active()
+    assert not lease.active
+
+
+def test_worker_that_fails_its_first_runtime_observation_is_stopped(native: _Native) -> None:
+    runtime = native.attempt.launch(native.intent)
+    assert native.sandboxes.sandbox is not None
+    native.sandboxes.sandbox.status.main_process_instance_id = "generation-2"
+    lease = WorkerAttemptLease(native.record("active", runtime), owns_writer=lambda: True)
+    with pytest.raises(WorkerAttemptError):
+        native.attempt.connect(lease)
+    assert not native.sandboxes.running
+    assert [forward.active for forward in native.forwards] == [False]
+    assert not lease.active
+
+
+@pytest.mark.parametrize("obstacle", ["forwarder", "rotated-identity"])
+def test_revocation_deletes_the_sandbox_before_local_cleanup_can_fail(
+    native: _Native, obstacle: str
+) -> None:
+    runtime = native.attempt.launch(native.intent)
+    fenced = native.record("fenced", runtime)
+    certificate = native.settings.native_config_home / "openshell/gateways/synthetic/mtls/tls.crt"
+    original = certificate.read_text()
+    if obstacle == "forwarder":
+        native.forward_stuck = True
+    else:
+        certificate.write_text("rotated synthetic fixture, not key material")
+    with pytest.raises(WorkerAttemptError):
+        native.attempt.revoke(fenced)
+    assert native.sandboxes.deleted == ["hw-" + native.intent.attempt_id.hex[:16]]
+    assert len(native.docker.volumes) == 2
+    native.forward_stuck = False
+    certificate.write_text(original)
+    evidence = native.attempt.revoke(fenced)
+    assert evidence.outcome == "revoked"
+    assert evidence.sandbox_id == runtime.sandbox_id
+    assert native.docker.volumes == {}
+    assert native.sandboxes.closed
+
+
+@pytest.mark.parametrize("phase", ["prepared", "active"])
+def test_new_process_reconciles_an_attempt_its_owner_left_running(
+    native: _Native, phase: str
+) -> None:
+    runtime = native.attempt.launch(native.intent)
+    upgraded = native.settings.model_copy(update={"image_digest": "sha256:" + "9" * 64})
+    reconcile = worker_native.native_worker_reconciler(upgraded, native.project)
+    fenced = native.record("fenced", runtime if phase == "active" else None)
+    with pytest.raises(WorkerAttemptError, match="fenced"):
+        reconcile(native.record(phase, runtime if phase == "active" else None))
+    assert native.sandboxes.deleted == []
+    evidence = reconcile(fenced)
+    assert evidence.attempt_id == native.intent.attempt_id
+    assert evidence.outcome == "revoked"
+    assert evidence.sandbox_id == "sandbox-1"
+    assert native.sandboxes.deleted == ["hw-" + native.intent.attempt_id.hex[:16]]
+    assert native.docker.volumes == {}
+    assert native.sandboxes.closed
+    WorkerAttemptRecord.model_validate(
+        {
+            "phase": "revoked",
+            "intent": fenced.intent,
+            "runtime": fenced.runtime,
+            "revocation": evidence,
+        }
+    )
+
+
+def test_reconciliation_records_that_an_interrupted_launch_created_nothing(
+    native: _Native,
+) -> None:
+    reconcile = worker_native.native_worker_reconciler(native.settings, native.project)
+    evidence = reconcile(native.record("fenced", None))
+    assert evidence.outcome == "not-created"
+    assert evidence.sandbox_id is None
+    assert native.sandboxes.deleted == []
+
+
+@pytest.mark.parametrize("obstacle", ["project", "owner", "replaced", "container", "control"])
+def test_reconciliation_never_reports_revocation_it_did_not_observe(
+    native: _Native, monkeypatch: pytest.MonkeyPatch, obstacle: str
+) -> None:
+    runtime = native.attempt.launch(native.intent)
+    project = native.project
+    sandbox = native.sandboxes.sandbox
+    assert sandbox is not None
+    if obstacle == "project":
+        identity = uuid4()
+        project = ProjectContext(
+            project.root,
+            protected_state=project.state_root.parent / str(identity),
+            project_id=identity,
+        )
+    elif obstacle == "owner":
+        sandbox.labels["heartwood.attempt"] = str(uuid4())
+    elif obstacle == "replaced":
+        sandbox.id = "sandbox-2"
+    elif obstacle == "container":
+        native.docker.containers.append("remaining-worker")
+    else:
+
+        def unavailable(_name: str, **_options: object) -> SimpleNamespace:
+            raise native.sandboxes.error(native.sandboxes.grpc.StatusCode.UNAVAILABLE)
+
+        monkeypatch.setattr(native.sandboxes, "get", unavailable)
+    reconcile = worker_native.native_worker_reconciler(native.settings, project)
+    with pytest.raises(WorkerAttemptError):
+        reconcile(native.record("fenced", runtime))
+    assert len(native.docker.volumes) == 2
+    assert native.sandboxes.running == (obstacle != "container")
+
+
+def _offline_control(
+    settings: OpenShellWorkerDeployment, project: ProjectContext, monkeypatch: pytest.MonkeyPatch
+) -> NativeWorkerControl:
+    sdk = SimpleNamespace(
+        SandboxStatusRef=SimpleNamespace(__dataclass_fields__={"configuration_admission": None})
+    )
+    monkeypatch.setattr(
+        "heartwood.gateway.worker_control.importlib.import_module", Mock(return_value=sdk)
+    )
+    return NativeWorkerControl(settings, project)
+
+
+def _forwarder(settings: OpenShellWorkerDeployment, script: str) -> None:
+    settings.openshell_cli.chmod(0o700)
+    settings.openshell_cli.write_text("#!/bin/sh\n" + script)
+    settings.openshell_cli.chmod(0o500)
+
+
+def test_forwarder_reports_its_loopback_endpoint_without_ambient_authority(
+    deployment: tuple[OpenShellWorkerDeployment, ProjectContext],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings, project = deployment
+    monkeypatch.setenv("SYNTHETIC_SECRET", "not-for-forwarding")
+    _forwarder(
+        settings,
+        'echo "$@" > "$XDG_CONFIG_HOME/arguments"\nenv > "$XDG_CONFIG_HOME/environment"\n'
+        'echo "Forwarding 127.0.0.1:43210 -> unique-attempt:8000"\nexec sleep 30\n',
+    )
+    forward = NativeWorkerForward(
+        _offline_control(settings, project, monkeypatch), "unique-attempt"
+    )
+    observed = [forward.active]
+    try:
+        assert forward.start() == "http://127.0.0.1:43210/"
+        observed.append(forward.active)
+        with pytest.raises(WorkerAttemptError, match="cannot be restarted"):
+            forward.start()
+    finally:
+        forward.close()
+    observed.append(forward.active)
+    assert observed == [False, True, False]
+    arguments = (settings.native_config_home / "arguments").read_text().split()
+    assert arguments[:3] == ["forward", "service", "unique-attempt"]
+    assert arguments[arguments.index("--gateway") + 1] == settings.gateway
+    assert arguments[arguments.index("--workspace") + 1] == settings.workspace
+    assert arguments[arguments.index("--local") + 1] == "127.0.0.1:0"
+    assert "SYNTHETIC_SECRET" not in (settings.native_config_home / "environment").read_text()
+
+
+def test_forwarder_that_exits_without_an_endpoint_requires_reconciliation(
+    deployment: tuple[OpenShellWorkerDeployment, ProjectContext],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings, project = deployment
+    _forwarder(settings, 'echo "Forwarding 0.0.0.0:43210 -> unique-attempt:8000"\nexit 1\n')
+    forward = NativeWorkerForward(
+        _offline_control(settings, project, monkeypatch), "unique-attempt"
+    )
+    with pytest.raises(WorkerAttemptError, match="reconciliation"):
+        forward.start()
+    forward.close()
+    assert not forward.active
+
+
+def test_forwarder_is_not_started_with_a_changed_gateway_identity(
+    deployment: tuple[OpenShellWorkerDeployment, ProjectContext],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings, project = deployment
+    _forwarder(settings, 'touch "$XDG_CONFIG_HOME/started"\nexec sleep 30\n')
+    control = _offline_control(settings, project, monkeypatch)
+    certificate = settings.native_config_home / "openshell/gateways/synthetic/mtls/tls.crt"
+    certificate.write_text("rotated synthetic fixture, not key material")
+    forward = NativeWorkerForward(control, "unique-attempt")
+    with pytest.raises(WorkerAttemptError, match="identity changed"):
+        forward.start()
+    assert not forward.active
+    assert not (settings.native_config_home / "started").exists()

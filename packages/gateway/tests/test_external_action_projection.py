@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
@@ -17,10 +19,20 @@ from heartwood.core_adapter.external_actions import (
     ExternalActionProposal,
     ExternalActionRecord,
     ExternalActionRequest,
+    ExternalInputReference,
 )
 from heartwood.core_adapter.external_results import ExternalResultProposal, ExternalResultRecord
 from heartwood.core_adapter.worker_attempts import WorkerAttemptIntent
-from heartwood.gateway._session_projection import project_session
+from heartwood.gateway._action_presentation import (
+    action_summary_label,
+    outside_review_lines,
+    outside_review_title,
+)
+from heartwood.gateway._session_projection import (
+    ProjectionOutsideOperationActionDetails,
+    ProjectionOutsideResultActionDetails,
+    project_session,
+)
 from heartwood.schemas import PlatformOperationObservation
 from heartwood.session import EventKind, SessionEvent
 
@@ -96,6 +108,162 @@ def test_outside_review_uses_shared_action_group(proposal: ExternalActionProposa
     assert action.arguments == proposal.review_call.arguments
     assert projection.actions[0].tool_call_id == "worker-native-id"
     assert projection.activity[-1].label == "Outside operation"
+
+
+def test_outside_operation_review_states_what_leaves_and_where(
+    proposal: ExternalActionProposal,
+) -> None:
+    request_json = '{"cohort":"aggregate","threshold":5}'
+    proposal = proposal.model_copy(
+        update={
+            "request": proposal.request.model_copy(
+                update={
+                    "request_json": request_json,
+                    "inputs": (
+                        ExternalInputReference(
+                            reference="synthetic-input", sha256="f" * 64, size_bytes=42
+                        ),
+                    ),
+                }
+            )
+        }
+    )
+    projection = project_session(
+        (
+            _source(proposal),
+            _event(ExternalActionRecord(phase="proposed", proposal=proposal), 1),
+        ),
+        session_id="synthetic-session",
+    )
+    native, outside = projection.actions
+    assert native.details.kind == "other"
+    assert native.summary_source == "model"
+    assert outside.summary == "Submit synthetic analysis"
+    assert outside.summary_source == "gateway"
+    details = outside.details
+    assert isinstance(details, ProjectionOutsideOperationActionDetails)
+    assert details.service_id == "synthetic-service"
+    assert details.destination == "synthetic-results"
+    assert details.expires_at == proposal.expires_at.isoformat()
+    assert json.loads(details.request.preview) == json.loads(request_json)
+    assert not details.request.truncated
+    assert details.request.size_bytes == len(request_json)
+    assert details.request.sha256 == hashlib.sha256(request_json.encode()).hexdigest()
+    assert [(item.reference, item.sha256, item.size_bytes) for item in details.inputs] == [
+        ("synthetic-input", "f" * 64, 42)
+    ]
+    assert projection.pending_approval is not None
+    assert projection.pending_approval.actions == (outside,)
+    assert outside_review_title(native) is None
+    assert outside_review_lines(native) == ()
+    assert action_summary_label(native) == "Model-provided summary"
+    assert outside_review_title(outside) == "Outside Operation"
+    assert action_summary_label(outside) == "Gateway-provided summary"
+    assert outside_review_lines(outside) == (
+        "Leaves the sandbox",
+        "Service: synthetic-service",
+        "Destination: synthetic-results",
+        "Operation: synthetic-analysis",
+        f"Input: synthetic-input · 42 bytes · SHA-256 {'f' * 64}",
+        f"Request sent to the service: {len(request_json)} bytes of canonical JSON"
+        f" · SHA-256 {details.request.sha256}",
+        f"Review valid until: {details.expires_at}",
+    )
+
+
+def _release(proposal: ExternalActionProposal, content_json: str) -> ExternalResultProposal:
+    return ExternalResultProposal(
+        release_id=uuid4(),
+        operation_id=proposal.operation_id,
+        operation_sha256=proposal.sha256,
+        observation_event_id="event-3",
+        worker=proposal.worker,
+        service_policy_sha256=proposal.service_policy_sha256,
+        content_json=content_json,
+        model_route_json='{"endpoint":"https://model.invalid","model_id":"synthetic-model"}',
+        created_at=_NOW,
+        expires_at=_NOW + timedelta(minutes=5),
+    )
+
+
+def test_long_result_release_preview_is_marked_truncated_with_size_and_digest(
+    proposal: ExternalActionProposal,
+) -> None:
+    decision = ExternalActionDecision(
+        command_id="outside-approval",
+        actor_id="researcher",
+        decision="approved",
+        decided_at=_NOW,
+        proposal_sha256=proposal.sha256,
+    )
+    observed = ExternalActionRecord(
+        phase="observed",
+        proposal=proposal,
+        decision=decision,
+        observation=ExternalActionObservation(
+            proposal_sha256=proposal.sha256,
+            operation=PlatformOperationObservation(
+                project_context_id=str(proposal.worker.project_id),
+                operation_id=str(proposal.operation_id),
+                service_id=proposal.request.service_id,
+                backend_operation_ref="native-operation",
+                observed_at=_NOW,
+                status="completed",
+                platform_record_ref="native-audit",
+            ),
+        ),
+    )
+    content = {"rows": [f"synthetic aggregate row {index}" for index in range(400)]}
+    content_json = json.dumps(content, sort_keys=True, separators=(",", ":"))
+    release = _release(proposal, content_json)
+    projection = project_session(
+        (
+            _source(proposal),
+            _event(ExternalActionRecord(phase="proposed", proposal=proposal), 1),
+            _event(
+                ExternalActionRecord(phase="submitting", proposal=proposal, decision=decision), 2
+            ),
+            _event(observed, 3),
+            SessionEvent(
+                event_id="event-4",
+                session_id="synthetic-session",
+                sequence=4,
+                kind=EventKind.EXTERNAL_RESULT_RECORDED,
+                occurred_at=_NOW.isoformat(),
+                payload={
+                    "record": ExternalResultRecord(phase="proposed", proposal=release).model_dump(
+                        mode="json"
+                    )
+                },
+            ),
+        ),
+        session_id="synthetic-session",
+    )
+    assert projection.pending_approval is not None
+    (action,) = projection.pending_approval.actions
+    assert action.summary_source == "gateway"
+    details = action.details
+    assert isinstance(details, ProjectionOutsideResultActionDetails)
+    assert details.model_route == {
+        "endpoint": "https://model.invalid",
+        "model_id": "synthetic-model",
+    }
+    assert details.expires_at == release.expires_at.isoformat()
+    complete = json.dumps(content, indent=2, sort_keys=True)
+    assert details.content.truncated
+    assert len(details.content.preview) == 2_000
+    assert complete.startswith(details.content.preview)
+    assert details.content.size_bytes == len(content_json.encode())
+    assert details.content.sha256 == hashlib.sha256(content_json.encode()).hexdigest()
+    assert action.arguments["content"] == content
+    assert outside_review_title(action) == "Outside Result Release"
+    assert outside_review_lines(action) == (
+        "Leaves Heartwood for the model route",
+        'Model route: {"endpoint": "https://model.invalid", "model_id": "synthetic-model"}',
+        f"Content sent to the worker and its model: {details.content.size_bytes:,} bytes"
+        f" of canonical JSON · SHA-256 {details.content.sha256}",
+        f"Review valid until: {details.expires_at}",
+    )
 
 
 @pytest.mark.parametrize(
@@ -180,6 +348,48 @@ def test_denied_outside_operation_has_no_execution_result(proposal: ExternalActi
     assert projection.actions[-1].outcome is None
 
 
+@pytest.mark.parametrize("phase", ["expired", "expired-authorization", "withdrawn"])
+def test_outside_review_closed_before_dispatch_is_not_pending_or_uncertain(
+    proposal: ExternalActionProposal, phase: str
+) -> None:
+    decisions = [
+        ExternalActionDecision(
+            command_id=f"synthetic-{decision}",
+            actor_id="researcher",
+            decision=decision,
+            decided_at=_NOW,
+            proposal_sha256=proposal.sha256,
+        )
+        for decision in ("approved", "denied")
+    ]
+    closed = ExternalActionRecord(
+        phase="withdrawn" if phase == "withdrawn" else "expired",
+        proposal=proposal,
+        decision=None if phase == "expired" else decisions[0],
+        withdrawal=decisions[1] if phase == "withdrawn" else None,
+    )
+    events = [
+        _source(proposal),
+        _event(ExternalActionRecord(phase="proposed", proposal=proposal), 1),
+    ]
+    if phase != "expired":
+        events.append(
+            _event(
+                ExternalActionRecord(phase="authorized", proposal=proposal, decision=decisions[0]),
+                2,
+            )
+        )
+    final = _event(closed, len(events)).model_copy(
+        update={"occurred_at": proposal.expires_at.isoformat()}
+    )
+    projection = project_session((*events, final), session_id="synthetic-session")
+    assert projection.pending_approval is None
+    action = projection.actions[-1]
+    assert action.state == "failed"
+    assert action.outcome is not None
+    assert "before dispatch" in action.outcome.summary
+
+
 @pytest.mark.parametrize(
     ("phase", "expected"),
     [
@@ -223,18 +433,7 @@ def test_result_release_has_independent_review_and_delivery_outcome(
         _event(ExternalActionRecord(phase="submitting", proposal=proposal, decision=decision), 2),
         _event(outside, 3),
     ]
-    release = ExternalResultProposal(
-        release_id=uuid4(),
-        operation_id=proposal.operation_id,
-        operation_sha256=proposal.sha256,
-        observation_event_id="event-3",
-        worker=proposal.worker,
-        service_policy_sha256=proposal.service_policy_sha256,
-        content_json='{"aggregate":7}',
-        model_route_json='{"endpoint":"https://model.invalid"}',
-        created_at=_NOW,
-        expires_at=_NOW + timedelta(minutes=5),
-    )
+    release = _release(proposal, '{"aggregate":7}')
     release_decision = ExternalActionDecision(
         command_id="result-approval",
         actor_id="researcher",

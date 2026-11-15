@@ -32,6 +32,16 @@ heartwood actions set ask-every-time
 Review controls apply to registered tool proposals; they do not intercept every operation of arbitrary code already running inside a permitted sandbox.
 Privileged outside effects require the independent authorization boundary described in the [Platform Contract](../operate/platform-contract.md#outside-operation-admission).
 
+## Outside Operations and Result Releases
+
+Where a deployment enables outside operations, their reviews are separate from the review of the tool call that proposed them.
+Every interface titles the review **Outside Operation** or **Outside Result Release** and marks it as leaving the sandbox or leaving Heartwood for the model route.
+Without expanding anything, the review states the service, destination, and operation, or the model route, together with the size and SHA-256 digest of the canonical JSON that would be sent and the time until which the review is valid.
+The browser shows the request or result content directly.
+When that content is longer than the 2,000-character preview, the browser says that the preview is truncated and offers all of it under **Complete reviewed proposal**; the terminal and notebook print the complete proposal.
+Inputs submitted with an operation are listed by reference, size, and digest; their bytes are not displayed.
+The summary of these reviews comes from the trusted service adapter or the gateway and is labelled **Gateway-provided summary**, while summaries written by the model keep the **Model-provided summary** label.
+
 ## Grouped Decisions
 
 OpenHands may propose several related tool calls as one action set.
@@ -48,7 +58,7 @@ The gateway turns that stream into one projection for terminal, browser, and not
 Incremental response tokens are visible while the model works but are not persisted.
 
 Each proposed tool has one versioned action record.
-It correlates the OpenHands action and tool-call identifiers, grouped decision, typed terminal, file-editor, Task, or other arguments, execution state, bounded outcome, and explicitly supported affected paths.
+It correlates the OpenHands action and tool-call identifiers, grouped decision, typed terminal, file-editor, Task, outside-operation, outside-result, or other arguments, execution state, bounded outcome, and explicitly supported affected paths.
 States distinguish proposed, awaiting review, approved, rejected, running, succeeded, failed, and outcome unknown.
 Heartwood does not infer authoritative file changes from shell command text.
 

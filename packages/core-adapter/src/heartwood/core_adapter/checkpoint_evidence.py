@@ -69,27 +69,35 @@ class SessionCheckpointEvidence:
     ) -> tuple[SessionEvent, ...]:
         """Anchor the exact durable boundary, reconciling prepared publication on retry."""
         first_sequence = store.next_sequence()
-        retained_requirement = boundary.payload.get("evidence_mode") == "required" or any(
-            event.kind == EventKind.AUDIT_EVIDENCE_RECORDED
-            and event.payload.get("boundary_event_id") == boundary.event_id
-            and event.payload.get("mode") == "required"
+        evidence = [
+            event.payload
             for event in store.replay_events()
+            if event.kind == EventKind.AUDIT_EVIDENCE_RECORDED
+            and event.payload.get("boundary_event_id") == boundary.event_id
+        ]
+        retained_requirement = boundary.payload.get("evidence_mode") == "required" or any(
+            payload.get("mode") == "required" for payload in evidence
         )
         effective_mode = "required" if required or retained_requirement else self.mode
         publication_id = "boundary-" + hashlib.sha256(boundary.event_id.encode()).hexdigest()
         try:
             retained = self._ensure(store, boundary, record, publication_id)
         except Exception as error:
-            record(
-                EventKind.AUDIT_EVIDENCE_RECORDED,
-                {
-                    "boundary_event_id": boundary.event_id,
-                    "boundary_sequence": boundary.sequence,
-                    "mode": effective_mode,
-                    "status": "pending",
-                    "code": "audit.evidence.unavailable",
-                },
-            )
+            # A retry that fails the same way adds nothing to the journal.
+            if not evidence or (evidence[-1].get("status"), evidence[-1].get("mode")) != (
+                "pending",
+                effective_mode,
+            ):
+                record(
+                    EventKind.AUDIT_EVIDENCE_RECORDED,
+                    {
+                        "boundary_event_id": boundary.event_id,
+                        "boundary_sequence": boundary.sequence,
+                        "mode": effective_mode,
+                        "status": "pending",
+                        "code": "audit.evidence.unavailable",
+                    },
+                )
             bufferable = isinstance(
                 error, (OSError, CheckpointSignerError, RecordsUnavailableError)
             )
@@ -169,8 +177,7 @@ class SessionCheckpointEvidence:
             if context.sequence > len(history):
                 audit_events, _ = verify_audit_jsonl(content)
                 snapshot = canonical_audit_jsonl(audit_events[: event.sequence + 1])
-                self._publish(snapshot, event.occurred_at)
-                history = self._history()
+                history = self._publish(snapshot, event.occurred_at)
             retained = history[context.sequence - 1]
             actual = checkpoint_context(retained.checkpoint.statement, retained.audit_content)
             if actual != context:
@@ -196,13 +203,13 @@ class SessionCheckpointEvidence:
             },
         )
         content, _ = store.verified_audit_export()
-        self._publish(content, exported.occurred_at)
-        retained = self._history()[-1]
+        retained = self._publish(content, exported.occurred_at)[-1]
         if checkpoint_context(retained.checkpoint.statement, retained.audit_content) != context:
             raise ValueError("retained checkpoint differs from the requested boundary")
         return retained
 
-    def _publish(self, content: str, created_at: str) -> None:
+    def _publish(self, content: str, created_at: str) -> tuple[RetainedCheckpoint, ...]:
+        """Sign one statement and return the history verified after its publication."""
         _, verification = verify_audit_jsonl(content)
         statement = AuditCheckpointStatement(
             deployment_id=self.records.scope.deployment_id,
@@ -231,3 +238,4 @@ class SessionCheckpointEvidence:
             or history[context.sequence - 1].checkpoint.signature != signature
         ):
             raise ValueError("signer response is not independently retained")
+        return history

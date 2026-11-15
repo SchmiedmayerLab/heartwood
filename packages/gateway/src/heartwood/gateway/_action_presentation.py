@@ -8,9 +8,17 @@
 
 from __future__ import annotations
 
+import json
 import unicodedata
+from typing import TYPE_CHECKING
 
 from heartwood.gateway._action_settings import ACTION_MODE_OPTIONS
+
+if TYPE_CHECKING:
+    from heartwood.gateway._session_projection import (
+        ProjectionActionRecord,
+        ProjectionOutsideContent,
+    )
 
 ACTION_TOOL_LABELS = {
     "file_editor": "File Change",
@@ -22,6 +30,10 @@ ACTION_RISK_LABELS = {
     "low": "Advisory Low Risk",
     "medium": "Advisory Medium Risk",
     "unknown": "Not Classified",
+}
+OUTSIDE_REVIEW_TITLES = {
+    "outside-operation": "Outside Operation",
+    "outside-result": "Outside Result Release",
 }
 UNKNOWN_ACTION_TOOL_LABEL = "Tool Action"
 UNKNOWN_ACTION_RISK_LABEL = "Not Classified"
@@ -89,6 +101,52 @@ def display_safe_text(value: object, *, preserve_newlines: bool = False) -> str:
     return "".join(rendered)
 
 
+def action_summary_label(action: ProjectionActionRecord) -> str:
+    """Name the author of an action summary so trusted text is not read as model text."""
+    return (
+        "Gateway-provided summary"
+        if action.summary_source == "gateway"
+        else "Model-provided summary"
+    )
+
+
+def outside_review_title(action: ProjectionActionRecord) -> str | None:
+    """Return the title of a gateway-issued outside review, or None for a sandbox action."""
+    return OUTSIDE_REVIEW_TITLES.get(action.details.kind)
+
+
+def _outside_content_identity(content: ProjectionOutsideContent) -> str:
+    return f"{content.size_bytes:,} bytes of canonical JSON · SHA-256 {content.sha256}"
+
+
+def outside_review_lines(action: ProjectionActionRecord) -> tuple[str, ...]:
+    """State what an outside review sends and where; empty for a sandbox action."""
+    details = action.details
+    if details.kind == "outside-operation":
+        lines = [
+            "Leaves the sandbox",
+            f"Service: {details.service_id}",
+            f"Destination: {details.destination}",
+            f"Operation: {action.tool_name}",
+            *(
+                f"Input: {item.reference} · {item.size_bytes:,} bytes · SHA-256 {item.sha256}"
+                for item in details.inputs
+            ),
+            f"Request sent to the service: {_outside_content_identity(details.request)}",
+        ]
+    elif details.kind == "outside-result":
+        lines = [
+            "Leaves Heartwood for the model route",
+            "Model route: " + json.dumps(details.model_route, sort_keys=True),
+            "Content sent to the worker and its model: "
+            + _outside_content_identity(details.content),
+        ]
+    else:
+        return ()
+    lines.append(f"Review valid until: {details.expires_at}")
+    return tuple(display_safe_text(line) for line in lines)
+
+
 def action_presentation() -> dict[str, object]:
     """Return non-secret terminology consumed by interface adapters."""
     return {
@@ -112,6 +170,9 @@ __all__ = [
     "action_presentation",
     "action_risk_label",
     "action_state_label",
+    "action_summary_label",
     "action_tool_label",
     "display_safe_text",
+    "outside_review_lines",
+    "outside_review_title",
 ]

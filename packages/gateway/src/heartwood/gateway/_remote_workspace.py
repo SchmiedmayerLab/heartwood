@@ -10,11 +10,15 @@ from __future__ import annotations
 
 import json
 import math
-from collections.abc import Mapping, Sequence
+import time
+from collections.abc import Callable, Mapping, Sequence
+from datetime import datetime
 from threading import Lock
 from typing import Any
 
 import httpx
+from openhands.sdk.agent.base import AgentBase
+from openhands.sdk.event.conversation_state import FULL_STATE_KEY
 from openhands.sdk.tool.client_tool import ClientToolSpec
 from openhands.sdk.workspace import RemoteWorkspace
 from pydantic import ConfigDict, Field, PrivateAttr, model_validator
@@ -22,7 +26,11 @@ from pydantic import ConfigDict, Field, PrivateAttr, model_validator
 from heartwood.core_adapter.worker_attempts import WorkerAttemptError, WorkerAttemptLease
 
 _MAX_RESPONSE_BYTES = 4 * 1024 * 1024
+_MAX_RESPONSE_SECONDS = 120.0
 _MAX_JSON_DEPTH = 64
+
+# The gateway's agent as sent to the worker and as serialized without secrets.
+AgentContract = tuple[dict[str, Any], dict[str, Any]]
 
 
 class WorkerResponseError(ValueError):
@@ -30,21 +38,34 @@ class WorkerResponseError(ValueError):
 
 
 class WorkerResponseBudget:
-    """Lifetime admission shared by a workspace's response transports."""
+    """Rate-bounded admission shared by a workspace's response transports.
+
+    The allowance absorbs bursts such as reading retained history and refills at the
+    rate of ordinary status polling and progress reads, so a run of any length stays
+    admitted while a worker that answers faster than that is fenced.
+    """
 
     def __init__(
         self,
         *,
         max_bytes: int = 32 * 1024 * 1024,
         max_responses: int = 1024,
+        bytes_per_second: int = 1024 * 1024,
+        responses_per_second: int = 4,
         attempt: WorkerAttemptLease | None = None,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
-        if type(max_bytes) is not int or type(max_responses) is not int:
+        limits = (max_bytes, max_responses, bytes_per_second, responses_per_second)
+        if any(type(limit) is not int or limit <= 0 for limit in limits):
             raise ValueError("worker response limits must be positive integers")
-        if max_bytes <= 0 or max_responses <= 0:
-            raise ValueError("worker response limits must be positive integers")
-        self._remaining_bytes = max_bytes
-        self._remaining_responses = max_responses
+        self._max_bytes = max_bytes
+        self._max_responses = max_responses
+        self._bytes_per_second = bytes_per_second
+        self._responses_per_second = responses_per_second
+        self._remaining_bytes = float(max_bytes)
+        self._remaining_responses = float(max_responses)
+        self._clock = clock
+        self._replenished = clock()
         self._closed = False
         self._lock = Lock()
         self._attempt = attempt
@@ -66,7 +87,17 @@ class WorkerResponseBudget:
                     self._closed = True
             if self._closed:
                 raise WorkerResponseError("worker response admission is closed")
-            if size > self._remaining_bytes or (new_response and not self._remaining_responses):
+            now = self._clock()
+            elapsed = max(0.0, now - self._replenished)
+            self._replenished = now
+            self._remaining_bytes = min(
+                self._max_bytes, self._remaining_bytes + elapsed * self._bytes_per_second
+            )
+            self._remaining_responses = min(
+                self._max_responses,
+                self._remaining_responses + elapsed * self._responses_per_second,
+            )
+            if size > self._remaining_bytes or (new_response and self._remaining_responses < 1):
                 self._closed = True
                 if self._attempt is not None:
                     self._attempt.fence()
@@ -76,7 +107,7 @@ class WorkerResponseBudget:
                 self._remaining_responses -= 1
 
     def close(self) -> None:
-        """Refuse further admission without replenishing the lifetime budget."""
+        """Refuse further admission permanently."""
         with self._lock:
             self._closed = True
             if self._attempt is not None:
@@ -108,10 +139,14 @@ class WorkerResponseTransport(httpx.BaseTransport):
         transport: httpx.BaseTransport,
         budget: WorkerResponseBudget | None = None,
         client_tools: Sequence[ClientToolSpec] = (),
+        agent: Callable[[], AgentContract | None] = lambda: None,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._origin = _worker_origin(host)
+        self._clock = clock
         self._tool_modules = dict(tool_modules)
         self._client_tools = _client_tool_contract(client_tools)
+        self._agent = agent
         self._transport = transport
         self._budget = budget if budget is not None else WorkerResponseBudget()
         if self._budget.attempt is not None and self._origin != _worker_origin(
@@ -136,6 +171,15 @@ class WorkerResponseTransport(httpx.BaseTransport):
             self._budget.close()
             raise
         request.headers["Accept-Encoding"] = "identity"
+        # Callers hold session and gateway locks while they wait, so a worker may not
+        # keep one response open: each read and the whole body are bounded.
+        deadline = self._clock() + _MAX_RESPONSE_SECONDS
+        timeout = dict(request.extensions.get("timeout") or {})
+        read = timeout.get("read")
+        timeout["read"] = (
+            _MAX_RESPONSE_SECONDS if read is None else min(read, _MAX_RESPONSE_SECONDS)
+        )
+        request.extensions["timeout"] = timeout
         response = self._transport.handle_request(request)
         try:
             if response.is_redirect:
@@ -148,6 +192,8 @@ class WorkerResponseTransport(httpx.BaseTransport):
             stream = response.stream
             assert isinstance(stream, httpx.SyncByteStream)
             for chunk in stream:
+                if self._clock() > deadline:
+                    raise WorkerResponseError("worker response exceeded its deadline")
                 self._budget.charge(len(chunk))
                 if len(body) + len(chunk) > _MAX_RESPONSE_BYTES:
                     raise WorkerResponseError("worker response exceeds the byte limit")
@@ -157,8 +203,21 @@ class WorkerResponseTransport(httpx.BaseTransport):
                 media_type = response.headers.get("content-type", "").split(";", 1)[0]
                 if media_type.strip().lower() != "application/json":
                     raise WorkerResponseError("worker response must be JSON")
-                value = _admit_json(content, self._tool_modules, self._client_tools)
+                value = _admit_json(content, self._tool_modules, self._client_tools, self._agent())
                 attempt = self._budget.attempt
+                if isinstance(value, dict):
+                    # Event pages and snapshots are replayed to the same callbacks as
+                    # socket messages, so their events pass the same admission.
+                    for events in (value.get("items"), value.get("events")):
+                        for event in events if isinstance(events, list) else ():
+                            if isinstance(event, dict):
+                                _admit_event(
+                                    event,
+                                    self._tool_modules,
+                                    self._client_tools,
+                                    self._agent(),
+                                    attempt,
+                                )
                 if (
                     attempt is not None
                     and (request.method, request.url.path)
@@ -194,7 +253,9 @@ class WorkerResponseTransport(httpx.BaseTransport):
         path = request.url.path
         canonical = request.url.raw_path.split(b"?", 1)[0] == path.encode("utf-8")
         if path == "/api/conversations" and request.method == "POST" and canonical:
-            value = _admit_json(request.content, self._tool_modules, self._client_tools)
+            value = _admit_json(
+                request.content, self._tool_modules, self._client_tools, self._agent()
+            )
             if isinstance(value, dict) and value.get("conversation_id") == identity:
                 return
         prefix = f"/api/conversations/{identity}"
@@ -224,7 +285,10 @@ def _reject_constant(_value: str) -> None:
 
 
 def _admit_json(
-    content: bytes, tool_modules: Mapping[str, str], client_tools: Mapping[str, str] | None = None
+    content: bytes,
+    tool_modules: Mapping[str, str],
+    client_tools: Mapping[str, str] | None = None,
+    agent: AgentContract | None = None,
 ) -> object:
     try:
         value: object = json.loads(
@@ -247,7 +311,7 @@ def _admit_json(
             raise WorkerResponseError("worker JSON contains a nonfinite number")
     if not isinstance(value, dict):
         return value
-    _admit_metadata(value, tool_modules, client_tools)
+    _admit_metadata(value, tool_modules, client_tools, agent)
     return value
 
 
@@ -286,10 +350,72 @@ def _admit_client_tools(value: object, expected: Mapping[str, str]) -> None:
         seen.add(spec.name)
 
 
+def _same_agent(returned: object, sent: object, redacted: object) -> bool:
+    # Requests omit unset fields that responses carry as null, so the two are equivalent.
+    if isinstance(sent, dict):
+        redacted = redacted if isinstance(redacted, dict) else sent
+        return isinstance(returned, dict) and all(
+            _same_agent(returned.get(key), sent.get(key), redacted.get(key))
+            for key in returned.keys() | sent.keys()
+        )
+    if isinstance(sent, list):
+        redacted = redacted if isinstance(redacted, list) else sent
+        return (
+            isinstance(returned, list)
+            and len(returned) == len(sent) == len(redacted)
+            and all(map(_same_agent, returned, sent, redacted))
+        )
+    if type(returned) is type(sent) and returned == sent:
+        return True
+    # Only a secret serializes differently; the worker may redact or omit its value.
+    return sent != redacted and (
+        returned is None or (type(returned) is type(redacted) and returned == redacted)
+    )
+
+
+def _with_server_context(
+    returned: object, agent: AgentContract, client_tools: Mapping[str, str]
+) -> AgentContract:
+    """Accept what the agent server adds to the gateway's agent in its responses.
+
+    It appends one tool entry per authorized client tool, carrying its exact
+    specification, and replaces two prompt-context values.
+    """
+    if not isinstance(returned, dict):
+        return agent
+    registered = [
+        {"name": name, "params": {"spec": json.loads(spec)}} for name, spec in client_tools.items()
+    ]
+    tools = returned.get("tools")
+    if registered and isinstance(tools, list) and tools[len(agent[0]["tools"]) :] == registered:
+        agent = tuple(  # type: ignore[assignment]
+            {**side, "tools": [*side["tools"], *registered]} for side in agent
+        )
+    context = returned.get("agent_context")
+    if not isinstance(context, dict) or not isinstance(agent[0].get("agent_context"), dict):
+        return agent
+    owned: dict[str, Any] = {}
+    started = context.get("current_datetime")
+    if isinstance(started, str) and len(started) <= 64:
+        try:
+            datetime.fromisoformat(started)
+        except ValueError:
+            pass
+        else:
+            owned["current_datetime"] = started
+    if context.get("skills") == []:
+        owned["skills"] = []
+    sent, redacted = (
+        {**side, "agent_context": {**side["agent_context"], **owned}} for side in agent
+    )
+    return sent, redacted
+
+
 def _admit_metadata(
     value: dict[str, Any],
     tool_modules: Mapping[str, str],
     client_tools: Mapping[str, str] | None = None,
+    agent: AgentContract | None = None,
 ) -> None:
     registrations = value.get("tool_module_qualnames", {})
     if not isinstance(registrations, dict) or any(
@@ -298,26 +424,40 @@ def _admit_metadata(
     ):
         raise WorkerResponseError("worker tool registrations are not authorized")
     _admit_client_tools(value.get("client_tools"), client_tools or {})
-    agent = value.get("agent")
-    if agent is not None:
-        if not isinstance(agent, dict) or agent.get("kind") != "Agent":
-            raise WorkerResponseError("worker agent kind is not authorized")
-        _reject_completion_logging(agent)
+    # The SDK deserializes a returned agent, and constructing its models can contact
+    # the configured model route, so only the gateway's own agent is admitted.
+    returned = value.get("agent")
+    if returned is not None and (
+        agent is None
+        or not _same_agent(returned, *_with_server_context(returned, agent, client_tools or {}))
+    ):
+        raise WorkerResponseError("worker agent is not authorized")
 
 
-def _reject_completion_logging(agent: dict[str, Any]) -> None:
-    # RemoteConversation installs a local file-writing callback when any returned
-    # LLM enables completion logging. Worker metadata cannot grant that authority.
-    pending: list[Any] = [agent]
-    while pending:
-        item = pending.pop()
-        if isinstance(item, dict):
-            setting = item.get("log_completions")
-            if setting is not None and setting is not False:
-                raise WorkerResponseError("worker-selected completion logging is not authorized")
-            pending.extend(item.values())
-        elif isinstance(item, list):
-            pending.extend(item)
+def _admit_event(
+    value: dict[str, Any],
+    tool_modules: Mapping[str, str],
+    client_tools: Mapping[str, str],
+    agent: AgentContract | None,
+    attempt: WorkerAttemptLease | None,
+) -> None:
+    """Reject events that would write completion logs or replace admitted state."""
+    kind = value.get("kind")
+    if kind == "LLMCompletionLogEvent":
+        raise WorkerResponseError("worker completion-log events are not authorized")
+    if kind != "ConversationStateUpdateEvent":
+        return
+    key, state = value.get("key"), value.get("value")
+    metadata = state if key == FULL_STATE_KEY else {key: state}
+    if not isinstance(metadata, dict):
+        raise WorkerResponseError("worker state update is not authorized")
+    _admit_metadata(metadata, tool_modules, client_tools, agent)
+    if (
+        attempt is not None
+        and (key == FULL_STATE_KEY or "id" in metadata)
+        and metadata.get("id") != str(attempt.intent.conversation_id)
+    ):
+        raise WorkerResponseError("worker returned another conversation identity")
 
 
 class AdmittedRemoteWorkspace(RemoteWorkspace):
@@ -331,6 +471,7 @@ class AdmittedRemoteWorkspace(RemoteWorkspace):
     _admitted_client: httpx.Client | None = PrivateAttr(default=None)
     _response_budget: WorkerResponseBudget = PrivateAttr(default_factory=WorkerResponseBudget)
     _client_tool_specs: tuple[str, ...] | None = PrivateAttr(default=None)
+    _agent_contract: AgentContract | None = PrivateAttr(default=None)
 
     @model_validator(mode="after")
     def _bind_attempt_budget(self) -> AdmittedRemoteWorkspace:
@@ -349,6 +490,13 @@ class AdmittedRemoteWorkspace(RemoteWorkspace):
         """Copy the captured native specifications without sharing mutable schemas."""
         return [ClientToolSpec.model_validate_json(spec) for spec in self._client_tool_specs or ()]
 
+    def authorize_agent(self, agent: AgentBase) -> None:
+        """Bind the agent this workspace sends; worker metadata may return no other."""
+        self._agent_contract = (
+            agent.model_dump(mode="json", context={"expose_secrets": True}),
+            agent.model_dump(mode="json"),
+        )
+
     @property
     def client(self) -> httpx.Client:
         self._response_budget.charge(0)
@@ -365,6 +513,7 @@ class AdmittedRemoteWorkspace(RemoteWorkspace):
                 host=self.host,
                 tool_modules=modules,
                 client_tools=self.authorized_client_tools,
+                agent=lambda: self._agent_contract,
                 budget=self._response_budget,
                 transport=httpx.HTTPTransport(
                     trust_env=False, limits=httpx.Limits(max_connections=4)

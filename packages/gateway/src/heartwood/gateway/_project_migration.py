@@ -11,7 +11,7 @@ import os
 import shutil
 import stat
 import tomllib
-from contextlib import ExitStack
+from contextlib import AbstractContextManager, ExitStack
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -52,7 +52,7 @@ def migrate_project_state(*, deployment: Path, workspace: Path, backup: Path) ->
     source = ProjectContext(workspace)
     journal = _journal(target)
     _require_backup(source, target, backup)
-    with native_file_lock(journal.with_suffix(".lock"), timeout=0, reentrant=False):
+    with _journal_lock(journal):
         if journal.exists() or target.state_root.exists() or backup.exists():
             raise ProjectStateError("migration destination already exists; inspect or recover it")
         with staged_session_records(source, target) as stage, ExitStack() as leases:
@@ -111,7 +111,7 @@ def migrate_project_state(*, deployment: Path, workspace: Path, backup: Path) ->
                 raise ProjectStateError("a retained migration stage already exists")
             stage.rename(retained_stage)
             fsync_directory(retained_stage.parent)
-            write_private_json_atomic(journal, receipt)
+            _write_unowned(journal, receipt)
             _publish(source, target, receipt)
     return journal
 
@@ -126,7 +126,7 @@ def recover_project_migration(*, deployment: Path, workspace: Path, rollback: bo
     target = bound.project
     source = ProjectContext(workspace)
     journal = _journal(target)
-    with native_file_lock(journal.with_suffix(".lock"), timeout=0, reentrant=False):
+    with _journal_lock(journal):
         expected_stage = target.state_root.with_name(f".{target.project_id}.migration-stage")
         receipt = read_private_json(
             journal if journal.exists() else expected_stage / "migration.json"
@@ -171,7 +171,7 @@ def recover_project_migration(*, deployment: Path, workspace: Path, rollback: bo
             if _snapshot(original) != receipt["source_files"]:
                 raise ProjectStateError("original migration records changed; recovery stopped")
             if not journal.exists():
-                write_private_json_atomic(journal, receipt)
+                _write_unowned(journal, receipt)
             if rollback:
                 _rollback(source, target, receipt)
             else:
@@ -182,7 +182,7 @@ def recover_project_migration(*, deployment: Path, workspace: Path, rollback: bo
 def _publish(source: ProjectContext, target: ProjectContext, receipt: dict[str, Any]) -> None:
     fence = source.root / ".heartwood-migration.json"
     if not fence.exists():
-        write_private_json_atomic(fence, {"schema_version": _SCHEMA, "retired": True})
+        _write_unowned(fence, {"schema_version": _SCHEMA, "retired": True})
     backup = Path(receipt["backup"])
     if source.state_root.exists():
         if backup.exists():
@@ -214,7 +214,7 @@ def _rollback(source: ProjectContext, target: ProjectContext, receipt: dict[str,
         else:
             # Restore a copy so the protected original remains available for inspection.
             restore = source.root / ".heartwood-restore"
-            if restore.exists() and _snapshot(restore) != receipt["source_files"]:
+            if (restore.exists() or restore.is_symlink()) and not _restored(restore, receipt):
                 restore = source.root / f".heartwood-restore-{uuid4().hex}"
             if not restore.exists():
                 _copy_tree(backup, restore)
@@ -229,9 +229,29 @@ def _rollback(source: ProjectContext, target: ProjectContext, receipt: dict[str,
         raise ProjectStateError("original state did not restore")
 
 
+def _restored(restore: Path, receipt: dict[str, Any]) -> bool:
+    """Return whether an earlier rollback left this complete verified copy."""
+    try:
+        matches: bool = _snapshot(restore) == receipt["source_files"]
+    except ProjectStateError:
+        return False
+    return matches
+
+
 def _journal(target: ProjectContext) -> Path:
     _validate_trusted_parents(target.state_root.parent)
     return target.state_root.with_name(f".{target.project_id}.migration.json")
+
+
+def _journal_lock(journal: Path) -> AbstractContextManager[None]:
+    return native_file_lock(
+        journal.with_suffix(".lock"), timeout=0, secure_parent=False, reentrant=False
+    )
+
+
+def _write_unowned(path: Path, payload: dict[str, Any]) -> None:
+    """Write a private record without changing the mode of a directory Heartwood does not own."""
+    write_private_json_atomic(path, payload, secure_parent=False)
 
 
 def _lock_retired_state(leases: ExitStack, root: Path) -> None:

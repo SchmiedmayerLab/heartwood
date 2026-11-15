@@ -25,6 +25,8 @@ export type ProjectionActionDetails =
   | ProjectionTerminalActionDetails
   | ProjectionFileEditorActionDetails
   | ProjectionTaskActionDetails
+  | ProjectionOutsideOperationActionDetails
+  | ProjectionOutsideResultActionDetails
   | ProjectionOtherActionDetails;
 /**
  * Events emitted by a Heartwood session.
@@ -152,6 +154,7 @@ export interface ProjectionActionRecord {
     | "failed"
     | "outcome-unknown";
   summary: string;
+  summarySource: "model" | "gateway";
   toolCallId: string;
   toolName: string;
   updatedSequence: number;
@@ -194,6 +197,48 @@ export interface ProjectionTaskActionDetails {
   resume: string | null;
   roleLabel: string | null;
   subagentType: string | null;
+}
+/**
+ * A gateway-issued operation that leaves the sandbox for a deployment service.
+ */
+export interface ProjectionOutsideOperationActionDetails {
+  destination: string;
+  expiresAt: string;
+  inputs: ProjectionOutsideInput[];
+  kind: "outside-operation";
+  request: ProjectionOutsideContent;
+  serviceId: string;
+}
+/**
+ * One immutable input submitted with an outside operation by reference and digest.
+ */
+export interface ProjectionOutsideInput {
+  reference: string;
+  sha256: string;
+  sizeBytes: number;
+}
+/**
+ * Exact JSON that leaves the session: its identity and a bounded leading preview.
+ *
+ * The size and digest describe the canonical UTF-8 JSON bound by the review.
+ * The complete content remains in the action record's exact arguments.
+ */
+export interface ProjectionOutsideContent {
+  preview: string;
+  sha256: string;
+  sizeBytes: number;
+  truncated: boolean;
+}
+/**
+ * A gateway-issued release of an outside result to the worker and its model route.
+ */
+export interface ProjectionOutsideResultActionDetails {
+  content: ProjectionOutsideContent;
+  expiresAt: string;
+  kind: "outside-result";
+  modelRoute: {
+    [k: string]: JsonValue;
+  };
 }
 /**
  * Typed fallback for an OpenHands tool without a specialized renderer.

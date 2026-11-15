@@ -267,7 +267,7 @@ class SessionService:
                 if command_kind == CommandKind.AUDIT_EXPORT.value or not reconcile_before_command
                 else (
                     *self._reconcile_locked(),
-                    *self._recover_approval_commands_locked(),
+                    *self._recover_approval_commands_locked(command),
                 )
             )
             if reconciled:
@@ -278,7 +278,21 @@ class SessionService:
             if record is not None:
                 return _command_result_from_receipt(persisted, command, command_hash, record)
             unresolved = self.store.unresolved_command_ids()
-            if unresolved:
+            undispatched = self._undispatched_authorizations(persisted) if unresolved else {}
+            if unresolved and unresolved[0] in undispatched:
+                # Only its own approval may dispatch a retained authorization, and only
+                # its denial may pass it; any other command leaves it untouched.
+                if (
+                    command_kind != CommandKind.DENY.value
+                    or unresolved != (unresolved[0],)
+                    or command.payload.get("target_id") != undispatched[unresolved[0]]
+                ):
+                    raise SessionRecoveryError(
+                        f"session {self.store.session_id} holds an approved outside decision "
+                        f"({unresolved[0]}) that has not been dispatched; retry that approval "
+                        "or deny it to withdraw it"
+                    )
+            elif unresolved:
                 raise SessionRecoveryError(
                     f"session {self.store.session_id} has an interrupted command "
                     f"({unresolved[0]}) and cannot accept more work; replay and verify the "
@@ -475,16 +489,16 @@ class SessionService:
                     "outside operation requires an admitted worker and service"
                 )
             events = self.replay_events()
-            records = external_action_records(events)
             existing = next(
                 (
                     item
-                    for item in records.values()
-                    if item.proposal.source_event_id == source_event_id
+                    for item in external_action_records(events).values()
+                    if item.proposal.source_event_id == source_event_id and item.phase != "expired"
                 ),
                 None,
             )
-            if existing is not None:
+            closed = self._expire_external_review(existing)
+            if existing is not None and closed is None:
                 raise ExternalActionError("worker proposal already has an outside operation")
             source = next((event for event in events if event.event_id == source_event_id), None)
             if (
@@ -518,8 +532,99 @@ class SessionService:
             event = self._record_external_action(
                 ExternalActionRecord(phase="proposed", proposal=proposal)
             )
-        self._event_sink((event,))
+        self._event_sink((event,) if closed is None else (closed, event))
         return event
+
+    def _expire_external_review(
+        self, record: ExternalActionRecord | ExternalResultRecord | None
+    ) -> SessionEvent | None:
+        """Close an undecided review after its validity so the same content can be re-proposed.
+
+        The expired proposal can never be approved; a fresh review has its own identity,
+        validity interval and decision.
+        """
+        if (
+            record is None
+            or record.phase != "proposed"
+            or self._external_now() < record.proposal.expires_at
+        ):
+            return None
+        return self._close_external(record, "expired")
+
+    def _close_external(
+        self,
+        record: ExternalActionRecord | ExternalResultRecord,
+        phase: Literal["expired", "withdrawn"],
+        withdrawal: ExternalActionDecision | None = None,
+    ) -> SessionEvent:
+        """Record that a review or undispatched authorization can no longer cause an effect."""
+        if isinstance(record, ExternalActionRecord):
+            return self._record_external_action(
+                ExternalActionRecord(
+                    phase=phase,
+                    proposal=record.proposal,
+                    decision=record.decision,
+                    withdrawal=withdrawal,
+                )
+            )
+        return self._record_external_result(
+            ExternalResultRecord(
+                phase=phase,
+                proposal=record.proposal,
+                decision=record.decision,
+                withdrawal=withdrawal,
+            )
+        )
+
+    def _withdraw_external_authorization(
+        self, command: SessionCommand, current: ExternalActionRecord | ExternalResultRecord
+    ) -> tuple[SessionEvent, ...]:
+        """Let the researcher's denial close an approval that provably never dispatched."""
+        assert current.decision is not None
+        boundary = self._close_external(
+            current,
+            "withdrawn",
+            ExternalActionDecision(
+                command_id=command.command_id,
+                actor_id=command.actor_id,
+                decision="denied",
+                decided_at=self._external_now(),
+                proposal_sha256=current.proposal.sha256,
+            ),
+        )
+        emitted = (boundary, *self._checkpoint_boundary(boundary))
+        self._complete_external_command(current.decision.command_id)
+        return emitted
+
+    def _undispatched_authorizations(self, events: tuple[SessionEvent, ...]) -> dict[str, str]:
+        """Map each approval command awaiting dispatch to its reviewed action set."""
+        outside: list[ExternalActionRecord | ExternalResultRecord] = [
+            *external_action_records(events).values(),
+            *external_result_records(events).values(),
+        ]
+        return {
+            record.decision.command_id: record.proposal.group_id
+            for record in outside
+            if record.phase == "authorized" and record.decision is not None
+        }
+
+    def _external_command_receipt(self, command_id: str) -> tuple[int, str]:
+        receipt = self.store.command_record(command_id)
+        if receipt is None:
+            raise SessionRecoveryError("outside decision has no command receipt")
+        first, digest = receipt.get("first_sequence"), receipt.get("command_hash")
+        if not isinstance(first, int) or not isinstance(digest, str):
+            raise SessionRecoveryError("outside approval receipt is invalid")
+        return first, digest
+
+    def _complete_external_command(self, command_id: str) -> None:
+        first, digest = self._external_command_receipt(command_id)
+        self.store.complete_command(
+            command_id=command_id,
+            command_hash=digest,
+            first_sequence=first,
+            last_sequence=self.replay_events()[-1].sequence,
+        )
 
     def _result_model_route(self) -> str:
         return canonical_request(
@@ -543,6 +648,15 @@ class SessionService:
             adapter, lease = self._external_actions, self._worker_lease
             events = self.replay_events()
             outside = external_action_records(events).get(operation_id)
+            closed: SessionEvent | None = None
+            existing = next(
+                (
+                    item
+                    for item in external_result_records(events).values()
+                    if item.proposal.operation_id == operation_id and item.phase != "expired"
+                ),
+                None,
+            )
             if (
                 adapter is None
                 or lease is None
@@ -550,9 +664,9 @@ class SessionService:
                 or not outside.terminal
                 or outside.observation is None
                 or outside.proposal.worker != lease.intent
-                or any(
-                    item.proposal.operation_id == operation_id
-                    for item in external_result_records(events).values()
+                or (
+                    existing is not None
+                    and (closed := self._expire_external_review(existing)) is None
                 )
             ):
                 raise ExternalActionError("result release requires a unique current worker outcome")
@@ -590,7 +704,7 @@ class SessionService:
             event = self._record_external_result(
                 ExternalResultRecord(phase="proposed", proposal=proposal)
             )
-        self._event_sink((event,))
+        self._event_sink((event,) if closed is None else (closed, event))
         return event
 
     def _check_result_authority(self, proposal: ExternalResultProposal) -> None:
@@ -630,9 +744,10 @@ class SessionService:
     ) -> tuple[SessionEvent, ...]:
         proposal, adapter = current.proposal, self._external_actions
         approved = _kind_value(command.kind) == CommandKind.APPROVE.value
+        if current.phase == "authorized" and not approved:
+            return self._withdraw_external_authorization(command, current)
         if current.phase == "authorized" and (
-            not approved
-            or current.decision is None
+            current.decision is None
             or current.decision.command_id != command.command_id
             or current.decision.actor_id != command.actor_id
         ):
@@ -807,9 +922,10 @@ class SessionService:
     ) -> tuple[SessionEvent, ...]:
         proposal, adapter = current.proposal, self._external_actions
         approved = _kind_value(command.kind) == CommandKind.APPROVE.value
+        if current.phase == "authorized" and not approved:
+            return self._withdraw_external_authorization(command, current)
         if current.phase == "authorized" and (
-            not approved
-            or current.decision is None
+            current.decision is None
             or current.decision.command_id != command.command_id
             or current.decision.actor_id != command.actor_id
         ):
@@ -1498,22 +1614,24 @@ class SessionService:
                 and event.source_event_id in known_source_event_ids
             ):
                 continue
+            source_payload: dict[str, JsonValue] = (
+                {"source_event_id": event.source_event_id}
+                if event.source_event_id is not None
+                else {}
+            )
             if self._reserved_external_event(event):
+                # Retaining the source identity records the rejection once, not on every replay.
                 translated.append(
                     self._record_event(
                         EventKind.ERROR_RECORDED,
                         {
                             "reason": "worker event selected an outside operation identity",
                             "affects_lifecycle": False,
+                            **source_payload,
                         },
                     )
                 )
                 continue
-            source_payload: dict[str, JsonValue] = (
-                {"source_event_id": event.source_event_id}
-                if event.source_event_id is not None
-                else {}
-            )
             if isinstance(event, BackendAgentMessageEvent):
                 translated.append(
                     self._record_event(
@@ -1554,6 +1672,23 @@ class SessionService:
                 translated.append(self._record_confirmation_request(event))
             elif isinstance(event, BackendConfirmationResolutionEvent):
                 tool_call = event.tool_call
+                if event.approved and not self._approval_recorded(event.action_group_id):
+                    # Only a recorded decision approves an action; a backend that reports
+                    # execution without one has left review and is not trusted further.
+                    if self._worker_lease is not None:
+                        self._worker_lease.fence()
+                    translated.append(
+                        self._record_event(
+                            EventKind.ERROR_RECORDED,
+                            {
+                                "reason": "action executed without a recorded review decision",
+                                "tool_call_id": tool_call.tool_call_id,
+                                "group_id": event.action_group_id,
+                                **source_payload,
+                            },
+                        )
+                    )
+                    continue
                 translated.append(
                     self._record_event(
                         EventKind.CONFIRMATION_RESOLVED,
@@ -1769,6 +1904,14 @@ class SessionService:
             )
         )
 
+    def _approval_recorded(self, group_id: str) -> bool:
+        return any(
+            event.kind == EventKind.APPROVAL_RECORDED
+            and event.payload.get("group_id") == group_id
+            and event.payload.get("decision") == "approved"
+            for event in self.replay_events()
+        )
+
     def _known_source_event_ids_locked(self) -> set[str]:
         if (
             self._known_source_event_ids is None
@@ -1816,9 +1959,14 @@ class SessionService:
         )
 
     def _recover_external_approvals_locked(
-        self, *, dispatch_pending: bool = False
+        self, *, dispatch_pending: bool = False, command: SessionCommand | None = None
     ) -> tuple[SessionEvent, ...]:
-        """Resume only proven pre-dispatch decisions; never repeat uncertain effects."""
+        """Resume only proven pre-dispatch decisions; never repeat uncertain effects.
+
+        While a command is being handled, only an exact retry of the original approval
+        resumes its authorization. An authorization that outlived its validity is
+        recorded as expired instead of blocking the session.
+        """
         unresolved = self.store.unresolved_command_ids()
         if not unresolved:
             return ()
@@ -1833,26 +1981,37 @@ class SessionService:
                 (
                     item
                     for item in outside
-                    if item.decision is not None and item.decision.command_id == command_id
+                    if any(
+                        decision is not None and decision.command_id == command_id
+                        for decision in (item.decision, item.withdrawal)
+                    )
                 ),
                 None,
             )
             if decided is None:
                 continue
-            receipt = self.store.command_record(command_id)
-            if receipt is None:
-                raise SessionRecoveryError("outside decision has no command receipt")
-            first, digest = receipt.get("first_sequence"), receipt.get("command_hash")
-            if not isinstance(first, int) or not isinstance(digest, str):
-                raise SessionRecoveryError("outside approval receipt is invalid")
-            if decided.phase == "authorized":
-                if not dispatch_pending or self._worker_admission_error_locked() is not None:
+            _, digest = self._external_command_receipt(command_id)
+            if (
+                decided.phase == "authorized"
+                and self._external_now() >= decided.proposal.expires_at
+            ):
+                boundary = self._close_external(decided, "expired")
+                recovered.extend((boundary, *self._checkpoint_boundary(boundary)))
+            elif decided.phase == "authorized":
+                if (
+                    not dispatch_pending
+                    or self._worker_admission_error_locked() is not None
+                    or (
+                        command is not None
+                        and (command.command_id != command_id or _command_hash(command) != digest)
+                    )
+                ):
                     continue
                 assert decided.decision is not None
                 decision = decided.decision
                 # The command receipt remains authoritative. This envelope is used only
                 # to repeat live authorization checks for its retained decision.
-                command = SessionCommand(
+                retained = SessionCommand(
                     session_id=self.store.session_id,
                     command_id=decision.command_id,
                     actor_id=decision.actor_id,
@@ -1862,12 +2021,12 @@ class SessionService:
                 )
                 current: ExternalActionRecord | ExternalResultRecord
                 if isinstance(decided, ExternalActionRecord):
-                    recovered.extend(self._decide_external_action(command, decided))
+                    recovered.extend(self._decide_external_action(retained, decided))
                     current = external_action_records(self.replay_events())[
                         decided.proposal.operation_id
                     ]
                 else:
-                    recovered.extend(self._decide_external_result(command, decided))
+                    recovered.extend(self._decide_external_result(retained, decided))
                     current = external_result_records(self.replay_events())[
                         decided.proposal.release_id
                     ]
@@ -1875,22 +2034,21 @@ class SessionService:
                     raise SessionRecoveryError(
                         "Retained outside authorization cannot dispatch under current policy"
                     )
-            elif decided.phase == "denied":
+            elif decided.phase in {"denied", "expired", "withdrawn"}:
                 recovered.extend(
                     self._checkpoint_boundary(self._external_decision_boundary(decided))
                 )
-            self.store.complete_command(
-                command_id=command_id,
-                command_hash=digest,
-                first_sequence=first,
-                last_sequence=self.replay_events()[-1].sequence,
-            )
+            self._complete_external_command(command_id)
 
         return tuple(recovered)
 
-    def _recover_approval_commands_locked(self) -> tuple[SessionEvent, ...]:
+    def _recover_approval_commands_locked(
+        self, command: SessionCommand | None = None
+    ) -> tuple[SessionEvent, ...]:
         """Finish approvals whose retained state makes recovery unambiguous."""
-        recovered = list(self._recover_external_approvals_locked(dispatch_pending=True))
+        recovered = list(
+            self._recover_external_approvals_locked(dispatch_pending=True, command=command)
+        )
         if self._worker_admission_error_locked() is not None:
             return tuple(recovered)
         for command_id in self.store.unresolved_command_ids():
@@ -2079,24 +2237,26 @@ def _audit_payload(kind: EventKind, payload: dict[str, JsonValue]) -> dict[str, 
     """Project an operational event into its content-minimized audit representation."""
     if kind == EventKind.EXTERNAL_RESULT_RECORDED:
         release = ExternalResultRecord.model_validate_json(json.dumps(payload["record"]))
+        decided = release.withdrawal or release.decision
         return {
             "release_id": str(release.proposal.release_id),
             "operation_id": str(release.proposal.operation_id),
             "proposal_sha256": release.proposal.sha256,
             "phase": release.phase,
             **_selected_audit_fields(payload, "evidence_mode"),
-            "actor_id": release.decision.actor_id if release.decision else None,
-            "command_id": release.decision.command_id if release.decision else None,
+            "actor_id": decided.actor_id if decided else None,
+            "command_id": decided.command_id if decided else None,
         }
     if kind == EventKind.EXTERNAL_ACTION_RECORDED:
         outside = ExternalActionRecord.model_validate_json(json.dumps(payload["record"]))
+        decided = outside.withdrawal or outside.decision
         return {
             "operation_id": str(outside.proposal.operation_id),
             "proposal_sha256": outside.proposal.sha256,
             "phase": outside.phase,
             **_selected_audit_fields(payload, "evidence_mode"),
-            "actor_id": outside.decision.actor_id if outside.decision else None,
-            "command_id": outside.decision.command_id if outside.decision else None,
+            "actor_id": decided.actor_id if decided else None,
+            "command_id": decided.command_id if decided else None,
             "status": outside.observation.operation.status if outside.observation else None,
         }
     if kind == EventKind.WORKER_ATTEMPT_RECORDED:
