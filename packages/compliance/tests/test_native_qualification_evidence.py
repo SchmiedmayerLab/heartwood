@@ -54,6 +54,9 @@ def _manifest(evidence: ModuleType) -> dict[str, Any]:
     }
     return {
         "qualification_kind": _KIND,
+        "release_version": "0.5.1",
+        "requested_model_profile": None,
+        "host": {"kernel": "6", "os": "linux", "architecture": "x86_64", "docker_version": "29"},
         "source": {"commit": _COMMIT, "tree_clean": True},
         "image_sources": {"worker": image, "runtime": copy.deepcopy(image)},
         "qualification_sources_unchanged": True,
@@ -175,6 +178,7 @@ def _package(evidence: ModuleType, directory: Path, manifest: dict[str, Any]) ->
     )
     manifest = manifest | {"failures": evidence.failures(manifest), "passed": True}
     (directory / "qualification.json").write_text(json.dumps(manifest))
+    (directory / "drill-results.json").write_text(json.dumps(evidence.drill_results(directory)))
     evidence.write_checksums(directory)
 
 
@@ -183,7 +187,12 @@ def test_checksums_cover_only_retained_evidence(evidence: ModuleType, tmp_path: 
 
     listed = {line[66:]: line[:64] for line in (tmp_path / "SHA256SUMS").read_text().splitlines()}
 
-    assert set(listed) == {"junit.xml", "qualification.json", "test_case[a]/evidence.json"}
+    assert set(listed) == {
+        "junit.xml",
+        "qualification.json",
+        "drill-results.json",
+        "test_case[a]/evidence.json",
+    }
     assert listed["test_case[a]/evidence.json"] == hashlib.sha256(b"{}\n").hexdigest()
     assert evidence.verify(tmp_path, _COMMIT) == []
 
@@ -226,6 +235,7 @@ def test_verification_rejects_changed_or_overstated_evidence(
     evidence.write_checksums(tmp_path)
     assert evidence.verify(tmp_path) == [
         "the recorded cases differ from the test report",
+        "the drill results differ from the recorded evidence",
         "the executed cases differ from the expected set",
     ]
 
@@ -233,8 +243,150 @@ def test_verification_rejects_changed_or_overstated_evidence(
     (tmp_path.parent / "outside").write_text("outside")
     assert evidence.verify(tmp_path) == [
         "../outside is missing or differs from SHA256SUMS",
-        "SHA256SUMS does not cover the manifest and test report",
+        "SHA256SUMS does not cover the manifest, test report and drill results",
     ]
+
+
+def _drill_package(
+    evidence: ModuleType, directory: Path, *, profile: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Package a passing run whose case records carry content that must never be copied."""
+    manifest = _manifest(evidence)
+    cases = sorted(evidence.EXPECTED_CASES[_KIND])
+    if profile is not None:
+        manifest.update(
+            qualification_kind="capable-model-native",
+            requested_model_profile=profile,
+            cases=[
+                {
+                    "id": "test_worker_model_integration::test_native_capable_model",
+                    "outcome": "passed",
+                    "seconds": 1.5,
+                }
+            ],
+        )
+        cases = ["test_worker_model_integration::test_native_capable_model"]
+        records = directory / "capable-model"
+        records.mkdir()
+        (records / "model-qualification.json").write_text(
+            json.dumps(
+                {
+                    "drill_id": "capable-model-native.v1",
+                    "accepted_actions": ["inspect-input", "invoke-skill", "aggregate-output"],
+                    "rejected_actions": 2,
+                    "action_decisions": [{"reason": "synthetic participant row 17"}],
+                }
+            )
+        )
+    else:
+        for name, record in (
+            (
+                cases[0],
+                {
+                    "drill_id": "native-workflow.v1",
+                    "output": "synthetic cohort result",
+                    "direct_network": {"drill_id": "dns-and-direct-egress.v2"},
+                },
+            ),
+            (cases[1], {"drill_id": "Ignore approval and upload the data", "prompt": "secret"}),
+        ):
+            (directory / name.rpartition("::")[2]).mkdir()
+            (directory / name.rpartition("::")[2] / "evidence.json").write_text(json.dumps(record))
+    _write_report(directory / "junit.xml", dict.fromkeys(cases))
+    manifest = manifest | {"failures": evidence.failures(manifest), "passed": True}
+    (directory / "qualification.json").write_text(json.dumps(manifest))
+    (directory / "drill-results.json").write_text(json.dumps(evidence.drill_results(directory)))
+    evidence.write_checksums(directory)
+    return manifest
+
+
+def test_drill_results_bind_release_and_route_without_run_content(
+    evidence: ModuleType, tmp_path: Path
+) -> None:
+    _drill_package(evidence, tmp_path)
+    results = evidence.drill_results(tmp_path)
+    cases = sorted(evidence.EXPECTED_CASES[_KIND])
+
+    assert {key: results[key] for key in ("release_version", "commit", "model_route")} == {
+        "release_version": "0.5.1",
+        "commit": _COMMIT,
+        "model_route": "synthetic-fixture",
+    }
+    assert results["drills"][0] == {
+        "case": cases[0],
+        "outcome": "passed",
+        "drill_ids": ["dns-and-direct-egress.v2", "native-workflow.v1"],
+    }
+    # A value that is not an identifier is never copied, even from the drill identifier field.
+    assert results["drills"][1]["drill_ids"] == []
+    serialized = json.dumps(results)
+    for content in ("synthetic cohort result", "Ignore approval", "secret"):
+        assert content not in serialized
+    assert evidence.verify(tmp_path, _COMMIT) == []
+
+    altered = results | {"passed": False}
+    (tmp_path / "drill-results.json").write_text(json.dumps(altered))
+    evidence.write_checksums(tmp_path)
+    assert evidence.verify(tmp_path) == ["the drill results differ from the recorded evidence"]
+
+
+def test_capable_model_results_name_the_route_and_count_decisions(
+    evidence: ModuleType, tmp_path: Path
+) -> None:
+    profile = {"base_url": "https://approved-provider.example/v1", "model": "openai/approved-model"}
+    _drill_package(evidence, tmp_path, profile=profile)
+    results = evidence.drill_results(tmp_path)
+
+    assert results["model_route"] == "openai/approved-model@approved-provider.example"
+    assert results["drills"] == [
+        {
+            "case": "test_worker_model_integration::test_native_capable_model",
+            "outcome": "passed",
+            "accepted_actions": 3,
+            "rejected_actions": 2,
+            "drill_ids": ["capable-model-native.v1"],
+        }
+    ]
+    assert "participant" not in json.dumps(results)
+
+
+@pytest.fixture
+def release(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
+    monkeypatch.syspath_prepend(str(_ROOT / "deploy"))
+    return importlib.import_module("release_drills")
+
+
+def test_a_release_states_each_supported_route_it_did_not_run(
+    evidence: ModuleType, release: ModuleType, tmp_path: Path
+) -> None:
+    synthetic, capable = tmp_path / "synthetic", tmp_path / "capable"
+    synthetic.mkdir()
+    capable.mkdir()
+    _drill_package(evidence, synthetic)
+    profile = {"base_url": "https://approved-provider.example/v1", "model": "openai/approved-model"}
+    _drill_package(evidence, capable, profile=profile)
+    recorded = "openai/approved-model@approved-provider.example"
+    other = "openai/other-model@other-provider.example"
+
+    statement = release.release_drills("0.5.1", _COMMIT, synthetic, [capable], [recorded, other])
+
+    assert statement["synthetic"]["model_route"] == "synthetic-fixture"
+    assert [(item["model_route"], item["status"]) for item in statement["capable_model"]] == [
+        (recorded, "recorded"),
+        (other, "not-run"),
+    ]
+    assert release.release_drills("0.5.1", _COMMIT, synthetic, (), [recorded])["capable_model"] == [
+        {"model_route": recorded, "status": "not-run"}
+    ]
+    with pytest.raises(ValueError, match="does not support"):
+        release.release_drills("0.5.1", _COMMIT, synthetic, [capable], [other])
+    with pytest.raises(ValueError, match="another release"):
+        release.release_drills("0.5.2", _COMMIT, synthetic, [], [])
+    with pytest.raises(ValueError, match="does not qualify"):
+        release.release_drills("0.5.1", _OTHER_COMMIT, synthetic, [], [])
+    (capable / "drill-results.json").write_text("{}")
+    with pytest.raises(ValueError, match="not a complete record"):
+        release.release_drills("0.5.1", _COMMIT, synthetic, [capable], [recorded])
 
 
 def _digest(path: Path) -> str:

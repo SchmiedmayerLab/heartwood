@@ -367,6 +367,7 @@ def test_native_capable_model(monkeypatch: pytest.MonkeyPatch) -> None:
             if timer.is_alive():
                 raise RuntimeError("Outside deadline revocation remains unresolved")
         evidence = {
+            "drill_id": "capable-model-native.v1",
             "passed": passed,
             "sensitive_data_ready": False,
             "requested_profile": profile.mapping(),

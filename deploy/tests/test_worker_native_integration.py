@@ -823,6 +823,7 @@ def test_native_unapproved_action_does_not_execute(
         (fixture.output / "evidence.json").write_text(
             json.dumps(
                 {
+                    "drill_id": "native-unapproved-action.v1",
                     "worker_image": fixture.worker,
                     "gateway_image": fixture.gateway_image,
                     "attempt_id": str(attempt.intent.attempt_id),
