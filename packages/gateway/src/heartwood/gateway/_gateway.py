@@ -2263,7 +2263,7 @@ class SessionGateway:
         return OpenHandsSdkBackend(
             profile=profile,
             workspace=self.project.root,
-            skill_directories=self.skill_manager.active_skill_directories(),
+            verified_skills=self.skill_manager.active_skill_manifests(),
             specialist_catalog=self._specialist_catalog(),
             persistence_dir=self.sessions_root / session_id / "openhands",
             conversation_key=f"{self.project.root}#{session_id}",

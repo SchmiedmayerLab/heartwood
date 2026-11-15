@@ -10,7 +10,7 @@ import os
 import shutil
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pytest
@@ -18,7 +18,7 @@ from heartwood_skill_catalog import build_catalog
 
 from heartwood.audit import AuditLog
 from heartwood.gateway import SkillManager, SkillSettingsError
-from heartwood.gateway._openhands_sdk import OpenHandsSdkError, load_skill_directories
+from heartwood.gateway._openhands_sdk import OpenHandsSdkError, load_verified_skills
 from heartwood.persistence import NativeLockUnavailableError
 from heartwood.skills import (
     CatalogEntry,
@@ -316,7 +316,7 @@ def test_manager_reverifies_signed_source_before_runtime_activation(tmp_path: Pa
 
     client.failure = SkillCatalogError("signed metadata expired")
     with pytest.raises(SkillSettingsError, match="signed metadata expired"):
-        manager.active_skill_directories()
+        manager.active_skill_manifests()
 
 
 def test_manager_records_removal_despite_unexpected_content_next_to_the_skill(
@@ -397,7 +397,7 @@ def test_manager_does_not_expose_installation_without_activation_audit(tmp_path:
     with pytest.raises(SkillSettingsError, match="missing a verified activation event"):
         manager.summaries()
     with pytest.raises(SkillSettingsError, match="missing a verified activation event"):
-        manager.active_skill_directories()
+        manager.active_skill_manifests()
 
 
 def test_manager_enforces_platform_and_deployment_owned_controlled_data_approval(
@@ -650,11 +650,11 @@ def test_manager_fails_closed_for_missing_source_and_corrupt_installed_state(
         platform_id="generic",
     )
     with pytest.raises(SkillSettingsError, match="no longer configured"):
-        manager_without_source.active_skill_directories()
+        manager_without_source.active_skill_manifests()
 
     manager.store.index_path.write_text("{", encoding="utf-8")
     with pytest.raises(SkillSettingsError, match="index is invalid"):
-        manager_without_source.active_skill_directories()
+        manager_without_source.active_skill_manifests()
 
 
 def test_manager_accepts_an_empty_pin_and_rejects_invalid_bundled_skills(
@@ -766,9 +766,9 @@ def _local_skill(tmp_path: Path) -> Path:
 
 def _installed_directories(manager: SkillManager) -> tuple[Path, ...]:
     return tuple(
-        path
-        for path in manager.active_skill_directories()
-        if path.is_relative_to(manager.store.root)
+        manifest.root
+        for manifest in manager.active_skill_manifests()
+        if manifest.root.is_relative_to(manager.store.root)
     )
 
 
@@ -939,7 +939,7 @@ def test_agent_receives_only_verified_skill_directories(
     )
 
     with caplog.at_level("WARNING", logger="heartwood.gateway._skill_settings"):
-        skills = load_skill_directories(manager.active_skill_directories())
+        skills = load_verified_skills(manager.active_skill_manifests())
 
     assert {skill.name for skill in skills} == {
         "aggregate-export",
@@ -977,14 +977,20 @@ def test_agent_receives_only_verified_skill_directories(
 
 
 def test_agent_skill_loading_refuses_a_directory_that_does_not_load(tmp_path: Path) -> None:
+    manifest = LocalSkillVerifier(_skills_root()).inspect_manifest(
+        _skills_root() / "aggregate-export"
+    )
     renamed = tmp_path / "renamed"
-    shutil.copytree(_skills_root() / "aggregate-export", renamed)
+    shutil.copytree(manifest.root, renamed)
+    changed = tmp_path / "changed" / "aggregate-export"
+    shutil.copytree(manifest.root, changed)
+    (changed / "SKILL.md").write_text(
+        (changed / "SKILL.md").read_text(encoding="utf-8") + "\nchanged\n", encoding="utf-8"
+    )
 
-    for directory in (tmp_path / "missing", renamed):
-        with pytest.raises(
-            OpenHandsSdkError, match=f"Unable to load verified Skill {directory.name}"
-        ):
-            load_skill_directories((directory,))
+    for root in (tmp_path / "missing", renamed, changed):
+        with pytest.raises(OpenHandsSdkError, match=r"Skill.*aggregate-export"):
+            load_verified_skills((replace(manifest, root=root),))
 
 
 def test_unexpected_content_is_reported_on_the_installed_skill_summary(tmp_path: Path) -> None:
@@ -1036,7 +1042,7 @@ SkillManager(
     cache_dir=root / "cache",
     audit_path=root / "audit.jsonl",
     platform_id="generic",
-).active_skill_directories()
+).active_skill_manifests()
 """
     environment = {key: value for key, value in os.environ.items() if key != "LOG_LEVEL"}
     environment["COLUMNS"] = "400"
@@ -1112,7 +1118,7 @@ def test_bundled_skills_must_match_the_release_pin(tmp_path: Path, change: str) 
     with pytest.raises(SkillSettingsError, match="release"):
         manager.summaries()
     with pytest.raises(SkillSettingsError, match="release"):
-        manager.active_skill_directories()
+        manager.active_skill_manifests()
     with (
         pytest.raises(SkillSettingsError, match="release"),
         manager.stage_worker_skills(project_root=tmp_path / "project", staging_parent=parent),

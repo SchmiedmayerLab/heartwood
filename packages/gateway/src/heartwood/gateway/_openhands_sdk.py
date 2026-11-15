@@ -29,6 +29,7 @@ os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 os.environ.setdefault("LOG_LEVEL", "ERROR")
 os.environ.setdefault("OPENHANDS_SUPPRESS_BANNER", "1")
 
+from heartwood_skill_catalog import CatalogBuildError, inspect_skill
 from openhands.sdk import LLM, Agent, AgentContext, LLMStreamChunk, LocalConversation, Tool
 from openhands.sdk.conversation import (
     BaseConversation,
@@ -150,6 +151,7 @@ from heartwood.gateway._worker_events import AdmittedWorkerWorkspace
 from heartwood.schemas import ActionReviewMode, JsonValue
 from heartwood.schemas.evaluation import EvaluationRuntimeObservation
 from heartwood.schemas.project_paths import ProjectPathError, project_relative_path
+from heartwood.skills import SkillManifest
 
 install_privacy_safe_retry_logging()
 
@@ -302,7 +304,7 @@ class OpenHandsSdkBackend:
         workspace: Path,
         persistence_dir: Path,
         conversation_key: str,
-        skill_directories: Sequence[Path] = (),
+        verified_skills: Sequence[SkillManifest] = (),
         specialist_catalog: SpecialistCatalog | None = None,
         credential_environment_names: Sequence[str] = (),
         env: Mapping[str, str] | None = None,
@@ -318,7 +320,7 @@ class OpenHandsSdkBackend:
         self.profile = profile
         self._managed_inference = managed_inference
         self.workspace = workspace.resolve()
-        self.skill_directories = tuple(path.resolve() for path in skill_directories)
+        self.verified_skills = tuple(verified_skills)
         self.specialist_catalog = specialist_catalog
         self.persistence_dir = persistence_dir.resolve()
         self.conversation_key = conversation_key
@@ -844,7 +846,7 @@ class OpenHandsSdkBackend:
             )
         self.workspace.mkdir(parents=True, exist_ok=True)
         self.persistence_dir.mkdir(parents=True, exist_ok=True)
-        skills = load_skill_directories(self.skill_directories)
+        skills = load_verified_skills(self.verified_skills)
         self._register_specialized_agents()
         options = _llm_options(
             self.profile,
@@ -2276,14 +2278,16 @@ def _conversation_runtime_options() -> _ConversationRuntimeOptions:
     }
 
 
-def load_skill_directories(directories: Sequence[Path]) -> list[Skill]:
-    """Load exactly the given Agent Skill directories, refusing any that does not load."""
+def load_verified_skills(manifests: Sequence[SkillManifest]) -> list[Skill]:
+    """Load exactly the selected Skill directories after rechecking each selected digest."""
     skills: list[Skill] = []
-    for directory in directories:
+    for manifest in manifests:
         try:
-            skill = Skill.load(directory / "SKILL.md")
-        except (OSError, SkillError) as error:
-            raise OpenHandsSdkError(f"Unable to load verified Skill {directory.name}") from error
+            if inspect_skill(manifest.root).tree_sha256 != manifest.tree_sha256:
+                raise OpenHandsSdkError(f"Verified Skill changed before loading: {manifest.name}")
+            skill = Skill.load(manifest.root / "SKILL.md")
+        except (CatalogBuildError, OSError, SkillError) as error:
+            raise OpenHandsSdkError(f"Unable to load verified Skill {manifest.name}") from error
         skills.append(skill)
     return skills
 

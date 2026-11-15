@@ -75,7 +75,8 @@ The projection likewise reports controlled-data approval for an installed Skill 
 The agent context contains the release-bundled Skills compatible with the current deployment and the verified active installed Skills, and nothing else.
 The local gateway and the worker projection use this same selection.
 The gateway loads each selected Skill from its own `SKILL.md`; it never passes a parent directory to OpenHands for discovery.
-A selected directory that fails to load stops conversation setup rather than being skipped.
+When it creates the conversation, it first rechecks each selected Skill's complete-tree digest, so content changed after selection is refused.
+A selected Skill that has changed or fails to load stops conversation setup rather than being skipped.
 
 Each content-addressed slot `artifacts/sha256/<tree-digest>/` holds exactly one Skill directory.
 Anything else in that slot, such as a directory written beside the Skill or a staging directory left by an interrupted installation, has neither a verified digest nor an activation record.

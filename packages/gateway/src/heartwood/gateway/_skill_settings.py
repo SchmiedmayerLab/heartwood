@@ -479,10 +479,10 @@ class SkillManager:
         # is no longer loaded, so its directory is not reverified here.
         self._record_removal(removed)
 
-    def active_skill_directories(self) -> tuple[Path, ...]:
-        """Return exactly the verified, active Skill directories that OpenHands may load."""
+    def active_skill_manifests(self) -> tuple[SkillManifest, ...]:
+        """Return exactly the verified, active Skills that OpenHands may load."""
         with self._lifecycle_lock():
-            return tuple(manifest.root for manifest in self._agent_skill_manifests())
+            return self._agent_skill_manifests()
 
     @contextmanager
     def stage_worker_skills(
