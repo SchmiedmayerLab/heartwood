@@ -16,7 +16,6 @@ from uuid import UUID
 import certifi
 import httpx
 from openhands.sdk.event import Event
-from openhands.sdk.event.conversation_state import FULL_STATE_KEY, ConversationStateUpdateEvent
 from openhands.sdk.tool.client_tool import ClientToolSpec
 from openhands.sdk.workspace import RemoteWorkspace
 from pydantic import Field, PrivateAttr, model_validator
@@ -36,8 +35,8 @@ from heartwood.gateway._remote_workspace import (
     AgentContract,
     WorkerResponseBudget,
     WorkerResponseError,
+    _admit_event,
     _admit_json,
-    _admit_metadata,
     _client_tool_contract,
     _worker_origin,
 )
@@ -151,21 +150,10 @@ class WorkerEventAdmission:
                 raise ValueError
             agent = self._agent()
             value = _admit_json(content, self._tool_modules, self._client_tools, agent)
-            if not isinstance(value, dict) or value.get("kind") == "LLMCompletionLogEvent":
+            if not isinstance(value, dict):
                 raise ValueError
-            event = Event.model_validate(value)
-            if isinstance(event, ConversationStateUpdateEvent):
-                metadata = event.value if event.key == FULL_STATE_KEY else {event.key: event.value}
-                if not isinstance(metadata, dict):
-                    raise ValueError
-                _admit_metadata(metadata, self._tool_modules, self._client_tools, agent)
-                attempt = self._budget.attempt
-                if (
-                    attempt is not None
-                    and (event.key == FULL_STATE_KEY or "id" in metadata)
-                    and metadata.get("id") != str(attempt.intent.conversation_id)
-                ):
-                    raise ValueError
+            _admit_event(value, self._tool_modules, self._client_tools, agent, self._budget.attempt)
+            Event.model_validate(value)
             self._budget.charge(0)
         except Exception:
             self._budget.close()

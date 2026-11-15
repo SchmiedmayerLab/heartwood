@@ -101,6 +101,29 @@ def test_response_rejects_unsafe_metadata(body: bytes) -> None:
         _request(body)
 
 
+@pytest.mark.parametrize("field", ["items", "events"])
+@pytest.mark.parametrize(
+    "event",
+    [
+        {"kind": "LLMCompletionLogEvent"},
+        {"kind": "ConversationStateUpdateEvent", "key": "agent", "value": {"kind": "Agent"}},
+        {
+            "kind": "ConversationStateUpdateEvent",
+            "key": "tool_module_qualnames",
+            "value": {"forged": "unlisted"},
+        },
+        {"kind": "ConversationStateUpdateEvent", "key": "full_state", "value": "unstructured"},
+    ],
+)
+def test_replayed_events_pass_the_admission_applied_to_socket_events(
+    field: str, event: dict[str, object]
+) -> None:
+    harmless = {"kind": "MessageEvent"}
+    assert _request(json.dumps({field: [harmless]}).encode()).status_code == 200
+    with pytest.raises(WorkerResponseError):
+        _request(json.dumps({field: [harmless, event]}).encode())
+
+
 def test_exact_tool_pair_is_admitted_without_changing_response() -> None:
     body = b'{"tool_module_qualnames":{"terminal":"trusted.terminal"}}'
     assert _request(body, modules={"terminal": "trusted.terminal"}).content == body
