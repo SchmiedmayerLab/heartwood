@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Annotated, ClassVar, Literal, cast
 
@@ -472,6 +474,35 @@ class SessionProjection(_ProjectionRecord):
         )
 
 
+@dataclass(slots=True)
+class _SessionReduction:
+    """Mutable state accumulated while reducing one session's events in order."""
+
+    activity: list[ProjectionActivity] = field(default_factory=list)
+    conversation: list[ProjectionMessage] = field(default_factory=list)
+    actions: dict[str, ProjectionActionRecord] = field(default_factory=dict)
+    proposed_action_ids: set[str] = field(default_factory=set)
+    approval_group_actions: dict[str, list[str]] = field(default_factory=dict)
+    approval_group_decisions: dict[str, Literal["approved", "denied"] | None] = field(
+        default_factory=dict
+    )
+    approval_group_resolutions: dict[str, dict[str, Literal["approved", "denied"]]] = field(
+        default_factory=dict
+    )
+    integrity_failed_action_ids: set[str] = field(default_factory=set)
+    reported_resolutions: set[str] = field(default_factory=set)
+    context: ProjectionModelContext = field(default_factory=ProjectionModelContext)
+    lifecycle_status: SessionLifecycle = SessionLifecycle.IDLE
+    lifecycle_sequence: int = -1
+    lifecycle_error_recoverable: bool = True
+    command_outcome: ProjectionCommandOutcome | None = None
+    tasks: tuple[ProjectionTask, ...] = ()
+    usage: ProjectionUsage | None = None
+    usage_by_purpose: dict[str, ProjectionUsage] = field(default_factory=dict)
+    subagents: dict[str, ProjectionSubagent] = field(default_factory=dict)
+    worker_attempts: set[str] = field(default_factory=set)
+
+
 def project_session(
     events: tuple[SessionEvent, ...],
     *,
@@ -482,570 +513,23 @@ def project_session(
     parallel_reviews_available: bool = False,
 ) -> SessionProjection:
     """Reduce durable session events once at the gateway boundary."""
-    activity: list[ProjectionActivity] = []
-    conversation: list[ProjectionMessage] = []
-    actions: dict[str, ProjectionActionRecord] = {}
-    proposed_action_ids: set[str] = set()
-    approval_group_actions: dict[str, list[str]] = {}
-    approval_group_decisions: dict[str, Literal["approved", "denied"] | None] = {}
-    approval_group_resolutions: dict[
-        str,
-        dict[str, Literal["approved", "denied"]],
-    ] = {}
-    integrity_failed_action_ids: set[str] = set()
-    reported_resolutions: set[str] = set()
-    context = ProjectionModelContext()
-    lifecycle_status = SessionLifecycle.IDLE
-    lifecycle_sequence = -1
-    lifecycle_error_recoverable = True
-    command_outcome: ProjectionCommandOutcome | None = None
-    tasks: tuple[ProjectionTask, ...] = ()
-    usage: ProjectionUsage | None = None
-    usage_by_purpose: dict[str, ProjectionUsage] = {}
-    subagents: dict[str, ProjectionSubagent] = {}
-    worker_attempts: set[str] = set()
-
+    reduction = _SessionReduction()
+    # Malformed outside-result records must fail the projection before any event is reduced.
     external_result_records(events)
     for event in events:
-        activity.append(_activity(event))
-        kind = str(event.kind)
-        if kind == EventKind.USER_MESSAGE_RECORDED.value:
-            _append_message(
-                conversation,
-                event,
-                role="user",
-                label="You",
-                content=_string(event.payload.get("content")),
-                message_id=f"local-{_string(event.payload.get('command_id'))}",
-            )
-        elif kind == EventKind.COMMAND_RECEIVED.value:
-            command_outcome = ProjectionCommandOutcome(
-                command_id=_string(event.payload.get("command_id")),
-                command_kind=CommandKind(_string(event.payload.get("command_kind"))),
-                status="accepted",
-            )
-        elif kind == EventKind.AGENT_MESSAGE_EMITTED.value:
-            _append_message(
-                conversation,
-                event,
-                role="agent",
-                label="Agent",
-                content=_string(event.payload.get("content")),
-            )
-        elif kind in {
-            EventKind.EXTERNAL_ACTION_RECORDED.value,
-            EventKind.EXTERNAL_RESULT_RECORDED.value,
-        }:
-            outside = (
-                ExternalActionRecord.model_validate_json(json.dumps(event.payload["record"]))
-                if kind == EventKind.EXTERNAL_ACTION_RECORDED.value
-                else ExternalResultRecord.model_validate_json(json.dumps(event.payload["record"]))
-            )
-            outside_proposal = outside.proposal
-            call = outside_proposal.review_call
-            outside_action = actions.get(outside_proposal.action_id) or _action_record(
-                event,
-                payload={"summary": call.summary, "action_id": outside_proposal.action_id},
-                tool_call_id=outside_proposal.action_id,
-                tool_name=call.tool_name,
-                arguments=call.arguments,
-            )
-            state = "awaiting-review"
-            outcome = None
-            decision = None
-            if outside.decision is not None:
-                decision = "approved" if outside.decision.decision == "approved" else "rejected"
-                state = "rejected" if decision == "rejected" else "outcome-unknown"
-                approval_group_decisions[outside_proposal.group_id] = outside.decision.decision
-                _append_approval_message(
-                    conversation,
-                    event,
-                    group_id=outside_proposal.group_id,
-                    decision=outside.decision.decision,
-                    action_count=1,
-                    reported_resolutions=reported_resolutions,
-                )
-            else:
-                approval_group_decisions[outside_proposal.group_id] = None
-            if outside.phase == "authorized":
-                state = "approved"
-            if outside.phase in {"expired", "withdrawn"}:
-                # Closed before dispatch: neither awaiting review nor an uncertain effect.
-                approval_group_decisions[outside_proposal.group_id] = "denied"
-                state = "failed"
-                outcome = ProjectionActionOutcome(
-                    exit_code=1,
-                    summary=(
-                        "Review expired before dispatch"
-                        if outside.phase == "expired"
-                        else "Approval withdrawn before dispatch"
-                    ),
-                    result="Nothing was sent.",
-                )
-            if isinstance(outside, ExternalResultRecord) and outside.phase == "submitted":
-                state = "succeeded"
-                outcome = ProjectionActionOutcome(
-                    exit_code=0,
-                    summary="Result submitted to worker",
-                    result="Native delivery accepted; worker execution is not established.",
-                )
-            if isinstance(outside, ExternalActionRecord) and outside.observation is not None:
-                operation = outside.observation.operation
-                state = {
-                    "submitted": "running",
-                    "queued": "running",
-                    "running": "running",
-                    "completed": "succeeded",
-                    "failed": "failed",
-                    "cancelled": "failed",
-                    "denied": "failed",
-                    "unknown": "outcome-unknown",
-                }[operation.status]
-                if outside.terminal:
-                    outcome = ProjectionActionOutcome(
-                        exit_code=0 if operation.status == "completed" else 1,
-                        summary=f"Platform operation {operation.status}",
-                        result=f"Platform record: {operation.platform_record_ref}",
-                    )
-            actions[outside_proposal.action_id] = outside_action.model_copy(
-                update={
-                    "summary_source": "gateway",
-                    "details": _outside_details(outside_proposal),
-                    "group_id": outside_proposal.group_id,
-                    "state": state,
-                    "decision": decision,
-                    "outcome": outcome,
-                    "updated_sequence": event.sequence,
-                }
-            )
-            approval_group_actions[outside_proposal.group_id] = [outside_proposal.action_id]
-        elif kind == EventKind.TOOL_CALL_PROPOSED.value:
-            tool_name = _string(event.payload.get("tool_name"))
-            arguments = _mapping(event.payload.get("arguments"))
-            tool_call_id = _string(event.payload.get("tool_call_id"))
-            if tool_call_id:
-                prior = actions.get(tool_call_id)
-                # Reconciliation may capture a complete confirmation before its
-                # callback proposal. It is not a second proposal, but its action
-                # identity and reviewed arguments must remain unchanged.
-                if tool_call_id in proposed_action_ids or (
-                    prior is not None
-                    and (
-                        prior.tool_name != tool_name
-                        or prior.arguments != arguments
-                        or (
-                            prior.action_id is not None
-                            and prior.action_id != (_string(event.payload.get("action_id")) or None)
-                        )
-                        or tool_call_id in integrity_failed_action_ids
-                    )
-                ):
-                    integrity_failed_action_ids.add(tool_call_id)
-                    _mark_projection_integrity_failure(
-                        actions,
-                        conversation,
-                        event,
-                        tool_call_ids=(tool_call_id,),
-                        detail="An action proposal repeats or conflicts with its stable identity.",
-                    )
-                    lifecycle_status = SessionLifecycle.ERROR
-                    lifecycle_sequence = event.sequence
-                    lifecycle_error_recoverable = False
-                    continue
-                proposed_action_ids.add(tool_call_id)
-                proposal = _action_record(
-                    event,
-                    payload=event.payload,
-                    tool_call_id=tool_call_id,
-                    tool_name=tool_name,
-                    arguments=arguments,
-                )
-                actions[tool_call_id] = (
-                    proposal
-                    if prior is None
-                    else proposal.model_copy(
-                        update={
-                            "group_id": prior.group_id,
-                            "state": prior.state,
-                            "decision": prior.decision,
-                            "automatic_rule": prior.automatic_rule,
-                            "outcome": prior.outcome,
-                        }
-                    )
-                )
-        elif kind == EventKind.TOOL_EXECUTION_RECORDED.value:
-            tool_name = _string(event.payload.get("tool_name"))
-            tool_call_id = _string(event.payload.get("tool_call_id"))
-            action = actions.get(tool_call_id)
-            exit_code = _signed_integer(event.payload.get("exit_code"))
-            outcome = ProjectionActionOutcome(
-                exit_code=exit_code,
-                summary=(
-                    _string(event.payload.get("summary"))
-                    or f"{tool_name} {'failed' if exit_code != 0 else 'completed'}"
-                ),
-                result=_string(event.payload.get("result")) or None,
-                result_truncated=event.payload.get("result_truncated") is True,
-            )
-            if tool_call_id:
-                if action is not None and action.decision == "rejected":
-                    integrity_failed_action_ids.add(tool_call_id)
-                    _mark_projection_integrity_failure(
-                        actions,
-                        conversation,
-                        event,
-                        tool_call_ids=(tool_call_id,),
-                        detail="A rejected action has a recorded execution.",
-                    )
-                    lifecycle_status = SessionLifecycle.ERROR
-                    lifecycle_sequence = event.sequence
-                    lifecycle_error_recoverable = False
-                    continue
-                if action is None:
-                    action = _action_record(
-                        event,
-                        payload=event.payload,
-                        tool_call_id=tool_call_id,
-                        tool_name=tool_name,
-                        arguments={},
-                    )
-                    actions[tool_call_id] = action
-                    integrity_failed_action_ids.add(tool_call_id)
-                    _mark_projection_integrity_failure(
-                        actions,
-                        conversation,
-                        event,
-                        tool_call_ids=(tool_call_id,),
-                        detail="An action execution has no matching proposal.",
-                    )
-                    lifecycle_status = SessionLifecycle.ERROR
-                    lifecycle_sequence = event.sequence
-                    lifecycle_error_recoverable = False
-                    continue
-                action_id = _string(event.payload.get("action_id")) or None
-                if (
-                    (action.action_id is not None and action.action_id != action_id)
-                    or action.tool_name != tool_name
-                    or action.outcome is not None
-                ):
-                    integrity_failed_action_ids.add(tool_call_id)
-                    _mark_projection_integrity_failure(
-                        actions,
-                        conversation,
-                        event,
-                        tool_call_ids=(tool_call_id,),
-                        detail="An action execution conflicts with its stable identity.",
-                    )
-                    lifecycle_status = SessionLifecycle.ERROR
-                    lifecycle_sequence = event.sequence
-                    lifecycle_error_recoverable = False
-                    continue
-                actions[tool_call_id] = action.model_copy(
-                    update={
-                        "action_id": action.action_id or action_id,
-                        "state": "failed" if exit_code != 0 else "succeeded",
-                        "outcome": outcome,
-                        "updated_sequence": event.sequence,
-                    }
-                )
-        elif kind == EventKind.CONFIRMATION_REQUESTED.value:
-            request = _mapping(event.payload.get("request"))
-            tool_call_id = _string(request.get("tool_call_id"))
-            if tool_call_id:
-                group_id = _string(request.get("group_id")) or "pending-action-set"
-                existing_action = actions.get(tool_call_id)
-                request_action_id = _string(request.get("action_id")) or None
-                request_tool_name = _string(request.get("tool_name"))
-                if existing_action is not None and (
-                    (
-                        request_action_id is not None
-                        and existing_action.action_id is not None
-                        and request_action_id != existing_action.action_id
-                    )
-                    or request_tool_name != existing_action.tool_name
-                    or (
-                        existing_action.group_id is not None
-                        and existing_action.group_id != group_id
-                    )
-                ):
-                    integrity_failed_action_ids.add(tool_call_id)
-                    _mark_projection_integrity_failure(
-                        actions,
-                        conversation,
-                        event,
-                        tool_call_ids=(tool_call_id,),
-                        detail="An approval request conflicts with its stable action identity.",
-                    )
-                    lifecycle_status = SessionLifecycle.ERROR
-                    lifecycle_sequence = event.sequence
-                    lifecycle_error_recoverable = False
-                    continue
-                action = existing_action or _action_record(
-                    event,
-                    payload=request,
-                    tool_call_id=tool_call_id,
-                    tool_name=request_tool_name,
-                    arguments=_mapping(request.get("arguments")),
-                )
-                actions[tool_call_id] = action.model_copy(
-                    update={
-                        "group_id": group_id,
-                        "state": "awaiting-review",
-                        "updated_sequence": event.sequence,
-                    }
-                )
-                group_actions = approval_group_actions.setdefault(group_id, [])
-                if tool_call_id not in group_actions:
-                    group_actions.append(tool_call_id)
-                approval_group_decisions[group_id] = None
-                lifecycle_status = SessionLifecycle.WAITING_FOR_CONFIRMATION
-        elif kind == EventKind.APPROVAL_RECORDED.value:
-            group_id = _string(event.payload.get("group_id"))
-            decision = _approval_decision(event.payload.get("decision"))
-            tool_call_ids = tuple(
-                item
-                for item in (
-                    _string(value) for value in _sequence(event.payload.get("tool_call_ids"))
-                )
-                if item
-            )
-            if group_id and decision is not None and tool_call_ids:
-                automatic_rule = (
-                    _string(_mapping(event.payload.get("review")).get("rule")) or None
-                    if event.payload.get("actor_id") == AUTOMATIC_REVIEW_ACTOR
-                    else None
-                )
-                group_actions = approval_group_actions.setdefault(group_id, [])
-                for tool_call_id in tool_call_ids:
-                    if tool_call_id not in group_actions:
-                        group_actions.append(tool_call_id)
-                    action = actions.get(tool_call_id)
-                    if action is not None:
-                        actions[tool_call_id] = _resolved_action(
-                            action,
-                            group_id=group_id,
-                            decision=decision,
-                            sequence=event.sequence,
-                        ).model_copy(update={"automatic_rule": automatic_rule})
-                approval_group_decisions[group_id] = decision
-                approval_group_resolutions[group_id] = dict.fromkeys(tool_call_ids, decision)
-                _append_approval_message(
-                    conversation,
-                    event,
-                    group_id=group_id,
-                    decision=decision,
-                    action_count=len(tool_call_ids),
-                    reported_resolutions=reported_resolutions,
-                    automatic_rule=automatic_rule,
-                )
-                lifecycle_status = SessionLifecycle.IDLE
-        elif kind == EventKind.CONFIRMATION_RESOLVED.value:
-            tool_call_id = _string(event.payload.get("tool_call_id"))
-            group_id = _string(event.payload.get("group_id"))
-            if not group_id:
-                group_id = next(
-                    (
-                        candidate_group_id
-                        for candidate_group_id, candidate_actions in approval_group_actions.items()
-                        if tool_call_id in candidate_actions
-                    ),
-                    "",
-                )
-            approval_decision = _approval_decision(event.payload.get("decision"))
-            current_actions = approval_group_actions.get(group_id)
-            if current_actions is not None and approval_decision is not None:
-                group_decision = approval_group_decisions.get(group_id)
-                if group_decision is not None and group_decision != approval_decision:
-                    integrity_failed_action_ids.update(current_actions)
-                    _mark_projection_integrity_failure(
-                        actions,
-                        conversation,
-                        event,
-                        tool_call_ids=tuple(current_actions),
-                        detail="An action-set resolution contradicts its recorded decision.",
-                    )
-                    lifecycle_status = SessionLifecycle.ERROR
-                    lifecycle_sequence = event.sequence
-                    lifecycle_error_recoverable = False
-                    continue
-                resolutions = approval_group_resolutions.setdefault(group_id, {})
-                resolutions[tool_call_id] = approval_decision
-                action = actions.get(tool_call_id)
-                if action is not None:
-                    actions[tool_call_id] = _resolved_action(
-                        action,
-                        group_id=group_id,
-                        decision=approval_decision,
-                        sequence=event.sequence,
-                    )
-                resolved_decisions = {resolutions.get(candidate) for candidate in current_actions}
-                if (
-                    None not in resolved_decisions
-                    and len(resolved_decisions) == 1
-                    and group_decision is None
-                ):
-                    approval_group_decisions[group_id] = approval_decision
-                    _append_approval_message(
-                        conversation,
-                        event,
-                        group_id=group_id,
-                        decision=approval_decision,
-                        action_count=len(current_actions),
-                        reported_resolutions=reported_resolutions,
-                    )
-                    lifecycle_status = SessionLifecycle.IDLE
-        elif kind == EventKind.MODEL_CALL_DECISION_RECORDED.value:
-            model_decision = _mapping(event.payload.get("decision"))
-            context = ProjectionModelContext(
-                model_endpoint=_string(model_decision.get("endpoint")) or None,
-                model_decision=_string(model_decision.get("decision")) or None,
-                model_reason=_string(model_decision.get("reason")) or None,
-            )
-        elif kind == EventKind.AGENT_LIFECYCLE_UPDATED.value:
-            lifecycle_status = _lifecycle(_string(event.payload.get("status")))
-            lifecycle_sequence = event.sequence
-        elif kind == EventKind.TASK_PLAN_UPDATED.value:
-            tasks = tuple(_task(item) for item in _sequence(event.payload.get("tasks")))
-        elif kind == EventKind.MODEL_USAGE_UPDATED.value:
-            usage_update = _usage(_mapping(event.payload.get("usage")))
-            if usage_update is not None:
-                if usage_update.usage_id == "total":
-                    usage = usage_update
-                else:
-                    usage_by_purpose[usage_update.usage_id] = usage_update
-        elif kind == EventKind.SUBAGENT_UPDATED.value:
-            subagent = _subagent(_mapping(event.payload.get("subagent")))
-            if subagent.invocation_id:
-                subagents[subagent.invocation_id] = subagent
-        elif kind == EventKind.WORKER_ATTEMPT_RECORDED.value:
-            attempt_id = _string(_mapping(event.payload.get("intent")).get("attempt_id"))
-            if event.payload.get("phase") == "active" and attempt_id not in worker_attempts:
-                if worker_attempts:
-                    _append_message(
-                        conversation,
-                        event,
-                        role="trace",
-                        label="System",
-                        content="A new worker replaced the earlier one",
-                        detail=(
-                            "The earlier sandboxed worker was stopped and removed. "
-                            "This session's record is retained, but the new worker does not "
-                            "remember the earlier conversation and starts with an empty workspace."
-                        ),
-                    )
-                worker_attempts.add(attempt_id)
-        elif kind == EventKind.SESSION_PAUSED.value:
-            lifecycle_status = SessionLifecycle.PAUSED
-            lifecycle_sequence = event.sequence
-        elif kind == EventKind.SESSION_RESUMED.value:
-            lifecycle_status = SessionLifecycle.RUNNING
-            lifecycle_sequence = event.sequence
-        elif (
-            kind == EventKind.ERROR_RECORDED.value
-            and event.payload.get("automatic_review") == "not-applied"
-        ):
-            # A withdrawn gateway decision returns its action set to the researcher.
-            group_id = _string(event.payload.get("group_id"))
-            approval_group_decisions[group_id] = None
-            approval_group_resolutions.pop(group_id, None)
-            reported_resolutions.discard(group_id)
-            for tool_call_id in approval_group_actions.get(group_id, ()):
-                if (action := actions.get(tool_call_id)) is not None:
-                    actions[tool_call_id] = action.model_copy(
-                        update={
-                            "state": "awaiting-review",
-                            "decision": None,
-                            "automatic_rule": None,
-                            "updated_sequence": event.sequence,
-                        }
-                    )
-            lifecycle_status = SessionLifecycle.WAITING_FOR_CONFIRMATION
-            _append_message(
-                conversation,
-                event,
-                role="trace",
-                label="Approval",
-                content="Automatic review was not applied",
-                detail="The action set waits for your decision.",
-            )
-        elif kind == EventKind.ERROR_RECORDED.value:
-            error_code = _string(event.payload.get("code"))
-            error_message = _error_detail(
-                reason=_string(event.payload.get("reason")),
-                code=error_code,
-            )
-            _append_message(
-                conversation,
-                event,
-                role="trace",
-                label="System",
-                content="The task could not be completed",
-                detail=error_message,
-            )
-            if command_outcome is not None:
-                command_outcome = command_outcome.model_copy(
-                    update={
-                        "status": "rejected",
-                        "error_code": error_code or None,
-                        "message": error_message,
-                    }
-                )
-            if event.payload.get("affects_lifecycle") is not False:
-                lifecycle_status = SessionLifecycle.ERROR
-                lifecycle_sequence = event.sequence
-                lifecycle_error_recoverable = (
-                    lifecycle_error_recoverable and not backend_error_is_fatal(error_code)
-                )
+        reduction.activity.append(_activity(event))
+        reduce_event = _EVENT_REDUCERS.get(str(event.kind))
+        if reduce_event is not None:
+            reduce_event(reduction, event)
+    _settle_actions(reduction)
 
-    if lifecycle_status == SessionLifecycle.RUNNING:
-        actions = {
-            tool_call_id: (
-                action.model_copy(
-                    update={
-                        "state": "running",
-                        "updated_sequence": max(
-                            action.updated_sequence,
-                            lifecycle_sequence,
-                        ),
-                    }
-                )
-                if action.state in {"approved", "proposed"}
-                else action
-            )
-            for tool_call_id, action in actions.items()
-        }
-    if not lifecycle_error_recoverable:
-        lifecycle_status = SessionLifecycle.ERROR
-        actions = {
-            tool_call_id: (
-                action.model_copy(
-                    update={
-                        "state": "outcome-unknown",
-                        "updated_sequence": max(
-                            action.updated_sequence,
-                            lifecycle_sequence,
-                        ),
-                    }
-                )
-                if action.outcome is None and action.state not in {"rejected", "awaiting-review"}
-                else action
-            )
-            for tool_call_id, action in actions.items()
-        }
-    for tool_call_id in integrity_failed_action_ids:
-        action = actions.get(tool_call_id)
-        if action is not None:
-            actions[tool_call_id] = action.model_copy(
-                update={
-                    "state": "outcome-unknown",
-                    "outcome": None,
-                }
-            )
-
+    actions = reduction.actions
+    lifecycle_status = reduction.lifecycle_status
+    lifecycle_error_recoverable = reduction.lifecycle_error_recoverable
     pending_approval = _pending_approval(
         actions,
-        approval_group_actions=approval_group_actions,
-        approval_group_decisions=approval_group_decisions,
+        approval_group_actions=reduction.approval_group_actions,
+        approval_group_decisions=reduction.approval_group_decisions,
     )
     if pending_approval is not None and lifecycle_status not in {
         SessionLifecycle.ERROR,
@@ -1069,7 +553,8 @@ def project_session(
     )
     projected_actions = tuple(actions.values())
     projected_subagents = tuple(
-        _enrich_subagent(subagent, actions=projected_actions) for subagent in subagents.values()
+        _enrich_subagent(subagent, actions=projected_actions)
+        for subagent in reduction.subagents.values()
     )
     available_commands = _available_commands(
         lifecycle=lifecycle_status,
@@ -1100,34 +585,594 @@ def project_session(
         ),
         stream_epoch=stream_epoch,
         stream_revision=stream_revision,
-        activity=tuple(activity),
-        conversation=tuple(conversation),
+        activity=tuple(reduction.activity),
+        conversation=tuple(reduction.conversation),
         actions=projected_actions,
         pending_approval=pending_approval,
-        context=context,
+        context=reduction.context,
         lifecycle=lifecycle,
         researcher_status=_researcher_status(
             lifecycle_status,
             error_recoverable=lifecycle_error_recoverable,
             latest_action_denied=_latest_action_was_denied(projected_actions),
         ),
-        researcher_notice=_researcher_notice(command_outcome),
-        last_command_outcome=command_outcome,
-        task_plan=tasks,
-        usage=usage,
-        usage_by_purpose=tuple(usage_by_purpose.values()),
+        researcher_notice=_researcher_notice(reduction.command_outcome),
+        last_command_outcome=reduction.command_outcome,
+        task_plan=reduction.tasks,
+        usage=reduction.usage,
+        usage_by_purpose=tuple(reduction.usage_by_purpose.values()),
         subagents=projected_subagents,
         suggestions=_suggestions(
             lifecycle=lifecycle_status,
-            conversation=tuple(conversation),
+            conversation=tuple(reduction.conversation),
             actions=projected_actions,
-            tasks=tasks,
+            tasks=reduction.tasks,
             available_commands=available_commands,
             error_recoverable=lifecycle_error_recoverable,
         ),
         streaming_text=(streaming_text if lifecycle_status == SessionLifecycle.RUNNING else ""),
         available_commands=available_commands,
     )
+
+
+def _reduce_user_message(reduction: _SessionReduction, event: SessionEvent) -> None:
+    _append_message(
+        reduction.conversation,
+        event,
+        role="user",
+        label="You",
+        content=_string(event.payload.get("content")),
+        message_id=f"local-{_string(event.payload.get('command_id'))}",
+    )
+
+
+def _reduce_command_received(reduction: _SessionReduction, event: SessionEvent) -> None:
+    reduction.command_outcome = ProjectionCommandOutcome(
+        command_id=_string(event.payload.get("command_id")),
+        command_kind=CommandKind(_string(event.payload.get("command_kind"))),
+        status="accepted",
+    )
+
+
+def _reduce_agent_message(reduction: _SessionReduction, event: SessionEvent) -> None:
+    _append_message(
+        reduction.conversation,
+        event,
+        role="agent",
+        label="Agent",
+        content=_string(event.payload.get("content")),
+    )
+
+
+def _reduce_outside_record(reduction: _SessionReduction, event: SessionEvent) -> None:
+    outside = (
+        ExternalActionRecord.model_validate_json(json.dumps(event.payload["record"]))
+        if str(event.kind) == EventKind.EXTERNAL_ACTION_RECORDED.value
+        else ExternalResultRecord.model_validate_json(json.dumps(event.payload["record"]))
+    )
+    outside_proposal = outside.proposal
+    call = outside_proposal.review_call
+    outside_action = reduction.actions.get(outside_proposal.action_id) or _action_record(
+        event,
+        payload={"summary": call.summary, "action_id": outside_proposal.action_id},
+        tool_call_id=outside_proposal.action_id,
+        tool_name=call.tool_name,
+        arguments=call.arguments,
+    )
+    state = "awaiting-review"
+    outcome = None
+    decision = None
+    if outside.decision is not None:
+        decision = "approved" if outside.decision.decision == "approved" else "rejected"
+        state = "rejected" if decision == "rejected" else "outcome-unknown"
+        reduction.approval_group_decisions[outside_proposal.group_id] = outside.decision.decision
+        _append_approval_message(
+            reduction.conversation,
+            event,
+            group_id=outside_proposal.group_id,
+            decision=outside.decision.decision,
+            action_count=1,
+            reported_resolutions=reduction.reported_resolutions,
+        )
+    else:
+        reduction.approval_group_decisions[outside_proposal.group_id] = None
+    if outside.phase == "authorized":
+        state = "approved"
+    if outside.phase in {"expired", "withdrawn"}:
+        # Closed before dispatch: neither awaiting review nor an uncertain effect.
+        reduction.approval_group_decisions[outside_proposal.group_id] = "denied"
+        state = "failed"
+        outcome = ProjectionActionOutcome(
+            exit_code=1,
+            summary=(
+                "Review expired before dispatch"
+                if outside.phase == "expired"
+                else "Approval withdrawn before dispatch"
+            ),
+            result="Nothing was sent.",
+        )
+    if isinstance(outside, ExternalResultRecord) and outside.phase == "submitted":
+        state = "succeeded"
+        outcome = ProjectionActionOutcome(
+            exit_code=0,
+            summary="Result submitted to worker",
+            result="Native delivery accepted; worker execution is not established.",
+        )
+    if isinstance(outside, ExternalActionRecord) and outside.observation is not None:
+        operation = outside.observation.operation
+        state = {
+            "submitted": "running",
+            "queued": "running",
+            "running": "running",
+            "completed": "succeeded",
+            "failed": "failed",
+            "cancelled": "failed",
+            "denied": "failed",
+            "unknown": "outcome-unknown",
+        }[operation.status]
+        if outside.terminal:
+            outcome = ProjectionActionOutcome(
+                exit_code=0 if operation.status == "completed" else 1,
+                summary=f"Platform operation {operation.status}",
+                result=f"Platform record: {operation.platform_record_ref}",
+            )
+    reduction.actions[outside_proposal.action_id] = outside_action.model_copy(
+        update={
+            "summary_source": "gateway",
+            "details": _outside_details(outside_proposal),
+            "group_id": outside_proposal.group_id,
+            "state": state,
+            "decision": decision,
+            "outcome": outcome,
+            "updated_sequence": event.sequence,
+        }
+    )
+    reduction.approval_group_actions[outside_proposal.group_id] = [outside_proposal.action_id]
+
+
+def _reduce_tool_call_proposed(reduction: _SessionReduction, event: SessionEvent) -> None:
+    tool_name = _string(event.payload.get("tool_name"))
+    arguments = _mapping(event.payload.get("arguments"))
+    tool_call_id = _string(event.payload.get("tool_call_id"))
+    if not tool_call_id:
+        return
+    prior = reduction.actions.get(tool_call_id)
+    # Reconciliation may capture a complete confirmation before its
+    # callback proposal. It is not a second proposal, but its action
+    # identity and reviewed arguments must remain unchanged.
+    if tool_call_id in reduction.proposed_action_ids or (
+        prior is not None
+        and (
+            prior.tool_name != tool_name
+            or prior.arguments != arguments
+            or (
+                prior.action_id is not None
+                and prior.action_id != (_string(event.payload.get("action_id")) or None)
+            )
+            or tool_call_id in reduction.integrity_failed_action_ids
+        )
+    ):
+        _fail_integrity(
+            reduction,
+            event,
+            tool_call_ids=(tool_call_id,),
+            detail="An action proposal repeats or conflicts with its stable identity.",
+        )
+        return
+    reduction.proposed_action_ids.add(tool_call_id)
+    proposal = _action_record(
+        event,
+        payload=event.payload,
+        tool_call_id=tool_call_id,
+        tool_name=tool_name,
+        arguments=arguments,
+    )
+    reduction.actions[tool_call_id] = (
+        proposal
+        if prior is None
+        else proposal.model_copy(
+            update={
+                "group_id": prior.group_id,
+                "state": prior.state,
+                "decision": prior.decision,
+                "automatic_rule": prior.automatic_rule,
+                "outcome": prior.outcome,
+            }
+        )
+    )
+
+
+def _reduce_tool_execution(reduction: _SessionReduction, event: SessionEvent) -> None:
+    tool_name = _string(event.payload.get("tool_name"))
+    tool_call_id = _string(event.payload.get("tool_call_id"))
+    action = reduction.actions.get(tool_call_id)
+    exit_code = _signed_integer(event.payload.get("exit_code"))
+    outcome = ProjectionActionOutcome(
+        exit_code=exit_code,
+        summary=(
+            _string(event.payload.get("summary"))
+            or f"{tool_name} {'failed' if exit_code != 0 else 'completed'}"
+        ),
+        result=_string(event.payload.get("result")) or None,
+        result_truncated=event.payload.get("result_truncated") is True,
+    )
+    if not tool_call_id:
+        return
+    if action is not None and action.decision == "rejected":
+        _fail_integrity(
+            reduction,
+            event,
+            tool_call_ids=(tool_call_id,),
+            detail="A rejected action has a recorded execution.",
+        )
+        return
+    if action is None:
+        reduction.actions[tool_call_id] = _action_record(
+            event,
+            payload=event.payload,
+            tool_call_id=tool_call_id,
+            tool_name=tool_name,
+            arguments={},
+        )
+        _fail_integrity(
+            reduction,
+            event,
+            tool_call_ids=(tool_call_id,),
+            detail="An action execution has no matching proposal.",
+        )
+        return
+    action_id = _string(event.payload.get("action_id")) or None
+    if (
+        (action.action_id is not None and action.action_id != action_id)
+        or action.tool_name != tool_name
+        or action.outcome is not None
+    ):
+        _fail_integrity(
+            reduction,
+            event,
+            tool_call_ids=(tool_call_id,),
+            detail="An action execution conflicts with its stable identity.",
+        )
+        return
+    reduction.actions[tool_call_id] = action.model_copy(
+        update={
+            "action_id": action.action_id or action_id,
+            "state": "failed" if exit_code != 0 else "succeeded",
+            "outcome": outcome,
+            "updated_sequence": event.sequence,
+        }
+    )
+
+
+def _reduce_confirmation_requested(reduction: _SessionReduction, event: SessionEvent) -> None:
+    request = _mapping(event.payload.get("request"))
+    tool_call_id = _string(request.get("tool_call_id"))
+    if not tool_call_id:
+        return
+    group_id = _string(request.get("group_id")) or "pending-action-set"
+    existing_action = reduction.actions.get(tool_call_id)
+    request_action_id = _string(request.get("action_id")) or None
+    request_tool_name = _string(request.get("tool_name"))
+    if existing_action is not None and (
+        (
+            request_action_id is not None
+            and existing_action.action_id is not None
+            and request_action_id != existing_action.action_id
+        )
+        or request_tool_name != existing_action.tool_name
+        or (existing_action.group_id is not None and existing_action.group_id != group_id)
+    ):
+        _fail_integrity(
+            reduction,
+            event,
+            tool_call_ids=(tool_call_id,),
+            detail="An approval request conflicts with its stable action identity.",
+        )
+        return
+    action = existing_action or _action_record(
+        event,
+        payload=request,
+        tool_call_id=tool_call_id,
+        tool_name=request_tool_name,
+        arguments=_mapping(request.get("arguments")),
+    )
+    reduction.actions[tool_call_id] = action.model_copy(
+        update={
+            "group_id": group_id,
+            "state": "awaiting-review",
+            "updated_sequence": event.sequence,
+        }
+    )
+    group_actions = reduction.approval_group_actions.setdefault(group_id, [])
+    if tool_call_id not in group_actions:
+        group_actions.append(tool_call_id)
+    reduction.approval_group_decisions[group_id] = None
+    reduction.lifecycle_status = SessionLifecycle.WAITING_FOR_CONFIRMATION
+
+
+def _reduce_approval_recorded(reduction: _SessionReduction, event: SessionEvent) -> None:
+    group_id = _string(event.payload.get("group_id"))
+    decision = _approval_decision(event.payload.get("decision"))
+    tool_call_ids = tuple(
+        item
+        for item in (_string(value) for value in _sequence(event.payload.get("tool_call_ids")))
+        if item
+    )
+    if not (group_id and decision is not None and tool_call_ids):
+        return
+    automatic_rule = (
+        _string(_mapping(event.payload.get("review")).get("rule")) or None
+        if event.payload.get("actor_id") == AUTOMATIC_REVIEW_ACTOR
+        else None
+    )
+    group_actions = reduction.approval_group_actions.setdefault(group_id, [])
+    for tool_call_id in tool_call_ids:
+        if tool_call_id not in group_actions:
+            group_actions.append(tool_call_id)
+        action = reduction.actions.get(tool_call_id)
+        if action is not None:
+            reduction.actions[tool_call_id] = _resolved_action(
+                action,
+                group_id=group_id,
+                decision=decision,
+                sequence=event.sequence,
+            ).model_copy(update={"automatic_rule": automatic_rule})
+    reduction.approval_group_decisions[group_id] = decision
+    reduction.approval_group_resolutions[group_id] = dict.fromkeys(tool_call_ids, decision)
+    _append_approval_message(
+        reduction.conversation,
+        event,
+        group_id=group_id,
+        decision=decision,
+        action_count=len(tool_call_ids),
+        reported_resolutions=reduction.reported_resolutions,
+        automatic_rule=automatic_rule,
+    )
+    reduction.lifecycle_status = SessionLifecycle.IDLE
+
+
+def _reduce_confirmation_resolved(reduction: _SessionReduction, event: SessionEvent) -> None:
+    tool_call_id = _string(event.payload.get("tool_call_id"))
+    group_id = _string(event.payload.get("group_id"))
+    if not group_id:
+        group_id = next(
+            (
+                candidate_group_id
+                for candidate_group_id, candidate_actions in (
+                    reduction.approval_group_actions.items()
+                )
+                if tool_call_id in candidate_actions
+            ),
+            "",
+        )
+    approval_decision = _approval_decision(event.payload.get("decision"))
+    current_actions = reduction.approval_group_actions.get(group_id)
+    if current_actions is None or approval_decision is None:
+        return
+    group_decision = reduction.approval_group_decisions.get(group_id)
+    if group_decision is not None and group_decision != approval_decision:
+        _fail_integrity(
+            reduction,
+            event,
+            tool_call_ids=tuple(current_actions),
+            detail="An action-set resolution contradicts its recorded decision.",
+        )
+        return
+    resolutions = reduction.approval_group_resolutions.setdefault(group_id, {})
+    resolutions[tool_call_id] = approval_decision
+    action = reduction.actions.get(tool_call_id)
+    if action is not None:
+        reduction.actions[tool_call_id] = _resolved_action(
+            action,
+            group_id=group_id,
+            decision=approval_decision,
+            sequence=event.sequence,
+        )
+    resolved_decisions = {resolutions.get(candidate) for candidate in current_actions}
+    if None not in resolved_decisions and len(resolved_decisions) == 1 and group_decision is None:
+        reduction.approval_group_decisions[group_id] = approval_decision
+        _append_approval_message(
+            reduction.conversation,
+            event,
+            group_id=group_id,
+            decision=approval_decision,
+            action_count=len(current_actions),
+            reported_resolutions=reduction.reported_resolutions,
+        )
+        reduction.lifecycle_status = SessionLifecycle.IDLE
+
+
+def _reduce_model_call_decision(reduction: _SessionReduction, event: SessionEvent) -> None:
+    model_decision = _mapping(event.payload.get("decision"))
+    reduction.context = ProjectionModelContext(
+        model_endpoint=_string(model_decision.get("endpoint")) or None,
+        model_decision=_string(model_decision.get("decision")) or None,
+        model_reason=_string(model_decision.get("reason")) or None,
+    )
+
+
+def _reduce_lifecycle_updated(reduction: _SessionReduction, event: SessionEvent) -> None:
+    reduction.lifecycle_status = _lifecycle(_string(event.payload.get("status")))
+    reduction.lifecycle_sequence = event.sequence
+
+
+def _reduce_task_plan(reduction: _SessionReduction, event: SessionEvent) -> None:
+    reduction.tasks = tuple(_task(item) for item in _sequence(event.payload.get("tasks")))
+
+
+def _reduce_model_usage(reduction: _SessionReduction, event: SessionEvent) -> None:
+    usage_update = _usage(_mapping(event.payload.get("usage")))
+    if usage_update is not None:
+        if usage_update.usage_id == "total":
+            reduction.usage = usage_update
+        else:
+            reduction.usage_by_purpose[usage_update.usage_id] = usage_update
+
+
+def _reduce_subagent(reduction: _SessionReduction, event: SessionEvent) -> None:
+    subagent = _subagent(_mapping(event.payload.get("subagent")))
+    if subagent.invocation_id:
+        reduction.subagents[subagent.invocation_id] = subagent
+
+
+def _reduce_worker_attempt(reduction: _SessionReduction, event: SessionEvent) -> None:
+    attempt_id = _string(_mapping(event.payload.get("intent")).get("attempt_id"))
+    if event.payload.get("phase") == "active" and attempt_id not in reduction.worker_attempts:
+        if reduction.worker_attempts:
+            _append_message(
+                reduction.conversation,
+                event,
+                role="trace",
+                label="System",
+                content="A new worker replaced the earlier one",
+                detail=(
+                    "The earlier sandboxed worker was stopped and removed. "
+                    "This session's record is retained, but the new worker does not "
+                    "remember the earlier conversation and starts with an empty workspace."
+                ),
+            )
+        reduction.worker_attempts.add(attempt_id)
+
+
+def _reduce_session_paused(reduction: _SessionReduction, event: SessionEvent) -> None:
+    reduction.lifecycle_status = SessionLifecycle.PAUSED
+    reduction.lifecycle_sequence = event.sequence
+
+
+def _reduce_session_resumed(reduction: _SessionReduction, event: SessionEvent) -> None:
+    reduction.lifecycle_status = SessionLifecycle.RUNNING
+    reduction.lifecycle_sequence = event.sequence
+
+
+def _reduce_error_recorded(reduction: _SessionReduction, event: SessionEvent) -> None:
+    if event.payload.get("automatic_review") == "not-applied":
+        _reduce_automatic_review_not_applied(reduction, event)
+        return
+    error_code = _string(event.payload.get("code"))
+    error_message = _error_detail(
+        reason=_string(event.payload.get("reason")),
+        code=error_code,
+    )
+    _append_message(
+        reduction.conversation,
+        event,
+        role="trace",
+        label="System",
+        content="The task could not be completed",
+        detail=error_message,
+    )
+    if reduction.command_outcome is not None:
+        reduction.command_outcome = reduction.command_outcome.model_copy(
+            update={
+                "status": "rejected",
+                "error_code": error_code or None,
+                "message": error_message,
+            }
+        )
+    if event.payload.get("affects_lifecycle") is not False:
+        reduction.lifecycle_status = SessionLifecycle.ERROR
+        reduction.lifecycle_sequence = event.sequence
+        reduction.lifecycle_error_recoverable = (
+            reduction.lifecycle_error_recoverable and not backend_error_is_fatal(error_code)
+        )
+
+
+def _reduce_automatic_review_not_applied(reduction: _SessionReduction, event: SessionEvent) -> None:
+    # A withdrawn gateway decision returns its action set to the researcher.
+    group_id = _string(event.payload.get("group_id"))
+    reduction.approval_group_decisions[group_id] = None
+    reduction.approval_group_resolutions.pop(group_id, None)
+    reduction.reported_resolutions.discard(group_id)
+    for tool_call_id in reduction.approval_group_actions.get(group_id, ()):
+        if (action := reduction.actions.get(tool_call_id)) is not None:
+            reduction.actions[tool_call_id] = action.model_copy(
+                update={
+                    "state": "awaiting-review",
+                    "decision": None,
+                    "automatic_rule": None,
+                    "updated_sequence": event.sequence,
+                }
+            )
+    reduction.lifecycle_status = SessionLifecycle.WAITING_FOR_CONFIRMATION
+    _append_message(
+        reduction.conversation,
+        event,
+        role="trace",
+        label="Approval",
+        content="Automatic review was not applied",
+        detail="The action set waits for your decision.",
+    )
+
+
+_EVENT_REDUCERS: dict[str, Callable[[_SessionReduction, SessionEvent], None]] = {
+    EventKind.USER_MESSAGE_RECORDED.value: _reduce_user_message,
+    EventKind.COMMAND_RECEIVED.value: _reduce_command_received,
+    EventKind.AGENT_MESSAGE_EMITTED.value: _reduce_agent_message,
+    EventKind.EXTERNAL_ACTION_RECORDED.value: _reduce_outside_record,
+    EventKind.EXTERNAL_RESULT_RECORDED.value: _reduce_outside_record,
+    EventKind.TOOL_CALL_PROPOSED.value: _reduce_tool_call_proposed,
+    EventKind.TOOL_EXECUTION_RECORDED.value: _reduce_tool_execution,
+    EventKind.CONFIRMATION_REQUESTED.value: _reduce_confirmation_requested,
+    EventKind.APPROVAL_RECORDED.value: _reduce_approval_recorded,
+    EventKind.CONFIRMATION_RESOLVED.value: _reduce_confirmation_resolved,
+    EventKind.MODEL_CALL_DECISION_RECORDED.value: _reduce_model_call_decision,
+    EventKind.AGENT_LIFECYCLE_UPDATED.value: _reduce_lifecycle_updated,
+    EventKind.TASK_PLAN_UPDATED.value: _reduce_task_plan,
+    EventKind.MODEL_USAGE_UPDATED.value: _reduce_model_usage,
+    EventKind.SUBAGENT_UPDATED.value: _reduce_subagent,
+    EventKind.WORKER_ATTEMPT_RECORDED.value: _reduce_worker_attempt,
+    EventKind.SESSION_PAUSED.value: _reduce_session_paused,
+    EventKind.SESSION_RESUMED.value: _reduce_session_resumed,
+    EventKind.ERROR_RECORDED.value: _reduce_error_recorded,
+}
+
+
+def _settle_actions(reduction: _SessionReduction) -> None:
+    """Apply the final lifecycle and integrity state to every reduced action."""
+    if reduction.lifecycle_status == SessionLifecycle.RUNNING:
+        reduction.actions = {
+            tool_call_id: (
+                action.model_copy(
+                    update={
+                        "state": "running",
+                        "updated_sequence": max(
+                            action.updated_sequence,
+                            reduction.lifecycle_sequence,
+                        ),
+                    }
+                )
+                if action.state in {"approved", "proposed"}
+                else action
+            )
+            for tool_call_id, action in reduction.actions.items()
+        }
+    if not reduction.lifecycle_error_recoverable:
+        reduction.lifecycle_status = SessionLifecycle.ERROR
+        reduction.actions = {
+            tool_call_id: (
+                action.model_copy(
+                    update={
+                        "state": "outcome-unknown",
+                        "updated_sequence": max(
+                            action.updated_sequence,
+                            reduction.lifecycle_sequence,
+                        ),
+                    }
+                )
+                if action.outcome is None and action.state not in {"rejected", "awaiting-review"}
+                else action
+            )
+            for tool_call_id, action in reduction.actions.items()
+        }
+    for tool_call_id in reduction.integrity_failed_action_ids:
+        action = reduction.actions.get(tool_call_id)
+        if action is not None:
+            reduction.actions[tool_call_id] = action.model_copy(
+                update={
+                    "state": "outcome-unknown",
+                    "outcome": None,
+                }
+            )
 
 
 def _action_record(
@@ -1361,18 +1406,19 @@ def _append_approval_message(
     )
 
 
-def _mark_projection_integrity_failure(
-    actions: dict[str, ProjectionActionRecord],
-    conversation: list[ProjectionMessage],
+def _fail_integrity(
+    reduction: _SessionReduction,
     event: SessionEvent,
     *,
     tool_call_ids: tuple[str, ...],
     detail: str,
 ) -> None:
+    """Record contradictory history: the affected actions and the session become unrecoverable."""
+    reduction.integrity_failed_action_ids.update(tool_call_ids)
     for tool_call_id in tool_call_ids:
-        action = actions.get(tool_call_id)
+        action = reduction.actions.get(tool_call_id)
         if action is not None:
-            actions[tool_call_id] = action.model_copy(
+            reduction.actions[tool_call_id] = action.model_copy(
                 update={
                     "state": "outcome-unknown",
                     "outcome": None,
@@ -1380,13 +1426,16 @@ def _mark_projection_integrity_failure(
                 }
             )
     _append_message(
-        conversation,
+        reduction.conversation,
         event,
         role="trace",
         label="System",
         content="Session history failed an integrity check",
         detail=detail,
     )
+    reduction.lifecycle_status = SessionLifecycle.ERROR
+    reduction.lifecycle_sequence = event.sequence
+    reduction.lifecycle_error_recoverable = False
 
 
 def _pending_approval(
