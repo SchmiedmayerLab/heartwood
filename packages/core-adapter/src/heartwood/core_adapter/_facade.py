@@ -398,6 +398,10 @@ class AgentBackend(Protocol):
         """Return the declared normalized endpoint evaluated by Heartwood policy."""
 
     @property
+    def model_id(self) -> str:
+        """Return the declared model identifier independently of its profile and endpoint."""
+
+    @property
     def model_profile_id(self) -> str:
         """Return the stable non-secret model profile identifier."""
 
@@ -435,6 +439,9 @@ class AgentBackend(Protocol):
 
     def pending_action_group(self, *, session_id: str) -> PendingActionGroup | None:
         """Return the atomic unmatched action group directly from backend state."""
+
+    def submit_context(self, *, session_id: str, content: str) -> tuple[BackendEvent, ...]:
+        """Submit reviewed external data through the native conversation, without a user claim."""
 
     def submit_turn(self, *, session_id: str, prompt: str) -> tuple[BackendEvent, ...]:
         """Submit a user task and start or steer execution."""
@@ -495,6 +502,11 @@ class DeterministicAgentBackend:
         return "https://model.local.invalid/v1/chat/completions"
 
     @property
+    def model_id(self) -> str:
+        """Return the deterministic synthetic model identifier."""
+        return "synthetic"
+
+    @property
     def model_profile_id(self) -> str:
         """Return the deterministic fixture profile identifier."""
         return "deterministic-local"
@@ -546,6 +558,10 @@ class DeterministicAgentBackend:
         """Return the current deterministic pending action group."""
         actions = () if self._pending is None else (self._pending,)
         return pending_action_group(actions)
+
+    def submit_context(self, *, session_id: str, content: str) -> tuple[BackendEvent, ...]:
+        """Exercise the same deterministic continuation with reviewed synthetic data."""
+        return self.submit_turn(session_id=session_id, prompt=content)
 
     def submit_turn(self, *, session_id: str, prompt: str) -> tuple[BackendEvent, ...]:
         """Emit a message and one pending synthetic action."""

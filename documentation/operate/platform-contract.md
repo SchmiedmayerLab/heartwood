@@ -593,6 +593,56 @@ sequenceDiagram
 An unknown outcome is Heartwood's lack of an authoritative observation, not proof that nothing happened.
 Cancellation can leave completed work and incurred charges; status and cost observations must preserve both.
 
+#### Outside Operation Admission
+
+A trusted embedding can supply `ExternalActionAdapter` to a managed `SessionService` and prepare an outside operation from a retained worker tool proposal with `propose_external_action`.
+The adapter resolves native service requests and immutable input references from deployment configuration; preparation must have no external effects.
+This optional boundary is disabled by default and is not installed by the built-in launchers.
+
+The gateway issues a separate operation identifier and presents the complete request, input digests, destination, worker identity, policy revision, and five-minute validity interval through the shared action review.
+The existing approve and deny commands bind the full proposal digest.
+Immediately before submission, the gateway rechecks the live worker attempt, current project and policy, actor entitlement, validity interval, and input contents.
+It submits the exact verified input bytes without reopening worker paths.
+The trusted adapter must bound reads, exclude credentials from the reviewable request, and resolve input references without granting worker-selected filesystem access.
+
+The decision and submission intent are committed through the paired session and audit journal before contacting the service.
+The private session retains review content; the audit records operation identifiers, digests, decisions, and status without copying request or input payloads.
+A worker acknowledgement or completion event cannot settle the separately identified outside operation.
+
+`reconcile_external_actions` queries the existing operation identifier after an interrupted submission or an uncertain result.
+It does not repeat submission, restore a worker lease, or fall back to local tool execution.
+A platform observation must match the project, service, operation, and exact proposal digest.
+Cancellation requires the service's native operation contract; denying an already submitted operation does not cancel it.
+
+The service must independently authenticate the caller and enforce actor entitlement, project scope, current attempt revocation, policy, expiry, and transactional idempotency.
+A command's actor identifier is a claim, not authentication; the embedding must bind it to an authenticated researcher and the service's own identity context.
+The worker must have no alternate credential or network route to the privileged service.
+These requirements need deployment-specific qualification, including revocation races, interruption, input storage isolation, and service-side duplicate suppression.
+The adapter interface and local journal checks alone do not establish those infrastructure guarantees.
+
+#### Result Release to the Worker
+
+An outside operation's approval does not authorize disclosing its result to a worker or inference provider.
+A trusted embedding can call `propose_external_result` for a terminal, observed operation from the current worker attempt.
+The native service adapter must independently authorize and bound the result read, omit credentials, and return sanitized JSON data.
+The gateway rejects ambiguous or oversized JSON and limits the complete message, including its provenance envelope, to 64 KiB.
+
+The shared action review binds the exact result, outside observation, worker identity, service policy revision, declared model identifier and route, and a fresh five-minute validity interval.
+Approval checks current service disclosure policy, the live worker lease, an idle conversation without pending native actions, and the existing model and workflow admission rules.
+The adapter's disclosure check must enforce the researcher's entitlement and data eligibility for the exact worker and inference destination.
+Sender labels are descriptive metadata and never establish approval or authenticated identity.
+
+The paired journal retains the decision and delivery intent before sending the reviewed snapshot through the native conversation message and run APIs.
+Result data is untrusted context; the worker retains its enforced tool and network restrictions.
+The operational audit records release and operation identifiers, digests, actor, command, and phase without copying the result.
+A submitted result means the native delivery path accepted it; it does not establish that the worker used it correctly or completed subsequent work.
+
+There is one result-release review per outside operation.
+Denial is final for that release; changed content or destinations require a separately authorized workflow.
+An interrupted or uncertain delivery is never retried automatically, including after gateway restart.
+The retained record and native conversation must be inspected before continuing in a new authorized session.
+This optional boundary does not establish protected result storage, deployed isolation, provider eligibility, or controlled-data readiness.
+
 #### Asynchronous Results
 
 Pending results use the optional [MCP Tasks extension, revision 2026-07-28](https://tasks.extensions.modelcontextprotocol.io/specification/2026-07-28/tasks).

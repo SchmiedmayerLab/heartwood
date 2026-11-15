@@ -317,6 +317,11 @@ class OpenHandsSdkBackend:
         return self.profile.policy_endpoint
 
     @property
+    def model_id(self) -> str:
+        """Return the declared model identifier used for result disclosure review."""
+        return self.profile.model
+
+    @property
     def model_profile_id(self) -> str:
         """Return the selected non-secret profile identifier."""
         return self.profile.profile_id
@@ -500,6 +505,15 @@ class OpenHandsSdkBackend:
 
     def submit_turn(self, *, session_id: str, prompt: str) -> tuple[BackendEvent, ...]:
         """Submit a user task and start or steer the active OpenHands run."""
+        return self._submit_message(session_id=session_id, prompt=prompt, sender="heartwood-user")
+
+    def submit_context(self, *, session_id: str, content: str) -> tuple[BackendEvent, ...]:
+        """Submit approved external data using the existing native message and run path."""
+        return self._submit_message(session_id=session_id, prompt=content, sender="outside-result")
+
+    def _submit_message(
+        self, *, session_id: str, prompt: str, sender: str
+    ) -> tuple[BackendEvent, ...]:
         try:
             conversation = self._get_conversation()
         except Exception as error:
@@ -523,7 +537,7 @@ class OpenHandsSdkBackend:
                 ),
             )
         try:
-            conversation.send_message(prompt, sender="heartwood-user")
+            conversation.send_message(prompt, sender=sender)
         except Exception as error:
             return (_backend_error(error),)
         if self._run_active():
