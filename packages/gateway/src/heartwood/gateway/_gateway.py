@@ -880,13 +880,15 @@ class SessionGateway:
                 persisted_projection.lifecycle.status == SessionLifecycle.ERROR
                 and not persisted_projection.lifecycle.can_steer
             ):
-                # A session that cannot continue is never given a worker: the withdrawal it
-                # still admits sends nothing and is recorded by a service without a backend.
+                # A session that cannot continue is never given a worker: a refusal, and the
+                # withdrawal it still admits, which sends nothing, are recorded by its cached
+                # service or by a service without a backend.
                 return self._handle_stored_command(
                     command,
                     unavailable_reason=command_unavailable_reason(
                         persisted_projection, command_kind
                     ),
+                    unrecoverable=True,
                 )
         if self._worker_revoked(command.session_id):
             # Only a command replaces a revoked worker's service; a read keeps it.
@@ -936,13 +938,19 @@ class SessionGateway:
         *,
         starting_workflow: bool = False,
         unavailable_reason: str | None = None,
+        unrecoverable: bool = False,
     ) -> SessionResult:
-        """Handle a command that only reads or writes durable state, under the state lock."""
+        """Handle a command that only reads or writes durable state, under the state lock.
+
+        Only a session that cannot continue binds a storage service to the deployment's
+        trusted records, which a withdrawal and an expiry it records require.
+        """
         self._ensure_session_locked(command.session_id)
-        service = None if unavailable_reason is not None else self._services.get(command.session_id)
-        close_service = service is None
+        service = self._services.get(command.session_id)
+        storage_service = service is None
+        close_service = False
         if service is None:
-            service = self._storage_service(command.session_id)
+            service = self._storage_service(command.session_id, checkpoint_evidence=unrecoverable)
         try:
             # Earlier durable events are published before the command's own.
             self._publish_committed_events(
@@ -967,7 +975,9 @@ class SessionGateway:
                 close_service = True
             return result
         finally:
-            if close_service:
+            if storage_service:
+                service.close(record_closure=False)
+            elif close_service:
                 self._close_service(service)
                 if self._services.get(command.session_id) is service:
                     self._services.pop(command.session_id, None)
@@ -2521,8 +2531,14 @@ class SessionGateway:
             raise ValueError("Checkpoint evidence does not authorize this project and session")
         return checkpoint_evidence
 
-    def _storage_service(self, session_id: str) -> SessionService:
-        """Build an uncached service for commands that only access durable state."""
+    def _storage_service(self, session_id: str, *, checkpoint_evidence: bool) -> SessionService:
+        """Build an uncached service for commands that only access durable state.
+
+        It never records a session closure, so it adds nothing to the journal on its own.
+        Only a session that cannot continue binds it to the deployment's trusted records,
+        which a withdrawal and an expiry it records require; an audit export or a workflow
+        start needs none.
+        """
         from heartwood.gateway._research_evaluation import ResearchStageEvaluator
 
         configuration = self._service_configuration()
@@ -2533,8 +2549,9 @@ class SessionGateway:
             policy_profile=configuration.policy_profile,
             env=self.env,
             worker_project_id=self.project.project_id,
-            # Durable state stays bound to the deployment's trusted records.
-            checkpoint_evidence=self._checkpoint_evidence(session_id),
+            checkpoint_evidence=(
+                self._checkpoint_evidence(session_id) if checkpoint_evidence else None
+            ),
             workflow_evaluator=ResearchStageEvaluator(
                 self.workspace_inspector,
                 parallel_review_preparer=self._parallel_review_preparer,
@@ -2702,7 +2719,7 @@ class SessionGateway:
             close_service = reconciler == "storage"
             try:
                 active_service = (
-                    self._storage_service(session_id)
+                    self._storage_service(session_id, checkpoint_evidence=True)
                     if close_service
                     else self._service(session_id)
                 )
@@ -2714,7 +2731,7 @@ class SessionGateway:
             return active_service.replay_events()
         finally:
             if close_service:
-                self._close_service(active_service)
+                active_service.close(record_closure=False)
 
     def _read_under_lock(self, service: SessionService) -> bool:
         """Return whether reading this service cannot launch a worker."""

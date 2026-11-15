@@ -9,15 +9,25 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from datetime import timedelta
 from pathlib import Path
+from typing import Literal
+from uuid import uuid4
 
 import pytest
 
 from heartwood.core_adapter import BackendErrorCode, BackendErrorEvent, SessionService
-from heartwood.core_adapter._state import SessionRecoveryError
-from heartwood.core_adapter.checkpoint_evidence import CheckpointEvidenceUnavailableError
-from heartwood.gateway import approval_retry_unavailable_reason, retained_approval
-from heartwood.session import SessionCommand
+from heartwood.core_adapter._state import FileSessionStore, SessionRecoveryError
+from heartwood.core_adapter.checkpoint_evidence import (
+    CheckpointEvidenceUnavailableError,
+    SessionCheckpointEvidence,
+)
+from heartwood.gateway import (
+    SessionGateway,
+    approval_retry_unavailable_reason,
+    retained_approval,
+)
+from heartwood.session import CommandKind, EventKind, SessionCommand
 from packages.gateway.tests.outside_retry_fixtures import (
     NOW,
     SESSION,
@@ -99,13 +109,7 @@ def test_rejecting_the_review_withdraws_a_retained_approval_through_the_gateway(
     assert review.outside.submissions == 0
 
 
-@pytest.mark.parametrize("read_first", [False, True])
-def test_rejection_after_a_fatal_error_and_a_service_release_starts_no_worker(
-    review: OutsideReview, read_first: bool, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # The services the gateway builds itself read the same clock as the review's service.
-    monkeypatch.setattr("heartwood.core_adapter._service._utc_now", lambda: NOW.isoformat())
-    approved = _interrupted_approval(review)
+def _released_after_a_fatal_error(review: OutsideReview) -> SessionGateway:
     review.service.backend.emit(  # type: ignore[attr-defined]
         (BackendErrorEvent(error_code=BackendErrorCode.ACTION_OUTCOME_UNKNOWN),)
     )
@@ -115,6 +119,17 @@ def test_rejection_after_a_fatal_error_and_a_service_release_starts_no_worker(
         gateway._close_service(gateway._services.pop(SESSION))
         gateway._service_configurations.pop(SESSION, None)
     gateway._checkpoint_evidence_factory = lambda _: review.evidence
+    return gateway
+
+
+@pytest.mark.parametrize("read_first", [False, True])
+def test_rejection_after_a_fatal_error_and_a_service_release_starts_no_worker(
+    review: OutsideReview, read_first: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The services the gateway builds itself read the same clock as the review's service.
+    monkeypatch.setattr("heartwood.core_adapter._service._utc_now", lambda: NOW.isoformat())
+    approved = _interrupted_approval(review)
+    gateway = _released_after_a_fatal_error(review)
     opened: list[str] = []
     factory = gateway._service_factory
     assert factory is not None
@@ -126,8 +141,12 @@ def test_rejection_after_a_fatal_error_and_a_service_release_starts_no_worker(
     gateway._service_factory = counting
 
     if read_first:
-        projection = gateway.session_projection(session_id=SESSION)
-        assert projection.available_commands == ("deny",)
+        journal = FileSessionStore(gateway.sessions_root, SESSION).replay_events()
+        for _ in range(2):
+            projection = gateway.session_projection(session_id=SESSION)
+            assert projection.available_commands == ("deny",)
+        # Reading the session records nothing and binds nothing to the records service.
+        assert FileSessionStore(gateway.sessions_root, SESSION).replay_events() == journal
     gateway.handle(review.decision(approved=False))
 
     # The session cannot continue, so nothing may prepare or launch a worker for it.
@@ -140,6 +159,65 @@ def test_rejection_after_a_fatal_error_and_a_service_release_starts_no_worker(
         "The approval is no longer waiting to be sent: Approval withdrawn before dispatch."
     )
     assert review.outside.submissions == 0
+
+
+def test_an_approval_expiring_after_a_fatal_error_is_recorded_once_by_a_read(
+    review: OutsideReview, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    now = [NOW]
+    monkeypatch.setattr("heartwood.core_adapter._service._utc_now", lambda: now[0].isoformat())
+    _interrupted_approval(review)
+    gateway = _released_after_a_fatal_error(review)
+    now[0] = NOW + timedelta(minutes=5)
+
+    projection = gateway.session_projection(session_id=SESSION)
+
+    # The expiry is recorded with its checkpoint; later reads record nothing.
+    assert review.phase() == "expired"
+    assert projection.pending_approval is None
+    assert projection.available_commands == ()
+    journal = FileSessionStore(gateway.sessions_root, SESSION).replay_events()
+    gateway.session_projection(session_id=SESSION)
+    assert FileSessionStore(gateway.sessions_root, SESSION).replay_events() == journal
+    assert review.outside.submissions == 0
+
+
+@pytest.mark.parametrize("mode", ["buffered", "required"])
+def test_an_audit_export_without_a_live_service_needs_no_checkpoint(
+    review: OutsideReview, mode: Literal["buffered", "required"]
+) -> None:
+    gateway = review.gateway
+    with gateway._state_lock:
+        gateway._close_service(gateway._services.pop(SESSION))
+        gateway._service_configurations.pop(SESSION, None)
+    evidence = review.evidence
+    gateway._checkpoint_evidence_factory = lambda _: SessionCheckpointEvidence(
+        records=evidence.records,
+        signer=evidence.signer,
+        trusted_keys=evidence.trusted_keys,
+        mode=mode,
+    )
+    review.records.unavailable = True
+    journal = FileSessionStore(gateway.sessions_root, SESSION).replay_events()
+
+    result = gateway.handle(
+        SessionCommand(
+            session_id=SESSION,
+            command_id=str(uuid4()),
+            kind=CommandKind.AUDIT_EXPORT,
+            actor_id="researcher",
+            created_at=NOW.isoformat(),
+            payload={},
+        )
+    )
+
+    # Storage-only commands read and record the journal; they open and close no session.
+    assert [event.kind for event in result.events] == [
+        EventKind.COMMAND_RECEIVED,
+        EventKind.AUDIT_EXPORT_RECORDED,
+    ]
+    after = FileSessionStore(gateway.sessions_root, SESSION).replay_events()
+    assert after == (*journal, *result.events)
 
 
 def test_an_expired_retained_approval_is_reported_and_never_sent(review: OutsideReview) -> None:

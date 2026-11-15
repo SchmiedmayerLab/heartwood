@@ -925,8 +925,12 @@ class SessionService:
             return stale
         return outcome[0][0]
 
-    def close(self) -> None:
-        """Release backend resources once the command in progress has completed."""
+    def close(self, *, record_closure: bool = True) -> None:
+        """Release backend resources once the command in progress has completed.
+
+        With checkpoint evidence, closing records the session owner's closure and its
+        checkpoint; a service that only accessed durable state passes ``record_closure=False``.
+        """
         with self._control_worker():
             with self._command_lock:
                 if self._closed:
@@ -940,7 +944,11 @@ class SessionService:
                 raise
             with self._command_lock:
                 try:
-                    if self._checkpoint_evidence is not None and self.replay_events():
+                    if (
+                        record_closure
+                        and self._checkpoint_evidence is not None
+                        and self.replay_events()
+                    ):
                         self.store.acquire_writer()
                         boundary = self._record_event(EventKind.SESSION_CLOSED, {})
                         self._event_sink((boundary, *self._checkpoint_boundary(boundary)))
