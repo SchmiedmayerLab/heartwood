@@ -10,6 +10,7 @@ import os
 import shutil
 import subprocess
 import sys
+from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -1159,3 +1160,32 @@ def test_unpinned_bundled_entries_are_reported_and_never_loaded(
     }
     assert ".DS_Store" in caplog.text
     assert "community-summary" in caplog.text
+
+
+def test_case_variant_bundled_skill_directory_is_not_reported_as_unpinned(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from heartwood.gateway._skill_settings import unexpected_bundled_entries
+
+    bundled = tmp_path / "bundled"
+    shutil.copytree(_skills_root(), bundled)
+    (bundled / ".DS_Store").write_bytes(b"synthetic finder metadata")
+    stored = bundled / "aggregate-export"
+    variant = bundled / "AGGREGATE-EXPORT"
+    if Path(__file__).with_name(Path(__file__).name.upper()).exists():
+        stored.rename(variant)
+    else:
+        # Present the stored spelling the way a case-insensitive file system does.
+        iterdir, lstat = Path.iterdir, Path.lstat
+
+        def case_preserving_iterdir(self: Path) -> Iterator[Path]:
+            for path in iterdir(self):
+                yield variant if path == stored else path
+
+        def case_insensitive_lstat(self: Path) -> os.stat_result:
+            return lstat(stored if self == variant else self)
+
+        monkeypatch.setattr(Path, "iterdir", case_preserving_iterdir)
+        monkeypatch.setattr(Path, "lstat", case_insensitive_lstat)
+
+    assert unexpected_bundled_entries(bundled) == (bundled / ".DS_Store",)

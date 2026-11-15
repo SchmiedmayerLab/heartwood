@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -788,7 +788,19 @@ def unexpected_bundled_entries(
     """Return entries in the bundled directory that are not release-pinned Skills."""
     if not bundled_dir.is_dir():
         return ()
-    return tuple(path for path in sorted(bundled_dir.iterdir()) if path.name not in digests)
+    # Compare identities, not names: a case-insensitive file system can list a pinned
+    # Skill directory under a different spelling of its name.
+    pinned: set[tuple[int, int]] = set()
+    for name in digests:
+        with suppress(FileNotFoundError):
+            metadata = (bundled_dir / name).lstat()
+            pinned.add((metadata.st_dev, metadata.st_ino))
+    unexpected: list[Path] = []
+    for path in sorted(bundled_dir.iterdir()):
+        metadata = path.lstat()
+        if (metadata.st_dev, metadata.st_ino) not in pinned:
+            unexpected.append(path)
+    return tuple(unexpected)
 
 
 def compatible_bundled_manifests(
