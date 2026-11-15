@@ -23,6 +23,7 @@ from heartwood.cli._workspace_presentation import (
 )
 from heartwood.gateway import (
     RETAINED_APPROVAL_NOTICE,
+    SPECIALIST_RESULT_LABEL,
     SPECIALIST_TASK_LABEL,
     ActionSettingsError,
     ModelSettingsError,
@@ -757,7 +758,9 @@ def format_runtime_lines(projection: SessionProjection) -> tuple[str, ...]:
                     f"    {SPECIALIST_TASK_LABEL}: {terminal_safe_text(item.task_summary)}"
                 )
             if item.result_summary is not None:
-                lines.append(f"    Result: {terminal_safe_text(item.result_summary)}")
+                lines.append(
+                    f"    {SPECIALIST_RESULT_LABEL}: {terminal_safe_text(item.result_summary)}"
+                )
             if item.review_proposals is not None:
                 lines.extend(
                     f"    Unverified review proposal: {terminal_safe_text(candidate.summary)}"

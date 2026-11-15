@@ -16,6 +16,7 @@ from types import ModuleType
 from typing import Protocol, cast
 
 from heartwood.gateway import (
+    SPECIALIST_RESULT_LABEL,
     SPECIALIST_TASK_LABEL,
     ProjectionSubagent,
     action_arguments_label,
@@ -289,7 +290,7 @@ def _specialist_item(agent: ProjectionSubagent) -> str:
     if agent.task_summary is not None:
         details.append(f"{SPECIALIST_TASK_LABEL}: {agent.task_summary}")
     if agent.result_summary is not None:
-        details.append(f"Result: {agent.result_summary}")
+        details.append(f"{SPECIALIST_RESULT_LABEL}: {agent.result_summary}")
     if agent.review_proposals is not None:
         details.extend(
             f"Unverified review proposal: {candidate.summary}"

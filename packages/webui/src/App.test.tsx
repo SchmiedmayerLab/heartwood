@@ -2242,7 +2242,7 @@ describe("App", () => {
             status: "completed",
             statusLabel: "Complete",
             taskSummary: "Verify the result",
-            resultSummary: null,
+            resultSummary: "The result matches the plan",
             reviewProposals: {
               candidates: [
                 {
@@ -2268,6 +2268,9 @@ describe("App", () => {
     });
     await waitFor(() => expect(status).toHaveTextContent("$1.25"));
     expect(status).toHaveTextContent("2 specialists");
+    expect(status).toHaveTextContent(
+      "Model-provided result: The result matches the plan",
+    );
     expect(status).toHaveTextContent("Unverified review proposals");
     expect(status).toHaveTextContent(
       "Check the supplied <script>source</script>.",

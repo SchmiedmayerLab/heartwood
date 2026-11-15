@@ -35,6 +35,7 @@ import {
   modelProposedOperation,
   retainedApprovalSendable,
   specialistModelFields,
+  specialistResultLabel,
   specialistTaskLabel,
   summarySourceLabel,
 } from "../actionPresentation";
@@ -806,7 +807,8 @@ const RuntimeStatus = ({
                     : null}
                     {subagent.resultSummary ?
                       <small>
-                        Result: {displaySafeText(subagent.resultSummary)}
+                        {specialistResultLabel}:{" "}
+                        {displaySafeText(subagent.resultSummary)}
                       </small>
                     : null}
                     {subagent.reviewProposals?.candidates.length ?

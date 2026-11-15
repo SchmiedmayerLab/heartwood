@@ -925,7 +925,8 @@ def test_notebook_view_model_preserves_the_complete_gateway_projection() -> None
     assert sections["Specialists"] == (
         "Research Planner: Working\n"
         "Model-provided task: Review the synthetic analysis plan\n"
-        "Result: Plan review is in progress\nUnverified review proposal: Inspect supplied source",
+        "Model-provided result: Plan review is in progress\n"
+        "Unverified review proposal: Inspect supplied source",
     )
     assert sections["Runtime"][-1] == (
         "Usage: 128 input, 32 output tokens across 2 calls (synthetic-model)"

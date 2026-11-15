@@ -1212,7 +1212,7 @@ def test_line_formatter_renders_the_gateway_owned_atomic_action_set() -> None:
     assert "[ ] Write the aggregate result (In Progress)" in rendered
     assert "Research Planner: Complete" in rendered
     assert "Model-provided task: Review the synthetic analysis plan" in rendered
-    assert "Result: Plan review completed" in rendered
+    assert "Model-provided result: Plan review completed" in rendered
     assert "Unverified review proposal: Inspect source\\u202e" in rendered
     assert "\u202e" not in rendered
     assert "task-call-1" not in rendered

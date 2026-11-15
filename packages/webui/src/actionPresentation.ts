@@ -76,6 +76,9 @@ export const summarySourceLabel = (action: ProjectionActionRecord): string =>
 /** Labels a specialist's runtime task summary, which the model wrote. */
 export const specialistTaskLabel = "Model-provided task";
 
+/** Labels a specialist's runtime result summary, which the model wrote. */
+export const specialistResultLabel = "Model-provided result";
+
 /** Whether the exact retry of a retained approval can still send it, as the gateway decides. */
 export const retainedApprovalSendable = (
   projection: SessionProjection,
