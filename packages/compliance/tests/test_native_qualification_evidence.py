@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import ast
 import copy
 import hashlib
 import importlib
@@ -165,6 +166,104 @@ def test_only_an_exact_complete_run_qualifies_its_commit(
     change(manifest)
 
     assert reason in evidence.failures(manifest)
+
+
+def _parameter_ids(decorator: ast.expr) -> list[str] | None:
+    """Return the identifiers pytest derives from one literal parametrize decorator."""
+    if not (
+        isinstance(decorator, ast.Call)
+        and isinstance(decorator.func, ast.Attribute)
+        and decorator.func.attr == "parametrize"
+    ):
+        return None
+    names, values = (ast.literal_eval(argument) for argument in decorator.args[:2])
+    keywords = {keyword.arg: keyword.value for keyword in decorator.keywords}
+    if "ids" in keywords:
+        return list(ast.literal_eval(keywords["ids"]))
+    return [
+        value
+        if isinstance(value, str)
+        else str(value)
+        if isinstance(value, (bool, int, float))
+        else f"{names}{index}"
+        for index, value in enumerate(values)
+    ]
+
+
+def _collected_cases(module: str) -> set[str]:
+    """Collect the case identifiers a qualification run reports for one module."""
+    tree = ast.parse((_ROOT / "deploy" / "tests" / f"{module}.py").read_text())
+    collected: set[str] = set()
+    for node in tree.body:
+        if not isinstance(node, ast.FunctionDef) or not node.name.startswith("test_"):
+            continue
+        variants = [""]
+        # The decorator nearest the function contributes the first identifier part.
+        for decorator in reversed(node.decorator_list):
+            ids = _parameter_ids(decorator)
+            if ids is not None:
+                variants = [
+                    f"{left}-{right}" if left else right for left in variants for right in ids
+                ]
+        collected.update(
+            f"{module}::{node.name}" + (f"[{variant}]" if variant else "") for variant in variants
+        )
+    return collected
+
+
+def test_every_expected_case_is_an_existing_qualification_test(evidence: ModuleType) -> None:
+    for kind, expected in evidence.EXPECTED_CASES.items():
+        modules = {identifier.split("::")[0] for identifier in expected}
+        # A run executes every test in its modules, so the expected set must be exactly those.
+        assert set().union(*map(_collected_cases, modules)) == expected, kind
+
+
+def _written_strings(value: ast.expr) -> list[str]:
+    """Return the string literals an expression can evaluate to, including both branches."""
+    if isinstance(value, ast.Constant) and isinstance(value.value, str):
+        return [value.value]
+    if isinstance(value, ast.IfExp):
+        return _written_strings(value.body) + _written_strings(value.orelse)
+    return []
+
+
+def _recorded_drills() -> set[str]:
+    """Collect every drill identifier a qualification module can write as `drill_id`."""
+    recorded: set[str] = set()
+    for path in sorted((_ROOT / "deploy" / "tests").glob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text())):
+            if not isinstance(node, ast.Dict):
+                continue
+            for key, value in zip(node.keys, node.values, strict=True):
+                if isinstance(key, ast.Constant) and key.value == "drill_id":
+                    recorded.update(_written_strings(value))
+    return recorded
+
+
+def _catalogued_drills() -> dict[str, list[str]]:
+    """Map the case column heading of each Agent Safety Drills table to its drill rows."""
+    page = (_ROOT / "documentation" / "architecture" / "testing.md").read_text()
+    section = page.split("\n## Agent Safety Drills\n", 1)[1].split("\n## ", 1)[0]
+    tables: dict[str, list[str]] = {}
+    rows: list[str] | None = None
+    for line in section.splitlines():
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if not line.startswith("|"):
+            rows = None
+        elif cells[0] == "Drill":
+            rows = tables.setdefault(cells[1], [])
+        elif rows is not None and (identifier := re.fullmatch(r"`([^`]+)`", cells[0])):
+            rows.append(identifier[1])
+    return tables
+
+
+def test_the_drill_catalog_lists_exactly_the_recorded_native_drills() -> None:
+    recorded = _recorded_drills()
+    catalogued = _catalogued_drills()["Native case"]
+
+    assert recorded
+    # A drill without a row, a stale version or a repeated row fails.
+    assert sorted(catalogued) == sorted(recorded)
 
 
 def _package(evidence: ModuleType, directory: Path, manifest: dict[str, Any]) -> None:

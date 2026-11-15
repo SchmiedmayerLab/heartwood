@@ -221,13 +221,10 @@ def test_native_cancellation_settles_without_repeating_the_effect(
         attempt, worker = _worker(application)
         time.sleep(2)
         _submit(application, CommandKind.PAUSE, {})
-        backend = service.backend
-        assert isinstance(backend, OpenHandsSdkBackend)
-        assert backend.wait_for_idle(90)
-        service.reconcile()
+        # Without the pause the script would continue past the step and finish the turn.
+        _settle(application, status="paused")
         paused = len(fixture.provider.observations)
         effect = _read(fixture, worker, "/workspace/cancelled.txt")
-        assert effect in {"", "once"}
         events = service.replay_events()
         unknown = [
             event
@@ -236,8 +233,16 @@ def test_native_cancellation_settles_without_repeating_the_effect(
             and event.payload.get("code") == "HW-AGENT-006"
         ]
         executions = _executions(application)
-        # A cancelled step is either recorded once or reported with an unknown outcome.
-        assert len(executions) + len(unknown) <= 1
+        succeeded = [item for item in executions if item.get("exit_code") == 0]
+        interrupted = [item for item in executions if item.get("exit_code") != 0]
+        # The record agrees with the observed effect: a completed step is recorded once
+        # with success, and an interrupted step has exactly one cancelled or unknown record.
+        if effect == "once":
+            assert (len(succeeded), len(interrupted), len(unknown)) == (1, 0, 0)
+        else:
+            assert effect == ""
+            assert not succeeded
+            assert len(interrupted) + len(unknown) == 1
         _submit(application, CommandKind.RESUME, {})
         _settle(application)
         # Outlast the cancelled step: neither it nor the resumed turn may repeat the effect.
@@ -330,6 +335,7 @@ def test_native_new_worker_image_and_rotated_credential_after_restart(
     fixture.provider.credential = rotated
     executions = len(_executions(restarted))
     recorded = len(service.replay_events())
+    rotated_at = len(fixture.provider.observations)
     _submit(restarted, CommandKind.CHAT, {"prompt": "Continue with the next value."})
     codes: set[object] = set()
     deadline = time.monotonic() + 240
@@ -345,7 +351,7 @@ def test_native_new_worker_image_and_rotated_credential_after_restart(
     assert len(_executions(restarted)) == executions
     assert not any(
         row["authorized"] and row["route"] == "image-second"
-        for row in fixture.provider.observations[4:]
+        for row in fixture.provider.observations[rotated_at:]
     )
     _stop(restarted)
     _assert_revoked(service)
