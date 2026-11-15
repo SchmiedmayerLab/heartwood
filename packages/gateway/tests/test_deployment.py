@@ -21,6 +21,7 @@ from heartwood.gateway import (
     SessionGateway,
     load_project_deployment,
 )
+from heartwood.gateway._project_config import LocalModelSelection
 from heartwood.schemas import PolicyProfile
 from heartwood.session import CommandKind, SessionCommand
 
@@ -100,13 +101,15 @@ def test_protected_model_paths_resolve_inside_external_store(tmp_path: Path) -> 
     model = project.models_dir / "model.gguf"
     model.write_bytes(b"synthetic")
     gateway = SessionGateway(project=project, deployment_policy=deployment.policy, env={})
-    selected = gateway.config_store.select_local_model(artifact_id="reviewed", path=model)
+    selected = gateway.config_store.select_local_model(
+        LocalModelSelection(artifact_id="reviewed", path=str(model))
+    )
     assert selected.local_model is not None
     assert selected.local_model.path == "models/model.gguf"
     assert selected.local_model.resolved_path(project) == model
     with pytest.raises(ProjectConfigError, match="stored under"):
         gateway.config_store.select_local_model(
-            artifact_id="outside", path=workspace / "model.gguf"
+            LocalModelSelection(artifact_id="outside", path=str(workspace / "model.gguf"))
         )
     gateway.stop()
 

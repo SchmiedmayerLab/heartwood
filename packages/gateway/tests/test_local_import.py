@@ -381,7 +381,7 @@ def test_gateway_removes_import_when_project_selection_fails(
     def fail_selection(*_args: object, **_kwargs: object) -> None:
         raise RuntimeError("synthetic selection failure")
 
-    monkeypatch.setattr(gateway, "_select_downloaded_local_model", fail_selection)
+    monkeypatch.setattr(gateway.local_models, "select_downloaded_local_model", fail_selection)
 
     with pytest.raises(RuntimeError, match="synthetic selection failure"):
         gateway.import_local_model(

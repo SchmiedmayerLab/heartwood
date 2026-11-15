@@ -69,6 +69,7 @@ from heartwood.gateway import (
     model_profile_from_preset,
 )
 from heartwood.gateway._project_activity import project_gateway_maintenance
+from heartwood.gateway._project_config import LocalModelSelection
 
 
 def _options(
@@ -98,32 +99,36 @@ def _options(
             ),
         )
         store.select_local_model(
-            artifact_id="test-model",
-            path=project.models_dir / ("model.gguf" if runtime == "llama-cpp" else "model"),
-            runtime=runtime,
-            model_id="test-model",
-            display_name="Synthetic test model",
-            source_repository="example/test-model",
-            source_revision="1" * 40,
-            size_bytes=1024,
-            minimum_free_bytes=2048,
-            license_posture="Synthetic test model.",
-            license_id="Apache-2.0",
-            context_window=context_window,
-            maximum_context_window=context_window,
-            minimum_resource_envelope="Synthetic minimum resources.",
-            recommended_resource_envelope="Synthetic recommended resources.",
-            precision="Synthetic",
-            qualification=qualification,
-            qualification_date=qualification_date,
-            qualification_evidence=qualification_evidence,
-            minimum_gpu_count=0 if runtime == "llama-cpp" else 1,
-            minimum_gpu_memory_bytes=0 if runtime == "llama-cpp" else 1,
-            recommended_cpu_count=16,
-            recommended_ram_bytes=16 * 1024**3,
-            recommended_disk_bytes=32 * 1024**3,
-            tool_call_parser=None if runtime == "llama-cpp" else "hermes",
-            catalog_source="user-selected",
+            LocalModelSelection(
+                artifact_id="test-model",
+                path=str(
+                    project.models_dir / ("model.gguf" if runtime == "llama-cpp" else "model")
+                ),
+                runtime=runtime,
+                model_id="test-model",
+                display_name="Synthetic test model",
+                source_repository="example/test-model",
+                source_revision="1" * 40,
+                size_bytes=1024,
+                minimum_free_bytes=2048,
+                license_posture="Synthetic test model.",
+                license_id="Apache-2.0",
+                context_window=context_window,
+                maximum_context_window=context_window,
+                minimum_resource_envelope="Synthetic minimum resources.",
+                recommended_resource_envelope="Synthetic recommended resources.",
+                precision="Synthetic",
+                qualification=qualification,
+                qualification_date=qualification_date,
+                qualification_evidence=qualification_evidence,
+                minimum_gpu_count=0 if runtime == "llama-cpp" else 1,
+                minimum_gpu_memory_bytes=0 if runtime == "llama-cpp" else 1,
+                recommended_cpu_count=16,
+                recommended_ram_bytes=16 * 1024**3,
+                recommended_disk_bytes=32 * 1024**3,
+                tool_call_parser=None if runtime == "llama-cpp" else "hermes",
+                catalog_source="user-selected",
+            )
         )
     values: dict[str, object] = {
         "project": project,

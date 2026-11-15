@@ -27,6 +27,7 @@ from heartwood.gateway import (
     ProjectContext,
     persist_deployment_profile,
 )
+from heartwood.gateway._project_config import LocalModelSelection
 
 
 def _write_executable(path: Path, contents: str) -> None:
@@ -157,14 +158,16 @@ def test_carina_launch_handoff_setup_and_cleanup(tmp_path: Path) -> None:
             policy=adapter.default_policy_profile(),
         ),
     ).select_local_model(
-        artifact_id="synthetic-model",
-        path=model_root,
-        runtime="vllm",
-        model_id="test-model",
-        minimum_gpu_count=2,
-        minimum_gpu_memory_bytes=1,
-        tool_call_parser="hermes",
-        tensor_parallel_size=2,
+        LocalModelSelection(
+            artifact_id="synthetic-model",
+            path=str(model_root),
+            runtime="vllm",
+            model_id="test-model",
+            minimum_gpu_count=2,
+            minimum_gpu_memory_bytes=1,
+            tool_call_parser="hermes",
+            tensor_parallel_size=2,
+        )
     )
 
     _write_executable(

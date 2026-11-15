@@ -1028,7 +1028,7 @@ def test_download_completion_waits_for_an_active_session_turn(tmp_path: Path) ->
 
     def select_download() -> None:
         selection_started.set()
-        gateway._select_downloaded_local_model(model_id, model_path, "llama-cpp-cpu")
+        gateway.local_models.select_downloaded_local_model(model_id, model_path, "llama-cpp-cpu")
         selection_finished.set()
 
     with ThreadPoolExecutor(max_workers=3) as executor:
@@ -2391,7 +2391,7 @@ def test_gpu_environment_is_cached_and_can_be_refreshed(
             capacities=(),
         )
 
-    monkeypatch.setattr("heartwood.gateway._gateway.inspect_gpu_environment", inspect)
+    monkeypatch.setattr("heartwood.gateway._local_model_lifecycle.inspect_gpu_environment", inspect)
     gateway = _gateway(tmp_path)
 
     first = gateway.gpu_environment()
@@ -2419,7 +2419,9 @@ def test_local_model_availability_reflects_installed_runtime_executables(
         return real_is_file(path)
 
     monkeypatch.setattr(Path, "is_file", without_packaged_runtimes)
-    monkeypatch.setattr("heartwood.gateway._gateway.shutil.which", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        "heartwood.gateway._local_model_lifecycle.shutil.which", lambda *_args, **_kwargs: None
+    )
 
     unavailable = cast(list[dict[str, JsonValue]], gateway.model_artifacts()["models"])
     assert not any(model["available"] for model in unavailable)
@@ -2434,7 +2436,7 @@ def test_local_model_availability_reflects_installed_runtime_executables(
     assert "portable CPU runtime" in str(rejected.body["error"])
 
     monkeypatch.setattr(
-        "heartwood.gateway._gateway.shutil.which",
+        "heartwood.gateway._local_model_lifecycle.shutil.which",
         lambda executable, **_kwargs: (
             "/runtime/llama-server" if executable == "llama-server" else None
         ),
@@ -2448,12 +2450,12 @@ def test_local_model_availability_reflects_installed_runtime_executables(
     assert available[0]["availability_reason"] == "Recommended for this deployment"
 
     monkeypatch.setattr(
-        "heartwood.gateway._gateway.shutil.which",
+        "heartwood.gateway._local_model_lifecycle.shutil.which",
         lambda executable, **_kwargs: f"/runtime/{executable}",
     )
     gateway.env["CUDA_VISIBLE_DEVICES"] = "0,1,2,3"
     monkeypatch.setattr(
-        gateway,
+        gateway.local_models,
         "gpu_environment",
         lambda: GpuEnvironment(
             platform_id="generic",
@@ -2488,7 +2490,7 @@ def test_local_model_availability_reflects_installed_runtime_executables(
         assert fully_available[0]["availability_reason"] == "Available on this deployment"
 
     monkeypatch.setattr(
-        gateway,
+        gateway.local_models,
         "gpu_environment",
         lambda: GpuEnvironment(
             platform_id="terra",
@@ -2546,9 +2548,9 @@ def test_terra_gpu_recommendation_requires_the_qualified_resource_envelope(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     gateway = _gateway(tmp_path)
-    monkeypatch.setattr(gateway, "_local_runtime_available", lambda _runtime: True)
+    monkeypatch.setattr(gateway.local_models, "local_runtime_available", lambda _runtime: True)
     monkeypatch.setattr(
-        gateway,
+        gateway.local_models,
         "gpu_environment",
         lambda: GpuEnvironment(
             platform_id="terra",
@@ -2592,7 +2594,9 @@ def test_inaccessible_packaged_runtime_is_reported_as_unavailable(
         return real_is_file(path)
 
     monkeypatch.setattr(Path, "is_file", inaccessible_runtime)
-    monkeypatch.setattr("heartwood.gateway._gateway.shutil.which", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        "heartwood.gateway._local_model_lifecycle.shutil.which", lambda *_args, **_kwargs: None
+    )
 
     models = cast(list[dict[str, JsonValue]], gateway.model_artifacts()["models"])
 
@@ -2884,7 +2888,7 @@ def test_user_selected_model_plan_persists_across_gateway_restart(
         destination.write_bytes(b"content")
         return destination
 
-    monkeypatch.setattr("heartwood.gateway._gateway.download_artifact", download)
+    monkeypatch.setattr("heartwood.gateway._local_model_lifecycle.download_artifact", download)
 
     plan = gateway.inspect_model_repository("example/research-model-gguf")
     path = gateway.download_custom_local_model_now(
@@ -2926,7 +2930,7 @@ def test_user_selected_model_plan_persists_across_gateway_restart(
     assert tampered[0]["status"] == "error"
     assert "checksum" in str(tampered[0]["error"])
     path.write_bytes(b"content")
-    monkeypatch.setattr(restarted, "_local_runtime_installed", lambda _runtime: True)
+    monkeypatch.setattr(restarted.local_models, "local_runtime_installed", lambda _runtime: True)
 
     background_models: list[ModelArtifact | ModelSnapshot] = []
 
@@ -2958,9 +2962,9 @@ def test_gateway_downloads_recommended_artifacts_and_snapshots_through_one_inter
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     gateway = _gateway(tmp_path)
-    monkeypatch.setattr(gateway, "_local_runtime_installed", lambda _runtime: True)
+    monkeypatch.setattr(gateway.local_models, "local_runtime_installed", lambda _runtime: True)
     monkeypatch.setattr(
-        gateway,
+        gateway.local_models,
         "gpu_environment",
         lambda: GpuEnvironment(
             platform_id="carina",
@@ -2997,8 +3001,12 @@ def test_gateway_downloads_recommended_artifacts_and_snapshots_through_one_inter
         path.mkdir(parents=True)
         return path
 
-    monkeypatch.setattr("heartwood.gateway._gateway.download_artifact", artifact_download)
-    monkeypatch.setattr("heartwood.gateway._gateway.download_model_snapshot", snapshot_download)
+    monkeypatch.setattr(
+        "heartwood.gateway._local_model_lifecycle.download_artifact", artifact_download
+    )
+    monkeypatch.setattr(
+        "heartwood.gateway._local_model_lifecycle.download_model_snapshot", snapshot_download
+    )
 
     artifact = gateway.download_local_model_now("llama-cpp-stories260k-ci")
     assert gateway.config_store.load().local_model is None
@@ -3055,9 +3063,9 @@ def test_gateway_download_uses_the_normalized_model_catalog(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     gateway = _gateway(tmp_path)
-    monkeypatch.setattr(gateway, "_local_runtime_installed", lambda _runtime: True)
+    monkeypatch.setattr(gateway.local_models, "local_runtime_installed", lambda _runtime: True)
     monkeypatch.setattr(
-        gateway,
+        gateway.local_models,
         "gpu_environment",
         lambda: GpuEnvironment(
             platform_id="terra",
@@ -3092,7 +3100,9 @@ def test_gateway_download_uses_the_normalized_model_catalog(
         return destination
 
     monkeypatch.setattr(ModelArtifactCatalog, "artifact", fail_lookup)
-    monkeypatch.setattr("heartwood.gateway._gateway.download_model_snapshot", snapshot_download)
+    monkeypatch.setattr(
+        "heartwood.gateway._local_model_lifecycle.download_model_snapshot", snapshot_download
+    )
 
     assert gateway.download_local_model_now(snapshot_id) == destination
 

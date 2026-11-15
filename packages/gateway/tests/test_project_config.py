@@ -273,7 +273,9 @@ def test_local_model_selection_stays_under_project_model_root(tmp_path: Path) ->
     model.write_bytes(b"synthetic")
     store = ProjectConfigStore(project, _default_config(project))
 
-    configured = store.select_local_model(artifact_id="reviewed", path=model)
+    configured = store.select_local_model(
+        LocalModelSelection(artifact_id="reviewed", path=str(model))
+    )
 
     assert configured.local_model == LocalModelSelection(
         artifact_id="reviewed",
@@ -282,7 +284,9 @@ def test_local_model_selection_stays_under_project_model_root(tmp_path: Path) ->
     assert configured.model_source == "heartwood"
     assert configured.local_model.resolved_path(project) == model
     with pytest.raises(ProjectConfigError, match=r"under \.heartwood/models"):
-        store.select_local_model(artifact_id="outside", path=tmp_path / "outside.gguf")
+        store.select_local_model(
+            LocalModelSelection(artifact_id="outside", path=str(tmp_path / "outside.gguf"))
+        )
 
 
 def test_project_config_selects_model_source_and_settings_atomically(tmp_path: Path) -> None:
@@ -340,9 +344,7 @@ def test_project_config_selects_local_model_and_profile_atomically(tmp_path: Pat
     settings = ModelSettings(active_profile="heartwood", profiles=(profile,))
 
     configured = store.select_local_model(
-        artifact_id="reviewed",
-        path=model,
-        settings=settings,
+        LocalModelSelection(artifact_id="reviewed", path=str(model)), settings=settings
     )
 
     assert configured.model_source == "heartwood"
@@ -360,21 +362,23 @@ def test_project_config_persists_user_selected_model_provenance(tmp_path: Path) 
     store = ProjectConfigStore(project, _default_config(project))
 
     configured = store.select_local_model(
-        artifact_id="hf-model",
-        path=model,
-        runtime="llama-cpp",
-        display_name="Research Model Q4_K_M",
-        source_repository="example/research-model-gguf",
-        source_revision="1" * 40,
-        source_path="model-q4_k_m.gguf",
-        model_type="qwen2",
-        size_bytes=9,
-        minimum_free_bytes=9,
-        license_posture="Source model card reports apache-2.0.",
-        artifact_sha256="a" * 64,
-        minimum_resource_envelope="Estimated minimum resources",
-        recommended_resource_envelope="Recommended resources",
-        catalog_source="user-selected",
+        LocalModelSelection(
+            artifact_id="hf-model",
+            path=str(model),
+            runtime="llama-cpp",
+            display_name="Research Model Q4_K_M",
+            source_repository="example/research-model-gguf",
+            source_revision="1" * 40,
+            source_path="model-q4_k_m.gguf",
+            model_type="qwen2",
+            size_bytes=9,
+            minimum_free_bytes=9,
+            license_posture="Source model card reports apache-2.0.",
+            artifact_sha256="a" * 64,
+            minimum_resource_envelope="Estimated minimum resources",
+            recommended_resource_envelope="Recommended resources",
+            catalog_source="user-selected",
+        )
     )
 
     assert configured.local_model is not None
