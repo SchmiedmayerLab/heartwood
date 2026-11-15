@@ -36,6 +36,20 @@ Green marks what Heartwood owns and blue marks what the research environment or 
 
 ## Shared Contracts
 
+### Remote Worker Construction
+
+The SDK backend accepts a trusted `worker_context` provider for an already admitted worker attempt.
+The provider supplies the admitted workspace, an inference placeholder, explicitly projected native Skills, and the operator-qualified specialist catalog digest.
+Local and remote conversations share Heartwood's agent settings and tool construction; remote tools use `/workspace`, and projected Skills use `/skills`.
+The worker bootstrap registers the image's verified advisory specialist factories before invoking the native agent server.
+Subscription authentication and provider-managed identity are unavailable through this factory; it never resolves gateway provider credentials for serialization.
+
+Remote creation uses the retained conversation identity and the SDK's public creation request, with automatic title generation disabled and the established iteration and confirmation settings.
+Creation is attempted once; an uncertain response fences the worker lease and requires outside reconciliation.
+Native streaming-delta events feed transient interface text, while durable translation continues through admitted native state.
+Gateway-local parallel-review executors are not installed on remote agent copies; sequential advisory specialists remain available, and remote parallel review requires separate qualification.
+This embedding contract does not provision a sandbox or enable remote execution in the default gateway launch path.
+
 ### Project Context
 
 `ProjectContext.current()` resolves the process current directory and reserves `.heartwood/` beneath it.

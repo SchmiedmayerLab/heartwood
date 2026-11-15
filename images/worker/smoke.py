@@ -70,7 +70,7 @@ def verify_exec(executable, arguments, environment):
             assert error.errno == errno.EBADF
         else:
             raise AssertionError("bootstrap retained an inherited descriptor")
-    assert arguments[1:6] == ["-I", "-B", "-u", "-m", "openhands.agent_server"]
+    assert arguments[1:6] == ["-I", "-B", "-u", "-m", "heartwood.gateway.worker_server"]
     assert environment["SESSION_API_KEY"] == key
 os.execve = verify_exec
 bootstrap["main"]()

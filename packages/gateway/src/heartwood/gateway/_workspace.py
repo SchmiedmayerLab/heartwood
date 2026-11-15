@@ -279,6 +279,21 @@ class WorkspaceInspector:
         Before/after metadata catches ordinary concurrent changes, not adversarial
         change-and-restore. A digest is an observation, not an immutable snapshot.
         """
+        return self._capture(path, max_bytes=max_bytes, capture_bytes=False)[0]
+
+    def read_verified(self, artifact: ExperimentFile, *, max_bytes: int) -> bytes:
+        """Return the exact captured bytes only when they match the selected fingerprint."""
+        artifact = ExperimentFile.model_validate(artifact)
+        observed, content = self._capture(artifact.path, max_bytes=max_bytes, capture_bytes=True)
+        if observed != artifact:
+            raise WorkspaceInspectionError(
+                "HW-WORKSPACE-007", "file no longer matches its selected fingerprint"
+            )
+        return content
+
+    def _capture(
+        self, path: str, *, max_bytes: int, capture_bytes: bool
+    ) -> tuple[ExperimentFile, bytes]:
         if type(max_bytes) is not int or max_bytes < 0:
             raise ValueError("Fingerprint byte limit must be nonnegative")
         relative = _relative_path(path)
@@ -289,13 +304,18 @@ class WorkspaceInspector:
                     before = os.fstat(descriptor)
                     if not stat.S_ISREG(before.st_mode) or before.st_size > max_bytes:
                         raise ValueError("Not a bounded regular file")
+                    if capture_bytes and before.st_nlink != 1:
+                        raise ValueError("Multiply linked files cannot supply worker inputs")
                     digest = hashlib.sha256()
+                    chunks: list[bytes] = []
                     count = 0
                     while chunk := os.read(descriptor, min(1024 * 1024, max_bytes - count + 1)):
                         count += len(chunk)
                         if count > max_bytes:
                             raise ValueError("File grew beyond its fingerprint limit")
                         digest.update(chunk)
+                        if capture_bytes:
+                            chunks.append(chunk)
                     after = os.fstat(descriptor)
                     current = os.stat(name, dir_fd=parent, follow_symlinks=False)
 
@@ -306,6 +326,7 @@ class WorkspaceInspector:
                             item.st_size,
                             item.st_mtime_ns,
                             item.st_ctime_ns,
+                            item.st_nlink,
                         )
 
                     if (
@@ -314,8 +335,11 @@ class WorkspaceInspector:
                         or identity(after) != identity(current)
                     ):
                         raise ValueError("File changed during fingerprint capture")
-                    return ExperimentFile(
-                        path=relative.as_posix(), sha256=digest.hexdigest(), size_bytes=count
+                    return (
+                        ExperimentFile(
+                            path=relative.as_posix(), sha256=digest.hexdigest(), size_bytes=count
+                        ),
+                        b"".join(chunks),
                     )
                 finally:
                     os.close(descriptor)

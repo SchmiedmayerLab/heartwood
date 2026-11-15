@@ -64,7 +64,22 @@ Installed catalog artifacts are addressed by the complete tree SHA-256 digest.
 The activation index records the source identifier, full source commit, catalog target, version, review status, and revocation status.
 One project-scoped native lock serializes source refresh, download, activation, removal, and runtime revalidation across CLI and browser processes.
 Heartwood revalidates the signed source, installed tree, and matching activation event in the verified audit chain before exposing an active catalog Skill to OpenHands.
+Runtime selection rereads the installation index after refreshing signed sources, so a newly observed revocation excludes the package from that same selection.
 It also reevaluates tool, network, and platform compatibility for the current deployment, so project state moved between environments cannot activate an incompatible Skill.
+
+## Worker Projection
+
+`SkillManager.stage_worker_skills` creates a temporary projection containing only compatible release-bundled and verified active installed Skill packages.
+It refreshes signed sources and checks activation audit records under the existing lifecycle lock, then uses the catalog's verified tree copier to bind every copied package to its selected tree digest.
+Installation indexes, source registries, trust roots, signatures, and audit records remain outside the projection.
+The snapshot digest binds the selected names and complete-tree digests; native Skill objects use `/skills/<name>` locations instead of gateway filesystem paths.
+Automatic user, project, and marketplace discovery must remain disabled in the worker's agent context.
+
+The trusted launcher owns the private staging directory outside the project, verifies the transferred snapshot, and mounts it read-only at `/skills` before admitting the worker.
+The projection accepts at most 256 packages and 64 MiB of content, in addition to the catalog's per-package limits.
+The staging context removes its directory after transfer or failure; an abrupt process exit can leave unused staging data that recovery must discard.
+A snapshot records a selection at one point in time; it does not revoke an already running worker when source metadata later changes.
+The launcher must fence and revoke that worker before replacing its context, and must select and validate a new snapshot for the replacement attempt.
 
 ## Offline Use
 
