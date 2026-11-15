@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 import tracemalloc
 import uuid
 from collections.abc import Callable, Iterator
@@ -23,12 +24,14 @@ import pytest
 from openhands.sdk import Agent, RemoteConversation
 from openhands.sdk.conversation import ConversationExecutionStatus
 from openhands.sdk.conversation.conversation_stats import ConversationStats
+from openhands.sdk.conversation.impl.remote_conversation import RemoteEventsList
 from openhands.sdk.conversation.request import StartConversationRequest
-from openhands.sdk.event import ActionEvent, MessageEvent, StreamingDeltaEvent
+from openhands.sdk.event import ActionEvent, MessageEvent, ObservationEvent, StreamingDeltaEvent
 from openhands.sdk.event import Event as OpenHandsEvent
 from openhands.sdk.event.conversation_state import ConversationStateUpdateEvent
-from openhands.sdk.llm import Message, MessageToolCall, TextContent
+from openhands.sdk.llm import LLM, Message, MessageToolCall, TextContent
 from openhands.sdk.security import SecurityRisk
+from openhands.sdk.security.confirmation_policy import AlwaysConfirm
 from openhands.sdk.testing import TestLLM
 from openhands.sdk.workspace import LocalWorkspace
 from openhands.tools.terminal import TerminalAction
@@ -91,6 +94,8 @@ class _Worker:
         self.id = attempt.intent.conversation_id if attempt is not None else uuid.uuid4()
         self.events: list[OpenHandsEvent] = []
         self.status = ConversationExecutionStatus.IDLE
+        # What the SDK's event connection last delivered, which can lag the worker.
+        self.cached: ConversationExecutionStatus | None = None
         self.requests: list[tuple[str, str | None]] = []
         self.sent = 0
         self.fail: Exception | None = None
@@ -133,16 +138,22 @@ class _Worker:
     def branch(self) -> WorkerBranch:
         return WorkerBranch(self.workspace, self.id)
 
-    def state(self) -> tuple[ConversationExecutionStatus, ConversationStats]:
-        self.requests.append(("status", None))
-        return self.status, ConversationStats()
-
     def _respond(self, request: httpx.Request) -> httpx.Response:
         route = request.url.path.rsplit("/", 1)[-1]
+        if route == str(self.id):
+            route = "status"
         page = request.url.params.get("page_id")
         self.requests.append((route, page))
         if self.fail is not None:
             raise self.fail
+        if route == "status":
+            return self._json(
+                {
+                    "id": str(self.id),
+                    "execution_status": self.status.value,
+                    "stats": ConversationStats().model_dump(mode="json"),
+                }
+            )
         if route == "search" and self.on_search is not None:
             self.on_search()
         events = self.answer(route, list(self.events)) if self.answer else list(self.events)
@@ -168,6 +179,9 @@ class _Worker:
                 ],
                 "next_page_id": selected[limit].id if len(selected) > limit else None,
             }
+        return self._json(body)
+
+    def _json(self, body: dict[str, Any]) -> httpx.Response:
         content = json.dumps(body).encode()
         self.sent += len(content)
         return httpx.Response(200, content=content, headers={"Content-Type": "application/json"})
@@ -179,7 +193,7 @@ class _RemoteState:
 
     @property
     def execution_status(self) -> ConversationExecutionStatus:
-        return self._worker.state()[0]
+        return self._worker.cached or self._worker.status
 
     @property
     def stats(self) -> ConversationStats:
@@ -229,13 +243,16 @@ def test_first_read_is_one_snapshot_and_later_reads_transfer_only_new_events(
         assert [request.tool_call.tool_call_id for request in requests] == ["pending-call"]
         known = frozenset(event.source_event_id for event in events if event.source_event_id)
 
-        # Nothing new: one page holding the admitted leaf and a logged state update.
+        # Nothing new: the status and one page holding the admitted leaf and a logged
+        # state update.
         worker.requests.clear()
         sent = worker.sent
-        assert backend.reconcile(session_id="session-1", known_source_event_ids=known) == ()
+        assert (
+            backend.reconcile(session_id="session-1", known_source_event_ids=frozenset(known)) == ()
+        )
         assert worker.requests == [("status", None), ("search", "pending-action")]
         page = sum(len(event.model_dump_json(exclude_none=True)) for event in worker.events[-2:])
-        assert worker.sent - sent < page + 128
+        assert worker.sent - sent < page + 1024
 
         worker.requests.clear()
         worker.status = ConversationExecutionStatus.FINISHED
@@ -245,6 +262,23 @@ def test_first_read_is_one_snapshot_and_later_reads_transfer_only_new_events(
         assert [
             event.message for event in events if isinstance(event, BackendAgentMessageEvent)
         ] == ["Finished."]
+    finally:
+        backend.close()
+
+
+def test_status_is_read_from_the_worker_not_from_the_sdk_cache(tmp_path: Path) -> None:
+    worker = _Worker()
+    worker.append(_message("Planning."))
+    backend = _backend(tmp_path, _Remote(worker))
+    try:
+        backend.reconcile(session_id="session-1", known_source_event_ids=frozenset())
+        # The worker now waits for confirmation, but no state update reached the cache.
+        worker.cached = ConversationExecutionStatus.RUNNING
+        worker.status = ConversationExecutionStatus.WAITING_FOR_CONFIRMATION
+        worker.append(_action("pending-action", "pending-call"))
+        group = backend.pending_action_group(session_id="session-1")
+        assert group is not None
+        assert [action.tool_call_id for action in group.actions] == ["pending-call"]
     finally:
         backend.close()
 
@@ -319,9 +353,9 @@ def test_repeated_missing_reordered_or_forged_events_fence_the_attempt(
     worker.append(*(_message(f"Step {index}.") for index in range(4)))
     worker.answer = _forge(kind)
     branch = worker.branch()
-    assert len(branch.read(worker.state).events) == 2
+    assert len(branch.read().events) == 2
     with pytest.raises(WorkerResponseError):
-        branch.read(worker.state)
+        branch.read()
     assert not attempt.active
     with pytest.raises(WorkerResponseError, match="closed"):
         worker.budget.charge(0)
@@ -331,18 +365,16 @@ def test_reads_walk_every_page_after_the_leaf() -> None:
     worker = _Worker()
     worker.append(_message("Start."))
     branch = worker.branch()
-    branch.read(worker.state)
+    branch.read()
     worker.append(*(_message(f"Step {index}.") for index in range(250)))
     worker.requests.clear()
-    assert [event.id for event in branch.read(worker.state).events] == [
-        event.id for event in worker.events
-    ]
+    assert [event.id for event in branch.read().events] == [event.id for event in worker.events]
     searches = [page for route, page in worker.requests if route == "search"]
     assert searches == [worker.events[0].id, worker.events[100].id, worker.events[200].id]
     # A later walk starts again from the new leaf, so the walk bound never accumulates.
     for _ in range(3):
         worker.append(_message("More."))
-        branch.read(worker.state)
+        branch.read()
 
 
 def test_long_session_retains_a_bounded_branch_and_reads_stay_small(
@@ -353,7 +385,7 @@ def test_long_session_retains_a_bounded_branch_and_reads_stay_small(
     worker = _Worker()
     worker.append(_message("Start."))
     branch = worker.branch()
-    branch.read(worker.state)
+    branch.read()
     step = "x" * 4000
     retained = len(worker.events[0].model_dump_json())
     peaks: list[int] = []
@@ -368,7 +400,7 @@ def test_long_session_retains_a_bounded_branch_and_reads_stay_small(
             sent = worker.sent
             tracemalloc.start()
             try:
-                branch.read(worker.state)
+                branch.read()
             finally:
                 peaks.append(tracemalloc.get_traced_memory()[1])
                 tracemalloc.stop()
@@ -387,14 +419,46 @@ def test_long_session_retains_a_bounded_branch_and_reads_stay_small(
         worker.budget.charge(0)
 
 
+def test_sdk_history_cache_is_bounded_by_the_walk_and_outgrowing_it_fences(
+    monkeypatch: pytest.MonkeyPatch, worker_attempt: Callable[[str], WorkerAttemptLease]
+) -> None:
+    bound = 256 * 1024
+    monkeypatch.setattr(remote_workspace_module, "_MAX_HISTORY_BYTES", bound)
+    attempt = worker_attempt(_HOST)
+    worker = _Worker(attempt)
+    worker.append(_message("Start."))
+    # The SDK's own cache, filled as it is at attachment and after every run.
+    cache = RemoteEventsList(worker.workspace.client, str(worker.id))
+    step = "x" * 4000
+    walks = 0
+    while attempt.active:
+        worker.append(*(_message(step) for _ in range(3)))
+        worker.append_update()
+        history = sum(len(event.model_dump_json(exclude_none=True)) for event in worker.events)
+        # The complete history read when a run ends.
+        cache.reconcile()
+        cached = sum(len(event.model_dump_json(exclude_none=True)) for event in cache)
+        if attempt.active:
+            walks += 1
+            assert history <= bound
+            assert cached == history
+    # The walk that would admit more than the bound fences the attempt, and the cache
+    # holds no more than the last complete walk admitted.
+    assert walks > 10
+    assert history > bound
+    assert cached <= bound
+    with pytest.raises(WorkerResponseError, match="closed"):
+        worker.budget.charge(0)
+
+
 def test_status_is_read_before_the_events_it_describes() -> None:
     worker = _Worker()
     worker.append(_message("Start."))
     branch = worker.branch()
-    branch.read(worker.state)
+    branch.read()
     worker.requests.clear()
     worker.append(_message("More."))
-    branch.read(worker.state)
+    branch.read()
     assert worker.requests == [("status", None), ("search", worker.events[0].id)]
 
 
@@ -402,7 +466,7 @@ def test_concurrent_reads_share_one_consistent_branch() -> None:
     worker = _Worker()
     worker.append(_message("Start."))
     branch = worker.branch()
-    branch.read(worker.state)
+    branch.read()
     worker.append(_message("Early."))
     both_reading, answered, claim = Barrier(2, timeout=5), Event(), Lock()
     claimed = False
@@ -419,7 +483,7 @@ def test_concurrent_reads_share_one_consistent_branch() -> None:
 
     worker.on_search, worker.after_read = before, answered.set
     with ThreadPoolExecutor(max_workers=2) as executor:
-        reads = [executor.submit(branch.read, worker.state) for _ in range(2)]
+        reads = [executor.submit(branch.read) for _ in range(2)]
         results = sorted((read.result(timeout=5).events for read in reads), key=len)
     worker.on_search = worker.after_read = None
     identities = [event.id for event in worker.events]
@@ -428,7 +492,7 @@ def test_concurrent_reads_share_one_consistent_branch() -> None:
         identities,
     ]
     worker.requests.clear()
-    assert [event.id for event in branch.read(worker.state).events] == identities
+    assert [event.id for event in branch.read().events] == identities
     assert worker.requests == [("status", None), ("search", identities[-1])]
 
 
@@ -543,6 +607,52 @@ def agent_server(tmp_path: Path) -> Iterator[httpx.Client]:
         yield client
 
 
+def _create(agent_server: httpx.Client, request: StartConversationRequest) -> uuid.UUID:
+    created = agent_server.post(
+        "/api/conversations",
+        content=request.model_dump_json(exclude_none=True),
+        headers={"Content-Type": "application/json"},
+    )
+    assert created.status_code == 201
+    return uuid.UUID(created.json()["id"])
+
+
+def _admitted_branch(
+    agent_server: httpx.Client, request: StartConversationRequest, identity: uuid.UUID
+) -> tuple[WorkerBranch, list[str]]:
+    """Read the server's branch through the gateway's admission, recording each route."""
+    host = str(agent_server.base_url).rstrip("/")
+    workspace = AdmittedRemoteWorkspace(host=host, working_dir="/workspace")
+    workspace.authorize_request(request)
+    paths: list[str] = []
+
+    class Observed(httpx.BaseTransport):
+        def handle_request(self, request: httpx.Request) -> httpx.Response:
+            route = request.url.path.rsplit("/", 1)[-1]
+            paths.append("status" if route == str(identity) else route)
+            response = agent_server._transport.handle_request(request)
+            return httpx.Response(
+                response.status_code, headers=response.headers, content=response.read()
+            )
+
+    workspace._admitted_client = httpx.Client(
+        base_url=host,
+        transport=WorkerResponseTransport(
+            host=host,
+            tool_modules={},
+            request=lambda: workspace._request_contract,
+            budget=workspace._response_budget,
+            transport=Observed(),
+        ),
+    )
+    return WorkerBranch(workspace, identity), paths
+
+
+def _snapshot_ids(agent_server: httpx.Client, identity: uuid.UUID) -> list[str]:
+    snapshot = agent_server.get(f"/api/conversations/{identity}/events/snapshot").json()
+    return [event["id"] for event in snapshot["events"]]
+
+
 def test_pinned_agent_server_branch_extends_by_its_parent_links(
     agent_server: httpx.Client, tmp_path: Path
 ) -> None:
@@ -551,13 +661,7 @@ def test_pinned_agent_server_branch_extends_by_its_parent_links(
         workspace=LocalWorkspace(working_dir=tmp_path / "worker-workspace"),
         autotitle=False,
     )
-    created = agent_server.post(
-        "/api/conversations",
-        content=request.model_dump_json(exclude_none=True),
-        headers={"Content-Type": "application/json"},
-    )
-    assert created.status_code == 201
-    identity = uuid.UUID(created.json()["id"])
+    identity = _create(agent_server, request)
 
     def send(text: str) -> None:
         response = agent_server.post(
@@ -567,37 +671,102 @@ def test_pinned_agent_server_branch_extends_by_its_parent_links(
         assert response.status_code == 200
 
     send("First synthetic message.")
-    host = str(agent_server.base_url).rstrip("/")
-    workspace = AdmittedRemoteWorkspace(host=host, working_dir="/workspace")
-    paths: list[str] = []
-
-    class Observed(httpx.BaseTransport):
-        def handle_request(self, request: httpx.Request) -> httpx.Response:
-            paths.append(request.url.path.rsplit("/", 1)[-1])
-            response = agent_server._transport.handle_request(request)
-            return httpx.Response(
-                response.status_code, headers=response.headers, content=response.read()
-            )
-
-    workspace._admitted_client = httpx.Client(
-        base_url=host,
-        transport=WorkerResponseTransport(
-            host=host, tool_modules={}, budget=workspace._response_budget, transport=Observed()
-        ),
-    )
-    branch = WorkerBranch(workspace, identity)
-
-    def status() -> tuple[ConversationExecutionStatus, ConversationStats]:
-        return ConversationExecutionStatus.IDLE, ConversationStats()
-
-    first = branch.read(status).events
+    branch, paths = _admitted_branch(agent_server, request, identity)
+    first = branch.read().events
     assert first
     assert paths == ["snapshot"]
     for index in range(3):
         send(f"Synthetic message {index}.")
-    later = branch.read(status).events
-    assert paths == ["snapshot", "search"]
+    later = branch.read().events
+    assert paths == ["snapshot", "status", "search"]
     assert later[: len(first)] == first
     assert len(later) == len(first) + 3
+    assert [event.id for event in later] == _snapshot_ids(agent_server, identity)
+
+
+def _tool_call(call_id: str, name: str, arguments: dict[str, str]) -> MessageToolCall:
+    return MessageToolCall(
+        id=call_id, name=name, arguments=json.dumps(arguments), origin="completion"
+    )
+
+
+def test_pinned_agent_server_confirmation_cycle_is_read_incrementally(
+    agent_server: httpx.Client, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The server rebuilds the agent's model from its request, so its completions are scripted
+    # where every model of this test process answers.
+    scripted = TestLLM.from_messages(
+        [
+            Message(
+                role="assistant",
+                content=[TextContent(text="Two steps.")],
+                tool_calls=[
+                    _tool_call("think-1", "think", {"thought": "First."}),
+                    _tool_call("think-2", "think", {"thought": "Second."}),
+                ],
+            ),
+            Message(
+                role="assistant",
+                content=[TextContent(text="")],
+                tool_calls=[_tool_call("finish-1", "finish", {"message": "Done."})],
+            ),
+        ]
+    )
+
+    monkeypatch.setattr(LLM, "acompletion", staticmethod(scripted.acompletion))
+    monkeypatch.setattr(LLM, "completion", staticmethod(scripted.completion))
+    request = StartConversationRequest(
+        agent=Agent(
+            llm=TestLLM(model="test-model"),
+            tools=[],
+            include_default_tools=["FinishTool", "ThinkTool"],
+        ),
+        workspace=LocalWorkspace(working_dir=tmp_path / "worker-workspace"),
+        confirmation_policy=AlwaysConfirm(),
+        autotitle=False,
+    )
+    identity = _create(agent_server, request)
+    sent = agent_server.post(
+        f"/api/conversations/{identity}/events",
+        json={"role": "user", "content": [{"type": "text", "text": "Begin."}], "run": False},
+    )
+    assert sent.status_code == 200
+    branch, paths = _admitted_branch(agent_server, request, identity)
+    first = branch.read()
+    assert first.events
+    assert paths == ["snapshot"]
+
+    def settles(status: ConversationExecutionStatus) -> None:
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            reported = agent_server.get(f"/api/conversations/{identity}").json()
+            if reported["execution_status"] == status.value:
+                return
+            time.sleep(0.02)
+        pytest.fail(f"agent server did not reach {status.value}")
+
+    assert agent_server.post(f"/api/conversations/{identity}/run").status_code == 200
+    settles(ConversationExecutionStatus.WAITING_FOR_CONFIRMATION)
+    waiting = branch.read()
+    assert waiting.execution_status == ConversationExecutionStatus.WAITING_FOR_CONFIRMATION
+    assert waiting.events[: len(first.events)] == first.events
+    assert [event.tool_call_id for event in waiting.events if isinstance(event, ActionEvent)] == [
+        "think-1",
+        "think-2",
+    ]
+    assert [event.id for event in waiting.events] == _snapshot_ids(agent_server, identity)
+
+    accepted = agent_server.post(
+        f"/api/conversations/{identity}/events/respond_to_confirmation", json={"accept": True}
+    )
+    assert accepted.status_code == 200
+    settles(ConversationExecutionStatus.FINISHED)
+    finished = branch.read()
+    assert finished.execution_status == ConversationExecutionStatus.FINISHED
+    assert finished.events[: len(waiting.events)] == waiting.events
+    assert sum(isinstance(event, ObservationEvent) for event in finished.events) == 3
     snapshot = agent_server.get(f"/api/conversations/{identity}/events/snapshot").json()
-    assert [event.id for event in later] == [event["id"] for event in snapshot["events"]]
+    assert [event.id for event in finished.events] == [event["id"] for event in snapshot["events"]]
+    assert finished.stats == ConversationStats.model_validate(snapshot["stats"])
+    # Every read after the first is the status, then the history after the leaf.
+    assert paths == ["snapshot", "status", "search", "status", "search"]

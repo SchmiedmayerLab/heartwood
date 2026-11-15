@@ -739,20 +739,19 @@ class WorkerBranch:
     def __init__(self, workspace: AdmittedRemoteWorkspace, conversation_id: UUID) -> None:
         self._workspace = workspace
         self._identity = str(conversation_id)
-        self._path = f"/api/conversations/{conversation_id}/events"
+        self._conversation = f"/api/conversations/{conversation_id}"
         self._lock = Lock()
         self._events: tuple[Event, ...] = ()
         self._positions: dict[str, int] = {}
         self._bytes = 0
         self._values = 0
 
-    def read(
-        self, status: Callable[[], tuple[ConversationExecutionStatus, ConversationStats]]
-    ) -> WorkerBranchRead:
-        """Read events after the admitted leaf; ``status`` is read before them.
+    def read(self) -> WorkerBranchRead:
+        """Read the worker's status and usage, then the events after the admitted leaf.
 
-        A status read first can only describe a prefix of the events read after it,
-        and an empty branch is read as one snapshot, which carries its own status.
+        The agent server persists an event before it publishes the status that follows
+        it, so a status read first describes a prefix of the events read after it. An
+        empty branch is read as one snapshot, which carries its own status.
         """
         try:
             with self._lock:
@@ -761,38 +760,43 @@ class WorkerBranch:
                 snapshot = self._snapshot()
                 self._extend((), snapshot.events)
                 return snapshot
-            execution_status, stats = status()
+            execution_status, stats = self._status(self._get(""))
             events = self._extend(base, self._after(base))
             return WorkerBranchRead(events, execution_status, stats)
         except WorkerResponseError:
             self._workspace._response_budget.close()
             raise
 
-    def _get(self, path: str, **params: str | int) -> tuple[dict[str, Any], tuple[Event, ...]]:
+    def _get(self, path: str, **params: str | int) -> dict[str, Any]:
         response = self._workspace.client.get(
-            self._path + path, params=params, extensions={_ADMITTED: True}
+            self._conversation + path, params=params, extensions={_ADMITTED: True}
         )
         value, events = response.extensions.get(_ADMITTED, (None, ()))
-        field = "events" if path == "/snapshot" else "items"
-        if (
-            not isinstance(value, dict)
-            or not isinstance(value.get(field), list)
-            or len(value[field]) != len(events)
+        field = {"": None, "/events/snapshot": "events"}.get(path, "items")
+        if not isinstance(value, dict) or (
+            field is not None
+            and (not isinstance(value.get(field), list) or len(value[field]) != len(events))
         ):
             raise WorkerResponseError("worker branch response is invalid")
-        return value, events
+        return {**value, field: events} if field is not None else value
 
-    def _snapshot(self) -> WorkerBranchRead:
-        value, events = self._get("/snapshot")
+    def _status(
+        self, value: dict[str, Any]
+    ) -> tuple[ConversationExecutionStatus, ConversationStats]:
         try:
             execution_status = ConversationExecutionStatus(value.get("execution_status"))
             stats = ConversationStats.model_validate(value.get("stats"))
         except ValueError:
             raise WorkerResponseError("worker branch response is invalid") from None
-        branch = _require_chain(None, events, set())
-        if value.get("id") != self._identity or value.get("leaf_event_id") != (
-            branch[-1].id if branch else None
-        ):
+        if value.get("id") != self._identity:
+            raise WorkerResponseError("worker branch response is invalid")
+        return execution_status, stats
+
+    def _snapshot(self) -> WorkerBranchRead:
+        value = self._get("/events/snapshot")
+        execution_status, stats = self._status(value)
+        branch = _require_chain(None, value["events"], set())
+        if value.get("leaf_event_id") != (branch[-1].id if branch else None):
             raise WorkerResponseError("worker branch response is invalid")
         return WorkerBranchRead(branch, execution_status, stats)
 
@@ -802,7 +806,8 @@ class WorkerBranch:
         seen: set[str] = set()
         page, first = leaf.id, True
         while True:
-            value, items = self._get("/search", page_id=page, limit=_HISTORY_PAGE_EVENTS)
+            value = self._get("/events/search", page_id=page, limit=_HISTORY_PAGE_EVENTS)
+            items = value["items"]
             # A page starts at the event it was requested from; the first is the leaf itself.
             if not items or items[0].id != page or (first and items[0] != leaf):
                 raise WorkerResponseError("worker history does not continue the admitted branch")

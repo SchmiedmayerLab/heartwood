@@ -1041,8 +1041,7 @@ class OpenHandsSdkBackend:
                         raise OpenHandsSdkError("Worker reads require an admitted workspace")
                     self._worker_branch = WorkerBranch(workspace, conversation.id)
                 branch = self._worker_branch
-            state = conversation.state
-            read = branch.read(lambda: (state.execution_status, state.stats))
+            read = branch.read()
         except Exception:
             raise OpenHandsSdkError("Worker conversation state is unavailable") from None
         return _ConversationRead(read.events, read.execution_status, _usage(read))
