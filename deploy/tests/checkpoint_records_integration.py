@@ -217,6 +217,19 @@ def conditional_write_policy(
     return bool(report["conditional_write_enforcement"])
 
 
+class RecordsPolicyNotEnforcedError(AssertionError):
+    """The records server accepted writes that the create-only policy must deny."""
+
+
+def require_create_only_enforcement(report: Mapping[str, Any]) -> None:
+    """Fail qualification unless the store itself enforces create-only publication."""
+    if report.get("conditional_write_enforcement") is not True:
+        raise RecordsPolicyNotEnforcedError(
+            "records server does not enforce the conditional-write policy; "
+            "create-only publication is not qualified"
+        )
+
+
 def refused(operation: Any, code: str, **kwargs: object) -> None:  # noqa: ANN401
     """Require the store itself to refuse a write with the expected error code."""
     with pytest.raises(Exception, match=code) as failure:
@@ -653,6 +666,7 @@ def run(binary: Path, image: str, output: Path) -> None:
                 "unconditional new object version is detected even when bytes are identical"
             )
         report["records_policy_qualified"] = enforced
+        require_create_only_enforcement(report)
         report["passed"] = True
     finally:
         for server in owned:

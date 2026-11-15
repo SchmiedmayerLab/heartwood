@@ -2,20 +2,18 @@
 # SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
 # SPDX-License-Identifier: MIT
 
-"""Storage readiness requires an authenticated API response, not a live listener."""
+"""Storage qualification requires an authenticated, policy-enforcing records server."""
 
 import importlib
 import importlib.util
 from pathlib import Path
+from types import ModuleType
 from unittest.mock import Mock
 
 import pytest
 
 
-@pytest.mark.parametrize("failure", ["initializing", "connection", "denied", "timeout", "exited"])
-def test_records_readiness_waits_only_for_startup(
-    failure: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def _qualification() -> ModuleType:
     spec = importlib.util.spec_from_file_location(
         "records_qualification",
         Path(__file__).resolve().parents[3] / "deploy/tests/checkpoint_records_integration.py",
@@ -24,6 +22,14 @@ def test_records_readiness_waits_only_for_startup(
     assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.parametrize("failure", ["initializing", "connection", "denied", "timeout", "exited"])
+def test_records_readiness_waits_only_for_startup(
+    failure: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _qualification()
     errors = importlib.import_module("botocore.exceptions")
     initializing = errors.ClientError(
         {"Error": {"Code": "XMinioServerNotInitialized"}}, "ListBuckets"
@@ -64,3 +70,14 @@ def test_records_readiness_waits_only_for_startup(
         server._wait_ready()
         assert client.list_buckets.call_count == 2
     client.close.assert_called_once_with()
+
+
+@pytest.mark.parametrize("enforcement", [False, None])
+def test_records_qualification_requires_an_enforced_create_only_policy(
+    enforcement: bool | None,
+) -> None:
+    module = _qualification()
+    report = {} if enforcement is None else {"conditional_write_enforcement": enforcement}
+    with pytest.raises(module.RecordsPolicyNotEnforcedError, match="create-only"):
+        module.require_create_only_enforcement(report)
+    module.require_create_only_enforcement({"conditional_write_enforcement": True})

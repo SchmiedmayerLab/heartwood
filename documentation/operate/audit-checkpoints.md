@@ -56,17 +56,26 @@ Managed evidence does not checkpoint every model request, prove a worker's claim
 
 ### Verification at a Boundary
 
-The gateway and the signing authority each keep the history they have verified and the observed version identifier and entity tag of every retained object it covers.
-The first boundary after the gateway starts, and the first request the signing authority serves, verify the complete retained history: every checkpoint, its signature, its audit candidate and its link to its predecessor.
-A later boundary, and a later signing request, extend that verification instead.
-They list the session's records versions once and read only the checkpoints published since, with their candidates; the signed hash chain covers the earlier checkpoints.
-The number of records read at a boundary does not depend on the session's length; the version listing still grows with it, one request for each thousand retained objects.
-Before a new checkpoint is published, the gateway and the signing authority each reject a modified, missing, reordered or replaced checkpoint, candidate or experiment export they have already verified, and any delete marker in the session's records.
-A failed boundary or request discards the kept history, so the next one verifies the complete history again.
+The gateway creates one evidence controller for each session service it opens; the signing authority is one `AnchoredCheckpointSigner` instance.
+Each keeps the history it has verified, including the head's audit content, and the observed version identifier and entity tag of every retained checkpoint, candidate and experiment export in that history.
 
-Only a complete verification rereads retained bytes.
-A store that changes an object's bytes without changing its version identifier or entity tag violates S3 versioning; the next complete verification detects such a change, after a gateway or authority restart or through the controller's explicit `verify` method.
-The `heartwood audit verify` command and checkpoint creation still verify the complete local session and audit streams.
+A complete verification reads every retained checkpoint, its signature, its audit candidate and its link to its predecessor.
+It runs on the first boundary of each session service the gateway opens, so at least once for each session after every gateway start.
+It runs on the first request each signing-authority instance serves.
+It also runs on the next boundary or request after any failed one, because a failure discards the kept history.
+
+Every other verification extends the kept history.
+It takes one listing of the session's records versions and reads only the checkpoints published since, with their candidates; the signed hash chain covers the earlier checkpoints.
+The gateway verifies before staging a candidate and again after publication; the signing authority verifies once per request.
+The number of records read does not depend on the session's length, but the bytes read do: each new candidate is the complete audit prefix, and the listing needs one request for each thousand retained objects.
+Before a new checkpoint is published, the listing rejects a modified, missing, reordered or replaced checkpoint, candidate or experiment export that was already verified.
+It also rejects any delete marker or noncurrent version anywhere in the session's records, including one for an abandoned staged candidate, so such an object blocks every later boundary of that session.
+
+An extension relies on the version identifier and entity tag of already verified objects and does not reread their bytes.
+Bytes rewritten in place under an unchanged version identifier and entity tag, which S3 versioning does not allow, are therefore not detected at a boundary.
+Only the next complete verification detects them.
+No command starts a complete verification of retained records for a running gateway or signing authority; after they restart, each session's next boundary verifies its retained history completely.
+The `heartwood audit verify` command and checkpoint creation verify the complete local session and audit streams, not the retained records.
 
 ## Configure Managed Evidence
 
@@ -135,10 +144,11 @@ Qualify equivalent behavior for any other S3-compatible store.
 
 Native qualification runs the records-service and transport suites against a synthetic MinIO server built from the revision pinned in `images/worker/candidate/records.json`, with versioning, Object Lock in COMPLIANCE mode and the conditional-write bucket policy above.
 Each suite records the store, the policy and `conditional_write_enforcement` in its `records-result.json`.
-That server rejects the `s3:if-none-match` condition key, so its results record `conditional_write_enforcement: false` and `records_policy_qualified: false`.
-It refuses a conditional overwrite of a published checkpoint but accepts an unconditional write as a new version.
-Heartwood rejects such a version wherever it reads the affected history, yet create-only publication is not enforced by that store.
 The records-service suite checks retention denial, lost-reply reconciliation, concurrent publication, outage recovery, backup and restore into a fresh server, and delete-marker and replacement-version detection against that same configuration.
+It fails, and with it native qualification, unless the store itself enforces the conditional-write policy.
+The pinned MinIO server rejects the `s3:if-none-match` condition key, so its results record `conditional_write_enforcement: false` and `records_policy_qualified: false`, and qualification against it does not pass.
+That server refuses a conditional overwrite of a published checkpoint but accepts an unconditional write as a new version.
+Heartwood rejects such a version wherever it reads the affected history, yet create-only publication is not enforced by that store.
 Create-only publication still needs qualification against a store that enforces the conditional-write policy, together with institutional retention approval and a production KMS or HSM signer.
 
 A working manifest does not prove that the signer authorizes requests, that the storage identities are restricted, or that the institution approves the deployment.

@@ -68,11 +68,6 @@ class SessionCheckpointEvidence:
         self.mode = mode
         self._verified: VerifiedHistory | None = None
 
-    def verify(self) -> VerifiedHistory:
-        """Reread and verify the complete retained history, as after a restart."""
-        self._verified = None
-        return self._history()
-
     def ensure(
         self,
         store: FileSessionStore,

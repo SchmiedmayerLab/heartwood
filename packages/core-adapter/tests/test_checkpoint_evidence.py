@@ -470,7 +470,7 @@ def test_restart_and_audit_verification_read_the_complete_history(tmp_path: Path
         mode="required",
     )
     before = env.client.reads
-    assert len(restarted.verify().checkpoints) == 7
+    assert len(restarted.records.verified_history(restarted.trusted_keys).checkpoints) == 7
     # Each retained checkpoint and its audit candidate.
     assert env.client.reads - before == 14
 
@@ -488,7 +488,7 @@ def test_restart_and_audit_verification_read_the_complete_history(tmp_path: Path
         )
     ).encode()
     with pytest.raises(AuditCheckpointError):
-        restarted.verify()
+        restarted.records.verified_history(restarted.trusted_keys)
     service = SessionService.local_default(
         tmp_path / "project", backend=env.backend, env={}, checkpoint_evidence=restarted
     )

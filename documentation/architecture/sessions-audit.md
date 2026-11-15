@@ -183,7 +183,7 @@ The explicit development and offline fallback uses the same contract through an 
 Verification requires the active deployment profile or a public key obtained through an independent trust path and rejects noncanonical or unexpected bundle content.
 The chain and signature cannot prove that an intact suffix was not deleted before checkpoint creation.
 An operator-bound evidence controller additionally verifies the independently retained checkpoint history and requires each successor to extend the retained audit prefix.
-It verifies the complete history once per process and extends that verification at later boundaries, as the [managed evidence contract](../operate/audit-checkpoints.md#verification-at-a-boundary) describes.
+It verifies the complete history on the first boundary of each session service and after a failed boundary, and extends that verification at other boundaries, as the [managed evidence contract](../operate/audit-checkpoints.md#verification-at-a-boundary) describes.
 This detects rewriting or truncation of that prefix; it does not authenticate unobserved events or prove the completeness of activity after the last retained checkpoint.
 The [managed evidence contract](../operate/audit-checkpoints.md#automatic-evidence-boundaries) defines publication, retention observation and required-mode recovery.
 The retention declaration also does not implement storage lifecycle controls; the deployment records system remains responsible for authoritative storage and policy enforcement.
