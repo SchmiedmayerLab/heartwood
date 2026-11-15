@@ -1038,6 +1038,7 @@ class SessionService:
                 gateway_policy_sha256=gateway_policy_sha256(self.policy_profile),
                 sandbox_policy_sha256=sandbox_policy_sha256,
                 input_manifest_sha256=input_manifest_sha256,
+                model_data_handling=self.model_data_handling,
             )
             self._worker_attempt_created = True
             self._record_worker_transition_locked(

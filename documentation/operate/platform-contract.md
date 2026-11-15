@@ -205,6 +205,7 @@ Describe the complete route: an outside credential-substituting transport such a
 
 Setup responses expose the descriptor and a shared summary for every connection and for the active route.
 Each `model_call.decision.recorded` event, which precedes the model work it authorizes, records the descriptor of the route the session uses, and the scrubbed audit export retains it without credentials.
+Each worker attempt records the descriptor of the route it was launched for with its other launch identities.
 A policy's `allowed_data_destinations` restricts routes to the listed destinations: selection and each model call fail closed when a route's descriptor is missing or names another destination.
 A project policy can narrow the list but cannot remove or widen a deployment's list.
 
