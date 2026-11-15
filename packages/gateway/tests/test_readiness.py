@@ -221,12 +221,14 @@ def _configure_model(
         model_path = project.models_dir / "synthetic-model"
         model_path.mkdir()
         store.select_local_model(
-            artifact_id="synthetic-model",
-            path=model_path,
-            runtime="vllm",
-            minimum_gpu_count=1,
-            minimum_gpu_memory_bytes=1,
-            tool_call_parser="hermes",
+            LocalModelSelection(
+                artifact_id="synthetic-model",
+                path=str(model_path),
+                runtime="vllm",
+                minimum_gpu_count=1,
+                minimum_gpu_memory_bytes=1,
+                tool_call_parser="hermes",
+            )
         )
         config = store.load()
     else:
@@ -478,9 +480,9 @@ def test_downloaded_local_model_requires_managed_runtime_before_setup(tmp_path: 
     model_path = project.models_dir / "synthetic-model"
     model_path.mkdir()
     store.select_local_model(
-        artifact_id="synthetic-model",
-        path=model_path,
-        runtime="llama-cpp",
+        LocalModelSelection(
+            artifact_id="synthetic-model", path=str(model_path), runtime="llama-cpp"
+        )
     )
 
     stopped = inspect_deployment(project, env={})

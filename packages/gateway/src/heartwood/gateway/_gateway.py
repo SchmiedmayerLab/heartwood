@@ -11,7 +11,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import shutil
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, contextmanager, nullcontext, suppress
 from dataclasses import dataclass, replace
@@ -19,7 +18,7 @@ from datetime import UTC, datetime
 from functools import wraps
 from pathlib import Path
 from threading import RLock
-from typing import TYPE_CHECKING, Any, Concatenate, Literal, Protocol, cast
+from typing import TYPE_CHECKING, Concatenate, Literal, Protocol, cast
 from uuid import uuid4
 
 from heartwood.adapters.platform import select_platform_adapter
@@ -68,36 +67,19 @@ from heartwood.gateway._credentials import CredentialStore, CredentialStoreError
 from heartwood.gateway._experiment_store import ExperimentStore
 from heartwood.gateway._gpu_environment import (
     GpuEnvironment,
-    inspect_gpu_environment,
-    minimum_compute_capability_for_model,
 )
 from heartwood.gateway._lifecycle import GatewayOperations, gateway_operation
-from heartwood.gateway._local_import import import_local_model
 from heartwood.gateway._local_model_contract import (
-    MINIMUM_AGENT_RUNTIME_CONTEXT_WINDOW,
     managed_model_native_tool_calling,
     managed_model_request_body,
-    managed_model_token_budgets,
 )
+from heartwood.gateway._local_model_lifecycle import LocalModelLifecycle
 from heartwood.gateway._local_models import (
     HuggingFaceModelRepository,
-    LocalModelCatalogSource,
-    LocalModelChoice,
-    LocalModelRuntime,
-    ModelRepositoryError,
-    catalog_model_choices,
 )
 from heartwood.gateway._model_artifacts import (
-    LocalModelDownloadManager,
-    ModelArtifact,
     ModelArtifactCatalog,
-    ModelArtifactError,
-    ModelDownload,
     load_model_artifact_catalog,
-    verify_model_artifact,
-)
-from heartwood.gateway._model_artifacts import (
-    download_model_artifact as download_artifact,
 )
 from heartwood.gateway._model_catalog import (
     ModelCatalog,
@@ -116,21 +98,12 @@ from heartwood.gateway._model_settings import (
     ModelSettings,
     ModelSettingsError,
     align_model_profile_request_endpoint,
-    model_profile_from_preset,
 )
 from heartwood.gateway._model_snapshots import (
     ModelSnapshot,
     ModelSnapshotCatalog,
-    ModelSnapshotError,
     ModelTier,
-    automatic_model_tier,
-    download_model_snapshot,
     load_model_snapshot_catalog,
-)
-from heartwood.gateway._model_transfer import (
-    ModelTransferError,
-    ModelTransferManager,
-    inspect_model_bundle,
 )
 from heartwood.gateway._openhands_models import prepare_openhands_import
 from heartwood.gateway._project import ProjectContext, ProjectStateError
@@ -145,9 +118,7 @@ from heartwood.gateway._project_config import (
 )
 from heartwood.gateway._readiness import (
     DeploymentReadiness,
-    gpu_visible,
     inspect_deployment,
-    managed_local_runtime_active,
     model_source_for_connection,
     model_source_options,
     persist_deployment_profile,
@@ -513,7 +484,6 @@ class SessionGateway:
         self._state_lock: AbstractContextManager[object] = RLock()
         self._stream_lock = RLock()
         self._stream_epoch = uuid4().hex
-        self._gpu_environment: GpuEnvironment | None = None
         adapter = select_platform_adapter(self.env)
         self._platform_capabilities = adapter.capabilities()
         self._deployment_policy = deployment_policy
@@ -549,64 +519,23 @@ class SessionGateway:
         )
         self.subscription_provider = subscription_provider or OpenHandsOpenAISubscription()
         self.workspace_inspector = workspace_inspector or WorkspaceInspector(self.project)
-        self._verified_local_artifacts: set[tuple[Path, int, int, str]] = set()
         resource_root = _runtime_resource_root()
-        catalog_path = resource_root / "images" / "generic" / "local-runtime" / "model-catalog.toml"
-        self.artifact_catalog = artifact_catalog or load_model_artifact_catalog(catalog_path)
-        snapshot_catalog_path = (
-            resource_root / "images" / "generic" / "local-runtime" / "snapshots.toml"
+        local_runtime_resources = resource_root / "images" / "generic" / "local-runtime"
+        self.local_models = LocalModelLifecycle(
+            project=self.project,
+            env=self.env,
+            config_store=self.config_store,
+            artifact_catalog=artifact_catalog
+            or load_model_artifact_catalog(local_runtime_resources / "model-catalog.toml"),
+            snapshot_catalog=snapshot_catalog
+            or load_model_snapshot_catalog(local_runtime_resources / "snapshots.toml"),
+            model_repository=model_repository
+            or HuggingFaceModelRepository(token=self.env.get("HF_TOKEN")),
+            state_lock=self._state_lock,
+            on_selection_changed=self._reset_services,
         )
-        self.snapshot_catalog = snapshot_catalog or load_model_snapshot_catalog(
-            snapshot_catalog_path
-        )
-        downloadable_choices = catalog_model_choices(
-            self.artifact_catalog.artifacts,
-            self.snapshot_catalog.snapshots,
-            recommended_only=False,
-        )
-        self._downloadable_local_model_choices = {
-            choice.model_id: choice for choice in downloadable_choices
-        }
-        self._local_model_choices = dict(self._downloadable_local_model_choices)
-        self._recommended_local_model_ids = {
-            artifact.artifact_id
-            for artifact in self.artifact_catalog.artifacts
-            if artifact.recommended
-        } | {
-            snapshot.snapshot_id
-            for snapshot in self.snapshot_catalog.snapshots
-            if snapshot.recommended
-        }
-        selected_local_model = self.config_store.load().local_model
-        if selected_local_model is not None:
-            selected_choice = self._downloadable_local_model_choices.get(
-                selected_local_model.artifact_id
-            )
-            if selected_local_model.catalog_source == "transferred" or (
-                selected_choice is None and selected_local_model.catalog_source == "user-selected"
-            ):
-                selected_choice = _selected_local_model_choice(selected_local_model)
-                if selected_local_model.catalog_source == "user-selected":
-                    self._downloadable_local_model_choices[selected_choice.model_id] = (
-                        selected_choice
-                    )
-            if selected_choice is not None:
-                self._local_model_choices[selected_choice.model_id] = selected_choice
-        self._repository_plans: dict[tuple[str, str], LocalModelChoice] = {}
-        self.model_repository = model_repository or HuggingFaceModelRepository(
-            token=self.env.get("HF_TOKEN")
-        )
-        self.model_cache_dir = self.project.models_dir
-        self.local_model_manager = LocalModelDownloadManager(
-            artifact_catalog=self.artifact_catalog,
-            snapshot_catalog=self.snapshot_catalog,
-            cache_dir=self.model_cache_dir,
-            on_ready=self._select_downloaded_local_model,
-        )
-        self.model_transfer_manager = ModelTransferManager(
-            models_dir=self.model_cache_dir,
-            on_import_ready=self._select_transferred_local_model,
-        )
+        self.local_model_manager = self.local_models.local_model_manager
+        self.model_transfer_manager = self.local_models.model_transfer_manager
         bundled_skills_dir = resource_root / "vendor" / "heartwood-skills" / "skills"
         if skill_source_registry is None:
             try:
@@ -1924,121 +1853,12 @@ class SessionGateway:
     @gateway_operation
     def model_artifacts(self) -> ModelArtifactsResponse:
         """Return normalized local choices, source metadata, and download status."""
-        snapshot_catalog = self.snapshot_catalog.safe_dict()
-        statuses = {status.model_id: status for status in self.local_model_manager.statuses()}
-        selected = self.config_store.load().local_model
-        active_model_id = (
-            selected.artifact_id
-            if selected is not None and managed_local_runtime_active(selected, self.env)
-            else None
-        )
-        if selected is not None and selected.artifact_id not in statuses:
-            path = selected.resolved_path(self.project)
-            if path.exists():
-                size = selected.size_bytes or self._local_model_size(selected.artifact_id, path)
-                try:
-                    self._verify_selected_local_artifact(selected, path)
-                except (OSError, ValueError) as error:
-                    statuses[selected.artifact_id] = ModelDownload(
-                        model_id=selected.artifact_id,
-                        status="error",
-                        bytes_downloaded=0,
-                        bytes_total=size,
-                        error=f"Selected model integrity check failed: {error}",
-                    )
-                else:
-                    statuses[selected.artifact_id] = ModelDownload(
-                        model_id=selected.artifact_id,
-                        status="ready",
-                        bytes_downloaded=size,
-                        bytes_total=size,
-                        path=str(path),
-                    )
-        gpu_environment = self.gpu_environment()
-        preferred_runtime = self._preferred_local_runtime()
-        local_choices = list(self._local_model_choices.values())
-        local_choices.sort(
-            key=lambda choice: (
-                selected is None or choice.model_id != selected.artifact_id,
-                not self._local_runtime_available(choice.runtime),
-                choice.runtime != preferred_runtime,
-            )
-        )
-        recommendation = self.recommend_managed_model(
-            maximum_tier=automatic_model_tier(gpu_environment.platform_id),
-            gpu_environment=gpu_environment,
-        )
-        preferred_id = (
-            recommendation.snapshot_id
-            if recommendation is not None
-            else next(
-                (
-                    choice.model_id
-                    for choice in local_choices
-                    if choice.model_id in self._recommended_local_model_ids
-                    and choice.minimum_gpu_count == 0
-                    and choice.qualification_for(gpu_environment.platform_id) == "qualified"
-                    and self._local_runtime_available(choice.runtime)
-                    and choice.runtime == preferred_runtime
-                ),
-                None,
-            )
-        )
-        choices = [
-            self._local_model_choice_dict(
-                choice,
-                active=choice.model_id == active_model_id,
-                selected=selected is not None and choice.model_id == selected.artifact_id,
-                recommendation=(
-                    "Selected for this project"
-                    if selected is not None and choice.model_id == selected.artifact_id
-                    else (
-                        "Recommended for this deployment"
-                        if selected is None and choice.model_id == preferred_id
-                        else None
-                    )
-                ),
-                gpu_environment=gpu_environment,
-            )
-            for choice in local_choices
-        ]
-        return api_response(
-            ModelArtifactsResponse,
-            {
-                **self.artifact_catalog.safe_dict(),
-                "snapshot_schema_version": snapshot_catalog["schema_version"],
-                "snapshots": snapshot_catalog["snapshots"],
-                "models": choices,
-                "downloads": [status.safe_dict() for status in statuses.values()],
-                "transfers": [
-                    transfer.safe_dict() for transfer in self.model_transfer_manager.statuses()
-                ],
-                "gpu_environment": {
-                    "platform_id": gpu_environment.platform_id,
-                    "capacities": [
-                        {
-                            "label": capacity.label,
-                            "gpu_model": capacity.gpu_model,
-                            "gpu_count": capacity.gpu_count,
-                            "gpu_memory_bytes": capacity.gpu_memory_bytes,
-                            "allocation_required": capacity.allocation_required,
-                            "partition": capacity.partition,
-                        }
-                        for capacity in gpu_environment.capacities
-                    ],
-                },
-            },
-        )
+        return self.local_models.model_artifacts()
 
     @gateway_operation
     def gpu_environment(self, *, refresh: bool = False) -> GpuEnvironment:
         """Return the shared GPU and scheduler inventory for this deployment."""
-        if refresh or self._gpu_environment is None:
-            self._gpu_environment = inspect_gpu_environment(
-                self.config_store.load().platform_id,
-                self.env,
-            )
-        return self._gpu_environment
+        return self.local_models.gpu_environment(refresh=refresh)
 
     @gateway_operation
     def recommend_managed_model(
@@ -2049,41 +1869,11 @@ class SessionGateway:
         gpu_environment: GpuEnvironment | None = None,
     ) -> ModelSnapshot | None:
         """Choose one qualified catalog model for the detected resource envelopes."""
-        environment = gpu_environment or self.gpu_environment()
-        return self.snapshot_catalog.recommend_for_capacities(
-            platform_id=environment.platform_id,
-            capacities=tuple(
-                (capacity.gpu_count, capacity.gpu_memory_bytes)
-                for capacity in environment.capacities
-            ),
+        return self.local_models.recommend_managed_model(
             maximum_tier=maximum_tier,
             requested_gpus=requested_gpus,
+            gpu_environment=gpu_environment,
         )
-
-    def _verify_selected_local_artifact(
-        self,
-        selected: LocalModelSelection,
-        path: Path,
-    ) -> None:
-        runtime = selected.runtime
-        if runtime == "auto":
-            runtime = "llama-cpp" if path.suffix.casefold() == ".gguf" else "vllm"
-        if runtime != "llama-cpp":
-            return
-        if selected.size_bytes is None or selected.artifact_sha256 is None:
-            raise ModelArtifactError(
-                "selected llama.cpp artifact is missing persisted size or checksum metadata"
-            )
-        stat = path.stat()
-        cache_key = (path, stat.st_size, stat.st_mtime_ns, selected.artifact_sha256)
-        if cache_key in self._verified_local_artifacts:
-            return
-        verify_model_artifact(
-            path,
-            expected_size_bytes=selected.size_bytes,
-            expected_sha256=selected.artifact_sha256,
-        )
-        self._verified_local_artifacts = {cache_key}
 
     @gateway_operation
     def inspect_model_repository(
@@ -2093,33 +1883,13 @@ class SessionGateway:
         revision: str | None = None,
     ) -> ModelRepositoryPlanResponse:
         """Build one automatic download plan without downloading model weights."""
-        plan = self.model_repository.plan(
-            repository,
-            revision=revision,
-            cpu_available=self._local_runtime_available("llama-cpp"),
-            gpu_available=self._local_runtime_available("vllm"),
-        )
-        self._repository_plans[(repository.strip(), (revision or "").strip())] = plan.model
-        self._repository_plans[(plan.model.source_repository, plan.model.source_revision)] = (
-            plan.model
-        )
-        return api_response(
-            ModelRepositoryPlanResponse,
-            {
-                "model": self._local_model_choice_dict(plan.model),
-                "selection_reason": plan.selection_reason,
-            },
-        )
+        return self.local_models.inspect_model_repository(repository, revision=revision)
 
     @gateway_operation
     def download_local_model(self, model_id: str) -> ModelDownloadResponse:
         """Start a known local-model download into project storage."""
         self._project_activity.initialize()
-        choice = self._require_downloadable_local_model(model_id)
-        return api_response(
-            ModelDownloadResponse,
-            self.local_model_manager.start_model(choice.download_model()).safe_dict(),
-        )
+        return self.local_models.download_local_model(model_id)
 
     @gateway_operation
     def download_custom_local_model(
@@ -2130,14 +1900,7 @@ class SessionGateway:
     ) -> ModelDownloadResponse:
         """Resolve and start one user-selected Hugging Face model download."""
         self._project_activity.initialize()
-        choice = self._custom_local_model_choice(
-            repository,
-            revision=revision,
-        )
-        return api_response(
-            ModelDownloadResponse,
-            self.local_model_manager.start_model(choice.download_model()).safe_dict(),
-        )
+        return self.local_models.download_custom_local_model(repository, revision=revision)
 
     @gateway_operation
     def download_local_model_now(
@@ -2148,22 +1911,10 @@ class SessionGateway:
     ) -> Path:
         """Download and verify a known model, selecting it when agent-compatible."""
         self._project_activity.initialize()
-        model = self._require_downloadable_local_model(model_id).download_model()
-        if isinstance(model, ModelArtifact):
-            path = download_artifact(
-                model,
-                cache_dir=self.model_cache_dir,
-                progress_callback=progress_callback,
-            )
-        else:
-            path = download_model_snapshot(
-                model,
-                cache_dir=self.model_cache_dir,
-                progress_callback=progress_callback,
-            )
-        runtime_profile = model.runtime_profile
-        self._select_downloaded_local_model(model_id, path, runtime_profile)
-        return path
+        return self.local_models.download_local_model_now(
+            model_id,
+            progress_callback=progress_callback,
+        )
 
     @gateway_operation
     def download_custom_local_model_now(
@@ -2175,25 +1926,11 @@ class SessionGateway:
     ) -> Path:
         """Resolve, download, verify, and select one user-selected model."""
         self._project_activity.initialize()
-        choice = self._custom_local_model_choice(
+        return self.local_models.download_custom_local_model_now(
             repository,
             revision=revision,
+            progress_callback=progress_callback,
         )
-        model = choice.download_model()
-        if isinstance(model, ModelArtifact):
-            path = download_artifact(
-                model,
-                cache_dir=self.model_cache_dir,
-                progress_callback=progress_callback,
-            )
-        else:
-            path = download_model_snapshot(
-                model,
-                cache_dir=self.model_cache_dir,
-                progress_callback=progress_callback,
-            )
-        self._select_downloaded_local_model(choice.model_id, path, model.runtime_profile)
-        return path
 
     @gateway_operation
     @_serialized_state
@@ -2208,85 +1945,24 @@ class SessionGateway:
     ) -> LocalModelImportResponse:
         """Import and select a reviewed local GGUF file or vLLM snapshot."""
         self._project_activity.initialize()
-        imported = import_local_model(
+        return self.local_models.import_local_model(
             source,
-            models_dir=self.model_cache_dir,
             source_repository=source_repository,
             source_revision=source_revision,
             license_posture=license_posture,
             context_window=context_window,
         )
-        choice = imported.model
-        previous_config = self.config_store.load() if self.config_store.configured else None
-        self._local_model_choices[choice.model_id] = choice
-        self._downloadable_local_model_choices[choice.model_id] = choice
-        runtime_profile = "llama-cpp-cpu" if choice.runtime == "llama-cpp" else "vllm-cuda"
-        try:
-            self._select_downloaded_local_model(choice.model_id, imported.path, runtime_profile)
-        except Exception:
-            self._local_model_choices.pop(choice.model_id, None)
-            self._downloadable_local_model_choices.pop(choice.model_id, None)
-            self.config_store.restore(previous_config)
-            shutil.rmtree(imported.storage_root, ignore_errors=True)
-            raise
-        selected = self.config_store.load().local_model
-        selected_for_project = selected is not None and selected.artifact_id == choice.model_id
-        return api_response(
-            LocalModelImportResponse,
-            {
-                "model": self._local_model_choice_dict(
-                    choice,
-                    active=(
-                        selected_for_project
-                        and selected is not None
-                        and managed_local_runtime_active(selected, self.env)
-                    ),
-                    selected=selected_for_project,
-                    recommendation="Selected for this project",
-                ),
-                "path": str(imported.path),
-                "status": "ready",
-            },
-        )
 
     @gateway_operation
     def inspect_local_model_bundle(self, path: Path) -> ModelTransferPlanResponse:
         """Inspect one portable model bundle without changing project state."""
-        plan = inspect_model_bundle(path)
-        choice = self._trusted_transferred_model_choice(plan.model)
-        warnings = self._model_transfer_warnings(choice)
-        return api_response(
-            ModelTransferPlanResponse,
-            {
-                "bundle_path": str(plan.bundle_path),
-                "bundle_size_bytes": plan.bundle_size_bytes,
-                "manifest_sha256": plan.manifest_sha256,
-                "file_count": len(plan.manifest.files),
-                "runtime_profile": plan.manifest.runtime_profile,
-                "model": self._local_model_choice_dict(choice),
-                "warnings": list(warnings),
-            },
-        )
+        return self.local_models.inspect_local_model_bundle(path)
 
     @gateway_operation
     def export_local_model(self, path: Path) -> ModelTransferResponse:
         """Start a verified export of the selected Heartwood-managed model."""
         self._project_activity.initialize()
-        selected = self.config_store.load().local_model
-        if selected is None:
-            raise ModelTransferError(
-                "select or download a Heartwood-managed model before exporting a bundle"
-            )
-        choice = self._local_model_choices.get(selected.artifact_id)
-        if choice is None:
-            choice = _selected_local_model_choice(selected)
-        transfer = self.model_transfer_manager.start_export(
-            choice=choice,
-            model_path=selected.resolved_path(self.project),
-            bundle_path=path,
-            warnings=self._model_transfer_warnings(choice),
-        )
-        return api_response(ModelTransferResponse, transfer.safe_dict())
+        return self.local_models.export_local_model(path)
 
     @gateway_operation
     def import_local_model_bundle(
@@ -2298,34 +1974,21 @@ class SessionGateway:
     ) -> ModelTransferResponse:
         """Start an atomic model-bundle import after explicit review."""
         self._project_activity.initialize()
-        plan = inspect_model_bundle(path)
-        if plan.manifest_sha256 != manifest_sha256:
-            raise ModelTransferError(
-                "model bundle manifest changed after review; inspect the bundle again"
-            )
-        choice = self._trusted_transferred_model_choice(plan.model)
-        transfer = self.model_transfer_manager.start_import(
-            plan=plan,
+        return self.local_models.import_local_model_bundle(
+            path,
             approved=approved,
-            warnings=self._model_transfer_warnings(choice),
+            manifest_sha256=manifest_sha256,
         )
-        return api_response(ModelTransferResponse, transfer.safe_dict())
 
     @gateway_operation
     def cancel_model_transfer(self, transfer_id: str) -> ModelTransferResponse:
         """Request cancellation of one active model transfer."""
-        return api_response(
-            ModelTransferResponse,
-            self.model_transfer_manager.cancel(transfer_id).safe_dict(),
-        )
+        return self.local_models.cancel_model_transfer(transfer_id)
 
     @gateway_operation
     def model_transfer_status(self, transfer_id: str) -> ModelTransferResponse:
         """Return one shared model-transfer status snapshot."""
-        return api_response(
-            ModelTransferResponse,
-            self.model_transfer_manager.status(transfer_id).safe_dict(),
-        )
+        return self.local_models.model_transfer_status(transfer_id)
 
     @gateway_operation
     def skill_settings(self) -> SkillSettingsResponse:
@@ -3154,335 +2817,6 @@ class SessionGateway:
             return self._model_source_for_connection(connection)
         return "custom"
 
-    @_serialized_state
-    def _select_downloaded_local_model(
-        self,
-        model_id: str,
-        path: Path,
-        runtime_profile: str,
-    ) -> None:
-        choice = self._downloadable_local_model_choices.get(model_id)
-        if choice is None:
-            raise ModelRepositoryError(
-                f"Heartwood-managed model metadata is unavailable: {model_id}"
-            )
-        self._select_local_model(choice, path, runtime_profile)
-
-    def _select_local_model(
-        self,
-        choice: LocalModelChoice,
-        path: Path,
-        runtime_profile: str,
-    ) -> None:
-        """Select one verified local model through the shared project contract."""
-        execution_model = "heartwood-managed-model"
-        if choice.context_window < MINIMUM_AGENT_RUNTIME_CONTEXT_WINDOW:
-            return
-        input_capacity, output_budget = managed_model_token_budgets(choice.context_window)
-        profile = replace(
-            model_profile_from_preset("heartwood-managed", execution_model),
-            profile_id="heartwood",
-            description=choice.label,
-            max_input_tokens=input_capacity,
-            max_output_tokens=output_budget,
-        )
-        settings = (
-            self.config_store.load()
-            .model_settings.with_profile(profile)
-            .selecting(profile.profile_id)
-        )
-        platform_id = self.config_store.load().platform_id
-        platform_qualification = choice.qualification_for(platform_id)
-        self.config_store.select_local_model(
-            artifact_id=choice.model_id,
-            path=path,
-            runtime=_runtime_kind(runtime_profile),
-            model_id=execution_model,
-            display_name=choice.label,
-            source_repository=choice.source_repository,
-            source_revision=choice.source_revision,
-            source_path=choice.source_path,
-            model_type=choice.model_type,
-            size_bytes=choice.size_bytes,
-            minimum_free_bytes=choice.minimum_free_bytes,
-            license_posture=choice.license_posture,
-            license_id=choice.license_id,
-            artifact_sha256=choice.artifact_sha256,
-            context_window=choice.context_window,
-            maximum_context_window=choice.maximum_context_window,
-            minimum_resource_envelope=choice.minimum_resource_envelope,
-            recommended_resource_envelope=choice.recommended_resource_envelope,
-            precision=choice.precision,
-            tier=choice.tier,
-            qualification=platform_qualification,
-            minimum_gpu_count=choice.minimum_gpu_count,
-            minimum_gpu_memory_bytes=choice.minimum_gpu_memory_bytes,
-            recommended_ram_bytes=choice.recommended_ram_bytes,
-            recommended_disk_bytes=choice.recommended_disk_bytes,
-            recommended_cpu_count=choice.recommended_cpu_count,
-            tool_call_parser=choice.tool_call_parser,
-            reasoning_parser=choice.reasoning_parser,
-            tensor_parallel_size=choice.tensor_parallel_size,
-            startup_seconds_min=choice.startup_seconds_min,
-            startup_seconds_max=choice.startup_seconds_max,
-            download_policy=choice.download_policy,
-            allow_patterns=choice.allow_patterns,
-            ignore_patterns=choice.ignore_patterns,
-            validated_platforms=choice.validated_platforms,
-            qualification_test=choice.qualification_test,
-            qualification_date=(
-                choice.qualification_date if platform_qualification != "unvalidated" else None
-            ),
-            qualification_evidence=(
-                choice.qualification_evidence if platform_qualification != "unvalidated" else None
-            ),
-            catalog_source=choice.catalog_source,
-            settings=settings,
-        )
-        self._reset_services()
-
-    @_serialized_state
-    def _select_transferred_local_model(
-        self,
-        choice: LocalModelChoice,
-        path: Path,
-        runtime_profile: str,
-    ) -> None:
-        """Register and select one bundle model through the normal managed-model path."""
-        choice = self._trusted_transferred_model_choice(choice)
-        previous_choice = self._local_model_choices.get(choice.model_id)
-        previous_config = self.config_store.load() if self.config_store.configured else None
-        self._local_model_choices[choice.model_id] = choice
-        try:
-            self._select_local_model(choice, path, runtime_profile)
-        except Exception:
-            if previous_choice is None:
-                self._local_model_choices.pop(choice.model_id, None)
-            else:
-                self._local_model_choices[choice.model_id] = previous_choice
-            self.config_store.restore(previous_config)
-            raise
-
-    def _trusted_transferred_model_choice(self, choice: LocalModelChoice) -> LocalModelChoice:
-        """Reject identity collisions and never trust bundle-supplied qualification."""
-        choice.validate()
-        try:
-            managed_model_token_budgets(choice.context_window)
-        except ValueError as error:
-            raise ModelRepositoryError(str(error)) from error
-        existing = self._local_model_choices.get(choice.model_id)
-        if existing is not None and _model_transfer_identity(choice) != _model_transfer_identity(
-            existing
-        ):
-            raise ModelTransferError(
-                f"model bundle metadata conflicts with the configured catalog: {choice.model_id}"
-            )
-        trusted = self._downloadable_local_model_choices.get(choice.model_id)
-        if trusted is not None and _model_transfer_identity(choice) == _model_transfer_identity(
-            trusted
-        ):
-            return replace(trusted, catalog_source="transferred")
-        return replace(
-            choice,
-            qualification="unvalidated",
-            validated_platforms=(),
-            qualification_test=None,
-            qualification_date=None,
-            qualification_evidence=None,
-        )
-
-    def _model_transfer_warnings(self, choice: LocalModelChoice) -> tuple[str, ...]:
-        """Return shared import/export guidance for one transfer model."""
-        warnings = [
-            "Verify the upstream license and use an institution-approved transfer channel; "
-            "bundle checksums provide integrity, not transfer authorization."
-        ]
-        platform_id = self.config_store.load().platform_id
-        if choice.qualification_for(platform_id) != "qualified":
-            warnings.append(
-                "This exact model configuration has not completed Heartwood qualification "
-                f"for {platform_id}."
-            )
-        if not self._local_runtime_installed(choice.runtime):
-            runtime = "NVIDIA vLLM" if choice.runtime == "vllm" else "portable CPU"
-            warnings.append(
-                f"The {runtime} runtime is not installed in this deployment; import is allowed, "
-                "but launch will remain unavailable until a compatible runtime is provided."
-            )
-        return tuple(warnings)
-
-    def _custom_local_model_choice(
-        self,
-        repository: str,
-        *,
-        revision: str | None,
-    ) -> LocalModelChoice:
-        key = (repository.strip(), (revision or "").strip())
-        choice = self._repository_plans.get(key)
-        if choice is None:
-            choice = self.model_repository.plan(
-                repository,
-                revision=revision,
-                cpu_available=self._local_runtime_available("llama-cpp"),
-                gpu_available=self._local_runtime_available("vllm"),
-            ).model
-        existing = self._local_model_choices.get(choice.model_id)
-        if existing is not None and existing != choice:
-            raise ModelRepositoryError(f"Heartwood-managed model id collision: {choice.model_id}")
-        self._local_model_choices[choice.model_id] = choice
-        self._downloadable_local_model_choices[choice.model_id] = choice
-        return choice
-
-    def _local_model_choice_dict(
-        self,
-        choice: LocalModelChoice,
-        *,
-        active: bool = False,
-        selected: bool = False,
-        recommendation: str | None = None,
-        gpu_environment: GpuEnvironment | None = None,
-    ) -> dict[str, object]:
-        platform_id = (
-            gpu_environment.platform_id
-            if gpu_environment is not None
-            else self.config_store.load().platform_id
-        )
-        qualification = choice.qualification_for(platform_id)
-        runtime_available = self._local_runtime_available(choice.runtime)
-        resource_reason: str | None = None
-        available = runtime_available
-        if choice.runtime == "vllm" and runtime_available:
-            environment = gpu_environment or self.gpu_environment()
-            available, resource_reason = environment.assess(
-                gpu_count=choice.tensor_parallel_size,
-                gpu_memory_bytes=choice.minimum_gpu_memory_bytes,
-                minimum_compute_capability=minimum_compute_capability_for_model(
-                    model_id=choice.source_repository,
-                    precision=choice.precision,
-                ),
-            )
-        if qualification != "qualified":
-            candidate_reason = "No completed Heartwood qualification exists for this platform"
-            recommendation = (
-                f"{recommendation}; {candidate_reason.lower()}"
-                if recommendation
-                else candidate_reason
-            )
-        unavailable_reason = resource_reason if resource_reason and not available else None
-        if resource_reason and available:
-            recommendation = (
-                f"{recommendation}; {resource_reason}" if recommendation else resource_reason
-            )
-        reason = self._local_model_availability_reason(
-            choice.runtime,
-            available=available,
-            recommendation=recommendation,
-            unavailable_reason=unavailable_reason,
-        )
-        return {
-            **choice.safe_dict(),
-            "qualification": qualification,
-            "qualification_test": (
-                choice.qualification_test if qualification == "qualified" else None
-            ),
-            "qualification_date": (
-                choice.qualification_date if qualification == "qualified" else None
-            ),
-            "qualification_evidence": (
-                choice.qualification_evidence if qualification == "qualified" else None
-            ),
-            "active": active,
-            "available": available,
-            "selected": selected,
-            "availability_reason": reason,
-            "recommended": (
-                qualification == "qualified"
-                and choice.model_id in self._recommended_local_model_ids
-                and available
-            ),
-        }
-
-    @staticmethod
-    def _local_model_availability_reason(
-        runtime: str,
-        *,
-        available: bool,
-        recommendation: str | None,
-        unavailable_reason: str | None = None,
-    ) -> str:
-        if available:
-            return recommendation or "Available on this deployment"
-        unavailable = unavailable_reason or (
-            "Requires a Heartwood NVIDIA GPU runtime"
-            if runtime == "vllm"
-            else "The portable CPU runtime is not available on this deployment"
-        )
-        return f"{recommendation}; {unavailable.lower()}" if recommendation else unavailable
-
-    def _preferred_local_runtime(self) -> str | None:
-        if self._local_runtime_available("vllm"):
-            return "vllm"
-        if self._local_runtime_available("llama-cpp"):
-            return "llama-cpp"
-        return None
-
-    def _require_downloadable_local_model(self, model_id: str) -> LocalModelChoice:
-        choice = self._downloadable_local_model_choices.get(model_id)
-        if choice is None:
-            raise ModelRepositoryError(f"unknown Heartwood-managed model: {model_id}")
-        if not self._local_runtime_installed(choice.runtime):
-            reason = self._local_model_availability_reason(
-                choice.runtime,
-                available=False,
-                recommendation=None,
-            )
-            raise ModelRepositoryError(f"{choice.label} cannot be downloaded: {reason}")
-        return choice
-
-    def _local_runtime_available(self, runtime: str) -> bool:
-        platform_id = self.config_store.load().platform_id
-        installed = self._local_runtime_installed(runtime)
-        if runtime == "llama-cpp":
-            return installed
-        if runtime != "vllm":
-            return False
-        if platform_id == "carina":
-            return installed
-        return installed and gpu_visible(self.env)
-
-    def _local_runtime_installed(self, runtime: str) -> bool:
-        executable_path = self.env.get("PATH")
-        if runtime == "llama-cpp":
-            return self._runtime_executable_available(Path("/opt/llama.cpp/llama-server")) or (
-                executable_path is not None
-                and shutil.which("llama-server", path=executable_path) is not None
-            )
-        if runtime != "vllm":
-            return False
-        if self.config_store.load().platform_id == "carina":
-            return True
-        return self._runtime_executable_available(Path("/opt/heartwood-vllm/bin/vllm")) or (
-            executable_path is not None and shutil.which("vllm", path=executable_path) is not None
-        )
-
-    @staticmethod
-    def _runtime_executable_available(path: Path) -> bool:
-        try:
-            return path.is_file() and os.access(path, os.X_OK)
-        except OSError:
-            return False
-
-    def _local_model_size(self, model_id: str, path: Path) -> int:
-        try:
-            return self.artifact_catalog.artifact(model_id).artifact_size_bytes
-        except ModelArtifactError:
-            try:
-                return self.snapshot_catalog.snapshot(model_id).expected_size_bytes
-            except ModelSnapshotError:
-                if path.is_file():
-                    return path.stat().st_size
-                return sum(item.stat().st_size for item in path.rglob("*") if item.is_file())
-
 
 def _runtime_resource_root() -> Path:
     module_dir = Path(__file__).resolve().parent
@@ -3535,126 +2869,9 @@ def _review_mode_unavailable_reason(
     return None
 
 
-def _selected_local_model_choice(selection: LocalModelSelection) -> LocalModelChoice:
-    """Restore one normalized choice from persisted user-selected metadata."""
-    if (
-        selection.display_name is None
-        or selection.source_repository is None
-        or selection.source_revision is None
-        or selection.size_bytes is None
-        or selection.minimum_free_bytes is None
-        or selection.license_posture is None
-        or selection.minimum_resource_envelope is None
-        or selection.recommended_resource_envelope is None
-    ):  # pragma: no cover - validated project-config invariant
-        raise ModelRepositoryError("persisted user-selected model provenance is incomplete")
-    runtime = selection.runtime
-    if runtime == "auto":
-        runtime = (
-            "llama-cpp" if (selection.source_path or "").casefold().endswith(".gguf") else "vllm"
-        )
-    source_description = (
-        "Transferred model with verified Heartwood bundle provenance; capability and platform "
-        "qualification remain specific to the recorded configuration."
-        if selection.catalog_source == "transferred"
-        else (
-            "User-selected Hugging Face model; Heartwood has not reviewed its capabilities, "
-            "license, or suitability."
-        )
-    )
-    choice = LocalModelChoice(
-        model_id=selection.artifact_id,
-        label=selection.display_name,
-        purpose=source_description,
-        runtime=cast(LocalModelRuntime, runtime),
-        source_repository=selection.source_repository,
-        source_revision=selection.source_revision,
-        source_path=selection.source_path,
-        model_type=selection.model_type,
-        size_bytes=selection.size_bytes,
-        minimum_free_bytes=selection.minimum_free_bytes,
-        license_posture=selection.license_posture,
-        catalog_source=cast(LocalModelCatalogSource, selection.catalog_source),
-        artifact_sha256=selection.artifact_sha256,
-        context_window=selection.context_window,
-        minimum_resource_envelope=selection.minimum_resource_envelope,
-        recommended_resource_envelope=selection.recommended_resource_envelope,
-        license_id=selection.license_id or "Unspecified",
-        precision=selection.precision or "Unspecified",
-        tier=cast(Any, selection.tier),
-        qualification=cast(Any, selection.qualification),
-        minimum_gpu_count=selection.minimum_gpu_count,
-        minimum_gpu_memory_bytes=selection.minimum_gpu_memory_bytes,
-        recommended_ram_bytes=selection.recommended_ram_bytes or selection.minimum_free_bytes,
-        recommended_disk_bytes=selection.recommended_disk_bytes or selection.minimum_free_bytes,
-        recommended_cpu_count=selection.recommended_cpu_count,
-        maximum_context_window=selection.maximum_context_window,
-        tool_call_parser=cast(Any, selection.tool_call_parser),
-        reasoning_parser=cast(Any, selection.reasoning_parser),
-        tensor_parallel_size=selection.tensor_parallel_size,
-        startup_seconds_min=selection.startup_seconds_min,
-        startup_seconds_max=selection.startup_seconds_max,
-        download_policy=selection.download_policy,
-        allow_patterns=selection.allow_patterns,
-        ignore_patterns=selection.ignore_patterns,
-        validated_platforms=selection.validated_platforms,
-        qualification_test=selection.qualification_test,
-        qualification_date=selection.qualification_date,
-        qualification_evidence=selection.qualification_evidence,
-    )
-    choice.validate()
-    return choice
-
-
-def _model_transfer_identity(choice: LocalModelChoice) -> tuple[object, ...]:
-    """Return fields that determine transferred weights and runtime behavior."""
-    return (
-        choice.model_id,
-        choice.label,
-        choice.purpose,
-        choice.runtime,
-        choice.source_repository,
-        choice.source_revision,
-        choice.source_path,
-        choice.size_bytes,
-        choice.minimum_free_bytes,
-        choice.license_id,
-        choice.license_posture,
-        choice.model_type,
-        choice.context_window,
-        choice.artifact_sha256,
-        choice.minimum_resource_envelope,
-        choice.recommended_resource_envelope,
-        choice.precision,
-        choice.tier,
-        choice.minimum_gpu_count,
-        choice.minimum_gpu_memory_bytes,
-        choice.recommended_ram_bytes,
-        choice.recommended_disk_bytes,
-        choice.maximum_context_window,
-        choice.tool_call_parser,
-        choice.reasoning_parser,
-        choice.tensor_parallel_size,
-        choice.startup_seconds_min,
-        choice.startup_seconds_max,
-        choice.download_policy,
-        choice.allow_patterns,
-        choice.ignore_patterns,
-        choice.recommended_cpu_count,
-    )
-
-
 def _catalog_entry(catalog: ModelCatalog, model_id: str) -> ModelCatalogEntry:
     selected = model_id.strip()
     for entry in catalog.models:
         if selected in {entry.model_id, entry.execution_model}:
             return entry
     raise ModelCatalogError(f"model is not present in the discovered catalog: {model_id}")
-
-
-def _runtime_kind(profile: str) -> str:
-    if profile.startswith("llama-cpp"):
-        return "llama-cpp"
-    if profile.startswith("vllm"):
-        return "vllm"
-    raise ModelArtifactError(f"unsupported managed runtime profile: {profile}")

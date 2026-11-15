@@ -15,7 +15,7 @@ import shutil
 import stat
 import threading
 from collections.abc import Callable, Iterable
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, fields, replace
 from pathlib import Path, PurePosixPath
 from time import monotonic
 from typing import ClassVar, Literal, Self
@@ -35,6 +35,17 @@ _CHUNK_SIZE = 1024 * 1024
 _MAX_MANIFEST_BYTES = 1024 * 1024
 _MAX_FILES = 100_000
 _ZIP_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
+# The receiving deployment assigns catalog provenance and qualification; a bundle cannot.
+_DEPLOYMENT_ASSIGNED_FIELDS = frozenset(
+    {
+        "catalog_source",
+        "qualification",
+        "qualification_date",
+        "qualification_evidence",
+        "qualification_test",
+        "validated_platforms",
+    }
+)
 
 type TransferKind = Literal["export", "import"]
 type TransferStatus = Literal["cancelled", "cancelling", "error", "ready", "running"]
@@ -488,6 +499,15 @@ class ModelTransferManager:
                 status="error",
                 error=_safe_transfer_error(error),
             )
+
+
+def model_transfer_identity(choice: LocalModelChoice) -> tuple[object, ...]:
+    """Return fields that determine transferred weights and runtime behavior."""
+    return tuple(
+        getattr(choice, field.name)
+        for field in fields(choice)
+        if field.name not in _DEPLOYMENT_ASSIGNED_FIELDS
+    )
 
 
 def inspect_model_bundle(path: Path) -> ModelTransferPlan:

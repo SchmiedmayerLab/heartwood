@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import time
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
@@ -18,6 +20,7 @@ from uuid import UUID
 from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, model_validator
 
 from heartwood.core_adapter.session_activity import session_activity
+from heartwood.schemas import PolicyProfile
 from heartwood.schemas.experiments import Digest, Reference
 from heartwood.session import EventKind, SessionEvent, validate_session_id
 
@@ -53,6 +56,14 @@ class WorkerAttemptIntent(_WorkerRecord):
     def _session_identity(self) -> Self:
         validate_session_id(self.session_id)
         return self
+
+
+def gateway_policy_sha256(policy_profile: PolicyProfile) -> str:
+    """Fingerprint the gateway policy a worker attempt is issued under and checked against."""
+    policy = json.dumps(
+        policy_profile.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
+    )
+    return hashlib.sha256(policy.encode()).hexdigest()
 
 
 class WorkerRuntimeBinding(_WorkerRecord):

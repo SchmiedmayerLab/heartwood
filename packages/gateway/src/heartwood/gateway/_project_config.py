@@ -12,7 +12,7 @@ import re
 import tomllib
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +32,7 @@ from heartwood.gateway._local_model_contract import (
     MINIMUM_LOCAL_CONTEXT_WINDOW,
     managed_model_parsers_compatible,
 )
+from heartwood.gateway._local_models import LocalModelChoice, ModelRepositoryError
 from heartwood.gateway._model_catalog import (
     BUILT_IN_MODEL_CONNECTIONS,
     ModelCatalogError,
@@ -305,6 +306,80 @@ class LocalModelSelection:
         self.validate(project)
         return (project.model_path_root / self.path).resolve()
 
+    @classmethod
+    def from_choice(
+        cls,
+        choice: LocalModelChoice,
+        *,
+        path: Path,
+        runtime: str,
+        platform_id: str,
+    ) -> LocalModelSelection:
+        """Record one normalized choice as stored at ``path`` for one platform."""
+        qualification = choice.qualification_for(platform_id)
+        values = {name: getattr(choice, name) for name in _CHOICE_FIELDS}
+        values.update(runtime=runtime, qualification=qualification)
+        if qualification == "unvalidated":
+            values.update(qualification_date=None, qualification_evidence=None)
+        return cls(
+            artifact_id=choice.model_id,
+            path=str(path),
+            display_name=choice.label,
+            **values,
+        )
+
+    def to_choice(self) -> LocalModelChoice:
+        """Restore one normalized choice from persisted user-selected metadata."""
+        if (
+            self.display_name is None
+            or self.source_repository is None
+            or self.source_revision is None
+            or self.size_bytes is None
+            or self.minimum_free_bytes is None
+            or self.license_posture is None
+            or self.minimum_resource_envelope is None
+            or self.recommended_resource_envelope is None
+        ):  # pragma: no cover - validated project-config invariant
+            raise ModelRepositoryError("persisted user-selected model provenance is incomplete")
+        runtime = self.runtime
+        if runtime == "auto":
+            runtime = (
+                "llama-cpp" if (self.source_path or "").casefold().endswith(".gguf") else "vllm"
+            )
+        purpose = (
+            "Transferred model with verified Heartwood bundle provenance; capability and platform "
+            "qualification remain specific to the recorded configuration."
+            if self.catalog_source == "transferred"
+            else (
+                "User-selected Hugging Face model; Heartwood has not reviewed its capabilities, "
+                "license, or suitability."
+            )
+        )
+        values = {name: getattr(self, name) for name in _CHOICE_FIELDS}
+        values.update(
+            runtime=runtime,
+            license_id=self.license_id or "Unspecified",
+            precision=self.precision or "Unspecified",
+            recommended_ram_bytes=self.recommended_ram_bytes or self.minimum_free_bytes,
+            recommended_disk_bytes=self.recommended_disk_bytes or self.minimum_free_bytes,
+        )
+        choice = LocalModelChoice(
+            model_id=self.artifact_id,
+            label=self.display_name,
+            purpose=purpose,
+            **values,
+        )
+        choice.validate()
+        return choice
+
+
+# ``LocalModelSelection.model_id`` names the served model; a choice id is the artifact id.
+_CHOICE_FIELDS = tuple(
+    item.name
+    for item in fields(LocalModelSelection)
+    if item.name != "model_id" and item.name in {other.name for other in fields(LocalModelChoice)}
+)
+
 
 @dataclass(frozen=True, slots=True)
 class ProjectConfig:
@@ -494,93 +569,18 @@ class ProjectConfigStore:
 
     def select_local_model(
         self,
+        selection: LocalModelSelection,
         *,
-        artifact_id: str,
-        path: Path,
-        runtime: str = "auto",
-        model_id: str = "heartwood-managed-model",
-        display_name: str | None = None,
-        source_repository: str | None = None,
-        source_revision: str | None = None,
-        source_path: str | None = None,
-        model_type: str | None = None,
-        size_bytes: int | None = None,
-        minimum_free_bytes: int | None = None,
-        license_posture: str | None = None,
-        license_id: str | None = None,
-        artifact_sha256: str | None = None,
-        context_window: int = DEFAULT_LOCAL_CONTEXT_WINDOW,
-        maximum_context_window: int = DEFAULT_LOCAL_CONTEXT_WINDOW,
-        minimum_resource_envelope: str | None = None,
-        recommended_resource_envelope: str | None = None,
-        precision: str | None = None,
-        tier: str = "standard",
-        qualification: str = "unvalidated",
-        minimum_gpu_count: int = 0,
-        minimum_gpu_memory_bytes: int = 0,
-        recommended_ram_bytes: int | None = None,
-        recommended_disk_bytes: int | None = None,
-        recommended_cpu_count: int = 8,
-        tool_call_parser: str | None = None,
-        reasoning_parser: str | None = None,
-        tensor_parallel_size: int = 1,
-        startup_seconds_min: int = 30,
-        startup_seconds_max: int = 600,
-        download_policy: str | None = None,
-        allow_patterns: tuple[str, ...] = (),
-        ignore_patterns: tuple[str, ...] = (),
-        validated_platforms: tuple[str, ...] = (),
-        qualification_test: str | None = None,
-        qualification_date: str | None = None,
-        qualification_evidence: str | None = None,
-        catalog_source: str = "catalog",
         settings: ModelSettings | None = None,
     ) -> ProjectConfig:
-        """Persist one verified Heartwood-managed model and optional active profile."""
-        resolved = path.resolve()
+        """Persist one verified Heartwood-managed model and optional active profile.
+
+        The selection may name its artifact by absolute path; the stored path is project-relative.
+        """
+        resolved = (self.project.model_path_root / selection.path).resolve()
         if self.project.models_dir not in resolved.parents:
             raise ProjectConfigError("downloaded model must be stored under .heartwood/models")
-        selection = LocalModelSelection(
-            artifact_id=artifact_id,
-            path=str(resolved.relative_to(self.project.model_path_root)),
-            runtime=runtime,
-            model_id=model_id,
-            display_name=display_name,
-            source_repository=source_repository,
-            source_revision=source_revision,
-            source_path=source_path,
-            model_type=model_type,
-            size_bytes=size_bytes,
-            minimum_free_bytes=minimum_free_bytes,
-            license_posture=license_posture,
-            license_id=license_id,
-            artifact_sha256=artifact_sha256,
-            context_window=context_window,
-            maximum_context_window=maximum_context_window,
-            minimum_resource_envelope=minimum_resource_envelope,
-            recommended_resource_envelope=recommended_resource_envelope,
-            precision=precision,
-            tier=tier,
-            qualification=qualification,
-            minimum_gpu_count=minimum_gpu_count,
-            minimum_gpu_memory_bytes=minimum_gpu_memory_bytes,
-            recommended_ram_bytes=recommended_ram_bytes,
-            recommended_disk_bytes=recommended_disk_bytes,
-            recommended_cpu_count=recommended_cpu_count,
-            tool_call_parser=tool_call_parser,
-            reasoning_parser=reasoning_parser,
-            tensor_parallel_size=tensor_parallel_size,
-            startup_seconds_min=startup_seconds_min,
-            startup_seconds_max=startup_seconds_max,
-            download_policy=download_policy,
-            allow_patterns=allow_patterns,
-            ignore_patterns=ignore_patterns,
-            validated_platforms=validated_platforms,
-            qualification_test=qualification_test,
-            qualification_date=qualification_date,
-            qualification_evidence=qualification_evidence,
-            catalog_source=catalog_source,
-        )
+        selection = replace(selection, path=str(resolved.relative_to(self.project.model_path_root)))
 
         def apply(current: ProjectConfig) -> ProjectConfig:
             updated = replace(current, model_source="heartwood", local_model=selection)

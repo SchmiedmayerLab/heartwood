@@ -442,7 +442,7 @@ def test_non_interactive_local_setup_accepts_one_hugging_face_identifier(
         destination.write_bytes(b"content")
         return destination
 
-    monkeypatch.setattr("heartwood.gateway._gateway.download_artifact", download)
+    monkeypatch.setattr("heartwood.gateway._local_model_lifecycle.download_artifact", download)
     _install_deterministic_gateway(
         monkeypatch,
         model_catalog_service=_local_catalog(fail=True),

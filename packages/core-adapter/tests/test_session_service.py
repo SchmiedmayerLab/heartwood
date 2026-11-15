@@ -51,7 +51,7 @@ from heartwood.core_adapter import (
     ToolExecution,
     pending_action_group,
 )
-from heartwood.core_adapter._service import _audit_payload
+from heartwood.core_adapter._audit_projection import project_audit_payload
 from heartwood.core_adapter._state import _writer_owner_summary
 from heartwood.schemas import AuditEvent, PolicyProfile
 from heartwood.session import (
@@ -267,9 +267,9 @@ def test_reserved_audit_event_payloads_fail_closed() -> None:
         "source_event_id": "source-1",
     }
 
-    assert _audit_payload(EventKind.APPROVAL_RECORDED, payload) == {"action_count": 0}
+    assert project_audit_payload(EventKind.APPROVAL_RECORDED, payload) == {"action_count": 0}
     assert "synthetic-sensitive-value" not in json.dumps(
-        _audit_payload(EventKind.POLICY_DECISION_RECORDED, payload)
+        project_audit_payload(EventKind.POLICY_DECISION_RECORDED, payload)
     )
 
 
@@ -293,8 +293,8 @@ def test_action_evidence_stays_out_of_content_minimized_audit_payloads() -> None
         "error": private_value,
     }
 
-    proposal_audit = _audit_payload(EventKind.TOOL_CALL_PROPOSED, proposed)
-    execution_audit = _audit_payload(EventKind.TOOL_EXECUTION_RECORDED, executed)
+    proposal_audit = project_audit_payload(EventKind.TOOL_CALL_PROPOSED, proposed)
+    execution_audit = project_audit_payload(EventKind.TOOL_EXECUTION_RECORDED, executed)
 
     assert proposal_audit == {
         "tool_call_id": "call-1",
@@ -1879,7 +1879,7 @@ def test_approved_action_records_tool_execution(tmp_path: Path) -> None:
     assert result.events[3].payload["exit_code"] == 0
     assert result.events[3].payload["tool_call_id"] == "session-synthetic-001-toolcall-0"
     assert result.events[3].payload["action_id"] is None
-    assert _audit_payload(
+    assert project_audit_payload(
         EventKind.TOOL_EXECUTION_RECORDED,
         result.events[3].payload,
     ) == {
