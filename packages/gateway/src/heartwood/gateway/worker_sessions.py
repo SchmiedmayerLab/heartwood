@@ -270,7 +270,7 @@ class ManagedWorkerSession:
                 self._plan is not None
                 or self._preparing
                 or not self._launch_settled.is_set()
-                or (self._closer is not None and self._closer.is_alive())
+                or self._closer is not None
             ):
                 self._close_deferred = True
                 self._close_settled.clear()
@@ -327,22 +327,23 @@ class ManagedWorkerSession:
             or self._revoking
         ):
             return
-        if self._closer is not None and self._closer.is_alive():
+        if self._closer is not None:
             return
 
         def finish() -> None:
             delay = _REVOCATION_RETRY_SECONDS
             while True:
-                last = self._retry_stopped.is_set()
                 try:
                     self._close_now()
                     break
                 except Exception:
-                    if last or not self.revocation_pending:
+                    if self._retry_stopped.is_set() or not self.revocation_pending:
                         break
                 self._retry_stopped.wait(delay)
                 delay = min(delay * 2, _REVOCATION_RETRY_MAX_SECONDS)
             with self._revocation_lock:
+                # A close requested while this one ran is answered by its result.
+                self._closer = None
                 self._close_deferred = False
                 self._close_settled.set()
 

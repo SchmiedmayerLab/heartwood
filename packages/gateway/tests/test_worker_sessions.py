@@ -1482,6 +1482,48 @@ def test_revocation_recorded_by_a_failed_close_still_admits_a_replacement(
         gateway.stop()
 
 
+def test_close_racing_a_finishing_closer_thread_still_closes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class LingeringThread(Thread):
+        # The thread stays alive for a while after its close has settled.
+        def run(self) -> None:
+            super().run()
+            sleep(0.5)
+
+    monkeypatch.setattr("heartwood.gateway.worker_sessions.Thread", LingeringThread)
+    _open_worker_only(monkeypatch)
+    platform = Platform()
+    gateway = configured_gateway(tmp_path, platform)
+    service = gateway._service("session-worker")
+    backend = service.backend
+    assert isinstance(backend, OpenHandsSdkBackend)
+    assert backend._worker_context is not None
+    backend._worker_context()
+    worker = gateway._worker_sessions[id(service)]
+    assert worker._plan is not None
+    released: list[bool] = []
+
+    def release_once() -> None:
+        released.append(True)
+        if len(released) == 1:
+            raise RuntimeError("synthetic native client shutdown failure")
+
+    worker._plan = replace(worker._plan, release_preparation=release_once)
+    try:
+        # The first close records the revocation and fails; the second follows at once.
+        gateway.save_model_profile(gateway.settings_store.load().profile())
+        assert not worker.wait_closed(10)
+        gateway.save_model_profile(gateway.settings_store.load().profile())
+        assert worker.wait_closed(10)
+        assert not worker.closing
+        assert not service.store.owns_writer
+        _chat(gateway, "chat-after-second-close")
+        assert gateway._services["session-worker"] is not service
+    finally:
+        gateway.stop()
+
+
 def test_close_during_a_retried_revocation_stops_the_retry_without_the_state_lock(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
