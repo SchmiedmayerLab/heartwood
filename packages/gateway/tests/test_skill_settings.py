@@ -18,7 +18,7 @@ from heartwood_skill_catalog import build_catalog
 
 from heartwood.audit import AuditLog
 from heartwood.gateway import SkillManager, SkillSettingsError
-from heartwood.gateway._openhands_sdk import OpenHandsSdkError, load_verified_skills
+from heartwood.gateway._skill_settings import load_verified_skills
 from heartwood.persistence import NativeLockUnavailableError
 from heartwood.skills import (
     CatalogEntry,
@@ -989,7 +989,7 @@ def test_agent_skill_loading_refuses_a_directory_that_does_not_load(tmp_path: Pa
     )
 
     for root in (tmp_path / "missing", renamed, changed):
-        with pytest.raises(OpenHandsSdkError, match=r"Skill.*aggregate-export"):
+        with pytest.raises(SkillSettingsError, match=r"Skill.*aggregate-export"):
             load_verified_skills((replace(manifest, root=root),))
 
 

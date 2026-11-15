@@ -77,6 +77,7 @@ The local gateway and the worker projection use this same selection.
 The gateway loads each selected Skill from its own `SKILL.md`; it never passes a parent directory to OpenHands for discovery.
 When it creates the conversation, it first rechecks each selected Skill's complete-tree digest, so content changed after selection is refused.
 A selected Skill that has changed or fails to load stops conversation setup rather than being skipped.
+Research specialists receive the Skills their definitions name from the compatible release-bundled part of this selection, loaded and rechecked the same way, in both the gateway and the worker image.
 
 Each content-addressed slot `artifacts/sha256/<tree-digest>/` holds exactly one Skill directory.
 Anything else in that slot, such as a directory written beside the Skill or a staging directory left by an interrupted installation, has neither a verified digest nor an activation record.

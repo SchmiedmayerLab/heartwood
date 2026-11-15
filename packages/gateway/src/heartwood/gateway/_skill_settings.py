@@ -9,13 +9,15 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final, Literal, Protocol
+from typing import TYPE_CHECKING, Final, Literal, Protocol
+
+from heartwood_skill_catalog import CatalogBuildError, inspect_skill
 
 from heartwood.audit import AuditIntegrityError, AuditLog
 from heartwood.gateway.worker_skills import WorkerSkillProjection, stage_skill_projection
@@ -36,6 +38,9 @@ from heartwood.skills import (
     SkillVerificationError,
     skill_compatibility_reason,
 )
+
+if TYPE_CHECKING:
+    from openhands.sdk.skills import Skill
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -501,10 +506,8 @@ class SkillManager:
 
     def _agent_skill_manifests(self) -> tuple[SkillManifest, ...]:
         """Select compatible bundled and active installed Skills under the lifecycle lock."""
-        bundled = tuple(
-            manifest
-            for manifest in self._bundled_manifests()
-            if self._compatibility_reason(manifest) is None
+        bundled = compatible_bundled_manifests(
+            self.bundled_dir, platform_id=self.platform_id, digests=self.bundled_digests
         )
         return (*bundled, *self._active_skill_manifests())
 
@@ -776,6 +779,39 @@ def pinned_bundled_manifests(
             raise SkillSettingsError(f"Bundled Skill does not match the release: {path.name}")
         manifests.append(manifest)
     return tuple(manifests)
+
+
+def compatible_bundled_manifests(
+    bundled_dir: Path,
+    *,
+    platform_id: str | None,
+    digests: Mapping[str, str] = BUNDLED_SKILL_DIGESTS,
+) -> tuple[SkillManifest, ...]:
+    """Select the release-pinned bundled Skills compatible with one deployment."""
+    return tuple(
+        manifest
+        for manifest in pinned_bundled_manifests(bundled_dir, digests)
+        if skill_compatibility_reason(
+            manifest.policy, declared_tools=manifest.declared_tools, platform_id=platform_id
+        )
+        is None
+    )
+
+
+def load_verified_skills(manifests: Sequence[SkillManifest]) -> list[Skill]:
+    """Load exactly the selected Skill directories after rechecking each selected digest."""
+    from openhands.sdk.skills import Skill, SkillError
+
+    skills: list[Skill] = []
+    for manifest in manifests:
+        try:
+            if inspect_skill(manifest.root).tree_sha256 != manifest.tree_sha256:
+                raise SkillSettingsError(f"Verified Skill changed before loading: {manifest.name}")
+            skill = Skill.load(manifest.root / "SKILL.md")
+        except (CatalogBuildError, OSError, SkillError) as error:
+            raise SkillSettingsError(f"Unable to load verified Skill {manifest.name}") from error
+        skills.append(skill)
+    return skills
 
 
 def _summary_order(summary: SkillSummary) -> tuple[int, str, str]:

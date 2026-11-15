@@ -29,7 +29,6 @@ os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 os.environ.setdefault("LOG_LEVEL", "ERROR")
 os.environ.setdefault("OPENHANDS_SUPPRESS_BANNER", "1")
 
-from heartwood_skill_catalog import CatalogBuildError, inspect_skill
 from openhands.sdk import LLM, Agent, AgentContext, LLMStreamChunk, LocalConversation, Tool
 from openhands.sdk.conversation import (
     BaseConversation,
@@ -63,7 +62,7 @@ from openhands.sdk.settings import (
     OpenHandsAgentSettings,
     VerificationSettings,
 )
-from openhands.sdk.skills import Skill, SkillError
+from openhands.sdk.skills import Skill
 from openhands.sdk.subagent import AgentDefinition, register_agent_if_absent
 from openhands.sdk.tool.builtins import ThinkAction
 from openhands.sdk.tool.builtins.finish import FinishTool
@@ -131,6 +130,7 @@ from heartwood.gateway._review_executor import (
     bind_review_executor,
     scoped_review_execution_enabled,
 )
+from heartwood.gateway._skill_settings import SkillSettingsError, load_verified_skills
 from heartwood.gateway._specialist_task import (
     HeartwoodSpecialistObservation,
     HeartwoodSpecialistToolSet,
@@ -846,7 +846,10 @@ class OpenHandsSdkBackend:
             )
         self.workspace.mkdir(parents=True, exist_ok=True)
         self.persistence_dir.mkdir(parents=True, exist_ok=True)
-        skills = load_verified_skills(self.verified_skills)
+        try:
+            skills = load_verified_skills(self.verified_skills)
+        except SkillSettingsError as error:
+            raise OpenHandsSdkError(str(error)) from error
         self._register_specialized_agents()
         options = _llm_options(
             self.profile,
@@ -2276,20 +2279,6 @@ def _conversation_runtime_options() -> _ConversationRuntimeOptions:
         "max_iteration_per_run": _AGENT_MAX_ITERATIONS_PER_RUN,
         "stuck_detection": True,
     }
-
-
-def load_verified_skills(manifests: Sequence[SkillManifest]) -> list[Skill]:
-    """Load exactly the selected Skill directories after rechecking each selected digest."""
-    skills: list[Skill] = []
-    for manifest in manifests:
-        try:
-            if inspect_skill(manifest.root).tree_sha256 != manifest.tree_sha256:
-                raise OpenHandsSdkError(f"Verified Skill changed before loading: {manifest.name}")
-            skill = Skill.load(manifest.root / "SKILL.md")
-        except (CatalogBuildError, OSError, SkillError) as error:
-            raise OpenHandsSdkError(f"Unable to load verified Skill {manifest.name}") from error
-        skills.append(skill)
-    return skills
 
 
 def _agent_context(

@@ -2299,6 +2299,7 @@ class SessionGateway:
         catalog = load_specialist_catalog(
             _runtime_resource_root() / "agents" / "verified",
             self.skill_manager.bundled_dir,
+            platform_id=self.skill_manager.platform_id,
         )
         self._specialist_catalog_cache = catalog
         return catalog
