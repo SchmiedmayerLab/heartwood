@@ -16,7 +16,7 @@ dependencies = [
     "anthropic==0.120.2",
     "certifi==2026.10.23",
     "botocore==1.43.125",
-    "filelock==3.32.2",
+    "filelock==4.2.1",
     "heartwood-adapters",
     "heartwood-audit",
     "heartwood-core-adapter",
