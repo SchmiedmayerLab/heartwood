@@ -26,6 +26,7 @@ import pytest
 from openhands.sdk.tool.client_tool import ClientToolSpec
 from pydantic import ValidationError
 
+from heartwood.core_adapter import worker_attempts
 from heartwood.core_adapter.worker_attempts import (
     WorkerAttemptError,
     WorkerAttemptIntent,
@@ -799,7 +800,10 @@ def test_worker_api_that_answers_without_authentication_is_stopped(
 
 
 @pytest.mark.parametrize("change", ["generation", "policy", "replaced", "forward"])
-def test_runtime_observation_fences_a_changed_worker(native: _Native, change: str) -> None:
+def test_runtime_observation_fences_a_changed_worker(
+    native: _Native, change: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(worker_attempts, "_RUNTIME_OBSERVATION_SECONDS", 0.0)
     runtime = native.attempt.launch(native.intent)
     lease = WorkerAttemptLease(native.record("active", runtime), owns_writer=lambda: True)
     native.attempt.connect(lease)
@@ -854,6 +858,38 @@ def test_revocation_deletes_the_sandbox_before_local_cleanup_can_fail(
     assert evidence.sandbox_id == runtime.sandbox_id
     assert native.docker.volumes == {}
     assert native.sandboxes.closed
+
+
+@pytest.mark.parametrize("obstacle", ["control", "replaced"])
+def test_forwarder_is_closed_when_the_sandbox_cannot_be_deleted(
+    native: _Native, monkeypatch: pytest.MonkeyPatch, obstacle: str
+) -> None:
+    runtime = native.attempt.launch(native.intent)
+    assert native.sandboxes.sandbox is not None
+    if obstacle == "replaced":
+        native.sandboxes.sandbox.labels["heartwood.attempt"] = str(uuid4())
+    else:
+
+        def unavailable(_name: str, **_options: object) -> SimpleNamespace:
+            raise native.sandboxes.error(native.sandboxes.grpc.StatusCode.UNAVAILABLE)
+
+        monkeypatch.setattr(native.sandboxes, "get", unavailable)
+    with pytest.raises(WorkerAttemptError):
+        native.attempt.revoke(native.record("fenced", runtime))
+    assert native.sandboxes.deleted == []
+    assert [forward.active for forward in native.forwards] == [False]
+    assert len(native.docker.volumes) == 2
+
+
+def test_interrupted_launch_stops_the_sandbox_it_created(native: _Native) -> None:
+    def interrupt(_sandbox: SimpleNamespace) -> None:
+        raise KeyboardInterrupt
+
+    native.sandboxes.after_probe = interrupt
+    with pytest.raises(KeyboardInterrupt):
+        native.attempt.launch(native.intent)
+    assert not native.sandboxes.running
+    assert native.sandboxes.deleted == ["hw-" + native.intent.attempt_id.hex[:16]]
 
 
 @pytest.mark.parametrize("phase", ["prepared", "active"])

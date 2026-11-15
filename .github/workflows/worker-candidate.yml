@@ -32,31 +32,17 @@ jobs:
           required=true
           if [[ "${EVENT_NAME}" == "pull_request" ]]; then
             required=false
-            changed="$(git diff --name-only HEAD^1 HEAD)"
+            changed="$(git diff --name-only --no-renames HEAD^1 HEAD)"
+            # Only paths that cannot change a candidate build, image behavior, or the
+            # qualification are exempt; any other or unrecognized path requires the run.
             while IFS= read -r path; do
               case "${path}" in
                 .github/workflows/worker-candidate.yml | \
-                  deploy/build-worker-candidate.py | \
-                  deploy/build-records-fixture.py | \
-                  deploy/qualify-native-worker.py | \
-                  deploy/qualification_evidence.py | \
-                  deploy/worker_model_profile.py | \
-                  deploy/tests/worker_native_fixture.py | \
-                  deploy/tests/test_worker_*_integration.py | \
-                  deploy/tests/external_service_fixture.py | \
-                  deploy/tests/worker_network_*.py | \
-                  deploy/tests/worker_hostile_probe.py | \
-                  deploy/tests/worker_telemetry.py | \
-                  deploy/tests/checkpoint_*_integration.py | \
-                  images/worker/candidate/* | \
-                  packages/* | \
-                  vendor/heartwood-skills | \
-                  pyproject.toml | \
-                  LICENSE.md | \
-                  images/Dockerfile | \
-                  images/worker/launch.py | \
-                  images/worker/config.json | \
-                  images/worker/smoke.py)
+                  .github/workflows/pull-request-validation.yml)
+                  required=true
+                  ;;
+                documentation/* | .github/*) ;;
+                *)
                   required=true
                   ;;
               esac
@@ -195,10 +181,6 @@ jobs:
     needs: [gateway, build, records]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    permissions:
-      attestations: write
-      contents: read
-      id-token: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -248,11 +230,6 @@ jobs:
         run: >-
           python3 deploy/qualification_evidence.py
           test-results/native-qualification --commit "${GITHUB_SHA}"
-      - name: Attest the evidence checksums
-        if: github.event_name != 'pull_request'
-        uses: actions/attest@v4
-        with:
-          subject-path: test-results/native-qualification/SHA256SUMS
       - name: Retain synthetic qualification evidence
         if: always()
         uses: actions/upload-artifact@v7

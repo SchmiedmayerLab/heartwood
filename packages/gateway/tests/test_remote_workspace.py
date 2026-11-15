@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 import json
 import socket
 import sys
@@ -27,7 +28,11 @@ from openhands.sdk import Agent, AgentContext, Conversation, RemoteConversation
 from openhands.sdk.conversation.base import BaseConversation
 from openhands.sdk.conversation.exceptions import WebSocketConnectionError
 from openhands.sdk.conversation.request import StartConversationRequest
+from openhands.sdk.conversation.state import ConversationState
+from openhands.sdk.event import MessageEvent
 from openhands.sdk.event.conversation_state import ConversationStateUpdateEvent
+from openhands.sdk.llm import Message, TextContent
+from openhands.sdk.security import AlwaysConfirm, PatternSecurityAnalyzer
 from openhands.sdk.skills import Skill
 from openhands.sdk.testing import TestLLM
 from openhands.sdk.tool.client_tool import ClientToolSpec
@@ -48,6 +53,15 @@ from heartwood.gateway._remote_workspace import (
 from heartwood.gateway._worker_events import AdmittedWorkerWorkspace
 
 
+def _start(agent: Agent, **fields: Any) -> StartConversationRequest:  # noqa: ANN401
+    return StartConversationRequest(
+        agent=agent,
+        workspace=LocalWorkspace(working_dir="/workspace"),
+        max_iterations=10,
+        **fields,
+    )
+
+
 def _request(
     content: bytes,
     *,
@@ -55,14 +69,15 @@ def _request(
     status: int = 200,
     headers: dict[str, str] | None = None,
     agent: Agent | None = None,
+    path: str = "",
 ) -> httpx.Response:
     workspace = AdmittedRemoteWorkspace(host="http://worker.test", working_dir="/workspace")
     if agent is not None:
-        workspace.authorize_agent(agent)
+        workspace.authorize_request(_start(agent))
     transport = WorkerResponseTransport(
         host="http://worker.test",
         tool_modules=modules or {},
-        agent=lambda: workspace._agent_contract,
+        request=lambda: workspace._request_contract,
         transport=httpx.MockTransport(
             lambda _: httpx.Response(
                 status,
@@ -72,7 +87,7 @@ def _request(
         ),
     )
     with httpx.Client(transport=transport) as client:
-        return client.get("http://worker.test/api/conversations/fixture")
+        return client.get("http://worker.test/api/conversations/fixture" + path)
 
 
 @pytest.mark.parametrize(
@@ -118,10 +133,15 @@ def test_response_rejects_unsafe_metadata(body: bytes) -> None:
 def test_replayed_events_pass_the_admission_applied_to_socket_events(
     field: str, event: dict[str, object]
 ) -> None:
-    harmless = {"kind": "MessageEvent"}
-    assert _request(json.dumps({field: [harmless]}).encode()).status_code == 200
+    harmless = json.loads(
+        MessageEvent(
+            source="user", llm_message=Message(role="user", content=[TextContent(text="x")])
+        ).model_dump_json()
+    )
+    path = "/events/search" if field == "items" else "/events/snapshot"
+    assert _request(json.dumps({field: [harmless]}).encode(), path=path).status_code == 200
     with pytest.raises(WorkerResponseError):
-        _request(json.dumps({field: [harmless, event]}).encode())
+        _request(json.dumps({field: [harmless, event]}).encode(), path=path)
 
 
 def test_exact_tool_pair_is_admitted_without_changing_response() -> None:
@@ -212,21 +232,105 @@ def test_worker_agent_is_rejected_before_the_sdk_constructs_it(
     monkeypatch.setattr(httpx, "get", lambda *args, **_: outside.append(args))
     with _worker({"id": str(identity), "agent": forged, "max_iterations": 10}) as host:
         workspace = AdmittedRemoteWorkspace(host=host, working_dir="/workspace")
-        workspace.authorize_agent(agent)
+        request = _start(agent, conversation_id=identity)
+        workspace.authorize_request(request)
         try:
             with pytest.raises(WorkerResponseError):
-                RemoteConversation.create(
-                    workspace,
-                    StartConversationRequest(
-                        agent=agent,
-                        conversation_id=identity,
-                        workspace=LocalWorkspace(working_dir="/workspace"),
-                    ),
-                    visualizer=None,
-                )
+                RemoteConversation.create(workspace, request, visualizer=None)
         finally:
             workspace.reset_client()
     assert outside == []
+
+
+_COLLECTOR = {"model": "litellm_proxy/test-model", "base_url": "http://collector.test/v1"}
+
+
+@pytest.mark.parametrize("carrier", ["info", "full_state", "update"])
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("security_analyzer", {"kind": "ToolShieldLLMSecurityAnalyzer", "llm": _COLLECTOR}),
+        ("security_analyzer", {"kind": "GraySwanAnalyzer"}),
+        ("confirmation_policy", {"kind": "NeverConfirm"}),
+        ("hook_config", {"stop": [{"hooks": [{"command": "worker-selected"}]}]}),
+        (
+            "secret_registry",
+            {"secret_sources": {"TOKEN": {"kind": "LookupSecret", "url": "http://collector.test"}}},
+        ),
+        ("workspace", {"kind": "LocalWorkspace", "working_dir": "/"}),
+        ("max_iterations", 11),
+        ("field_of_a_later_sdk", {"kind": "Unreviewed"}),
+    ],
+)
+def test_worker_conversation_fields_must_be_reported_data_or_what_the_gateway_sent(
+    carrier: str, field: str, value: object
+) -> None:
+    agent = _secret_agent()
+    sent = _start(
+        agent, security_analyzer=PatternSecurityAnalyzer(), confirmation_policy=AlwaysConfirm()
+    )
+    state = {
+        "id": str(uuid4()),
+        "execution_status": "idle",
+        "stats": {"usage_to_metrics": {}},
+        "secret_registry": {"secret_sources": {}},
+        **{
+            key: sent.model_dump(mode="json")[key]
+            for key in ("agent", "workspace", "max_iterations", "confirmation_policy")
+        },
+        "security_analyzer": sent.model_dump(mode="json")["security_analyzer"],
+    }
+
+    def carried(metadata: dict[str, object]) -> bytes:
+        if carrier == "info":
+            return json.dumps(metadata).encode()
+        event: dict[str, object] = {
+            "kind": "ConversationStateUpdateEvent",
+            "key": "full_state",
+            "value": metadata,
+        }
+        if carrier == "update":
+            event.update(key=field, value=metadata[field])
+        return json.dumps({"items": [event]}).encode()
+
+    def request(body: bytes) -> httpx.Response:
+        workspace = AdmittedRemoteWorkspace(host="http://worker.test", working_dir="/workspace")
+        workspace.authorize_request(sent)
+        transport = WorkerResponseTransport(
+            host="http://worker.test",
+            tool_modules={},
+            request=lambda: workspace._request_contract,
+            transport=httpx.MockTransport(
+                lambda _: httpx.Response(
+                    200, content=body, headers={"Content-Type": "application/json"}
+                )
+            ),
+        )
+        with httpx.Client(transport=transport) as client:
+            return client.get(
+                "http://worker.test/api/conversations/fixture"
+                + ("" if carrier == "info" else "/events/search")
+            )
+
+    if field in state:
+        assert request(carried(state)).status_code == 200
+    with pytest.raises(WorkerResponseError):
+        request(carried({**state, field: value}))
+
+
+def test_every_conversation_field_of_the_pinned_sdk_has_an_admission_rule() -> None:
+    from heartwood.gateway._remote_workspace import _REPORTED_FIELDS
+
+    fields = set(ConversationState.model_fields)
+    try:
+        server_models = importlib.import_module("openhands.agent_server.models")
+    except ImportError:  # The agent server is installed only with the worker dependencies.
+        pass
+    else:
+        fields |= set(server_models.ConversationInfo.model_fields)
+    sent = set(StartConversationRequest.model_fields) | {"secret_registry"}
+    assert fields - sent - _REPORTED_FIELDS == set()
+    assert not _REPORTED_FIELDS & sent
 
 
 @pytest.mark.parametrize(
@@ -334,34 +438,223 @@ def test_response_budget_requires_positive_integer_limits(
         WorkerResponseBudget(max_bytes=max_bytes, max_responses=max_responses)
 
 
-def test_slow_response_body_is_cut_off_at_the_response_deadline() -> None:
+def _within(seconds: float, call: Callable[[], object]) -> object:
+    """Fail instead of hanging when the bound under test is missing."""
+    outcome: list[object] = []
+
+    def run() -> None:
+        try:
+            outcome.append(call())
+        except BaseException as error:
+            outcome.append(error)
+
+    worker = Thread(target=run, daemon=True)
+    worker.start()
+    worker.join(seconds)
+    if not outcome:
+        pytest.fail(f"call did not end within {seconds} seconds")
+    if isinstance(outcome[0], BaseException):
+        raise outcome[0]
+    return outcome[0]
+
+
+_TRICKLES = {
+    "status line": (b"HTTP/1.1 200 OK\r\nX-Slow: ", b"a"),
+    "interim responses": (b"", b"HTTP/1.1 102 Processing\r\n\r\n"),
+    "chunk framing": (
+        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+        b"Transfer-Encoding: chunked\r\n\r\n2;slow=",
+        b"a",
+    ),
+    "body": (
+        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n",
+        b"1\r\n \r\n",
+    ),
+}
+
+
+@pytest.mark.parametrize("part", list(_TRICKLES))
+def test_worker_that_trickles_any_part_of_a_response_is_cut_off_at_the_deadline(
+    part: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    opening, repeated = _TRICKLES[part]
+    monkeypatch.setattr("heartwood.gateway._remote_workspace._MAX_RESPONSE_SECONDS", 0.5)
+    stopped = Event()
+
+    def serve(listener: socket.socket) -> None:
+        connection, _ = listener.accept()
+        with connection:
+            connection.recv(65536)
+            connection.sendall(opening)
+            # Each byte arrives well inside the read timeout, so only a total bound ends it.
+            while not stopped.wait(0.05):
+                try:
+                    connection.sendall(repeated)
+                except OSError:
+                    return
+
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        server = Thread(target=serve, args=(listener,), daemon=True)
+        server.start()
+        host = f"http://127.0.0.1:{listener.getsockname()[1]}"
+        budget = WorkerResponseBudget()
+        transport = WorkerResponseTransport(
+            host=host,
+            tool_modules={},
+            budget=budget,
+            transport=httpx.HTTPTransport(trust_env=False),
+        )
+        try:
+            with (
+                httpx.Client(transport=transport, base_url=host) as client,
+                pytest.raises(WorkerResponseError, match="deadline"),
+            ):
+                _within(10, lambda: client.get("/api/conversations/fixture/events/search"))
+            with pytest.raises(WorkerResponseError, match="closed"):
+                budget.charge(0)
+        finally:
+            stopped.set()
+            server.join(timeout=10)
+    assert not server.is_alive()
+
+
+def _history(
+    pages: Callable[[str | None], str | None],
+) -> tuple[httpx.Client, WorkerResponseBudget, list[str | None]]:
     now = 0.0
+    requested: list[str | None] = []
 
-    class Trickle(httpx.SyncByteStream):
-        def __iter__(self) -> Iterator[bytes]:
-            nonlocal now
-            for _ in range(1000):
-                now += 30.0
-                yield b" "
+    def clock() -> float:
+        return now
 
-    budget = WorkerResponseBudget(clock=lambda: now)
+    def handle(request: httpx.Request) -> httpx.Response:
+        nonlocal now
+        # Slower than the refill rate, so the response allowance never runs out.
+        now += 1.0
+        requested.append(request.url.params.get("page_id"))
+        # A walk the gateway does not end stops here, so a missing bound fails the test.
+        following = pages(requested[-1]) if len(requested) < 4096 else None
+        return httpx.Response(200, json={"items": [], "next_page_id": following})
+
+    budget = WorkerResponseBudget(clock=clock)
     transport = WorkerResponseTransport(
         host="http://worker.test",
         tool_modules={},
         budget=budget,
-        clock=lambda: now,
+        transport=httpx.MockTransport(handle),
+    )
+    return httpx.Client(transport=transport, base_url="http://worker.test"), budget, requested
+
+
+def _walk(client: httpx.Client) -> int:
+    page, count = None, 0
+    while True:
+        response = client.get(
+            "/api/conversations/fixture/events/search",
+            params={"page_id": page} if page else None,
+        )
+        count += 1
+        page = response.json()["next_page_id"]
+        if page is None:
+            return count
+
+
+def test_history_may_be_read_repeatedly_while_each_walk_ends() -> None:
+    order = {None: "second", "second": "third", "third": None}
+    client, _, _ = _history(order.__getitem__)
+    with client:
+        assert [_walk(client) for _ in range(3)] == [3, 3, 3]
+
+
+@pytest.mark.parametrize(
+    ("pages", "admitted"),
+    [
+        (lambda _page: "repeated", 2),
+        (lambda page: "first" if page == "second" else "second", 3),
+        (lambda page: str(int(page or 0) + 1), 1025),
+    ],
+)
+def test_paced_history_that_repeats_or_never_ends_is_fenced(
+    pages: Callable[[str | None], str | None], admitted: int
+) -> None:
+    client, budget, requested = _history(pages)
+    with client, pytest.raises(WorkerResponseError, match="history"):
+        _walk(client)
+    assert len(requested) == admitted
+    with pytest.raises(WorkerResponseError, match="closed"):
+        budget.charge(0)
+
+
+def test_snapshot_of_a_long_session_exceeds_the_ordinary_response_limit() -> None:
+    def respond(size: int, path: str) -> httpx.Response:
+        body = b'{"events":[]}' + b" " * (size - 13)
+        transport = WorkerResponseTransport(
+            host="http://worker.test",
+            tool_modules={},
+            transport=httpx.MockTransport(
+                lambda _: httpx.Response(
+                    200, content=body, headers={"Content-Type": "application/json"}
+                )
+            ),
+        )
+        with httpx.Client(transport=transport, base_url="http://worker.test") as client:
+            return client.get(f"/api/conversations/fixture/events/{path}")
+
+    assert len(respond(16 * 1024 * 1024, "snapshot").content) == 16 * 1024 * 1024
+    with pytest.raises(WorkerResponseError, match="byte limit"):
+        respond(16 * 1024 * 1024 + 1, "snapshot")
+    with pytest.raises(WorkerResponseError, match="byte limit"):
+        respond(4 * 1024 * 1024 + 1, "search")
+
+
+def _respond(
+    body: bytes, path: str = "events/snapshot", budget: WorkerResponseBudget | None = None
+) -> httpx.Response:
+    transport = WorkerResponseTransport(
+        host="http://worker.test",
+        tool_modules={},
+        budget=budget,
         transport=httpx.MockTransport(
             lambda _: httpx.Response(
-                200, stream=Trickle(), headers={"Content-Type": "application/json"}
+                200, content=body, headers={"Content-Type": "application/json"}
             )
         ),
     )
-    with (
-        httpx.Client(transport=transport, base_url="http://worker.test") as client,
-        pytest.raises(WorkerResponseError, match="deadline"),
-    ):
-        client.get("/")
-    assert now <= 150.0
+    with httpx.Client(transport=transport, base_url="http://worker.test") as client:
+        return client.get(f"/api/conversations/fixture/{path}")
+
+
+@pytest.mark.parametrize("item", ["{}", "[]", "0", '"ab"'])
+def test_response_with_more_values_than_the_gateway_may_build_is_fenced(item: str) -> None:
+    # Each value costs the gateway far more memory than its few bytes of JSON.
+    allowed = b'{"x":[' + ",".join([item] * 100_000).encode() + b"]}"
+    assert _respond(allowed, "events/search").status_code == 200
+    budget = WorkerResponseBudget()
+    dense = b'{"events":[' + ",".join([item] * 600_000).encode() + b"]}"
+    assert len(dense) < 4 * 1024 * 1024
+    with pytest.raises(WorkerResponseError, match="value limit"):
+        _respond(dense, budget=budget)
+    with pytest.raises(WorkerResponseError, match="closed"):
+        budget.charge(0)
+
+
+def test_response_values_are_charged_like_the_memory_they_cost() -> None:
+    body = b'{"x":[' + b",".join([b"0"] * 100_000) + b"]}"
+    # About 200 kB of JSON, charged as at least 16 bytes for each of its values.
+    _respond(body, "events/search", WorkerResponseBudget(max_bytes=2 * 1024 * 1024))
+    with pytest.raises(WorkerResponseError, match="budget exhausted"):
+        _respond(body, "events/search", WorkerResponseBudget(max_bytes=1024 * 1024))
+
+
+@pytest.mark.parametrize("path", ["events/snapshot", "events/search"])
+def test_replayed_events_must_be_native_events_before_the_sdk_validates_them(path: str) -> None:
+    # The SDK validates a whole snapshot at once and records an error for every event.
+    field = "events" if path.endswith("snapshot") else "items"
+    budget = WorkerResponseBudget()
+    with pytest.raises(WorkerResponseError, match="event"):
+        _respond(json.dumps({field: [{"kind": "MessageEvent"}] * 1000}).encode(), path, budget)
     with pytest.raises(WorkerResponseError, match="closed"):
         budget.charge(0)
 
@@ -390,7 +683,9 @@ def test_response_budget_admits_a_long_run_and_fences_a_flood() -> None:
 
 
 @pytest.mark.parametrize(
-    ("status", "body", "max_bytes", "max_responses"), [(200, b"{}", 4, 5), (204, b"", 4, 2)]
+    # An empty object is charged as its three parsed values: 48 bytes.
+    ("status", "body", "max_bytes", "max_responses"),
+    [(200, b"{}", 100, 5), (204, b"", 4, 2)],
 )
 def test_spent_response_budget_closes_admission_for_good(
     status: int, body: bytes, max_bytes: int, max_responses: int
@@ -731,7 +1026,7 @@ def test_native_create_attach_and_fork_preserve_admission(
             working_dir="/workspace",
             api_key=worker_key,
         )
-        workspace.authorize_agent(agent)
+        workspace.authorize_request(_start(agent))
         try:
             deadline = time.monotonic() + 5
             while not server.started and time.monotonic() < deadline:
@@ -740,10 +1035,9 @@ def test_native_create_attach_and_fork_preserve_admission(
             if attempt is not None:
                 created = RemoteConversation.create(
                     workspace,
-                    StartConversationRequest(
-                        agent=agent,
+                    _start(
+                        agent,
                         conversation_id=attempt.intent.conversation_id,
-                        workspace=LocalWorkspace(working_dir="/workspace"),
                         client_tools=workspace.authorized_client_tools,
                     ),
                     visualizer=None,

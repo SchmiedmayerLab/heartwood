@@ -84,6 +84,11 @@ The adapter reuses native sandbox creation, configuration admission, provider at
 Input, Skill and specialist identities are bound before launch; the worker is admitted only after its image, effective policy, runtime generation, projected bytes, non-root identity and authenticated API match the outside observations.
 When launch or the first runtime observation fails, the launcher deletes the sandbox that carries the attempt's identity and stops its forwarder without waiting for the session to close.
 The attempt still remains fenced until revocation observes worker absence and removes its projections.
+Fencing an attempt at any later point, including an exhausted response budget, a failed admission or runtime observation, a missed deadline or execution reported without a decision, starts that revocation at once.
+The component that fenced only signals the managed session, which revokes on one short-lived thread, so no control-plane call runs under a session lock or on a transport thread.
+Revocation waits for a session command already in progress and is then bounded by the control-plane timeouts: 15 seconds to observe the sandbox, 90 seconds for the delete request and 90 seconds to observe its absence.
+It is attempted once; if it fails, the attempt stays fenced and the worker can keep running until the session closes, the gateway stops or the next gateway start reconciles it.
+A fence is raised only when the gateway observes the condition, so a worker the gateway is not exchanging data with is not detected by this path.
 Native provider credentials remain in the sandbox control plane; the gateway receives an opaque placeholder from the worker environment.
 Model and tenant restrictions must be enforced by the qualified provider endpoint or existing institutional inference service; the selected model name and a provider attachment alone do not enforce them against a compromised worker.
 
@@ -92,8 +97,12 @@ It uses an explicit local daemon and an empty client configuration, with no inhe
 A short-lived preparation container receives only those named volumes and runs only the qualified image's permission utility; its root filesystem is read-only, its network is disabled, and its sole added capability is `FOWNER` to set permissions on copied files.
 The worker receives `/inputs` and `/skills` as read-only mounts; outside inspection checks the image, network and exact volume identities and rejects overlapping mounts.
 Inspection also rejects a privileged container and any mount whose host source overlaps the research directory, protected state, native configuration home or Docker socket.
-It compares the reported source paths lexically and does not restrict other supervisor-owned mounts.
-Inspection rejects any added Linux capability, a security option that leaves seccomp, AppArmor or SELinux labeling unconfined, and a host process, IPC or user namespace.
+It compares each reported source and each withheld location both as written, after lexical normalization, and as resolved on the gateway host, so a symbolic link or platform path alias on either side does not hide an overlap.
+The resolved forms describe the gateway host's filesystem; a container runtime that reports paths from another filesystem namespace is covered only by the forms as written.
+Inspection does not restrict other supervisor-owned mounts.
+Inspection rejects any added Linux capability and accepts only listed confinement values: the container's own process and user namespace, a private or absent IPC namespace, and security options that keep the default profiles or add `no-new-privileges` or the default AppArmor profile.
+An SELinux label option is accepted only when it selects the runtime's standard confined container type (`container_t`, formerly `svirt_lxc_net_t`) or a single sensitivity level with individual categories; user and role fields, any other type such as `spc_t` or an unconfined type, category ranges, and `label=disable` are rejected.
+A host or shared namespace, an unconfined or replaced profile, and any value outside that list are refused.
 Each of these fields must be present in the runtime's report; an absent field fails admission.
 Transfer is attempted once, and uncertainty requires reconciliation instead of repeating the copy.
 Cleanup checks both ownership labels and attempt-specific container names before removing projections, and refuses to remove resources whose ownership changed.
@@ -370,12 +379,15 @@ Replaying a record does not grant a live capability or permit a local execution 
 Once revocation of the previous attempt is recorded, the next owner of the session can launch one replacement attempt with a new identity, credentials, placeholder and response budget in a new sandbox.
 The replacement starts a new worker conversation and an empty sandbox workspace: the revoked worker's conversation state and files existed only inside its sandbox and are not restored.
 The session journal and audit record are retained, and the session projection adds a notice at the point where a replacement became active so no interface presents the new worker as a continuation.
-Replacement is refused when the journal shows work that only the revoked worker's conversation could finish: a run that did not reach an idle, finished or error state, a pause, an action still awaiting review, or an outside operation or result release that is not terminal.
+Replacement is refused when the journal shows work that only the revoked worker's conversation could finish: a run whose last recorded state is not idle, finished or error, a pause that no resume or new run ended, an action still awaiting review, an outcome recorded as unknown, or an outside operation or result release that is not terminal.
+A refused command records an error without ending a run or a pause, so it never makes a session replaceable.
+Only a gateway that launches workers admits a command for a revoked session; a gateway without a worker configuration refuses it rather than running the session on its own backend.
 Such a session stays readable and work continues in a new session.
 A fenced attempt blocks replacement until revocation is recorded, and a service that already launched an attempt never launches a second one.
 
 Each process-local admission capability belongs to one retained binding and session writer.
 The native launcher binds one outside runtime observer before connection; subsequent admission checks reject a changed sandbox, process generation, configuration or forwarding process and permanently fence the lease.
+A passing observation is reused for one second, so a changed runtime is rejected at the first admission check after that interval, while fencing and writer ownership are checked at every admission.
 The native forwarder does not itself pin process generation, so its continued liveness is insufficient evidence.
 The full worker workspace requires that capability and restricts requests and event connections to its observed origin and native conversation.
 Creation supplies the retained conversation identity; gateway-initiated forks require a separately authorized lifecycle and are rejected by this binding.
@@ -389,6 +401,7 @@ Native worker selection is explicit and requires qualified runtime dependencies;
 After an uncertain creation response, revocation may resolve the uniquely named sandbox only when its full project and attempt ownership match this process's retained intent.
 Revocation deletes the sandbox through the control client connected at launch before it stops the forwarder, rechecks the native configuration or removes projections.
 A failure in those later steps therefore leaves the attempt fenced for retry but does not leave the worker running.
+When the sandbox itself cannot be stopped, revocation still closes the forwarder before it reports the failure.
 Cleanup verifies native worker absence and removes only owned staging resources before releasing the session writer.
 If provisioning is still unresolved, deletion can require retry while the attempt remains fenced and the writer remains owned.
 A control-plane absence response alone is insufficient when the container runtime still retains attempt resources; never release ownership or repeat creation to bypass that discrepancy.
@@ -409,9 +422,15 @@ The complete returned registration set must match before any import can execute,
 The adapter uses the public workspace client property and HTTPX transport interface without changing SDK code or conversation orchestration.
 
 Responses are bounded, uncompressed UTF-8 JSON with unique object keys and finite numbers.
-Each workspace additionally permits at most 1,024 HTTP requests and 32 MiB of cumulative response bodies, including repeated history pages and requests that fail admission.
-Concurrent requests share that budget; resetting the HTTP client does not replenish it.
-Exhaustion or invalid response admission permanently closes the workspace's HTTP admission, including responses still in flight.
+A response body is limited to 4 MiB, except a branch snapshot, which carries the whole active branch and is limited to 16 MiB.
+Because a parsed value costs the gateway far more memory than its JSON bytes, a response may also contain at most 524,288 values, counted from its structure before it is parsed.
+That keeps the gateway's peak memory for one response, including the SDK's validation, near 70 MiB.
+A real session uses about 136 values per tool step, so a snapshot holds about 3,800 steps with short outputs, about 1,400 with 10 KB of output each, and about 320 when every output reaches the SDK's 50,000-character limit.
+Each event in a page or snapshot must validate as a native event before the SDK receives it, because the SDK validates a snapshot as one list and would record an error for every invalid event.
+One wall-clock deadline of 120 seconds covers each request from connection to the last body byte, so a worker cannot extend it by sending status lines, headers, interim responses or chunk framing slowly.
+A walk through paged history ends when a page identifier repeats or after 1,024 pages or 32 MiB, whichever comes first; a later walk starts again from the first page.
+Concurrent requests share one response budget, described below; resetting the HTTP client does not replenish it.
+Exhaustion, a missed deadline, an unbounded history or invalid response admission permanently closes the workspace's HTTP admission, including responses still in flight.
 Starting another workspace requires a new trusted execution decision; reconnecting is not a budget renewal.
 These limits bound received data and request count, not the SDK's exact memory consumption or execution inside the worker.
 Admission failure does not stop worker execution; the trusted launcher must revoke access and stop the worker through the independent sandbox control plane.
@@ -421,8 +440,11 @@ Admission captures those specifications independently of mutable caller objects 
 Client reset and model revalidation do not replace that captured contract.
 The SDK owns client-tool registration and execution semantics: its acknowledgement means a proposal was dispatched to the client, not that an external effect was authorized or completed.
 Outside authorization and independently observed service results remain separate requirements; worker claims cannot grant either.
-Remote agent metadata is admitted only when it equals the agent the gateway sent, apart from redacted or omitted secret values.
-A worker therefore cannot select another agent implementation, model route, tokenizer or completion-log setting for the gateway to construct.
+Conversation metadata is admitted field by field against the creation request the gateway sent.
+A field the request sets, such as the agent, security analyzer, confirmation policy, hook configuration, workspace, iteration limit or secret registry, is admitted only when it equals the sent value, apart from redacted or omitted secret values.
+A fixed list of reported fields, such as execution status, usage, identifiers and timestamps, is admitted as plain data, and any other field is rejected, including one introduced by a later SDK.
+The rule applies to the created and retained conversation, to full-state updates and to single-field updates.
+A worker therefore cannot select another agent implementation, model route, tokenizer, analyzer, secret source or completion-log setting for the gateway to construct.
 Errors expose a stable admission failure rather than worker response content.
 Resetting the workspace client retains the same admission policy.
 
@@ -434,7 +456,13 @@ The library bounds each message to 4 MiB and its receive queue to four frames.
 HTTP responses, connection attempts and received events share one response budget for the worker attempt.
 It admits bursts of 1,024 responses and 32 MiB and refills at four responses and 1 MiB per second, which covers status polling and progress reads for a run of any length.
 Received events are charged by size only.
-A worker that exceeds the budget, keeps a response open beyond 120 seconds, or stalls a read for that long is fenced.
+Each response is charged its size or 16 bytes per parsed value, whichever is larger, so a response dense with small values spends the allowance as fast as the memory it costs.
+A 16 MiB branch can therefore be read twice from a full allowance and then once every 16 seconds, and a response at the value limit four times and then once every 8 seconds.
+The refill bounds the rate of received data, not the events the SDK retains for a long session.
+A worker that exceeds the budget or the request deadline, or returns a history that does not end, is fenced.
+The event connection has no deadline of its own: an idle connection is the normal state while a session waits for its researcher, no gateway lock is held while it is read, its handshake is limited to ten seconds, and the library's keepalive closes a connection whose peer stops answering.
+After a session's first backend read, which can launch its worker, reconciliation reads the worker without holding the session command lock or the gateway state lock, so a slow response delays neither the fencing and revocation of its own attempt nor other sessions and settings.
+A command's own request to the worker still runs under both locks within the request deadline; fencing closes the attempt's admission at once and records the transition when that command returns.
 Individual and full-state updates receive the same metadata checks as HTTP responses.
 Raw text passes the JSON admission rules and native event schema before callback delivery; binary messages, completion-log events, and rejected data cannot authorize local file writing or appear in admission errors.
 

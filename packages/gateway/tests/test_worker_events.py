@@ -33,6 +33,7 @@ from heartwood.gateway._remote_workspace import (
     WorkerResponseBudget,
     WorkerResponseError,
     WorkerResponseTransport,
+    _json_values,
 )
 from heartwood.gateway._worker_events import AdmittedWorkerWorkspace, WorkerEventAdmission
 
@@ -99,7 +100,9 @@ def test_rejected_events_close_shared_admission_without_payloads(message: str | 
 
 def test_event_bytes_and_http_bodies_share_one_budget() -> None:
     message = _event()
-    budget = WorkerResponseBudget(max_bytes=len(message.encode()) + 2, clock=lambda: 0.0)
+    charged = max(len(message.encode()), 16 * _json_values(message.encode()))
+    # The event, then an empty HTTP object charged as its three values, leave two bytes.
+    budget = WorkerResponseBudget(max_bytes=charged + 48 + 2, clock=lambda: 0.0)
     policy = WorkerEventAdmission(host="http://worker.test", tool_modules={}, budget=budget)
     policy.validate_message(message)
     transport = WorkerResponseTransport(

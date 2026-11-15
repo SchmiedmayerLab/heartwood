@@ -254,6 +254,109 @@ def test_worker_inspection_rejects_mounts_of_withheld_host_locations(
         volumes.inspect_worker(observed["Name"].removeprefix("/"))
 
 
+@pytest.mark.parametrize("declared", ["alias", "target"])
+@pytest.mark.parametrize(
+    "reported", ["alias", "target", "alias/data", "target/data", "target/", "target/../target"]
+)
+def test_worker_inspection_compares_resolved_withheld_locations(
+    volumes: WorkerVolumes,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    declared: str,
+    reported: str,
+) -> None:
+    (tmp_path / "target" / "data").mkdir(parents=True)
+    (tmp_path / "alias").symlink_to(tmp_path / "target", target_is_directory=True)
+    protected = volumes
+    protected.settings = volumes.settings.model_copy(
+        update={"protected_paths": (tmp_path / declared,)}
+    )
+    observed = _container(protected)
+    observed["Mounts"].append(
+        {
+            "Destination": "/mnt/extra",
+            "Source": f"{tmp_path}/{reported}",
+            "Type": "bind",
+            "RW": False,
+        }
+    )
+    monkeypatch.setattr(protected, "command", Mock(return_value=json.dumps([observed]).encode()))
+    with pytest.raises(WorkerAttemptError, match="withheld host location"):
+        protected.inspect_worker(observed["Name"].removeprefix("/"))
+    observed["Mounts"][-1]["Source"] = str(tmp_path / "targeted")
+    monkeypatch.setattr(protected, "command", Mock(return_value=json.dumps([observed]).encode()))
+    protected.inspect_worker(observed["Name"].removeprefix("/"))
+
+
+@pytest.mark.parametrize(
+    ("option", "accepted"),
+    [
+        ("label=type:container_t", True),
+        ("label:type:container_t", True),
+        ("label=type:svirt_lxc_net_t", True),
+        ("label=level:s0:c100,c200", True),
+        ("label:level:s0:c1", True),
+        ("label=level:s0", True),
+        ("label=type:spc_t", False),
+        ("label=type:unconfined_t", False),
+        ("label=type:container_unconfined_t", False),
+        ("label=type:container_runtime_t", False),
+        ("label=type:svirt_t", False),
+        ("label=type:", False),
+        ("label=user:unconfined_u", False),
+        ("label=user:system_u", False),
+        ("label=role:system_r", False),
+        ("label=role:unconfined_r", False),
+        ("label=level:s0-s0:c0.c1023", False),
+        ("label=level:s0:c0.c1023", False),
+        ("label=level:s0:c1,c2;rm", False),
+        ("label=level:", False),
+        ("label=disable", False),
+        ("label:disable", False),
+        ("label=nested", False),
+        ("label=filetype:container_file_t", False),
+        ("label=", False),
+        ("label", False),
+    ],
+)
+def test_selinux_labels_are_admitted_only_when_they_keep_container_confinement(
+    volumes: WorkerVolumes, monkeypatch: pytest.MonkeyPatch, option: str, accepted: bool
+) -> None:
+    observed = _container(volumes)
+    observed["HostConfig"]["SecurityOpt"] = ["no-new-privileges:true", option]
+    monkeypatch.setattr(volumes, "command", Mock(return_value=json.dumps([observed]).encode()))
+    name = observed["Name"].removeprefix("/")
+    if accepted:
+        volumes.inspect_worker(name)
+    else:
+        with pytest.raises(WorkerAttemptError, match="confinement"):
+            volumes.inspect_worker(name)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("SecurityOpt", None),
+        ("SecurityOpt", []),
+        ("SecurityOpt", ["no-new-privileges:true", "apparmor=docker-default"]),
+        ("SecurityOpt", ["no-new-privileges=true", "label=type:container_t"]),
+        ("IpcMode", ""),
+        ("IpcMode", "none"),
+        ("CapAdd", None),
+    ],
+)
+def test_worker_inspection_accepts_only_listed_confinement_values(
+    volumes: WorkerVolumes,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    value: object,
+) -> None:
+    observed = _container(volumes)
+    observed["HostConfig"][field] = value
+    monkeypatch.setattr(volumes, "command", Mock(return_value=json.dumps([observed]).encode()))
+    volumes.inspect_worker(observed["Name"].removeprefix("/"))
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [
@@ -267,11 +370,23 @@ def test_worker_inspection_rejects_mounts_of_withheld_host_locations(
         ("SecurityOpt", ["label:disable"]),
         ("SecurityOpt", "seccomp=unconfined"),
         ("SecurityOpt", [None]),
+        ("SecurityOpt", ["no-new-privileges=false"]),
+        ("SecurityOpt", ["no-new-privileges:false"]),
+        ("SecurityOpt", ['seccomp={"defaultAction":"SCMP_ACT_ALLOW"}']),
+        ("SecurityOpt", ["apparmor=permissive-profile"]),
+        ("SecurityOpt", ["systempaths=unconfined"]),
+        ("SecurityOpt", ["unrecognized-option"]),
         ("PidMode", "host"),
+        ("PidMode", "container:0123456789ab"),
+        ("PidMode", "private"),
         ("PidMode", None),
+        ("PidMode", ["host"]),
         ("IpcMode", "host"),
+        ("IpcMode", "container:0123456789ab"),
+        ("IpcMode", "shareable"),
         ("IpcMode", None),
         ("UsernsMode", "host"),
+        ("UsernsMode", "private"),
         ("UsernsMode", None),
         ("CapAdd", ...),
         ("SecurityOpt", ...),
@@ -300,8 +415,8 @@ def test_worker_inspection_rejects_weakened_or_unobserved_confinement(
     "host",
     [
         {"CapAdd": [], "SecurityOpt": None},
-        {"SecurityOpt": [], "PidMode": "private", "IpcMode": "shareable"},
-        {"SecurityOpt": ["no-new-privileges:true", "seccomp=/etc/docker/profile.json"]},
+        {"SecurityOpt": [], "PidMode": "", "IpcMode": "private"},
+        {"SecurityOpt": ["no-new-privileges:true", "apparmor=docker-default"]},
     ],
 )
 def test_worker_inspection_accepts_confined_runtime_defaults(

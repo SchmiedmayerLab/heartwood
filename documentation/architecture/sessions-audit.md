@@ -41,6 +41,7 @@ The gateway incrementally translates persisted OpenHands messages, actions, obse
 While a native run is executing or publishing its final events, its live publisher owns event delivery.
 Read-side reconciliation waits for that publisher to finish so it cannot consume an observation before live reproduction evidence is recorded.
 After the publisher exits, reconciliation can recover persisted events without claiming that replay observed their execution.
+Except for a service's first read, reconciliation reads the backend without holding the session command lock and journals what it read only if no event was appended and the worker attempt was neither fenced nor replaced meanwhile; otherwise it reads again or discards the observation.
 Incremental token deltas remain in process memory and disappear after the run reaches a stable boundary or the process stops.
 Each REST, WebSocket, and server-sent-events response pairs an event batch with the projection produced from the same serialized snapshot.
 A transient revision orders token-only updates that share a durable event revision.
@@ -57,8 +58,10 @@ Replay and live updates remain available through the interface connected to the 
 Distinct sessions have independent leases.
 Trusted worker launch uses `SessionService.launch_worker` to retain an attempt before invoking the platform launcher and bind the observed runtime only after that call succeeds.
 The launcher must use the retained identity with the native sandbox lifecycle and verify the authorized image, effective policy, active configuration, and process generation before returning a binding.
-Missing generation, failed admission, interruption, or an uncertain create response leaves the attempt fenced for outside reconciliation; Heartwood does not retry creation or infer that no worker exists.
+Missing generation, failed admission, interruption, or an uncertain create response leaves the attempt fenced; Heartwood does not retry creation or infer that no worker exists.
+The managed session then revokes the fenced attempt without waiting for the session to close, and records `revoked` only with the platform's evidence; when that revocation fails, the attempt remains fenced for session close or start-up reconciliation.
 `revoke_worker` closes local admission before invoking the platform's revocation observer and records only returned evidence matching the retained attempt and runtime.
+Closing admission waits for no worker response: it takes effect during a reconciliation read or a command in flight, and the fenced transition is recorded once the journal is free.
 A failed or uncertain revocation does not permit replacement.
 An attempt retained by an ended process can be fenced and revoked by a later owner of the session writer through the same `revoke_worker` contract.
 After recorded revocation, `prepare_worker_attempt` issues a new attempt identity for the same session and native conversation identity, unless the journal still holds an unsettled run, a pause, an unreviewed action, or a non-terminal outside operation or result release of the revoked worker.
@@ -103,11 +106,12 @@ An interrupted approval is completed automatically only when its recorded intent
 Outside decisions distinguish authorization from attempted dispatch.
 An authorized record proves that the native call has not started; a submitting record means its outcome may be uncertain.
 A configured required-evidence gate must observe the authorization checkpoint before recording submission and calling the adapter.
-An interrupted authorization can resume only with the original decision, a live matching worker and renewed input, policy and expiry checks.
-While a command is handled, only an exact retry of the original approval resumes it; any other command is refused without dispatching.
-Denying the same review withdraws the undispatched authorization, and one that outlives its validity interval is recorded as expired.
+An approved outside operation or result release that could not be sent is sent only by an exact retry of its own approval command, never by another command, a status or projection read, reconciliation, or an automatic decision.
+That retry carries the same command identifier and content, resumes the authorization whether or not the caller reconciled the session first, and still requires a live matching worker and renewed input, policy and expiry checks.
+Any other command is refused without dispatching.
+Denying the same review withdraws the undispatched authorization without requiring an admitted worker, and one that outlives its validity interval is recorded as expired.
 Both closures are terminal journal and audit records that complete the original approval command, so the session can continue.
-Read-only reconciliation skips undispatched authorizations; it never converts observation into submission authority.
+Reconciliation skips undispatched authorizations except to record their expiry; it never converts observation into submission authority.
 Otherwise, the session rejects further mutation so a second approval or task cannot repeat an uncertain side effect.
 An action is recorded as approved only when the session holds a recorded decision for its action set.
 A decision the gateway makes under a review mode is such a record: an accepted command and an `approval.recorded` event with the actor `gateway` and the applied mode and rule, followed by the same checkpoint boundary, digest check, and resolution events as a researcher decision.

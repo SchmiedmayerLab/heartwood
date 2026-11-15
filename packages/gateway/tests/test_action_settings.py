@@ -121,7 +121,7 @@ def test_every_interface_option_is_a_review_mode_in_strictness_order() -> None:
 def test_a_local_launch_reviews_everything_and_offers_only_review_changes(
     tmp_path: Path,
 ) -> None:
-    gateway = SessionGateway(project=ProjectContext(tmp_path), env={})
+    gateway = SessionGateway(project=ProjectContext(tmp_path), env={}, backend_id="deterministic")
 
     settings = gateway.action_settings()
 
@@ -144,7 +144,7 @@ def test_a_local_selection_is_never_written_to_or_read_from_the_research_directo
     tmp_path: Path,
 ) -> None:
     project = ProjectContext(tmp_path)
-    gateway = SessionGateway(project=project, env={})
+    gateway = SessionGateway(project=project, env={}, backend_id="deterministic")
     gateway.select_action_review_mode("review-changes")
     gateway.config_store.save(gateway.config_store.load())
     assert "review-changes" not in project.config_path.read_text().split("[policy]")[0]
@@ -202,7 +202,7 @@ def test_sandboxed_sessions_default_to_reviewing_outside_effects(tmp_path: Path)
 
 
 def test_a_managed_launch_without_workers_cannot_select_sandbox_review(tmp_path: Path) -> None:
-    gateway = _managed_gateway(tmp_path)
+    gateway = _managed_gateway(tmp_path, backend_id="deterministic")
 
     assert gateway.action_settings()["review_mode"] == "review-all"
     assert _modes(gateway)["review-outside-effects"] is False
@@ -289,44 +289,75 @@ def test_an_unclassified_action_waits_for_the_researcher_in_every_selectable_mod
         gateway.stop()
 
 
-def test_the_manifest_ceiling_replaces_any_list_kept_in_project_state(tmp_path: Path) -> None:
-    """A migrated or edited project policy neither narrows nor widens the operator's ceiling."""
+def _reopened(gateway: SessionGateway, *modes: ActionReviewMode) -> dict[str, bool]:
+    return _modes(
+        SessionGateway(
+            project=gateway.project,
+            env={},
+            deployment_policy=_policy(*modes),
+            worker_plan_factory=_unused_worker_plan,
+        )
+    )
+
+
+def test_the_manifest_ceiling_applies_at_every_start_and_a_project_only_narrows_it(
+    tmp_path: Path,
+) -> None:
     gateway = _managed_gateway(tmp_path, workers=True)
     project = gateway.project
     gateway.config_store.save(gateway.config_store.load())
     stored = project.config_path.read_text()
-    listed = '"review-all",\n    "review-changes",\n    "review-outside-effects",\n'
-    assert listed in stored
-
-    project.config_path.write_text(stored.replace(listed, '"review-all",\n'))
-    migrated = SessionGateway(
-        project=project,
-        env={},
-        deployment_policy=_policy(),
-        worker_plan_factory=_unused_worker_plan,
-    )
-    assert all(_modes(migrated).values())
-    assert migrated.action_settings()["review_mode"] == "review-outside-effects"
-
-    project.config_path.write_text(stored)
-    narrowed = SessionGateway(
-        project=project,
-        env={},
-        deployment_policy=_policy("review-all"),
-        worker_plan_factory=_unused_worker_plan,
-    )
-    assert _modes(narrowed) == {
+    # A project that is no stricter than the operator stores no list of its own,
+    # so a later manifest change in either direction applies at the next start.
+    assert "allowed_action_review_modes" not in stored
+    assert _reopened(gateway, "review-all") == {
         "review-all": True,
         "review-changes": False,
         "review-outside-effects": False,
     }
-    assert narrowed.action_settings()["review_mode"] == "review-all"
+    assert all(_reopened(gateway).values())
+
+    # A narrower project list survives a wider manifest and never widens a narrower one.
+    project.config_path.write_text(
+        stored.replace(
+            "[policy]\n",
+            '[policy]\nallowed_action_review_modes = ["review-all", "review-changes"]\n',
+        )
+    )
+    assert _reopened(gateway) == {
+        "review-all": True,
+        "review-changes": True,
+        "review-outside-effects": False,
+    }
+    assert _reopened(gateway, "review-all", "review-outside-effects") == {
+        "review-all": True,
+        "review-changes": False,
+        "review-outside-effects": False,
+    }
+    narrowed = SessionGateway(project=project, env={}, deployment_policy=_policy())
+    narrowed.config_store.save(narrowed.config_store.load())
+    assert '"review-changes"' in project.config_path.read_text()
+    assert '"review-outside-effects"' not in project.config_path.read_text()
+
+
+def test_an_unconfigured_model_route_is_not_treated_as_isolated(tmp_path: Path) -> None:
+    gateway = SessionGateway(project=ProjectContext(tmp_path), env={})
+
+    settings = gateway.action_settings()
+
+    assert settings["review_mode"] == "review-all"
+    assert _modes(gateway)["review-changes"] is False
+    with pytest.raises(ActionSettingsError):
+        gateway.select_action_review_mode("review-changes")
+    service = gateway._service("session-main")
+    assert service.action_review_mode() == "review-all"
+    gateway.stop()
 
 
 def test_a_stored_selection_the_manifest_no_longer_permits_stops_the_project(
     tmp_path: Path,
 ) -> None:
-    gateway = _managed_gateway(tmp_path)
+    gateway = _managed_gateway(tmp_path, backend_id="deterministic")
     gateway.select_action_review_mode("review-changes")
 
     with pytest.raises(ProjectConfigError):

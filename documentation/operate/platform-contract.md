@@ -616,8 +616,9 @@ The trusted adapter must bound reads, exclude credentials from the reviewable re
 
 The decision and submission intent are committed through the paired session and audit journal before contacting the service.
 With a bound evidence controller, the authorization must also be independently retained before submission, including when ordinary session evidence uses buffered mode.
-After an evidence outage, recovery rechecks the proposal's inputs, policy, expiry, destination and current worker authority before proceeding.
-Until submission is recorded, the researcher can deny the review to withdraw the authorization, and no command other than the original approval dispatches it.
+An approved outside operation or result release that could not be sent is sent only by an exact retry of its own approval command, never by another command, a status or projection read, reconciliation, or an automatic decision.
+The retry rechecks the proposal's inputs, policy, expiry, destination and current worker authority before proceeding.
+Until submission is recorded, the researcher can deny the review to withdraw the authorization; withdrawal sends nothing and does not require an admitted worker.
 An authorization that is still undispatched when its validity interval ends is recorded as expired and never submitted.
 A review that expires without a decision stays closed to approval; calling `propose_external_action` again for the same worker proposal records the expiry and issues a new operation identifier, validity interval and review.
 Neither an expired review nor its authorization is extended or reused.

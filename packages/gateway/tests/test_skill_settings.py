@@ -314,6 +314,29 @@ def test_manager_reverifies_signed_source_before_runtime_activation(tmp_path: Pa
         manager.active_skill_roots()
 
 
+def test_manager_records_removal_despite_unexpected_content_next_to_the_skill(
+    tmp_path: Path,
+) -> None:
+    source = _local_skill(tmp_path)
+    manager = _manager(tmp_path)
+    installed = manager.install_local(
+        source, expected_tree_sha256=manager.inspect_local(source).tree_sha256, approved=True
+    )
+    artifact = manager.store.artifact_path(manager.store.records()[0])
+    (artifact.parent / "leftover").write_text("unverified\n", encoding="utf-8")
+
+    manager.remove(installed.name)
+
+    assert manager.store.records() == ()
+    assert manager.active_skill_roots() == ()
+    deactivated = AuditLog(tmp_path / "audit.jsonl").read()[-1]
+    assert deactivated.event_type == "skill.deactivated"
+    assert deactivated.payload["tree_sha256"] == installed.tree_sha256
+    assert deactivated.payload["review"] == "local-unreviewed"
+    with pytest.raises(SkillSettingsError, match="does not exist"):
+        manager.remove(installed.name)
+
+
 def test_manager_audits_approved_installation_failure_without_activating(
     tmp_path: Path,
 ) -> None:

@@ -455,8 +455,9 @@ class SkillManager:
             removed = self.store.remove(name)
         except SkillStoreError as error:
             raise SkillSettingsError(str(error)) from error
-        summary = SkillSummary.from_installed(removed, self.store.manifest(removed))
-        self._record_removal(summary)
+        # Record the committed removal from its index record; the removed artifact
+        # is no longer loaded, so its directory is not reverified here.
+        self._record_removal(removed)
 
     def active_skill_roots(self) -> tuple[Path, ...]:
         """Return verified installed roots consumable by OpenHands."""
@@ -677,8 +678,8 @@ class SkillManager:
             decision="approved" if approved else "denied",
         )
 
-    def _record_removal(self, summary: SkillSummary, *, actor_id: str = "human") -> None:
-        self._append_audit(summary, event="deactivated", actor_id=actor_id, decision=None)
+    def _record_removal(self, record: InstalledSkillRecord, *, actor_id: str = "human") -> None:
+        self._append_audit(record, event="deactivated", actor_id=actor_id, decision=None)
 
     def _record_installation_result(
         self,
@@ -696,7 +697,7 @@ class SkillManager:
 
     def _append_audit(
         self,
-        summary: SkillSummary,
+        summary: SkillSummary | InstalledSkillRecord,
         *,
         event: Literal["installation-decision", "activated", "installation-failed", "deactivated"],
         actor_id: str,

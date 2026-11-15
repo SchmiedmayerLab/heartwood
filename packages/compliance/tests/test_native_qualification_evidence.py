@@ -11,6 +11,10 @@ import hashlib
 import importlib
 import importlib.util
 import json
+import os
+import re
+import subprocess
+import tomllib
 from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -373,12 +377,103 @@ def test_runner_binds_its_result_to_the_images_own_source(
         assert evidence.verify(output, _COMMIT) == []
 
 
-def test_candidate_workflow_retains_and_attests_the_checksummed_evidence(
-    evidence: ModuleType,
-) -> None:
+def _workflow(name: str) -> dict[str, Any]:
     yaml = importlib.import_module("yaml")
-    workflows = _ROOT / ".github/workflows"
-    candidate = yaml.load((workflows / "worker-candidate.yml").read_text(), Loader=yaml.BaseLoader)
+    workflow: dict[str, Any] = yaml.load(
+        (_ROOT / ".github/workflows" / name).read_text(), Loader=yaml.BaseLoader
+    )
+    return workflow
+
+
+def _selects_qualification(changed: list[str], event: str = "pull_request") -> bool:
+    selection = _workflow("worker-candidate.yml")["jobs"]["scope"]["steps"][1]["run"]
+    comparison = '"$(git diff --name-only --no-renames HEAD^1 HEAD)"'
+    assert selection.count(comparison) == 1
+    completed = subprocess.run(
+        ["bash", "-e", "-o", "pipefail", "-c", selection.replace(comparison, '"${CHANGED}"')],
+        env={
+            "EVENT_NAME": event,
+            "CHANGED": "\n".join(changed),
+            "GITHUB_OUTPUT": "/dev/stdout",
+            "PATH": os.environ["PATH"],
+        },
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return {"required=true\n": True, "required=false\n": False}[completed.stdout]
+
+
+def _copied_sources(dockerfile: str) -> set[str]:
+    sources: set[str] = set()
+    for line in (_ROOT / dockerfile).read_text().splitlines():
+        arguments = [word for word in line.split() if not word.startswith("--")]
+        if arguments[:1] == ["COPY"] and "--from=" not in line:
+            sources.update(source.split("*")[0] for source in arguments[1:-1])
+    return sources
+
+
+def test_pull_request_selection_covers_every_candidate_input() -> None:
+    candidate = (_ROOT / ".github/workflows/worker-candidate.yml").read_text()
+    runner = (_ROOT / "deploy/qualify-native-worker.py").read_text()
+    inputs = {
+        ".dockerignore",
+        ".gitmodules",
+        ".github/workflows/pull-request-validation.yml",
+        ".github/workflows/worker-candidate.yml",
+        "LICENSE.md",
+        "deploy/build-worker-candidate.py",
+        "deploy/qualification_evidence.py",
+        "pyproject.toml",
+        "uv.lock",
+        "vendor/heartwood-skills",
+    }
+    for dockerfile in (
+        "images/Dockerfile",
+        "images/worker/candidate/controller.Dockerfile",
+        "images/worker/candidate/symlink-workspace.Dockerfile",
+    ):
+        inputs |= {dockerfile, *_copied_sources(dockerfile)}
+    # Application wheels bundle files from outside their package directories.
+    for project in sorted((_ROOT / "packages").glob("*/pyproject.toml")):
+        bundled = tomllib.loads(project.read_text()).get("tool", {}).get("hatch", {})
+        for source in (
+            bundled.get("build", {}).get("targets", {}).get("wheel", {}).get("force-include", {})
+        ):
+            inputs.add((project.parent / source).resolve().relative_to(_ROOT).as_posix())
+    inputs |= set(re.findall(r'ROOT / "([^"]+)"', runner))
+    inputs |= set(re.findall(r"(?:deploy|images)/[\w./-]+\.(?:py|sh)\b", candidate))
+    assert {"agents", "uv.lock", "images", "deploy/install-llama-cpp.sh"} <= inputs
+    assert "agents/verified" in inputs
+    assert "deploy/build-records-fixture.py" in inputs
+    assert "images/worker/candidate/runtime.sh" in inputs
+    # The workflow builds without local actions, so other workflow files cannot reach it.
+    assert "uses: ./" not in candidate
+
+    exempt = {
+        source
+        for source in inputs
+        if not _selects_qualification(
+            [source.rstrip("/") + "/changed" if (_ROOT / source).is_dir() else source]
+        )
+    }
+
+    # Documentation is copied into the image as files that no build or runtime step reads.
+    assert exempt == {"documentation"}
+    assert not _selects_qualification(
+        ["documentation/index.md", ".github/workflows/web-ui.yml", ".github/dependabot.yml"]
+    )
+    assert _selects_qualification(["documentation/index.md", "agents/verified/changed.md"])
+    assert _selects_qualification(["images/scripts/changed.sh"])
+    assert _selects_qualification(["unrecognized-new-directory/file"])
+    assert _selects_qualification(['"documentation/quoted\\303\\244.md"'])
+    assert _selects_qualification([])
+    for event in ("push", "workflow_dispatch"):
+        assert _selects_qualification(["documentation/index.md"], event)
+
+
+def test_candidate_workflow_retains_the_checksummed_evidence(evidence: ModuleType) -> None:
+    candidate = _workflow("worker-candidate.yml")
     jobs = candidate["jobs"]
     steps = {step["name"]: step for step in jobs["native"]["steps"]}
     retained = steps["Retain synthetic qualification evidence"]
@@ -389,26 +484,51 @@ def test_candidate_workflow_retains_and_attests_the_checksummed_evidence(
         for pattern in (*evidence.RETAINED, "SHA256SUMS")
     }
     assert retained["if"] == "always()"
-    assert steps["Attest the evidence checksums"] == {
-        "name": "Attest the evidence checksums",
-        "if": "github.event_name != 'pull_request'",
-        "uses": "actions/attest@v4",
-        "with": {"subject-path": "test-results/native-qualification/SHA256SUMS"},
-    }
     assert '--commit "${GITHUB_SHA}"' in steps["Verify the evidence for this commit"]["run"]
-    # Only an unchanged pull request may skip the builds; every other event qualifies.
-    selection = jobs["scope"]["steps"][1]["run"]
-    assert selection.startswith('required=true\nif [[ "${EVENT_NAME}" == "pull_request" ]]; then')
     for job in ("gateway", "build", "records"):
         assert jobs[job]["needs"] == "scope"
         assert jobs[job]["if"] == "needs.scope.outputs.required == 'true'"
     assert jobs["native"]["needs"] == ["gateway", "build", "records"]
     assert "if" not in jobs["native"]
     for entrypoint in ("main-validation.yml", "pull-request-validation.yml"):
-        validation = yaml.load((workflows / entrypoint).read_text(), Loader=yaml.BaseLoader)
-        assert validation["jobs"]["native-qualification"] == {
+        validation = _workflow(entrypoint)["jobs"]
+        assert validation["native-qualification"] == {
             "name": "Native Worker Qualification",
-            "permissions": jobs["native"]["permissions"],
             "uses": "./.github/workflows/worker-candidate.yml",
         }
-        assert "native-qualification" in validation["jobs"]["release-ready"]["needs"]
+        assert "native-qualification" in validation["release-ready"]["needs"]
+
+
+def test_only_a_main_validation_job_without_candidate_code_can_attest() -> None:
+    candidate = (_ROOT / ".github/workflows/worker-candidate.yml").read_text()
+    pull_request = (_ROOT / ".github/workflows/pull-request-validation.yml").read_text()
+    main = _workflow("main-validation.yml")
+    attestation = main["jobs"]["evidence-attestation"]
+
+    # Jobs that build and run candidate code never hold signing permissions.
+    for workflow in (candidate, pull_request):
+        assert "attestations:" not in workflow
+        assert "actions/attest" not in workflow
+    assert "id-token" not in candidate
+    assert _workflow("worker-candidate.yml")["permissions"] == {"contents": "read"}
+    assert "pull_request" not in main["on"]
+    assert attestation["needs"] == "native-qualification"
+    assert "if" not in attestation
+    assert attestation["permissions"] == {
+        "attestations": "write",
+        "contents": "read",
+        "id-token": "write",
+    }
+    assert "evidence-attestation" in main["jobs"]["release-ready"]["needs"]
+    checkout, download, verify, attest = attestation["steps"]
+    assert checkout["with"]["ref"] == "${{ github.sha }}"
+    assert download["with"] == {
+        "name": "worker-native-qualification-${{ github.sha }}",
+        "path": "test-results/native-qualification",
+    }
+    assert verify["run"] == (
+        "python3 deploy/qualification_evidence.py"
+        ' test-results/native-qualification --commit "${GITHUB_SHA}"'
+    )
+    assert attest["uses"] == "actions/attest@v4"
+    assert attest["with"] == {"subject-path": "test-results/native-qualification/SHA256SUMS"}

@@ -327,9 +327,11 @@ class _NativeWorkerAttempt:
                 image_digest=self.settings.image_digest,
                 sandbox_policy_sha256=self.settings.sandbox_policy_sha256,
             )
-        except Exception:
+        except BaseException as error:
             self._stop_unadmitted()
             self._preparation.close()
+            if not isinstance(error, Exception):
+                raise
             raise WorkerAttemptError(
                 "native worker launch requires outside reconciliation"
             ) from None
@@ -502,7 +504,14 @@ print(json.dumps({'files':files,'uid':os.getuid(),
         if self._volumes is not None:
             # The connected client keeps the identity admitted at launch, so stopping the
             # worker does not wait for local cleanup or a repeated configuration check.
-            self._stop_sandbox()
+            try:
+                self._stop_sandbox()
+            except Exception:
+                # A forwarder to a sandbox that is being stopped is never useful.
+                if self._forward is not None:
+                    with suppress(Exception):
+                        self._forward.close()
+                raise
         self._preparation.close()
         if self._forward is not None:
             self._forward.close()

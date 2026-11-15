@@ -12,8 +12,9 @@ import json
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
-from typing import get_args
-from uuid import uuid4
+from types import SimpleNamespace
+from typing import cast, get_args
+from uuid import UUID, uuid4
 
 import pytest
 from pydantic import AnyHttpUrl
@@ -25,6 +26,8 @@ from heartwood.core_adapter import (
     BackendErrorCode,
     BackendErrorEvent,
     BackendEvent,
+    BackendLifecycle,
+    BackendLifecycleEvent,
     BackendToolCallEvent,
     BackendToolExecutionEvent,
     CommandConflictError,
@@ -43,8 +46,14 @@ from heartwood.core_adapter.action_review import (
     effective_review_mode,
     is_tightening,
 )
+from heartwood.core_adapter.external_actions import ExternalActionAdapter
 from heartwood.core_adapter.external_results import RESULT_PREFIX
-from heartwood.core_adapter.worker_attempts import WorkerAttemptIntent, WorkerRuntimeBinding
+from heartwood.core_adapter.session_activity import session_activity
+from heartwood.core_adapter.worker_attempts import (
+    WorkerAttemptIntent,
+    WorkerRevocationEvidence,
+    WorkerRuntimeBinding,
+)
 from heartwood.schemas import ActionReviewMode, PolicyProfile
 from heartwood.session import CommandKind, EventKind, JsonValue, SessionCommand, SessionEvent
 
@@ -157,6 +166,7 @@ def _service(
     mode: str | Callable[[], str | None] | None = None,
     allowed: tuple[ActionReviewMode, ...] = (),
     sandboxed: bool = False,
+    project_id: UUID | None = None,
 ) -> SessionService:
     service = SessionService.local_default(
         tmp_path,
@@ -165,8 +175,9 @@ def _service(
         policy_profile=_policy(*allowed),
         env={},
         clock=lambda: "2026-01-01T00:00:00Z",
-        worker_project_id=uuid4(),
+        worker_project_id=project_id or uuid4(),
         action_review_mode=mode if callable(mode) else lambda: mode,
+        credentials_isolated=lambda: True,
     )
     if sandboxed:
         service.launch_worker(
@@ -487,6 +498,23 @@ def test_a_local_session_cannot_apply_sandbox_review(tmp_path: Path, selected: s
     service.close()
 
 
+def test_an_outside_service_tool_is_never_contained_whatever_type_the_worker_reports(
+    tmp_path: Path,
+) -> None:
+    disguised = replace(_action("record-1", "workspace"), tool_name="propose_record")
+    backend = _ScriptedBackend((disguised,))
+    service = _service(tmp_path, backend, sandboxed=True)
+    service._external_actions = cast(
+        ExternalActionAdapter, SimpleNamespace(tool_names=frozenset({"propose_record"}))
+    )
+
+    _chat(service)
+
+    assert backend.executed == []
+    assert _approvals(service) == []
+    assert _pending(service) == ("record-1",)
+
+
 def test_a_fenced_worker_loses_sandbox_review(tmp_path: Path) -> None:
     backend = _ScriptedBackend((_action("run-1", "workspace"),))
     service = _service(tmp_path, backend, sandboxed=True)
@@ -692,19 +720,403 @@ def test_automatic_decisions_pass_the_same_checkpoint_boundary(tmp_path: Path) -
     service.close()
 
 
-def test_a_failing_checkpoint_boundary_stops_an_automatic_decision(tmp_path: Path) -> None:
+def _not_applied(service: SessionService) -> list[SessionEvent]:
+    return [
+        event
+        for event in service.replay_events()
+        if event.kind == EventKind.ERROR_RECORDED
+        and event.payload.get("automatic_review") == "not-applied"
+    ]
+
+
+def test_a_failed_automatic_decision_leaves_the_group_for_the_researcher(tmp_path: Path) -> None:
+    """The researcher's command stands; the failure is recorded once and reads keep working."""
+    backend = _ScriptedBackend((_action("read-1", "read"),))
+    service = _service(tmp_path, backend, mode="review-changes")
+    original = service._checkpoint_boundary
+    available = [False]
+
+    def boundary(event: SessionEvent, *, required: bool = False) -> tuple[SessionEvent, ...]:
+        if not available[0]:
+            raise RuntimeError("records are unavailable")
+        return original(event, required=required)
+
+    service._checkpoint_boundary = boundary  # type: ignore[method-assign, assignment]
+
+    result = service.handle(_command(CommandKind.CHAT, prompt="analyze the synthetic cohort"))
+
+    assert result.events[0].payload["actor_id"] == "human"
+    assert result.events[-1].kind == EventKind.CONFIRMATION_REQUESTED
+    assert backend.executed == []
+    assert _pending(service) == ("read-1",)
+    (marker,) = _not_applied(service)
+    assert marker.payload["affects_lifecycle"] is False
+    assert not service.store.unresolved_command_ids()
+    for _ in range(2):
+        service.reconcile()
+    assert len(_not_applied(service)) == 1
+    assert backend.executed == []
+
+    # The recorded gateway approval no longer counts; the researcher decides the group.
+    available[0] = True
+    group = service.backend.pending_action_group(session_id=_SESSION)
+    assert group is not None
+    service.handle(
+        _command(CommandKind.DENY, "deny", target_type="action-set", target_id=group.group_id)
+    )
+    assert backend.executed == []
+    assert not service._approval_recorded(group.group_id)
+    service.close()
+
+
+def test_a_decision_the_backend_may_have_acted_on_is_never_reported_as_not_applied(
+    tmp_path: Path,
+) -> None:
+    class _FailsAfterDispatch(_ScriptedBackend):
+        def resolve_confirmation(
+            self, *, session_id: str, action_group_id: str, approved: bool
+        ) -> tuple[BackendEvent, ...]:
+            super().resolve_confirmation(
+                session_id=session_id, action_group_id=action_group_id, approved=approved
+            )
+            raise RuntimeError("the worker connection dropped after dispatch")
+
+    backend = _FailsAfterDispatch((_action("read-1", "read"),))
+    service = _service(tmp_path, backend, mode="review-changes")
+
+    result = service.handle(_command(CommandKind.CHAT, prompt="analyze the synthetic cohort"))
+
+    assert result.events[0].payload["actor_id"] == "human"
+    assert backend.executed == ["read-1"]
+    assert _not_applied(service) == []
+    unknown = [
+        event
+        for event in service.replay_events()
+        if event.kind == EventKind.ERROR_RECORDED
+        and event.payload.get("code") == BackendErrorCode.ACTION_OUTCOME_UNKNOWN.value
+    ]
+    assert [event.payload["command_id"] for event in unknown] == [
+        _approvals(service)[0].payload["command_id"]
+    ]
+    assert not service.store.unresolved_command_ids()
+    service.reconcile()
+
+
+def test_a_decision_raised_after_the_backend_started_the_run_is_an_unknown_outcome(
+    tmp_path: Path,
+) -> None:
+    """A run in progress keeps its actions unmatched, so the group can still look pending."""
+
+    class _StartsRun(_ScriptedBackend):
+        def resolve_confirmation(
+            self, *, session_id: str, action_group_id: str, approved: bool
+        ) -> tuple[BackendEvent, ...]:
+            del session_id
+            group = pending_action_group(self._group)
+            assert group is not None
+            assert group.group_id == action_group_id
+            assert approved
+            self.executed.extend(action.tool_call_id for action in group.actions)
+            return tuple(
+                BackendConfirmationResolutionEvent(
+                    tool_call=action, action_group_id=group.group_id, approved=True
+                )
+                for action in group.actions
+            )
+
+    backend = _StartsRun((_action("read-1", "read"),))
+    service = _service(tmp_path, backend, mode="review-changes")
+    translate = service._translate_backend_events
+
+    def fail_on_resolution(stream: tuple[BackendEvent, ...], **kwargs: bool) -> list[SessionEvent]:
+        if any(isinstance(event, BackendConfirmationResolutionEvent) for event in stream):
+            raise RuntimeError("journaling failed after dispatch")
+        return translate(stream, **kwargs)
+
+    service._translate_backend_events = fail_on_resolution  # type: ignore[method-assign]
+
+    result = service.handle(_command(CommandKind.CHAT, prompt="analyze the synthetic cohort"))
+
+    assert result.events[0].payload["actor_id"] == "human"
+    assert backend.executed == ["read-1"]
+    assert _pending(service) == ("read-1",)
+    assert _not_applied(service) == []
+    assert [
+        event.payload["command_id"]
+        for event in service.replay_events()
+        if event.kind == EventKind.ERROR_RECORDED
+        and event.payload.get("code") == BackendErrorCode.ACTION_OUTCOME_UNKNOWN.value
+    ] == [_approvals(service)[0].payload["command_id"]]
+    group_id = _approvals(service)[0].payload["group_id"]
+    assert isinstance(group_id, str)
+    assert service._approval_recorded(group_id)
+
+
+class _Surfacing(_ScriptedBackend):
+    """Surface the next scripted group from a status read or from the pause itself."""
+
+    def reconcile(
+        self, *, session_id: str, known_source_event_ids: frozenset[str]
+    ) -> tuple[BackendEvent, ...]:
+        del session_id, known_source_event_ids
+        return () if self._group or self.on_pause else self._propose()
+
+    on_pause = False
+
+    def pause(self, *, session_id: str) -> tuple[BackendEvent, ...]:
+        del session_id
+        return self._propose() if self.on_pause and not self._group else ()
+
+
+class _AfterPause(_ScriptedBackend):
+    """Surface a group only from a status read made after the researcher paused."""
+
+    paused = False
+    report_running = False
+
+    def pause(self, *, session_id: str) -> tuple[BackendEvent, ...]:
+        del session_id
+        self.paused = True
+        return ()
+
+    def reconcile(
+        self, *, session_id: str, known_source_event_ids: frozenset[str]
+    ) -> tuple[BackendEvent, ...]:
+        del session_id, known_source_event_ids
+        if not self.paused or self._group:
+            return ()
+        running = (
+            (BackendLifecycleEvent(lifecycle=BackendLifecycle.RUNNING, source_event_id="late"),)
+            if self.report_running
+            else ()
+        )
+        return (*running, *self._propose())
+
+
+@pytest.mark.parametrize("report_running", [False, True], ids=["request", "running-then-request"])
+def test_a_status_read_after_a_pause_never_decides_for_the_researcher(
+    tmp_path: Path, report_running: bool
+) -> None:
+    """Neither a request nor a run state the backend reports after the pause ends it."""
+    backend = _AfterPause((_action("read-1", "read"),))
+    backend.report_running = report_running
+    service = _service(tmp_path, backend, mode="review-changes")
+    service.handle(_command(CommandKind.PAUSE, "pause"))
+    assert _pending(service) == ()
+
+    service.reconcile()
+
+    assert _pending(service) == ("read-1",)
+    assert backend.executed == []
+    assert _approvals(service) == []
+    service.reconcile()
+    assert backend.executed == []
+    service.close()
+
+
+type _Entry = tuple[EventKind, dict[str, JsonValue]]
+
+
+def test_only_the_researcher_ends_a_pause() -> None:
+    def events(*entries: tuple[EventKind, dict[str, JsonValue]]) -> tuple[SessionEvent, ...]:
+        return tuple(
+            SessionEvent(
+                event_id=f"event-{sequence}",
+                session_id=_SESSION,
+                sequence=sequence,
+                kind=kind,
+                occurred_at="2026-01-01T00:00:00Z",
+                payload=payload,
+            )
+            for sequence, (kind, payload) in enumerate(entries)
+        )
+
+    paused: _Entry = (EventKind.SESSION_PAUSED, {})
+    running: _Entry = (EventKind.AGENT_LIFECYCLE_UPDATED, {"status": "running"})
+
+    def researcher(kind: str, actor: str = "human") -> tuple[EventKind, dict[str, JsonValue]]:
+        return (EventKind.COMMAND_RECEIVED, {"actor_id": actor, "command_kind": kind})
+
+    assert session_activity(events(paused, running)).paused
+    assert session_activity(events(paused, researcher("approve", AUTOMATIC_REVIEW_ACTOR))).paused
+    assert session_activity(events(paused, researcher("replay"), running)).paused
+    resumed: _Entry = (EventKind.SESSION_RESUMED, {})
+    assert not session_activity(events(paused, resumed)).paused
+    for kind in ("chat", "resume", "approve", "workflow"):
+        assert not session_activity(events(paused, researcher(kind), running)).paused
+
+
+@pytest.mark.parametrize("surfaced_by", ["status-read", "pause"])
+def test_no_automatic_decision_follows_a_pause(tmp_path: Path, surfaced_by: str) -> None:
+    backend = _Surfacing((_action("read-1", "read"),))
+    backend.on_pause = surfaced_by == "pause"
+    service = _service(tmp_path, backend, mode="review-changes")
+
+    service.handle(_command(CommandKind.PAUSE, "pause"))
+
+    assert backend.executed == []
+    assert _approvals(service) == []
+    assert _pending(service) == ("read-1",)
+    service.reconcile()
+    service.handle(_command(CommandKind.CHAT, "later", prompt="carry on"))
+    assert backend.executed == []
+    service.close()
+
+
+def test_no_automatic_decision_follows_a_rejected_steering_message(tmp_path: Path) -> None:
+    backend = _Surfacing((_action("read-1", "read"),))
+    service = _service(tmp_path, backend, mode="review-changes")
+
+    rejected = service.handle(_command(CommandKind.CHAT, "stop", prompt="stop, read nothing"))
+
+    assert any(event.kind == EventKind.ERROR_RECORDED for event in rejected.events)
+    assert backend.executed == []
+    assert _approvals(service) == []
+    assert _pending(service) == ("read-1",)
+    service.close()
+
+
+def test_no_automatic_decision_follows_a_denial(tmp_path: Path) -> None:
+    class _Persistent(_ScriptedBackend):
+        def resolve_confirmation(
+            self, *, session_id: str, action_group_id: str, approved: bool
+        ) -> tuple[BackendEvent, ...]:
+            resolved = super().resolve_confirmation(
+                session_id=session_id, action_group_id=action_group_id, approved=approved
+            )
+            return resolved if approved else (*resolved, *self._propose())
+
+    backend = _Persistent((_action("run-1", "workspace"),), (_action("read-1", "read"),))
+    service = _service(tmp_path, backend, mode="review-changes")
+    _chat(service)
+    group = service.backend.pending_action_group(session_id=_SESSION)
+    assert group is not None
+
+    service.handle(
+        _command(CommandKind.DENY, "deny", target_type="action-set", target_id=group.group_id)
+    )
+
+    assert backend.executed == []
+    assert [event.payload["actor_id"] for event in _approvals(service)] == ["human"]
+    assert _pending(service) == ("read-1",)
+    service.close()
+
+
+def test_a_revoked_worker_is_not_a_sandbox_and_cannot_run_on_another_backend(
+    tmp_path: Path,
+) -> None:
+    project_id = uuid4()
+    first = _service(tmp_path, _ScriptedBackend(), sandboxed=True, project_id=project_id)
+    attempt = first.worker_attempt()
+    assert attempt is not None
+    first.fence_worker_attempt(attempt_id=attempt.intent.attempt_id)
+    assert first.action_review_mode() == "review-all"
+    first.record_worker_revocation(
+        WorkerRevocationEvidence(
+            attempt_id=attempt.intent.attempt_id,
+            sandbox_id="synthetic-sandbox",
+            observer_id="synthetic-control-plane",
+            evidence_sha256="d" * 64,
+            outcome="revoked",
+        )
+    )
+    first.close()
+
+    host = _ScriptedBackend((_action("run-1", "workspace"),))
+    restored = _service(tmp_path, host, project_id=project_id)
+    restored_attempt = restored.worker_attempt()
+    assert restored_attempt is not None
+    assert restored_attempt.phase == "revoked"
+    assert restored.action_review_mode() == "review-all"
+
+    result = restored.handle(_command(CommandKind.CHAT, prompt="analyze the synthetic cohort"))
+
+    assert len(host._script) == 1
+    assert host.executed == []
+    assert result.events[-1].kind == EventKind.ERROR_RECORDED
+    assert result.events[-1].payload["affects_lifecycle"] is False
+    assert not any(
+        event.kind in {EventKind.USER_MESSAGE_RECORDED, EventKind.TOOL_CALL_PROPOSED}
+        for event in result.events
+    )
+    # The session is refused, not stuck: reads and later commands still complete.
+    restored.reconcile()
+    assert not restored.store.unresolved_command_ids()
+    restored.handle(_command(CommandKind.CHAT, "again", prompt="continue"))
+    assert len(host._script) == 1
+
+    # An owner that can launch a replacement admits the command, still without a sandbox.
+    restored.admit_worker_replacement()
+    assert restored.action_review_mode() == "review-all"
+    restored.close()
+
+
+def test_recovery_reapplies_the_rule_to_an_interrupted_automatic_decision(tmp_path: Path) -> None:
+    selection: list[str | None] = ["review-changes"]
+    backend = _ScriptedBackend((_action("read-1", "read"),))
+    service = _service(tmp_path, backend, mode=lambda: selection[0])
+
+    class _Interrupted(BaseException):
+        pass
+
+    def interrupt() -> None:
+        raise _Interrupted
+
+    backend.before_resolution = interrupt
+    with pytest.raises(_Interrupted):
+        _chat(service)
+    (approval,) = _approvals(service)
+    assert approval.payload["actor_id"] == AUTOMATIC_REVIEW_ACTOR
+    assert service.store.unresolved_command_ids()
+    service.close()
+
+    # The next launch starts without the in-memory selection, so the rule no longer holds.
+    backend.before_resolution = lambda: None
+    selection[0] = None
+    restarted = SessionService.local_default(
+        tmp_path,
+        session_id=_SESSION,
+        backend=backend,
+        policy_profile=_policy(),
+        env={},
+        action_review_mode=lambda: selection[0],
+        credentials_isolated=lambda: True,
+    )
+    restarted.reconcile()
+
+    assert backend.executed == []
+    assert _pending(restarted) == ("read-1",)
+    assert len(_not_applied(restarted)) == 1
+    assert not restarted.store.unresolved_command_ids()
+    assert not any(
+        event.kind == EventKind.ERROR_RECORDED and event.payload.get("code")
+        for event in restarted.replay_events()
+    )
+    restarted.close()
+
+
+def test_recovery_completes_an_interrupted_automatic_decision_the_rule_still_allows(
+    tmp_path: Path,
+) -> None:
     backend = _ScriptedBackend((_action("read-1", "read"),))
     service = _service(tmp_path, backend, mode="review-changes")
 
-    def unavailable(_event: SessionEvent, *, required: bool = False) -> tuple[SessionEvent, ...]:
-        del required
-        raise RuntimeError("records are unavailable")
+    class _Interrupted(BaseException):
+        pass
 
-    service._checkpoint_boundary = unavailable  # type: ignore[method-assign, assignment]
+    def interrupt() -> None:
+        raise _Interrupted
 
-    with pytest.raises(RuntimeError, match="records are unavailable"):
+    backend.before_resolution = interrupt
+    with pytest.raises(_Interrupted):
         _chat(service)
-    assert backend.executed == []
+    backend.before_resolution = lambda: None
+
+    service.reconcile()
+
+    assert backend.executed == ["read-1"]
+    assert _not_applied(service) == []
+    service.close()
 
 
 def test_no_interface_command_can_claim_the_gateway_actor(tmp_path: Path) -> None:

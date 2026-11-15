@@ -2859,7 +2859,7 @@ def test_review_mode_flag_selects_through_the_gateway_or_stops_with_its_reason(
     from heartwood.cli import _select_launch_review_mode
 
     project = ProjectContext(tmp_path)
-    gateway = RealSessionGateway(project=project, env={})
+    gateway = RealSessionGateway(project=project, env={}, backend_id="deterministic")
     _select_launch_review_mode(gateway, None)
     assert gateway.action_settings()["review_mode"] == "review-all"
     _select_launch_review_mode(gateway, "review-changes")

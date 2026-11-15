@@ -235,10 +235,10 @@ def _project_state_v3_to_v4(payload: Mapping[str, object]) -> JsonObject:
 
 
 def _project_config_v1_to_v2(payload: Mapping[str, object]) -> JsonObject:
-    """Rename review settings; a migrated project keeps complete review as its ceiling.
+    """Drop the retired confirmation settings; they recorded no choice among review modes.
 
-    The only effective earlier mode reviewed every action, so it records no
-    researcher selection and the migrated project uses its deployment default.
+    The only effective earlier mode reviewed every action, so neither its selection nor
+    its allowed list narrows the migrated project: the deployment ceiling and default apply.
     """
     migrated = dict(payload)
     migrated["schema_version"] = PROJECT_CONFIG_VERSION
@@ -259,12 +259,9 @@ def _project_config_v1_to_v2(payload: Mapping[str, object]) -> JsonObject:
         ) <= {"always-confirm", "confirm-risky"}:
             raise MigrationError("project configuration has unsupported action modes")
         migrated["policy"] = {
-            **{
-                key: value
-                for key, value in policy.items()
-                if key != "allowed_action_confirmation_modes"
-            },
-            "allowed_action_review_modes": ["review-all"],
+            key: value
+            for key, value in policy.items()
+            if key != "allowed_action_confirmation_modes"
         }
     return migrated
 

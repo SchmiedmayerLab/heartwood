@@ -78,6 +78,7 @@ from heartwood.core_adapter.reproduction_journal import (
     prepare_reproduction,
     reproduction_records,
 )
+from heartwood.core_adapter.session_activity import session_activity
 from heartwood.core_adapter.worker_attempts import (
     WorkerAttemptError,
     WorkerAttemptIntent,
@@ -129,8 +130,23 @@ class _ApprovalIntent:
     tool_call_ids: tuple[str, ...]
 
 
+_REVIEW_NOT_APPLIED = "not-applied"
+_COMMANDS_REVIEW_MAY_FOLLOW = frozenset(
+    {
+        CommandKind.CHAT.value,
+        CommandKind.RESUME.value,
+        CommandKind.APPROVE.value,
+        CommandKind.WORKFLOW.value,
+    }
+)
+
+
 class CommandConflictError(ValueError):
     """Raised when a command identifier is reused with different content."""
+
+
+# Reads repeated because the journal advanced under them before the observation is dropped.
+_BACKEND_READ_ATTEMPTS = 3
 
 
 class SessionService:
@@ -162,10 +178,17 @@ class SessionService:
         self.policy = ModelPolicyEngine(self.policy_profile)
         self.env = os.environ if env is None else env
         self.clock: Callable[[], str] = _utc_now if clock is None else clock
+        # Lock order, outermost first: the gateway state lock, the worker control lock,
+        # the command lock, the worker lease lock, then the stream lock an event or token
+        # sink takes. A worker response budget takes its own lock and then the lease lock.
+        # A backend read after the first holds none of them, and fencing a lease needs
+        # only the lease lock.
         self._command_lock = RLock()
         self._worker_control_lock = RLock()
         self._worker_control_active = False
         self._closed = False
+        self._closing = False
+        self._backend_opened = False
         self._event_sink = event_sink or (lambda _events: None)
         self._token_sink = token_sink or (lambda _delta: None)
         self._known_source_event_ids: set[str] | None = None
@@ -179,6 +202,8 @@ class SessionService:
         self._worker_project_id = worker_project_id
         self._worker_lease: WorkerAttemptLease | None = None
         self._worker_attempt_created = False
+        self._worker_replacement_admitted = False
+        self._decision_dispatched = False
         self.backend.bind_runtime(
             event_sink=self._accept_unbound_backend_events,
             token_sink=self._accept_unbound_backend_token,
@@ -274,20 +299,20 @@ class SessionService:
             raise CommandConflictError("Checkpoint bindings must be computed by the session owner")
         if command.actor_id == AUTOMATIC_REVIEW_ACTOR:
             raise CommandConflictError("The gateway actor is reserved for automatic review")
-        with self._command_lock:
-            if self._closed:
-                raise RuntimeError("Session service is closed")
-            self.store.acquire_writer()
-            self._recover_pending_commit_locked()
-            command_kind = _kind_value(command.kind)
-            reconciled = (
-                ()
-                if command_kind == CommandKind.AUDIT_EXPORT.value or not reconcile_before_command
-                else (
-                    *self._reconcile_locked(),
-                    *self._recover_approval_commands_locked(command),
-                )
-            )
+        command_kind = _kind_value(command.kind)
+        reconciling = command_kind != CommandKind.AUDIT_EXPORT.value and reconcile_before_command
+        with self._backend_reconciled(lambda: reconciling) as observed:
+            if reconciling:
+                reconciled = (*observed, *self._recover_approval_commands_locked(command))
+            elif (
+                command_kind == CommandKind.APPROVE.value
+                and command.command_id in self.store.unresolved_command_ids()
+            ):
+                # An exact retry resumes its retained outside authorization even when the
+                # caller has already reconciled, because reads never dispatch it.
+                reconciled = self._recover_external_approvals_locked(command)
+            else:
+                reconciled = ()
             if reconciled:
                 self._event_sink(reconciled)
             persisted = self.replay_events()
@@ -297,7 +322,8 @@ class SessionService:
                 return _command_result_from_receipt(persisted, command, command_hash, record)
             unresolved = self.store.unresolved_command_ids()
             undispatched = self._undispatched_authorizations(persisted) if unresolved else {}
-            if unresolved and unresolved[0] in undispatched:
+            withdrawal = bool(unresolved) and unresolved[0] in undispatched
+            if withdrawal:
                 # Only its own approval may dispatch a retained authorization, and only
                 # its denial may pass it; any other command leaves it untouched.
                 if (
@@ -325,9 +351,18 @@ class SessionService:
                     last_sequence=duplicate.events[-1].sequence,
                 )
                 return duplicate
-            if command_kind not in {CommandKind.REPLAY.value, CommandKind.AUDIT_EXPORT.value}:
+            # A withdrawal sends nothing, so it depends on neither an admitted worker
+            # nor a known execution outcome.
+            if not withdrawal and command_kind not in {
+                CommandKind.REPLAY.value,
+                CommandKind.AUDIT_EXPORT.value,
+            }:
                 unavailable_reason = unavailable_reason or self._worker_admission_error_locked()
-            if unavailable_reason is None and command_kind != CommandKind.AUDIT_EXPORT.value:
+            if (
+                not withdrawal
+                and unavailable_reason is None
+                and command_kind != CommandKind.AUDIT_EXPORT.value
+            ):
                 fatal_error = next(
                     (
                         event
@@ -360,11 +395,14 @@ class SessionService:
                 first_sequence=first_sequence,
                 last_sequence=result.events[-1].sequence,
             )
-            if unavailable_reason is None and command_kind not in {
-                CommandKind.REPLAY.value,
-                CommandKind.AUDIT_EXPORT.value,
-            }:
-                automatic = self._review_automatically_locked((*reconciled, *result.events))
+            # Only a command that lets the agent proceed, and was not refused, can be followed
+            # by a gateway decision; a request the researcher has not seen acted on waits.
+            if (
+                unavailable_reason is None
+                and command_kind in _COMMANDS_REVIEW_MAY_FOLLOW
+                and not any(event.kind == EventKind.ERROR_RECORDED for event in result.events)
+            ):
+                automatic = self._review_automatically_locked(result.events)
                 if automatic:
                     self._event_sink(automatic)
             return result
@@ -404,16 +442,55 @@ class SessionService:
                 command_hash=command_hash,
                 first_sequence=first_sequence,
             )
-            events = self._handle_new_command(command, unavailable_reason=None, automatic=True)
+            self._decision_dispatched = False
+            try:
+                requested = self._handle_new_command(
+                    command, unavailable_reason=None, automatic=True
+                ).events
+            except Exception:
+                # The operation that journaled the request has already succeeded. A decision the
+                # backend never received is withdrawn and the group waits for the researcher; once
+                # the decision was handed to the backend, a run may have started even if the group
+                # still looks pending, so the outcome is unknown and never "not applied".
+                requested = (
+                    self._record_review_not_applied(command.command_id, group.group_id)
+                    if not self._decision_dispatched
+                    else self._record_unknown_approval_outcome(
+                        _ApprovalIntent(
+                            command_id=command.command_id,
+                            group_id=group.group_id,
+                            approved=True,
+                            tool_call_ids=tuple(action.tool_call_id for action in group.actions),
+                        )
+                    ),
+                )
+                emitted.extend(
+                    event
+                    for event in self.replay_events()
+                    if first_sequence <= event.sequence < requested[0].sequence
+                )
             self.store.complete_command(
                 command_id=command.command_id,
                 command_hash=command_hash,
                 first_sequence=first_sequence,
-                last_sequence=events.events[-1].sequence,
+                last_sequence=requested[-1].sequence,
             )
-            requested = events.events
             emitted.extend(requested)
         return tuple(emitted)
+
+    def _record_review_not_applied(self, command_id: str, group_id: str) -> SessionEvent:
+        """Withdraw a gateway decision; its recorded approval then authorizes nothing."""
+        return self._record_event(
+            EventKind.ERROR_RECORDED,
+            {
+                "command": CommandKind.APPROVE.value,
+                "command_id": command_id,
+                "group_id": group_id,
+                "automatic_review": _REVIEW_NOT_APPLIED,
+                "reason": "automatic review was not applied; the action set waits for review",
+                "affects_lifecycle": False,
+            },
+        )
 
     def _automatic_review_locked(self, group: PendingActionGroup) -> AutomaticReview | None:
         """Apply the review rules to the backend's current group; any doubt asks the researcher."""
@@ -422,11 +499,8 @@ class SessionService:
             if (
                 self._worker_admission_error_locked() is not None
                 or not self._pending_proposal_is_durable(group)
-                or any(
-                    event.kind == EventKind.ERROR_RECORDED
-                    and backend_error_is_fatal(event.payload.get("code"))
-                    for event in events
-                )
+                # A pause, a stopped run or an unrecoverable outcome is the researcher's to end.
+                or not session_activity(events).awaits_decision
                 or any(
                     outside.proposal.group_id == group.group_id
                     for outside in external_action_records(events).values()
@@ -436,6 +510,15 @@ class SessionService:
                     for release in external_result_records(events).values()
                 )
                 or any(self._reserved_external_identity(action) for action in group.actions)
+                # A tool bound to an outside service is never contained, whatever type the
+                # worker reports for the action.
+                or (
+                    self._external_actions is not None
+                    and any(
+                        action.tool_name in self._external_actions.tool_names
+                        for action in group.actions
+                    )
+                )
             ):
                 return None
             sandboxed = self._sandboxed_locked()
@@ -453,13 +536,21 @@ class SessionService:
     def _sandboxed_locked(self) -> bool:
         """Return whether this session's actions run in its admitted sandbox worker."""
         self._known_source_event_ids_locked()
-        return self._worker_record is not None and self._worker_admission_error_locked() is None
+        record, lease = self._worker_record, self._worker_lease
+        return (
+            record is not None
+            and record.phase == "active"
+            and lease is not None
+            and lease.active
+            and lease.intent == record.intent
+            and self._worker_admission_error_locked() is None
+        )
 
     def _review_mode_locked(self, *, sandboxed: bool) -> ActionReviewMode:
         """Return the mode in force; an unreadable selection reviews every action."""
         try:
             selected = None if self._selected_review_mode is None else self._selected_review_mode()
-            isolated = self._credentials_isolated is None or self._credentials_isolated()
+            isolated = self._credentials_isolated is not None and self._credentials_isolated()
         except Exception:
             return "review-all"
         return effective_review_mode(
@@ -572,23 +663,79 @@ class SessionService:
 
     def reconcile(self) -> tuple[SessionEvent, ...]:
         """Commit OpenHands state not yet represented in the durable session."""
-        with self._command_lock:
-            if self._closed:
-                raise RuntimeError("Session service is closed")
-            self.store.acquire_writer()
-            self._recover_pending_commit_locked()
-            if self._has_failed_approval_recovery_locked():
-                events = self._recover_approval_commands_locked()
-            else:
-                events = (
-                    *self._reconcile_locked(),
-                    *self._recover_approval_commands_locked(),
-                )
+        recovery_failed = False
+
+        def readable() -> bool:
+            nonlocal recovery_failed
+            recovery_failed = self._has_failed_approval_recovery_locked()
+            return not recovery_failed
+
+        with self._backend_reconciled(readable) as observed:
+            events = (*observed, *self._recover_approval_commands_locked())
+            if not recovery_failed:
                 # A status read can journal a request before the backend's own callback does.
                 events = (*events, *self._review_automatically_locked(events))
         if events:
             self._event_sink(events)
         return events
+
+    @property
+    def backend_opened(self) -> bool:
+        """Return whether the first backend read, which may launch a worker, has finished."""
+        return self._backend_opened
+
+    @contextmanager
+    def _backend_reconciled(
+        self, readable: Callable[[], bool]
+    ) -> Iterator[tuple[SessionEvent, ...]]:
+        """Hold the command lock with the backend's unjournaled state committed.
+
+        A remote worker answers a backend read, so the read runs before the lock is
+        taken and no command, fencing or revocation waits for it. Its observation is
+        journaled only if the journal head and the worker lease are still those it was
+        read against, because an interleaved command, callback or lifecycle change can
+        make observed state stale; source-event identities deduplicate the rest. The
+        first read opens the backend, which can launch a worker and journal its attempt
+        through this service, so that read alone runs under the lock.
+        """
+        observed: tuple[BackendEvent, ...] = ()
+        observed_head: int | None = None
+        observed_lease: WorkerAttemptLease | None = None
+        attempts = _BACKEND_READ_ATTEMPTS
+        while True:
+            with self._command_lock:
+                if self._closed:
+                    raise RuntimeError("Session service is closed")
+                self.store.acquire_writer()
+                self._recover_pending_commit_locked()
+                head, lease = self.store.next_sequence(), self._worker_lease
+                current = head == observed_head and lease is observed_lease
+                if (
+                    self._closing  # A closing backend is not read, and what it answered is dropped.
+                    or not (current or readable())
+                    or self._worker_admission_error_locked() is not None
+                ):
+                    yield ()
+                    return
+                if not current:
+                    if self._backend_opened and not attempts:
+                        # The writers that keep advancing the journal own what they recorded.
+                        yield ()
+                        return
+                    known = frozenset(self._known_source_event_ids_locked())
+                    if not self._backend_opened:
+                        observed = self.backend.reconcile(
+                            session_id=self.store.session_id, known_source_event_ids=known
+                        )
+                        self._backend_opened = current = True
+                if current:
+                    yield tuple(self._translate_backend_events(observed, live=False))
+                    return
+            attempts -= 1
+            observed = self.backend.reconcile(
+                session_id=self.store.session_id, known_source_event_ids=known
+            )
+            observed_head, observed_lease = head, lease
 
     def close(self) -> None:
         """Release backend resources."""
@@ -596,7 +743,12 @@ class SessionService:
             with self._command_lock:
                 if self._closed:
                     return
-            self.backend.close()
+                self._closing = True
+            try:
+                self.backend.close()
+            except BaseException:
+                self._closing = False
+                raise
             with self._command_lock:
                 try:
                     if self._checkpoint_evidence is not None and self.replay_events():
@@ -1222,6 +1374,8 @@ class SessionService:
     ) -> WorkerRevocationEvidence:
         """Fence before outside revocation and retain only matching observer evidence."""
         with self._control_worker():
+            if self._worker_lease is not None:
+                self._worker_lease.fence()
             current = self.worker_attempt()
             if current is None:
                 raise WorkerAttemptError("no worker attempt exists")
@@ -1313,6 +1467,10 @@ class SessionService:
 
     def fence_worker_attempt(self, *, attempt_id: UUID) -> None:
         """Close local admission before recording the required outside revocation."""
+        lease = self._worker_lease
+        if lease is not None and lease.intent.attempt_id == attempt_id:
+            # Admission closes at once; only its journal record waits for a command in flight.
+            lease.fence()
         with self._command_lock:
             self._require_worker_owner_locked()
             current = self._require_worker_attempt_locked(attempt_id)
@@ -1364,9 +1522,14 @@ class SessionService:
             return None
         lease = self._worker_lease
         if current.phase == "revoked" and lease is None and not self._worker_attempt_created:
-            # Verified revocation lets this owner launch one replacement attempt, provided no
-            # retained run or review still depends on the revoked worker's conversation.
-            reason = self._worker_replacement_blocker_locked()
+            # Verified revocation lets an owner that launches workers start one replacement
+            # attempt, provided no retained run or review still depends on the revoked worker's
+            # conversation. No other owner may run this session's turns on its own backend.
+            reason = (
+                self._worker_replacement_blocker_locked()
+                if self._worker_replacement_admitted
+                else "the session's worker was revoked and this gateway launches no replacement"
+            )
             return None if reason is None else f"{reason}; continue in a new session"
         if (
             current.phase != "active"
@@ -1377,6 +1540,11 @@ class SessionService:
         ):
             return "worker attempt requires trusted launcher reconciliation"
         return None
+
+    def admit_worker_replacement(self) -> None:
+        """Declare that this owner's backend reaches a worker only through `launch_worker`."""
+        with self._command_lock:
+            self._worker_replacement_admitted = True
 
     def _worker_replacement_blocker_locked(self) -> str | None:
         events = self.replay_events()
@@ -1713,6 +1881,8 @@ class SessionService:
             )
         )
         events.extend(self._checkpoint_boundary(events[-1]))
+        # From here the backend may act on the decision, whatever its state looks like later.
+        self._decision_dispatched = True
         backend_events = self.backend.resolve_confirmation(
             session_id=command.session_id,
             action_group_id=action_group_id,
@@ -2052,33 +2222,30 @@ class SessionService:
                 return
             self.store.acquire_writer()
             self._recover_pending_commit_locked()
-            if self._worker_admission_error_locked() is not None:
+            if self._worker_admission_error_locked() is not None or (
+                # A session with a worker record journals callbacks only under a live lease.
+                self._worker_record is not None and self._worker_lease is None
+            ):
                 return
             translated = self._translate_backend_events(stream)
             events = (*translated, *self._review_automatically_locked(translated))
         if events:
             self._event_sink(events)
 
-    def _reconcile_locked(self) -> tuple[SessionEvent, ...]:
-        if self._worker_admission_error_locked() is not None:
-            return ()
-        known_source_event_ids = self._known_source_event_ids_locked()
-        return tuple(
-            self._translate_backend_events(
-                self.backend.reconcile(
-                    session_id=self.store.session_id,
-                    known_source_event_ids=frozenset(known_source_event_ids),
-                ),
-                live=False,
-            )
-        )
-
     def _approval_recorded(self, group_id: str) -> bool:
+        events = self.replay_events()
+        withdrawn = {
+            event.payload.get("command_id")
+            for event in events
+            if event.kind == EventKind.ERROR_RECORDED
+            and event.payload.get("automatic_review") == _REVIEW_NOT_APPLIED
+        }
         return any(
             event.kind == EventKind.APPROVAL_RECORDED
             and event.payload.get("group_id") == group_id
             and event.payload.get("decision") == "approved"
-            for event in self.replay_events()
+            and event.payload.get("command_id") not in withdrawn
+            for event in events
         )
 
     def _known_source_event_ids_locked(self) -> set[str]:
@@ -2128,13 +2295,14 @@ class SessionService:
         )
 
     def _recover_external_approvals_locked(
-        self, *, dispatch_pending: bool = False, command: SessionCommand | None = None
+        self, command: SessionCommand | None = None
     ) -> tuple[SessionEvent, ...]:
         """Resume only proven pre-dispatch decisions; never repeat uncertain effects.
 
-        While a command is being handled, only an exact retry of the original approval
-        resumes its authorization. An authorization that outlived its validity is
-        recorded as expired instead of blocking the session.
+        Only the exact retry of the original approval, given as the command being
+        handled, resumes its authorization; reads and every other command leave it
+        undispatched. An authorization that outlived its validity is recorded as
+        expired instead of blocking the session.
         """
         unresolved = self.store.unresolved_command_ids()
         if not unresolved:
@@ -2168,12 +2336,10 @@ class SessionService:
                 recovered.extend((boundary, *self._checkpoint_boundary(boundary)))
             elif decided.phase == "authorized":
                 if (
-                    not dispatch_pending
+                    command is None
+                    or command.command_id != command_id
+                    or _command_hash(command) != digest
                     or self._worker_admission_error_locked() is not None
-                    or (
-                        command is not None
-                        and (command.command_id != command_id or _command_hash(command) != digest)
-                    )
                 ):
                     continue
                 assert decided.decision is not None
@@ -2215,9 +2381,7 @@ class SessionService:
         self, command: SessionCommand | None = None
     ) -> tuple[SessionEvent, ...]:
         """Finish approvals whose retained state makes recovery unambiguous."""
-        recovered = list(
-            self._recover_external_approvals_locked(dispatch_pending=True, command=command)
-        )
+        recovered = list(self._recover_external_approvals_locked(command))
         if self._worker_admission_error_locked() is not None:
             return tuple(recovered)
         for command_id in self.store.unresolved_command_ids():
@@ -2230,12 +2394,20 @@ class SessionService:
                 continue
             if not _approval_intent_finished(events, intent):
                 pending_group = self.backend.pending_action_group(session_id=self.store.session_id)
-                if (
+                matches = (
                     pending_group is not None
                     and pending_group.group_id == intent.group_id
                     and tuple(action.tool_call_id for action in pending_group.actions)
                     == intent.tool_call_ids
+                )
+                if (
+                    matches
+                    and pending_group is not None
+                    and intent.command_id == f"automatic-review-{intent.group_id}"
                 ):
+                    # The rule is applied again under the mode and state now in force.
+                    self._recover_automatic_review_locked(intent, pending_group, recovered)
+                elif matches:
                     boundary = next(
                         event
                         for event in reversed(events)
@@ -2270,6 +2442,31 @@ class SessionService:
                 last_sequence=last_sequence,
             )
         return tuple(recovered)
+
+    def _recover_automatic_review_locked(
+        self,
+        intent: _ApprovalIntent,
+        group: PendingActionGroup,
+        recovered: list[SessionEvent],
+    ) -> None:
+        """Finish an interrupted gateway decision only if its rule still allows the group."""
+        try:
+            if self._automatic_review_locked(group) is None:
+                raise SessionRecoveryError("the review rule no longer allows the action set")
+            boundary = next(
+                event
+                for event in reversed(self.replay_events())
+                if event.kind == EventKind.APPROVAL_RECORDED
+                and event.payload.get("command_id") == intent.command_id
+            )
+            recovered.extend(self._checkpoint_boundary(boundary))
+        except Exception:
+            recovered.append(self._record_review_not_applied(intent.command_id, intent.group_id))
+            return
+        backend_events = self.backend.resolve_confirmation(
+            session_id=self.store.session_id, action_group_id=intent.group_id, approved=True
+        )
+        recovered.extend(self._translate_backend_events(backend_events))
 
     def _record_unknown_approval_outcome(self, intent: _ApprovalIntent) -> SessionEvent:
         return self._record_event(
@@ -2829,7 +3026,16 @@ def _approval_intent_finished(
     events: tuple[SessionEvent, ...],
     intent: _ApprovalIntent,
 ) -> bool:
-    return _approval_intent_resolved(events, intent) or _approval_intent_failed(events, intent)
+    return (
+        _approval_intent_resolved(events, intent)
+        or _approval_intent_failed(events, intent)
+        or any(
+            event.kind == EventKind.ERROR_RECORDED
+            and event.payload.get("automatic_review") == _REVIEW_NOT_APPLIED
+            and event.payload.get("command_id") == intent.command_id
+            for event in events
+        )
+    )
 
 
 def _backend_confirmation_resolved(

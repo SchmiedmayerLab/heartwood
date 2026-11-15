@@ -940,6 +940,34 @@ def project_session(
         elif kind == EventKind.SESSION_RESUMED.value:
             lifecycle_status = SessionLifecycle.RUNNING
             lifecycle_sequence = event.sequence
+        elif (
+            kind == EventKind.ERROR_RECORDED.value
+            and event.payload.get("automatic_review") == "not-applied"
+        ):
+            # A withdrawn gateway decision returns its action set to the researcher.
+            group_id = _string(event.payload.get("group_id"))
+            approval_group_decisions[group_id] = None
+            approval_group_resolutions.pop(group_id, None)
+            reported_resolutions.discard(group_id)
+            for tool_call_id in approval_group_actions.get(group_id, ()):
+                if (action := actions.get(tool_call_id)) is not None:
+                    actions[tool_call_id] = action.model_copy(
+                        update={
+                            "state": "awaiting-review",
+                            "decision": None,
+                            "automatic_rule": None,
+                            "updated_sequence": event.sequence,
+                        }
+                    )
+            lifecycle_status = SessionLifecycle.WAITING_FOR_CONFIRMATION
+            _append_message(
+                conversation,
+                event,
+                role="trace",
+                label="Approval",
+                content="Automatic review was not applied",
+                detail="The action set waits for your decision.",
+            )
         elif kind == EventKind.ERROR_RECORDED.value:
             error_code = _string(event.payload.get("code"))
             error_message = _error_detail(
