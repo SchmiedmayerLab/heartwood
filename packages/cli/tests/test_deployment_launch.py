@@ -90,6 +90,7 @@ def test_gateway_launch_uses_external_binding_or_fails_closed(
 def test_explicit_worker_selection_reaches_native_factory_without_local_fallback(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
     available: bool,
 ) -> None:
     from unittest.mock import Mock
@@ -138,7 +139,15 @@ def test_explicit_worker_selection_reaches_native_factory_without_local_fallback
     monkeypatch.setattr(
         "heartwood.gateway.worker_native.native_worker_plan_factory", native_factory
     )
+    reconciler = Mock(side_effect=AssertionError("No attempt was retained"))
+    native_reconciler = Mock(return_value=reconciler)
+    monkeypatch.setattr(
+        "heartwood.gateway.worker_native.native_worker_reconciler", native_reconciler
+    )
     monkeypatch.setattr("heartwood.cli.load_project_deployment", Mock(return_value=deployment))
+    monkeypatch.setattr(
+        "heartwood.cli.SessionGateway.reconcile_workers", lambda _gateway: ("session-unobserved",)
+    )
     monkeypatch.chdir(research)
     monkeypatch.setenv("HEARTWOOD_PLATFORM", "generic")
     web = tmp_path / "web"
@@ -149,6 +158,7 @@ def test_explicit_worker_selection_reaches_native_factory_without_local_fallback
         app = server.config.app
         assert isinstance(app, GatewayAsgiApp)
         assert app.gateway._worker_plan_factory is plan_factory
+        assert app.gateway._worker_reconciler is reconciler
         started.append(True)
         app.gateway.stop()
 
@@ -172,5 +182,9 @@ def test_explicit_worker_selection_reaches_native_factory_without_local_fallback
     assert result == (0 if available else 64)
     native_factory.assert_called_once_with(settings, project)
     plan_factory.assert_not_called()
+    if available:
+        native_reconciler.assert_called_once_with(settings, project)
+    reconciler.assert_not_called()
+    assert ("session-unobserved" in capsys.readouterr().err) is available
     assert started == ([True] if available else [])
     assert not (research / ".heartwood").exists()

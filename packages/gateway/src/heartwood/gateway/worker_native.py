@@ -12,7 +12,7 @@ import hashlib
 import json
 import secrets
 from collections.abc import Sequence
-from contextlib import ExitStack
+from contextlib import ExitStack, suppress
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from time import monotonic, sleep
@@ -40,6 +40,7 @@ from heartwood.gateway.worker_deployment import OpenShellWorkerDeployment
 from heartwood.gateway.worker_inputs import stage_worker_inputs
 from heartwood.gateway.worker_sessions import (
     WorkerPlanFactory,
+    WorkerReconciler,
     WorkerSessionPlan,
     WorkerSessionRequest,
 )
@@ -72,6 +73,93 @@ def native_worker_plan_factory(
     return prepare
 
 
+def native_worker_reconciler(
+    settings: OpenShellWorkerDeployment, project: ProjectContext
+) -> WorkerReconciler:
+    """Revoke attempts whose gateway process ended, through the operator's current deployment."""
+
+    def reconcile(record: WorkerAttemptRecord) -> WorkerRevocationEvidence:
+        if record.phase != "fenced" or record.intent.project_id != project.project_id:
+            raise WorkerAttemptError("native reconciliation requires this project's fenced attempt")
+        control = NativeWorkerControl(settings, project)
+        control.connect()
+        try:
+            volumes = WorkerVolumes(
+                _volume_settings(settings, project, record.intent.image_digest), record.intent
+            )
+            retained = record.runtime.sandbox_id if record.runtime else None
+            sandbox_id = _owned_sandbox(control, volumes, retained)
+            if sandbox_id is not None:
+                _delete_sandbox(control, volumes, sandbox_id)
+            volumes.remove_after_revocation()
+        finally:
+            control.close()
+        return _revocation_evidence(settings, record, sandbox_id or retained)
+
+    return reconcile
+
+
+def _volume_settings(
+    settings: OpenShellWorkerDeployment, project: ProjectContext, image_digest: str
+) -> WorkerVolumeSettings:
+    return WorkerVolumeSettings(
+        docker_cli=settings.docker_cli,
+        docker_host=settings.docker_host,
+        workspace=settings.workspace,
+        image_digest=image_digest,
+        protected_paths=(project.root, project.state_root, settings.native_config_home),
+    )
+
+
+def _owned_sandbox(
+    control: NativeWorkerControl, volumes: WorkerVolumes, sandbox_id: str | None
+) -> str | None:
+    """Resolve the uniquely named sandbox only while it carries the complete attempt identity."""
+    try:
+        observed = control.client.get(volumes.worker_name, workspace=control.settings.workspace)
+    except control.grpc.RpcError as error:
+        if error.code() != control.grpc.StatusCode.NOT_FOUND:
+            raise WorkerAttemptError("native worker absence was not observed") from None
+        return None
+    if dict(observed.labels) != volumes.labels or (
+        sandbox_id is not None and observed.id != sandbox_id
+    ):
+        raise WorkerAttemptError("native worker identity changed before revocation")
+    return str(observed.id)
+
+
+def _delete_sandbox(control: NativeWorkerControl, volumes: WorkerVolumes, sandbox_id: str) -> None:
+    workspace = control.settings.workspace
+    control.client.delete(volumes.worker_name, workspace=workspace, timeout_seconds=90)
+    control.client.wait_deleted(
+        volumes.worker_name,
+        workspace=workspace,
+        expected_sandbox_id=sandbox_id,
+        timeout_seconds=90,
+    )
+
+
+def _revocation_evidence(
+    settings: OpenShellWorkerDeployment, record: WorkerAttemptRecord, sandbox_id: str | None
+) -> WorkerRevocationEvidence:
+    payload = json.dumps(
+        {
+            "attempt": str(record.intent.attempt_id),
+            "sandbox": sandbox_id,
+            "worker_absent": True,
+            "projections_removed": True,
+        },
+        sort_keys=True,
+    )
+    return WorkerRevocationEvidence(
+        attempt_id=record.intent.attempt_id,
+        sandbox_id=sandbox_id,
+        observer_id="native-" + settings.gateway,
+        evidence_sha256=hashlib.sha256(payload.encode()).hexdigest(),
+        outcome="revoked" if sandbox_id is not None else "not-created",
+    )
+
+
 class _NativeWorkerAttempt:
     def __init__(
         self,
@@ -102,6 +190,7 @@ class _NativeWorkerAttempt:
         self._generation: str | None = None
         self._key = secrets.token_urlsafe(32)
         self._placeholder: str | None = None
+        self._connected = False
         try:
             parent = Path(
                 self._preparation.enter_context(
@@ -174,12 +263,7 @@ class _NativeWorkerAttempt:
                 raise WorkerAttemptError("native worker intent does not match preparation")
             self.control.connect()
             volumes = self._volumes = WorkerVolumes(
-                WorkerVolumeSettings(
-                    docker_cli=self.settings.docker_cli,
-                    docker_host=self.settings.docker_host,
-                    workspace=self.settings.workspace,
-                    image_digest=self.settings.image_digest,
-                ),
+                _volume_settings(self.settings, self.request.project, self.settings.image_digest),
                 intent,
             )
             try:
@@ -235,10 +319,28 @@ class _NativeWorkerAttempt:
                 sandbox_policy_sha256=self.settings.sandbox_policy_sha256,
             )
         except Exception:
+            self._stop_unadmitted()
             self._preparation.close()
             raise WorkerAttemptError(
                 "native worker launch requires outside reconciliation"
             ) from None
+
+    def _stop_sandbox(self) -> None:
+        assert self._volumes is not None
+        observed = _owned_sandbox(self.control, self._volumes, self._sandbox_id)
+        if observed is not None:
+            # Retained before deletion so an interrupted deletion is still recorded as revoked.
+            self._sandbox_id = observed
+            _delete_sandbox(self.control, self._volumes, observed)
+
+    def _stop_unadmitted(self) -> None:
+        # Revocation still observes absence and removes projections before releasing the attempt.
+        if self._volumes is not None and self.control.client is not None:
+            with suppress(Exception):
+                self._stop_sandbox()
+        if self._forward is not None:
+            with suppress(Exception):
+                self._forward.close()
 
     def _container_name(self) -> str:
         assert self._volumes is not None
@@ -354,9 +456,14 @@ print(json.dumps({'files':files,'uid':os.getuid(),
         raise WorkerAttemptError("native worker API did not become ready")
 
     def connect(self, lease: WorkerAttemptLease) -> WorkerConversationContext:
-        if lease.intent != self._intent or self._placeholder is None:
+        if lease.intent != self._intent or self._placeholder is None or self._connected:
             raise WorkerAttemptError("native worker connection does not match its launch")
-        lease.require_runtime_observation(self._observe)
+        self._connected = True
+        try:
+            lease.require_runtime_observation(self._observe)
+        except Exception:
+            self._stop_unadmitted()
+            raise
         prepare_openhands_sdk()
         self._workspace = AdmittedWorkerWorkspace(
             host=str(lease.runtime.endpoint),
@@ -383,50 +490,17 @@ print(json.dumps({'files':files,'uid':os.getuid(),
             or record.runtime.generation != self._generation
         ):
             raise WorkerAttemptError("retained runtime does not match native revocation")
+        if self._volumes is not None:
+            # The connected client keeps the identity admitted at launch, so stopping the
+            # worker does not wait for local cleanup or a repeated configuration check.
+            self._stop_sandbox()
         self._preparation.close()
         if self._forward is not None:
             self._forward.close()
         if self._volumes is not None:
             self.control.verify_configuration()
-            try:
-                observed = self.control.client.get(
-                    self._volumes.worker_name, workspace=self.settings.workspace
-                )
-            except self.control.grpc.RpcError as error:
-                if error.code() != self.control.grpc.StatusCode.NOT_FOUND:
-                    raise WorkerAttemptError("native worker absence was not observed") from None
-            else:
-                if dict(observed.labels) != self._volumes.labels or (
-                    self._sandbox_id is not None and observed.id != self._sandbox_id
-                ):
-                    raise WorkerAttemptError("native worker identity changed before revocation")
-                self._sandbox_id = observed.id
-                self.control.client.delete(
-                    self._volumes.worker_name, workspace=self.settings.workspace, timeout_seconds=90
-                )
-                self.control.client.wait_deleted(
-                    self._volumes.worker_name,
-                    workspace=self.settings.workspace,
-                    expected_sandbox_id=self._sandbox_id,
-                    timeout_seconds=90,
-                )
             self._volumes.remove_after_revocation()
         if self._workspace is not None:
             self._workspace.reset_client()
         self.control.close()
-        payload = json.dumps(
-            {
-                "attempt": str(record.intent.attempt_id),
-                "sandbox": self._sandbox_id,
-                "worker_absent": True,
-                "projections_removed": True,
-            },
-            sort_keys=True,
-        )
-        return WorkerRevocationEvidence(
-            attempt_id=record.intent.attempt_id,
-            sandbox_id=self._sandbox_id,
-            observer_id="native-" + self.settings.gateway,
-            evidence_sha256=hashlib.sha256(payload.encode()).hexdigest(),
-            outcome="revoked" if self._sandbox_id is not None else "not-created",
-        )
+        return _revocation_evidence(self.settings, record, self._sandbox_id)

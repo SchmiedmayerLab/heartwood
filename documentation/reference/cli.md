@@ -250,6 +250,8 @@ Provider attachments supply placeholders, not real inference secrets, to the wor
 The qualified inference endpoint must independently enforce approved models and tenant scope; this manifest does not add a model router or override provider authorization.
 Unavailable native dependencies, unsupported admission hooks, mismatched observed policy or failed outside revocation stop the operation without local fallback.
 Stopping an uncertain worker requires outside reconciliation; do not delete its records or release its writer merely because a client disconnected.
+Before serving, the gateway revokes worker attempts that an earlier gateway process for the same deployment left unrevoked.
+It prints one line for each session whose revocation could not be observed; that attempt stays fenced and is retried at the next start.
 
 The same manifest can select automatic checkpointing through an `evidence` table.
 Evidence configuration requires complete worker isolation and explicitly binds the records service, credential source, retention and approved production signer profile.

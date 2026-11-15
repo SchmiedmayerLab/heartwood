@@ -435,3 +435,152 @@ def test_outside_services_require_managed_worker_ownership(tmp_path: Path) -> No
             env={},
             external_actions_factory=lambda _: cast(ExternalActionAdapter, Mock()),
         )
+
+
+class Reconciler:
+    def __init__(self) -> None:
+        self.fail = False
+        self.records: list[WorkerAttemptRecord] = []
+
+    def __call__(self, record: WorkerAttemptRecord) -> WorkerRevocationEvidence:
+        self.records.append(record)
+        if self.fail:
+            raise TimeoutError("synthetic control plane outage")
+        return WorkerRevocationEvidence(
+            attempt_id=record.intent.attempt_id,
+            sandbox_id=record.runtime.sandbox_id if record.runtime else None,
+            observer_id="synthetic-outside-observer",
+            evidence_sha256="e" * 64,
+            outcome="revoked" if record.runtime else "not-created",
+        )
+
+
+def _end_without_revocation(gateway: SessionGateway) -> None:
+    """Stand in for a gateway process that ended: its ownership lapses, nothing is revoked."""
+    for service in gateway._services.values():
+        service.store.release_writer()
+    gateway._project_activity.close()
+
+
+def _successor(gateway: SessionGateway, reconciler: Reconciler | None) -> SessionGateway:
+    return SessionGateway(
+        project=gateway.project,
+        worker_plan_factory=Platform().prepare,
+        worker_reconciler=reconciler,
+        env={},
+    )
+
+
+@pytest.mark.parametrize("left", ["active", "fenced"])
+def test_new_gateway_reconciles_attempt_left_by_an_ended_process(
+    tmp_path: Path, left: Literal["active", "fenced"]
+) -> None:
+    platform = Platform()
+    gateway = configured_gateway(tmp_path, platform)
+    service = gateway._service("session-worker")
+    backend = service.backend
+    assert isinstance(backend, OpenHandsSdkBackend)
+    assert backend._worker_context is not None
+    if left == "active":
+        backend._worker_context()
+    else:
+        platform.fail = "connect"
+        with pytest.raises(RuntimeError):
+            backend._worker_context()
+    orphan = service.worker_attempt()
+    assert orphan is not None
+    assert orphan.phase == left
+    _end_without_revocation(gateway)
+    assert "revoke" not in platform.calls
+
+    reconciler = Reconciler()
+    successor = _successor(gateway, reconciler)
+    try:
+        assert successor.reconcile_workers() == ()
+        assert [record.phase for record in reconciler.records] == ["fenced"]
+        assert reconciler.records[0].intent == orphan.intent
+        assert reconciler.records[0].runtime == orphan.runtime
+        restored = successor._services["session-worker"]
+        revoked = restored.worker_attempt()
+        assert revoked is not None
+        assert revoked.phase == "revoked"
+        assert revoked.revocation is not None
+        assert revoked.revocation.attempt_id == orphan.intent.attempt_id
+        restored.audit_log.verify()
+        assert successor.reconcile_workers() == ()
+        assert len(reconciler.records) == 1
+        replacement = restored.prepare_worker_attempt(
+            image_digest=orphan.intent.image_digest,
+            sandbox_policy_sha256=orphan.intent.sandbox_policy_sha256,
+            input_manifest_sha256=orphan.intent.input_manifest_sha256,
+        )
+        assert replacement.attempt_id != orphan.intent.attempt_id
+        assert replacement.conversation_id == orphan.intent.conversation_id
+    finally:
+        successor.stop()
+
+
+def test_unobserved_reconciliation_keeps_the_attempt_fenced_until_retry(tmp_path: Path) -> None:
+    gateway = configured_gateway(tmp_path, Platform())
+    backend = gateway._service("session-worker").backend
+    assert isinstance(backend, OpenHandsSdkBackend)
+    assert backend._worker_context is not None
+    backend._worker_context()
+    _end_without_revocation(gateway)
+
+    reconciler = Reconciler()
+    reconciler.fail = True
+    successor = _successor(gateway, reconciler)
+    try:
+        assert successor.reconcile_workers() == ("session-worker",)
+        fenced = successor._services["session-worker"].worker_attempt()
+        assert fenced is not None
+        assert fenced.phase == "fenced"
+        reconciler.fail = False
+    finally:
+        successor.stop()
+    retry = _successor(gateway, reconciler)
+    try:
+        assert retry.reconcile_workers() == ()
+        revoked = retry._services["session-worker"].worker_attempt()
+        assert revoked is not None
+        assert revoked.phase == "revoked"
+    finally:
+        retry.stop()
+
+
+def test_reconciliation_leaves_this_gateways_own_worker_running(tmp_path: Path) -> None:
+    platform = Platform()
+    reconciler = Reconciler()
+    gateway = configured_gateway(tmp_path, platform)
+    gateway._worker_reconciler = reconciler
+    service = gateway._service("session-worker")
+    backend = service.backend
+    assert isinstance(backend, OpenHandsSdkBackend)
+    assert backend._worker_context is not None
+    context = backend._worker_context()
+    try:
+        assert gateway.reconcile_workers() == ()
+        assert reconciler.records == []
+        assert context.workspace.attempt.active
+    finally:
+        gateway.stop()
+
+
+def test_gateway_without_a_reconciler_leaves_retained_attempts_untouched(tmp_path: Path) -> None:
+    gateway = configured_gateway(tmp_path, Platform())
+    backend = gateway._service("session-worker").backend
+    assert isinstance(backend, OpenHandsSdkBackend)
+    assert backend._worker_context is not None
+    backend._worker_context()
+    _end_without_revocation(gateway)
+    successor = _successor(gateway, None)
+    try:
+        assert successor.reconcile_workers() == ()
+        assert successor._services == {}
+    finally:
+        successor.stop()
+    with pytest.raises(ValueError, match="requires managed workers"):
+        SessionGateway(
+            project=ProjectContext(tmp_path / "project"), env={}, worker_reconciler=Reconciler()
+        )
