@@ -37,11 +37,14 @@ class WorkerVolumeSettings(BaseModel):
     docker_host: str
     workspace: str = Field(pattern=r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
     image_digest: ImageDigest
+    protected_paths: tuple[Path, ...] = ()
 
     @model_validator(mode="after")
     def _explicit_locations(self) -> Self:
         if not self.docker_cli.is_absolute() or ".." in self.docker_cli.parts:
             raise ValueError("Docker executable must be an absolute canonical path")
+        if any(not path.is_absolute() or ".." in path.parts for path in self.protected_paths):
+            raise ValueError("protected locations must be absolute canonical paths")
         socket = urlsplit(self.docker_host)
         if (
             socket.scheme != "unix"
@@ -211,7 +214,7 @@ class WorkerVolumes:
         ]
 
     def inspect_worker(self, name: str) -> None:
-        """Observe the actual Docker image, network and projection mounts outside the worker."""
+        """Observe the actual Docker image, network, privilege and mounts outside the worker."""
         if not name.startswith(self._worker_prefix) or not name.removeprefix(self._worker_prefix):
             raise WorkerAttemptError("native worker name does not match the retained attempt")
         observed = self._inspect("container", name)
@@ -223,11 +226,25 @@ class WorkerVolumes:
             not isinstance(host, dict)
             or observed.get("Image") != self.settings.image_digest
             or host.get("NetworkMode") != "none"
+            or host.get("Privileged") is not False
         ):
-            raise WorkerAttemptError("native worker image or network does not match admission")
+            raise WorkerAttemptError(
+                "native worker image, network or privilege does not match admission"
+            )
         mounts = observed.get("Mounts")
         if not isinstance(mounts, list) or any(not isinstance(m, dict) for m in mounts):
             raise WorkerAttemptError("native worker projection mounts were not observed")
+        withheld = [
+            PurePosixPath(urlsplit(self.settings.docker_host).path),
+            *map(PurePosixPath, self.settings.protected_paths),
+        ]
+        for observed_mount in mounts:
+            source = observed_mount.get("Source")
+            if isinstance(source, str) and any(
+                path.is_relative_to(source) or PurePosixPath(source).is_relative_to(path)
+                for path in withheld
+            ):
+                raise WorkerAttemptError("native worker mount exposes a withheld host location")
         for mount, volume in self.names.items():
             target = PurePosixPath("/" + mount)
             matching = []
