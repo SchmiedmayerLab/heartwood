@@ -9,6 +9,8 @@
 
 [tool.uv]
 exclude-newer = "7 days"
+# Admit the Tornado security fix for GHSA-5cjw-f85j-cv6r; remove after 2026-11-17.
+exclude-newer-package = { tornado = "2026-11-10T00:00:00Z" }
 
 [tool.uv.workspace]
 members = [
