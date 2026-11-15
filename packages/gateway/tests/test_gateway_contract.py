@@ -219,6 +219,31 @@ def test_idle_wait_allows_pause_and_invalidates_a_replaced_service(
                 gateway.stop()
 
 
+def test_a_backend_report_after_a_pause_leaves_resume_available(tmp_path: Path) -> None:
+    gateway = _gateway(tmp_path)
+    try:
+        with gateway._state_lock:
+            gateway._project_activity.initialize()
+            backend = gateway._service("session-1").backend
+        assert isinstance(backend, DeterministicAgentBackend)
+        running = (BackendLifecycleEvent(lifecycle=BackendLifecycle.RUNNING),)
+        backend._event_sink(running)
+        gateway.handle(SessionCommand.model_validate_json(_command(CommandKind.PAUSE)))
+        # The worker reports itself running again, but only the researcher ends a pause.
+        backend._event_sink(running)
+        projection = gateway.session_projection(session_id="session-1")
+        assert projection.paused
+        assert projection.available_commands == ("chat", "resume")
+
+        result = gateway.handle(SessionCommand.model_validate_json(_command(CommandKind.RESUME)))
+
+        assert all("unavailable" not in str(event.payload.get("reason")) for event in result.events)
+        assert any(event.kind == EventKind.SESSION_RESUMED for event in result.events)
+        assert not gateway.session_projection(session_id="session-1").paused
+    finally:
+        gateway.stop()
+
+
 class _FailingResolutionBackend(DeterministicAgentBackend):
     def resolve_confirmation(
         self,

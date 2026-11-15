@@ -17,7 +17,6 @@ from typing import Annotated, ClassVar, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
-from heartwood.core_adapter import backend_error_is_fatal
 from heartwood.core_adapter.action_review import AUTOMATIC_REVIEW_ACTOR
 from heartwood.core_adapter.external_actions import ExternalActionProposal, ExternalActionRecord
 from heartwood.core_adapter.external_results import (
@@ -25,7 +24,11 @@ from heartwood.core_adapter.external_results import (
     ExternalResultRecord,
     external_result_records,
 )
-from heartwood.core_adapter.session_activity import worker_replacement_blocker
+from heartwood.core_adapter.session_activity import (
+    SessionActivity,
+    session_activity,
+    worker_replacement_blocker,
+)
 from heartwood.core_adapter.workflow_provenance import workflow_experiment_events
 from heartwood.core_adapter.workflow_runtime import workflow_controls, workflow_run
 from heartwood.schemas.execution import ExecutionBudget, ExecutionUsage, NativeTaskExecution
@@ -531,6 +534,7 @@ def project_session(
         reduce_event = _EVENT_REDUCERS.get(str(event.kind))
         if reduce_event is not None:
             reduce_event(reduction, event)
+    _apply_session_activity(reduction, session_activity(events))
     _settle_actions(reduction)
 
     actions = reduction.actions
@@ -1133,9 +1137,6 @@ def _reduce_error_recorded(reduction: _SessionReduction, event: SessionEvent) ->
     if event.payload.get("affects_lifecycle") is not False:
         reduction.lifecycle_status = SessionLifecycle.ERROR
         reduction.lifecycle_sequence = event.sequence
-        reduction.lifecycle_error_recoverable = (
-            reduction.lifecycle_error_recoverable and not backend_error_is_fatal(error_code)
-        )
 
 
 def _reduce_automatic_review_not_applied(reduction: _SessionReduction, event: SessionEvent) -> None:
@@ -1186,6 +1187,15 @@ _EVENT_REDUCERS: dict[str, Callable[[_SessionReduction, SessionEvent], None]] = 
     EventKind.SESSION_RESUMED.value: _reduce_session_resumed,
     EventKind.ERROR_RECORDED.value: _reduce_error_recorded,
 }
+
+
+def _apply_session_activity(reduction: _SessionReduction, activity: SessionActivity) -> None:
+    """Take pause and fatal errors from the reduction the session service decides with."""
+    if activity.fatal:
+        reduction.lifecycle_error_recoverable = False
+    # Only a researcher command continuing the agent ends a pause, whatever the backend reports.
+    if activity.paused and reduction.lifecycle_error_recoverable:
+        reduction.lifecycle_status = SessionLifecycle.PAUSED
 
 
 def _settle_actions(reduction: _SessionReduction) -> None:

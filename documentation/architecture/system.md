@@ -357,6 +357,8 @@ The terminal, browser, and notebook bridge submit typed commands and render one 
   Final messages, actions, lifecycle changes, task plans, usage, specialist lineage, and errors become durable events; token text stays transient.
 - The session projection contains the conversation, versioned action records, lifecycle, the complete pending action set, task plan, usage by purpose, specialist lineage, available commands, status, and bounded next-step suggestions.
   The gateway enforces the available commands before dispatch.
+  Pause and unrecoverable errors in the projection come from the same journal reduction that the session service uses for automatic review and worker replacement.
+  A pause therefore stays in effect, whatever the backend reports, until a researcher command continues the agent, and an error that makes further work unsafe ends steering even when it was recorded without changing the displayed lifecycle.
 - REST, server-sent events, and WebSocket return events and the projection from one serialized snapshot; a transient revision orders token-only updates.
 
 `IngressPolicy` models direct loopback, a local Jupyter proxy, and an explicitly trusted proxy with one external origin and base path.
