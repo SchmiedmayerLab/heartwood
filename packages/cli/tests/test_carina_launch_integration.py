@@ -16,6 +16,7 @@ import sys
 import textwrap
 import time
 import tomllib
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
@@ -63,9 +64,14 @@ def _run_with_pty(
     *,
     cwd: Path,
     env: dict[str, str],
-    user_input: str,
+    steps: Sequence[tuple[str | None, str]],
     timeout: float,
 ) -> subprocess.CompletedProcess[str]:
+    """Drive a terminal, writing each step's input only once its marker has been displayed.
+
+    A step whose marker is None is written immediately. A decision such as `/allow` applies
+    to the action set the terminal displayed, so it must not be typed before that display.
+    """
     master, slave = os.openpty()
     process = subprocess.Popen(
         command,
@@ -78,14 +84,22 @@ def _run_with_pty(
     )
     os.close(slave)
     output = bytearray()
+    pending = list(steps)
     deadline = time.monotonic() + timeout
     try:
-        os.write(master, user_input.encode())
         while process.poll() is None:
+            while pending and (
+                pending[0][0] is None or pending[0][0] in output.decode(errors="replace")
+            ):
+                os.write(master, pending.pop(0)[1].encode())
             if time.monotonic() >= deadline:
                 process.kill()
                 process.wait()
-                raise subprocess.TimeoutExpired(command, timeout, output=bytes(output))
+                awaited = pending[0][0] if pending else "process exit"
+                raise AssertionError(
+                    f"terminal did not reach {awaited!r} within {timeout:g} seconds:\n"
+                    + output.decode(errors="replace")
+                )
             readable, _, _ = select.select([master], [], [], 0.1)
             if readable:
                 chunk = _read_pty(master)
@@ -457,12 +471,10 @@ def test_carina_launch_handoff_setup_and_cleanup(tmp_path: Path) -> None:
             "--startup-timeout",
             "10",
         ),
-        user_input=(
-            "Create carina-agent-e2e.txt with the exact requested synthetic marker.\n"
-            "/allow\n"
-            "/replay\n"
-            "/audit-export\n"
-            "/exit\n"
+        steps=(
+            (None, "Create carina-agent-e2e.txt with the exact requested synthetic marker.\n"),
+            ("Review 1 action as one OpenHands action set", "/allow\n"),
+            ("Action set approved (1 action)", "/replay\n/audit-export\n/exit\n"),
         ),
         timeout=90,
         env=env,
