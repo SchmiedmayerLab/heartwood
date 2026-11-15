@@ -252,6 +252,24 @@ The operator must be able to observe and revoke a worker independently of its me
 No Docker socket, infrastructure credential, broad research mount or canonical-state mount belongs inside the worker.
 The native reference adapter needs an operator-controlled Docker service; it does not require handing Docker administration to the researcher or agent.
 
+### Gateway Behavior Behind Native Qualification
+
+Heartwood does not distribute a production sandbox gateway; the reference adapter uses the OpenShell gateway that the operator registers.
+Native qualification instead runs against a gateway built for qualification only, from the upstream source revision and the two patches recorded in `images/worker/candidate/gateway.json`.
+Its revocation and cleanup evidence depends on two behaviors of that build which the unmodified upstream release at the same revision does not provide:
+
+- The Docker driver rejects deletion of a sandbox whose provisioning has not settled, instead of abandoning the provisioning task.
+  Without it, a container request already sent to Docker can produce a worker after the gateway reported the sandbox deleted and Heartwood recorded its absence.
+- An explicit delete of a sandbox that is already marked as deleting calls the driver again.
+  Without it, a failed deletion that the gateway could not roll back stays marked as deleting, later requests are acknowledged without cleanup, and revocation times out without evidence of absence.
+
+An operator's gateway must provide both behaviors before qualification results for revocation or cleanup are applied to that deployment.
+Heartwood does not check the version or deletion behavior of the registered gateway when it launches or revokes a worker.
+The qualified build reports the `version` recorded in `gateway.json`, a local version that no upstream release uses, from `openshell-gateway --version` and from the gateway `Health` API.
+The `gateway_build` entry of the [qualification evidence](../architecture/testing.md#native-qualification-evidence) records the same version, source revision and binary digests.
+Compare the deployed gateway with that record, or repeat the native qualification against the deployed gateway and retain its evidence.
+A gateway that reports another version requires its own evidence for both behaviors; the published qualification does not cover it.
+
 Sensitive-data use additionally requires institution-approved data eligibility, provider agreements, residency, retention, monitoring and output-release controls for the exact deployment.
 Heartwood provides selected-input staging and native read-only mounts, but not a complete quarantine or steward-approved release service.
 Signed checkpoint export does not establish immutable retention or continuity between checkpoints.

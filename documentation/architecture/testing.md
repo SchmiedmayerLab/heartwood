@@ -71,6 +71,9 @@ That qualification promotes one precise row in the [GPU compatibility matrix](..
 
 Pull-request validation and main-branch validation both call the shared capable-model acceptance workflow, while protected GPU qualification remains a separate entry point.
 Every pull request includes capable-model acceptance in the required `Release Candidate Ready` aggregate so changes cannot bypass the real model, OpenHands, approval, replay, and audit contract.
+The same aggregate requires the native worker candidate workflow on pull requests and on the main branch.
+Every main-branch commit runs the complete synthetic native qualification, so a release candidate cannot be ready without a pass recorded for that exact commit.
+A pull request repeats the candidate builds and native qualification only when it changes the application packages, worker or candidate image inputs, the builders, or the qualification sources; other pull requests record the selection and skip those jobs.
 Registry writes, multi-platform manifest assembly, and moving-tag promotion remain main-only; pull requests build the same image stages and validate the promotion scripts without receiving package-write access.
 Release creation also requires the repository-managed Python and JavaScript/TypeScript CodeQL analyses for the exact commit.
 Capable-model acceptance runs on the organization's large hosted runner because CPU inference does not finish inside its command deadline on a standard runner; every other job runs on standard GitHub-hosted runners, and container builds reclaim unused preinstalled toolchains first and reuse bounded GitHub Actions BuildKit caches.
@@ -141,14 +144,15 @@ The builder requires the uv version recorded in the source manifest and a new ou
 The conversation patch adds bounded remote-event admission, terminal failure propagation and explicit outside client-tool control.
 The terminal patch exposes explicit environment replacement across terminal backends and session resets, allowing the gateway to pass only documented task variables.
 The sandbox patch exposes the native configuration-admission record needed to bind a worker to its admitted policy and process generation.
-The dependency patch supplies the inference-client constraint, public imports and usage-cost handling required by the candidate SDK dependency graph.
+The dependency patch raises the file-lock requirement to its security-fixed release and admits the first inference-client release series that permits it.
 The local package version suffix distinguishes these reviewed candidates from upstream releases.
+Its base is the version the pinned source declares; that revision can follow the upstream release tag of the same number, so the recorded source revision, not the version, identifies the upstream code.
 Source revisions, patch digests and wheel records must accompany any qualification result that uses them.
 Changes to a patched SDK require a distinct local package version, reviewed source and patch digests, reproducible wheel hashes, and integrated qualification of the resulting application artifact.
 
 The candidate environment command compiles a separate hash-pinned dependency graph and installs it only into a new environment.
 It fixes the Python and package-manager versions, runtime hashes and isolated build dependencies, and checks installed-package consistency.
-The fixed release cutoff has explicit exceptions for the file-lock security update and the inference-client version required by the reviewed SDK patch.
+The fixed release cutoff has explicit exceptions for the file-lock security update and the first inference-client release that permits it.
 The lock includes test tools.
 The application builder archives the current Heartwood commit and its pinned Skill submodule, then builds wheels from that snapshot.
 The application builder verifies the same dependency pins as the default workspace and adds a local version suffix only to temporary Heartwood package metadata for qualification.
@@ -193,7 +197,8 @@ Image construction and worker smoke checks do not establish native sandbox, prov
 
 ### Gateway Build
 
-The gateway candidate uses the pinned upstream source and focused Docker provisioning patch recorded in `images/worker/candidate/gateway.json`.
+The gateway candidate uses the pinned upstream source and the Docker provisioning and deletion-retry patches recorded in `images/worker/candidate/gateway.json`.
+It exists only for qualification; an operator's gateway must separately provide the [behavior this evidence depends on](../operate/platform-requirements.md#gateway-behavior-behind-native-qualification).
 Build it with the existing candidate builder:
 
 ```bash
@@ -201,6 +206,7 @@ uv run --no-project --python 3.12.15 deploy/build-worker-candidate.py \
   --gateway --output test-results/gateway-candidate --cache test-results/gateway-cache
 ```
 
+The cache directory shares source archives and the Cargo registry between builds; compiled objects are kept per manifest, so changed source, patch or toolchain inputs never reuse earlier objects.
 Add `--gateway-tests` to run the upstream server deletion regressions before the binary build.
 The test container requires 12 GiB of memory and uses one Cargo job with optimization disabled only for the server package; the binary build retains its normal release profile and resource limits.
 A failed or empty test run prevents packaging; the exact test command and output remain in `gateway-test-command.json` and `gateway-tests.log`.
@@ -271,8 +277,51 @@ The derived image digest and Dockerfile hash remain part of the qualification ev
 A separate fault test discards a successful native create response and requires a fenced attempt until outside revocation removes its containers and volumes.
 Test failure or failed cleanup prevents qualification; retained evidence must include the successful command exit and teardown results, not merely an individual assertion record.
 If revocation cannot settle, the local fixture retains its control state for reconciliation.
-CI retains only the selected synthetic evidence and logs, excluding private gateway state and generated credentials.
 These tests do not establish model-driven attack resistance, production records-policy qualification, tenant authorization, or institutional sensitive-data approval.
+
+### Native Qualification Evidence
+
+The runner writes `qualification.json` as the manifest of one run and `SHA256SUMS` over the retained evidence files.
+The manifest describes the run without relying on image tags, directory names, or a separate summary:
+
+| Field | Content |
+|---|---|
+| `source` | The Heartwood commit of the checkout and whether its working tree matched that commit |
+| `started_at`, `finished_at` | Run boundaries in Coordinated Universal Time |
+| `invocation` | The image references and paths supplied to the runner; the qualification credential is never an argument |
+| `images` | Content identifiers of the supplied worker and runtime images and of the gateway, controller, and symlink-workspace images built for the run |
+| `image_sources` | For the worker and runtime images, the revision label, registry digests, and the dependency and application build records with wheel hashes, all read from the image itself |
+| `gateway_build`, `records_build` | The verified build records of the gateway and records tools |
+| `qualification_sources` | Hashes of the runner, fixtures, tests, and controller inputs, with a flag recording that they did not change during the run |
+| `host` | Kernel, architecture, and Docker version of the engine that ran the workers |
+| `cases` | Identifier, outcome, and duration of every executed case, read from `junit.xml` |
+| `failures`, `passed` | Every reason the run does not qualify its commit, and the resulting verdict |
+
+A run passes only when the working tree matches its commit, the revision label and application build record of both supplied images name that commit, the test command and teardown succeed, the qualification sources are unchanged, and the executed cases equal the expected set in `deploy/qualification_evidence.py` with every case passed.
+A reduced, extended, or skipped selection therefore fails, as does a run against images built from another commit.
+Adding, removing, or renaming a native case requires changing the expected set in the same commit.
+
+`SHA256SUMS` lists the manifest, test report, logs, and per-case evidence files.
+Private gateway state and generated credentials share the output directory during a run and are excluded from the checksums and from CI retention.
+The candidate workflow verifies the evidence against its own commit, uploads exactly the listed files, and keeps main-branch evidence for 90 days and pull-request evidence for 14 days.
+Main-branch and manually started runs also publish a GitHub build-provenance attestation for `SHA256SUMS`; pull-request runs qualify a temporary merge commit and are not attested.
+
+To verify a downloaded evidence directory, check out the Heartwood commit it claims to qualify and run these commands inside the evidence directory:
+
+```bash
+gh attestation verify SHA256SUMS --repo SchmiedmayerLab/heartwood
+sha256sum --check SHA256SUMS
+python3 "$HEARTWOOD_CHECKOUT/deploy/qualification_evidence.py" . \
+  --commit "$(git -C "$HEARTWOOD_CHECKOUT" rev-parse HEAD)"
+```
+
+The attestation shows that the candidate workflow of this repository produced the checksums, and its certificate names the workflow run and commit.
+The checksum command shows that the files are the ones the workflow recorded.
+The last command checks the listed digests again, compares the recorded cases with `junit.xml`, re-evaluates every pass condition against the expected set of the checkout it runs from, and requires the stated commit; it exits with a non-zero status and prints each reason otherwise.
+
+A manifest binds a result to one commit, one set of image contents, and one host; it does not transfer to another commit, architecture, or rebuilt image.
+Locally produced evidence has no attestation, so its checksums show internal consistency rather than origin.
+Capable-model runs use the same manifest with the operator's requested model profile and remain unattested operator records.
 
 ### Infrastructure Telemetry
 

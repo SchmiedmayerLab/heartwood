@@ -5,37 +5,69 @@
 name: Worker Dependency Candidate
 
 on:
-  pull_request:
-    paths:
-      - .github/workflows/worker-candidate.yml
-      - deploy/build-worker-candidate.py
-      - deploy/build-records-fixture.py
-      - deploy/qualify-native-worker.py
-      - deploy/tests/worker_native_fixture.py
-      - deploy/tests/test_worker_*_integration.py
-      - deploy/tests/external_service_fixture.py
-      - deploy/worker_model_profile.py
-      - deploy/tests/worker_network_*.py
-      - deploy/tests/worker_hostile_probe.py
-      - deploy/tests/worker_telemetry.py
-      - deploy/tests/checkpoint_*_integration.py
-      - images/worker/candidate/**
-      - packages/**
-      - vendor/heartwood-skills
-      - pyproject.toml
-      - LICENSE.md
-      - images/Dockerfile
-      - images/worker/launch.py
-      - images/worker/config.json
-      - images/worker/smoke.py
+  workflow_call:
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
+  scope:
+    name: Select qualification for changed inputs
+    runs-on: ubuntu-24.04
+    outputs:
+      required: ${{ steps.inputs.outputs.required }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+          submodules: true
+      - name: Compare a pull request with its base
+        id: inputs
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          required=true
+          if [[ "${EVENT_NAME}" == "pull_request" ]]; then
+            required=false
+            changed="$(git diff --name-only HEAD^1 HEAD)"
+            while IFS= read -r path; do
+              case "${path}" in
+                .github/workflows/worker-candidate.yml | \
+                  deploy/build-worker-candidate.py | \
+                  deploy/build-records-fixture.py | \
+                  deploy/qualify-native-worker.py | \
+                  deploy/qualification_evidence.py | \
+                  deploy/worker_model_profile.py | \
+                  deploy/tests/worker_native_fixture.py | \
+                  deploy/tests/test_worker_*_integration.py | \
+                  deploy/tests/external_service_fixture.py | \
+                  deploy/tests/worker_network_*.py | \
+                  deploy/tests/worker_hostile_probe.py | \
+                  deploy/tests/worker_telemetry.py | \
+                  deploy/tests/checkpoint_*_integration.py | \
+                  images/worker/candidate/* | \
+                  packages/* | \
+                  vendor/heartwood-skills | \
+                  pyproject.toml | \
+                  LICENSE.md | \
+                  images/Dockerfile | \
+                  images/worker/launch.py | \
+                  images/worker/config.json | \
+                  images/worker/smoke.py)
+                  required=true
+                  ;;
+              esac
+            done <<<"${changed}"
+          fi
+          echo "required=${required}" >> "${GITHUB_OUTPUT}"
+
   gateway:
     name: Build the pinned gateway candidate
+    needs: scope
+    if: needs.scope.outputs.required == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     concurrency:
@@ -56,8 +88,10 @@ jobs:
         uses: actions/cache@v6.1.0
         with:
           path: test-results/gateway-cache
-          key: gateway-linux-amd64-${{ hashFiles('images/worker/candidate/gateway.json', 'images/worker/candidate/docker-provisioning.patch') }}
-          restore-keys: gateway-linux-amd64-
+          key: >-
+            gateway-linux-amd64-${{ hashFiles('images/worker/candidate/gateway.json',
+            'images/worker/candidate/docker-provisioning.patch',
+            'images/worker/candidate/gateway-delete-retry.patch') }}
       - name: Build from verified upstream inputs
         run: >-
           uv run --no-project --python 3.12.15 deploy/build-worker-candidate.py
@@ -79,6 +113,8 @@ jobs:
 
   build:
     name: Verify candidate wheel reproducibility
+    needs: scope
+    if: needs.scope.outputs.required == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
@@ -128,6 +164,8 @@ jobs:
 
   records:
     name: Build synthetic records tools
+    needs: scope
+    if: needs.scope.outputs.required == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -157,6 +195,10 @@ jobs:
     needs: [gateway, build, records]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    permissions:
+      attestations: write
+      contents: read
+      id-token: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -202,22 +244,36 @@ jobs:
           --gateway-artifacts test-results/gateway-candidate
           --records-artifacts test-results/records-tools
           --output test-results/native-qualification
+      - name: Verify the evidence for this commit
+        run: >-
+          python3 deploy/qualification_evidence.py
+          test-results/native-qualification --commit "${GITHUB_SHA}"
+      - name: Attest the evidence checksums
+        if: github.event_name != 'pull_request'
+        uses: actions/attest@v4
+        with:
+          subject-path: test-results/native-qualification/SHA256SUMS
       - name: Retain synthetic qualification evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: worker-native-qualification-${{ github.sha }}
           path: |
+            test-results/native-qualification/SHA256SUMS
             test-results/native-qualification/qualification.json
-            test-results/native-qualification/network.json
+            test-results/native-qualification/junit.xml
             test-results/native-qualification/qualification.log
             test-results/native-qualification/controller-preflight.log
-            test-results/native-qualification/junit.xml
+            test-results/native-qualification/network.json
             test-results/native-qualification/*/evidence.json
             test-results/native-qualification/*/cleanup.json
+            test-results/native-qualification/*/session-diagnostics.json
             test-results/native-qualification/*/gateway.log
             test-results/native-qualification/*/infrastructure-otlp.jsonl
             test-results/native-qualification/*/infrastructure-otlp-status.json
             test-results/native-qualification/*/checkpoint-evidence.json
             test-results/native-qualification/*/records-result.json
-          retention-days: 14
+            test-results/native-qualification/*/credential-expiry.json
+            test-results/native-qualification/*/provider-profile.json
+            test-results/native-qualification/*/model-qualification.json
+          retention-days: ${{ github.event_name == 'pull_request' && 14 || 90 }}
