@@ -994,24 +994,33 @@ def _handle_serve(
             checkpoint_evidence_factory = resources.enter_context(
                 deployment_checkpoint_evidence(deployment.evidence, project)
             )
-        worker_plan_factory = None
+        worker_plan_factory = worker_reconciler = None
         if deployment is not None and deployment.worker is not None:
-            from heartwood.gateway.worker_native import native_worker_plan_factory
+            from heartwood.gateway.worker_native import (
+                native_worker_plan_factory,
+                native_worker_reconciler,
+            )
 
             worker_plan_factory = native_worker_plan_factory(deployment.worker, project)
-        app = GatewayAsgiApp(
+            worker_reconciler = native_worker_reconciler(deployment.worker, project)
+        gateway = (
             SessionGateway(
                 project=project,
                 deployment_policy=deployment.policy,
                 worker_plan_factory=worker_plan_factory,
+                worker_reconciler=worker_reconciler,
                 checkpoint_evidence_factory=checkpoint_evidence_factory,
             )
             if deployment is not None
-            else SessionGateway(project=project),
-            static_dir=web_root,
-            ingress=ingress,
-            access=access,
+            else SessionGateway(project=project)
         )
+        for session_id in gateway.reconcile_workers():
+            print(
+                f"Worker revocation was not observed for session {session_id}; "
+                "its attempt remains fenced until the next gateway start.",
+                file=sys.stderr,
+            )
+        app = GatewayAsgiApp(gateway, static_dir=web_root, ingress=ingress, access=access)
         config = uvicorn.Config(
             app,
             host=host,

@@ -67,12 +67,19 @@ Preparation, launch and connection are attempted once per service; uncertainty r
 
 Before replacing or closing a managed session, the gateway fences its lease and records the platform callback's revocation evidence through the existing session lifecycle.
 Failed revocation retains the service and writer ownership for recovery; closing an HTTP client is not revocation evidence.
+A gateway process that ends without revoking leaves its attempt retained in the session journal.
+A managed gateway can receive a second operator-owned callback that revokes such an attempt without the ended process's launch state.
+`SessionGateway.reconcile_workers` fences every attempt that an earlier process left unrevoked, records the callback's evidence through the same session lifecycle and returns the sessions whose revocation was not observed.
+It skips sessions the current process already serves, and a session whose writer another live process still owns stays unresolved.
+`heartwood gateway serve --deployment` runs this reconciliation before serving and reports unresolved sessions; their attempts remain fenced until a later start observes revocation.
 The platform callback remains responsible for native worker and service cleanup, including attempt-owned storage.
 An operator-owned deployment manifest can explicitly select the native Docker sandbox adapter.
 The launcher validates native tools, the local daemon socket, registered mutual TLS identity and the exact policy file outside research files and protected project state.
 Unsupported SDK admission or transport hooks stop launch without a local fallback.
 The adapter reuses native sandbox creation, configuration admission, provider attachments and service forwarding; it does not implement another agent loop, scheduler, inference router or tunnel.
 Input, Skill and specialist identities are bound before launch; the worker is admitted only after its image, effective policy, runtime generation, projected bytes, non-root identity and authenticated API match the outside observations.
+When launch or the first runtime observation fails, the launcher deletes the sandbox that carries the attempt's identity and stops its forwarder without waiting for the session to close.
+The attempt still remains fenced until revocation observes worker absence and removes its projections.
 Native provider credentials remain in the sandbox control plane; the gateway receives an opaque placeholder from the worker environment.
 Model and tenant restrictions must be enforced by the qualified provider endpoint or existing institutional inference service; the selected model name and a provider attachment alone do not enforce them against a compromised worker.
 
@@ -80,6 +87,8 @@ The Docker reference adapter can transfer verified private input and Skill snaps
 It uses an explicit local daemon and an empty client configuration, with no inherited Docker context, credential helpers or proxy settings.
 A short-lived preparation container receives only those named volumes and runs only the qualified image's permission utility; its root filesystem is read-only, its network is disabled, and its sole added capability is `FOWNER` to set permissions on copied files.
 The worker receives `/inputs` and `/skills` as read-only mounts; outside inspection checks the image, network and exact volume identities and rejects overlapping mounts.
+Inspection also rejects a privileged container and any mount whose host source overlaps the research directory, protected state, native configuration home or Docker socket.
+It compares the reported source paths lexically and does not restrict other supervisor-owned mounts or added capabilities.
 Transfer is attempted once, and uncertainty requires reconciliation instead of repeating the copy.
 Cleanup checks both ownership labels and attempt-specific container names before removing projections, and refuses to remove resources whose ownership changed.
 The storage adapter supplies only storage observations; the native launcher combines these with control-plane admission and revocation evidence.
@@ -366,11 +375,19 @@ Attempt records and ordinary session/audit correlation contain no worker credent
 These internal launcher contracts do not launch sandboxes, verify an observer's evidence, or revoke service access themselves.
 Native worker selection is explicit and requires qualified runtime dependencies; ordinary launch does not silently switch execution modes.
 After an uncertain creation response, revocation may resolve the uniquely named sandbox only when its full project and attempt ownership match this process's retained intent.
+Revocation deletes the sandbox through the control client connected at launch before it stops the forwarder, rechecks the native configuration or removes projections.
+A failure in those later steps therefore leaves the attempt fenced for retry but does not leave the worker running.
 Cleanup verifies native worker absence and removes only owned staging resources before releasing the session writer.
 If provisioning is still unresolved, deletion can require retry while the attempt remains fenced and the writer remains owned.
 A control-plane absence response alone is insufficient when the container runtime still retains attempt resources; never release ownership or repeat creation to bypass that discrepancy.
 The native deletion API is name-scoped rather than an atomic expected-generation deletion; unique attempt names and outside identity checks do not replace control-plane authorization.
-A prior process's attempt or changed native connection identity requires explicit outside reconciliation rather than automatic deletion against potentially different infrastructure.
+A changed native connection identity blocks projection cleanup and revocation evidence in the owning process until the identity is restored or a later gateway start reconciles the attempt.
+A prior process's attempt is never revoked by another session's launch state.
+Reconciliation at gateway start resolves the sandbox by the attempt's unique name, deletes it only when its project and attempt labels and any retained sandbox identity match, verifies that the container runtime retains no attempt-owned worker, and removes owned projections before recording evidence.
+It observes the control plane and Docker daemon named by the current deployment manifest.
+An operator who points the manifest at different infrastructure must first remove the earlier worker there, because absence on the new infrastructure would otherwise be recorded as revocation.
+Reconciliation cannot signal the ended process's forwarder; that process loses its target when the sandbox is deleted.
+A reconciled session has the same retained state as one whose gateway stopped normally.
 
 ### Remote Response Admission
 

@@ -58,6 +58,8 @@ class WorkerSessionPlan:
 
 
 WorkerPlanFactory = Callable[[WorkerSessionRequest], WorkerSessionPlan]
+# Revokes an attempt whose owning gateway process ended, without that process's launch state.
+WorkerReconciler = Callable[[WorkerAttemptRecord], WorkerRevocationEvidence]
 
 
 class ManagedWorkerSession:

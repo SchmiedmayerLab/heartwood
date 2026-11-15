@@ -23,6 +23,8 @@ The complete worker runs behind the sandbox boundary, receives selected read-onl
 Canonical state, deployment authority, provider credentials, management sockets and signing material remain outside its mounts and process identity.
 The gateway independently checks attempt identity, admits untrusted responses and retains approval authority; the sandbox and outside services enforce filesystem, process and network restrictions.
 An uncertain revocation fences the attempt and retains writer ownership until reconciliation establishes that its resources are gone.
+The launcher deletes a worker that fails launch admission without waiting for the session to close, and the next managed gateway start deletes workers that an ended gateway process left running.
+Until that start, such a worker keeps its sandbox policy and provider attachment.
 This path does not silently replace local execution and does not establish sensitive-data readiness merely by starting a worker.
 See the [platform isolation requirements](platform-contract.md#agent-isolation) and [native qualification limits](../architecture/testing.md#installed-native-integration).
 
