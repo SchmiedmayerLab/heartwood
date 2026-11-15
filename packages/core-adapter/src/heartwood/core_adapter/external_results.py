@@ -118,7 +118,7 @@ class ExternalResultRecord(BaseModel):
     model_config = ConfigDict(
         extra="forbid", frozen=True, revalidate_instances="always", hide_input_in_errors=True
     )
-    phase: Literal["proposed", "denied", "submitting", "unknown", "submitted"]
+    phase: Literal["proposed", "authorized", "denied", "submitting", "unknown", "submitted"]
     proposal: ExternalResultProposal
     decision: ExternalActionDecision | None = None
 
@@ -151,7 +151,13 @@ def validate_result_transition(
         return
     if current.proposal != previous.proposal:
         raise ExternalActionError("result release content or destination changed")
-    if previous.phase == "proposed" and current.phase in {"denied", "submitting"}:
+    if previous.phase == "proposed" and current.phase in {"authorized", "denied", "submitting"}:
+        return
+    if (
+        previous.phase == "authorized"
+        and current.phase == "submitting"
+        and current.decision == previous.decision
+    ):
         return
     if (
         previous.phase == "submitting"

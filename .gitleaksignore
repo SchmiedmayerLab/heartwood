@@ -3,3 +3,5 @@
 # Public WebSocket example nonce, not an authentication credential: RFC 6455 section 1.2.
 # https://www.rfc-editor.org/rfc/rfc6455.html#section-1.2
 34f03342b0077f6d2b04ba25e3e46f459e23e477:deploy/tests/worker_hostile_probe.py:generic-api-key:81
+# Synthetic credential expiry timestamp in milliseconds; the value is not a credential.
+e51f2e5e2482ed376980e8be9d20b6eb979d3695:packages/compliance/tests/test_native_model_profile.py:generic-api-key:218

@@ -103,6 +103,20 @@ The identifier binds the complete ordered set, tools and structured arguments; c
 A decision does not freeze referenced file contents, grant platform permissions or replace outside enforcement.
 See [Action Review and Audit](../use/actions-audit.md) for the researcher workflow.
 
+### Required Audit Evidence
+
+A managed deployment can require an independently retained checkpoint before dispatching an approved action.
+The decision remains durable while publication is unavailable; HTTP `409` can therefore mean that its required evidence is still unresolved, rather than that the researcher must issue a new decision.
+Read the session events and projection, restore the operator-owned evidence service, and retry the same complete command envelope when recovery permits it.
+Do not change the command identifier, remove evidence configuration or downgrade the policy to bypass the gate.
+
+The `audit.evidence.recorded` event identifies the decision boundary, effective `mode` and `status` (`pending` or `retained`).
+A pending record includes `code: "audit.evidence.unavailable"`; a retained record includes the checkpoint digest and covered audit sequence.
+The shared projection reports this state in its activity list.
+Buffered mode can expose a gap while ordinary work continues; outside-operation submission and outside-result disclosure still require retained evidence.
+These observations describe the gateway's evidence checks, not proof that a platform's retention policy or an external operation is independently qualified.
+See [Automatic Evidence Boundaries](../operate/audit-checkpoints.md#automatic-evidence-boundaries) for recovery and trust requirements.
+
 ## Replay and Streaming
 
 `GET /sessions/{session_id}/events?after=N` returns durable events after the supplied sequence and the current projection.

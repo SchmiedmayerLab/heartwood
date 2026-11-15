@@ -177,7 +177,7 @@ class ExternalActionObservation(_Record):
 class ExternalActionRecord(_Record):
     """One complete observation in the existing paired session and audit journal."""
 
-    phase: Literal["proposed", "denied", "submitting", "unknown", "observed"]
+    phase: Literal["proposed", "authorized", "denied", "submitting", "unknown", "observed"]
     proposal: ExternalActionProposal
     decision: ExternalActionDecision | None = None
     observation: ExternalActionObservation | None = None
@@ -270,8 +270,13 @@ def validate_external_transition(
     if current.proposal != previous.proposal or previous.terminal:
         raise ExternalActionError("outside operation identity changed or is already terminal")
     if previous.phase == "proposed":
-        if current.phase not in {"denied", "submitting"}:
+        if current.phase not in {"authorized", "denied", "submitting"}:
             raise ExternalActionError("outside operation requires a trusted decision")
+    elif previous.phase == "authorized":
+        if current.phase != "submitting" or current.decision != previous.decision:
+            raise ExternalActionError(
+                "authorized operation requires its original dispatch decision"
+            )
     elif current.phase not in {"unknown", "observed"} or current.decision != previous.decision:
         raise ExternalActionError("outside operation cannot reuse or change its decision")
 

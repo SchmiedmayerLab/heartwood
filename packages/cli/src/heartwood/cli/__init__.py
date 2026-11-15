@@ -19,6 +19,7 @@ import tempfile
 import threading
 import time
 from collections.abc import Callable, Sequence
+from contextlib import ExitStack
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
@@ -2620,39 +2621,48 @@ def _handle_serve(
         )
     except IngressConfigurationError as error:
         raise SystemExit(f"{diagnostic.code}: {error}") from error
-    worker_plan_factory = None
-    if deployment is not None and deployment.worker is not None:
-        from heartwood.gateway.worker_native import native_worker_plan_factory
+    with ExitStack() as resources:
+        checkpoint_evidence_factory = None
+        if deployment is not None and deployment.evidence is not None:
+            from heartwood.gateway.checkpoint_deployment import deployment_checkpoint_evidence
 
-        worker_plan_factory = native_worker_plan_factory(deployment.worker, project)
-    app = GatewayAsgiApp(
-        SessionGateway(
-            project=project,
-            deployment_policy=deployment.policy,
-            worker_plan_factory=worker_plan_factory,
+            checkpoint_evidence_factory = resources.enter_context(
+                deployment_checkpoint_evidence(deployment.evidence, project)
+            )
+        worker_plan_factory = None
+        if deployment is not None and deployment.worker is not None:
+            from heartwood.gateway.worker_native import native_worker_plan_factory
+
+            worker_plan_factory = native_worker_plan_factory(deployment.worker, project)
+        app = GatewayAsgiApp(
+            SessionGateway(
+                project=project,
+                deployment_policy=deployment.policy,
+                worker_plan_factory=worker_plan_factory,
+                checkpoint_evidence_factory=checkpoint_evidence_factory,
+            )
+            if deployment is not None
+            else SessionGateway(project=project),
+            static_dir=web_root,
+            ingress=ingress,
+            access=access,
         )
-        if deployment is not None
-        else SessionGateway(project=project),
-        static_dir=web_root,
-        ingress=ingress,
-        access=access,
-    )
-    config = uvicorn.Config(
-        app,
-        host=host,
-        port=port,
-        log_level="info",
-        proxy_headers=False,
-        access_log=False,
-        ws_max_size=8192,
-    )
-    with config.bind_socket() as listener:
-        listener.set_inheritable(False)
-        listener.listen(config.backlog)
-        launch_url = access.launch_url(ingress)
-        if launch_url is not None:
-            print(f"Open Heartwood with this one-time link:\n  {launch_url}\n", flush=True)
-        uvicorn.Server(config).run(sockets=[listener])
+        config = uvicorn.Config(
+            app,
+            host=host,
+            port=port,
+            log_level="info",
+            proxy_headers=False,
+            access_log=False,
+            ws_max_size=8192,
+        )
+        with config.bind_socket() as listener:
+            listener.set_inheritable(False)
+            listener.listen(config.backlog)
+            launch_url = access.launch_url(ingress)
+            if launch_url is not None:
+                print(f"Open Heartwood with this one-time link:\n  {launch_url}\n", flush=True)
+            uvicorn.Server(config).run(sockets=[listener])
     return 0
 
 

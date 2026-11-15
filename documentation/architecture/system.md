@@ -47,6 +47,9 @@ Subscription authentication and provider-managed identity are unavailable throug
 Remote creation uses the retained conversation identity and the SDK's public creation request, with automatic title generation disabled and the established iteration and confirmation settings.
 Creation is attempted once; an uncertain response fences the worker lease and requires outside reconciliation.
 Native streaming-delta events feed transient interface text, while durable translation continues through admitted native state.
+During remote execution, admitted event callbacks coalesce progress reads; token deltas do not request conversation snapshots.
+A five-second fallback refresh and final reconciliation preserve progress and settled state without repeatedly fetching an unchanged branch.
+These reads remain subject to the worker attempt's unchanged lifetime response budget.
 Gateway-local parallel-review executors are not installed on remote agent copies; sequential advisory specialists remain available, and remote parallel review requires separate qualification.
 This embedding contract does not provision a sandbox or enable remote execution in the default gateway launch path.
 

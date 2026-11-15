@@ -244,3 +244,113 @@ def test_application_metadata_rejects_unreviewed_dependency_changes(
             },
         )
     assert metadata.read_text() == original
+
+
+@pytest.mark.parametrize("result", ["passed", "empty", "missing"])
+def test_gateway_tests_require_positive_results_and_preserve_build_limits(
+    builder: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, result: str
+) -> None:
+    container = ["docker", "run", "--memory", "4g", "--memory-swap", "5g"]
+    original = list(container)
+    observed: list[list[str]] = []
+
+    def run(command: list[str], **kwargs: object) -> None:
+        observed.append(command)
+        log = kwargs["stdout"]
+        assert hasattr(log, "write")
+        log.write(
+            "test result: ok. 4 passed; 0 failed; 0 ignored;\n"
+            if result == "passed"
+            else "test result: ok. 0 passed; 0 failed; 0 ignored;\n"
+            if result == "empty"
+            else "no test results\n"
+        )
+        assert kwargs["check"] is True
+        assert kwargs["stderr"] == builder.subprocess.STDOUT
+
+    monkeypatch.setattr(builder.subprocess, "run", run)
+    if result == "passed":
+        record = builder._gateway_tests(container, "rust@sha256:" + "a" * 64, tmp_path)
+        assert record["passed"] == 4
+        assert (
+            record["log_sha256"]
+            == hashlib.sha256((tmp_path / "gateway-tests.log").read_bytes()).hexdigest()
+        )
+    else:
+        with pytest.raises(ValueError, match="nonempty passing suite"):
+            builder._gateway_tests(container, "rust@sha256:" + "a" * 64, tmp_path)
+    assert container == original
+    command = observed[0]
+    assert command[command.index("--memory") + 1] == "12g"
+    assert command[command.index("--memory-swap") + 1] == "12g"
+    assert command[command.index("--jobs") + 1] == "1"
+    assert command[command.index("--features") + 1] == "telemetry,vendored-z3"
+    assert command[command.index("--config") + 1] == (
+        "profile.release.package.openshell-server.opt-level=0"
+    )
+    assert command[-3:] == ["delete", "--", "--test-threads=1"]
+    assert json.loads((tmp_path / "gateway-test-command.json").read_text()) == command
+
+
+def test_gateway_regression_failure_prevents_binary_build(
+    builder: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "Cargo.toml").write_text('[workspace.package]\nversion = "0.0.0"\n')
+    (source / "Cargo.lock").write_text(
+        'version = 4\n[[package]]\nname = "openshell-server"\nversion = "0.0.0"\n'
+    )
+    manifest = {
+        "version": "0.1.8+heartwood.1",
+        "source": {},
+        "patches": [],
+        "cmake": {"amd64": {}},
+        "cli": {"amd64": {}},
+        "images": {"rust": "rust@sha256:" + "a" * 64},
+    }
+    monkeypatch.setattr(builder, "_gateway_configuration", lambda: (manifest, b"manifest"))
+    monkeypatch.setattr(builder, "_source", lambda *_args, **_kwargs: source)
+    monkeypatch.setattr(builder.subprocess, "check_output", lambda *_args, **_kwargs: "linux/amd64")
+    observed: list[list[str]] = []
+
+    def fail(command: list[str], **kwargs: object) -> None:
+        observed.append(command)
+        assert "test" in command
+        log = kwargs["stdout"]
+        assert hasattr(log, "write")
+        log.write("synthetic upstream test failure\n")
+        raise builder.subprocess.CalledProcessError(101, command)
+
+    monkeypatch.setattr(builder.subprocess, "run", fail)
+    output = tmp_path / "output"
+    with pytest.raises(builder.subprocess.CalledProcessError):
+        builder.build_gateway(output, tmp_path / "cache", gateway_tests=True)
+    assert len(observed) == 1
+    assert (output / "gateway-tests.log").read_text() == "synthetic upstream test failure\n"
+    assert not (output / "bin").exists()
+    assert not (output / "gateway-build-record.json").exists()
+
+
+@pytest.mark.parametrize("gateway", [False, True])
+def test_gateway_tests_cli_requires_gateway(
+    builder: ModuleType, monkeypatch: pytest.MonkeyPatch, gateway: bool
+) -> None:
+    import sys
+
+    arguments = ["builder", "--gateway-tests", "--output", "output", "--cache", "cache"]
+    if gateway:
+        arguments.append("--gateway")
+    monkeypatch.setattr(sys, "argv", arguments)
+    calls = []
+    monkeypatch.setattr(
+        builder, "build_gateway", lambda *args, **kwargs: calls.append((args, kwargs))
+    )
+    if gateway:
+        builder.main()
+        assert calls == [((Path("output"), Path("cache")), {"gateway_tests": True})]
+    else:
+        with pytest.raises(SystemExit) as failure:
+            builder.main()
+        assert failure.value.code == 2
+        assert not calls

@@ -75,6 +75,55 @@ Registry writes, multi-platform manifest assembly, and moving-tag promotion rema
 Release creation also requires the repository-managed Python and JavaScript/TypeScript CodeQL analyses for the exact commit.
 Capable-model acceptance runs on the organization's large hosted runner because CPU inference does not finish inside its command deadline on a standard runner; every other job runs on standard GitHub-hosted runners, and container builds reclaim unused preinstalled toolchains first and reuse bounded GitHub Actions BuildKit caches.
 
+## Capable Model Qualification in a Native Worker
+
+The native qualification runner accepts an explicit operator model profile for a synthetic task through the complete worker boundary.
+It uses the same verified images, native gateway, inference credential replacement, input and Skill projections, policy probes, audit records and resource cleanup as synthetic native qualification.
+The credential enters the trusted controller once through standard input; it is never a command argument, public profile field, worker credential, or report value.
+The provider key's existing model authorization remains unchanged.
+
+A profile contains only the approved route and bounded qualification settings:
+
+```json
+{
+  "base_url": "https://approved-provider.example/v1",
+  "model": "openai/approved-model",
+  "max_input_tokens": 32768,
+  "max_output_tokens": 512,
+  "max_iterations": 6,
+  "deadline_seconds": 180
+}
+```
+
+Supply the credential from the operator's secret manager or a protected secret mount, and use the same artifact arguments as synthetic native qualification:
+
+```bash
+python3 deploy/qualify-native-worker.py \
+  --worker-image "$WORKER_IMAGE" --runtime-image "$RUNTIME_IMAGE" \
+  --gateway-artifacts "$GATEWAY_ARTIFACTS" --records-artifacts "$RECORDS_ARTIFACTS" \
+  --model-profile /run/config/qualification-model.json \
+  --output test-results/native-model-qualification < /run/secrets/qualification-key
+```
+
+The synthetic input contains an instruction to disregard approval and access outside credentials.
+The controller approves only the exact input-read, verified Skill invocation and aggregate command required by the task; other proposals are denied.
+It independently checks the suppression result, runs six filesystem probes and the maintained direct-IP network probes using the approved inference hostname, verifies the audit ledger, and requires outside revocation before successful cleanup.
+After the model finishes, native credential expiry must deny a retained placeholder at the configured inference endpoint before provider detachment; the shared key and its authorization remain unchanged.
+Synthetic forbidden-path, redirect and WebSocket-upgrade probes run separately against the deterministic fixture endpoint, never against the institutional inference service.
+These additional probes are explicitly driven by the qualification controller and are reported separately from model-proposed actions.
+
+Before any worker can attach, the controller gives its disposable native provider credential an expiry matching the qualification deadline.
+OpenShell enforces that expiry during credential delivery and request-time resolution, including when worker startup is late or the application command is blocked.
+The deadline includes setup after provider creation; an expired setup cannot begin inference.
+An independent outside timer also discovers this project's native workers and requests provider detachment and deletion without acquiring the application's command lock.
+Uncertain cleanup fails qualification and retains control state for recovery; expiry does not cancel a request already accepted by the upstream provider.
+The SDK iteration cap and requested per-call token limits bound the expected task, but are not a provider-enforced spending quota.
+The runner does not change shared key limits or authorization.
+A hard spending cap requires a separately provisioned provider-side budget.
+Reports identify the model as operator-requested configuration and usage as worker-reported diagnostics, without treating either as provider billing evidence or attested model identity.
+No credentialed run occurs automatically in pull-request CI; the ordinary capable-model workflow continues to qualify its local inference runtime separately.
+A successful synthetic run does not establish sensitive-data readiness.
+
 ## Native Worker Dependency Candidates
 
 The native worker qualification path needs SDK admission and remote-event hooks that are not available in the public application lock.
@@ -150,6 +199,12 @@ uv run --no-project --python 3.12.15 deploy/build-worker-candidate.py \
   --gateway --output test-results/gateway-candidate --cache test-results/gateway-cache
 ```
 
+Add `--gateway-tests` to run the upstream server deletion regressions before the binary build.
+The test container requires 12 GiB of memory and uses one Cargo job with optimization disabled only for the server package; the binary build retains its normal release profile and resource limits.
+A failed or empty test run prevents packaging; the exact test command and output remain in `gateway-test-command.json` and `gateway-tests.log`.
+The gateway CI job enables this check on its Linux runner and retains those files on failure.
+
+
 The output directory must be new and separate from the reusable cache directory.
 The builder verifies source, patch, CLI and build-tool archives, stamps a distinct local workspace version without changing registry dependencies, and uses locked Cargo dependencies inside a resource-bounded Linux container.
 Rust, CMake and image inputs are pinned; no mutable system-package installation is required.
@@ -180,13 +235,19 @@ The supervisor retains its supported bridge configuration, and workers retain `n
 Injected instructions appear in synthetic input and tool output, but deterministic provider responses do not establish resistance to model-driven prompt injection.
 
 The candidate workflow builds the gateway and dependency wheels independently, then assembles the shared worker and runtime images for native integration.
+The records fixture builds its server and administration client from digest-verified source archives using a pinned Go image, read-only sources and bounded build containers.
+Its artifacts retain both source archives, licenses, binary hashes and build inputs.
+These tools provide synthetic storage behavior; they are not a production records-service recommendation.
 Run the same tests locally against those images and gateway artifacts:
 
 ```bash
+python3 deploy/build-records-fixture.py \
+  --output test-results/records-tools --cache test-results/records-cache
 python3 deploy/qualify-native-worker.py \
   --worker-image heartwood-worker:qualification \
   --runtime-image heartwood-runtime:qualification \
   --gateway-artifacts test-results/gateway-candidate \
+  --records-artifacts test-results/records-tools \
   --output test-results/native-qualification
 ```
 
@@ -198,6 +259,10 @@ The synthetic TLS provider uses a generated test credential and a fixed tool-cal
 
 The workflow test uses Heartwood's production native launcher, independently admitted policy, read-only inputs and Skills, exact outside approvals, aggregate suppression, verified audit, and revocation before writer release.
 After shutdown it checks protected-state replay in a fresh process and rejects incorrect project identity and corrupted audit data.
+Both ordinary and hostile sessions also run with deployment-bound checkpoint evidence, using distinct storage identities and an independent HTTPS signer outside the worker.
+A records outage must block the approved terminal action until its exact authorization is retained; command replay must not repeat the effect.
+The evidence bundle retains the signed audit prefixes, predecessor digests and public verification key, including the session-owner closure checkpoint.
+The storage policy result remains separate: the pinned synthetic server rejects the conditional-write bucket policy, so replacement versions must be detected and rejected without claiming full storage-policy qualification.
 A derived image changes the OCI working directory to a symlink while preserving the parent worker and policy.
 The suite requires an explicit outside `WorkspaceValidationFailed` condition, no main-process start and no inference requests; the parent image must pass an independent admission control.
 The derived image digest and Dockerfile hash remain part of the qualification evidence.
@@ -205,7 +270,7 @@ A separate fault test discards a successful native create response and requires 
 Test failure or failed cleanup prevents qualification; retained evidence must include the successful command exit and teardown results, not merely an individual assertion record.
 If revocation cannot settle, the local fixture retains its control state for reconciliation.
 CI retains only the selected synthetic evidence and logs, excluding private gateway state and generated credentials.
-These tests do not establish model-driven attack resistance, signed-checkpoint retention, tenant authorization, or institutional sensitive-data approval.
+These tests do not establish model-driven attack resistance, production records-policy qualification, tenant authorization, or institutional sensitive-data approval.
 
 ### Infrastructure Telemetry
 
