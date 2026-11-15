@@ -267,7 +267,6 @@ def test_main_validation_owns_release_readiness_dependencies() -> None:
         "secrets": "gitleaks.yml",
         "gpu-containers": "gpu-container-image.yml",
         "native-assets": "native-release.yml",
-        "native-qualification": "worker-candidate.yml",
         "python": "python.yml",
         "validation": "validate.yml",
         "web-ui": "web-ui.yml",
