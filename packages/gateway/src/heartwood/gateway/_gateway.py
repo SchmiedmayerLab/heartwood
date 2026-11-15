@@ -146,6 +146,7 @@ from heartwood.gateway._session_catalog import (
 from heartwood.gateway._session_projection import (
     SessionLifecycle,
     SessionProjection,
+    command_unavailable_reason,
     project_session,
 )
 from heartwood.gateway._skill_settings import SkillManager, SkillSettingsError
@@ -875,24 +876,15 @@ class SessionGateway:
                 FileSessionStore(self.sessions_root, command.session_id).replay_events(),
                 session_id=command.session_id,
             )
-            retained = persisted_projection.pending_approval
-            if (
-                persisted_projection.lifecycle.status == SessionLifecycle.ERROR
+            fatal_unavailable_reason = (
+                command_unavailable_reason(persisted_projection, command_kind)
+                if persisted_projection.lifecycle.status == SessionLifecycle.ERROR
                 and not persisted_projection.lifecycle.can_steer
-                # Withdrawing a retained outside approval sends nothing, so it needs
-                # neither an admitted worker nor a known execution outcome.
-                and not (
-                    command_kind == CommandKind.DENY.value
-                    and retained is not None
-                    and retained.decision == "approved"
-                )
-            ):
+                else None
+            )
+            if fatal_unavailable_reason is not None:
                 return self._handle_stored_command(
-                    command,
-                    unavailable_reason=(
-                        f"{command_kind} is unavailable while the agent is "
-                        f"{persisted_projection.lifecycle.status}"
-                    ),
+                    command, unavailable_reason=fatal_unavailable_reason
                 )
         if self._worker_revoked(command.session_id):
             # Only a command replaces a revoked worker's service; a read keeps it.
@@ -906,13 +898,9 @@ class SessionGateway:
                 session_id=command.session_id, all_events=all_events
             ).projection
             unavailable_reason = deployment_refusal or (
-                None
-                if command_kind not in _PROJECTED_COMMANDS
-                or command_kind in projection.available_commands
-                else (
-                    f"{command_kind} is unavailable while the agent is "
-                    f"{projection.lifecycle.status}"
-                )
+                command_unavailable_reason(projection, command_kind)
+                if command_kind in _PROJECTED_COMMANDS
+                else None
             )
             streaming: str | None = None
             if unavailable_reason is None and command_kind in _STREAMING_COMMANDS:

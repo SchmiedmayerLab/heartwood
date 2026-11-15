@@ -1759,22 +1759,112 @@ def test_only_a_researcher_command_ends_a_projected_pause() -> None:
     assert continued.lifecycle.can_pause
 
 
-def test_a_review_requested_during_a_pause_waits_without_ending_it() -> None:
+def test_a_review_requested_during_a_pause_is_decided_first_and_a_rejection_keeps_the_pause() -> (
+    None
+):
+    requested = (
+        _command(0, "pause"),
+        _event(1, EventKind.SESSION_PAUSED, {}),
+        _event(
+            2, EventKind.TOOL_CALL_PROPOSED, {"tool_call_id": "call-1", "tool_name": "terminal"}
+        ),
+        _confirmation_event(3, "group-1", "call-1", "terminal"),
+    )
+    projection = project_session(requested, session_id="session-1")
+
+    # The gateway accepts only the decision, so nothing may offer resume or guidance.
+    assert session_activity(requested).paused
+    assert projection.lifecycle.status == SessionLifecycle.WAITING_FOR_CONFIRMATION
+    assert projection.lifecycle.model_dump() == {
+        "status": SessionLifecycle.WAITING_FOR_CONFIRMATION,
+        "can_pause": False,
+        "can_resume": False,
+        "can_steer": False,
+    }
+    assert projection.researcher_status.code == "waiting-for-review"
+    assert projection.pending_approval is not None
+    assert projection.available_commands == ("approve", "deny")
+
+    rejected = (
+        *requested,
+        _command(4, "deny"),
+        _event(
+            5,
+            EventKind.APPROVAL_RECORDED,
+            {"group_id": "group-1", "decision": "denied", "tool_call_ids": ["call-1"]},
+        ),
+        _event(
+            6,
+            EventKind.CONFIRMATION_RESOLVED,
+            {"group_id": "group-1", "tool_call_id": "call-1", "decision": "denied"},
+        ),
+    )
+    still_paused = project_session(rejected, session_id="session-1")
+    # A rejection does not continue the agent, so the pause is still in effect.
+    assert session_activity(rejected).paused
+    assert still_paused.paused
+    assert still_paused.available_commands == ("chat", "resume")
+
+    approved = project_session((*requested, _command(4, "approve")), session_id="session-1")
+    assert not session_activity((*requested, _command(4, "approve"))).paused
+    assert approved.available_commands == ("approve", "deny")
+
+
+@pytest.mark.parametrize("kind", ["chat", "workflow", "resume"])
+def test_a_researcher_command_ends_the_projected_pause_when_it_ends_the_service_pause(
+    kind: str,
+) -> None:
+    events = (
+        _event(0, EventKind.AGENT_LIFECYCLE_UPDATED, {"status": "running"}),
+        _command(1, "pause"),
+        _event(2, EventKind.SESSION_PAUSED, {}),
+        _command(3, kind),
+    )
+
+    projection = project_session(events, session_id="session-1")
+
+    assert not session_activity(events).paused
+    assert not projection.paused
+    assert projection.lifecycle.status == SessionLifecycle.RUNNING
+    assert projection.available_commands == ("chat", "pause")
+
+
+@pytest.mark.parametrize("cause", ["fatal-error", "integrity"])
+def test_an_unrecoverable_session_advertises_no_decision_on_an_open_review(cause: str) -> None:
+    unrecoverable = (
+        _event(
+            2,
+            EventKind.ERROR_RECORDED,
+            {
+                "reason": "synthetic",
+                "code": BackendErrorCode.ACTION_OUTCOME_UNKNOWN.value,
+                "affects_lifecycle": False,
+            },
+        )
+        if cause == "fatal-error"
+        else _event(
+            2,
+            EventKind.TOOL_CALL_PROPOSED,
+            {"tool_call_id": "call-1", "tool_name": "terminal"},
+        )
+    )
     projection = project_session(
         (
-            _command(0, "pause"),
-            _event(1, EventKind.SESSION_PAUSED, {}),
             _event(
-                2, EventKind.TOOL_CALL_PROPOSED, {"tool_call_id": "call-1", "tool_name": "terminal"}
+                0, EventKind.TOOL_CALL_PROPOSED, {"tool_call_id": "call-1", "tool_name": "terminal"}
             ),
-            _confirmation_event(3, "group-1", "call-1", "terminal"),
+            _confirmation_event(1, "group-1", "call-1", "terminal"),
+            unrecoverable,
         ),
         session_id="session-1",
     )
 
-    assert projection.lifecycle.status == SessionLifecycle.PAUSED
+    # The gateway refuses every decision once the session cannot continue.
     assert projection.pending_approval is not None
-    assert projection.available_commands == ("approve", "deny")
+    assert projection.lifecycle.status == SessionLifecycle.ERROR
+    assert not projection.lifecycle.can_steer
+    assert projection.researcher_status.code == "terminal-failure"
+    assert projection.available_commands == ()
 
 
 def test_a_fatal_error_ends_steering_whatever_its_lifecycle_flag() -> None:
