@@ -323,7 +323,9 @@ The gateway could not observe that a worker attempt an earlier gateway process l
 The attempt remains fenced, and the session refuses commands until revocation is observed; it stays readable.
 The gateway retries while it runs, with a growing interval of up to 10 minutes, so restoring the control plane is enough; restarting the gateway retries at once.
 A worker whose revocation fails while the gateway runs, including when its session's service is being closed, is handled the same way: the session stays fenced, refuses commands as retryable and stays readable until the retry observes revocation.
-When the gateway never learned whether its request to create the worker succeeded, the attempt stays fenced even while the control plane answers, because absence does not show that the creation will not still complete; the retry deletes the worker if it appears.
+When the gateway's request to create the worker failed or went unanswered, the attempt stays fenced even while the control plane answers, because absence does not show that the creation will not still complete; the retry deletes the worker if it appears.
+The only exception is a request the control plane rejected as invalid, unauthorized or unauthenticated, which the same gateway process then records as never created.
+A gateway process that ended after it prepared a worker and before it recorded the worker's runtime or its revocation leaves the attempt fenced the same way.
 Continue such a session's work in a new session.
 Do not delete the session's records or writer files to release it.
 

@@ -176,7 +176,8 @@ Each attempt's launch intent records stable identities of the sandbox control pl
 Launch refuses to proceed when either identity changed after preparation.
 Reconciliation observes the infrastructure named by the current deployment manifest only when both identities match the attempt's record; otherwise the attempt stays fenced with `HW-WORKER-002` and nothing is observed or removed, because absence on other infrastructure is not evidence of revocation.
 Attempt records are versioned: records written before launches retained these identities remain readable, name no infrastructure, and are never reconciled against the current one.
-After a creation request whose outcome is unknown, absence of the sandbox is never recorded as `not-created`; reconciliation treats an attempt without a recorded runtime the same way.
+The qualified sandbox gateway answers a creation request with `INVALID_ARGUMENT`, `PERMISSION_DENIED` or `UNAUTHENTICATED` only before it records or requests the sandbox, so the gateway process that received such a rejection records later absence as `not-created`.
+After any other failed or unanswered creation request, absence of the sandbox is never recorded as `not-created`; reconciliation treats an attempt without a recorded runtime the same way, because the process that received the response has ended.
 The qualified sandbox gateway rejects deletion of a sandbox whose provisioning has not settled, but it does not report a creation request it has not recorded yet, so absence cannot show that such a request will not still create the sandbox.
 The attempt therefore stays fenced and its revocation keeps being retried; a sandbox that appears under the attempt's unique name with its full identity is deleted, and the attempt is recorded as revoked.
 Resolving such an attempt from absence requires a sandbox gateway that rejects or reports later creations under a name whose absence it confirmed.

@@ -52,8 +52,9 @@ from heartwood.gateway.worker_volumes import (
     container_runtime_sha256,
 )
 
-# After a creation whose outcome is unknown, absence is observed for this long, then counts
-# only once observed again after the attempt's unique name was deleted.
+# The pinned sandbox gateway returns these statuses for a creation request only before it
+# records or requests the sandbox; any other failure may still leave one created.
+_CREATION_REJECTED = ("INVALID_ARGUMENT", "PERMISSION_DENIED", "UNAUTHENTICATED")
 
 
 def native_worker_plan_factory(
@@ -357,12 +358,18 @@ class _NativeWorkerAttempt:
             )
             # Until the control plane answers, the creation may complete later.
             self._creation_uncertain = True
-            created = self.control.client.create(
-                workspace=self.settings.workspace,
-                name=volumes.worker_name,
-                spec=spec,
-                labels=volumes.labels,
-            )
+            try:
+                created = self.control.client.create(
+                    workspace=self.settings.workspace,
+                    name=volumes.worker_name,
+                    spec=spec,
+                    labels=volumes.labels,
+                )
+            except self.control.grpc.RpcError as error:
+                status = self.control.grpc.StatusCode
+                if error.code() in tuple(status[name] for name in _CREATION_REJECTED):
+                    self._creation_uncertain = False
+                raise
             self._sandbox_id = created.id
             self._creation_uncertain = False
             ready = self.control.client.wait_ready(

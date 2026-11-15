@@ -1195,6 +1195,40 @@ def test_absence_after_an_uncertain_creation_keeps_the_attempt_fenced_until_it_a
     assert not native.sandboxes.running
 
 
+@pytest.mark.parametrize(
+    ("status", "rejected"),
+    [
+        ("INVALID_ARGUMENT", True),
+        ("PERMISSION_DENIED", True),
+        ("UNAUTHENTICATED", True),
+        ("FAILED_PRECONDITION", False),
+        ("ALREADY_EXISTS", False),
+        ("INTERNAL", False),
+        ("UNAVAILABLE", False),
+        ("DEADLINE_EXCEEDED", False),
+    ],
+)
+def test_only_a_creation_rejected_before_any_record_resolves_from_absence(
+    native: _Native, monkeypatch: pytest.MonkeyPatch, status: str, rejected: bool
+) -> None:
+    def failed_create(**_request: object) -> SimpleNamespace:
+        raise native.sandboxes.error(getattr(native.sandboxes.grpc.StatusCode, status))
+
+    monkeypatch.setattr(native.sandboxes, "create", failed_create)
+    with pytest.raises(WorkerAttemptError, match="outside reconciliation"):
+        native.attempt.launch(native.intent)
+    if rejected:
+        assert native.attempt.revoke(native.record("fenced", None)).outcome == "not-created"
+    else:
+        with pytest.raises(WorkerAttemptError, match="absence after an unresolved creation"):
+            native.attempt.revoke(native.record("fenced", None))
+    # Without a recorded runtime, an ended process cannot tell which outcome it had.
+    reconcile = worker_native.native_worker_reconciler(native.settings, native.project)
+    with pytest.raises(WorkerAttemptError, match="absence after an unresolved creation"):
+        reconcile(native.record("fenced", None))
+    assert native.sandboxes.deleted == []
+
+
 _GATEWAY_PROCESS = """import sys, time
 from pathlib import Path
 from types import SimpleNamespace
