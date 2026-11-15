@@ -414,6 +414,7 @@ _NARROWED: dict[str, list[str]] = {
     "allowed_action_review_modes": ["review-all"],
     "allowed_credential_backends": ["mounted-file"],
     "allowed_checkpoint_signer_profiles": ["research-records"],
+    "allowed_data_destinations": ["same-compute"],
 }
 
 

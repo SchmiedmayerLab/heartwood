@@ -113,6 +113,8 @@ def _format_readiness(readiness: DeploymentReadiness) -> str:
             if policy["checkpoint_signer_profiles"] is None
             else _listed(policy["checkpoint_signer_profiles"])
         ),
+        "Data destinations: "
+        + ("any" if policy["data_destinations"] is None else _listed(policy["data_destinations"])),
         f"Isolated worker: {policy['isolated_worker']}",
         f"Checkpoint evidence: {policy['checkpoint_evidence']}",
     ]

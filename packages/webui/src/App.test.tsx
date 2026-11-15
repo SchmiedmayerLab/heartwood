@@ -4347,6 +4347,7 @@ const projectReadiness = (
     credential_references: [],
     credential_backends: ["process", "keyring", "mounted-file"],
     checkpoint_signer_profiles: null,
+    data_destinations: null,
     aggregate_count_floor: 20,
     isolated_worker: "not-configured",
     checkpoint_evidence: "not-configured",

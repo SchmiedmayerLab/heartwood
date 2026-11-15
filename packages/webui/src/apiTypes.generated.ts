@@ -624,6 +624,7 @@ export interface EffectivePolicyResponse {
     "process" | "keyring" | "mounted-file" | "managed-identity"
   )[];
   credential_references: string[];
+  data_destinations: DataDestination[] | null;
   deny_egress_by_default: boolean;
   isolated_worker: "required" | "configured" | "not-configured";
   manifest: string | null;

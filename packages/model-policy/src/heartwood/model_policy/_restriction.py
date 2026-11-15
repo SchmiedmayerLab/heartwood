@@ -66,7 +66,7 @@ POLICY_RESTRICTIONS: Mapping[str, PolicyRestriction] = MappingProxyType(
             "optional-subset", "checkpoint_signer_profiles", absent_means_any=True
         ),
         "allowed_data_destinations": PolicyRestriction(
-            "optional-subset", absent_means_any=True, keep_disjoint=True
+            "optional-subset", "data_destinations", absent_means_any=True, keep_disjoint=True
         ),
         "aggregate_count_floor": PolicyRestriction("minimum", "aggregate_count_floor"),
         "notes": PolicyRestriction("no-authority"),

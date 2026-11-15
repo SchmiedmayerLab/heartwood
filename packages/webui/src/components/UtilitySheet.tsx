@@ -1099,6 +1099,7 @@ const effectivePolicyLabels: Record<
     label: "Checkpoint signers",
     unset: "Deployment registry",
   },
+  data_destinations: { label: "Data destinations", unset: "Any" },
   aggregate_count_floor: { label: "Aggregate count floor" },
   isolated_worker: { label: "Isolated worker" },
   checkpoint_evidence: { label: "Checkpoint evidence" },

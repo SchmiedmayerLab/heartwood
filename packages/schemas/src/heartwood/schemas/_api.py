@@ -484,6 +484,7 @@ class EffectivePolicyResponse(_ApiResponse):
     credential_references: list[str]
     credential_backends: list[Literal["process", "keyring", "mounted-file", "managed-identity"]]
     checkpoint_signer_profiles: list[str] | None
+    data_destinations: list[DataDestination] | None
     aggregate_count_floor: int
     isolated_worker: Literal["required", "configured", "not-configured"]
     checkpoint_evidence: Literal["required", "configured", "not-configured"]
