@@ -319,7 +319,6 @@ def test_real_sdk_session_allows_project_reads_and_stops_before_a_command(
             credential_kind="none",
         ),
         workspace=project,
-        skills_dir=tmp_path / "skills",
         persistence_dir=tmp_path / "openhands",
         conversation_key="review-conformance",
         env={},

@@ -74,7 +74,6 @@ def _backend(
     return OpenHandsSdkBackend(
         profile=profile,
         workspace=tmp_path / "project",
-        skills_dir=tmp_path / "private-skills",
         persistence_dir=tmp_path / "private-runtime",
         conversation_key="synthetic",
         worker_context=lambda: context,

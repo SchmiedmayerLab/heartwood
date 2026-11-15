@@ -232,7 +232,6 @@ def _gateway(
                 credential_kind="none",
             ),
             workspace=root,
-            skills_dir=root / ".heartwood/skills",
             persistence_dir=persistence,
             conversation_key=f"{root}#{session_id}",
             env={},

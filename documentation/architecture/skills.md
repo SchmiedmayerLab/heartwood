@@ -31,7 +31,7 @@ Every catalog target contains the complete immutable Agent Skill package, rather
 
 OpenHands also provides installed-Skill and marketplace APIs for its general-purpose runtime.
 Heartwood does not use those APIs as a second installation registry because they do not carry deployment TUF roots, exact-digest controlled-data approvals, signed revocation state, or project-scoped audit evidence.
-Heartwood instead verifies and activates a Skill once in its gateway-owned project store, then passes only the verified active directories to the public OpenHands loader.
+Heartwood instead verifies and activates a Skill once in its gateway-owned project store, then loads each verified active Skill directory individually with the public OpenHands Skill loader.
 Installation decisions and lifecycle results use Heartwood's existing recoverable, scrubbed, hash-chained audit log rather than a Skill-specific logging format.
 
 ## Signed Source Flow
@@ -67,6 +67,18 @@ Heartwood revalidates the signed source, installed tree, and matching activation
 Runtime selection rereads the installation index after refreshing signed sources, so a newly observed revocation excludes the package from that same selection.
 It also reevaluates tool, network, and platform compatibility for the current deployment, so project state moved between environments cannot activate an incompatible Skill.
 The projection likewise reports controlled-data approval for an installed Skill from the current deployment registry, not from the retained installation record.
+
+## Agent Selection
+
+The agent context contains the release-bundled Skills compatible with the current deployment and the verified active installed Skills, and nothing else.
+The local gateway and the worker projection use this same selection.
+The gateway loads each selected Skill from its own `SKILL.md`; it never passes a parent directory to OpenHands for discovery.
+A selected directory that fails to load stops conversation setup rather than being skipped.
+
+Each content-addressed slot `artifacts/sha256/<tree-digest>/` holds exactly one Skill directory.
+Anything else in that slot, such as a directory written beside the Skill or a staging directory left by an interrupted installation, has neither a verified digest nor an activation record.
+Heartwood does not load or project that content and logs a gateway warning naming each unexpected entry whenever it selects the Skill.
+Removing the unexpected entry clears the warning; the verified Skill remains available meanwhile.
 
 ## Worker Projection
 

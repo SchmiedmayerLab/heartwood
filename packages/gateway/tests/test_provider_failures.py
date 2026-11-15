@@ -618,7 +618,6 @@ def _service_for_profile(
     backend = OpenHandsSdkBackend(
         profile=profile,
         workspace=tmp_path / "project",
-        skills_dir=tmp_path / "skills",
         persistence_dir=tmp_path / "openhands",
         conversation_key=conversation_key,
         credential_environment_names=(_API_KEY_NAME,),

@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
@@ -34,6 +35,8 @@ from heartwood.skills import (
     SkillVerificationError,
     skill_compatibility_reason,
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class SkillSettingsError(ValueError):
@@ -459,27 +462,34 @@ class SkillManager:
         # is no longer loaded, so its directory is not reverified here.
         self._record_removal(removed)
 
-    def active_skill_roots(self) -> tuple[Path, ...]:
-        """Return verified installed roots consumable by OpenHands."""
+    def active_skill_directories(self) -> tuple[Path, ...]:
+        """Return exactly the verified, active Skill directories that OpenHands may load."""
         with self._lifecycle_lock():
-            return tuple(manifest.root.parent for manifest in self._active_skill_manifests())
+            return tuple(manifest.root for manifest in self._agent_skill_manifests())
 
     @contextmanager
     def stage_worker_skills(
         self, *, project_root: Path, staging_parent: Path
     ) -> Iterator[WorkerSkillProjection]:
         """Project verified active content without exposing the installation store."""
-        with self._lifecycle_lock():
-            manifests = [
-                manifest
-                for manifest in self._bundled_manifests()
-                if self._compatibility_reason(manifest) is None
-            ]
-            manifests.extend(self._active_skill_manifests())
-            with stage_skill_projection(
-                manifests, project_root=project_root, staging_parent=staging_parent
-            ) as projection:
-                yield projection
+        with (
+            self._lifecycle_lock(),
+            stage_skill_projection(
+                self._agent_skill_manifests(),
+                project_root=project_root,
+                staging_parent=staging_parent,
+            ) as projection,
+        ):
+            yield projection
+
+    def _agent_skill_manifests(self) -> tuple[SkillManifest, ...]:
+        """Select compatible bundled and active installed Skills under the lifecycle lock."""
+        bundled = tuple(
+            manifest
+            for manifest in self._bundled_manifests()
+            if self._compatibility_reason(manifest) is None
+        )
+        return (*bundled, *self._active_skill_manifests())
 
     def _active_skill_manifests(self) -> tuple[SkillManifest, ...]:
         """Return active packages while holding the lifecycle lock."""
@@ -505,6 +515,12 @@ class SkillManager:
                 if record.status != "active":
                     continue
                 manifest = self.store.manifest(record)
+                if unexpected := self.store.unexpected_artifact_entries(record):
+                    _LOGGER.warning(
+                        "Ignoring unverified content beside installed Skill %s: %s",
+                        record.name,
+                        ", ".join(repr(name) for name in unexpected),
+                    )
                 if self._compatibility_reason(manifest) is None:
                     manifests.append(manifest)
             return tuple(manifests)

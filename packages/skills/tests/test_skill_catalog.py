@@ -612,6 +612,27 @@ def test_local_install_is_unreviewed_content_addressed_and_tamper_evident(tmp_pa
         store.active_manifests()
 
 
+def test_store_reports_unexpected_entries_beside_an_installed_skill(tmp_path: Path) -> None:
+    source = tmp_path / "source" / "aggregate-export"
+    shutil.copytree(_SKILLS_ROOT / "aggregate-export", source)
+    store = SkillArtifactStore(tmp_path / "state" / "skills")
+    tree_sha256 = LocalSkillVerifier(source.parent).load_manifest(source).tree_sha256
+    record = store.install_local(source, expected_tree_sha256=tree_sha256)
+    slot = store.artifact_path(record).parent
+    assert store.unexpected_artifact_entries(record) == ()
+
+    (slot / "planted-context").mkdir()
+    (slot / ".aggregate-export-interrupted").mkdir()
+    assert store.unexpected_artifact_entries(record) == (
+        ".aggregate-export-interrupted",
+        "planted-context",
+    )
+
+    shutil.rmtree(slot)
+    with pytest.raises(SkillStoreError, match="artifact is unreadable"):
+        store.unexpected_artifact_entries(record)
+
+
 def test_installed_record_cannot_forge_catalog_or_controlled_data_provenance() -> None:
     common = {
         "name": "synthetic-skill",

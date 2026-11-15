@@ -62,7 +62,7 @@ from openhands.sdk.settings import (
     OpenHandsAgentSettings,
     VerificationSettings,
 )
-from openhands.sdk.skills import Skill
+from openhands.sdk.skills import Skill, SkillError
 from openhands.sdk.subagent import AgentDefinition, register_agent_if_absent
 from openhands.sdk.tool.builtins import ThinkAction
 from openhands.sdk.tool.builtins.finish import FinishTool
@@ -300,10 +300,9 @@ class OpenHandsSdkBackend:
         *,
         profile: ModelProfile,
         workspace: Path,
-        skills_dir: Path,
         persistence_dir: Path,
         conversation_key: str,
-        additional_skills_dirs: Sequence[Path] = (),
+        skill_directories: Sequence[Path] = (),
         specialist_catalog: SpecialistCatalog | None = None,
         credential_environment_names: Sequence[str] = (),
         env: Mapping[str, str] | None = None,
@@ -319,8 +318,7 @@ class OpenHandsSdkBackend:
         self.profile = profile
         self._managed_inference = managed_inference
         self.workspace = workspace.resolve()
-        self.skills_dir = skills_dir.resolve()
-        self.additional_skills_dirs = tuple(path.resolve() for path in additional_skills_dirs)
+        self.skill_directories = tuple(path.resolve() for path in skill_directories)
         self.specialist_catalog = specialist_catalog
         self.persistence_dir = persistence_dir.resolve()
         self.conversation_key = conversation_key
@@ -844,16 +842,9 @@ class OpenHandsSdkBackend:
             managed_api_key = configure_managed_inference(
                 os.environ if self.env is None else self.env
             )
-        from openhands.sdk.skills import load_skills_from_dir
-
         self.workspace.mkdir(parents=True, exist_ok=True)
         self.persistence_dir.mkdir(parents=True, exist_ok=True)
-        skills: list[Skill] = []
-        for skills_dir in (self.skills_dir, *self.additional_skills_dirs):
-            if not skills_dir.is_dir():
-                continue
-            repository, knowledge, agent_skills = load_skills_from_dir(skills_dir)
-            skills.extend((*repository.values(), *knowledge.values(), *agent_skills.values()))
+        skills = load_skill_directories(self.skill_directories)
         self._register_specialized_agents()
         options = _llm_options(
             self.profile,
@@ -2283,6 +2274,18 @@ def _conversation_runtime_options() -> _ConversationRuntimeOptions:
         "max_iteration_per_run": _AGENT_MAX_ITERATIONS_PER_RUN,
         "stuck_detection": True,
     }
+
+
+def load_skill_directories(directories: Sequence[Path]) -> list[Skill]:
+    """Load exactly the given Agent Skill directories, refusing any that does not load."""
+    skills: list[Skill] = []
+    for directory in directories:
+        try:
+            skill = Skill.load(directory / "SKILL.md")
+        except (OSError, SkillError) as error:
+            raise OpenHandsSdkError(f"Unable to load verified Skill {directory.name}") from error
+        skills.append(skill)
+    return skills
 
 
 def _agent_context(

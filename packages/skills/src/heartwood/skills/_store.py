@@ -232,10 +232,16 @@ class SkillArtifactStore:
                 self._verified_manifest(record) for record in records if record.status == "active"
             )
 
-    def active_skill_roots(self) -> tuple[Path, ...]:
-        """Return verified parent directories consumable by OpenHands."""
-        manifests = self.active_manifests()
-        return tuple(manifest.root.parent for manifest in manifests)
+    def unexpected_artifact_entries(self, record: InstalledSkillRecord) -> tuple[str, ...]:
+        """Return names beside one record's Skill directory in its content-addressed slot."""
+        path = self._artifact_path(record)
+        try:
+            entries = sorted(entry.name for entry in path.parent.iterdir())
+        except OSError as error:
+            raise SkillStoreError(
+                f"Installed Skill artifact is unreadable: {record.name}"
+            ) from error
+        return tuple(name for name in entries if name != path.name)
 
     def artifact_path(self, record: InstalledSkillRecord) -> Path:
         """Return the confined content-addressed directory for one record."""

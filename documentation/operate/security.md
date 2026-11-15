@@ -200,6 +200,8 @@ Do not enable unbounded runtime caches, share them between users, or place them 
 Reviewed external Skill packages install only from deployment-approved TUF roots, after verification of signatures, expiry, rollback state, target hashes, the complete file manifest, declared policy and OpenHands compatibility.
 Approval binds the exact tree digest, installation is atomic, and a signed revocation prevents later activation.
 Only the deployment-owned system Skill registry can approve a digest for controlled data.
+The agent receives each verified active Skill directory individually, never a parent directory that OpenHands would scan for more Skills.
+Content placed beside an installed Skill in the project store, including another Skill directory or an interrupted installation, is not loaded, and the gateway logs a warning naming it.
 Verification establishes source and integrity, not that instructions are safe for a dataset; see [Skill Trust and Distribution](../architecture/skills.md).
 
 ## Audit Data

@@ -311,7 +311,9 @@ def test_gateway_removal_resets_sessions_despite_unexpected_skill_content(
 
     assert all(skill["source"] != "installed" for skill in settings["skills"])
     assert not gateway._services
-    assert gateway.skill_manager.active_skill_roots() == ()
+    assert not any(
+        path.is_relative_to(store.root) for path in gateway.skill_manager.active_skill_directories()
+    )
     audit = AuditLog(gateway.project.audit_dir / "skill-installations.jsonl").read()
     assert audit[-1].event_type == "skill.deactivated"
     gateway.stop()

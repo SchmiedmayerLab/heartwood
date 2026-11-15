@@ -255,7 +255,6 @@ def test_bundled_tool_free_specialists_register_with_openhands(tmp_path: Path) -
     backend = OpenHandsSdkBackend(
         profile=_local_profile(),
         workspace=tmp_path / "workspace",
-        skills_dir=tmp_path / "skills",
         persistence_dir=tmp_path / "openhands",
         conversation_key="specialist-registration",
         specialist_catalog=catalog,
@@ -348,7 +347,6 @@ def test_specialized_agent_name_collision_fails_closed(tmp_path: Path) -> None:
     backend = OpenHandsSdkBackend(
         profile=_local_profile(),
         workspace=tmp_path / "workspace",
-        skills_dir=tmp_path / "skills",
         persistence_dir=tmp_path / "openhands",
         conversation_key="specialist-collision",
         specialist_catalog=load_specialist_catalog(
@@ -397,7 +395,6 @@ def test_foreign_registered_agent_cannot_cross_the_specialist_allowlist(
     backend = OpenHandsSdkBackend(
         profile=_local_profile(),
         workspace=tmp_path / "workspace",
-        skills_dir=tmp_path / "skills",
         persistence_dir=tmp_path / "openhands",
         conversation_key="foreign-specialist",
         specialist_catalog=_specialist_catalog(),
@@ -3110,7 +3107,6 @@ def test_sequential_specialized_agent_workflow_exposes_parent_lineage(
     backend = OpenHandsSdkBackend(
         profile=_local_profile(),
         workspace=tmp_path / "workspace",
-        skills_dir=tmp_path / "skills",
         persistence_dir=tmp_path / "openhands",
         conversation_key="specialist-lineage",
         specialist_catalog=_specialist_catalog(),
@@ -3208,7 +3204,6 @@ def test_packaged_advisory_specialists_return_output_to_the_parent_agent(
     backend = OpenHandsSdkBackend(
         profile=_local_profile(),
         workspace=tmp_path / "workspace",
-        skills_dir=tmp_path / "skills",
         persistence_dir=tmp_path / "openhands",
         conversation_key="packaged-specialist",
         specialist_catalog=_specialist_catalog(),
@@ -3273,7 +3268,6 @@ def test_parent_cancels_specialist_delegation_before_the_child_starts(
     backend = OpenHandsSdkBackend(
         profile=_local_profile(),
         workspace=tmp_path / "workspace",
-        skills_dir=tmp_path / "skills",
         persistence_dir=tmp_path / "openhands",
         conversation_key="rejected-specialist",
         specialist_catalog=_specialist_catalog(),
@@ -3328,7 +3322,6 @@ def test_specialist_resume_fails_closed_until_lineage_is_restart_durable(
     backend = OpenHandsSdkBackend(
         profile=_local_profile(),
         workspace=tmp_path / "workspace",
-        skills_dir=tmp_path / "skills",
         persistence_dir=tmp_path / "openhands",
         conversation_key="resumed-specialist",
         specialist_catalog=_specialist_catalog(),
@@ -3400,7 +3393,6 @@ def test_specialist_failure_is_projected_to_the_parent(
     backend = OpenHandsSdkBackend(
         profile=_local_profile(),
         workspace=tmp_path / "workspace",
-        skills_dir=tmp_path / "skills",
         persistence_dir=tmp_path / "openhands",
         conversation_key="failed-specialist",
         specialist_catalog=_specialist_catalog(),
@@ -3470,7 +3462,6 @@ def test_completed_specialist_workflow_replays_without_model_calls(
     first = OpenHandsSdkBackend(
         profile=_local_profile(),
         workspace=tmp_path / "workspace",
-        skills_dir=tmp_path / "skills",
         persistence_dir=persistence_dir,
         conversation_key="specialist-replay",
         specialist_catalog=_specialist_catalog(),
@@ -3524,7 +3515,6 @@ def test_completed_specialist_workflow_replays_without_model_calls(
     restored = OpenHandsSdkBackend(
         profile=_local_profile(),
         workspace=tmp_path / "workspace",
-        skills_dir=tmp_path / "skills",
         persistence_dir=persistence_dir,
         conversation_key="specialist-replay",
         specialist_catalog=_specialist_catalog(),
@@ -3701,7 +3691,6 @@ def test_native_specialist_task_concurrency_preserves_results_and_approval(
     backend = OpenHandsSdkBackend(
         profile=_local_profile(),
         workspace=tmp_path / "workspace",
-        skills_dir=tmp_path / "skills",
         persistence_dir=tmp_path / "openhands",
         conversation_key="parallel-conformance",
         specialist_catalog=_specialist_catalog(),
@@ -3783,7 +3772,6 @@ def test_native_specialist_task_concurrency_preserves_results_and_approval(
     restored = OpenHandsSdkBackend(
         profile=_local_profile(),
         workspace=tmp_path / "workspace",
-        skills_dir=tmp_path / "skills",
         persistence_dir=tmp_path / "openhands",
         conversation_key="parallel-conformance",
         specialist_catalog=_specialist_catalog(),
@@ -3847,7 +3835,6 @@ def test_scoped_review_denial_never_starts_a_child(tmp_path: Path, decision: str
     backend = OpenHandsSdkBackend(
         profile=_local_profile(),
         workspace=tmp_path / "workspace",
-        skills_dir=tmp_path / "skills",
         persistence_dir=tmp_path / "openhands",
         conversation_key="denied-parallel-review",
         specialist_catalog=_specialist_catalog(),
@@ -3959,7 +3946,6 @@ def test_parent_pause_interrupts_both_native_specialist_model_calls(
     backend = OpenHandsSdkBackend(
         profile=_local_profile(),
         workspace=tmp_path / "workspace",
-        skills_dir=tmp_path / "skills",
         persistence_dir=tmp_path / "openhands",
         conversation_key="parallel-interrupt",
         specialist_catalog=_specialist_catalog(),
@@ -3996,7 +3982,6 @@ def test_parent_pause_interrupts_both_native_specialist_model_calls(
     restored = OpenHandsSdkBackend(
         profile=_local_profile(),
         workspace=tmp_path / "workspace",
-        skills_dir=tmp_path / "skills",
         persistence_dir=tmp_path / "openhands",
         conversation_key="parallel-interrupt",
         specialist_catalog=_specialist_catalog(),
@@ -4086,7 +4071,6 @@ def test_structured_specialist_plain_prose_cannot_replace_review_proposals(tmp_p
     backend = OpenHandsSdkBackend(
         profile=_local_profile(),
         workspace=tmp_path / "workspace",
-        skills_dir=tmp_path / "skills",
         persistence_dir=tmp_path / "openhands",
         conversation_key="missing-review",
         specialist_catalog=_specialist_catalog(),
@@ -4318,7 +4302,6 @@ def test_openhands_backend_preflights_credential_reference(tmp_path: Path) -> No
     backend = OpenHandsSdkBackend(
         profile=_remote_profile(),
         workspace=tmp_path / "workspace",
-        skills_dir=tmp_path / "skills",
         persistence_dir=tmp_path / "openhands",
         conversation_key="credential-test",
         env={},
@@ -4352,7 +4335,6 @@ def test_openhands_backend_rejects_stale_provider_routes(
             api_key_env="OPENAI_API_KEY",
         ),
         workspace=tmp_path / "workspace",
-        skills_dir=tmp_path / "skills",
         persistence_dir=tmp_path / "openhands",
         conversation_key="route-test",
         env={"OPENAI_API_KEY": "test-key"},
@@ -4451,7 +4433,6 @@ def _backend(
     return OpenHandsSdkBackend(
         profile=_local_profile(),
         workspace=tmp_path / "workspace",
-        skills_dir=tmp_path / "skills",
         persistence_dir=tmp_path / "openhands",
         conversation_key="backend-test",
         env={},
@@ -4552,7 +4533,6 @@ def _openhands_gateway(
         backend = OpenHandsSdkBackend(
             profile=_local_profile(),
             workspace=project_root,
-            skills_dir=project_root / "skills",
             persistence_dir=sessions_root / session_id / "openhands",
             conversation_key=f"{project_root}#{session_id}",
             env={},
