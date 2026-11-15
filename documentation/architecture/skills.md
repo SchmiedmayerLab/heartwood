@@ -23,6 +23,8 @@ The Heartwood release pins one exact `heartwood-skills` Git revision as a submod
 Packaging verifies that the initialized directory is clean and matches that gitlink, then archives that revision into native and container artifacts.
 Release creation additionally verifies that the pinned revision is published on the protected `heartwood-skills/main` branch.
 Bundled Skills are governed by that Heartwood release; withdrawing bundled content requires a new Heartwood release.
+Heartwood also pins the complete-tree digest of each bundled Skill in its gateway source.
+Before it lists, loads, or projects bundled Skills, the gateway verifies that the bundled directory holds exactly the pinned Skill directories with those digests, and it refuses all three operations otherwise.
 Signed catalog revocations govern catalog-installed content and do not silently rewrite release-bundled content.
 
 Curated packages live directly under `skills/<skill-name>/`; directory names do not encode review or publication state.

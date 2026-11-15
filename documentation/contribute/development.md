@@ -103,7 +103,7 @@ Container, capable-model, and native worker checks need more resources and run t
 
 The curated Skill source must be initialized at the exact Git revision recorded by the superproject.
 CI rejects missing, modified, or substituted submodule content.
-Changes to curated Skill packages and catalog tooling are reviewed in `heartwood-skills`; Heartwood changes then advance the pinned revision and update interface, storage, and release tests together.
+Changes to curated Skill packages and catalog tooling are reviewed in `heartwood-skills`; Heartwood changes then advance the pinned revision, update `BUNDLED_SKILL_DIGESTS` in the gateway's Skill settings, and update interface, storage, and release tests together.
 
 ## Qualify a Terra Image Before Merge
 

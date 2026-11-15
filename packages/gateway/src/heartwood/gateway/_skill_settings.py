@@ -9,11 +9,12 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final, Literal, Protocol
 
 from heartwood.audit import AuditIntegrityError, AuditLog
@@ -37,6 +38,16 @@ from heartwood.skills import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+# Complete-tree digests of the release-bundled Skills in the pinned heartwood-skills
+# revision. Advance them together with that submodule.
+BUNDLED_SKILL_DIGESTS: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "aggregate-export": "2a8575cb0f0b06f48bd20551a50791ec33476b74cbbae6eef8156c029d9754ee",
+        "baseline-model": "2311e80e99d79d0a9f07e8d85b2cc073f8ca3c964209d81400a5ae7bd04ea22a",
+        "omop-cohort-summary": "4f1c6425c8089b487d3899f274b5fe4d38b5367d481f8235d711092a85537479",
+    }
+)
 
 
 class SkillSettingsError(ValueError):
@@ -250,8 +261,10 @@ class SkillManager:
         audit_path: Path,
         platform_id: str,
         client_factory: Callable[[SkillSourceProfile, Path], _CatalogClient] | None = None,
+        bundled_digests: Mapping[str, str] = BUNDLED_SKILL_DIGESTS,
     ) -> None:
         self.bundled_dir = bundled_dir.resolve()
+        self.bundled_digests = bundled_digests
         self.store = store
         self.lifecycle_lock_path = store.root / ".lifecycle.lock"
         self.source_registry = source_registry
@@ -604,23 +617,7 @@ class SkillManager:
         )
 
     def _bundled_manifests(self) -> tuple[SkillManifest, ...]:
-        if not self.bundled_dir.is_dir():
-            return ()
-        verifier = LocalSkillVerifier(
-            self.bundled_dir,
-            review="repository-reviewed",
-            require_repository_review=True,
-        )
-        manifests: list[SkillManifest] = []
-        for path in sorted(self.bundled_dir.iterdir()):
-            if not path.is_dir():
-                continue
-            try:
-                manifest = verifier.inspect_manifest(path)
-            except SkillVerificationError as error:
-                raise SkillSettingsError(f"Invalid bundled Skill {path.name}: {error}") from error
-            manifests.append(manifest)
-        return tuple(manifests)
+        return pinned_bundled_manifests(self.bundled_dir, self.bundled_digests)
 
     def _installed_summaries(self) -> tuple[SkillSummary, ...]:
         try:
@@ -751,6 +748,34 @@ class SkillManager:
             )
         except (AuditIntegrityError, NativeLockUnavailableError) as error:
             raise SkillSettingsError(f"Unable to record Skill audit event: {error}") from error
+
+
+def pinned_bundled_manifests(
+    bundled_dir: Path, digests: Mapping[str, str] = BUNDLED_SKILL_DIGESTS
+) -> tuple[SkillManifest, ...]:
+    """Verify that the bundled directory holds exactly the release-pinned Skill trees."""
+    entries = sorted(bundled_dir.iterdir()) if bundled_dir.is_dir() else []
+    names = {path.name for path in entries}
+    if names != set(digests):
+        differences = sorted(names.symmetric_difference(digests))
+        raise SkillSettingsError(
+            "Bundled Skills do not match the release: " + ", ".join(differences)
+        )
+    verifier = LocalSkillVerifier(
+        bundled_dir,
+        review="repository-reviewed",
+        require_repository_review=True,
+    )
+    manifests: list[SkillManifest] = []
+    for path in entries:
+        try:
+            manifest = verifier.inspect_manifest(path)
+        except SkillVerificationError as error:
+            raise SkillSettingsError(f"Invalid bundled Skill {path.name}: {error}") from error
+        if manifest.tree_sha256 != digests[path.name]:
+            raise SkillSettingsError(f"Bundled Skill does not match the release: {path.name}")
+        manifests.append(manifest)
+    return tuple(manifests)
 
 
 def _summary_order(summary: SkillSummary) -> tuple[int, str, str]:
