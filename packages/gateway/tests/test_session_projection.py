@@ -1615,3 +1615,13 @@ def _confirmation_event(
             }
         },
     )
+
+
+@pytest.mark.parametrize("mode", ["required", "buffered"])
+def test_projection_discloses_evidence_gap_and_retention(mode: str) -> None:
+    pending = _event(0, EventKind.AUDIT_EVIDENCE_RECORDED, {"mode": mode, "status": "pending"})
+    retained = _event(1, EventKind.AUDIT_EVIDENCE_RECORDED, {"mode": mode, "status": "retained"})
+    projection = project_session((pending, retained), session_id="session-main")
+    assert "pending" in projection.activity[0].detail.lower()
+    assert ("blocked" in projection.activity[0].detail.lower()) == (mode == "required")
+    assert "retained" in projection.activity[1].detail.lower()

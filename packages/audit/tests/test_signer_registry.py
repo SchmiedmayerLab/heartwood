@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import base64
 import stat
+import tomllib
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
 import pytest
+import tomli_w
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
@@ -26,6 +28,36 @@ from heartwood.audit import (
     load_checkpoint_signer_registry,
 )
 from heartwood.schemas import AuditCheckpointSignRequest, AuditCheckpointStatement, AuditRetention
+from packages.audit.tests.tls_fixture import server_certificates
+
+
+@pytest.mark.parametrize("change", ["valid", "relative", "symlink", "writable", "invalid", "local"])
+def test_registry_tls_trust_is_explicit_and_protected(tmp_path: Path, change: str) -> None:
+    setup = initialize_local_checkpoint_signer(directory=tmp_path / "operator")
+    ca = server_certificates(tmp_path / "tls")
+    document = tomllib.loads(setup.registry.read_text())
+    profile = document["profiles"][document["default_profile"]]
+    if change != "local":
+        profile.update(mode="production", endpoint="https://signer.test/v1/checkpoints/sign")
+    profile["trusted_ca_bundle"] = str(ca)
+    if change == "relative":
+        profile["trusted_ca_bundle"] = "tls/ca.crt"
+    elif change == "symlink":
+        linked = tmp_path / "linked-ca.pem"
+        linked.symlink_to(ca)
+        profile["trusted_ca_bundle"] = str(linked)
+    elif change == "writable":
+        ca.chmod(0o666)
+    elif change == "invalid":
+        ca.write_text("not a certificate")
+    setup.registry.write_text(tomli_w.dumps(document))
+    if change == "valid":
+        loaded = load_checkpoint_signer_registry(setup.registry).profile()
+        assert loaded.trusted_ca_bundle == ca
+        loaded.signer()
+    else:
+        with pytest.raises(CheckpointSignerError):
+            load_checkpoint_signer_registry(setup.registry)
 
 
 class _SigningTransport:

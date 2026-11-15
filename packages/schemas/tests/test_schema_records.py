@@ -33,6 +33,7 @@ from heartwood.schemas import (
 def test_schema_inventory_is_versioned() -> None:
     expected = {
         "approval-record.v1",
+        "audit-checkpoint-context.v1",
         "audit-checkpoint-sign-request.v1",
         "audit-checkpoint-signature.v1",
         "audit-checkpoint-statement.v1",

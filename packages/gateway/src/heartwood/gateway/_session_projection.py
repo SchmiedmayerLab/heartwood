@@ -509,6 +509,8 @@ def project_session(
                 )
             else:
                 approval_group_decisions[outside_proposal.group_id] = None
+            if outside.phase == "authorized":
+                state = "approved"
             if isinstance(outside, ExternalResultRecord) and outside.phase == "submitted":
                 state = "succeeded"
                 outcome = ProjectionActionOutcome(
@@ -1276,6 +1278,12 @@ def _activity_detail(event: SessionEvent) -> str:
     if kind in {EventKind.EXTERNAL_ACTION_RECORDED.value, EventKind.EXTERNAL_RESULT_RECORDED.value}:
         record = _mapping(event.payload.get("record"))
         return _string(record.get("phase"))
+    if kind == EventKind.AUDIT_EVIDENCE_RECORDED.value:
+        if event.payload.get("status") == "retained":
+            return "Checkpoint retained outside the session"
+        if event.payload.get("mode") == "required":
+            return "External evidence pending; dispatch blocked"
+        return "External evidence pending; buffered mode"
     if kind == EventKind.COMMAND_RECEIVED.value:
         return " · ".join(
             value
@@ -1749,6 +1757,8 @@ _ACTIVITY_LABELS = {
     EventKind.AGENT_MESSAGE_EMITTED.value: "Agent message",
     EventKind.APPROVAL_RECORDED.value: "Approval recorded",
     EventKind.AUDIT_EXPORT_RECORDED.value: "Audit export",
+    EventKind.AUDIT_EVIDENCE_RECORDED.value: "Audit evidence",
+    EventKind.SESSION_CLOSED.value: "Session owner closed",
     EventKind.COMMAND_RECEIVED.value: "Command received",
     EventKind.CONFIRMATION_REQUESTED.value: "Confirmation requested",
     EventKind.CONFIRMATION_RESOLVED.value: "Confirmation resolved",

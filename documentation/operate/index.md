@@ -22,7 +22,7 @@ A Heartwood deployment combines a versioned application artifact with platform s
 | Models | Provider catalogs, Heartwood-managed inference planning, route-policy evaluation | Approved endpoints, agreements, accounts, quotas, and data eligibility |
 | Compute | llama.cpp/vLLM launch contracts and Slurm/provisioned adapters | CPU/GPU capacity, drivers, scheduler, isolation, and cost controls |
 | Network | Deny-by-default model-route policy and strict declared ingress validation | Enforced egress, ingress authentication and authorization, proxy header sanitation, TLS, DNS, and segmentation |
-| Evidence | Session events, tamper-evident audit chain, scrubbed export, provider-neutral signed checkpoint format, CI artifacts | Signer service and key custody, authoritative storage, retention enforcement, central monitoring, incident response, and compliance evidence |
+| Evidence | Session events, tamper-evident audit chain, scrubbed export, signed checkpoints and deployment-bound evidence gates | Independent signer authorization and key custody, authoritative storage, retention enforcement, central monitoring, incident response, and compliance evidence |
 
 Heartwood policy is defense in depth and does not replace network enforcement.
 The [Platform Contract](platform-contract.md) defines this boundary and each capability a platform supplies in detail.

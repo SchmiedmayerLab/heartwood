@@ -18,6 +18,10 @@ from urllib.parse import urlsplit
 from uuid import UUID
 
 from heartwood.gateway._project import ProjectContext, ProjectStateError
+from heartwood.gateway.checkpoint_deployment import (
+    CheckpointEvidenceDeployment,
+    validate_evidence_deployment,
+)
 from heartwood.gateway.worker_deployment import OpenShellWorkerDeployment
 from heartwood.model_policy import validate_policy_restriction
 from heartwood.persistence import read_private_text
@@ -34,6 +38,7 @@ class ProjectDeployment:
     project: ProjectContext
     policy: PolicyProfile
     worker: OpenShellWorkerDeployment | None = None
+    evidence: CheckpointEvidenceDeployment | None = None
 
 
 def load_project_deployment(path: Path, *, project_root: Path) -> ProjectDeployment:
@@ -59,7 +64,8 @@ def load_project_deployment(path: Path, *, project_root: Path) -> ProjectDeploym
             )
         record = tomllib.loads(read_private_text(resolved, max_bytes=64 * 1024))
         if (
-            set(record) not in (_FIELDS, _FIELDS | {"worker"})
+            not set(record) >= _FIELDS
+            or set(record) - _FIELDS - {"worker", "evidence"}
             or record["schema_version"] != _SCHEMA
         ):
             raise ValueError("invalid deployment schema")
@@ -85,9 +91,20 @@ def load_project_deployment(path: Path, *, project_root: Path) -> ProjectDeploym
         )
         if worker is not None:
             validate_worker_deployment(worker, project)
+        evidence = (
+            CheckpointEvidenceDeployment.model_validate(record["evidence"])
+            if "evidence" in record
+            else None
+        )
+        if evidence is not None:
+            if worker is None:
+                raise ProjectStateError(
+                    "managed checkpoint evidence requires complete worker isolation"
+                )
+            validate_evidence_deployment(evidence, project)
         # Fail before opening gateway stores, including when legacy state is present.
         project.state_exists()
-        return ProjectDeployment(project=project, policy=policy, worker=worker)
+        return ProjectDeployment(project=project, policy=policy, worker=worker, evidence=evidence)
     except ProjectStateError:
         raise
     except (OSError, ValueError, TypeError, AttributeError) as error:
@@ -148,11 +165,11 @@ def _validate_operator_location(path: Path, project: ProjectContext) -> None:
         or path.is_relative_to(project.root)
         or path.is_relative_to(project.state_root)
     ):
-        raise ProjectStateError("native worker authority must be outside project files and state")
+        raise ProjectStateError("deployment authority must be outside project files and state")
 
 
 def validate_operator_file(path: Path, project: ProjectContext) -> None:
-    """Validate a native control file without disclosing its contents."""
+    """Validate an operator control file without disclosing its contents."""
     _validate_operator_location(path, project)
     _validate_trusted_parents(path.parent)
     metadata = path.stat()
@@ -162,4 +179,6 @@ def validate_operator_file(path: Path, project: ProjectContext) -> None:
         or metadata.st_uid not in {0, os.geteuid()}
         or metadata.st_nlink != 1
     ):
-        raise ProjectStateError("native worker files must be operator-owned and write-protected")
+        raise ProjectStateError(
+            "deployment authority files must be operator-owned and write-protected"
+        )
