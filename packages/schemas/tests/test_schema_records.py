@@ -43,6 +43,7 @@ def test_schema_inventory_is_versioned() -> None:
         "detector-evidence.v1",
         "egress-attestation-record.v1",
         "model-call-decision.v1",
+        "model-connections.v1",
         "policy-profile.v1",
     }
     assert set(schema_names()) == expected

@@ -792,7 +792,7 @@ def test_project_config_parser_rejects_non_platform_connection(tmp_path: Path) -
         }
     ]
 
-    with pytest.raises(ProjectConfigError, match="must use source platform"):
+    with pytest.raises(ProjectConfigError, match="source: Input should be 'platform'"):
         project_config_from_mapping(mapping, project=project)
 
 

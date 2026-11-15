@@ -38,3 +38,13 @@ path = [
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 Stanford University and the project authors (see CONTRIBUTORS.md)"
 SPDX-License-Identifier = "MIT"
+
+# Preserve the imported upstream files byte-for-byte.
+[[annotations]]
+path = [
+    "packages/schemas/src/heartwood/schemas/upstream/mcp-tasks.schema.json",
+    "packages/schemas/src/heartwood/schemas/upstream/mcp-tasks.LICENSE.txt",
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2025 The Model Context Protocol Authors"
+SPDX-License-Identifier = "Apache-2.0"

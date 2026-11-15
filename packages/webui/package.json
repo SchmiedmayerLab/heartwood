@@ -45,12 +45,15 @@
     "zod": "4.4.3"
   },
   "overrides": {
+    "@firebase/firestore": {
+      "@grpc/grpc-js": "1.13.6"
+    },
     "brace-expansion@1.1.16": "1.1.18",
     "esbuild": "0.28.1",
     "js-yaml": "4.3.2",
-    "next": "16.3.3",
+    "next": "16.3.8",
     "postcss": "8.5.23",
-    "sharp": "0.35.4"
+    "sharp": "0.35.5"
   },
   "devDependencies": {
     "@axe-core/playwright": "4.12.1",

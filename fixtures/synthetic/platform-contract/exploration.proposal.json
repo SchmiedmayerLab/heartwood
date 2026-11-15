@@ -1,0 +1,91 @@
+{
+  "created_at": "2026-10-17T10:00:00Z",
+  "estimates": [
+    {
+      "covered_element_ids": [
+        "exploration"
+      ],
+      "created_at": "2026-10-17T10:00:00Z",
+      "element_estimates": [
+        {
+          "cost": {
+            "coverage": "complete",
+            "denomination": {
+              "kind": "currency",
+              "unit": "USD"
+            },
+            "expected": "4.10"
+          },
+          "element_ids": [
+            "exploration"
+          ],
+          "included_in_total": true
+        }
+      ],
+      "estimate_id": "estimate",
+      "plan": {
+        "record_id": "plan",
+        "revision": 1
+      },
+      "prediction": {
+        "record_id": "prediction",
+        "revision": 1
+      },
+      "pricing_assumptions": [
+        "Illustrative platform quote only; not a provider price."
+      ],
+      "project_context_id": "project",
+      "scope": "plan",
+      "total": {
+        "coverage": "complete",
+        "denomination": {
+          "kind": "currency",
+          "unit": "USD"
+        },
+        "expected": "4.10"
+      },
+      "valid_until": "2026-10-17T11:00:00Z"
+    }
+  ],
+  "operations": [
+    {
+      "data_scope": "Synthetic inputs only.",
+      "description": "Submit exactly the reviewed exploration workload.",
+      "destination": "project output directory",
+      "element_ids": [
+        "exploration"
+      ],
+      "estimate_ids": [
+        "estimate"
+      ],
+      "operation_id": "exploration-submission",
+      "request": {
+        "protocol": "synthetic-platform-profile.v1",
+        "request_ref": "exploration.native-request.json",
+        "request_sha256": "65d3345c9bb769703a1ad47757202a179075e55f0babbd5244aa99d6d7083c4a",
+        "service_id": "compute"
+      },
+      "resource_limits": [
+        {
+          "maximum": "7200",
+          "metric": "duration",
+          "unit": "seconds"
+        }
+      ]
+    }
+  ],
+  "plan": {
+    "record_id": "plan",
+    "revision": 1
+  },
+  "prediction": {
+    "record_id": "prediction",
+    "revision": 1
+  },
+  "project_context_id": "project",
+  "proposal": {
+    "record_id": "proposal",
+    "revision": 1
+  },
+  "schema_version": "heartwood.operation-set-proposal.v1"
+}

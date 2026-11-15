@@ -17,6 +17,8 @@ from typing import Any, ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 
+from heartwood.schemas._connections import ModelConnectionsManifest
+
 _SAFE_IDENTIFIER_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
 
 type CapabilityTier = Literal["autonomous", "supervised", "experimental"]
@@ -265,7 +267,7 @@ class ApprovalRecord(_HeartwoodRecord):
     reason: str | None = None
 
 
-_SCHEMA_MODELS: Mapping[str, type[_HeartwoodRecord]] = {
+_SCHEMA_MODELS: Mapping[str, type[BaseModel]] = {
     "approval-record.v1": ApprovalRecord,
     "audit-checkpoint-sign-request.v1": AuditCheckpointSignRequest,
     "audit-checkpoint-signature.v1": AuditCheckpointSignature,
@@ -277,6 +279,7 @@ _SCHEMA_MODELS: Mapping[str, type[_HeartwoodRecord]] = {
     "detector-evidence.v1": DetectorEvidence,
     "egress-attestation-record.v1": EgressAttestationRecord,
     "model-call-decision.v1": ModelCallDecision,
+    "model-connections.v1": ModelConnectionsManifest,
     "policy-profile.v1": PolicyProfile,
 }
 

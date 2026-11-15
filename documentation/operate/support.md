@@ -6,7 +6,7 @@ SPDX-License-Identifier: MIT
 
 # Support and Compatibility
 
-Heartwood uses Semantic Versioning and is under active pre-1.0 development.
+Heartwood uses [Semantic Versioning 2.0.0](https://semver.org/) and is under active pre-1.0 development.
 This policy describes project maintenance; it is not a service-level agreement or an institutional support commitment.
 
 ## Supported Releases
@@ -16,7 +16,11 @@ The project may issue a patch for that line when a confirmed security, data-inte
 Older stable releases, prereleases, development branches, and moving `edge` image tags do not receive a maintenance window.
 
 Before `1.0.0`, minor releases may change commands, configuration, persisted state, interfaces, platform requirements, and deployment artifacts.
+Patch releases preserve compatibility, including validation rules and documented behavior.
+From `1.0.0`, incompatible public-contract changes increment the major version, compatible additions increment the minor version, and compatible fixes increment the patch version.
+Published release contents are immutable.
 Release notes and versioned documentation describe the supported behavior for each published version.
+The [platform contract bundle](platform-contract.md#contract-artifacts) has its own SemVer release independent of the application; upstream protocol versions retain their original schemes.
 
 ## Compatibility
 
