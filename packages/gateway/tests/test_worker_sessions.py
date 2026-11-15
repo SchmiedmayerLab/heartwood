@@ -36,6 +36,7 @@ from heartwood.gateway._session_projection import project_session
 from heartwood.gateway._worker_events import AdmittedWorkerWorkspace
 from heartwood.gateway.worker_sessions import WorkerSessionPlan, WorkerSessionRequest
 from heartwood.schemas import PolicyProfile
+from heartwood.session import CommandKind, EventKind, SessionCommand
 
 
 class Platform:
@@ -761,3 +762,57 @@ def test_sandbox_review_applies_only_while_the_worker_attempt_is_admitted(tmp_pa
     platform.lease.fence()
     assert service.action_review_mode() == "review-all"
     gateway.stop()
+
+
+def test_gateway_without_workers_never_runs_a_revoked_worker_session_on_the_host(
+    tmp_path: Path,
+) -> None:
+    platform = Platform()
+    gateway = configured_gateway(tmp_path, platform)
+    backend = gateway._service("session-worker").backend
+    assert isinstance(backend, OpenHandsSdkBackend)
+    assert backend._worker_context is not None
+    backend._worker_context()
+    gateway.stop()
+    assert _retained(gateway).phase == "revoked"
+
+    host = SessionGateway(project=gateway.project, env={})
+    try:
+        service = host._service("session-worker")
+        host_backend = service.backend
+        assert isinstance(host_backend, OpenHandsSdkBackend)
+        assert host_backend._worker_context is None
+        assert service.action_review_mode() == "review-all"
+
+        result = host.handle(
+            SessionCommand(
+                command_id="chat-on-host",
+                session_id="session-worker",
+                kind=CommandKind.CHAT,
+                created_at="2026-01-01T00:00:00Z",
+                payload={"prompt": "Continue the synthetic analysis."},
+            )
+        )
+
+        assert host_backend._conversation is None
+        assert result.events[-1].kind == EventKind.ERROR_RECORDED
+        assert not any(event.kind == EventKind.USER_MESSAGE_RECORDED for event in result.events)
+        projection = host.session_projection(session_id="session-worker")
+        assert projection.pending_approval is None
+        assert _retained(gateway).phase == "revoked"
+    finally:
+        host.stop()
+
+    # A later gateway that launches workers still replaces the revoked attempt.
+    relaunch = Platform()
+    successor = _successor(gateway, None, relaunch)
+    try:
+        restored = successor._service("session-worker")
+        assert restored.action_review_mode() == "review-all"
+        restored_backend = restored.backend
+        assert isinstance(restored_backend, OpenHandsSdkBackend)
+        assert restored_backend._worker_context is not None
+        restored_backend._worker_context()
+        assert restored.action_review_mode() == "review-outside-effects"
+    finally:
+        successor.stop()

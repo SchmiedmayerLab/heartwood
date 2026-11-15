@@ -422,16 +422,16 @@ class ProjectConfigStore:
             raise ProjectConfigError(f"unable to load .heartwood/config.toml: {error}") from error
         config = project_config_from_mapping(value, project=self.project)
         if self._deployment_policy is not None:
-            # The operator's review ceiling applies at every start; stored state keeps no copy
-            # that could outlive a manifest change.
+            # The operator's review ceiling applies at every start and a project may only
+            # narrow it: the effective list is what both permit, never wider than the manifest.
+            permitted = self._deployment_policy.allowed_action_review_modes
+            both = tuple(
+                mode for mode in permitted if mode in config.policy.allowed_action_review_modes
+            )
             config = replace(
                 config,
                 policy=config.policy.model_copy(
-                    update={
-                        "allowed_action_review_modes": (
-                            self._deployment_policy.allowed_action_review_modes
-                        )
-                    }
+                    update={"allowed_action_review_modes": both or ("review-all",)}
                 ),
             )
         self._validate_config(config)
@@ -476,6 +476,15 @@ class ProjectConfigStore:
     def _save_unlocked(self, config: ProjectConfig) -> None:
         self._validate_config(config)
         payload = _config_mapping(config)
+        policy = payload["policy"]
+        if (
+            self._deployment_policy is not None
+            and isinstance(policy, dict)
+            and config.policy.allowed_action_review_modes
+            == self._deployment_policy.allowed_action_review_modes
+        ):
+            # Only a narrower project list is stored, so a later manifest change still applies.
+            del policy["allowed_action_review_modes"]
         contents = tomli_w.dumps(payload)
         try:
             tomllib.loads(contents)

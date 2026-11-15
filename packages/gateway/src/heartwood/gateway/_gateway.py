@@ -315,6 +315,7 @@ class _ServiceConfiguration:
     """Configuration snapshot that owns one cached agent service."""
 
     model_settings: ModelSettings
+    model_source: str | None
     policy_profile: PolicyProfile
     local_model: LocalModelSelection | None
     managed_inference: bool
@@ -1757,7 +1758,9 @@ class SessionGateway:
         try:
             policy_allowed = self.config_store.load().policy.allowed_action_review_modes
             selected = self.action_settings_store.load().review_mode
-            isolated = self._credentials_isolated()
+            isolated = self._credentials_isolated(
+                self.settings_store.load(), model_source=self.config_store.load().model_source
+            )
         except (ProjectConfigError, ModelSettingsError) as error:
             raise ActionSettingsError(str(error)) from error
         sandboxed = self._worker_plan_factory is not None
@@ -1828,7 +1831,10 @@ class SessionGateway:
                     selected,
                     allowed=policy_allowed,
                     sandboxed=self._worker_plan_factory is not None,
-                    credentials_isolated=self._credentials_isolated(),
+                    credentials_isolated=self._credentials_isolated(
+                        self.settings_store.load(),
+                        model_source=self.config_store.load().model_source,
+                    ),
                 )
                 if reason is not None:
                     raise ActionSettingsError(reason)
@@ -2449,6 +2455,7 @@ class SessionGateway:
         )
         return _ServiceConfiguration(
             model_settings=model_settings,
+            model_source=config.model_source,
             policy_profile=config.policy,
             local_model=config.local_model,
             managed_inference=config.model_source == "heartwood",
@@ -2494,7 +2501,10 @@ class SessionGateway:
             worker_project_id=self.project.project_id,
             checkpoint_evidence=checkpoint_evidence,
             action_review_mode=lambda: self.action_settings_store.load().review_mode,
-            credentials_isolated=self._credentials_isolated,
+            # The boundary of the route this session's backend was built with, not a later one.
+            credentials_isolated=lambda: self._credentials_isolated(
+                configuration.model_settings, model_source=configuration.model_source
+            ),
             external_actions=(
                 self._external_actions_factory(session_id)
                 if self._external_actions_factory is not None
@@ -3055,10 +3065,13 @@ class SessionGateway:
         self.settings_store.save(settings)
         self.config_store.select_model_source(source, settings)
 
-    def _credentials_isolated(self) -> bool:
-        """Return whether the active model credential is kept from the agent tool runtime."""
+    def _credentials_isolated(self, settings: ModelSettings, *, model_source: str | None) -> bool:
+        """Return whether a model route keeps its credential from the agent tool runtime."""
+        if self.backend_id in {"deterministic", "deterministic-local"}:
+            # The deterministic backend calls no model and holds no credential.
+            return True
         return self._credential_isolation(
-            self.settings_store.load(), model_source=self.config_store.load().model_source
+            settings, model_source=model_source
         ).unattended_actions_allowed
 
     def _credential_isolation(
@@ -3481,8 +3494,8 @@ def _review_mode_unavailable_reason(
         return "Not permitted by this deployment's policy."
     if mode != "review-all" and not sandboxed and not credentials_isolated:
         return (
-            "Unavailable because the selected model credential is not isolated from the agent "
-            "tool runtime. Use a credential-free or platform-isolated model route."
+            "Unavailable until the selected model route is credential-free or platform-isolated: "
+            "a model credential is otherwise not isolated from the agent tool runtime."
         )
     if mode == "review-outside-effects" and not sandboxed:
         return "Requires sessions that run in an isolated worker."

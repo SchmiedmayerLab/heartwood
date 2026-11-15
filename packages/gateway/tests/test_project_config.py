@@ -156,7 +156,11 @@ def test_checked_in_project_config_compatibility_fixture_loads(tmp_path: Path) -
     assert config.schema_version == "heartwood.project-config.v2"
     assert config.platform_id == "generic"
     assert config.action_settings.review_mode is None
-    assert config.policy.allowed_action_review_modes == ("review-all",)
+    assert config.policy.allowed_action_review_modes == (
+        "review-all",
+        "review-changes",
+        "review-outside-effects",
+    )
 
 
 def test_project_config_lock_is_reentrant_across_store_instances(tmp_path: Path) -> None:

@@ -68,6 +68,32 @@ def _path_forms(path: str) -> set[PurePosixPath]:
     return {PurePosixPath(os.path.normpath(path)), PurePosixPath(os.path.realpath(path))}
 
 
+# Docker reports an empty mode for the container's own PID and user namespace, and
+# `private` or `none` for an IPC namespace that nothing else can join.
+_PRIVATE_NAMESPACE_MODES: dict[str, frozenset[str]] = {
+    "PidMode": frozenset({""}),
+    "IpcMode": frozenset({"", "private", "none"}),
+    "UsernsMode": frozenset({""}),
+}
+_SELINUX_LABEL_FIELDS = ("user:", "role:", "type:", "level:")
+
+
+def _confining_security_option(option: object) -> bool:
+    """Accept only options that keep or add confinement, never one that replaces a default."""
+    if not isinstance(option, str):
+        return False
+    # Docker accepts either separator after the option name.
+    cut = min((i for i in (option.find("="), option.find(":")) if i >= 0), default=len(option))
+    name, separator, value = option[:cut], option[cut : cut + 1], option[cut + 1 :]
+    if name == "no-new-privileges":
+        return not separator or value == "true"
+    if name == "apparmor":
+        return value == "docker-default"
+    if name == "label":
+        return value.startswith(_SELINUX_LABEL_FIELDS)
+    return False
+
+
 class WorkerVolumes:
     """Own only resources carrying the complete project and attempt identity."""
 
@@ -250,14 +276,12 @@ class WorkerVolumes:
         if (
             host["CapAdd"] not in (None, [])
             or not isinstance(options, list)
+            or any(not _confining_security_option(option) for option in options)
+            # Only namespaces private to the container are accepted; `host`, another
+            # container's namespace and any value not listed here are refused.
             or any(
-                not isinstance(option, str)
-                or option.replace(":", "=", 1).endswith(("=unconfined", "=disable"))
-                for option in options
-            )
-            or any(
-                not isinstance(host[name], str) or host[name] == "host"
-                for name in ("PidMode", "IpcMode", "UsernsMode")
+                not isinstance(host[name], str) or host[name] not in allowed
+                for name, allowed in _PRIVATE_NAMESPACE_MODES.items()
             )
         ):
             raise WorkerAttemptError("native worker confinement does not match admission")

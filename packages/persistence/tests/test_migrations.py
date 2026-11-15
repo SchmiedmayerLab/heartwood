@@ -105,7 +105,7 @@ def test_project_state_migration_records_each_owned_persistence_format() -> None
     assert result.payload == _fixture("project-state-v4.json")
 
 
-def test_project_config_migration_keeps_complete_review_as_the_ceiling() -> None:
+def test_project_config_migration_drops_the_retired_confirmation_settings() -> None:
     legacy = _fixture("project-config-v1.json")
     policy = legacy["policy"]
     assert isinstance(policy, dict)

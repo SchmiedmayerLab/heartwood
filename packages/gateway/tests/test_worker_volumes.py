@@ -291,6 +291,30 @@ def test_worker_inspection_compares_resolved_withheld_locations(
 @pytest.mark.parametrize(
     ("field", "value"),
     [
+        ("SecurityOpt", None),
+        ("SecurityOpt", []),
+        ("SecurityOpt", ["no-new-privileges:true", "apparmor=docker-default"]),
+        ("SecurityOpt", ["no-new-privileges=true", "label=type:container_t"]),
+        ("IpcMode", ""),
+        ("IpcMode", "none"),
+        ("CapAdd", None),
+    ],
+)
+def test_worker_inspection_accepts_only_listed_confinement_values(
+    volumes: WorkerVolumes,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    value: object,
+) -> None:
+    observed = _container(volumes)
+    observed["HostConfig"][field] = value
+    monkeypatch.setattr(volumes, "command", Mock(return_value=json.dumps([observed]).encode()))
+    volumes.inspect_worker(observed["Name"].removeprefix("/"))
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
         ("CapAdd", ["SYS_ADMIN"]),
         ("CapAdd", ["NET_ADMIN", "SYS_PTRACE"]),
         ("CapAdd", "SYS_ADMIN"),
@@ -301,11 +325,23 @@ def test_worker_inspection_compares_resolved_withheld_locations(
         ("SecurityOpt", ["label:disable"]),
         ("SecurityOpt", "seccomp=unconfined"),
         ("SecurityOpt", [None]),
+        ("SecurityOpt", ["no-new-privileges=false"]),
+        ("SecurityOpt", ["no-new-privileges:false"]),
+        ("SecurityOpt", ['seccomp={"defaultAction":"SCMP_ACT_ALLOW"}']),
+        ("SecurityOpt", ["apparmor=permissive-profile"]),
+        ("SecurityOpt", ["systempaths=unconfined"]),
+        ("SecurityOpt", ["unrecognized-option"]),
         ("PidMode", "host"),
+        ("PidMode", "container:0123456789ab"),
+        ("PidMode", "private"),
         ("PidMode", None),
+        ("PidMode", ["host"]),
         ("IpcMode", "host"),
+        ("IpcMode", "container:0123456789ab"),
+        ("IpcMode", "shareable"),
         ("IpcMode", None),
         ("UsernsMode", "host"),
+        ("UsernsMode", "private"),
         ("UsernsMode", None),
         ("CapAdd", ...),
         ("SecurityOpt", ...),
@@ -334,8 +370,8 @@ def test_worker_inspection_rejects_weakened_or_unobserved_confinement(
     "host",
     [
         {"CapAdd": [], "SecurityOpt": None},
-        {"SecurityOpt": [], "PidMode": "private", "IpcMode": "shareable"},
-        {"SecurityOpt": ["no-new-privileges:true", "seccomp=/etc/docker/profile.json"]},
+        {"SecurityOpt": [], "PidMode": "", "IpcMode": "private"},
+        {"SecurityOpt": ["no-new-privileges:true", "apparmor=docker-default"]},
     ],
 )
 def test_worker_inspection_accepts_confined_runtime_defaults(

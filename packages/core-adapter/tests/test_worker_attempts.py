@@ -34,8 +34,9 @@ from heartwood.core_adapter.worker_attempts import (
     WorkerAttemptRecord,
     WorkerRevocationEvidence,
     WorkerRuntimeBinding,
+    worker_replacement_blocker,
 )
-from heartwood.session import CommandKind, EventKind, SessionCommand
+from heartwood.session import CommandKind, EventKind, JsonValue, SessionCommand, SessionEvent
 
 _PROJECT = UUID("2ce140c9-e046-4fe3-9437-72b87341bf6f")
 _IMAGE = "sha256:" + "a" * 64
@@ -483,11 +484,96 @@ def test_revoked_attempt_does_not_block_the_next_owners_first_dispatch(
     backend = RecordingBackend()
     restored = SessionService.local_default(tmp_path, worker_project_id=_PROJECT, backend=backend)
     try:
+        # An owner that launches no workers never runs the revoked session on its own backend.
         _task(restored)
+        assert backend.dispatches == 0
+        assert "launches no replacement" in str(restored.replay_events()[-1].payload)
+        restored.admit_worker_replacement()
+        restored.handle(
+            SessionCommand(
+                command_id="after-admission",
+                session_id=restored.store.session_id,
+                kind=CommandKind.CHAT,
+                created_at="2026-01-01T00:00:00Z",
+                payload={"prompt": "Synthetic task"},
+            )
+        )
         assert backend.dispatches == 1
         assert _record(restored).phase == "revoked"
     finally:
         restored.close()
+
+
+def _journal(*entries: tuple[EventKind, dict[str, JsonValue]]) -> tuple[SessionEvent, ...]:
+    return tuple(
+        SessionEvent(
+            event_id=f"event-{sequence}",
+            session_id="session-main",
+            sequence=sequence,
+            kind=kind,
+            occurred_at="2026-01-01T00:00:00Z",
+            payload=payload,
+        )
+        for sequence, (kind, payload) in enumerate(entries)
+    )
+
+
+_RUNNING = (EventKind.AGENT_LIFECYCLE_UPDATED, {"status": "running"})
+_REFUSED = (EventKind.ERROR_RECORDED, {"command": "chat", "reason": "prompt is required"})
+
+
+@pytest.mark.parametrize(
+    ("entries", "blocked"),
+    [
+        ((), False),
+        ((_RUNNING, (EventKind.AGENT_LIFECYCLE_UPDATED, {"status": "finished"})), False),
+        ((_RUNNING, (EventKind.AGENT_LIFECYCLE_UPDATED, {"status": "error"})), False),
+        ((_RUNNING,), True),
+        # A refused command records an error without ending the run or the pause it met.
+        ((_RUNNING, _REFUSED), True),
+        (((EventKind.SESSION_PAUSED, {}), _REFUSED), True),
+        (
+            (
+                (EventKind.SESSION_PAUSED, {}),
+                (EventKind.AGENT_LIFECYCLE_UPDATED, {"status": "idle"}),
+            ),
+            True,
+        ),
+        (
+            (
+                (EventKind.SESSION_PAUSED, {}),
+                (EventKind.SESSION_RESUMED, {}),
+                (EventKind.AGENT_LIFECYCLE_UPDATED, {"status": "finished"}),
+            ),
+            False,
+        ),
+        (
+            (
+                (EventKind.AGENT_LIFECYCLE_UPDATED, {"status": "error"}),
+                (EventKind.ERROR_RECORDED, {"code": "HW-AGENT-006", "reason": "unknown"}),
+            ),
+            True,
+        ),
+        (
+            (
+                (EventKind.CONFIRMATION_REQUESTED, {"request": {"tool_call_id": "call-1"}}),
+                (EventKind.AGENT_LIFECYCLE_UPDATED, {"status": "idle"}),
+            ),
+            True,
+        ),
+        (
+            (
+                (EventKind.CONFIRMATION_REQUESTED, {"request": {"tool_call_id": "call-1"}}),
+                (EventKind.CONFIRMATION_RESOLVED, {"tool_call_id": "call-1"}),
+            ),
+            False,
+        ),
+    ],
+)
+def test_replacement_requires_a_run_the_journal_shows_as_settled(
+    entries: tuple[tuple[EventKind, dict[str, JsonValue]], ...], blocked: bool
+) -> None:
+    assert (worker_replacement_blocker(_journal(*entries)) is not None) is blocked
 
 
 @pytest.mark.parametrize("left", ["running", "paused", "waiting-for-confirmation", "review"])

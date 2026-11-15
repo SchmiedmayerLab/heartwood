@@ -100,7 +100,8 @@ Inspection also rejects a privileged container and any mount whose host source o
 It compares each reported source and each withheld location both as written, after lexical normalization, and as resolved on the gateway host, so a symbolic link or platform path alias on either side does not hide an overlap.
 The resolved forms describe the gateway host's filesystem; a container runtime that reports paths from another filesystem namespace is covered only by the forms as written.
 Inspection does not restrict other supervisor-owned mounts.
-Inspection rejects any added Linux capability, a security option that leaves seccomp, AppArmor or SELinux labeling unconfined, and a host process, IPC or user namespace.
+Inspection rejects any added Linux capability and accepts only listed confinement values: the container's own process and user namespace, a private or absent IPC namespace, and security options that keep the default profiles or add `no-new-privileges`, the default AppArmor profile, or an SELinux label.
+A host or shared namespace, an unconfined or replaced profile, and any value outside that list are refused.
 Each of these fields must be present in the runtime's report; an absent field fails admission.
 Transfer is attempted once, and uncertainty requires reconciliation instead of repeating the copy.
 Cleanup checks both ownership labels and attempt-specific container names before removing projections, and refuses to remove resources whose ownership changed.
@@ -377,7 +378,9 @@ Replaying a record does not grant a live capability or permit a local execution 
 Once revocation of the previous attempt is recorded, the next owner of the session can launch one replacement attempt with a new identity, credentials, placeholder and response budget in a new sandbox.
 The replacement starts a new worker conversation and an empty sandbox workspace: the revoked worker's conversation state and files existed only inside its sandbox and are not restored.
 The session journal and audit record are retained, and the session projection adds a notice at the point where a replacement became active so no interface presents the new worker as a continuation.
-Replacement is refused when the journal shows work that only the revoked worker's conversation could finish: a run that did not reach an idle, finished or error state, a pause, an action still awaiting review, or an outside operation or result release that is not terminal.
+Replacement is refused when the journal shows work that only the revoked worker's conversation could finish: a run whose last recorded state is not idle, finished or error, a pause that no resume or new run ended, an action still awaiting review, an outcome recorded as unknown, or an outside operation or result release that is not terminal.
+A refused command records an error without ending a run or a pause, so it never makes a session replaceable.
+Only a gateway that launches workers admits a command for a revoked session; a gateway without a worker configuration refuses it rather than running the session on its own backend.
 Such a session stays readable and work continues in a new session.
 A fenced attempt blocks replacement until revocation is recorded, and a service that already launched an attempt never launches a second one.
 

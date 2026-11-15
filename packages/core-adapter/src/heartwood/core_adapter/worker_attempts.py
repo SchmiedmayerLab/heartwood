@@ -16,6 +16,7 @@ from uuid import UUID
 
 from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, model_validator
 
+from heartwood.core_adapter.session_activity import session_activity
 from heartwood.schemas.experiments import Digest, Reference
 from heartwood.session import EventKind, SessionEvent, validate_session_id
 
@@ -163,27 +164,12 @@ def worker_replacement_blocker(events: Sequence[SessionEvent]) -> str | None:
     A replacement worker starts a new conversation in a new sandbox, so it cannot finish
     a run, a pause or an action review that the revoked worker left open.
     """
-    status = "idle"
-    awaiting_review: set[object] = set()
-    for event in events:
-        payload = event.payload
-        if event.kind == EventKind.AGENT_LIFECYCLE_UPDATED:
-            status = str(payload.get("status"))
-        elif event.kind == EventKind.SESSION_PAUSED:
-            status = "paused"
-        elif event.kind == EventKind.SESSION_RESUMED:
-            status = "running"
-        elif event.kind == EventKind.ERROR_RECORDED:
-            if payload.get("affects_lifecycle") is not False:
-                status = "error"
-        elif event.kind == EventKind.CONFIRMATION_REQUESTED:
-            request = payload.get("request")
-            awaiting_review.add(request.get("tool_call_id") if isinstance(request, dict) else None)
-        elif event.kind == EventKind.CONFIRMATION_RESOLVED:
-            awaiting_review.discard(payload.get("tool_call_id"))
-    if awaiting_review:
+    activity = session_activity(events)
+    if activity.awaiting_review:
         return "an action proposed by the revoked worker still awaits review"
-    if status not in {"idle", "finished", "error"}:
+    if activity.fatal:
+        return "the session recorded an outcome that cannot be recovered"
+    if not activity.settled:
         return "the revoked worker's run did not settle"
     return None
 

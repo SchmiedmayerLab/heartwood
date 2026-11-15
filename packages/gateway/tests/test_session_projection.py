@@ -661,6 +661,41 @@ def _reviewed_events(approval: dict[str, JsonValue]) -> tuple[SessionEvent, ...]
     )
 
 
+def test_a_withdrawn_gateway_decision_returns_the_action_set_to_the_researcher() -> None:
+    reviewed = _reviewed_events(
+        {
+            "actor_id": "gateway",
+            "command_id": "automatic-review-set-1",
+            "review": {"mode": "review-changes", "rule": "read.file-view"},
+        }
+    )[:3]
+    withdrawn = project_session(
+        (
+            *reviewed,
+            _event(
+                3,
+                EventKind.ERROR_RECORDED,
+                {
+                    "command": "approve",
+                    "command_id": "automatic-review-set-1",
+                    "group_id": "set-1",
+                    "automatic_review": "not-applied",
+                    "affects_lifecycle": False,
+                },
+            ),
+        ),
+        session_id="session-1",
+    )
+
+    assert withdrawn.pending_approval is not None
+    assert withdrawn.pending_approval.group_id == "set-1"
+    assert withdrawn.actions[0].state == "awaiting-review"
+    assert withdrawn.actions[0].decision is None
+    assert withdrawn.actions[0].automatic_rule is None
+    assert withdrawn.lifecycle.status == SessionLifecycle.WAITING_FOR_CONFIRMATION
+    assert project_session(reviewed, session_id="session-1").pending_approval is None
+
+
 def test_gateway_decisions_are_distinct_from_researcher_approvals() -> None:
     review: dict[str, JsonValue] = {"mode": "review-changes", "rule": "read.file-view"}
     automatic = project_session(

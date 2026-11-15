@@ -83,6 +83,8 @@ class ManagedWorkerSession:
         self._revocation_lock = Lock()
         self._closing = False
         self._context: WorkerConversationContext | None = None
+        # This owner reaches a worker only through `context`, so it may replace a revoked one.
+        service.admit_worker_replacement()
 
     def context(self) -> WorkerConversationContext:
         """Launch once after retaining intent, then admit only that exact session lease."""
