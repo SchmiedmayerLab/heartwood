@@ -60,6 +60,7 @@ def infrastructure(request: pytest.FixtureRequest) -> Iterator[NativeFixture]:
         fixture.start()
         yield fixture
     finally:
+        _retain_session_diagnostics(fixture.applications, output / "session-diagnostics.json")
         # Preserve control credentials and gateway state if revocation cannot settle.
         for application in fixture.applications:
             _stop(application)
@@ -67,6 +68,27 @@ def infrastructure(request: pytest.FixtureRequest) -> Iterator[NativeFixture]:
         fixture.resources.close()
         shutil.rmtree(private)
         (output / "cleanup.json").write_text('{"complete": true}\n')
+
+
+def _retain_session_diagnostics(applications: Sequence[SessionGateway], path: Path) -> None:
+    """Retain each session's event kinds, phases and failure reasons without its content."""
+    fields = ("reason", "code", "error_code", "status", "phase", "decision", "tool_name")
+    sessions = []
+    for application in applications:
+        for session_id, service in application._services.items():
+            events = []
+            for event in service.replay_events():
+                record = event.payload.get("record")
+                details = {**event.payload, **(record if isinstance(record, dict) else {})}
+                events.append(
+                    {
+                        "sequence": event.sequence,
+                        "kind": event.kind,
+                        **{name: details[name] for name in fields if name in details},
+                    }
+                )
+            sessions.append({"session_id": session_id, "events": events})
+    path.write_text(json.dumps(sessions, indent=2) + "\n")
 
 
 def test_failed_gateway_retains_logs_until_verified_cleanup() -> None:

@@ -267,6 +267,7 @@ jobs:
             test-results/native-qualification/network.json
             test-results/native-qualification/*/evidence.json
             test-results/native-qualification/*/cleanup.json
+            test-results/native-qualification/*/session-diagnostics.json
             test-results/native-qualification/*/gateway.log
             test-results/native-qualification/*/infrastructure-otlp.jsonl
             test-results/native-qualification/*/infrastructure-otlp-status.json

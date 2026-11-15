@@ -25,6 +25,7 @@ RETAINED = (
     "network.json",
     "*/evidence.json",
     "*/cleanup.json",
+    "*/session-diagnostics.json",
     "*/gateway.log",
     "*/infrastructure-otlp.jsonl",
     "*/infrastructure-otlp-status.json",
