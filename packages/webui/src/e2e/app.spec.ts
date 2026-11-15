@@ -286,9 +286,13 @@ test("keeps session navigation usable on a narrow notebook viewport", async ({
   await expect(approval).toBeVisible();
   await expect(page.getByLabel("Allow 1 action once")).toBeVisible();
   await page.getByLabel("Open action review settings").click();
-  await expect(
-    page.getByRole("radio", { name: /Review Every Action/u }),
-  ).toBeDisabled();
+  // A pending action set keeps waiting for the researcher; the gateway decides
+  // whether the mode may change, and tightening stays available.
+  const reviewEveryAction = page.getByRole("radio", {
+    name: /Review Every Action/u,
+  });
+  await expect(reviewEveryAction).toBeChecked();
+  await expect(reviewEveryAction).toBeEnabled();
   await page.keyboard.press("Escape");
   const conversationTab = page.getByRole("tab", { name: "Conversation" });
   await conversationTab.focus();
