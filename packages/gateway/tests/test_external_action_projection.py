@@ -180,6 +180,48 @@ def test_denied_outside_operation_has_no_execution_result(proposal: ExternalActi
     assert projection.actions[-1].outcome is None
 
 
+@pytest.mark.parametrize("phase", ["expired", "expired-authorization", "withdrawn"])
+def test_outside_review_closed_before_dispatch_is_not_pending_or_uncertain(
+    proposal: ExternalActionProposal, phase: str
+) -> None:
+    decisions = [
+        ExternalActionDecision(
+            command_id=f"synthetic-{decision}",
+            actor_id="researcher",
+            decision=decision,
+            decided_at=_NOW,
+            proposal_sha256=proposal.sha256,
+        )
+        for decision in ("approved", "denied")
+    ]
+    closed = ExternalActionRecord(
+        phase="withdrawn" if phase == "withdrawn" else "expired",
+        proposal=proposal,
+        decision=None if phase == "expired" else decisions[0],
+        withdrawal=decisions[1] if phase == "withdrawn" else None,
+    )
+    events = [
+        _source(proposal),
+        _event(ExternalActionRecord(phase="proposed", proposal=proposal), 1),
+    ]
+    if phase != "expired":
+        events.append(
+            _event(
+                ExternalActionRecord(phase="authorized", proposal=proposal, decision=decisions[0]),
+                2,
+            )
+        )
+    final = _event(closed, len(events)).model_copy(
+        update={"occurred_at": proposal.expires_at.isoformat()}
+    )
+    projection = project_session((*events, final), session_id="synthetic-session")
+    assert projection.pending_approval is None
+    action = projection.actions[-1]
+    assert action.state == "failed"
+    assert action.outcome is not None
+    assert "before dispatch" in action.outcome.summary
+
+
 @pytest.mark.parametrize(
     ("phase", "expected"),
     [
