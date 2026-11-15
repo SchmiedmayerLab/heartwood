@@ -93,6 +93,7 @@ from heartwood.gateway import (
     initialize_local_checkpoint_signer,
     inspect_deployment,
     load_checkpoint_signer_registry,
+    load_project_deployment,
     model_source_options,
     user_checkpoint_signer_registry_path,
 )
@@ -578,6 +579,11 @@ def _build_parser() -> argparse.ArgumentParser:
     gateway_serve.add_argument("--port", type=int, default=8767, help="Gateway bind port.")
     gateway_serve.add_argument("--web-root", type=Path, default=_DEFAULT_WEB_ROOT)
     gateway_serve.add_argument(
+        "--deployment",
+        type=Path,
+        help="Absolute operator manifest binding this project to external state and model policy.",
+    )
+    gateway_serve.add_argument(
         "--ingress-mode",
         choices=INGRESS_MODES,
         help="Explicit network route to the gateway; defaults to the platform capability.",
@@ -683,6 +689,7 @@ def _main(argv: Sequence[str] | None = None) -> int:
             trusted_identity=args.trusted_identity,
             proxy_strips_prefix=args.proxy_strips_prefix,
             host_loopback_publication=args.host_loopback_publication,
+            deployment_path=args.deployment,
         )
     if args.command == "doctor":
         return _handle_doctor(project=project, as_json=args.json)
@@ -2567,7 +2574,15 @@ def _handle_serve(
     trusted_identity: str | None = None,
     proxy_strips_prefix: bool = False,
     host_loopback_publication: bool = False,
+    deployment_path: Path | None = None,
 ) -> int:
+    deployment = (
+        load_project_deployment(deployment_path, project_root=project.root)
+        if deployment_path is not None
+        else None
+    )
+    if deployment is not None:
+        project = deployment.project
     if not web_root.exists():
         msg = f"web UI assets not found: {web_root}"
         raise SystemExit(msg)
@@ -2596,7 +2611,9 @@ def _handle_serve(
     except IngressConfigurationError as error:
         raise SystemExit(f"{diagnostic.code}: {error}") from error
     app = GatewayAsgiApp(
-        SessionGateway(project=project),
+        SessionGateway(project=project, deployment_policy=deployment.policy)
+        if deployment is not None
+        else SessionGateway(project=project),
         static_dir=web_root,
         ingress=ingress,
         access=access,

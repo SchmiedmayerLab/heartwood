@@ -44,8 +44,14 @@ from openhands.sdk.event import (
 )
 from openhands.sdk.event.conversation_error import ConversationErrorEvent
 from openhands.sdk.event.error_classification import ErrorClassification, FailureKind
-from openhands.sdk.llm import LLMResponse, Message, MessageToolCall, Metrics, TextContent
-from openhands.sdk.llm.llm import LLMCallContext
+from openhands.sdk.llm import (
+    LLMCallContext,
+    LLMResponse,
+    Message,
+    MessageToolCall,
+    Metrics,
+    TextContent,
+)
 from openhands.sdk.llm.streaming import AnyTokenCallbackType, TokenCallbackType
 from openhands.sdk.security import (
     AlwaysConfirm,
@@ -535,8 +541,11 @@ def test_openhands_agent_and_conversation_options_are_explicit() -> None:
         ),
     )
 
-    assert settings.enable_sub_agents is False
-    assert settings.enable_switch_llm_tool is False
+    assert settings.tools == []
+    agent = settings.create_agent()
+    assert agent.tools == []
+    assert agent.include_default_tools == ["FinishTool"]
+    assert settings.enable_classify_and_switch_llm_tool is False
     assert settings.tool_concurrency_limit == 1
     assert settings.mcp_config == {}
     assert settings.verification.critic_enabled is False
@@ -549,14 +558,14 @@ def test_openhands_agent_and_conversation_options_are_explicit() -> None:
 
 def test_openhands_bounds_local_and_remote_model_retries() -> None:
     assert _llm_resilience_options(_local_profile()) == {
-        "num_retries": 1,
+        "num_retries": 2,
         "retry_max_wait": 8,
         "retry_min_wait": 1,
         "retry_multiplier": 2.0,
         "timeout": 600,
     }
     assert _llm_resilience_options(_remote_profile()) == {
-        "num_retries": 2,
+        "num_retries": 3,
         "retry_max_wait": 8,
         "retry_min_wait": 1,
         "retry_multiplier": 2.0,
@@ -4213,7 +4222,7 @@ def _conversation_factory(
             llm=llm,
             tools=tools,
             agent_context=_agent_context([] if skills is None else skills),
-            enable_switch_llm_tool=False,
+            enable_classify_and_switch_llm_tool=False,
             tool_concurrency_limit=tool_concurrency_limit,
         )
         conversation = LocalConversation(

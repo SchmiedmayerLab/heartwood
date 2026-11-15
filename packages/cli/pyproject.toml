@@ -19,7 +19,7 @@ dependencies = [
     "packaging==26.3",
     "rich==15.0.0",
     "textual==8.2.8",
-    "uvicorn==0.52.1",
+    "uvicorn==0.54.0",
 ]
 
 [project.scripts]

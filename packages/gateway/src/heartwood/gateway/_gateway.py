@@ -437,6 +437,7 @@ class SessionGateway:
         workspace_inspector: WorkspaceInspector | None = None,
         skill_source_registry: SkillSourceRegistry | None = None,
         parallel_review_preparer: ParallelReviewPreparer | None = None,
+        deployment_policy: PolicyProfile | None = None,
         backend_id: str = "auto",
     ) -> None:
         prepare_openhands_import()
@@ -462,12 +463,14 @@ class SessionGateway:
         self._gpu_environment: GpuEnvironment | None = None
         adapter = select_platform_adapter(self.env)
         self._platform_capabilities = adapter.capabilities()
+        self._deployment_policy = deployment_policy
         self.config_store = ProjectConfigStore(
             self.project,
             ProjectConfig(
                 platform_id=adapter.adapter_id,
-                policy=adapter.default_policy_profile(),
+                policy=deployment_policy or adapter.default_policy_profile(),
             ),
+            deployment_policy=deployment_policy,
         )
         self.settings_store = settings_store or ProjectModelSettingsStore(self.config_store)
         self.action_settings_store = action_settings_store or ProjectActionSettingsStore(
@@ -2671,6 +2674,10 @@ class SessionGateway:
     def _configure_custom_policy(self, connection: ModelConnection) -> None:
         if connection.catalog_endpoint is None or connection.policy_endpoint is None:
             raise ModelCatalogError("Custom API requires catalog and completion endpoints")
+        if self._deployment_policy is not None:
+            # Route selection never adds authority to an operator-owned ceiling.
+            # Existing catalog and inference admission check the current policy.
+            return
         adapter = select_platform_adapter(self.env)
         if "custom" not in adapter.capabilities().model_sources:
             raise ModelCatalogError("Custom API is unavailable on this platform")
