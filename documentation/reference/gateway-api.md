@@ -22,6 +22,7 @@ The `x-sse-event` and `x-websocket` extensions describe event payloads and WebSo
 They supplement OpenAPI because WebSocket messages are not REST operations.
 The exporter writes files to a new directory; the gateway does not serve an OpenAPI discovery endpoint.
 Draft platform-message schemas in the same bundle do not add gateway routes or working platform integrations.
+Outside-operation adapter registration and proposal creation are trusted Python embedding interfaces, not HTTP endpoints; see [Outside Operation Admission](../operate/platform-contract.md#outside-operation-admission).
 See [Contract Artifacts](../operate/platform-contract.md#contract-artifacts) for maturity and compatibility rules.
 
 ## Address and Authentication

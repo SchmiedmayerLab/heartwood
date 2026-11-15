@@ -76,7 +76,14 @@ Pending append recovery, unresolved commands, corrupt records, symbolic links, a
 Worker recovery state, writer metadata, and derived exports remain in the source; they are not promoted into canonical records.
 The staged copy is temporary and cannot be opened as a project; leaving the staging context removes it and leaves the original records in place.
 An abrupt process exit can leave an inert staging directory; a retry uses a fresh directory and never adopts an earlier partial copy.
-Staging neither switches a deployment binding nor authenticates historical records, and is not exposed as an operator migration command.
+This staging primitive does not switch a deployment binding or authenticate historical records.
+The explicit `heartwood project migrate` operation builds on its leases and verified copy, validates configuration, experiment history and installed Skill content, and stages the remaining canonical state and model artifacts.
+Recorded Python experiments hold the same project lifetime lease as gateways and inference runtimes.
+Migration refuses unresolved or active work instead of terminating it or interpreting uncertain outcomes as completion.
+After verifying the staged bytes, it records protected recovery evidence, fences local startup, atomically retires the original directory into a protected backup, and publishes the verified external state.
+Managed startup requires the exact operator binding and a matching completion receipt; the workspace fence can deny local startup but cannot authorize external state.
+Explicit recovery can resume an interrupted publication or restore the preserved original while the target remains unchanged.
+Neither recovery nor normal activation removes the protected backup.
 Mutation acquires the writer lease before the paired-snapshot lock; recovery and replay never hold the snapshot lock while waiting for a writer lease.
 This fixed ordering prevents deadlock as new gateway workers and presentation adapters reuse the store.
 
