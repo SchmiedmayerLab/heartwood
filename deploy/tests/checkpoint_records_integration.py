@@ -4,9 +4,9 @@
 
 """Qualify checkpoint records against a task-owned S3 server process.
 
-Run inside a network-disabled qualification container with a native ``minio``
-binary. Only synthetic credentials and records are used. No existing bucket,
-service, credential profile or external endpoint is accepted by this harness.
+Run inside a network-disabled qualification container with the pinned native
+``versitygw`` binary. Only synthetic credentials and records are used. No existing
+bucket, service, credential profile or external endpoint is accepted by this harness.
 """
 
 from __future__ import annotations
@@ -17,11 +17,13 @@ import importlib
 import json
 import os
 import secrets
+import shutil
 import socket
 import subprocess
+import tempfile
 import threading
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -74,6 +76,8 @@ class QualificationClient(S3RecordsClient, Protocol):
 
 
 class ObjectStore:
+    """Own one versitygw S3 gateway and the standalone IAM service it authorizes against."""
+
     def __init__(
         self,
         binary: Path,
@@ -85,112 +89,205 @@ class ObjectStore:
     ) -> None:
         self.access = "synthetic-" + secrets.token_hex(8)
         self.secret = secrets.token_hex(32)
-        self._environment = {
-            **os.environ,
-            "MINIO_ROOT_USER": self.access,
-            "MINIO_ROOT_PASSWORD": self.secret,
-            "MINIO_BROWSER": "off",
-        }
         state.mkdir(mode=0o700)
-        with socket.socket() as listener:
-            listener.bind((listen_host, 0))
-            port = listener.getsockname()[1]
+        for area in ("data", "versions", "metadata", "iam"):
+            (state / area).mkdir(mode=0o700)
+        # Only the S3 endpoint listens on `listen_host`; administration stays on loopback.
+        ports = []
+        for host in (listen_host, "127.0.0.1"):
+            with socket.socket() as listener:
+                listener.bind((host, 0))
+                ports.append(listener.getsockname()[1])
         self.certificates = certificates
+        scheme = "https" if certificates else "http"
         # Clients use the loopback address, which every listen address includes.
-        self.endpoint = f"{'https' if certificates else 'http'}://127.0.0.1:{port}"
-        self._binary, self._state, self._port = binary, state, port
+        self.endpoint = f"{scheme}://127.0.0.1:{ports[0]}"
+        self.iam_endpoint = f"{scheme}://127.0.0.1:{ports[1]}"
+        self._binary, self._state, self._ports = binary, state, ports
         self._listen_host = listen_host
-        self._start()
+        self._processes: list[subprocess.Popen[bytes]] = []
         owned.append(self)
-        self._wait_ready()
+        self._start()
+
+    def _command(self, port: int, *arguments: str, host: str = "127.0.0.1") -> list[str]:
+        tls = self.certificates
+        return [
+            str(self._binary),
+            f"--port={host}:{port}",
+            "--quiet",
+            *(
+                ["--cert", str(tls / "public.crt"), "--key", str(tls / "private.key")]
+                if tls
+                else []
+            ),
+            *arguments,
+        ]
 
     def _start(self) -> None:
+        # The private endpoint carries signing keys and policy decisions; a
+        # task-owned unix socket keeps it off the network.
+        self._private = Path(tempfile.mkdtemp(prefix="hw-iam-"))
+        socket_path = str(self._private / "iam.sock")
+        environment = {
+            **os.environ,
+            "ROOT_ACCESS_KEY_ID": self.access,
+            "ROOT_SECRET_ACCESS_KEY": self.secret,
+        }
+        self._processes = []
         with (self._state.parent / f"{self._state.name}.log").open("a") as log:
-            self.process = subprocess.Popen(
-                [
-                    str(self._binary),
-                    "server",
-                    str(self._state),
-                    f"--address={self._listen_host}:{self._port}",
-                    *(["--certs-dir", str(self.certificates)] if self.certificates else []),
-                ],
-                env=self._environment,
+            iam_process = subprocess.Popen(
+                self._command(
+                    self._ports[1],
+                    "iam",
+                    "--dir",
+                    str(self._state / "iam"),
+                    "--private-ports",
+                    socket_path,
+                ),
+                env=environment,
                 stdout=log,
                 stderr=subprocess.STDOUT,
             )
-
-    def restart(self) -> None:
-        if self.process.poll() is None:
-            raise RuntimeError("stop the owned server before restarting it")
-        self._start()
-        self._wait_ready()
-
-    def _wait_ready(self) -> None:
-        exceptions = importlib.import_module("botocore.exceptions")
-        deadline = time.monotonic() + 30
+            self._processes.append(iam_process)
+            iam = self.iam()
+            try:
+                self._wait_ready(iam_process, iam.list_users)
+            finally:
+                iam.close()
+            gateway = subprocess.Popen(
+                self._command(
+                    self._ports[0],
+                    "--iam-standalone-endpoint",
+                    socket_path,
+                    "posix",
+                    "--versioning-dir",
+                    str(self._state / "versions"),
+                    # Sidecar metadata does not depend on extended attributes in the
+                    # host-mounted qualification output.
+                    "--sidecar",
+                    str(self._state / "metadata"),
+                    str(self._state / "data"),
+                    host=self._listen_host,
+                ),
+                env=environment,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+            )
+            self._processes.append(gateway)
         client = self.client()
         try:
-            while True:
-                if self.process.poll() is not None:
-                    raise RuntimeError("synthetic object store exited before readiness")
-                try:
-                    # A live HTTP listener can precede storage and IAM initialization.
-                    client.list_buckets()
-                    return
-                except exceptions.ClientError as error:
-                    if error.response.get("Error", {}).get("Code") != "XMinioServerNotInitialized":
-                        raise
-                except (
-                    exceptions.EndpointConnectionError,
-                    exceptions.ConnectTimeoutError,
-                    exceptions.ReadTimeoutError,
-                ):
-                    pass
-                if time.monotonic() >= deadline:
-                    raise TimeoutError("synthetic object store did not become ready") from None
-                time.sleep(0.1)
+            self._wait_ready(gateway, client.list_buckets)
         finally:
             client.close()
 
-    def stop(self) -> None:
-        if self.process.poll() is None:
-            self.process.terminate()
-            try:
-                self.process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                self.process.kill()
-                self.process.wait(timeout=10)
-        assert self.process.poll() is not None
+    def restart(self) -> None:
+        if not self.stopped:
+            raise RuntimeError("stop the owned server before restarting it")
+        self._start()
 
-    def client(self, *, wrong_identity: bool = False) -> QualificationClient:
+    @staticmethod
+    def _wait_ready(process: subprocess.Popen[bytes], probe: Callable[[], object]) -> None:
+        exceptions = importlib.import_module("botocore.exceptions")
+        deadline = time.monotonic() + 30
+        while True:
+            if process.poll() is not None:
+                raise RuntimeError("synthetic object store exited before readiness")
+            try:
+                probe()
+                return
+            except (
+                exceptions.EndpointConnectionError,
+                exceptions.ConnectTimeoutError,
+                exceptions.ReadTimeoutError,
+            ):
+                pass
+            if time.monotonic() >= deadline:
+                raise TimeoutError("synthetic object store did not become ready") from None
+            time.sleep(0.1)
+
+    @property
+    def stopped(self) -> bool:
+        return all(process.poll() is not None for process in self._processes)
+
+    @property
+    def pids(self) -> list[int]:
+        return [process.pid for process in self._processes]
+
+    def stop(self) -> None:
+        for process in reversed(self._processes):
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=10)
+            assert process.poll() is not None
+        shutil.rmtree(self._private, ignore_errors=True)
+
+    def _sdk(self, service: str, endpoint: str, access: str, secret: str) -> Any:  # noqa: ANN401
         sdk = importlib.import_module("boto3")
         config = importlib.import_module("botocore.config")
+        return sdk.client(
+            service,
+            endpoint_url=endpoint,
+            region_name="us-east-1",
+            verify=str(self.certificates / "ca.crt") if self.certificates else True,
+            aws_access_key_id=access,
+            aws_secret_access_key=secret,
+            config=config.Config(
+                signature_version="s3v4",
+                connect_timeout=3,
+                read_timeout=5,
+                retries={"total_max_attempts": 1},
+                s3={"addressing_style": "path"},
+            ),
+        )
+
+    def iam(self) -> Any:  # noqa: ANN401
+        """Administer synthetic identities through the store's own IAM API."""
+        return self._sdk("iam", self.iam_endpoint, self.access, self.secret)
+
+    def identity(self, name: str, statements: list[dict[str, object]]) -> tuple[str, str]:
+        """Create an ordinary account whose only permissions are the given policy statements."""
+        iam = self.iam()
+        try:
+            iam.create_user(UserName=name)
+            iam.put_user_policy(
+                UserName=name,
+                PolicyName=name,
+                PolicyDocument=json.dumps({"Version": "2012-10-17", "Statement": statements}),
+            )
+            key = iam.create_access_key(UserName=name)["AccessKey"]
+        finally:
+            iam.close()
+        return key["AccessKeyId"], key["SecretAccessKey"]
+
+    def client(
+        self, *, wrong_identity: bool = False, identity: tuple[str, str] | None = None
+    ) -> QualificationClient:
+        access, secret = identity or (self.access, self.secret)
         return cast(
             QualificationClient,
-            sdk.client(
+            self._sdk(
                 "s3",
-                endpoint_url=self.endpoint,
-                region_name="us-east-1",
-                verify=str(self.certificates / "ca.crt") if self.certificates else True,
-                aws_access_key_id=self.access,
-                aws_secret_access_key="invalid-synthetic-identity"
-                if wrong_identity
-                else self.secret,
-                config=config.Config(
-                    signature_version="s3v4",
-                    connect_timeout=3,
-                    read_timeout=5,
-                    retries={"total_max_attempts": 1},
-                    s3={"addressing_style": "path"},
-                ),
+                self.endpoint,
+                access,
+                "invalid-synthetic-identity" if wrong_identity else secret,
             ),
         )
 
 
-def conditional_write_policy(
-    client: QualificationClient, bucket: str, prefix: str, report: dict[str, Any]
-) -> bool:
-    """Deny unconditional writes in the bucket policy and record whether the store enforces it."""
+PROBE_PREFIX = "conditional-write-probe/"
+
+
+def conditional_write_policy(server: ObjectStore, bucket: str, report: dict[str, Any]) -> bool:
+    """Deny unconditional writes in the bucket policy and observe whether the store enforces it.
+
+    An accepted policy is not evidence: a dedicated ordinary account that may write
+    only below the probe prefix must be refused an unconditional write and allowed a
+    conditional one.
+    """
     policy = {
         "Version": "2012-10-17",
         "Statement": [
@@ -198,22 +295,45 @@ def conditional_write_policy(
                 "Effect": "Deny",
                 "Principal": "*",
                 "Action": "s3:PutObject",
-                "Resource": f"arn:aws:s3:::{bucket}/{prefix}*",
+                "Resource": f"arn:aws:s3:::{bucket}/*",
                 "Condition": {"Null": {"s3:if-none-match": "true"}},
             }
         ],
     }
     report["conditional_bucket_policy"] = policy
+    report["conditional_write_enforcement"] = False
+    root = server.client()
     try:
-        client.put_bucket_policy(Bucket=bucket, Policy=json.dumps(policy))
+        root.put_bucket_policy(Bucket=bucket, Policy=json.dumps(policy))
     except Exception as error:
-        response = getattr(error, "response", {}).get("Error", {})
-        if "invalid condition key 's3:if-none-match'" not in response.get("Message", ""):
-            raise
-        report["conditional_policy_rejection"] = response
-        report["conditional_write_enforcement"] = False
-    else:
-        report["conditional_write_enforcement"] = True
+        report["conditional_policy_rejection"] = getattr(error, "response", {}).get("Error", {})
+        return False
+    finally:
+        root.close()
+    probe = server.client(
+        identity=server.identity(
+            "conditional-write-probe",
+            [
+                {
+                    "Effect": "Allow",
+                    "Action": ["s3:PutObject"],
+                    "Resource": [f"arn:aws:s3:::{bucket}/{PROBE_PREFIX}*"],
+                }
+            ],
+        )
+    )
+    try:
+        key = PROBE_PREFIX + uuid4().hex
+        try:
+            probe.put_object(Bucket=bucket, Key=key, Body=b"unconditional")
+        except Exception as error:
+            if getattr(error, "response", {}).get("Error", {}).get("Code") != "AccessDenied":
+                raise
+            # The positive control shows the refusal comes from the condition alone.
+            probe.put_object(Bucket=bucket, Key=key, Body=b"conditional", IfNoneMatch="*")
+            report["conditional_write_enforcement"] = True
+    finally:
+        probe.close()
     return bool(report["conditional_write_enforcement"])
 
 
@@ -306,6 +426,7 @@ def candidate(
 
 def qualify_session_gate(
     server: ObjectStore,
+    writer: tuple[str, str],
     bucket: str,
     scope: CheckpointAuthorityScope,
     active_signer: LocalEd25519CheckpointSigner,
@@ -315,7 +436,7 @@ def qualify_session_gate(
     """Stop the real records service between a proposal and its reviewed decision."""
     session_id = "evidence-session"
     records = S3CheckpointRecords(
-        client=server.client(),
+        client=server.client(identity=writer),
         bucket=bucket,
         prefix="sessions",
         scope=CheckpointAuthorityScope(
@@ -422,6 +543,31 @@ class ConcurrentSigner:
         return self.delegate.sign(statement)
 
 
+def records_writer(server: ObjectStore, bucket: str) -> tuple[str, str]:
+    """Create the ordinary account that publishes records; the root account bypasses policy."""
+    return server.identity(
+        "records-writer",
+        [
+            {
+                "Effect": "Allow",
+                "Action": ["s3:ListBucketVersions"],
+                "Resource": [f"arn:aws:s3:::{bucket}"],
+            },
+            {
+                "Effect": "Allow",
+                "Action": [
+                    "s3:GetObject",
+                    "s3:GetObjectVersion",
+                    "s3:GetObjectRetention",
+                    "s3:PutObject",
+                    "s3:PutObjectRetention",
+                ],
+                "Resource": [f"arn:aws:s3:::{bucket}/*"],
+            },
+        ],
+    )
+
+
 def run(binary: Path, image: str, output: Path) -> None:
     output.mkdir(mode=0o700, parents=True, exist_ok=False)
     owned: list[ObjectStore] = []
@@ -430,10 +576,12 @@ def run(binary: Path, image: str, output: Path) -> None:
     report["passed"] = False
     try:
         server = ObjectStore(binary, output / "server-original", owned)
-        client = server.client()
+        admin = server.client()
         bucket = "synthetic-records-" + uuid4().hex
-        client.create_bucket(Bucket=bucket, ObjectLockEnabledForBucket=True)
-        enforced = conditional_write_policy(client, bucket, "", report)
+        admin.create_bucket(Bucket=bucket, ObjectLockEnabledForBucket=True)
+        enforced = conditional_write_policy(server, bucket, report)
+        writer = records_writer(server, bucket)
+        client = server.client(identity=writer)
         scope = CheckpointAuthorityScope(
             "synthetic-deployment",
             uuid4(),
@@ -492,7 +640,7 @@ def run(binary: Path, image: str, output: Path) -> None:
             "validly rehashed history cannot replace independently retained authorization"
         )
 
-        invalid = server.client(wrong_identity=True)
+        invalid = server.client(wrong_identity=True, identity=writer)
         with pytest.raises(Exception, match="SignatureDoesNotMatch"):
             invalid.list_object_versions(Bucket=bucket, Prefix="audit/")
         checks.append("unauthorized storage access rejected with authorized positive control")
@@ -500,9 +648,9 @@ def run(binary: Path, image: str, output: Path) -> None:
         versions = client.list_object_versions(Bucket=bucket)["Versions"]
         version = next(item for item in versions if "/checkpoints/" in item["Key"])
         with pytest.raises(Exception, match=r"AccessDenied|WORM protected"):
-            client.delete_object(Bucket=bucket, Key=version["Key"], VersionId=version["VersionId"])
+            admin.delete_object(Bucket=bucket, Key=version["Key"], VersionId=version["VersionId"])
         with pytest.raises(Exception, match=r"AccessDenied|WORM protected"):
-            client.put_object_retention(
+            admin.put_object_retention(
                 Bucket=bucket,
                 Key=version["Key"],
                 VersionId=version["VersionId"],
@@ -574,7 +722,7 @@ def run(binary: Path, image: str, output: Path) -> None:
         assert len(race_records.history()) == 1
         checks.append("concurrent publication preserves exactly one ordinal")
 
-        qualify_session_gate(server, bucket, scope, rotated, trusted, output)
+        qualify_session_gate(server, writer, bucket, scope, rotated, trusted, output)
         checks.append(
             "records outage blocks dispatch and recovery; "
             "retained evidence precedes resumed execution"
@@ -595,9 +743,10 @@ def run(binary: Path, image: str, output: Path) -> None:
 
         server.stop()
         replacement = ObjectStore(binary, output / "server-restored", owned)
-        restored_client = replacement.client()
-        restored_client.create_bucket(Bucket=bucket, ObjectLockEnabledForBucket=True)
-        assert conditional_write_policy(restored_client, bucket, "", {}) == enforced
+        restored_admin = replacement.client()
+        restored_admin.create_bucket(Bucket=bucket, ObjectLockEnabledForBucket=True)
+        assert conditional_write_policy(replacement, bucket, {}) == enforced
+        restored_client = replacement.client(identity=records_writer(replacement, bucket))
         for item in json.loads((output / "backup.json").read_text()):
             restored_client.put_object(
                 Bucket=bucket,
@@ -632,11 +781,11 @@ def run(binary: Path, image: str, output: Path) -> None:
             for item in restored_client.list_object_versions(Bucket=bucket)["Versions"]
             if "/checkpoints/" in item["Key"]
         )
-        marker = restored_client.delete_object(Bucket=bucket, Key=checkpoint_version["Key"])
+        marker = restored_admin.delete_object(Bucket=bucket, Key=checkpoint_version["Key"])
         with pytest.raises(CheckpointSignerError):
             restored_authority.sign(next_statement)
         checks.append("real delete marker cannot hide retained history from the authority")
-        restored_client.delete_object(
+        restored_admin.delete_object(
             Bucket=bucket, Key=checkpoint_version["Key"], VersionId=marker["VersionId"]
         )
         restored_authority.sign(next_statement)
@@ -658,13 +807,13 @@ def run(binary: Path, image: str, output: Path) -> None:
             refused(restored_client.put_object, "AccessDenied", **replacement_write)
             restored_authority.sign(next_statement)
             checks.append("restored store refuses an unconditional candidate overwrite")
-        else:
-            restored_client.put_object(**replacement_write)
-            with pytest.raises(CheckpointSignerError):
-                restored_authority.sign(next_statement)
-            checks.append(
-                "unconditional new object version is detected even when bytes are identical"
-            )
+        # The root account is exempt from the bucket policy, as an owner may be.
+        restored_admin.put_object(**replacement_write)
+        with pytest.raises(CheckpointSignerError):
+            restored_authority.sign(next_statement)
+        checks.append(
+            "a policy-exempt replacement version is detected even when bytes are identical"
+        )
         report["records_policy_qualified"] = enforced
         require_create_only_enforcement(report)
         report["passed"] = True
@@ -672,18 +821,21 @@ def run(binary: Path, image: str, output: Path) -> None:
         for server in owned:
             server.stop()
         report["cleanup"] = {
-            "server_processes_stopped": [server.process.pid for server in owned],
-            "records_stopped": all(server.process.poll() is not None for server in owned),
+            "server_processes_stopped": [pid for server in owned for pid in server.pids],
+            "records_stopped": all(server.stopped for server in owned),
         }
         report["limitations"] = [
             *(
                 []
                 if report.get("conditional_write_enforcement")
                 else [
-                    "Records server rejects the conditional-write bucket policy; create-only "
-                    "publication relies on client conditions and duplicate-version detection"
+                    "Records server does not enforce the conditional-write bucket policy; "
+                    "create-only publication relies on client conditions and "
+                    "duplicate-version detection"
                 ]
             ),
+            "The store's root account is exempt from the bucket policy and bound only by "
+            "Object Lock; replacement versions it writes are detected, not refused",
             "Synthetic object-store implementation, not institutional S3 qualification",
             "Synthetic signing key, not a KMS/HSM deployment",
             "No native worker or independently deployed gateway/signing-service integration",

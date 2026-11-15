@@ -161,7 +161,6 @@ class RecordsTransport:
 @contextmanager
 def records_transport(
     binary: Path,
-    admin: Path,
     image: str,
     output: Path,
     *,
@@ -186,35 +185,10 @@ def records_transport(
         root = server.client()
         bucket, prefix = "synthetic-evidence", "audit"
         root.create_bucket(Bucket=bucket, ObjectLockEnabledForBucket=True)
-        conditional_write_policy(root, bucket, prefix + "/", report)
+        conditional_write_policy(server, bucket, report)
         report["records_policy_qualified"] = False
-        admin_home = output / "admin"
-        admin_home.mkdir(mode=0o700)
-        trust = admin_home / "certs/CAs"
-        trust.mkdir(parents=True, mode=0o700)
-        (trust / "synthetic.crt").write_bytes(ca.read_bytes())
-
-        def mc(*args: str) -> None:
-            result = subprocess.run(
-                [str(admin), "--config-dir", str(admin_home), "--json", *args],
-                env={**os.environ, "SSL_CERT_FILE": str(ca)},
-                capture_output=True,
-                timeout=30,
-            )
-            if result.returncode:
-                raise RuntimeError(
-                    "synthetic records administration failed: "
-                    + result.stdout.decode()[-1200:]
-                    + result.stderr.decode()[-1200:]
-                )
-
-        mc("alias", "set", "synthetic", server.endpoint, server.access, server.secret)
-        identities = {
-            name: ("synthetic-" + name, secrets.token_hex(24))
-            for name in ("gateway", "signer", "worker")
-        }
-        for name, (access, secret) in identities.items():
-            mc("admin", "user", "add", "synthetic", access, secret)
+        identities = {}
+        for name in ("gateway", "signer", "worker"):
             statements: list[dict[str, object]]
             if name == "worker":
                 statements = [
@@ -246,10 +220,7 @@ def records_transport(
                         ],
                     },
                 ]
-            policy = output / f"{name}-policy.json"
-            policy.write_text(json.dumps({"Version": "2012-10-17", "Statement": statements}))
-            mc("admin", "policy", "create", "synthetic", name, str(policy))
-            mc("admin", "policy", "attach", "synthetic", name, "--user", access)
+            identities[name] = server.identity("synthetic-" + name, statements)
         checks.append(
             "distinct gateway, signer and worker identities have server-enforced policies"
         )
@@ -399,7 +370,7 @@ def records_transport(
             server.stop()
         report["cleanup"] = {
             "authority_stopped": authority_process is None or authority_process.poll() is not None,
-            "records_stopped": all(server.process.poll() is not None for server in owned),
+            "records_stopped": all(server.stopped for server in owned),
         }
         report["limitations"] = [
             "Synthetic identities, TLS authority and signing key; "
@@ -407,16 +378,16 @@ def records_transport(
         ]
         if report.get("conditional_write_enforcement") is False:
             report["limitations"].append(
-                "Records server rejects conditional-write policy; storage policy qualification "
-                "is incomplete despite fail-closed duplicate-version detection"
+                "Records server does not enforce the conditional-write policy; storage policy "
+                "qualification is incomplete despite fail-closed duplicate-version detection"
             )
         (output / "transport-result.json").write_text(json.dumps(report, indent=2) + "\n")
         print(json.dumps(report, indent=2))
 
 
-def run(binary: Path, admin: Path, image: str, output: Path) -> None:
+def run(binary: Path, image: str, output: Path) -> None:
     """Qualify storage authorization, retained evidence and failure recovery."""
-    with records_transport(binary, admin, image, output) as transport:
+    with records_transport(binary, image, output) as transport:
         server, project, root = transport.server, transport.project, transport.root
         settings, credentials = transport.settings, transport.credentials
         endpoint, ca, token = transport.endpoint, transport.ca, transport.token
@@ -533,6 +504,7 @@ def run(binary: Path, admin: Path, image: str, output: Path) -> None:
                         **{k: v for k, v in common_write.items() if k != "IfNoneMatch"},
                         Key=namespace + "/candidates/unconditional.jsonl",
                     )
+                    checks.append("store refuses an unconditional write by the gateway identity")
                 control = root.put_object(
                     Bucket=bucket, Key="worker-control/probe", Body=b"synthetic positive control"
                 )
@@ -593,11 +565,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--serve-authority", type=Path)
     parser.add_argument("--server-binary", type=Path)
-    parser.add_argument("--admin-binary", type=Path)
     parser.add_argument("--image")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     if args.serve_authority:
         serve_authority(args.serve_authority)
     else:
-        run(args.server_binary, args.admin_binary, args.image, args.output)
+        run(args.server_binary, args.image, args.output)

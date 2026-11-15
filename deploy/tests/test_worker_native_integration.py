@@ -154,8 +154,7 @@ def test_records_transport_authorization() -> None:
     private = output / "private"
     try:
         qualify_records_transport(
-            Path("/opt/qualification/bin/minio"),
-            Path("/opt/qualification/bin/mc"),
+            Path("/opt/qualification/bin/versitygw"),
             os.environ["HW_CONTROLLER_IMAGE"],
             private,
         )
@@ -176,7 +175,7 @@ def test_records_service_qualification() -> None:
     private = output / "private"
     try:
         qualify_records_service(
-            Path("/opt/qualification/bin/minio"), os.environ["HW_CONTROLLER_IMAGE"], private
+            Path("/opt/qualification/bin/versitygw"), os.environ["HW_CONTROLLER_IMAGE"], private
         )
     finally:
         result = private / "result.json"

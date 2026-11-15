@@ -112,7 +112,8 @@ uv run --no-project --python 3.12.15 deploy/build-worker-candidate.py \
 The cache keeps source archives and the Cargo registry, and compiled objects are keyed by the manifest so changed inputs never reuse them.
 The record binds source, manifest, lockfile, binary, and image identities; it establishes build provenance, not byte-identical gateway builds.
 These artifacts are qualification inputs, not a supported production gateway; an operator's gateway must provide the [behavior qualification depends on](../operate/platform-requirements.md).
-`deploy/build-records-fixture.py` builds the synthetic records server and client from digest-verified sources; they provide synthetic storage behavior, not a records-service recommendation.
+`deploy/build-records-fixture.py` builds a versitygw server from a digest-verified source archive using a pinned Go 1.26 image, read-only sources and a bounded build container; Go verifies module checksums against the source's `go.sum`.
+Its artifacts retain the source archive, license and notice, binary hash and build inputs; they provide synthetic storage behavior, not a records-service recommendation.
 
 ## Native Qualification
 
@@ -163,8 +164,7 @@ Otherwise, as on a local Docker host, a listener at that address on a separate d
 
 With checkpoint evidence, a records outage must block the approved action until its authorization is retained, and command replay must not repeat the effect.
 The records-service suite separately qualifies publication and exact retry, rehashed-history rejection, retention denial, key rotation with a lost publication reply, concurrent publication, a records outage between proposal and decision, backup and restore into a fresh server, and delete-marker and replacement-version detection; any failed check fails its case.
-The suite also fails unless the store enforces the conditional-write bucket policy.
-The pinned synthetic server rejects that policy, so its records-service case fails while replacement versions are still detected and rejected; qualifying create-only publication needs an enforcing store.
+The suite also fails unless the store enforces the conditional-write bucket policy, observed as a refused unconditional write and an accepted conditional write by an ordinary account; the pinned server enforces it.
 Test failure or failed cleanup fails qualification; if revocation cannot settle, the fixture retains its control state for reconciliation.
 
 These cases do not establish resistance to model-driven prompt injection, production records-policy qualification, tenant authorization, or sensitive-data readiness.
@@ -235,10 +235,12 @@ The runner writes `qualification.json` as the manifest of one run and `SHA256SUM
 | `host`, `controller_socket_group` | Kernel, architecture, and Docker version of the engine, and the socket group given to the controller |
 | `returncode`, `network_retained` | Test command status and whether the qualification network kept attached resources |
 | `cases` | Identifier, outcome, and duration of every executed case, read from `junit.xml` |
+| `records_service` | The store, `conditional_write_enforcement` and verdict retained in `records-service/records-result.json` |
 | `sensitive_data_ready` | Always `false` |
 | `failures`, `passed` | Every reason the run does not qualify its commit, and the verdict |
 
-A run passes only when the tree matches its commit, both supplied images name that commit in their revision label and application build record, the sources are unchanged, the test command succeeds, no network resources are retained, and the executed cases equal the expected set with every case passed.
+A run passes only when the tree matches its commit, both supplied images name that commit in their revision label and application build record, the sources are unchanged, the test command succeeds, no network resources are retained, the executed cases equal the expected set with every case passed, and a synthetic run's records-service result shows a passing store that enforced create-only publication.
+Verification also rejects a manifest whose `records_service` differs from the retained result file.
 A reduced, extended, or skipped selection therefore fails, and adding, removing, or renaming a case requires changing `EXPECTED_CASES` in the same commit.
 
 `SHA256SUMS` covers the manifest, `junit.xml`, drill results, logs, and per-case evidence.

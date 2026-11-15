@@ -83,6 +83,7 @@ _OUTCOMES = {"failure": "failed", "error": "error", "skipped": "skipped"}
 # Cases that retain their records outside a directory named after the case.
 _CASE_DIRECTORIES = {"test_native_capable_model": "capable-model"}
 _DRILL_ID = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\.v[1-9][0-9]{0,3}")
+RECORDS_RESULT = "records-service/records-result.json"
 
 
 def _digest(path: Path) -> str:
@@ -114,6 +115,15 @@ def cases(report: Path) -> list[dict[str, Any]]:
     ]
 
 
+def records_service(directory: Path) -> dict[str, Any] | None:
+    """Read the store and create-only verdict the records-service case retained."""
+    path = directory / RECORDS_RESULT
+    if not path.is_file():
+        return None
+    result = json.loads(path.read_text())
+    return {name: result.get(name) for name in ("store", "conditional_write_enforcement", "passed")}
+
+
 def failures(manifest: dict[str, Any]) -> list[str]:
     """List every reason a recorded run does not qualify its source commit."""
     commit = manifest["source"]["commit"]
@@ -134,6 +144,11 @@ def failures(manifest: dict[str, Any]) -> list[str]:
         reasons.append("the executed cases differ from the expected set")
     if any(case["outcome"] != "passed" for case in manifest["cases"]):
         reasons.append("not every case passed")
+    records = manifest.get("records_service") or {}
+    if manifest["qualification_kind"] == "synthetic-native" and not (
+        records.get("passed") is True and records.get("conditional_write_enforcement") is True
+    ):
+        reasons.append("the records store did not enforce create-only publication")
     return reasons
 
 
@@ -237,6 +252,8 @@ def integrity(directory: Path) -> list[str]:
         problems.append("the recorded cases differ from the test report")
     if json.loads((directory / DRILLS).read_text()) != drill_results(directory):
         problems.append("the drill results differ from the recorded evidence")
+    if manifest.get("records_service") != records_service(directory):
+        problems.append(f"the recorded records result differs from {RECORDS_RESULT}")
     return problems
 
 

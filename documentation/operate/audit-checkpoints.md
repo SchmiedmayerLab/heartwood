@@ -142,14 +142,16 @@ Neither identity needs bucket administration, object deletion, governance bypass
 Enforce `If-None-Match` writes in the bucket policy as well, because versioning and retention alone do not prevent a new version from hiding an older one. See [S3 conditional-write enforcement](https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-writes-enforce.html).
 Qualify equivalent behavior for any other S3-compatible store.
 
-Native qualification runs the records-service and transport suites against a synthetic MinIO server built from the revision pinned in `images/worker/candidate/records.json`, with versioning, Object Lock in COMPLIANCE mode and the conditional-write bucket policy above.
+Native qualification runs the records-service and transport suites against a synthetic versitygw server built from the release pinned in `images/worker/candidate/records.json`.
+The server uses its POSIX backend with versioning, Object Lock in COMPLIANCE mode, sidecar metadata and the conditional-write bucket policy above applied to the whole bucket.
+Its standalone IAM service holds ordinary accounts whose identity policies grant the gateway, signer and worker the permissions in the table, and a separate records writer for the records-service suite.
 Each suite records the store, the policy and `conditional_write_enforcement` in its `records-result.json`.
-The records-service suite checks retention denial, lost-reply reconciliation, concurrent publication, outage recovery, backup and restore into a fresh server, and delete-marker and replacement-version detection against that same configuration.
+Enforcement is observed, not inferred from an accepted policy: an ordinary account must be refused an unconditional write and allowed a conditional one.
+The records-service suite checks that the store refuses conditional and unconditional overwrites of a published checkpoint, retention denial, lost-reply reconciliation, concurrent publication, outage recovery, backup and restore into a fresh server, and delete-marker and replacement-version detection against that same configuration.
 It fails, and with it native qualification, unless the store itself enforces the conditional-write policy.
-The pinned MinIO server rejects the `s3:if-none-match` condition key, so its results record `conditional_write_enforcement: false` and `records_policy_qualified: false`, and qualification against it does not pass.
-That server refuses a conditional overwrite of a published checkpoint but accepts an unconditional write as a new version.
-Heartwood rejects such a version wherever it reads the affected history, yet create-only publication is not enforced by that store.
-Create-only publication still needs qualification against a store that enforces the conditional-write policy, together with institutional retention approval and a production KMS or HSM signer.
+The store's root account is exempt from bucket policies and bound only by Object Lock, as a bucket owner may be elsewhere; the suite therefore also requires Heartwood to reject a replacement version written by that account.
+Keep administrative identities away from the gateway and signer.
+This qualifies Heartwood's publication path against a store that enforces create-only writes; it does not replace qualification of the institution's own store, institutional retention approval, or a production KMS or HSM signer.
 
 A working manifest does not prove that the signer authorizes requests, that the storage identities are restricted, or that the institution approves the deployment.
 Verify authorized and denied operations, key rotation, interrupted publication, retention, backup and restore, and network boundaries with synthetic records before admitting sensitive data.
