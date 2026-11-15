@@ -42,6 +42,7 @@ def volumes() -> WorkerVolumes:
         docker_host="unix:///var/run/docker.sock",
         workspace="synthetic",
         image_digest=_IMAGE,
+        protected_paths=(Path("/srv/research"), Path("/srv/protected/state")),
     )
     return WorkerVolumes(settings, intent)
 
@@ -57,7 +58,7 @@ def _container(volumes: WorkerVolumes, *, role: str = "worker") -> dict[str, Any
         ),
         "Config": {"Labels": {**volumes.labels, "heartwood.role": role}},
         "Image": _IMAGE,
-        "HostConfig": {"NetworkMode": "none"},
+        "HostConfig": {"NetworkMode": "none", "Privileged": False},
         "State": {"Running": False, "ExitCode": 0},
         "Mounts": [
             {"Destination": f"/{mount}", "Name": name, "Type": "volume", "RW": False}
@@ -139,6 +140,8 @@ def test_native_failure_is_sanitized_and_never_retried(
         "name",
         "image",
         "network",
+        "privileged",
+        "privilege-unobserved",
         "rw",
         "volume",
         "bind",
@@ -165,6 +168,10 @@ def test_worker_inspection_fails_closed_on_changed_admission(
         observed["Image"] = "sha256:" + "f" * 64
     elif mutation == "network":
         observed["HostConfig"]["NetworkMode"] = "host"
+    elif mutation == "privileged":
+        observed["HostConfig"]["Privileged"] = True
+    elif mutation == "privilege-unobserved":
+        del observed["HostConfig"]["Privileged"]
     elif mutation in {"rw", "volume", "bind"}:
         key, value = {"rw": ("RW", True), "volume": ("Name", "foreign"), "bind": ("Type", "bind")}[
             mutation
@@ -194,12 +201,56 @@ def test_worker_inspection_accepts_exact_read_only_projections(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     observed = _container(volumes)
+    observed["Mounts"].append(
+        {
+            "Destination": "/opt/supervisor",
+            "Source": "/var/lib/docker/volumes/supervisor/_data",
+            "Type": "volume",
+            "RW": False,
+        }
+    )
     monkeypatch.setattr(volumes, "command", Mock(return_value=json.dumps([observed]).encode()))
     volumes.inspect_worker(observed["Name"].removeprefix("/"))
     assert len(volumes.mounts()) == 2
     assert all(mount["read_only"] is True for mount in volumes.mounts())
     with pytest.raises(WorkerAttemptError, match="name"):
         volumes.inspect_worker("another-worker")
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "/var/run/docker.sock",
+        "/var/run",
+        "/srv/research",
+        "/srv/research/data",
+        "/srv/protected/state",
+        "/srv/protected",
+        "/",
+    ],
+)
+@pytest.mark.parametrize("kind", ["bind", "volume"])
+def test_worker_inspection_rejects_mounts_of_withheld_host_locations(
+    volumes: WorkerVolumes,
+    monkeypatch: pytest.MonkeyPatch,
+    source: str,
+    kind: str,
+) -> None:
+    observed = _container(volumes)
+    observed["Mounts"].append(
+        {"Destination": "/mnt/extra", "Source": source, "Type": kind, "RW": False}
+    )
+    monkeypatch.setattr(volumes, "command", Mock(return_value=json.dumps([observed]).encode()))
+    with pytest.raises(WorkerAttemptError, match="withheld host location"):
+        volumes.inspect_worker(observed["Name"].removeprefix("/"))
+
+
+def test_protected_locations_must_be_canonical(volumes: WorkerVolumes) -> None:
+    for path in ("relative/state", "/srv/../state"):
+        with pytest.raises(ValidationError):
+            WorkerVolumeSettings.model_validate(
+                {**volumes.settings.model_dump(), "protected_paths": (path,)}
+            )
 
 
 @pytest.mark.parametrize("response", [b"null", b"{}", b"[{},{}]", b"invalid", b"\xff"])
