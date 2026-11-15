@@ -25,6 +25,7 @@ The gateway independently checks attempt identity, admits untrusted responses an
 An uncertain revocation fences the attempt and retains writer ownership until reconciliation establishes that its resources are gone.
 The launcher deletes a worker that fails launch admission without waiting for the session to close, and the next managed gateway start deletes workers that an ended gateway process left running.
 Until that start, such a worker keeps its sandbox policy and provider attachment.
+Recorded worker absence relies on the sandbox gateway completing deletion as the qualified gateway does; Heartwood does not verify the registered gateway, so the operator must confirm the [gateway behavior behind native qualification](platform-requirements.md#gateway-behavior-behind-native-qualification).
 This path does not silently replace local execution and does not establish sensitive-data readiness merely by starting a worker.
 See the [platform isolation requirements](platform-contract.md#agent-isolation) and [native qualification limits](../architecture/testing.md#installed-native-integration).
 
@@ -221,6 +222,7 @@ Confirm each control before researchers add project data, and again after each u
 - require **Review Every Action** for registered tool proposals;
 - keep the launch link and any supplied gateway capability private to the researcher who started Heartwood;
 - pin release artifacts, images, model revisions, and Skill versions;
+- for managed native execution, confirm that the deployed sandbox gateway provides the [deletion behavior that native qualification depends on](platform-requirements.md#gateway-behavior-behind-native-qualification);
 - collect content-minimized operational logs outside project outputs;
 - validate backup, retention, deletion, and incident-response procedures; and
 - perform synthetic end-to-end validation before controlled-data enablement.
