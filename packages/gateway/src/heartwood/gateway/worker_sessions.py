@@ -134,7 +134,10 @@ class ManagedWorkerSession:
                 raise WorkerAttemptError("worker context does not match the session launch")
             lease.ensure_active()
         except BaseException:
-            self._service.fence_worker_attempt(attempt_id=lease.intent.attempt_id)
+            # Prompt revocation may already have recorded the attempt as revoked; the
+            # connection's own failure is the one to report.
+            with suppress(Exception):
+                self._service.fence_worker_attempt(attempt_id=lease.intent.attempt_id)
             raise
         self._context = context
         return context

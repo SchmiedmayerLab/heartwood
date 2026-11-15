@@ -816,3 +816,39 @@ def test_gateway_without_workers_never_runs_a_revoked_worker_session_on_the_host
         assert restored.action_review_mode() == "review-outside-effects"
     finally:
         successor.stop()
+
+
+def test_connection_failure_after_prompt_revocation_keeps_its_own_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    platform = Platform()
+    original = platform.prepare
+    gateway = configured_gateway(tmp_path, platform)
+    service = gateway._service("session-worker")
+
+    def prepare(request: WorkerSessionRequest) -> WorkerSessionPlan:
+        plan = original(request)
+
+        def connect(lease: WorkerAttemptLease) -> WorkerConversationContext:
+            # A transport thread fences while connection is still being established.
+            lease.fence()
+            assert _settles(service, "revoked")
+            raise RuntimeError("synthetic connection failure")
+
+        return replace(plan, connect=connect)
+
+    monkeypatch.setattr(platform, "prepare", prepare)
+    gateway._worker_plan_factory = prepare
+    gateway._worker_sessions[id(service)]._prepare = prepare
+    backend = service.backend
+    assert isinstance(backend, OpenHandsSdkBackend)
+    assert backend._worker_context is not None
+    try:
+        with pytest.raises(RuntimeError, match="synthetic connection failure"):
+            backend._worker_context()
+        record = service.worker_attempt()
+        assert record is not None
+        assert record.phase == "revoked"
+    finally:
+        gateway.stop()
+    assert platform.calls.count("revoke") == 1

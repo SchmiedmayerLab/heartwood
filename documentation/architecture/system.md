@@ -100,7 +100,8 @@ Inspection also rejects a privileged container and any mount whose host source o
 It compares each reported source and each withheld location both as written, after lexical normalization, and as resolved on the gateway host, so a symbolic link or platform path alias on either side does not hide an overlap.
 The resolved forms describe the gateway host's filesystem; a container runtime that reports paths from another filesystem namespace is covered only by the forms as written.
 Inspection does not restrict other supervisor-owned mounts.
-Inspection rejects any added Linux capability and accepts only listed confinement values: the container's own process and user namespace, a private or absent IPC namespace, and security options that keep the default profiles or add `no-new-privileges`, the default AppArmor profile, or an SELinux label.
+Inspection rejects any added Linux capability and accepts only listed confinement values: the container's own process and user namespace, a private or absent IPC namespace, and security options that keep the default profiles or add `no-new-privileges` or the default AppArmor profile.
+An SELinux label option is accepted only when it selects the runtime's standard confined container type (`container_t`, formerly `svirt_lxc_net_t`) or a single sensitivity level with individual categories; user and role fields, any other type such as `spc_t` or an unconfined type, category ranges, and `label=disable` are rejected.
 A host or shared namespace, an unconfined or replaced profile, and any value outside that list are refused.
 Each of these fields must be present in the runtime's report; an absent field fails admission.
 Transfer is attempted once, and uncertainty requires reconciliation instead of repeating the copy.

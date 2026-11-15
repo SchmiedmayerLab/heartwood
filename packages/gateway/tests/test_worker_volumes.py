@@ -289,6 +289,51 @@ def test_worker_inspection_compares_resolved_withheld_locations(
 
 
 @pytest.mark.parametrize(
+    ("option", "accepted"),
+    [
+        ("label=type:container_t", True),
+        ("label:type:container_t", True),
+        ("label=type:svirt_lxc_net_t", True),
+        ("label=level:s0:c100,c200", True),
+        ("label:level:s0:c1", True),
+        ("label=level:s0", True),
+        ("label=type:spc_t", False),
+        ("label=type:unconfined_t", False),
+        ("label=type:container_unconfined_t", False),
+        ("label=type:container_runtime_t", False),
+        ("label=type:svirt_t", False),
+        ("label=type:", False),
+        ("label=user:unconfined_u", False),
+        ("label=user:system_u", False),
+        ("label=role:system_r", False),
+        ("label=role:unconfined_r", False),
+        ("label=level:s0-s0:c0.c1023", False),
+        ("label=level:s0:c0.c1023", False),
+        ("label=level:s0:c1,c2;rm", False),
+        ("label=level:", False),
+        ("label=disable", False),
+        ("label:disable", False),
+        ("label=nested", False),
+        ("label=filetype:container_file_t", False),
+        ("label=", False),
+        ("label", False),
+    ],
+)
+def test_selinux_labels_are_admitted_only_when_they_keep_container_confinement(
+    volumes: WorkerVolumes, monkeypatch: pytest.MonkeyPatch, option: str, accepted: bool
+) -> None:
+    observed = _container(volumes)
+    observed["HostConfig"]["SecurityOpt"] = ["no-new-privileges:true", option]
+    monkeypatch.setattr(volumes, "command", Mock(return_value=json.dumps([observed]).encode()))
+    name = observed["Name"].removeprefix("/")
+    if accepted:
+        volumes.inspect_worker(name)
+    else:
+        with pytest.raises(WorkerAttemptError, match="confinement"):
+            volumes.inspect_worker(name)
+
+
+@pytest.mark.parametrize(
     ("field", "value"),
     [
         ("SecurityOpt", None),

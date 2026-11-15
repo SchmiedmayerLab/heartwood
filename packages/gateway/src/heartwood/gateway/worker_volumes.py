@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import stat
 import subprocess
 from pathlib import Path, PurePosixPath
@@ -75,7 +76,19 @@ _PRIVATE_NAMESPACE_MODES: dict[str, frozenset[str]] = {
     "IpcMode": frozenset({"", "private", "none"}),
     "UsernsMode": frozenset({""}),
 }
-_SELINUX_LABEL_FIELDS = ("user:", "role:", "type:", "level:")
+# The container runtime's standard confined process type, under its current and former name.
+# A user or role field, or any other type, could select an unconfined or privileged domain.
+_CONFINED_SELINUX_TYPES = frozenset({"container_t", "svirt_lxc_net_t"})
+# One sensitivity with individual categories, as the runtime assigns them; a category range
+# such as `c0.c1023` would give the worker every other container's categories.
+_SELINUX_LEVEL = re.compile(r"s[0-9]+(?::c[0-9]+(?:,c[0-9]+)*)?")
+
+
+def _confining_selinux_label(value: str) -> bool:
+    field, _, setting = value.partition(":")
+    if field == "type":
+        return setting in _CONFINED_SELINUX_TYPES
+    return field == "level" and _SELINUX_LEVEL.fullmatch(setting) is not None
 
 
 def _confining_security_option(option: object) -> bool:
@@ -90,7 +103,7 @@ def _confining_security_option(option: object) -> bool:
     if name == "apparmor":
         return value == "docker-default"
     if name == "label":
-        return value.startswith(_SELINUX_LABEL_FIELDS)
+        return _confining_selinux_label(value)
     return False
 
 
