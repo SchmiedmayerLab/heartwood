@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -17,7 +18,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Never, cast
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from openhands.sdk.tool.client_tool import ClientToolSpec
@@ -982,42 +983,89 @@ def test_native_revoked_worker_is_replaced_for_the_next_command(
         _stop(application)
 
 
+def _group_running(group: int) -> bool:
+    """Return whether any process of a group still runs; an unreaped exit has ended."""
+    for stat in Path("/proc").glob("[0-9]*/stat"):
+        try:
+            fields = stat.read_text().rsplit(")", 1)[1].split()
+        except OSError:
+            continue
+        if int(fields[2]) == group and fields[0] != "Z":
+            return True
+    return False
+
+
 def test_native_forwarder_ends_with_the_gateway_process(infrastructure: NativeFixture) -> None:
     fixture = infrastructure
-    application = _application(fixture)
-    service = application._service("composition")
+    reports, report_end = os.pipe()
+    gateway = os.fork()
+    if gateway == 0:
+        # The gateway process admits a worker, reports its forwarder and waits to be killed.
+        try:
+            os.close(reports)
+            application = _application(fixture)
+            service = application._service("composition")
+            _submit(
+                application, CommandKind.CHAT, {"prompt": "Synthetic forwarder lifetime check."}
+            )
+            backend = service.backend
+            assert isinstance(backend, OpenHandsSdkBackend)
+            assert backend.wait_for_idle(60)
+            plan = application._worker_sessions[id(service)]._plan
+            assert plan is not None
+            attempt = cast(_NativeWorkerAttempt, cast(Any, plan.launch).__self__)
+            forward = attempt._forward
+            assert forward is not None
+            assert forward._process is not None
+            record = service.worker_attempt()
+            assert record is not None
+            report = {
+                "supervisor": forward._process.pid,
+                "root": str(application.project.root),
+                "protected": str(application.project.protected_state),
+                "project": str(application.project.project_id),
+                "settings": attempt.settings.model_dump(mode="json"),
+                "attempt": str(record.intent.attempt_id),
+            }
+            os.write(report_end, (json.dumps(report) + "\n").encode())
+            time.sleep(600)
+        finally:
+            os._exit(1)
+    os.close(report_end)
     try:
-        _submit(application, CommandKind.CHAT, {"prompt": "Synthetic forwarder lifetime check."})
-        backend = service.backend
-        assert isinstance(backend, OpenHandsSdkBackend)
-        assert backend.wait_for_idle(60)
-        plan = application._worker_sessions[id(service)]._plan
-        assert plan is not None
-        attempt = cast(_NativeWorkerAttempt, cast(Any, plan.launch).__self__)
-        forward = attempt._forward
-        assert forward is not None
-        process = forward._process
-        assert process is not None
-        assert process.stdin is not None
-
-        def group_alive() -> bool:
-            # The forwarder runs in the supervisor's process group and nowhere else.
-            try:
-                os.killpg(process.pid, 0)
-            except ProcessLookupError:
-                return False
-            return True
-
-        assert group_alive()
-        # Ending the gateway process closes its end of the pipe; nothing else is signalled.
-        process.stdin.close()
+        with os.fdopen(reports) as lines:
+            line = lines.readline()
+        assert line, "the gateway process admitted no worker"
+        report = json.loads(line)
+        supervisor = report["supervisor"]
+        assert _group_running(supervisor)
+        # Nothing but the gateway process is signalled, and it cannot clean up.
+        os.kill(gateway, signal.SIGKILL)
+        os.waitpid(gateway, 0)
+        gateway = 0
         deadline = time.monotonic() + 15
-        while group_alive() and time.monotonic() < deadline:
+        while _group_running(supervisor) and time.monotonic() < deadline:
             time.sleep(0.2)
-        assert not group_alive()
-        assert not forward.active
-        _stop(application)
-        _assert_revoked(service)
+        assert not _group_running(supervisor)
+        # A later gateway revokes the attempt the killed process left.
+        project = ProjectContext(
+            Path(report["root"]),
+            protected_state=Path(report["protected"]),
+            project_id=UUID(report["project"]),
+        )
+        settings = OpenShellWorkerDeployment.model_validate(report["settings"])
+        successor = SessionGateway(
+            project=project,
+            worker_plan_factory=native_worker_plan_factory(settings, project),
+            worker_reconciler=native_worker_reconciler(settings, project),
+            env={},
+        )
+        fixture.applications.append(successor)
+        try:
+            assert successor.reconcile_workers() == {}
+        finally:
+            _stop(successor)
+        _assert_absent(report["attempt"])
         (fixture.output / "evidence.json").write_text(
             json.dumps(
                 {
@@ -1031,4 +1079,6 @@ def test_native_forwarder_ends_with_the_gateway_process(infrastructure: NativeFi
             + "\n"
         )
     finally:
-        _stop(application)
+        if gateway:
+            os.kill(gateway, signal.SIGKILL)
+            os.waitpid(gateway, 0)
