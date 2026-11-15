@@ -22,6 +22,7 @@ from heartwood.cli._workspace_presentation import (
     format_workspace_tree,
 )
 from heartwood.gateway import (
+    RETAINED_APPROVAL_NOTICE,
     ActionSettingsError,
     ModelSettingsError,
     ProjectionActionRecord,
@@ -35,8 +36,10 @@ from heartwood.gateway import (
     action_state_label,
     action_summary_label,
     action_tool_label,
+    approval_retry_unavailable_reason,
     outside_review_lines,
     outside_review_title,
+    retained_approval,
     specialist_review_lines,
 )
 from heartwood.gateway import (
@@ -114,6 +117,11 @@ _COMMAND_ACTIVITIES = {
         waiting_label="Still continuing the action set",
         guidance="The model may need time to process the tool results.",
     ),
+    "/retry": InteractionActivity(
+        label="Resending the recorded approval",
+        waiting_label="Still resending the recorded approval",
+        guidance="Heartwood is sending the approval it recorded, once.",
+    ),
     "/reject": InteractionActivity(
         label="Rejecting the action set",
         waiting_label="Still rejecting the action set",
@@ -171,6 +179,7 @@ _COMMAND_ACTIVITIES = {
     ),
 }
 _STABLE_WAIT_TIMEOUT_SECONDS = 3600.0
+_RETAINED_APPROVAL_CHOICES = "Resend it with /retry, or withdraw it with /reject."
 
 
 class InteractiveSession:
@@ -180,6 +189,8 @@ class InteractiveSession:
         self.gateway = gateway
         self.session_id = session_id
         self._displayed_workflow_controls: tuple[WorkflowControl, ...] = ()
+        # The last approval the gateway retains unsent; only this exact command may send it.
+        self._approval_retry: SessionCommand | None = None
 
     def replay(self) -> SessionProjection:
         """Return the gateway-owned session projection."""
@@ -278,15 +289,23 @@ class InteractiveSession:
                     message="No actions are awaiting review.",
                     error=True,
                 )
-            kind = CommandKind.APPROVE if directive == "/allow" else CommandKind.DENY
-            events = self._handle(
-                kind,
-                {"target_type": "action-set", "target_id": target},
-            )
-            return InteractionResult(
-                events=events,
-                projection=self.replay(),
-            )
+            payload: dict[str, JsonValue] = {"target_type": "action-set", "target_id": target}
+            if directive == "/reject":
+                events = self._handle(CommandKind.DENY, payload)
+                return InteractionResult(events=events, projection=self.replay())
+            if retained_approval(self.replay()) is not None:
+                # A new approval is refused while the recorded one waits to be sent.
+                return InteractionResult(
+                    message=f"{RETAINED_APPROVAL_NOTICE}\n{_RETAINED_APPROVAL_CHOICES}",
+                    error=True,
+                )
+            return self._approve(self._command(CommandKind.APPROVE, payload))
+        if directive == "/retry" and len(parts) == 1:
+            reason = approval_retry_unavailable_reason(self.replay(), self._approval_retry)
+            if reason is not None or self._approval_retry is None:
+                self._approval_retry = None
+                return InteractionResult(message=reason, error=True)
+            return self._approve(self._approval_retry)
         if directive == "/pause" and len(parts) == 1:
             events = self._handle(CommandKind.PAUSE)
             return InteractionResult(events=events, projection=self.replay())
@@ -434,12 +453,40 @@ class InteractiveSession:
             return None
         return approval.group_id if requested_id is None else requested_id
 
+    def _approve(self, command: SessionCommand) -> InteractionResult:
+        """Send an approval, keeping it for an exact retry while the gateway retains it."""
+        try:
+            events = self.gateway.handle(command).events
+        except Exception as error:
+            projection = self.replay()
+            if approval_retry_unavailable_reason(projection, command) is not None:
+                self._approval_retry = None
+                raise
+            self._approval_retry = command
+            return InteractionResult(
+                projection=projection,
+                message=terminal_safe_text(
+                    f"{error}\n{RETAINED_APPROVAL_NOTICE}\n{_RETAINED_APPROVAL_CHOICES}",
+                    preserve_newlines=True,
+                ),
+                error=True,
+            )
+        self._approval_retry = None
+        return InteractionResult(events=events, projection=self.replay())
+
     def _handle(
         self,
         kind: CommandKind,
         payload: dict[str, JsonValue] | None = None,
     ) -> tuple[SessionEvent, ...]:
-        command = SessionCommand(
+        return self.gateway.handle(self._command(kind, payload)).events
+
+    def _command(
+        self,
+        kind: CommandKind,
+        payload: dict[str, JsonValue] | None = None,
+    ) -> SessionCommand:
+        return SessionCommand(
             command_id=new_command_id(self.session_id, kind),
             session_id=self.session_id,
             kind=kind,
@@ -447,13 +494,12 @@ class InteractiveSession:
             created_at=datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
             payload={} if payload is None else payload,
         )
-        return self.gateway.handle(command).events
 
 
 def command_help() -> str:
     """Return the commands common to terminal clients."""
     return (
-        "/allow  /reject  /permissions  /pause  /resume  /status  "
+        "/allow  /reject  /retry  /permissions  /pause  /resume  /status  "
         "/specialists  /workflows  /workflow  /experiments  /files  /show  /changes  "
         "/replay  /audit-export  /help  /exit"
     )
@@ -505,11 +551,16 @@ def format_projection_lines(
         outside_title = (
             outside_review_title(approval.actions[0]) if len(approval.actions) == 1 else None
         )
+        retained = approval.decision == "approved"
         lines.append(
-            f"Review {outside_title}:"
+            f"Approval not sent: {outside_title}"
+            if retained
+            else f"Review {outside_title}:"
             if outside_title
             else f"Review {len(approval.actions)} {label} as one OpenHands action set:"
         )
+        if retained:
+            lines.append(RETAINED_APPROVAL_NOTICE)
         for index, action in enumerate(approval.actions, 1):
             tool_label = terminal_safe_text(action_tool_label(action.tool_name))
             risk_label = action_risk_label(action.risk)
@@ -533,6 +584,11 @@ def format_projection_lines(
                 lines.extend(f"       {line}" for line in argument_lines)
         lines.extend(
             (
+                "Resend the recorded approval: /retry",
+                "Reject the review to withdraw it: /reject",
+            )
+            if retained
+            else (
                 "Allow the complete set once: /allow",
                 "Reject the complete set: /reject",
             )

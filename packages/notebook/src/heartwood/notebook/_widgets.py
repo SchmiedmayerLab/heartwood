@@ -16,6 +16,7 @@ from types import ModuleType
 from typing import Protocol, cast
 
 from heartwood.gateway import (
+    RETAINED_APPROVAL_NOTICE,
     ProjectionSubagent,
     action_heading,
     action_risk_label,
@@ -200,7 +201,11 @@ def _approval_items(view_model: NotebookViewModel) -> tuple[str, ...]:
     if group is None:
         return ()
     action_label = "action" if len(group.actions) == 1 else "actions"
-    items = [(f"Review {len(group.actions)} {action_label} as one complete set: pending")]
+    items = [
+        f"Approval not sent: {RETAINED_APPROVAL_NOTICE}"
+        if group.decision == "approved"
+        else f"Review {len(group.actions)} {action_label} as one complete set: pending"
+    ]
     for index, action in enumerate(group.actions, 1):
         details = action.details
         heading = (

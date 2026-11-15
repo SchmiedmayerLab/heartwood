@@ -69,6 +69,8 @@ view = session.approve(group_id=pending.group_id)
 ```
 
 The decision applies to every action in that set.
+If an outside approval is recorded but cannot be sent, `session.approve` raises and `view.pending_approval.decision` is `"approved"`.
+Resend that same approval with `session.retry()`, or withdraw it with `session.deny(group_id=pending.group_id)`; see [Outside Operations and Result Releases](actions-audit.md#outside-operations-and-result-releases).
 `view.actions` holds every action record with its state, bounded outcome, and affected paths.
 An action Heartwood allowed under a review rule has that rule in `automatic_rule` and never appears as your approval.
 

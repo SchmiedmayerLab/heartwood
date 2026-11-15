@@ -17,8 +17,11 @@ from heartwood.gateway._action_settings import ACTION_MODE_OPTIONS
 if TYPE_CHECKING:
     from heartwood.gateway._session_projection import (
         ProjectionActionRecord,
+        ProjectionApprovalGroup,
         ProjectionOutsideContent,
+        SessionProjection,
     )
+    from heartwood.session import SessionCommand
 
 ACTION_TOOL_LABELS = {
     "file_editor": "File Change",
@@ -188,6 +191,46 @@ def outside_review_lines(action: ProjectionActionRecord) -> tuple[str, ...]:
     return tuple(display_safe_text(line) for line in lines)
 
 
+RETAINED_APPROVAL_NOTICE = (
+    "Your approval is recorded but was not sent. Nothing is sent until that same approval "
+    "is retried, and rejecting the review withdraws it."
+)
+
+
+def retained_approval(projection: SessionProjection) -> ProjectionApprovalGroup | None:
+    """Return the outside approval the gateway holds unsent, if any."""
+    approval = projection.pending_approval
+    return approval if approval is not None and approval.decision == "approved" else None
+
+
+def approval_retry_unavailable_reason(
+    projection: SessionProjection, command: SessionCommand | None
+) -> str | None:
+    """Say why a kept approval cannot be resent, or return None while the gateway retains it."""
+    retained = retained_approval(projection)
+    target = None if command is None else command.payload.get("target_id")
+    if retained is not None and retained.group_id == target:
+        return None
+    if retained is not None:
+        return (
+            "This approval was made in another window or before Heartwood restarted, so only "
+            "rejecting the review, or waiting until it expires, ends it here."
+        )
+    if command is None:
+        return "No approval is waiting to be sent."
+    outcome = next(
+        (
+            action.outcome
+            for action in projection.actions
+            if action.group_id == target and action.outcome is not None
+        ),
+        None,
+    )
+    if outcome is None:
+        return "The approval is no longer waiting to be sent."
+    return display_safe_text(f"The approval is no longer waiting to be sent: {outcome.summary}.")
+
+
 def action_presentation() -> dict[str, object]:
     """Return non-secret terminology consumed by interface adapters."""
     return {
@@ -205,6 +248,7 @@ __all__ = [
     "ACTION_STATE_LABELS",
     "ACTION_TOOL_LABELS",
     "OTHER_ACTION_TOOL_LABEL_TEMPLATE",
+    "RETAINED_APPROVAL_NOTICE",
     "UNKNOWN_ACTION_RISK_LABEL",
     "UNKNOWN_ACTION_TOOL_LABEL",
     "action_heading",
@@ -214,8 +258,10 @@ __all__ = [
     "action_state_label",
     "action_summary_label",
     "action_tool_label",
+    "approval_retry_unavailable_reason",
     "display_safe_text",
     "outside_review_lines",
     "outside_review_title",
+    "retained_approval",
     "specialist_review_lines",
 ]

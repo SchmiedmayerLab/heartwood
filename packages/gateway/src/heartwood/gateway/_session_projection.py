@@ -228,6 +228,10 @@ class ProjectionApprovalGroup(_ProjectionRecord):
     group_id: str = Field(serialization_alias="groupId")
     actions: tuple[ProjectionActionRecord, ...]
     decision: Literal["approved", "denied"] | None = None
+    """``approved`` for an outside approval that is recorded but not yet sent.
+
+    Only that approval's own command can send it, so the set offers rejection alone.
+    """
     decision_scope: Literal["all"] = Field(
         default="all",
         serialization_alias="decisionScope",
@@ -499,6 +503,7 @@ class _SessionReduction:
         default_factory=dict
     )
     integrity_failed_action_ids: set[str] = field(default_factory=set)
+    retained_group_ids: set[str] = field(default_factory=set)
     reported_resolutions: set[str] = field(default_factory=set)
     context: ProjectionModelContext = field(default_factory=ProjectionModelContext)
     lifecycle_status: SessionLifecycle = SessionLifecycle.IDLE
@@ -544,6 +549,7 @@ def project_session(
         actions,
         approval_group_actions=reduction.approval_group_actions,
         approval_group_decisions=reduction.approval_group_decisions,
+        retained_group_ids=reduction.retained_group_ids,
     )
     if pending_approval is not None and lifecycle_status not in {
         SessionLifecycle.ERROR,
@@ -572,7 +578,7 @@ def project_session(
     )
     available_commands = _available_commands(
         lifecycle=lifecycle_status,
-        has_pending_approval=pending_approval is not None,
+        pending_approval=pending_approval,
         error_recoverable=lifecycle_error_recoverable,
     )
     current_workflow = workflow_run(events)
@@ -697,6 +703,9 @@ def _reduce_outside_record(reduction: _SessionReduction, event: SessionEvent) ->
         reduction.approval_group_decisions[outside_proposal.group_id] = None
     if outside.phase == "authorized":
         state = "approved"
+        reduction.retained_group_ids.add(outside_proposal.group_id)
+    else:
+        reduction.retained_group_ids.discard(outside_proposal.group_id)
     if outside.phase in {"expired", "withdrawn"}:
         # Closed before dispatch: neither awaiting review nor an uncertain effect.
         reduction.approval_group_decisions[outside_proposal.group_id] = "denied"
@@ -1200,6 +1209,12 @@ def _apply_session_activity(reduction: _SessionReduction, activity: SessionActiv
 
 def _settle_actions(reduction: _SessionReduction) -> None:
     """Apply the final lifecycle and integrity state to every reduced action."""
+    # A retained outside approval has sent nothing, whatever the agent run is doing.
+    retained = {
+        tool_call_id
+        for group_id in reduction.retained_group_ids
+        for tool_call_id in reduction.approval_group_actions.get(group_id, ())
+    }
     if reduction.lifecycle_status == SessionLifecycle.RUNNING:
         reduction.actions = {
             tool_call_id: (
@@ -1212,7 +1227,7 @@ def _settle_actions(reduction: _SessionReduction) -> None:
                         ),
                     }
                 )
-                if action.state in {"approved", "proposed"}
+                if action.state in {"approved", "proposed"} and tool_call_id not in retained
                 else action
             )
             for tool_call_id, action in reduction.actions.items()
@@ -1230,7 +1245,9 @@ def _settle_actions(reduction: _SessionReduction) -> None:
                         ),
                     }
                 )
-                if action.outcome is None and action.state not in {"rejected", "awaiting-review"}
+                if action.outcome is None
+                and action.state not in {"rejected", "awaiting-review"}
+                and tool_call_id not in retained
                 else action
             )
             for tool_call_id, action in reduction.actions.items()
@@ -1514,7 +1531,20 @@ def _pending_approval(
     *,
     approval_group_actions: dict[str, list[str]],
     approval_group_decisions: dict[str, Literal["approved", "denied"] | None],
+    retained_group_ids: set[str],
 ) -> ProjectionApprovalGroup | None:
+    # Every other command is refused while an outside approval waits to be sent.
+    for group_id, tool_call_ids in reversed(tuple(approval_group_actions.items())):
+        if group_id in retained_group_ids:
+            return ProjectionApprovalGroup(
+                group_id=group_id,
+                actions=tuple(
+                    action
+                    for tool_call_id in tool_call_ids
+                    if (action := actions.get(tool_call_id))
+                ),
+                decision="approved",
+            )
     for group_id, tool_call_ids in reversed(tuple(approval_group_actions.items())):
         if approval_group_decisions.get(group_id) is not None:
             continue
@@ -1991,11 +2021,12 @@ def _lifecycle(value: str) -> SessionLifecycle:
 def _available_commands(
     *,
     lifecycle: SessionLifecycle,
-    has_pending_approval: bool,
+    pending_approval: ProjectionApprovalGroup | None,
     error_recoverable: bool,
 ) -> tuple[Literal["chat", "pause", "resume", "approve", "deny"], ...]:
-    if has_pending_approval:
-        return ("approve", "deny")
+    if pending_approval is not None:
+        # A retained approval is sent only by its own retry, never by a new approval.
+        return ("deny",) if pending_approval.decision == "approved" else ("approve", "deny")
     if lifecycle == SessionLifecycle.RUNNING:
         return ("chat", "pause")
     if lifecycle == SessionLifecycle.PAUSED:

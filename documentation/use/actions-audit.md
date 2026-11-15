@@ -165,7 +165,11 @@ The summary of these reviews comes from the outside-service adapter or the gatew
 A released result reaches the model as message content; it is data from the service, not instructions Heartwood has checked.
 
 If an approval is recorded but cannot be sent, for example while the records service is unavailable, nothing is sent until you choose.
-In the browser, **Retry request** resends that same approval; a new approval from any interface is refused while it waits, so in the terminal and notebook you can only reject it or let it expire.
+Every interface then shows the review as **Approval not sent** and offers the same two choices: retry that approval, or reject the review to withdraw it.
+The window, terminal, or notebook that made the approval keeps it and resends the same command: **Retry request** in the browser, `/retry` or **Retry the Recorded Approval** in the terminal, and `session.retry()` in a notebook.
+A retry sends the approval at most once; after it has been sent, withdrawn, or expired, nothing is offered for a retry, and `/retry` and `session.retry()` say why.
+A new approval from any interface is refused while the recorded one waits, and an interface that did not make the approval, or was restarted since, can only reject the review or wait for it to expire.
+Rejection stays available while the approval waits, even after an unrecoverable session error, because it sends nothing.
 Opening or refreshing the session, other commands, and automatic decisions never send it.
 An approval not sent before the review's validity ends is recorded as expired.
 

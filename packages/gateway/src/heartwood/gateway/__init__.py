@@ -38,15 +38,18 @@ from heartwood.core_adapter import (
 )
 from heartwood.gateway._access import LaunchCapability
 from heartwood.gateway._action_presentation import (
+    RETAINED_APPROVAL_NOTICE,
     action_heading,
     action_mode_label,
     action_risk_label,
     action_state_label,
     action_summary_label,
     action_tool_label,
+    approval_retry_unavailable_reason,
     display_safe_text,
     outside_review_lines,
     outside_review_title,
+    retained_approval,
     specialist_review_lines,
 )
 from heartwood.gateway._action_settings import (
@@ -261,6 +264,7 @@ __all__ = [
     "MANAGED_RUNTIME_SOCKET_ENV",
     "MODEL_PRESETS",
     "MODEL_SOURCE_OPTIONS",
+    "RETAINED_APPROVAL_NOTICE",
     "ActionModeOption",
     "ActionSettings",
     "ActionSettingsError",
@@ -403,6 +407,7 @@ __all__ = [
     "action_state_label",
     "action_summary_label",
     "action_tool_label",
+    "approval_retry_unavailable_reason",
     "assess_credential_isolation",
     "automatic_model_tier",
     "catalog_model_choices",
@@ -452,6 +457,7 @@ __all__ = [
     "plan_local_context_window",
     "plan_startup",
     "project_session",
+    "retained_approval",
     "specialist_review_lines",
     "user_checkpoint_signer_registry_path",
     "verify_model_artifact",

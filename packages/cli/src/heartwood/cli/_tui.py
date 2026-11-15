@@ -54,6 +54,7 @@ from heartwood.cli._workspace_presentation import (
     format_workspace_file,
 )
 from heartwood.gateway import (
+    RETAINED_APPROVAL_NOTICE,
     ActionSettingsError,
     SessionProjection,
     action_mode_label,
@@ -325,6 +326,7 @@ class HeartwoodTerminalApp(App[None]):
         self._retired_stream_epochs: set[str] = set()
         self._mode_label = "Action Review"
         self._review_group_id = ""
+        self._review_retained = False
         self._workspace_revision: int | None = None
         self._workspace_overview_generation = 0
         self._workspace_file_generation = 0
@@ -654,16 +656,21 @@ class HeartwoodTerminalApp(App[None]):
             return
         actions = approval.actions
         self._review_group_id = approval.group_id
+        self._review_retained = approval.decision == "approved"
         panel.display = True
         label = "action" if len(actions) == 1 else "actions"
         outside_title = outside_review_title(actions[0]) if len(actions) == 1 else None
         self.query_one("#approval-title", Static).update(
-            f"Review {outside_title}"
+            f"Approval Not Sent · {outside_title}"
+            if self._review_retained
+            else f"Review {outside_title}"
             if outside_title
             else f"Review Agent Actions · {len(actions)} {label.title()}"
         )
         self.query_one("#approval-help", Static).update(
-            "Allow sends exactly this content once. Reject sends nothing."
+            RETAINED_APPROVAL_NOTICE
+            if self._review_retained
+            else "Allow sends exactly this content once. Reject sends nothing."
             if outside_title
             else "These actions were proposed together. One decision applies to the complete set."
         )
@@ -712,7 +719,10 @@ class HeartwoodTerminalApp(App[None]):
         options = self.query_one("#approval-options", OptionList)
         count_label = f"{len(actions)} {label.title()}"
         options.replace_option_prompt("reject", f"Reject {count_label}")
-        options.replace_option_prompt("allow", f"Allow {count_label} Once")
+        options.replace_option_prompt(
+            "allow",
+            "Retry the Recorded Approval" if self._review_retained else f"Allow {count_label} Once",
+        )
         options.disabled = self._busy
         options.highlighted = 0
         options.focus()
@@ -720,6 +730,11 @@ class HeartwoodTerminalApp(App[None]):
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         """Resolve the pending batch from the keyboard review control."""
         if event.option_list.id != "approval-options" or self._busy:
+            return
+        if event.option_id == "allow" and self._review_retained:
+            # A retained approval is resent as the same command, never approved anew.
+            self._set_busy(True, activity=interaction_activity("/retry"))
+            self._submit("/retry")
             return
         directive = "/allow" if event.option_id == "allow" else "/reject"
         self._set_busy(True, activity=interaction_activity(directive))

@@ -875,9 +875,17 @@ class SessionGateway:
                 FileSessionStore(self.sessions_root, command.session_id).replay_events(),
                 session_id=command.session_id,
             )
+            retained = persisted_projection.pending_approval
             if (
                 persisted_projection.lifecycle.status == SessionLifecycle.ERROR
                 and not persisted_projection.lifecycle.can_steer
+                # Withdrawing a retained outside approval sends nothing, so it needs
+                # neither an admitted worker nor a known execution outcome.
+                and not (
+                    command_kind == CommandKind.DENY.value
+                    and retained is not None
+                    and retained.decision == "approved"
+                )
             ):
                 return self._handle_stored_command(
                     command,

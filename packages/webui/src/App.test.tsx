@@ -3899,6 +3899,53 @@ class OutsidePendingClient extends PendingClient {
   }
 }
 
+class RetainedOutsideClient extends OutsidePendingClient {
+  retainedOnReplay = false;
+
+  constructor(private readonly outside: ReturnType<typeof syntheticAction>) {
+    super(outside);
+  }
+
+  retainedProjection(): SessionProjection {
+    const action = {
+      ...this.outside,
+      state: "approved" as const,
+      decision: "approved" as const,
+    };
+    return syntheticProjection({
+      sessionId: "session-test",
+      actions: [action],
+      pendingApproval: {
+        groupId: "action-set-session-test",
+        actions: [action],
+        decision: "approved",
+        decisionScope: "all",
+      },
+      availableCommands: ["deny"],
+      eventCount: 8,
+      revision: 7,
+    });
+  }
+
+  override replayEvents(sessionId: string): Promise<SessionProjectionResponse> {
+    if (!this.retainedOnReplay) return super.replayEvents(sessionId);
+    this.replayCalls += 1;
+    const projection = this.retainedProjection();
+    this.projections.set(sessionId, projection);
+    return Promise.resolve({ events: syntheticEvents(), projection });
+  }
+
+  override postCommand(
+    command: SessionCommand,
+  ): Promise<SessionProjectionResponse> {
+    if (command.kind === "approve" && this.commands.length === 0) {
+      this.commands.push(command);
+      return Promise.reject(new Error("records service unavailable"));
+    }
+    return super.postCommand(command);
+  }
+}
+
 class BatchPendingClient extends PendingClient {
   override replayEvents(sessionId: string): Promise<SessionProjectionResponse> {
     this.replayCalls += 1;
@@ -4156,6 +4203,59 @@ describe("App error handling", () => {
     fireEvent.click(screen.getByRole("button", { name: "Export audit" }));
 
     expect(await screen.findByText("synthetic gateway failure")).toBeVisible();
+  });
+
+  it("resends a retained outside approval as the same command or rejects it", async () => {
+    const client = new RetainedOutsideClient(syntheticOutsideOperation());
+    render(<App client={client} initialSessionId="session-test" />);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Allow 1 action once" }),
+    );
+    expect(
+      await screen.findByText("records service unavailable"),
+    ).toBeVisible();
+    act(() => client.emitStream(client.retainedProjection()));
+
+    const review = await screen.findByRole("region", {
+      name: "Approval not sent",
+    });
+    expect(
+      within(review).queryByRole("button", { name: "Allow 1 action once" }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(review).getByRole("button", { name: "Reject 1 action" }),
+    ).toBeEnabled();
+    fireEvent.click(
+      within(review).getByRole("button", { name: "Retry request" }),
+    );
+
+    await waitFor(() => expect(client.commands).toHaveLength(2));
+    expect(client.commands[1]).toEqual(client.commands[0]);
+  });
+
+  it("offers only rejection for an approval retained by another window", async () => {
+    const client = new RetainedOutsideClient(syntheticOutsideOperation());
+    client.retainedOnReplay = true;
+    render(<App client={client} initialSessionId="session-test" />);
+
+    const review = await screen.findByRole("region", {
+      name: "Approval not sent",
+    });
+    expect(within(review).getByText(/made in another window/u)).toBeVisible();
+    expect(
+      within(review).getByRole("button", { name: "Retry request" }),
+    ).toBeDisabled();
+    fireEvent.click(
+      within(review).getByRole("button", { name: "Reject 1 action" }),
+    );
+
+    await waitFor(() => expect(client.commands).toHaveLength(1));
+    expect(client.commands[0]?.kind).toBe("deny");
+    expect(client.commands[0]?.payload).toEqual({
+      target_id: "action-set-session-test",
+      target_type: "action-set",
+    });
   });
 
   it("retries an uncertain command with the original command identifier", async () => {

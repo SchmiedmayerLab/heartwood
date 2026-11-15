@@ -62,6 +62,8 @@ interface ConversationWorkspaceProps {
     decision: "approve" | "deny",
     approval: ProjectionApprovalGroup,
   ) => void;
+  /** Resends the exact approval this window recorded, when the gateway still retains it. */
+  onRetryApproval: (() => void) | null;
   onOpenSettings: () => void;
   onPauseToggle: () => void;
   onPrompt: (prompt: string) => void;
@@ -78,14 +80,19 @@ export const ConversationWorkspace = ({
   requestActivity,
   requestStatus,
   onDecision,
+  onRetryApproval,
   onOpenSettings,
   onPauseToggle,
   onPrompt,
   onSubmit,
 }: ConversationWorkspaceProps) => {
   const conversation = projection?.conversation ?? [];
+  // A retained approval stays in review: it can be retried or rejected, never approved anew.
   const pendingApproval =
-    projection?.pendingApproval?.decision === null ?
+    (
+      projection?.pendingApproval?.decision === null ||
+      projection?.pendingApproval?.decision === "approved"
+    ) ?
       projection.pendingApproval
     : null;
   const paused = projection?.paused ?? false;
@@ -177,6 +184,7 @@ export const ConversationWorkspace = ({
             canDeny={availableCommands.includes("deny")}
             busy={requestStatus === "busy"}
             onDecision={onDecision}
+            onRetry={onRetryApproval}
           />
         : (
           conversation.length > 0 &&
@@ -564,6 +572,12 @@ const ActionTechnicalDetails = ({
   );
 };
 
+// Shared wording with the gateway's RETAINED_APPROVAL_NOTICE and retry reasons.
+const retainedApprovalNotice =
+  "Your approval is recorded but was not sent. Nothing is sent until that same approval is retried, and rejecting the review withdraws it.";
+const retainedElsewhereNotice =
+  "This approval was made in another window or before Heartwood restarted, so only rejecting the review, or waiting until it expires, ends it here.";
+
 const outsideReviewCopy = {
   "outside-operation": {
     title: "Outside operation",
@@ -829,6 +843,7 @@ const ApprovalRequest = ({
   canApprove,
   canDeny,
   onDecision,
+  onRetry,
 }: {
   actionPresentation: ActionPresentation | null;
   approval: ProjectionApprovalGroup;
@@ -839,6 +854,7 @@ const ApprovalRequest = ({
     decision: "approve" | "deny",
     approval: ProjectionApprovalGroup,
   ) => void;
+  onRetry: (() => void) | null;
 }) => {
   const headingRef = useRef<HTMLHeadingElement>(null);
   useEffect(() => {
@@ -850,6 +866,7 @@ const ApprovalRequest = ({
   const allowLabel =
     approval.actions.length === 1 ? "Allow Once" : "Allow All Once";
   const rejectLabel = approval.actions.length === 1 ? "Reject" : "Reject All";
+  const retained = approval.decision === "approved";
   return (
     <section
       className="approval-request"
@@ -859,14 +876,22 @@ const ApprovalRequest = ({
       <div className="approval-copy">
         <div className="approval-introduction">
           <h2 id="action-review-heading" ref={headingRef} tabIndex={-1}>
-            {outsideCopy?.heading ?? `Review ${countLabel}`}
+            {retained ?
+              "Approval not sent"
+            : (outsideCopy?.heading ?? `Review ${countLabel}`)}
           </h2>
           <p>
-            {outsideCopy?.introduction ??
+            {retained ?
+              retainedApprovalNotice
+            : (outsideCopy?.introduction ??
               (approval.actions.length === 1 ?
                 "Allow runs it once. Reject skips it."
-              : "Allow runs all of them once. Reject runs none.")}
+              : "Allow runs all of them once. Reject runs none."))
+            }
           </p>
+          {retained && onRetry === null ?
+            <p>{retainedElsewhereNotice}</p>
+          : null}
         </div>
         <ol className="approval-batch-list" role="list">
           {approval.actions.map((control) => {
@@ -955,14 +980,23 @@ const ApprovalRequest = ({
         >
           {rejectLabel}
         </Button>
-        <Button
-          aria-label={`Allow ${countLabel} once`}
-          disabled={busy || !canApprove}
-          size="sm"
-          onClick={() => onDecision("approve", approval)}
-        >
-          {allowLabel}
-        </Button>
+        {retained ?
+          <Button
+            disabled={busy || onRetry === null}
+            size="sm"
+            onClick={() => onRetry?.()}
+          >
+            Retry request
+          </Button>
+        : <Button
+            aria-label={`Allow ${countLabel} once`}
+            disabled={busy || !canApprove}
+            size="sm"
+            onClick={() => onDecision("approve", approval)}
+          >
+            {allowLabel}
+          </Button>
+        }
       </div>
     </section>
   );

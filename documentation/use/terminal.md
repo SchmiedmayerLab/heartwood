@@ -73,7 +73,8 @@ In a project without Git, it shows only successful file changes from typed file-
 | `/status` | Show model, credential, policy, and action-review status |
 | `/permissions [MODE]` | Show or select the review mode: `review-all`, `review-changes`, or `review-outside-effects` |
 | `/allow` | Allow the complete pending action set once |
-| `/reject` | Reject the complete pending action set |
+| `/reject` | Reject the complete pending action set, or withdraw an approval that was recorded but not sent |
+| `/retry` | Resend the approval this terminal recorded but could not send, as the same command |
 | `/pause` | Pause active work |
 | `/resume` | Resume a paused session |
 | `/specialists` | Show the [research specialists](specialists.md) available to the agent |

@@ -13,6 +13,7 @@ from uuid import uuid4
 
 import pytest
 
+from heartwood.core_adapter import BackendErrorCode
 from heartwood.core_adapter.external_actions import (
     ExternalActionDecision,
     ExternalActionObservation,
@@ -513,3 +514,44 @@ def test_retained_outside_authorization_blocks_a_replacement_worker(
     assert notice is not None
     assert notice.code == "worker-replacement-unavailable"
     assert "outside operation" in notice.detail
+
+
+@pytest.mark.parametrize("backend", ["running", "unknown-outcome"])
+def test_retained_approval_offers_only_rejection_and_is_never_shown_as_sent(
+    proposal: ExternalActionProposal, backend: str
+) -> None:
+    approval = ExternalActionDecision(
+        command_id="synthetic-approval",
+        actor_id="researcher",
+        decision="approved",
+        decided_at=_NOW,
+        proposal_sha256=proposal.sha256,
+    )
+    report = SessionEvent(
+        event_id="event-3",
+        session_id="synthetic-session",
+        sequence=3,
+        kind=EventKind.AGENT_LIFECYCLE_UPDATED
+        if backend == "running"
+        else EventKind.ERROR_RECORDED,
+        occurred_at=_NOW.isoformat(),
+        payload={"status": "running"}
+        if backend == "running"
+        else {"reason": "synthetic", "code": BackendErrorCode.ACTION_OUTCOME_UNKNOWN.value},
+    )
+    events = (
+        _source(proposal),
+        _event(ExternalActionRecord(phase="proposed", proposal=proposal), 1),
+        _event(ExternalActionRecord(phase="authorized", proposal=proposal, decision=approval), 2),
+        report,
+    )
+
+    projection = project_session(events, session_id="synthetic-session")
+
+    retained = projection.pending_approval
+    assert retained is not None
+    assert (retained.group_id, retained.decision) == (proposal.group_id, "approved")
+    # Nothing was sent, whatever the agent run reports.
+    assert [action.state for action in retained.actions] == ["approved"]
+    assert projection.actions[-1].state == "approved"
+    assert projection.available_commands == ("deny",)
