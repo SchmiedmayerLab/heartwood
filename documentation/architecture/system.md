@@ -167,9 +167,10 @@ A fence is raised only when the gateway observes the condition, so a worker the 
 
 A gateway that ends without revoking leaves its attempt in the journal.
 `heartwood gateway serve --deployment` calls `SessionGateway.reconcile_workers` before serving: it fences each unrevoked attempt, deletes the sandbox only when its name, labels, and any retained sandbox identity match, verifies absence, removes owned volumes, and records the evidence.
-It runs without the gateway state lock, so other sessions and settings do not wait for the control plane; a command to the session being reconciled is refused until it finishes, and reconciliation never caches the session's service, so a later read does not start a worker.
+It runs without the gateway state lock, so other sessions and settings do not wait for the control plane; a command to the session being reconciled is refused until it finishes.
 Sessions whose attempt remains fenced are reported, each with a stable diagnostic.
 A session whose revocation was not observed (`HW-WORKER-003`) is retried while the gateway runs, first after 30 seconds and then with the wait doubling up to 10 minutes, and its attempt remains fenced until revocation is observed.
+Until then the gateway caches no service for that session: a read returns its journal and a command is refused, so no command takes the session out of the retry, and the first command after the observed revocation can admit a replacement.
 
 Each attempt's launch intent records stable identities of the sandbox control plane and the container runtime it uses: the registered gateway's name, endpoint, and certificate authority, and the identity the Docker daemon behind the configured socket reports.
 Launch refuses to proceed when either identity changed after preparation.
@@ -186,8 +187,8 @@ At that point the projection marks the earlier worker's unfinished tasks as supe
 Replacement is refused while the journal holds work only the revoked worker's conversation could finish: an unsettled run, an unended pause, an action awaiting review, an unrecoverable outcome, or a non-terminal outside operation or result release.
 While a revoked session is refused for one of these reasons, the shared projection carries the reason as a researcher notice, which the terminal, browser, and notebook present.
 A gateway without a worker configuration refuses commands for a revoked session instead of running it locally; the session stays readable.
-Once a running gateway records the revocation of a session's attempt, it replaces that session's service at the session's next command, so the command can admit a replacement without a restart or configuration change.
-A read alone does not replace the service or start a worker.
+Once the journal records the revocation of the attempt a session's service launched, whichever path recorded it, a running gateway replaces that service at the session's next command, so the command can admit a replacement without a restart or configuration change.
+A read alone does not replace or close the service or start a worker.
 The revoked attempt's backend is closed with its service, and events that arrive from it after fencing are discarded.
 
 ### Budgets and Deadlines

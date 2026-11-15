@@ -320,8 +320,8 @@ Pointing the manifest back at the original control plane and Docker daemon lets 
 ### `HW-WORKER-003`: Worker Revocation Was Not Observed
 
 The gateway could not observe that a worker attempt an earlier gateway process left running was stopped, typically because the sandbox control plane or the Docker daemon was unavailable.
-The attempt remains fenced, and the session refuses work until revocation is observed.
-The gateway retries while it runs, with a growing interval of up to 10 minutes, so restoring the control plane is usually enough; restarting the gateway retries at once.
+The attempt remains fenced, and the session refuses commands until revocation is observed; it stays readable.
+The gateway retries while it runs, with a growing interval of up to 10 minutes, so restoring the control plane is enough; restarting the gateway retries at once.
 Do not delete the session's records or writer files to release it.
 
 ### A Replacement Worker Started

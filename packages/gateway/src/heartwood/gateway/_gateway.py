@@ -517,6 +517,9 @@ class SessionGateway:
         self._worker_sessions: dict[int, ManagedWorkerSession] = {}
         # Sessions whose earlier attempt is being revoked outside the state lock.
         self._reconciling: set[str] = set()
+        # Sessions whose earlier attempt awaits observed revocation; no service is cached for
+        # them, so no command can take them out of the runtime retry.
+        self._unreconciled: set[str] = set()
         self._reconciliation_stopped = Event()
         self._reconciliation: Thread | None = None
         self._project_activity = ProjectActivity(self.project)
@@ -730,10 +733,12 @@ class SessionGateway:
                         FileSessionStore(self.sessions_root, session_id).replay_events()
                     )
                     if retained is None or retained.phase == "revoked":
+                        self._unreconciled.discard(session_id)
                         continue
                     service = self._default_service(session_id, self._service_configuration())
                 except Exception:
                     unresolved[session_id] = "worker-revocation"
+                    self._unreconciled.add(session_id)
                     continue
                 self._reconciling.add(session_id)
             # The control plane is asked without the state lock, so other sessions and
@@ -751,6 +756,10 @@ class SessionGateway:
                     self._close_service(service)
                 with self._state_lock:
                     self._reconciling.discard(session_id)
+                    if unresolved.get(session_id) == "worker-revocation":
+                        self._unreconciled.add(session_id)
+                    else:
+                        self._unreconciled.discard(session_id)
         return unresolved
 
     @gateway_operation
@@ -2354,6 +2363,11 @@ class SessionGateway:
             raise SessionRecoveryError(
                 f"session {session_id} is revoking a worker an earlier gateway left; retry shortly"
             )
+        if session_id in self._unreconciled:
+            raise SessionRecoveryError(
+                f"session {session_id} waits for revocation of a worker an earlier gateway left; "
+                "retry once the sandbox control plane answers"
+            )
         self._settle_releases_locked()
         if session_id in self._releasing:
             raise _SessionReleasingError(session_id)
@@ -2702,8 +2716,9 @@ class SessionGateway:
     ) -> tuple[Literal["journal", "storage", "service"], tuple[SessionEvent, ...]]:
         """Return what reconciles a session, its journal alone, a storage or a live service.
 
-        A session whose earlier worker service is still closing, or whose revoked worker
-        left no open work, is read from its journal.
+        A session whose earlier worker service is still closing, whose attempt left by an
+        earlier gateway is not yet revoked, or whose revoked worker left no open work, is
+        read from its journal.
         """
         self._settle_releases_locked()
         served = session_id in self._services
@@ -2717,6 +2732,7 @@ class SessionGateway:
         if (
             session_id in self._releasing
             or session_id in self._reconciling
+            or session_id in self._unreconciled
             or (
                 lifecycle
                 not in {

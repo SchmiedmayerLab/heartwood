@@ -102,7 +102,6 @@ class ManagedWorkerSession:
         self._closed = Event()
         self._released = False
         self._close_requested = Event()
-        self._revoked = False
         self._context: WorkerConversationContext | None = None
         # This owner reaches a worker only through `context`, so it may replace a revoked one.
         service.admit_worker_replacement()
@@ -186,11 +185,20 @@ class ManagedWorkerSession:
 
     @property
     def replaceable(self) -> bool:
-        """Return whether this owner's attempt is revoked, so the session needs a new owner.
+        """Return whether the journal records this spent owner's attempt as revoked.
 
-        The owner launches at most once; only a new owner may admit a replacement worker.
+        The owner launches at most once, so only a new owner may admit a replacement worker.
+        Whichever path recorded the revocation, the journal is what makes the session
+        replaceable.
         """
-        return self._revoked
+        if not self._attempted:
+            return False
+        current = self._service.worker_attempt()
+        return (
+            current is not None
+            and current.phase == "revoked"
+            and (self._launched is None or current.intent == self._launched)
+        )
 
     def _revoke_promptly(self) -> None:
         """Hand a fenced attempt to its own short-lived thread; the caller that fenced returns."""
@@ -212,7 +220,6 @@ class ManagedWorkerSession:
             while True:
                 with suppress(Exception):
                     self._service.revoke_worker(self._plan.revoke)
-                    self._revoked = True
                     return
                 if self._close_requested.wait(delay):
                     return
