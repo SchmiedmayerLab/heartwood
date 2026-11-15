@@ -2340,8 +2340,11 @@ class SessionGateway:
     def refresh_skills(self, source_id: str | None = None) -> SkillSettingsResponse:
         """Refresh signed Skill sources and apply their current revocation state."""
         self._project_activity.initialize()
-        self.skill_manager.refresh(source_id)
-        self._reset_services()
+        try:
+            self.skill_manager.refresh(source_id)
+        finally:
+            # A failure after a persisted revocation must not leave sessions with the Skill.
+            self._reset_services()
         return self.skill_settings()
 
     @gateway_operation
@@ -2414,8 +2417,11 @@ class SessionGateway:
     @_serialized_state
     def remove_skill(self, name: str) -> SkillSettingsResponse:
         """Remove one installed extension and reset active conversations."""
-        self.skill_manager.remove(name)
-        self._reset_services()
+        try:
+            self.skill_manager.remove(name)
+        finally:
+            # A failure after the index change must not leave sessions with the Skill.
+            self._reset_services()
         return self.skill_settings()
 
     @_serialized_state

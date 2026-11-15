@@ -11,6 +11,7 @@ from __future__ import annotations
 import errno
 import hashlib
 import json
+import shutil
 from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -21,6 +22,7 @@ from typing import Any, cast
 import pytest
 
 import heartwood.core_adapter._state as session_state
+from heartwood.audit import AuditLog
 from heartwood.core_adapter import (
     AgentBackend,
     BackendErrorCode,
@@ -269,6 +271,82 @@ def test_gateway_prepares_openhands_before_skill_loading(
 
     assert prepared == [True]
     assert gateway.skill_settings()["skills"]
+
+
+def test_gateway_removal_resets_sessions_despite_unexpected_skill_content(
+    tmp_path: Path,
+) -> None:
+    gateway = _gateway(tmp_path)
+    source = tmp_path / "skills" / "community-summary"
+    bundled = Path(__file__).resolve().parents[3] / "vendor/heartwood-skills/skills"
+    shutil.copytree(bundled / "aggregate-export", source)
+    skill_file = source / "SKILL.md"
+    skill_file.write_text(
+        skill_file.read_text(encoding="utf-8")
+        .replace("name: aggregate-export", "name: community-summary")
+        .replace(
+            'heartwood.id: "heartwood.research.aggregate-export"',
+            'heartwood.id: "example.community-summary"',
+        ),
+        encoding="utf-8",
+    )
+    inspected = gateway.inspect_local_skill(source)
+    gateway.install_local_skill(
+        source, expected_tree_sha256=inspected["tree_sha256"], approved=True
+    )
+    gateway.handle(
+        SessionCommand(
+            command_id="pause-cached",
+            session_id="session-cached",
+            kind=CommandKind.PAUSE,
+            actor_id="synthetic-user",
+            created_at="2026-01-01T00:00:00Z",
+        )
+    )
+    assert "session-cached" in gateway._services
+    store = gateway.skill_manager.store
+    (store.artifact_path(store.records()[0]).parent / "leftover").write_text("unverified\n")
+
+    settings = gateway.remove_skill("community-summary")
+
+    assert all(skill["source"] != "installed" for skill in settings["skills"])
+    assert not gateway._services
+    assert gateway.skill_manager.active_skill_roots() == ()
+    audit = AuditLog(gateway.project.audit_dir / "skill-installations.jsonl").read()
+    assert audit[-1].event_type == "skill.deactivated"
+    gateway.stop()
+
+
+@pytest.mark.parametrize("operation", ["remove", "refresh"])
+def test_gateway_resets_sessions_when_a_skill_change_fails_after_its_index_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str
+) -> None:
+    gateway = _gateway(tmp_path)
+    gateway.handle(
+        SessionCommand(
+            command_id="pause-cached",
+            session_id="session-cached",
+            kind=CommandKind.PAUSE,
+            actor_id="synthetic-user",
+            created_at="2026-01-01T00:00:00Z",
+        )
+    )
+    assert "session-cached" in gateway._services
+
+    def fail(*_args: object, **_kwargs: object) -> None:
+        raise SkillSettingsError("synthetic failure after the index change")
+
+    monkeypatch.setattr(gateway.skill_manager, operation, fail)
+
+    def change() -> object:
+        if operation == "remove":
+            return gateway.remove_skill("community-summary")
+        return gateway.refresh_skills()
+
+    with pytest.raises(SkillSettingsError, match="synthetic failure"):
+        change()
+    assert not gateway._services
+    gateway.stop()
 
 
 def test_gateway_rejects_invalid_deployment_skill_source_configuration(tmp_path: Path) -> None:
