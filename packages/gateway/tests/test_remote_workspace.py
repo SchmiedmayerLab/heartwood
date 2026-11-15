@@ -29,7 +29,9 @@ from openhands.sdk.conversation.base import BaseConversation
 from openhands.sdk.conversation.exceptions import WebSocketConnectionError
 from openhands.sdk.conversation.request import StartConversationRequest
 from openhands.sdk.conversation.state import ConversationState
+from openhands.sdk.event import MessageEvent
 from openhands.sdk.event.conversation_state import ConversationStateUpdateEvent
+from openhands.sdk.llm import Message, TextContent
 from openhands.sdk.security import AlwaysConfirm, PatternSecurityAnalyzer
 from openhands.sdk.skills import Skill
 from openhands.sdk.testing import TestLLM
@@ -131,7 +133,11 @@ def test_response_rejects_unsafe_metadata(body: bytes) -> None:
 def test_replayed_events_pass_the_admission_applied_to_socket_events(
     field: str, event: dict[str, object]
 ) -> None:
-    harmless = {"kind": "MessageEvent"}
+    harmless = json.loads(
+        MessageEvent(
+            source="user", llm_message=Message(role="user", content=[TextContent(text="x")])
+        ).model_dump_json()
+    )
     path = "/events/search" if field == "items" else "/events/snapshot"
     assert _request(json.dumps({field: [harmless]}).encode(), path=path).status_code == 200
     with pytest.raises(WorkerResponseError):
@@ -432,6 +438,26 @@ def test_response_budget_requires_positive_integer_limits(
         WorkerResponseBudget(max_bytes=max_bytes, max_responses=max_responses)
 
 
+def _within(seconds: float, call: Callable[[], object]) -> object:
+    """Fail instead of hanging when the bound under test is missing."""
+    outcome: list[object] = []
+
+    def run() -> None:
+        try:
+            outcome.append(call())
+        except BaseException as error:
+            outcome.append(error)
+
+    worker = Thread(target=run, daemon=True)
+    worker.start()
+    worker.join(seconds)
+    if not outcome:
+        pytest.fail(f"call did not end within {seconds} seconds")
+    if isinstance(outcome[0], BaseException):
+        raise outcome[0]
+    return outcome[0]
+
+
 _TRICKLES = {
     "status line": (b"HTTP/1.1 200 OK\r\nX-Slow: ", b"a"),
     "interim responses": (b"", b"HTTP/1.1 102 Processing\r\n\r\n"),
@@ -480,14 +506,12 @@ def test_worker_that_trickles_any_part_of_a_response_is_cut_off_at_the_deadline(
             budget=budget,
             transport=httpx.HTTPTransport(trust_env=False),
         )
-        started = time.monotonic()
         try:
             with (
                 httpx.Client(transport=transport, base_url=host) as client,
                 pytest.raises(WorkerResponseError, match="deadline"),
             ):
-                client.get("/api/conversations/fixture/events/search")
-            assert time.monotonic() - started < 10
+                _within(10, lambda: client.get("/api/conversations/fixture/events/search"))
             with pytest.raises(WorkerResponseError, match="closed"):
                 budget.charge(0)
         finally:
@@ -510,7 +534,9 @@ def _history(
         # Slower than the refill rate, so the response allowance never runs out.
         now += 1.0
         requested.append(request.url.params.get("page_id"))
-        return httpx.Response(200, json={"items": [], "next_page_id": pages(requested[-1])})
+        # A walk the gateway does not end stops here, so a missing bound fails the test.
+        following = pages(requested[-1]) if len(requested) < 4096 else None
+        return httpx.Response(200, json={"items": [], "next_page_id": following})
 
     budget = WorkerResponseBudget(clock=clock)
     transport = WorkerResponseTransport(
@@ -583,6 +609,56 @@ def test_snapshot_of_a_long_session_exceeds_the_ordinary_response_limit() -> Non
         respond(4 * 1024 * 1024 + 1, "search")
 
 
+def _respond(
+    body: bytes, path: str = "events/snapshot", budget: WorkerResponseBudget | None = None
+) -> httpx.Response:
+    transport = WorkerResponseTransport(
+        host="http://worker.test",
+        tool_modules={},
+        budget=budget,
+        transport=httpx.MockTransport(
+            lambda _: httpx.Response(
+                200, content=body, headers={"Content-Type": "application/json"}
+            )
+        ),
+    )
+    with httpx.Client(transport=transport, base_url="http://worker.test") as client:
+        return client.get(f"/api/conversations/fixture/{path}")
+
+
+@pytest.mark.parametrize("item", ["{}", "[]", "0", '"ab"'])
+def test_response_with_more_values_than_the_gateway_may_build_is_fenced(item: str) -> None:
+    # Each value costs the gateway far more memory than its few bytes of JSON.
+    allowed = b'{"x":[' + ",".join([item] * 100_000).encode() + b"]}"
+    assert _respond(allowed, "events/search").status_code == 200
+    budget = WorkerResponseBudget()
+    dense = b'{"events":[' + ",".join([item] * 600_000).encode() + b"]}"
+    assert len(dense) < 4 * 1024 * 1024
+    with pytest.raises(WorkerResponseError, match="value limit"):
+        _respond(dense, budget=budget)
+    with pytest.raises(WorkerResponseError, match="closed"):
+        budget.charge(0)
+
+
+def test_response_values_are_charged_like_the_memory_they_cost() -> None:
+    body = b'{"x":[' + b",".join([b"0"] * 100_000) + b"]}"
+    # About 200 kB of JSON, charged as at least 16 bytes for each of its values.
+    _respond(body, "events/search", WorkerResponseBudget(max_bytes=2 * 1024 * 1024))
+    with pytest.raises(WorkerResponseError, match="budget exhausted"):
+        _respond(body, "events/search", WorkerResponseBudget(max_bytes=1024 * 1024))
+
+
+@pytest.mark.parametrize("path", ["events/snapshot", "events/search"])
+def test_replayed_events_must_be_native_events_before_the_sdk_validates_them(path: str) -> None:
+    # The SDK validates a whole snapshot at once and records an error for every event.
+    field = "events" if path.endswith("snapshot") else "items"
+    budget = WorkerResponseBudget()
+    with pytest.raises(WorkerResponseError, match="event"):
+        _respond(json.dumps({field: [{"kind": "MessageEvent"}] * 1000}).encode(), path, budget)
+    with pytest.raises(WorkerResponseError, match="closed"):
+        budget.charge(0)
+
+
 def test_response_budget_admits_a_long_run_and_fences_a_flood() -> None:
     now = 0.0
     budget = WorkerResponseBudget(clock=lambda: now)
@@ -607,7 +683,9 @@ def test_response_budget_admits_a_long_run_and_fences_a_flood() -> None:
 
 
 @pytest.mark.parametrize(
-    ("status", "body", "max_bytes", "max_responses"), [(200, b"{}", 4, 5), (204, b"", 4, 2)]
+    # An empty object is charged as its three parsed values: 48 bytes.
+    ("status", "body", "max_bytes", "max_responses"),
+    [(200, b"{}", 100, 5), (204, b"", 4, 2)],
 )
 def test_spent_response_budget_closes_admission_for_good(
     status: int, body: bytes, max_bytes: int, max_responses: int

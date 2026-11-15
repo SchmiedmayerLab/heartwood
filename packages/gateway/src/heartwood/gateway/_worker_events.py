@@ -148,7 +148,7 @@ class WorkerEventAdmission:
             self._budget.charge(len(content))
             if len(content) > _MAX_RESPONSE_BYTES:
                 raise ValueError
-            value = _admit_json(content)
+            value = _admit_json(content, self._budget)
             if not isinstance(value, dict):
                 raise ValueError
             _admit_event(

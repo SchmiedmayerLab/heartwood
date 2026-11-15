@@ -423,7 +423,10 @@ The adapter uses the public workspace client property and HTTPX transport interf
 
 Responses are bounded, uncompressed UTF-8 JSON with unique object keys and finite numbers.
 A response body is limited to 4 MiB, except a branch snapshot, which carries the whole active branch and is limited to 16 MiB.
-Measured on serialized SDK events, 16 MiB holds about 4,500 tool steps with 2 KB of output each, about 1,400 with 10 KB each, and about 320 when every output reaches the SDK's 50,000-character limit.
+Because a parsed value costs the gateway far more memory than its JSON bytes, a response may also contain at most 524,288 values, counted from its structure before it is parsed.
+That keeps the gateway's peak memory for one response, including the SDK's validation, near 70 MiB.
+A real session uses about 136 values per tool step, so a snapshot holds about 3,800 steps with short outputs, about 1,400 with 10 KB of output each, and about 320 when every output reaches the SDK's 50,000-character limit.
+Each event in a page or snapshot must validate as a native event before the SDK receives it, because the SDK validates a snapshot as one list and would record an error for every invalid event.
 One wall-clock deadline of 120 seconds covers each request from connection to the last body byte, so a worker cannot extend it by sending status lines, headers, interim responses or chunk framing slowly.
 A walk through paged history ends when a page identifier repeats or after 1,024 pages or 32 MiB, whichever comes first; a later walk starts again from the first page.
 Concurrent requests share one response budget, described below; resetting the HTTP client does not replenish it.
@@ -453,7 +456,8 @@ The library bounds each message to 4 MiB and its receive queue to four frames.
 HTTP responses, connection attempts and received events share one response budget for the worker attempt.
 It admits bursts of 1,024 responses and 32 MiB and refills at four responses and 1 MiB per second, which covers status polling and progress reads for a run of any length.
 Received events are charged by size only.
-Each snapshot read is charged its full size, so a 16 MiB branch can be read twice from a full allowance and then once every 16 seconds.
+Each response is charged its size or 16 bytes per parsed value, whichever is larger, so a response dense with small values spends the allowance as fast as the memory it costs.
+A 16 MiB branch can therefore be read twice from a full allowance and then once every 16 seconds, and a response at the value limit four times and then once every 8 seconds.
 The refill bounds the rate of received data, not the events the SDK retains for a long session.
 A worker that exceeds the budget or the request deadline, or returns a history that does not end, is fenced.
 The event connection has no deadline of its own: an idle connection is the normal state while a session waits for its researcher, no gateway lock is held while it is read, its handshake is limited to ten seconds, and the library's keepalive closes a connection whose peer stops answering.

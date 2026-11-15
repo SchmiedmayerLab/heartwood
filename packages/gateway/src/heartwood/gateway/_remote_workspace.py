@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import time
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
@@ -18,10 +19,11 @@ from typing import Any
 
 import httpx
 from openhands.sdk.conversation.request import StartConversationRequest
+from openhands.sdk.event import Event
 from openhands.sdk.event.conversation_state import FULL_STATE_KEY
 from openhands.sdk.tool.client_tool import ClientToolSpec
 from openhands.sdk.workspace import RemoteWorkspace
-from pydantic import ConfigDict, Field, PrivateAttr, model_validator
+from pydantic import ConfigDict, Field, PrivateAttr, ValidationError, model_validator
 
 from heartwood.core_adapter.worker_attempts import WorkerAttemptError, WorkerAttemptLease
 
@@ -30,6 +32,15 @@ _MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 _MAX_SNAPSHOT_BYTES = 16 * 1024 * 1024
 _MAX_RESPONSE_SECONDS = 120.0
 _MAX_JSON_DEPTH = 64
+# Parsed values, not bytes, decide the memory a response costs: an empty object takes
+# three bytes of JSON and about a hundred bytes once parsed and validated. This bound
+# holds one parse and its native validation below about 70 MiB, and a real session's
+# 136 values per tool step allow about 3,800 steps in one snapshot.
+_MAX_JSON_VALUES = 512 * 1024
+# Each value is charged at least this many bytes, so dense responses spend the
+# response budget as fast as the memory they cost.
+_VALUE_CHARGE_BYTES = 16
+_JSON_STRING = re.compile(rb'"[^"\\]*(?:\\.[^"\\]*)*"')
 # One walk through paged history may use the burst allowance but none of its refill,
 # so a worker cannot extend a walk by answering slowly.
 _MAX_HISTORY_PAGES = 1024
@@ -231,7 +242,7 @@ class WorkerResponseTransport(httpx.BaseTransport):
                 media_type = headers.get("content-type", "").split(";", 1)[0]
                 if media_type.strip().lower() != "application/json":
                     raise WorkerResponseError("worker response must be JSON")
-                value = _admit_json(content)
+                value = _admit_json(content, self._budget)
                 attempt = self._budget.attempt
                 if isinstance(value, dict):
                     # The SDK reads these two responses as the conversation itself.
@@ -256,6 +267,9 @@ class WorkerResponseTransport(httpx.BaseTransport):
                                     self._request(),
                                     attempt,
                                 )
+                                # The SDK validates a snapshot as one list and records an
+                                # error for every invalid event, so the first one ends here.
+                                _validate_event(event)
                     if path.endswith("/events/search"):
                         self._admit_history_page(request, value, len(content))
                 if (
@@ -364,7 +378,7 @@ class WorkerResponseTransport(httpx.BaseTransport):
         path = request.url.path
         canonical = request.url.raw_path.split(b"?", 1)[0] == path.encode("utf-8")
         if path == "/api/conversations" and request.method == "POST" and canonical:
-            value = _admit_json(request.content)
+            value = _admit_json(request.content, self._budget)
             if isinstance(value, dict) and value.get("conversation_id") == identity:
                 # The gateway's own request may carry only what this workspace was bound to.
                 sent = {key: value[key] for key in _SENT_FIELDS if key in value}
@@ -396,7 +410,29 @@ def _reject_constant(_value: str) -> None:
     raise WorkerResponseError("worker JSON contains a nonfinite number")
 
 
-def _admit_json(content: bytes) -> object:
+def _json_values(content: bytes) -> int:
+    """Return an upper bound on the values parsing would build, without building them."""
+    structure = _JSON_STRING.sub(b"", content)
+    return (
+        2 * (structure.count(b"{") + structure.count(b"["))
+        + structure.count(b",")
+        + structure.count(b":")
+        + 1
+    )
+
+
+def _validate_event(event: dict[str, Any]) -> None:
+    try:
+        Event.model_validate(event)
+    except ValidationError:
+        raise WorkerResponseError("worker event is not a native event") from None
+
+
+def _admit_json(content: bytes, budget: WorkerResponseBudget) -> object:
+    values = _json_values(content)
+    if values > _MAX_JSON_VALUES:
+        raise WorkerResponseError("worker JSON exceeds the value limit")
+    budget.charge(max(0, values * _VALUE_CHARGE_BYTES - len(content)))
     try:
         value: object = json.loads(
             content.decode("utf-8"),
