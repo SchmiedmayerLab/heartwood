@@ -19,7 +19,7 @@ Operating-system permissions and the surrounding platform remain the authoritati
 
 ## Heartwood Project State
 
-After you confirm the project, Heartwood creates `.heartwood/`:
+For a local launch, confirming the project creates `.heartwood/`:
 
 ```text
 project/
@@ -49,6 +49,10 @@ This mode keeps configuration, canonical sessions, audit records, installed Skil
 It does not create `.heartwood/` in the research directory or read project-local identity hints as authority.
 A copied research directory needs its own authorized deployment binding.
 
+Only `heartwood gateway serve` accepts `--deployment`; standalone terminal, notebook and maintenance commands do not automatically discover this binding.
+Use the explicitly bound gateway and trusted operator integration for managed state.
+Do not run local project initialization or point an ordinary command at the state directory to imitate a managed launch.
+
 The manifest must bind the exact canonical launch directory and contain a deny-by-default model-policy ceiling.
 Its project identifier is a canonical UUID, and its external state directory must have that identifier as its final path component.
 Both the manifest and the state directory must remain outside the research tree, with operator-owned parent directories that other users cannot replace.
@@ -75,13 +79,15 @@ See the [gateway reference](../reference/cli.md) for the manifest format.
 | Stanford Carina | A dedicated writable directory in approved project storage |
 
 Job scratch, temporary container filesystems, and `/tmp` are not durable project locations.
-The project location must also support native process-shared advisory file locks so an interrupted process releases session ownership automatically.
-Use the attached Terra persistent disk or approved Carina project storage rather than an object-store mount for `.heartwood/`.
+Canonical state storage must support native process-shared advisory file locks so an interrupted process releases session ownership automatically.
+Use an attached persistent disk or qualified native project filesystem rather than an object-store mount for local `.heartwood/` or managed external state.
+Managed research and state storage must preserve their authorized project binding across restarts.
 
 ## Back Up and Share Carefully
 
 Back up research files according to institutional policy.
-Treat `.heartwood/` as private operational state: it can contain prompts, paths, model metadata, tool summaries, and session history even though raw credentials are excluded.
+Back up matching canonical state and preserve its project identity: local `.heartwood/` or the operator-bound external directory.
+Treat this directory as private operational state: it can contain prompts, paths, model metadata, tool summaries, and session history even though raw credentials are excluded.
 
-Do not commit `.heartwood/` to source control or copy it into a public artifact.
+Do not commit canonical state to source control or copy it into a public artifact.
 Use an audit export when a reviewed, content-minimized record is needed.

@@ -4,12 +4,11 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Loopback-only service implementing the checkpoint signer protocol."""
+"""Private Unix-socket service implementing the checkpoint signer protocol."""
 
 from __future__ import annotations
 
 import hmac
-import ipaddress
 import json
 from collections.abc import Awaitable, Callable, Mapping
 
@@ -31,7 +30,7 @@ _MAXIMUM_REQUEST_BYTES = 64 * 1024
 
 
 class LocalCheckpointSignerApp:
-    """Expose one local signer over an authenticated loopback ASGI endpoint."""
+    """Expose one local signer over an authenticated Unix-socket ASGI endpoint."""
 
     def __init__(self, signer: CheckpointSigner, *, authorization_token: str) -> None:
         self.signer = signer
@@ -54,8 +53,16 @@ class LocalCheckpointSignerApp:
         receive: AsgiReceive,
         send: AsgiSend,
     ) -> None:
-        if not _is_loopback_client(scope):
-            await _send_json(send, status_code=403, value={"error": "loopback access required"})
+        server = scope.get("server")
+        unix_server = server is None or (
+            isinstance(server, tuple | list)
+            and len(server) == 2
+            and isinstance(server[0], str)
+            and server[0].startswith("/")
+            and server[1] is None
+        )
+        if scope.get("client") is not None or not unix_server:
+            await _send_json(send, status_code=403, value={"error": "Unix socket access required"})
             return
         method = _scope_value(scope, "method")
         path = _scope_value(scope, "path")
@@ -141,18 +148,6 @@ def _scope_value(scope: AsgiScope, key: str) -> str:
     if not isinstance(value, str):
         raise ValueError(f"invalid local signer {key}")
     return value
-
-
-def _is_loopback_client(scope: AsgiScope) -> bool:
-    client = scope.get("client")
-    if client is None:
-        return False
-    if not isinstance(client, tuple) or not client or not isinstance(client[0], str):
-        return False
-    try:
-        return ipaddress.ip_address(client[0]).is_loopback
-    except ValueError:
-        return False
 
 
 def _authorized(scope: AsgiScope, expected: bytes) -> bool:

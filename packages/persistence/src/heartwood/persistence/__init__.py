@@ -55,6 +55,7 @@ from heartwood.persistence._migrations import (
     MigrationRegistry,
     MigrationResult,
 )
+from heartwood.persistence._sockets import private_socket_identity, require_private_socket_parent
 
 __all__ = [
     "AUDIT_EVENT_KIND",
@@ -93,9 +94,11 @@ __all__ = [
     "append_private_bytes",
     "fsync_directory",
     "native_file_lock",
+    "private_socket_identity",
     "read_private_bytes",
     "read_private_json",
     "read_private_text",
+    "require_private_socket_parent",
     "truncate_private_file",
     "unlink_durable",
     "write_private_bytes_atomic",

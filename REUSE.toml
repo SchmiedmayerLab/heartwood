@@ -49,3 +49,21 @@ path = [
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2025 The Model Context Protocol Authors"
 SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
+path = ["images/worker/candidate/sources.json", "images/worker/candidate/gateway.json", "images/worker/candidate/build-requirements.txt", "images/worker/candidate/runtime-requirements.txt"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Stanford University and the project authors (see CONTRIBUTORS.md)"
+SPDX-License-Identifier = "MIT"
+
+[[annotations]]
+path = ["images/worker/candidate/conversation-admission.patch", "images/worker/candidate/dependency-compatibility.patch"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = ["2026 OpenHands contributors", "2026 Stanford University and the project authors (see CONTRIBUTORS.md)"]
+SPDX-License-Identifier = "MIT"
+
+[[annotations]]
+path = ["images/worker/candidate/sandbox-admission.patch", "images/worker/candidate/docker-provisioning.patch"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = ["2025-2026 NVIDIA CORPORATION & AFFILIATES", "2026 Stanford University and the project authors (see CONTRIBUTORS.md)"]
+SPDX-License-Identifier = "Apache-2.0"

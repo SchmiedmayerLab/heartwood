@@ -1,0 +1,174 @@
+diff --git a/crates/openshell-driver-docker/src/lib.rs b/crates/openshell-driver-docker/src/lib.rs
+index e542143..e93c504 100644
+--- a/crates/openshell-driver-docker/src/lib.rs
++++ b/crates/openshell-driver-docker/src/lib.rs
+@@ -539,6 +539,7 @@ impl DockerLifecycleEventFences {
+ 
+ struct PendingSandboxRecord {
+     sandbox: DriverSandbox,
++    provisioning: bool,
+     task: Option<JoinHandle<()>>,
+ }
+ 
+@@ -2267,13 +2268,8 @@ impl DockerComputeDriver {
+         sandbox_name: &str,
+     ) -> Result<bool, Status> {
+         let pending = self
+-            .remove_pending_sandbox(sandbox_id, sandbox_name)
++            .remove_pending_sandbox(sandbox_id, sandbox_name, true)
+             .await?;
+-        if let Some(record) = pending.as_ref()
+-            && let Some(task) = record.task.as_ref()
+-        {
+-            task.abort();
+-        }
+         if let Some(record) = pending.as_ref() {
+             self.stop_control_process(&record.sandbox.id).await;
+             self.remove_auxiliary_containers_for_sandbox(&record.sandbox.id)
+@@ -2383,7 +2379,7 @@ impl DockerComputeDriver {
+         // workload container exists. Cancel it before removing the supervisor
+         // so its failure path cannot delete retained workload storage.
+         let mut pending = self
+-            .remove_pending_sandbox(sandbox_id, sandbox_name)
++            .remove_pending_sandbox(sandbox_id, sandbox_name, false)
+             .await?;
+         if let Some(task) = pending.as_mut().and_then(|record| record.task.take()) {
+             task.abort();
+@@ -2673,6 +2669,7 @@ impl DockerComputeDriver {
+                     provisioning_condition(),
+                     false,
+                 ),
++                provisioning: true,
+                 task: None,
+             },
+         );
+@@ -2706,11 +2703,19 @@ impl DockerComputeDriver {
+         &self,
+         sandbox_id: &str,
+         sandbox_name: &str,
++        require_settled: bool,
+     ) -> Result<Option<PendingSandboxRecord>, Status> {
+         let mut pending = self.pending.lock().await;
+         let Some(id) = pending_sandbox_record_id(&pending, sandbox_id, sandbox_name)? else {
+             return Ok(None);
+         };
++        // Cancelling a future does not cancel a Docker create already submitted.
++        // Keep ownership until provisioning settles; deletion can then be retried.
++        if require_settled && pending[&id].provisioning {
++            return Err(Status::failed_precondition(
++                "Docker sandbox provisioning is still in progress; retry deletion",
++            ));
++        }
+         Ok(pending.remove(&id))
+     }
+ 
+@@ -2730,6 +2735,7 @@ impl DockerComputeDriver {
+             let mut pending = self.pending.lock().await;
+             if let Some(record) = pending.get_mut(&sandbox.id) {
+                 record.sandbox = snapshot.clone();
++                record.provisioning = false;
+                 record.task = None;
+             } else {
+                 return;
+diff --git a/crates/openshell-driver-docker/src/tests.rs b/crates/openshell-driver-docker/src/tests.rs
+index c022adc..02d4615 100644
+--- a/crates/openshell-driver-docker/src/tests.rs
++++ b/crates/openshell-driver-docker/src/tests.rs
+@@ -3979,6 +3979,7 @@ fn pending_sandbox_snapshot_uses_docker_namespace_and_starting_condition() {
+         snapshot.id.clone(),
+         PendingSandboxRecord {
+             sandbox: snapshot.clone(),
++            provisioning: true,
+             task: None,
+         },
+     )]);
+@@ -4016,6 +4017,7 @@ fn pending_lookup_is_id_authoritative_and_rejects_ambiguous_names() {
+                 sandbox.id.clone(),
+                 PendingSandboxRecord {
+                     sandbox,
++                    provisioning: true,
+                     task: None,
+                 },
+             )
+@@ -4588,3 +4590,66 @@ fn normalize_pull_reference_appends_latest_only_when_untagged() {
+         "registry:5000/team/app:v1"
+     );
+ }
++
++#[tokio::test]
++async fn deletion_keeps_pending_provisioning_owned_until_settled() {
++    let driver = test_driver_with_config(runtime_config());
++    let sandbox = test_sandbox();
++    driver.reserve_pending_sandbox(&sandbox).await.unwrap();
++
++    // Also covers deletion between reservation and task registration.
++    let error = driver
++        .delete_sandbox_inner(&sandbox.id, &sandbox.name)
++        .await
++        .unwrap_err();
++    assert_eq!(error.code(), tonic::Code::FailedPrecondition);
++    assert!(
++        driver
++            .pending_snapshot(&sandbox.id, &sandbox.name)
++            .await
++            .unwrap()
++            .is_some()
++    );
++
++    let (release, waiting) = oneshot::channel();
++    let (completed, completion) = oneshot::channel();
++    let task = tokio::spawn(async move {
++        waiting.await.unwrap();
++        completed.send(()).unwrap();
++    });
++    driver
++        .pending
++        .lock()
++        .await
++        .get_mut(&sandbox.id)
++        .unwrap()
++        .task = Some(task);
++    let error = driver
++        .delete_sandbox_inner(&sandbox.id, &sandbox.name)
++        .await
++        .unwrap_err();
++    assert_eq!(error.code(), tonic::Code::FailedPrecondition);
++    release.send(()).unwrap();
++    completion.await.unwrap();
++
++    driver
++        .fail_pending_sandbox(
++            &sandbox,
++            &DockerProvisioningFailure::new("ContainerCreateFailed", "synthetic settled failure"),
++        )
++        .await;
++    assert!(
++        driver
++            .remove_pending_sandbox(&sandbox.id, &sandbox.name, true)
++            .await
++            .unwrap()
++            .is_some()
++    );
++    assert!(
++        driver
++            .pending_snapshot(&sandbox.id, &sandbox.name)
++            .await
++            .unwrap()
++            .is_none()
++    );
++}
+diff --git a/docs/how-it-works/sandboxes/overview.mdx b/docs/how-it-works/sandboxes/overview.mdx
+index 2ac6a4f..1c6e0c9 100644
+--- a/docs/how-it-works/sandboxes/overview.mdx
++++ b/docs/how-it-works/sandboxes/overview.mdx
+@@ -1143,6 +1143,10 @@ step requires completion. An already-absent sandbox is a successful no-op, but
+ missing workspaces and authorization failures remain errors. SDK callers can
+ inspect [typed deletion outcomes](/sdk/api-errors#deletion-outcomes).
+ 
++The Docker driver rejects deletion while provisioning is still in progress.
++Retry after provisioning finishes or fails; a rejected deletion does not confirm
++that the sandbox's resources are gone.
++
+ ```shell
+ openshell sandbox delete my-sandbox
+ ```

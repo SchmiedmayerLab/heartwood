@@ -11,7 +11,6 @@ from __future__ import annotations
 import base64
 import hashlib
 import http.client
-import ipaddress
 import json
 import math
 import os
@@ -33,6 +32,10 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 )
 from pydantic import ValidationError
 
+from heartwood.audit._local_signer_socket import (
+    connect_local_checkpoint_socket,
+    local_checkpoint_socket_path,
+)
 from heartwood.persistence import DurableFileError, read_private_bytes
 from heartwood.schemas import (
     AuditCheckpointSignature,
@@ -120,12 +123,12 @@ class RemoteCheckpointSigner:
         endpoint: str,
         authorization_token: str | None = None,
         timeout_seconds: float = 15.0,
-        allow_insecure_loopback: bool = False,
+        allow_local_socket: bool = False,
         transport: CheckpointSignerTransport | None = None,
     ) -> None:
         self.endpoint = _validate_signer_endpoint(
             endpoint,
-            allow_insecure_loopback=allow_insecure_loopback,
+            allow_local_socket=allow_local_socket,
         )
         if not math.isfinite(timeout_seconds) or timeout_seconds <= 0 or timeout_seconds > 120:
             raise CheckpointSignerError("signer timeout must be between 0 and 120 seconds")
@@ -135,7 +138,11 @@ class RemoteCheckpointSigner:
             else validate_checkpoint_signer_token(authorization_token)
         )
         self.timeout_seconds = timeout_seconds
-        self.transport = transport or _UrlLibSignerTransport()
+        self.transport = transport or (
+            _UnixSignerTransport()
+            if self.endpoint.startswith("unix:")
+            else _UrlLibSignerTransport()
+        )
 
     def sign(self, statement: AuditCheckpointStatement) -> AuditCheckpointSignature:
         """Submit one canonical statement and validate the signature envelope."""
@@ -276,7 +283,7 @@ def _key_metadata(path: Path, *, private: bool) -> os.stat_result:
     return metadata
 
 
-def _validate_signer_endpoint(endpoint: str, *, allow_insecure_loopback: bool) -> str:
+def _validate_signer_endpoint(endpoint: str, *, allow_local_socket: bool) -> str:
     normalized = endpoint.strip()
     if len(normalized) > 2048:
         raise CheckpointSignerError("signer endpoint must not exceed 2048 characters")
@@ -284,6 +291,9 @@ def _validate_signer_endpoint(endpoint: str, *, allow_insecure_loopback: bool) -
         raise CheckpointSignerError("signer endpoint is not a valid URL")
     try:
         parsed = urlsplit(normalized)
+        if parsed.scheme == "unix" and allow_local_socket:
+            local_checkpoint_socket_path(normalized)
+            return normalized
         hostname = parsed.hostname
         _ = parsed.port
     except ValueError as error:
@@ -302,13 +312,7 @@ def _validate_signer_endpoint(endpoint: str, *, allow_insecure_loopback: bool) -
         )
     if parsed.scheme == "https":
         return normalized
-    try:
-        loopback = ipaddress.ip_address(hostname).is_loopback
-    except ValueError:
-        loopback = False
-    if not allow_insecure_loopback or not loopback:
-        raise CheckpointSignerError("production signer endpoints must use HTTPS")
-    return normalized
+    raise CheckpointSignerError("signer endpoints require HTTPS or an explicit local Unix socket")
 
 
 def _canonical_json(value: object) -> str:
@@ -337,14 +341,50 @@ class _UrlLibSignerTransport:
                 payload = response.read(_MAXIMUM_SIGNER_RESPONSE_BYTES + 1)
         except (OSError, urllib.error.HTTPError, urllib.error.URLError) as error:
             raise CheckpointSignerError("checkpoint signer request failed") from error
-        if content_type != "application/json":
-            raise CheckpointSignerError("checkpoint signer returned an invalid content type")
-        if len(payload) > _MAXIMUM_SIGNER_RESPONSE_BYTES:
-            raise CheckpointSignerError("checkpoint signer response exceeds 64 KiB")
+        return _decode_signer_response(content_type, payload)
+
+
+class _UnixSignerConnection(http.client.HTTPConnection):
+    def __init__(self, endpoint: str, timeout: float) -> None:
+        super().__init__("localhost", timeout=timeout)
+        self.endpoint = endpoint
+        self.timeout_seconds = timeout
+
+    def connect(self) -> None:
+        self.sock = connect_local_checkpoint_socket(self.endpoint, self.timeout_seconds)
+
+
+class _UnixSignerTransport:
+    def post(
+        self, endpoint: str, *, body: bytes, headers: Mapping[str, str], timeout_seconds: float
+    ) -> object:
+        connection = _UnixSignerConnection(endpoint, timeout_seconds)
         try:
-            return cast(object, json.loads(payload))
-        except (UnicodeDecodeError, json.JSONDecodeError) as error:
-            raise CheckpointSignerError("checkpoint signer returned invalid JSON") from error
+            connection.request("POST", "/v1/checkpoints/sign", body=body, headers=dict(headers))
+            response = connection.getresponse()
+            if response.status != 200:
+                raise CheckpointSignerError("local checkpoint signer rejected the request")
+            return _decode_signer_response(
+                response.headers.get_content_type(),
+                response.read(_MAXIMUM_SIGNER_RESPONSE_BYTES + 1),
+            )
+        except CheckpointSignerError:
+            raise
+        except (OSError, ValueError, http.client.HTTPException) as error:
+            raise CheckpointSignerError("local signer socket is unavailable or insecure") from error
+        finally:
+            connection.close()
+
+
+def _decode_signer_response(content_type: str, payload: bytes) -> object:
+    if content_type != "application/json":
+        raise CheckpointSignerError("checkpoint signer returned an invalid content type")
+    if len(payload) > _MAXIMUM_SIGNER_RESPONSE_BYTES:
+        raise CheckpointSignerError("checkpoint signer response exceeds 64 KiB")
+    try:
+        return cast(object, json.loads(payload))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise CheckpointSignerError("checkpoint signer returned invalid JSON") from error
 
 
 class _RejectRedirects(urllib.request.HTTPRedirectHandler):

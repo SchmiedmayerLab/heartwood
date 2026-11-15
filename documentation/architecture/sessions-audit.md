@@ -129,7 +129,7 @@ Changed arguments, substituted tools, or added actions require a different decis
 Advisory risk labels and presentation summaries are not execution authority and do not change this binding.
 The gateway and backend both compare the current binding before resolving a decision.
 This binds the proposed action content; it does not freeze files referenced by a command or establish an outside security boundary for local tool execution.
-Previously issued identifiers that only bound tool-call identifiers are not valid for new approvals; preserve their history and start a new session when an upgrade invalidates pending review.
+An approval identifier without the complete action-content binding is invalid; preserved history does not authorize new execution.
 
 Each OpenHands proposal becomes one `heartwood.action-record.v1` projection correlated by stable action and tool-call identifiers.
 The same record accumulates its group, decision, execution state, bounded result, and typed affected-path evidence across replay.
@@ -139,7 +139,9 @@ Unknown outcomes fail closed and are never converted into a successful result by
 ## Audit Integrity
 
 Audit records are chained so replay and export detect corruption, and any modification, reordering, or removal made without recomputing the chain.
-The chain uses no key, so a process that can write `.heartwood/`, including an approved agent command, can rewrite records and recompute it.
+The chain uses no key, so a process that can write canonical state can rewrite records and recompute it.
+In local mode, an approved same-identity agent command can reach `.heartwood/`; managed workers must be denied access to external state by the surrounding sandbox.
+The trusted gateway can still write its state, so external placement does not replace independently retained checkpoints.
 Only a signed checkpoint binds the history, and only as it stood when the checkpoint was signed.
 Each content-minimized audit record also authenticates the corresponding complete session event by hash; replay requires matching counts, sequence, type, time, chain link, and event hash.
 The recovery journal repairs a verified interrupted two-file append before replay, while tampered or unexplained mismatches fail closed.
@@ -150,7 +152,7 @@ The export path is itself recorded as an event.
 A deployment can create a canonical checkpoint outside the project through the provider-neutral `CheckpointSigner` contract.
 The signed payload binds the audit digest, event count, terminal hash, session, deployment identifier, creation time, retention declaration, signer identity, key identity, key version, algorithm, and public-key fingerprint.
 Managed deployments resolve an approved HTTPS signer and independently trusted public key from one deployment-owned registry; project state stores only the selected profile identifier.
-The explicit development and offline fallback uses the same contract through an authenticated loopback service with an owner-only Ed25519 key.
+The explicit development and offline fallback uses the same contract through an authenticated Unix socket in an owner-only directory, with an owner-only Ed25519 key.
 Verification requires the active deployment profile or a public key obtained through an independent trust path and rejects noncanonical or unexpected bundle content.
 The chain and signature cannot prove that an intact suffix was not deleted before checkpoint creation.
 The retention declaration also does not implement storage lifecycle controls; the deployment records system remains responsible for authoritative storage and policy enforcement.

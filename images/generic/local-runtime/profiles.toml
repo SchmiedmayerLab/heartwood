@@ -6,18 +6,18 @@
 
 schema_version = "1"
 default_profile = "llama-cpp-cpu"
-fallback_fixture_profile = "stub-loopback"
+fallback_fixture_profile = "stub-unix"
 model_weight_policy = "No runtime profile embeds model weights in an image."
 
-[profiles.stub-loopback]
+[profiles.stub-unix]
 status = "implemented"
 purpose = "Deterministic OpenAI-compatible fixture for the OpenHands, policy, audit, CLI, and web integration path."
-runtime = "heartwood-loopback-stub"
+runtime = "heartwood-unix-stub"
 inference_runtime = false
 model_artifact_required = false
 quality_claim = false
-endpoint = "http://127.0.0.1:8765/v1/chat/completions"
-startup = "Set HEARTWOOD_LOCAL_RUNTIME_PROFILE=stub-loopback and run images/generic/scripts/start_local_runtime.sh."
+logical_endpoint = "http://127.0.0.1:8765/v1/chat/completions"
+startup = "Run images/generic/scripts/offline_stack_smoke.sh."
 runtime_network = "none"
 supported_platforms = ["linux/amd64", "linux/arm64"]
 ci_scope = "Pull requests, pushes to main, and local Compose smoke tests."
@@ -34,14 +34,13 @@ runtime_artifacts = [
 ]
 model_artifact_required = true
 artifact_format = "GGUF"
-endpoint = "http://127.0.0.1:8765/v1/chat/completions"
-host = "127.0.0.1"
-port = 8765
+logical_endpoint = "http://127.0.0.1:8765/v1/chat/completions"
+transport = "Launcher-owned Unix socket; the endpoint is a logical SDK origin, not a TCP listener."
 supported_platforms = ["linux/amd64", "linux/arm64"]
 startup = "Run heartwood models download <model>, then heartwood from the project directory."
 artifact_cache = "The selected project's .heartwood/models directory, backed by the project volume or platform-persistent storage."
 runtime_resolution = "Load only the path selected by the operator; recommended and user-selected downloads verify immutable provenance and content before use."
-ci_scope = "CI tests the OpenHands integration with a deterministic loopback fixture and tests artifact verification separately; CI never embeds weights in images."
+ci_scope = "CI tests the OpenHands integration with a deterministic private-socket fixture and tests artifact verification separately; CI never embeds weights in images."
 
 [profiles.llama-cpp-cuda]
 status = "deferred"

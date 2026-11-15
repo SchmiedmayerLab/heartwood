@@ -17,7 +17,9 @@ import sys
 import time
 import tomllib
 from collections.abc import Callable
+from contextlib import nullcontext
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Literal, cast
 
 import pytest
@@ -2348,6 +2350,10 @@ def test_local_signer_setup_uses_external_defaults_and_serves_without_key_argume
         observed.update(kwargs)
 
     monkeypatch.setattr("heartwood.cli.uvicorn.run", run_server)
+    monkeypatch.setattr(
+        "heartwood.cli.local_checkpoint_signer_socket",
+        lambda _endpoint: nullcontext(SimpleNamespace(fileno=lambda: 77)),
+    )
     assert (
         _run(
             project,
@@ -2360,14 +2366,15 @@ def test_local_signer_setup_uses_external_defaults_and_serves_without_key_argume
         == 0
     )
     assert isinstance(observed["app"], LocalCheckpointSignerApp)
-    assert observed["host"] == "127.0.0.1"
-    assert observed["port"] == 8771
+    assert observed["fd"] == 77
+    assert "host" not in observed
+    assert "port" not in observed
     assert observed["access_log"] is False
 
     registry_path = tmp_path / "config" / "heartwood" / "checkpoint-signers.toml"
     registry_path.write_text(
         registry_path.read_text(encoding="utf-8").replace(
-            "http://127.0.0.1:8771/v1/checkpoints/sign",
+            (registry_path.parent / "checkpoint.sock").as_uri().replace("file:", "unix:", 1),
             "https://signer.example:443/v1/checkpoints/sign",
         ),
         encoding="utf-8",
@@ -2375,7 +2382,10 @@ def test_local_signer_setup_uses_external_defaults_and_serves_without_key_argume
     registry_path.chmod(0o600)
     observed.clear()
     assert _run(project, monkeypatch, ["signer", "serve-local"]) == 65
-    assert "local signer must bind a loopback host" in capsys.readouterr().err
+    assert (
+        "local signer requires a canonical absolute unix:/// socket endpoint"
+        in capsys.readouterr().err
+    )
     assert observed == {}
 
 
@@ -2413,8 +2423,6 @@ def test_audit_signer_selection_persists_only_the_deployment_profile(
                 str(selected_operator),
                 "--profile",
                 "project-selected",
-                "--port",
-                "8772",
             ],
         )
         == 0
@@ -2794,3 +2802,23 @@ def _community_skill(tmp_path: Path) -> Path:
         encoding="utf-8",
     )
     return source
+
+
+@pytest.mark.parametrize("relative", [Path("packages/webui/dist"), Path("fixtures/synthetic")])
+def test_installed_cli_does_not_select_project_or_ancestor_assets(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, relative: Path
+) -> None:
+    import heartwood.cli as cli
+
+    module = tmp_path / "environment/lib/python3.12/site-packages/heartwood/cli/__init__.py"
+    module.parent.mkdir(parents=True)
+    monkeypatch.setattr(cli, "__file__", str(module))
+    project = tmp_path / "research"
+    (project / relative).mkdir(parents=True)
+    (tmp_path / relative).mkdir(parents=True)
+    monkeypatch.chdir(project)
+    expected = module.parent / "_bundled" / relative
+    assert cli._bundled_path(relative) == expected
+    assert not expected.exists()
+    expected.mkdir(parents=True)
+    assert cli._bundled_path(relative) == expected

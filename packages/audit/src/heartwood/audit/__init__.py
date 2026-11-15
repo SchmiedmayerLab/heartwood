@@ -20,6 +20,10 @@ from heartwood.audit._local_signer_setup import (
     LocalCheckpointSignerSetup,
     initialize_local_checkpoint_signer,
 )
+from heartwood.audit._local_signer_socket import (
+    local_checkpoint_signer_socket,
+    local_checkpoint_socket_path,
+)
 from heartwood.audit._log import (
     AuditIntegrityError,
     AuditLog,
@@ -76,6 +80,8 @@ __all__ = [
     "initialize_local_checkpoint_signer",
     "load_checkpoint_public_key",
     "load_checkpoint_signer_registry",
+    "local_checkpoint_signer_socket",
+    "local_checkpoint_socket_path",
     "prepare_audit_event",
     "scrub_json_value",
     "user_checkpoint_signer_registry_path",

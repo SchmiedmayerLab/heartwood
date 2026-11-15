@@ -48,6 +48,7 @@ nav = [
     { "Operate Heartwood" = [
         { "Deployment Responsibilities" = "operate/index.md" },
         { "Platform Contract" = "operate/platform-contract.md" },
+        { "Platform API and Access Requirements" = "operate/platform-requirements.md" },
         { "Audit Checkpoints and Retention" = "operate/audit-checkpoints.md" },
         { "Qualify Parallel Reviews" = "operate/parallel-reviews.md" },
         { "Support and Compatibility" = "operate/support.md" },
@@ -63,6 +64,7 @@ nav = [
         { "Testing and Evidence" = "architecture/testing.md" },
     ] },
     { "Reference" = [
+        { "Gateway API" = "reference/gateway-api.md" },
         { "Command Reference" = "reference/cli.md" },
         { "Configuration and State" = "reference/configuration.md" },
         { "Platform Capabilities" = "reference/capabilities.md" },
