@@ -25,6 +25,13 @@ No single layer establishes every property of a deployment.
 | Platform-derived CI | Terra Jupyter inheritance, prefixed internal gateway routing, persistence, image media type, CI-only model rejection as an agent profile, and separate real inference |
 | Live synthetic validation | Exact published artifact in Terra or Carina without protected data |
 
+Outside-operation conformance tests use the native SDK MCP client against an authenticated synthetic MCP endpoint on loopback.
+The maintained token verifier checks signature, issuer, audience, and expiry; the service separately checks project, researcher, worker attempt, policy, exact request, and input bytes.
+Its synthetic record and operation identity are committed in one SQLite transaction with the current service authorization, including when a request waits behind revocation.
+Concurrent replays cannot create another record or reuse a decision for a different operation.
+Tests discard a reply after the effect commits, restart the gateway and synthetic service, rotate the test credential, and recover through status lookup without resubmission.
+These checks establish native protocol and authorization behavior; they do not establish process isolation, deployed network policy, protected input storage, or controlled-data readiness.
+
 GPU image CI verifies the fully hashed CUDA 12.9 environment, exact vLLM and PyTorch versions, compatibility guards, available tool parsers, launcher, and absence of bundled model weights on standard runners.
 Each immutable GPU candidate embeds the complete compatibility matrix for its commit.
 Qualification profiles select external model weights and runtime arguments against that candidate; they do not produce profile-specific images.

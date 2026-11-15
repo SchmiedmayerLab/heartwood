@@ -28,6 +28,7 @@ from openhands.sdk.conversation.exceptions import WebSocketConnectionError
 from openhands.sdk.conversation.request import StartConversationRequest
 from openhands.sdk.event.conversation_state import ConversationStateUpdateEvent
 from openhands.sdk.testing import TestLLM
+from openhands.sdk.tool.client_tool import ClientToolSpec
 from openhands.sdk.workspace import LocalWorkspace, RemoteWorkspace
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -462,6 +463,16 @@ def test_native_create_attach_and_fork_preserve_admission(
     poisoned = False
     reject_events = False
     worker_key = "synthetic-event-key"
+    client_spec = ClientToolSpec(
+        name="propose_review_operation",
+        description="Propose an operation for outside review.",
+        parameters={
+            "type": "object",
+            "properties": {"reference": {"type": "string"}},
+            "required": ["reference"],
+            "additionalProperties": False,
+        },
+    )
 
     async def metadata(request: Request) -> JSONResponse:
         assert request.headers.get("X-Session-API-Key") == worker_key
@@ -482,6 +493,9 @@ def test_native_create_attach_and_fork_preserve_admission(
                 "max_iterations": 10,
                 "execution_status": "idle",
                 "tool_module_qualnames": {"forged": "unlisted"} if poisoned and is_fork else {},
+                "client_tools": [
+                    spec.model_dump(mode="json") for spec in workspace.authorized_client_tools
+                ],
             }
         )
 
@@ -522,6 +536,7 @@ def test_native_create_attach_and_fork_preserve_admission(
         workspace = workspace_type(
             host=host,
             attempt=attempt,
+            client_tools=(client_spec,) if attempt else (),
             working_dir="/workspace",
             api_key=worker_key,
         )
@@ -537,6 +552,7 @@ def test_native_create_attach_and_fork_preserve_admission(
                         agent=agent,
                         conversation_id=attempt.intent.conversation_id,
                         workspace=LocalWorkspace(working_dir="/workspace"),
+                        client_tools=workspace.authorized_client_tools,
                     ),
                     visualizer=None,
                 )
