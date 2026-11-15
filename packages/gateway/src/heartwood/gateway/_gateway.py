@@ -725,8 +725,13 @@ class SessionGateway:
                 session_ids = tuple(summary.session_id for summary in self.session_catalog.list())
         for session_id in session_ids:
             with self._state_lock:
-                # A session this process already serves revokes its own attempt.
-                if session_id in self._services or session_id in self._reconciling:
+                # A session this process already serves, or still closes, revokes its own
+                # attempt.
+                if (
+                    session_id in self._services
+                    or session_id in self._releasing
+                    or session_id in self._reconciling
+                ):
                     continue
                 try:
                     retained = current_worker_attempt(
@@ -2652,7 +2657,9 @@ class SessionGateway:
             service = self._services.get(session_id)
             if service is None and self._session_reconciler_locked(session_id)[0] == "service":
                 service = self._service(session_id)
-        if service is None:
+            worker = None if service is None else self._worker_sessions.get(id(service))
+        if service is None or (worker is not None and worker.preparing):
+            # A worker preparation in progress opens the backend; its journal is read instead.
             return None
         try:
             service.reconcile()
@@ -3096,10 +3103,10 @@ class SessionGateway:
 
     @_serialized_state
     def _reset_services(self) -> None:
-        """Detach every cached service; a worker's close may finish outside the state lock.
+        """Detach every cached service; a worker's close finishes outside the state lock.
 
         A service whose close fails stays cached and owned, so a later reset or stop
-        retries it.
+        retries it; a worker close retries an unobserved revocation itself.
         """
         self._settle_releases_locked()
         services = tuple(self._services.items())
@@ -3128,11 +3135,17 @@ class SessionGateway:
             raise ExceptionGroup("unable to close all session services", errors)
 
     def _finish_releases(self) -> None:
-        """Wait a bounded time for deferred worker closes; a failed one stays owned and cached."""
+        """Make each worker close attempt revocation once more, and wait a bounded time.
+
+        A close that still fails leaves its session owned, and a later stop retries it.
+        """
         with self._state_lock:
             workers = [
                 self._worker_sessions[id(service)] for service, _ in self._releasing.values()
             ]
+        for worker in workers:
+            worker.stop_retrying()
+            worker.close()
         for worker in workers:
             worker.wait_closed()
         with self._state_lock:
@@ -3140,6 +3153,7 @@ class SessionGateway:
             errors = [
                 WorkerAttemptError(f"worker close is still in progress for session {session_id}")
                 for session_id in self._releasing
+                if session_id not in failed
             ] + [
                 WorkerAttemptError(f"worker close failed for session {session_id}")
                 for session_id in failed
@@ -3150,21 +3164,26 @@ class SessionGateway:
     def _settle_releases_locked(self) -> tuple[str, ...]:
         """Forget closed worker services, and cache again those whose deferred close failed.
 
-        Returns the sessions cached again.
+        A service is cached again only once its attempt's revocation is recorded; one whose
+        close stopped retrying an unobserved revocation stays detached and refused.
+        Returns the sessions whose close failed.
         """
         failed: list[str] = []
         for session_id, (service, configuration) in tuple(self._releasing.items()):
             worker = self._worker_sessions[id(service)]
             if worker.closing:
                 continue
-            del self._releasing[session_id]
             if worker.wait_closed(0):
+                del self._releasing[session_id]
                 self._worker_sessions.pop(id(service), None)
                 continue
+            failed.append(session_id)
+            if worker.revocation_pending:
+                continue
+            del self._releasing[session_id]
             self._services[session_id] = service
             if configuration is not None:
                 self._service_configurations[session_id] = configuration
-            failed.append(session_id)
         return tuple(failed)
 
     def _discard_transient_state(self, session_id: str) -> None:

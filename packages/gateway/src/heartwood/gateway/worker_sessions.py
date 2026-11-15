@@ -62,9 +62,10 @@ class WorkerSessionPlan:
 
 
 WorkerPlanFactory = Callable[[WorkerSessionRequest], WorkerSessionPlan]
-# How long a caller waits for a close deferred to a launch or prompt revocation in progress.
+# How long a caller waits for a close, which runs on its own thread.
 _CLOSE_WAIT_SECONDS = 30.0
-# A failed prompt revocation is retried after these waits, doubling up to the maximum.
+# A failed prompt revocation, or a close whose revocation failed, is retried after these
+# waits, doubling up to the maximum.
 _REVOCATION_RETRY_SECONDS = 15.0
 _REVOCATION_RETRY_MAX_SECONDS = 600.0
 # Revokes an attempt whose owning gateway process ended, without that process's launch state.
@@ -90,11 +91,13 @@ class ManagedWorkerSession:
         self._revocation: Thread | None = None
         self._revoking = False
         self._revocation_lock = Lock()
+        self._preparing = False
         self._launch_settled = Event()
         self._launch_settled.set()
         self._closing = False
-        # A close that found a launch or prompt revocation in progress is finished once that
-        # ends; `_close_settled` is clear until then, and `_closed` is set when a close succeeds.
+        # A close of prepared worker authority runs on its own thread, once no preparation,
+        # launch or prompt revocation remains; `_close_settled` is clear until it ends, and
+        # `_closed` is set when a close succeeds.
         self._close_deferred = False
         self._close_settled = Event()
         self._close_settled.set()
@@ -102,6 +105,8 @@ class ManagedWorkerSession:
         self._closed = Event()
         self._released = False
         self._close_requested = Event()
+        # Set while the gateway stops: a close makes one more attempt instead of retrying.
+        self._retry_stopped = Event()
         self._context: WorkerConversationContext | None = None
         # This owner reaches a worker only through `context`, so it may replace a revoked one.
         service.admit_worker_replacement()
@@ -127,15 +132,30 @@ class ManagedWorkerSession:
         )
         if decision.decision != "allow":
             raise WorkerAttemptError("worker launch is denied by session policy")
-        plan = self._prepare(self._request)
+        with self._revocation_lock:
+            self._preparing = True
+        try:
+            plan = self._prepare(self._request)
+        except BaseException:
+            with self._revocation_lock:
+                self._preparing = False
+                self._finish_deferred_close_locked()
+            raise
         with self._revocation_lock:
             self._plan, closing = plan, self._closing
             if not closing:
+                self._preparing = False
                 self._launch_settled.clear()
         if closing:
-            # A close that began during preparation found no plan to release.
-            if plan.release_preparation is not None:
-                plan.release_preparation()
+            # A close that began during preparation releases it once this thread has.
+            try:
+                if plan.release_preparation is not None:
+                    plan.release_preparation()
+                    self._released = True
+            finally:
+                with self._revocation_lock:
+                    self._preparing = False
+                    self._finish_deferred_close_locked()
             raise WorkerAttemptError("worker session closed before launch")
 
         def launch(intent: WorkerAttemptIntent) -> WorkerRuntimeBinding:
@@ -232,10 +252,12 @@ class ManagedWorkerSession:
     def close(self) -> bool:
         """Keep ownership until outside revocation and native client shutdown succeed.
 
-        A close never waits for a launch or prompt revocation in progress, so the caller's
-        locks are not held for a control-plane call that is already running. That thread
-        finishes the close once it ends, and this returns false; `wait_closed` observes
-        the result. Otherwise this returns true once closed, or raises and leaves the
+        A close never asks the control plane on the caller's thread, so the caller's locks
+        are not held for it. Once the session holds prepared authority, the close runs on
+        its own thread after any preparation, launch or prompt revocation in progress, and
+        this returns false; `wait_closed` observes the result. While the attempt's
+        revocation is not observed, that thread retries it with backoff, and the session
+        stays owned. Otherwise this returns true once closed, or raises and leaves the
         session owned, and the close can be retried.
         """
         with self._revocation_lock:
@@ -245,16 +267,40 @@ class ManagedWorkerSession:
             # A prompt revocation waiting to retry stops, and this close revokes instead.
             self._close_requested.set()
             if (
-                not self._launch_settled.is_set()
-                or self._revoking
+                self._plan is not None
+                or self._preparing
+                or not self._launch_settled.is_set()
                 or (self._closer is not None and self._closer.is_alive())
             ):
                 self._close_deferred = True
                 self._close_settled.clear()
+                self._finish_deferred_close_locked()
                 return False
             self._close_deferred = False
         self._close_now()
         return True
+
+    def stop_retrying(self) -> None:
+        """Make the next revocation attempt of a close its last, because the gateway stops."""
+        self._retry_stopped.set()
+
+    @property
+    def preparing(self) -> bool:
+        """Return whether the session's worker preparation is in progress."""
+        return self._preparing
+
+    @property
+    def revocation_pending(self) -> bool:
+        """Return whether this owner's launched attempt is not yet recorded as revoked."""
+        if self._launched is None:
+            return False
+        try:
+            current = self._service.worker_attempt()
+        except Exception:
+            return True
+        return (
+            current is not None and current.intent == self._launched and current.revocation is None
+        )
 
     @property
     def closing(self) -> bool:
@@ -270,16 +316,32 @@ class ManagedWorkerSession:
         """Start a deferred close on its own thread once no launch or revocation remains.
 
         The close waits for the session command in progress, which may be the launch
-        that started it, so it never runs on that thread.
+        that started it, so it never runs on that thread. While the attempt's revocation
+        is not observed, the close is retried with backoff, so the attempt stays fenced
+        and the session owned until the control plane answers.
         """
-        if not self._close_deferred or not self._launch_settled.is_set() or self._revoking:
+        if (
+            not self._close_deferred
+            or self._preparing
+            or not self._launch_settled.is_set()
+            or self._revoking
+        ):
             return
         if self._closer is not None and self._closer.is_alive():
             return
 
         def finish() -> None:
-            with suppress(Exception):
-                self._close_now()
+            delay = _REVOCATION_RETRY_SECONDS
+            while True:
+                last = self._retry_stopped.is_set()
+                try:
+                    self._close_now()
+                    break
+                except Exception:
+                    if last or not self.revocation_pending:
+                        break
+                self._retry_stopped.wait(delay)
+                delay = min(delay * 2, _REVOCATION_RETRY_MAX_SECONDS)
             with self._revocation_lock:
                 self._close_deferred = False
                 self._close_settled.set()

@@ -333,14 +333,17 @@ def test_failed_revocation_retains_service_and_writer_until_retry(tmp_path: Path
     platform.fail = "revoke"
     with pytest.raises(ExceptionGroup, match="unable to close"):
         gateway.stop()
-    assert gateway._services["session-worker"] is service
+    # A service whose revocation is not observed is never cached again.
+    assert "session-worker" not in gateway._services
+    assert gateway._releasing["session-worker"][0] is service
     assert bool(service.store.owns_writer)
     assert not context.workspace.attempt.active
+    failed = platform.calls.count("revoke")
     platform.fail = None
     gateway.stop()
     assert not bool(service.store.owns_writer)
     assert platform.calls.count("launch") == 1
-    assert platform.calls.count("revoke") == 2
+    assert platform.calls.count("revoke") == failed + 1
 
 
 def test_managed_workers_reject_local_state(tmp_path: Path) -> None:
@@ -361,7 +364,10 @@ def test_managed_workers_reject_local_backend_override(tmp_path: Path) -> None:
         )
 
 
-def test_failed_revocation_prevents_configuration_replacement(tmp_path: Path) -> None:
+def test_failed_revocation_prevents_configuration_replacement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("heartwood.gateway.worker_sessions._REVOCATION_RETRY_SECONDS", 0.05)
     platform = Platform()
     gateway = configured_gateway(tmp_path, platform)
     service = gateway._service("session-worker")
@@ -374,13 +380,20 @@ def test_failed_revocation_prevents_configuration_replacement(tmp_path: Path) ->
         replace(config, policy=config.policy.model_copy(update={"policy_id": "updated"}))
     )
     platform.fail = "revoke"
-    with pytest.raises(WorkerAttemptError, match="revocation"):
+    with pytest.raises(SessionRecoveryError, match="closing"):
         gateway._service("session-worker")
-    assert gateway._services["session-worker"] is service
+    worker = gateway._worker_sessions[id(service)]
+    deadline = monotonic() + 10
+    while platform.calls.count("revoke") < 2 and monotonic() < deadline:
+        sleep(0.01)
+    with pytest.raises(SessionRecoveryError, match="closing"):
+        gateway._service("session-worker")
+    assert gateway._releasing["session-worker"][0] is service
     assert bool(service.store.owns_writer)
     assert not context.workspace.attempt.active
     assert platform.calls.count("launch") == 1
     platform.fail = None
+    assert worker.wait_closed(10)
     replacement = gateway._service("session-worker")
     assert replacement is not service
     assert not bool(service.store.owns_writer)
@@ -1454,9 +1467,11 @@ def test_revocation_recorded_by_a_failed_close_still_admits_a_replacement(
 
     worker._plan = replace(worker._plan, release_preparation=release_once)
     try:
-        # The close revokes the attempt, then fails, so the service stays cached and owned.
-        with pytest.raises(ExceptionGroup, match="unable to close"):
-            gateway.save_model_profile(gateway.settings_store.load().profile())
+        # The close revokes the attempt, then fails, so the service is cached again and owned.
+        gateway.save_model_profile(gateway.settings_store.load().profile())
+        assert not worker.wait_closed(10)
+        with gateway._state_lock:
+            assert gateway._settle_releases_locked() == ("session-worker",)
         assert gateway._services["session-worker"] is service
         assert _retained(gateway).phase == "revoked"
         _chat(gateway, "chat-after-failed-close")
@@ -1513,4 +1528,135 @@ def test_close_during_a_retried_revocation_stops_the_retry_without_the_state_loc
         assert len(calls) == retried
     finally:
         release.set()
+        gateway.stop()
+
+
+def test_failed_close_retries_revocation_until_the_control_plane_returns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("heartwood.gateway.worker_sessions._REVOCATION_RETRY_SECONDS", 0.05)
+    monkeypatch.setattr("heartwood.gateway._gateway._RELEASE_WAIT_SECONDS", 0.1)
+    _open_worker_only(monkeypatch)
+    platform = Platform()
+    gateway = configured_gateway(tmp_path, platform)
+    service = gateway._service("session-worker")
+    backend = service.backend
+    assert isinstance(backend, OpenHandsSdkBackend)
+    assert backend._worker_context is not None
+    lease = backend._worker_context().workspace.attempt
+    worker = gateway._worker_sessions[id(service)]
+    source = _local_skill(gateway)
+    platform.fail = "revoke"
+    try:
+        lease.fence()
+        deadline = monotonic() + 10
+        while platform.calls.count("revoke") < 2 and monotonic() < deadline:
+            sleep(0.01)
+        # A Skill change leaves the service configuration unchanged.
+        inspected = gateway.inspect_local_skill(source)
+        gateway.install_local_skill(
+            source, expected_tree_sha256=inspected["tree_sha256"], approved=True
+        )
+        asked = platform.calls.count("revoke")
+        deadline = monotonic() + 10
+        while platform.calls.count("revoke") < asked + 2 and monotonic() < deadline:
+            sleep(0.01)
+        assert platform.calls.count("revoke") >= asked + 2
+        # Until revocation is observed, the session is fenced, owned and refused as retryable.
+        assert worker.closing
+        with pytest.raises(SessionRecoveryError, match="closing"):
+            _chat(gateway, "chat-while-revocation-fails")
+        gateway.session_projection(session_id="session-worker")
+        assert "session-worker" not in gateway._services
+        assert _retained(gateway).phase == "fenced"
+        assert bool(service.store.owns_writer)
+        assert platform.calls.count("launch") == 1
+        # The control plane returns: the retry revokes, with no reset or stop.
+        platform.fail = None
+        assert worker.wait_closed(10)
+        assert _retained(gateway).phase == "revoked"
+        assert not service.store.owns_writer
+        _chat(gateway, "chat-after-revocation")
+        assert platform.calls.count("launch") == 2
+        assert gateway._services["session-worker"] is not service
+    finally:
+        platform.fail = None
+        gateway.stop()
+
+
+def test_settings_change_never_revokes_a_live_worker_under_the_state_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _open_worker_only(monkeypatch)
+    platform = Platform()
+    gateway = configured_gateway(tmp_path, platform)
+    service = gateway._service("session-worker")
+    backend = service.backend
+    assert isinstance(backend, OpenHandsSdkBackend)
+    assert backend._worker_context is not None
+    backend._worker_context()
+    worker = gateway._worker_sessions[id(service)]
+    assert worker._plan is not None
+    revoke = worker._plan.revoke
+    asked, release = Event(), Event()
+
+    def stalled(record: WorkerAttemptRecord) -> WorkerRevocationEvidence:
+        asked.set()
+        assert release.wait(timeout=20)
+        return revoke(record)
+
+    worker._plan = replace(worker._plan, revoke=stalled)
+    profile = gateway.settings_store.load().profile()
+    try:
+        began = monotonic()
+        gateway.save_model_profile(replace(profile, model="openai/synthetic-updated"))
+        assert monotonic() - began < 2
+        assert gateway.settings_store.load().profile().model == "openai/synthetic-updated"
+        assert asked.wait(timeout=10)
+        state_lock = cast(RLock, gateway._state_lock)
+        assert state_lock.acquire(timeout=1)
+        state_lock.release()
+        began = monotonic()
+        gateway.session_projection(session_id="session-other")
+        gateway.session_projection(session_id="session-worker")
+        assert monotonic() - began < 2
+        assert "session-worker" in gateway._releasing
+        assert bool(service.store.owns_writer)
+        release.set()
+        assert worker.wait_closed(10)
+        assert _retained(gateway).phase == "revoked"
+        assert not service.store.owns_writer
+    finally:
+        release.set()
+        gateway.stop()
+
+
+def test_same_session_read_answers_during_a_stalled_worker_preparation(tmp_path: Path) -> None:
+    platform = Platform()
+    gateway = configured_gateway(tmp_path, platform)
+    preparing, release = Event(), Event()
+    prepare = platform.prepare
+
+    def slow_prepare(request: WorkerSessionRequest) -> WorkerSessionPlan:
+        preparing.set()
+        assert release.wait(timeout=20)
+        return prepare(request)
+
+    gateway._worker_plan_factory = slow_prepare
+    command = Thread(target=lambda: gateway.handle(_chat_command("chat-during-preparation")))
+    command.daemon = True
+    command.start()
+    try:
+        assert preparing.wait(timeout=10)
+        answered: list[object] = []
+        reader = Thread(
+            target=lambda: answered.append(gateway.session_projection(session_id="session-worker")),
+            daemon=True,
+        )
+        reader.start()
+        reader.join(timeout=2)
+        assert answered
+    finally:
+        release.set()
+        command.join(timeout=10)
         gateway.stop()
