@@ -6,9 +6,16 @@
 
 """Deployment policy admits only narrower project authority."""
 
+from typing import Literal, get_args, get_origin
+
 import pytest
 
-from heartwood.model_policy import PolicyInputError, validate_policy_restriction
+from heartwood.model_policy import (
+    POLICY_RESTRICTIONS,
+    PolicyInputError,
+    restrict_policy,
+    validate_policy_restriction,
+)
 from heartwood.schemas import PolicyProfile
 
 
@@ -21,6 +28,8 @@ def _ceiling() -> PolicyProfile:
         allowed_capability_tiers=("supervised", "experimental"),
         allowed_action_review_modes=("review-all",),
         credential_allowlist=("MODEL_KEY",),
+        allowed_credential_backends=("mounted-file",),
+        allowed_checkpoint_signer_profiles=("research-records",),
         aggregate_count_floor=30,
     )
 
@@ -35,6 +44,10 @@ def _ceiling() -> PolicyProfile:
         ("allowed_capability_tiers", ("autonomous",)),
         ("allowed_action_review_modes", ("review-all", "review-changes")),
         ("credential_allowlist", ("OTHER_KEY",)),
+        ("allowed_credential_backends", ("mounted-file", "keyring")),
+        ("allowed_checkpoint_signer_profiles", ("research-records", "other")),
+        # Absent means any registry signer, which is wider than every list.
+        ("allowed_checkpoint_signer_profiles", None),
         ("aggregate_count_floor", 20),
     ],
 )
@@ -61,7 +74,7 @@ def test_deployment_policy_accepts_narrowing_and_equivalent_endpoint_spelling() 
 
 
 def test_deployment_policy_itself_must_deny_unlisted_egress() -> None:
-    with pytest.raises(PolicyInputError, match="deny-by-default"):
+    with pytest.raises(PolicyInputError, match="deny_egress_by_default"):
         validate_policy_restriction(
             _ceiling(), _ceiling().model_copy(update={"deny_egress_by_default": False})
         )
@@ -74,3 +87,58 @@ def test_deployment_policy_rejects_malformed_endpoints_even_in_matching_profiles
     invalid = _ceiling().model_copy(update={field: ("https://user:secret@example/v1",)})
     with pytest.raises(PolicyInputError, match="userinfo"):
         validate_policy_restriction(invalid, invalid)
+
+
+def test_every_policy_field_has_one_restriction_rule() -> None:
+    # A field added without a rule would be unchecked by every manifest, project and
+    # interface path, so the table must name each field exactly once.
+    assert set(POLICY_RESTRICTIONS) == set(PolicyProfile.model_fields)
+
+
+def _permitted_entries(annotation: object) -> set[object] | None:
+    """Return every value a tuple-of-literals policy field can list."""
+    for candidate in (annotation, *get_args(annotation)):
+        if get_origin(candidate) is tuple:
+            element = get_args(candidate)[0]
+            element = getattr(element, "__value__", element)
+            if get_origin(element) is Literal:
+                return set(get_args(element))
+    return None
+
+
+@pytest.mark.parametrize(
+    "field",
+    sorted(name for name, rule in POLICY_RESTRICTIONS.items() if rule.rule != "no-authority"),
+)
+def test_absent_means_any_exactly_when_the_schema_default_is_unrestricted(field: str) -> None:
+    schema = PolicyProfile.model_fields[field]
+    default = schema.get_default()
+    entries = _permitted_entries(schema.annotation)
+    unrestricted = default is None or (entries is not None and set(default) == entries)
+    assert POLICY_RESTRICTIONS[field].absent_means_any == unrestricted
+
+
+def test_restriction_keeps_only_what_both_policies_permit() -> None:
+    ceiling = _ceiling()
+    profile = PolicyProfile(
+        policy_id="project",
+        platform_id="generic",
+        allowed_model_endpoints=(
+            "HTTPS://MODEL.EXAMPLE/v1/chat/completions",
+            "https://other.example/v1/chat/completions",
+        ),
+        allowed_capability_tiers=("autonomous", "experimental"),
+        allowed_action_review_modes=("review-all", "review-changes"),
+        credential_allowlist=("MODEL_KEY", "OTHER_KEY"),
+        aggregate_count_floor=20,
+    )
+    restricted = restrict_policy(profile, ceiling)
+    validate_policy_restriction(restricted, ceiling)
+    assert restricted.allowed_model_endpoints == ("HTTPS://MODEL.EXAMPLE/v1/chat/completions",)
+    assert restricted.allowed_capability_tiers == ("experimental",)
+    assert restricted.allowed_action_review_modes == ("review-all",)
+    assert restricted.credential_allowlist == ("MODEL_KEY",)
+    assert restricted.allowed_credential_backends == ("mounted-file",)
+    assert restricted.allowed_checkpoint_signer_profiles == ("research-records",)
+    assert restricted.aggregate_count_floor == 30
+    assert restricted.policy_id == "project"

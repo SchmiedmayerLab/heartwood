@@ -25,6 +25,14 @@ session.startup_plan()
 `session.project_readiness()` and `session.platform_capabilities()` show whether a model is configured and what this platform supports.
 
 ```python
+from heartwood.notebook import render_policy
+
+render_policy(session.project_readiness())
+```
+
+`render_policy()` displays the effective policy, its source and the operator requirements, the same values the browser and `heartwood doctor` report.
+
+```python
 view = session.chat(
     "Inspect the analysis code and explain the existing data-quality checks. Do not modify files."
 )

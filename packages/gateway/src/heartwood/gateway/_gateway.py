@@ -126,7 +126,6 @@ from heartwood.gateway._project_config import (
     ProjectModelSettingsStore,
 )
 from heartwood.gateway._readiness import (
-    DeploymentControl,
     DeploymentReadiness,
     EffectivePolicy,
     inspect_deployment,
@@ -1593,24 +1592,15 @@ class SessionGateway:
         if self._deployment_policy is None:
             return EffectivePolicy("platform", policy)
         deployment = self._deployment
-        requirements = None if deployment is None else deployment.requirements
-
-        def control(required: bool, configured: bool) -> DeploymentControl:
-            return "required" if required else "configured" if configured else "not-configured"
-
+        if deployment is None:
+            return EffectivePolicy("deployment", policy, change_refused=self._deployment_refusal)
         return EffectivePolicy(
             "deployment",
             policy,
-            manifest=None if deployment is None else str(deployment.manifest),
-            manifest_sha256=None if deployment is None else deployment.manifest_sha256,
-            isolated_worker=control(
-                requirements is not None and requirements.isolated_worker,
-                self._worker_plan_factory is not None,
-            ),
-            checkpoint_evidence=control(
-                requirements is not None and requirements.checkpoint_evidence,
-                self._checkpoint_evidence_factory is not None,
-            ),
+            manifest=None if deployment.manifest is None else str(deployment.manifest),
+            manifest_sha256=deployment.manifest_sha256,
+            # The manifest, not the launch path that built clients, owns these controls.
+            **deployment.controls(),
             change_refused=self._deployment_refusal,
         )
 

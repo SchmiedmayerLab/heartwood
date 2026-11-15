@@ -26,8 +26,10 @@ from heartwood.gateway import (
     load_project_deployment,
 )
 from heartwood.gateway._credentials import CredentialStoreError
+from heartwood.gateway._deployment import DeploymentRequirements
 from heartwood.gateway._project_config import LocalModelSelection
-from heartwood.schemas import JsonValue
+from heartwood.model_policy import POLICY_RESTRICTIONS
+from heartwood.schemas import EffectivePolicyResponse, JsonValue
 from heartwood.session import CommandKind, EventKind, SessionCommand
 
 
@@ -405,6 +407,69 @@ def test_other_manifest_changes_stop_dispatch_until_restart(tmp_path: Path, chan
         assert not any(event.kind == EventKind.USER_MESSAGE_RECORDED for event in refused.events)
     finally:
         gateway.stop()
+
+
+# A narrower value for every field whose absence from the manifest permits anything.
+_NARROWED: dict[str, list[str]] = {
+    "allowed_action_review_modes": ["review-all"],
+    "allowed_credential_backends": ["mounted-file"],
+    "allowed_checkpoint_signer_profiles": ["research-records"],
+}
+
+
+def test_every_field_where_absent_means_any_is_checked_for_live_removal() -> None:
+    assert set(_NARROWED) == {
+        name for name, rule in POLICY_RESTRICTIONS.items() if rule.absent_means_any
+    }
+
+
+@pytest.mark.parametrize("field", sorted(_NARROWED))
+def test_removing_a_manifest_restriction_while_running_never_applies(
+    tmp_path: Path, field: str
+) -> None:
+    manifest, workspace, record = _manifest(tmp_path)
+    narrowed = {**cast(dict[str, object], record["policy"]), field: _NARROWED[field]}
+    _write(manifest, {**record, "policy": narrowed})
+    gateway = SessionGateway(
+        deployment=load_project_deployment(manifest, project_root=workspace, env={}),
+        env={},
+        backend_id="deterministic",
+    )
+    try:
+        gateway.handle(_command(CommandKind.CHAT, {"prompt": "Start."}))
+        # Removing the line widens the field to anything the platform or registry permits.
+        _write(manifest, record)
+        result = gateway.handle(_command(CommandKind.CHAT, {"prompt": "Continue."}))
+        reasons = [str(event.payload.get("reason")) for event in result.events]
+        assert any(reason.startswith("HW-DEPLOY-004") for reason in reasons)
+        assert not any(event.kind == EventKind.USER_MESSAGE_RECORDED for event in result.events)
+        reported = gateway.effective_policy().safe_dict()
+        assert reported[cast(str, POLICY_RESTRICTIONS[field].reported_as)] == _NARROWED[field]
+    finally:
+        gateway.stop()
+
+
+def test_interfaces_report_every_policy_field_and_deployment_requirement(tmp_path: Path) -> None:
+    manifest, workspace, _record = _manifest(tmp_path)
+    gateway = SessionGateway(
+        deployment=load_project_deployment(manifest, project_root=workspace, env={}),
+        env={},
+        backend_id="deterministic",
+    )
+    try:
+        reported = gateway.effective_policy().safe_dict()
+    finally:
+        gateway.stop()
+    policy_names = {
+        rule.reported_as for rule in POLICY_RESTRICTIONS.values() if rule.reported_as is not None
+    }
+    # Fields without a reported name are identifiers or prose and grant no authority.
+    assert {name for name, rule in POLICY_RESTRICTIONS.items() if rule.reported_as is None} == {
+        "schema_version",
+        "notes",
+    }
+    assert policy_names | set(DeploymentRequirements.model_fields) <= set(reported)
+    assert set(reported) == set(EffectivePolicyResponse.__annotations__)
 
 
 def _signer(tmp_path: Path, profile_id: str) -> CheckpointSignerProfile:

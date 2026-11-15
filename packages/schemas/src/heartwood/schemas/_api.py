@@ -476,13 +476,15 @@ class EffectivePolicyResponse(_ApiResponse):
     manifest_sha256: str | None
     policy_id: str
     platform_id: str
-    action_review_modes: list[ActionReviewMode]
+    deny_egress_by_default: bool
     model_endpoints: list[str]
     model_catalog_endpoints: list[str]
     capability_tiers: list[CapabilityTier]
+    action_review_modes: list[ActionReviewMode]
     credential_references: list[str]
     credential_backends: list[Literal["process", "keyring", "mounted-file", "managed-identity"]]
     checkpoint_signer_profiles: list[str] | None
+    aggregate_count_floor: int
     isolated_worker: Literal["required", "configured", "not-configured"]
     checkpoint_evidence: Literal["required", "configured", "not-configured"]
     change_refused: str | None

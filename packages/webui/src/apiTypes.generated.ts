@@ -615,6 +615,7 @@ export interface ReadinessCheckResponse {
  */
 export interface EffectivePolicyResponse {
   action_review_modes: ActionReviewMode[];
+  aggregate_count_floor: number;
   capability_tiers: CapabilityTier[];
   change_refused: string | null;
   checkpoint_evidence: "required" | "configured" | "not-configured";
@@ -623,6 +624,7 @@ export interface EffectivePolicyResponse {
     "process" | "keyring" | "mounted-file" | "managed-identity"
   )[];
   credential_references: string[];
+  deny_egress_by_default: boolean;
   isolated_worker: "required" | "configured" | "not-configured";
   manifest: string | null;
   manifest_sha256: string | null;

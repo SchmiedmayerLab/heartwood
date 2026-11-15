@@ -53,7 +53,7 @@ from heartwood.gateway._subscriptions import (
     OpenHandsOpenAISubscription,
     SubscriptionError,
 )
-from heartwood.model_policy import ModelPolicyEngine
+from heartwood.model_policy import ModelPolicyEngine, policy_report, widen_route_fields
 from heartwood.persistence import NativeLockUnavailableError
 from heartwood.schemas import PolicyProfile
 from heartwood.skills import SkillArtifactStore, SkillStoreError
@@ -183,21 +183,11 @@ class EffectivePolicy:
 
     def safe_dict(self) -> dict[str, object]:
         """Return the non-secret policy dimensions every interface reports."""
-        policy = self.policy
-        signers = policy.allowed_checkpoint_signer_profiles
         return {
             "source": self.source,
             "manifest": self.manifest,
             "manifest_sha256": self.manifest_sha256,
-            "policy_id": policy.policy_id,
-            "platform_id": policy.platform_id,
-            "action_review_modes": list(policy.allowed_action_review_modes),
-            "model_endpoints": list(policy.allowed_model_endpoints),
-            "model_catalog_endpoints": list(policy.allowed_model_catalog_endpoints),
-            "capability_tiers": list(policy.allowed_capability_tiers),
-            "credential_references": list(policy.credential_allowlist),
-            "credential_backends": list(policy.allowed_credential_backends),
-            "checkpoint_signer_profiles": None if signers is None else list(signers),
+            **policy_report(self.policy),
             "isolated_worker": self.isolated_worker,
             "checkpoint_evidence": self.checkpoint_evidence,
             "change_refused": self.change_refused,
@@ -678,24 +668,15 @@ def platform_policy_ceiling(adapter: PlatformAdapter, requested: PolicyProfile) 
     """
     platform_policy = adapter.default_policy_profile()
     capabilities = adapter.capabilities()
-    routes = [platform_policy]
+    routes = [
+        platform_policy.model_copy(update={"credential_allowlist": adapter.credential_allowlist()})
+    ]
     if "stanford-ai-api-gateway" in capabilities.model_sources:
         routes.append(_stanford_route_policy(platform_policy))
     if "custom" in capabilities.model_sources:
         routes.append(requested)
-
-    def union(field: str) -> tuple[str, ...]:
-        return tuple(dict.fromkeys(value for route in routes for value in getattr(route, field)))
-
-    return platform_policy.model_copy(
-        update={
-            "allowed_model_endpoints": union("allowed_model_endpoints"),
-            "allowed_model_catalog_endpoints": union("allowed_model_catalog_endpoints"),
-            "credential_allowlist": tuple(
-                dict.fromkeys((*union("credential_allowlist"), *adapter.credential_allowlist()))
-            ),
-            "allowed_credential_backends": capabilities.credential_backends,
-        }
+    return widen_route_fields(platform_policy, routes).model_copy(
+        update={"allowed_credential_backends": capabilities.credential_backends}
     )
 
 

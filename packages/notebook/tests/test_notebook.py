@@ -55,8 +55,10 @@ from heartwood.gateway import (
 from heartwood.gateway.experiments import ExperimentRecorder
 from heartwood.notebook import (
     NotebookSession,
+    build_policy_spec,
     build_view_model,
     build_widget_spec,
+    render_policy,
     render_widgets,
 )
 from heartwood.notebook._widgets import WidgetSpec, _section_html
@@ -1224,6 +1226,28 @@ def test_widget_rendering_falls_back_without_ipywidgets(
 
     assert isinstance(rendered, tuple)
     assert all(isinstance(item, WidgetSpec) for item in rendered)
+
+
+def test_notebook_displays_every_effective_policy_dimension(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = NotebookSession(project=ProjectContext(tmp_path), session_id="notebook-policy")
+    try:
+        readiness = session.project_readiness()
+    finally:
+        session.close()
+    policy = readiness["policy"]
+
+    spec = build_policy_spec(readiness)
+
+    assert spec.title == "Effective Policy"
+    assert len(spec.items) == len(policy)
+    assert "Source: platform" in spec.items
+    assert "Action review modes: " + ", ".join(policy["action_review_modes"]) in spec.items
+    assert "Checkpoint signer profiles: not set" in spec.items
+    monkeypatch.setattr("heartwood.notebook._widgets._load_widgets", lambda: None)
+    assert render_policy(readiness) == spec
 
 
 def test_widget_html_preserves_exact_action_whitespace() -> None:

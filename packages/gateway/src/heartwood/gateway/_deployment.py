@@ -23,21 +23,23 @@ from pydantic import BaseModel, ConfigDict
 from heartwood.adapters.platform import select_platform_adapter
 from heartwood.gateway._diagnostics import diagnostic_for
 from heartwood.gateway._project import ProjectContext, ProjectStateError
-from heartwood.gateway._readiness import platform_policy_ceiling
+from heartwood.gateway._readiness import DeploymentControl, platform_policy_ceiling
 from heartwood.gateway.checkpoint_deployment import (
     CheckpointEvidenceDeployment,
     validate_evidence_deployment,
 )
 from heartwood.gateway.worker_deployment import OpenShellWorkerDeployment
-from heartwood.model_policy import PolicyInputError, validate_policy_restriction
+from heartwood.model_policy import (
+    PolicyInputError,
+    inherit_absent_fields,
+    validate_policy_restriction,
+)
 from heartwood.persistence import read_private_text
 from heartwood.schemas import PolicyProfile
 
 _SCHEMA = "heartwood.project-deployment.v1"
 _FIELDS = {"schema_version", "project_id", "workspace", "state_root", "policy"}
 _OPTIONAL_FIELDS = {"worker", "evidence", "requirements"}
-# An omitted ceiling list follows the platform instead of the permissive schema default.
-_PLATFORM_DEFAULTS = ("allowed_action_review_modes", "allowed_credential_backends")
 
 
 class DeploymentError(ProjectStateError):
@@ -69,6 +71,21 @@ class ProjectDeployment:
     requirements: DeploymentRequirements = field(default_factory=DeploymentRequirements)
     manifest: Path | None = None
     manifest_sha256: str | None = None
+
+    def controls(self) -> dict[str, DeploymentControl]:
+        """Report each operator requirement as required, configured or not configured."""
+        configured = {
+            "isolated_worker": self.worker is not None,
+            "checkpoint_evidence": self.evidence is not None,
+        }
+        return {
+            name: "required"
+            if getattr(self.requirements, name)
+            else "configured"
+            if configured[name]
+            else "not-configured"
+            for name in DeploymentRequirements.model_fields
+        }
 
 
 def load_project_deployment(
@@ -212,9 +229,8 @@ def _platform_restricted_policy(
                 )
             }
         )
-    policy = requested.model_copy(
-        update={name: getattr(ceiling, name) for name in _PLATFORM_DEFAULTS if name not in value}
-    )
+    # An omitted field that would permit anything follows the platform instead.
+    policy = inherit_absent_fields(requested, ceiling, value)
     try:
         validate_policy_restriction(policy, ceiling)
     except PolicyInputError as error:

@@ -117,12 +117,13 @@ At launch, Heartwood refuses a manifest whose policy permits a review mode, capa
 A platform that offers **Other compatible service** already lets its own setup add any compatible endpoint and credential name, so on the workstation/container and Terra adapters a manifest may name such a route; on Carina it may use only the loopback and Stanford AI API Gateway routes.
 `allowed_credential_backends` limits where provider credentials may come from: without `process`, interfaces cannot enter a credential and only bindings in the trusted launch environment resolve, and without `keyring` nothing is read from or saved to a system credential store.
 `allowed_checkpoint_signer_profiles` limits the signer registry's profiles a project may select; a list with one profile fixes it, and a project cannot select or store another.
+An omitted `allowed_action_review_modes`, `allowed_credential_backends` or `allowed_checkpoint_signer_profiles` would permit anything, so it follows the platform policy, and removing such a line widens the policy.
 The optional `[requirements]` table makes a missing control a launch failure with `HW-DEPLOY-003`: `isolated_worker = true` requires a `[worker]` section, the separately mediated executor that review of registered tool calls does not replace, and `checkpoint_evidence = true` requires an `[evidence]` section in `required` mode.
 
-`heartwood doctor --deployment`, the browser's project details and the notebook bridge's `project_readiness()` report the same effective policy, its source and the manifest digest.
+`heartwood doctor --deployment`, the browser's project details and the notebook bridge's `project_readiness()` report the same effective policy, its source, the manifest digest and whether the manifest requires or configures an isolated worker and checkpoint evidence; `render_policy()` displays it in a notebook.
 The gateway rereads the manifest before each command that can continue agent work.
 A change that only narrows the policy applies before that command, and a change to the policy or to the review mode in force, whether it comes from the manifest or from a selection in any interface, is recorded as a `policy.decision.recorded` event before the session's next model dispatch.
-Any other manifest change, including a change to `allowed_credential_backends`, stops dispatch with `HW-DEPLOY-004` until the gateway restarts, so loosening always requires the operator to restart under the changed manifest.
+Any other manifest change, including a change to `allowed_credential_backends` or the removal of a restricting line, stops dispatch with `HW-DEPLOY-004` until the gateway restarts, so loosening always requires the operator to restart under the changed manifest.
 
 ### Failure Behavior
 

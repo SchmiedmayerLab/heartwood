@@ -23,9 +23,9 @@ from heartwood.gateway._deployment import _read_project_deployment, _validate_tr
 from heartwood.gateway._experiment_store import ExperimentStore
 from heartwood.gateway._project import ProjectContext, ProjectStateError, _current_state_payload
 from heartwood.gateway._project_activity import project_gateway_maintenance
-from heartwood.gateway._project_config import narrow_to_deployment, project_config_from_mapping
+from heartwood.gateway._project_config import project_config_from_mapping
 from heartwood.gateway._session_migration import staged_session_records
-from heartwood.model_policy import validate_policy_restriction
+from heartwood.model_policy import restrict_policy, validate_policy_restriction
 from heartwood.persistence import (
     fsync_directory,
     native_file_lock,
@@ -66,7 +66,7 @@ def migrate_project_state(*, deployment: Path, workspace: Path, backup: Path) ->
                     tomllib.loads(read_private_text(source.config_path)), project=source
                 )
                 validate_policy_restriction(
-                    narrow_to_deployment(config.policy, bound.policy), bound.policy
+                    restrict_policy(config.policy, bound.policy), bound.policy
                 )
             original = _snapshot(source.state_root)
             for name in _DIRECTORIES:

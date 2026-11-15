@@ -52,7 +52,8 @@ from heartwood.gateway._model_settings import (
 from heartwood.gateway._project import ProjectContext
 from heartwood.model_policy import (
     PolicyInputError,
-    normalize_endpoint,
+    inherited_fields,
+    restrict_policy,
     validate_policy_restriction,
 )
 from heartwood.persistence import (
@@ -466,47 +467,6 @@ class ProjectConfig:
         return replace(self, model_source=source, model_settings=settings)
 
 
-# Lists a project stores only when narrower, so a later manifest change still applies.
-DEPLOYMENT_CEILING_FIELDS = (
-    "allowed_action_review_modes",
-    "allowed_credential_backends",
-    "allowed_checkpoint_signer_profiles",
-    "allowed_data_destinations",
-)
-
-
-def narrow_to_deployment(policy: PolicyProfile, deployment: PolicyProfile) -> PolicyProfile:
-    """Return the project policy limited to what the operator's manifest permits now.
-
-    The manifest bounds a project at every start and after a narrowing change, so stored
-    project lists keep only entries the manifest still lists, never more.
-    """
-    update: dict[str, object] = {}
-    for name in ("allowed_model_endpoints", "allowed_model_catalog_endpoints"):
-        permitted = {normalize_endpoint(value) for value in getattr(deployment, name)}
-        update[name] = tuple(
-            value for value in getattr(policy, name) if normalize_endpoint(value) in permitted
-        )
-    for name in ("allowed_capability_tiers", "credential_allowlist", *DEPLOYMENT_CEILING_FIELDS):
-        permitted, selected = getattr(deployment, name), getattr(policy, name)
-        if permitted is None:
-            continue
-        both = tuple(item for item in permitted if selected is None or item in selected)
-        # An empty review intersection falls back to the mode every path can apply. A project
-        # destination list the manifest no longer overlaps stays as stored, so validation
-        # refuses the project instead of widening its list.
-        if name == "allowed_action_review_modes":
-            update[name] = both or ("review-all",)
-        elif name == "allowed_data_destinations":
-            update[name] = both or selected
-        else:
-            update[name] = both
-    update["aggregate_count_floor"] = max(
-        policy.aggregate_count_floor, deployment.aggregate_count_floor
-    )
-    return policy.model_copy(update=update)
-
-
 class ProjectConfigStore:
     """Atomically load and persist one project configuration."""
 
@@ -561,9 +521,7 @@ class ProjectConfigStore:
             raise ProjectConfigError(f"unable to load .heartwood/config.toml: {error}") from error
         config = project_config_from_mapping(value, project=self.project)
         if self._deployment_policy is not None:
-            config = replace(
-                config, policy=narrow_to_deployment(config.policy, self._deployment_policy)
-            )
+            config = replace(config, policy=restrict_policy(config.policy, self._deployment_policy))
         self._validate_config(config)
         return config
 
@@ -609,9 +567,8 @@ class ProjectConfigStore:
         policy = payload["policy"]
         if self._deployment_policy is not None and isinstance(policy, dict):
             # Only a narrower project list is stored, so a later manifest change still applies.
-            for name in DEPLOYMENT_CEILING_FIELDS:
-                if getattr(config.policy, name) == getattr(self._deployment_policy, name):
-                    policy.pop(name, None)
+            for name in inherited_fields(config.policy, self._deployment_policy):
+                policy.pop(name, None)
         contents = tomli_w.dumps(payload)
         try:
             tomllib.loads(contents)

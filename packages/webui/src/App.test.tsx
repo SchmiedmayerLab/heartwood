@@ -1340,6 +1340,12 @@ describe("App", () => {
     expect(
       within(project).getByText("Isolated worker: required"),
     ).toBeInTheDocument();
+    expect(
+      within(project).getByText("Aggregate count floor: 20"),
+    ).toBeInTheDocument();
+    expect(
+      within(project).getByText("Unlisted egress denied: Yes"),
+    ).toBeInTheDocument();
   });
 
   it("opens first-run setup and configures a shared research model source", async () => {
@@ -4333,6 +4339,7 @@ const projectReadiness = (
     manifest_sha256: null,
     policy_id: "generic-default",
     platform_id: "generic",
+    deny_egress_by_default: true,
     action_review_modes: ["review-all", "review-changes"],
     model_endpoints: ["http://127.0.0.1:8765/v1/chat/completions"],
     model_catalog_endpoints: ["http://127.0.0.1:8765/v1/models"],
@@ -4340,6 +4347,7 @@ const projectReadiness = (
     credential_references: [],
     credential_backends: ["process", "keyring", "mounted-file"],
     checkpoint_signer_profiles: null,
+    aggregate_count_floor: 20,
     isolated_worker: "not-configured",
     checkpoint_evidence: "not-configured",
     change_refused: null,
