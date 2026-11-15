@@ -1,0 +1,130 @@
+{
+  "events": [
+    {
+      "event_id": "event-0",
+      "kind": "agent.lifecycle.updated",
+      "occurred_at": "2026-01-01T00:00:00+00:00",
+      "payload": {
+        "status": "running"
+      },
+      "sequence": 0,
+      "session_id": "synthetic-session"
+    },
+    {
+      "event_id": "event-1",
+      "kind": "command.received",
+      "occurred_at": "2026-01-01T00:00:00+00:00",
+      "payload": {
+        "actor_id": "researcher",
+        "command_id": "command-pause-0",
+        "command_kind": "pause"
+      },
+      "sequence": 1,
+      "session_id": "synthetic-session"
+    },
+    {
+      "event_id": "event-2",
+      "kind": "session.paused",
+      "occurred_at": "2026-01-01T00:00:00+00:00",
+      "payload": {
+        "command_id": "command-pause-0"
+      },
+      "sequence": 2,
+      "session_id": "synthetic-session"
+    },
+    {
+      "event_id": "event-3",
+      "kind": "tool_call.proposed",
+      "occurred_at": "2026-01-01T00:00:00+00:00",
+      "payload": {
+        "tool_call_id": "call-1",
+        "tool_name": "terminal"
+      },
+      "sequence": 3,
+      "session_id": "synthetic-session"
+    },
+    {
+      "event_id": "event-4",
+      "kind": "confirmation.requested",
+      "occurred_at": "2026-01-01T00:00:00+00:00",
+      "payload": {
+        "request": {
+          "arguments": {
+            "command": "ls"
+          },
+          "group_id": "group-1",
+          "request_id": "call-1-confirm",
+          "risk": "medium",
+          "session_id": "synthetic-session",
+          "summary": "Run terminal",
+          "tool_call_id": "call-1",
+          "tool_name": "terminal"
+        }
+      },
+      "sequence": 4,
+      "session_id": "synthetic-session"
+    },
+    {
+      "event_id": "event-5",
+      "kind": "command.received",
+      "occurred_at": "2026-01-01T00:00:00+00:00",
+      "payload": {
+        "actor_id": "researcher",
+        "command_id": "command-deny-0",
+        "command_kind": "deny"
+      },
+      "sequence": 5,
+      "session_id": "synthetic-session"
+    },
+    {
+      "event_id": "event-6",
+      "kind": "approval.recorded",
+      "occurred_at": "2026-01-01T00:00:00+00:00",
+      "payload": {
+        "decision": "denied",
+        "group_id": "group-1",
+        "tool_call_ids": [
+          "call-1"
+        ]
+      },
+      "sequence": 6,
+      "session_id": "synthetic-session"
+    },
+    {
+      "event_id": "event-7",
+      "kind": "confirmation.resolved",
+      "occurred_at": "2026-01-01T00:00:00+00:00",
+      "payload": {
+        "decision": "denied",
+        "group_id": "group-1",
+        "tool_call_id": "call-1"
+      },
+      "sequence": 7,
+      "session_id": "synthetic-session"
+    }
+  ],
+  "expected": {
+    "projection": {
+      "lifecycle": {
+        "status": "paused",
+        "can_pause": false,
+        "can_resume": true,
+        "can_steer": true
+      },
+      "paused": true,
+      "researcher_status": "paused",
+      "available_commands": [
+        "chat",
+        "resume"
+      ],
+      "pending_approval": null
+    },
+    "service": {
+      "status": "idle",
+      "paused": true,
+      "fatal": false,
+      "open_reviews": [],
+      "retained_approvals": []
+    }
+  }
+}

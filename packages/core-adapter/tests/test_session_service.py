@@ -2258,6 +2258,47 @@ def test_a_turn_refused_by_platform_policy_leaves_the_pause_in_effect(tmp_path: 
     service.close()
 
 
+def test_a_turn_refused_after_a_policy_change_leaves_the_pause_in_effect(
+    tmp_path: Path,
+) -> None:
+    endpoint = "https://public.example.invalid/v1/chat/completions"
+
+    def service_under(*allowed: str) -> SessionService:
+        return SessionService.local_default(
+            tmp_path,
+            backend=_RecordingBackend(endpoint=endpoint),
+            policy_profile=PolicyProfile(
+                policy_id="site-policy",
+                platform_id="generic",
+                deny_egress_by_default=True,
+                allowed_model_endpoints=allowed,
+                credential_allowlist=(),
+            ),
+            clock=lambda: "2026-01-01T00:00:00Z",
+        )
+
+    first = service_under(endpoint)
+    first.handle(
+        _command(CommandKind.CHAT, prompt="Start").model_copy(update={"session_id": "session-main"})
+    )
+    first.handle(_command(CommandKind.PAUSE).model_copy(update={"session_id": "session-main"}))
+    first.close()
+    # The narrower policy is recorded as a governing change before the refused route.
+    second = service_under()
+    second.handle(
+        _command(CommandKind.CHAT, command_id="command-continue", prompt="Continue").model_copy(
+            update={"session_id": "session-main"}
+        )
+    )
+
+    events = second.replay_events()
+    assert EventKind.POLICY_DECISION_RECORDED in {event.kind for event in events}
+    activity = session_activity(events)
+    assert activity.paused
+    assert activity.status == "paused"
+    second.close()
+
+
 def test_approved_action_rechecks_route_before_backend_continuation(tmp_path: Path) -> None:
     pending = ProposedToolCall(
         tool_call_id="session-main-action",

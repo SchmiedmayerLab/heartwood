@@ -1,0 +1,128 @@
+{
+  "events": [
+    {
+      "event_id": "event-0",
+      "kind": "agent.lifecycle.updated",
+      "occurred_at": "2026-01-01T00:00:00+00:00",
+      "payload": {
+        "status": "running"
+      },
+      "sequence": 0,
+      "session_id": "synthetic-session"
+    },
+    {
+      "event_id": "event-1",
+      "kind": "command.received",
+      "occurred_at": "2026-01-01T00:00:00+00:00",
+      "payload": {
+        "actor_id": "researcher",
+        "command_id": "command-pause-0",
+        "command_kind": "pause"
+      },
+      "sequence": 1,
+      "session_id": "synthetic-session"
+    },
+    {
+      "event_id": "event-2",
+      "kind": "session.paused",
+      "occurred_at": "2026-01-01T00:00:00+00:00",
+      "payload": {
+        "command_id": "command-pause-0"
+      },
+      "sequence": 2,
+      "session_id": "synthetic-session"
+    },
+    {
+      "event_id": "event-3",
+      "kind": "command.received",
+      "occurred_at": "2026-01-01T00:00:00+00:00",
+      "payload": {
+        "actor_id": "researcher",
+        "command_id": "command-chat-0",
+        "command_kind": "chat"
+      },
+      "sequence": 3,
+      "session_id": "synthetic-session"
+    },
+    {
+      "event_id": "event-4",
+      "kind": "user_message.recorded",
+      "occurred_at": "2026-01-01T00:00:00+00:00",
+      "payload": {
+        "actor_id": "researcher",
+        "command_id": "command-chat-0",
+        "content": "Continue"
+      },
+      "sequence": 4,
+      "session_id": "synthetic-session"
+    },
+    {
+      "event_id": "event-5",
+      "kind": "policy.decision.recorded",
+      "occurred_at": "2026-01-01T00:00:00+00:00",
+      "payload": {
+        "action_review_mode": "review-all",
+        "change": "governing-settings",
+        "policy_profile_id": "synthetic-policy",
+        "policy_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "previous_action_review_mode": "review-all",
+        "previous_policy_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      },
+      "sequence": 5,
+      "session_id": "synthetic-session"
+    },
+    {
+      "event_id": "event-6",
+      "kind": "model_call.decision.recorded",
+      "occurred_at": "2026-01-01T00:00:00+00:00",
+      "payload": {
+        "decision": {
+          "capability_tier": "supervised",
+          "decision": "deny",
+          "decision_id": "command-chat-0-model-route",
+          "endpoint": "https://model.example.invalid/v1/chat/completions",
+          "policy_profile_id": "synthetic-policy",
+          "reason": "endpoint is not allowlisted for agent turn",
+          "schema_version": "heartwood.model-call-decision.v1"
+        }
+      },
+      "sequence": 6,
+      "session_id": "synthetic-session"
+    },
+    {
+      "event_id": "event-7",
+      "kind": "error.recorded",
+      "occurred_at": "2026-01-01T00:00:00+00:00",
+      "payload": {
+        "command": "chat",
+        "reason": "active model profile is denied by platform policy"
+      },
+      "sequence": 7,
+      "session_id": "synthetic-session"
+    }
+  ],
+  "expected": {
+    "projection": {
+      "lifecycle": {
+        "status": "paused",
+        "can_pause": false,
+        "can_resume": true,
+        "can_steer": true
+      },
+      "paused": true,
+      "researcher_status": "paused",
+      "available_commands": [
+        "chat",
+        "resume"
+      ],
+      "pending_approval": null
+    },
+    "service": {
+      "status": "paused",
+      "paused": true,
+      "fatal": false,
+      "open_reviews": [],
+      "retained_approvals": []
+    }
+  }
+}

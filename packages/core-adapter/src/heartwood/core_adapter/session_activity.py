@@ -170,8 +170,9 @@ class SessionActivityReducer:
         """End the pause at the first record that the service accepted the command.
 
         The service records a refusal as an error before any effect: after the prompt,
-        and after a model-route decision that did not allow the turn. A workflow command is
-        accepted as continuing the agent only at an allowed model route.
+        after a change of the governing policy or review mode, and after a model-route
+        decision that did not allow the turn. A workflow command is accepted as continuing
+        the agent only at an allowed model route.
         """
         if kind in {EventKind.ERROR_RECORDED.value, EventKind.COMMAND_RECEIVED.value}:
             self.continuing = None
@@ -185,7 +186,11 @@ class SessionActivityReducer:
         if not allowed and (
             self.continuing == CommandKind.WORKFLOW.value
             or kind
-            in {EventKind.USER_MESSAGE_RECORDED.value, EventKind.MODEL_CALL_DECISION_RECORDED.value}
+            in {
+                EventKind.USER_MESSAGE_RECORDED.value,
+                EventKind.POLICY_DECISION_RECORDED.value,
+                EventKind.MODEL_CALL_DECISION_RECORDED.value,
+            }
         ):
             return
         self.continuing = None
