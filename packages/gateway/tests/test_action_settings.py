@@ -287,3 +287,67 @@ def test_an_unclassified_action_waits_for_the_researcher_in_every_selectable_mod
         assert all(action.automatic_rule is None for action in projection.pending_approval.actions)
     finally:
         gateway.stop()
+
+
+def test_the_manifest_ceiling_replaces_any_list_kept_in_project_state(tmp_path: Path) -> None:
+    """A migrated or edited project policy neither narrows nor widens the operator's ceiling."""
+    gateway = _managed_gateway(tmp_path, workers=True)
+    project = gateway.project
+    gateway.config_store.save(gateway.config_store.load())
+    stored = project.config_path.read_text()
+    listed = '"review-all",\n    "review-changes",\n    "review-outside-effects",\n'
+    assert listed in stored
+
+    project.config_path.write_text(stored.replace(listed, '"review-all",\n'))
+    migrated = SessionGateway(
+        project=project,
+        env={},
+        deployment_policy=_policy(),
+        worker_plan_factory=_unused_worker_plan,
+    )
+    assert all(_modes(migrated).values())
+    assert migrated.action_settings()["review_mode"] == "review-outside-effects"
+
+    project.config_path.write_text(stored)
+    narrowed = SessionGateway(
+        project=project,
+        env={},
+        deployment_policy=_policy("review-all"),
+        worker_plan_factory=_unused_worker_plan,
+    )
+    assert _modes(narrowed) == {
+        "review-all": True,
+        "review-changes": False,
+        "review-outside-effects": False,
+    }
+    assert narrowed.action_settings()["review_mode"] == "review-all"
+
+
+def test_a_stored_selection_the_manifest_no_longer_permits_stops_the_project(
+    tmp_path: Path,
+) -> None:
+    gateway = _managed_gateway(tmp_path)
+    gateway.select_action_review_mode("review-changes")
+
+    with pytest.raises(ProjectConfigError):
+        SessionGateway(
+            project=gateway.project, env={}, deployment_policy=_policy("review-all")
+        ).config_store.load()
+
+
+def test_a_launch_selection_obeys_every_limit_and_leaves_the_project_untouched(
+    tmp_path: Path,
+) -> None:
+    project = ProjectContext(tmp_path)
+    gateway = SessionGateway(project=project, env={}, backend_id="deterministic")
+    try:
+        assert gateway.select_action_review_mode("review-changes")["review_mode"] == (
+            "review-changes"
+        )
+        assert not project.state_root.exists()
+        assert gateway._service("session-main").action_review_mode() == "review-changes"
+        with pytest.raises(ActionSettingsError):
+            gateway.select_action_review_mode("review-outside-effects")
+        assert gateway.action_settings()["review_mode"] == "review-changes"
+    finally:
+        gateway.stop()

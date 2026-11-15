@@ -27,7 +27,8 @@ platform_id = "generic"
 allowed_action_review_modes = ["review-all", "review-changes"]
 ```
 
-The project policy must be a subset of the manifest policy, and a stored selection must be in the project policy; either violation stops the gateway from loading the project.
+The gateway reads this ceiling from the manifest every time it loads the project, so a change to the manifest applies at the next start and stored project state never keeps an older or wider list.
+A stored selection that the manifest no longer permits stops the gateway from loading the project until the selection is reset or the manifest permits it.
 At decision time the session service applies the ceiling again, so a mode outside it resolves to `review-all`.
 `review-outside-effects` additionally requires an admitted, active worker attempt for that session and resolves to `review-all` whenever the attempt is missing, fenced, or revoked.
 A manifest without a `[worker]` section therefore never applies it.
@@ -35,12 +36,13 @@ A manifest without a `[worker]` section therefore never applies it.
 Without a manifest, the built-in workstation/container, Terra, and Carina policies permit `review-all` and `review-changes`.
 Project state is then inside the research directory, so the gateway keeps the researcher's selection in process memory and ignores any review mode in `.heartwood/config.toml`.
 A file in the research directory can narrow the permitted modes; it cannot select one or make `review-outside-effects` applicable.
+`--review-mode` on a launch or `gateway serve` command is the same selection made at start: it passes through the ceiling, worker, and credential checks, and the command stops with the reason when they refuse it.
 
 ### What Each Mode Relies On
 
 | Mode | Automatic actions are bounded by | Residual exposure |
 |---|---|---|
-| `review-changes` | The gateway resolves the viewed path inside the project before the decision, and the file editor resolves it again when the view runs. The task tracker has no workspace or network effect. | Viewed file content, including any secret stored inside the project, reaches the selected model route without a per-file decision. |
+| `review-changes` | The gateway resolves the viewed path inside the project before the decision, and the file editor resolves it again when the view runs. The task tracker has no workspace or network effect. | Viewed file content reaches the selected model route without a per-file decision. The mode is unavailable while the model credential is application-scrubbed. |
 | `review-outside-effects` | The sandbox policy, non-root identity, read-only inputs and Skills, and deny-by-default egress of the admitted worker. Command content is not inspected. | Code runs unreviewed on mounted inputs, can alter or delete the worker workspace, and can send content to the admitted model endpoint. |
 
 Review is not the security boundary for a sandboxed worker: a compromised worker does not need an approval to act inside its sandbox.
@@ -48,9 +50,9 @@ Outside operations and release of outside results stay on their separate, digest
 
 ### Failure Behavior
 
-The researcher is asked whenever the selection cannot be read, the mode is unknown or outside the ceiling, the worker attempt is not admitted, the action set is not fully journaled, an action has no rule, the fixed threat checks flag or cannot assess an action, or the session has an unresolved or unknown outcome.
+The researcher is asked whenever the selection or the credential boundary cannot be read, the model credential is not isolated from a local session's tools, the mode is unknown or outside the ceiling, the worker attempt is not admitted, the action set is not fully journaled, an action has no rule, the fixed threat checks flag or cannot assess an action, or the session has an unresolved or unknown outcome.
 The decision is computed again on the pending action set that it binds, and a set whose identity changed is not executed.
-A pending set is considered once, when its review request is journaled; a set retained across a restart or a mode change waits for the researcher.
+A pending set is considered once, when its review request is journaled; a set whose request was already journaled before a restart or a mode change waits for the researcher.
 Interrupted automatic decisions are recovered by the same rules as interrupted researcher decisions.
 
 Qualify a mode for a deployment with the action-review benchmark described in [Testing and Evidence](../architecture/testing.md), which requires zero automatic decisions on actions labelled as requiring review.
@@ -115,9 +117,9 @@ Heartwood reports one of three effective boundaries for the active model route:
 
 | Boundary | Guarantee | Action Review |
 |---|---|---|
-| Credential-free | No model credential is placed in the Heartwood process, as with an unauthenticated local model server | Unchanged by the boundary |
-| Application-scrubbed | Heartwood excludes the credential from tool inputs, project state, terminal subprocess environments, interfaces, events, logs, and audits | Unchanged by the boundary; no command runs unreviewed outside an isolated worker |
-| Platform-isolated | A separately authorized model transport keeps the credential outside the operating-system identity that runs agent tools, with live synthetic qualification for that platform | Unchanged by the boundary |
+| Credential-free | No model credential is placed in the Heartwood process, as with an unauthenticated local model server | `review-changes` may be selected |
+| Application-scrubbed | Heartwood excludes the credential from tool inputs, project state, terminal subprocess environments, interfaces, events, logs, and audits | `review-all` is required outside an isolated worker |
+| Platform-isolated | A separately authorized model transport keeps the credential outside the operating-system identity that runs agent tools, with live synthetic qualification for that platform | `review-changes` may be selected |
 
 Application scrubbing is not process isolation.
 OpenHands' local model client and coding tools run under the same Heartwood operating-system identity, so environment filtering cannot prevent every same-identity memory, process, or inherited-resource access path.
@@ -151,8 +153,9 @@ Sandboxed workers cannot use this local socket: they require an independently au
 That boundary isolates the caller from the agent workspace, but it does not by itself separate model authentication from tools running inside that agent environment.
 Heartwood uses the upstream OpenHands credential and model transports without treating a remote workspace as model-only credential isolation.
 
-Credential isolation does not select or widen action review.
-The gateway allows actions automatically only under the review modes described in [Action Review](#action-review), and a model's risk rating never authorizes execution.
+An application-scrubbed credential shares an operating-system identity with the agent tools, so a session outside an isolated worker then reviews every action: no reduced review mode can be selected or applied.
+A sandboxed worker never holds the provider credential, so `review-outside-effects` does not depend on this boundary.
+A model's risk rating never authorizes execution.
 Removing a credential from Heartwood's saved settings does not invalidate copies held by running processes or revoke the key at its issuer.
 For sandbox provider access, require acknowledged outside detachment or verified worker revocation; neither undoes requests already forwarded upstream.
 Changing the review mode never broadens model authorization.
@@ -268,7 +271,6 @@ Confirm each control before researchers add project data, and again after each u
 - keep provider secrets in a keyring, mounted secret, or managed identity;
 - keep production checkpoint keys in an independently authorized KMS/HSM-backed signer service;
 - limit `allowed_action_review_modes` to the modes qualified for the deployment, and to `review-all` where no automatic decision is acceptable;
-- keep credential files outside project directories;
 - keep the launch link and any supplied gateway capability private to the researcher who started Heartwood;
 - pin release artifacts, images, model revisions, and Skill versions;
 - for managed native execution, confirm that the deployed sandbox gateway provides the [deletion behavior that native qualification depends on](platform-requirements.md#gateway-behavior-behind-native-qualification);

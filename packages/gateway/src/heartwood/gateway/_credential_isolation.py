@@ -42,6 +42,11 @@ class CredentialIsolation:
         """Return the interface-safe isolation assessment."""
         return asdict(self)
 
+    @property
+    def unattended_actions_allowed(self) -> bool:
+        """Return whether actions may run unreviewed beside this model credential."""
+        return self.status != "review-required"
+
 
 def assess_credential_isolation(
     profile: ModelProfile | None,

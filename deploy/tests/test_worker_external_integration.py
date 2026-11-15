@@ -23,6 +23,7 @@ from deploy.tests.external_service_fixture import (
     records_client,
     serve_records,
 )
+from heartwood.core_adapter.action_review import REVIEW_MODES
 from heartwood.core_adapter.external_actions import ExternalActionRecord, external_action_records
 from heartwood.gateway._openhands_sdk import OpenHandsSdkBackend
 from heartwood.session import CommandKind, EventKind, SessionCommand
@@ -166,6 +167,173 @@ def test_native_outside_effect_requires_retained_authorization(
                         "retained_checkpoints": len(evidence.records.history()),
                         "native_proposal_admitted": True,
                         "replayed_approval_resubmitted": False,
+                        "sensitive_data_ready": False,
+                    },
+                    indent=2,
+                )
+                + "\n"
+            )
+        finally:
+            _stop(application)
+
+
+def test_native_contained_action_is_automatic_and_outside_effect_waits(
+    infrastructure: NativeFixture,
+) -> None:
+    """Under the sandbox default the gateway allows in-worker actions and nothing that leaves."""
+    fixture = infrastructure
+    records = SyntheticRecords(fixture.private)
+    spec = ClientToolSpec(
+        name="propose_record",
+        description="Propose a synthetic record for outside review without storing it.",
+        parameters={
+            "type": "object",
+            "properties": {"record": {"type": "string", "enum": ["synthetic-result"]}},
+            "required": ["record"],
+            "additionalProperties": False,
+        },
+    )
+    terminal = "printf contained > /workspace/contained.txt"
+    fixture.provider.script = [
+        ("terminal", {"command": terminal}),
+        ("propose_record", {"record": "synthetic-result"}),
+        ("finish", {"message": "Synthetic proposal dispatched; no external effect is implied."}),
+    ]
+    adapter: RecordsAdapter | None = None
+
+    def outside_adapter(_session_id: str) -> RecordsAdapter:
+        assert adapter is not None
+        return adapter
+
+    application = _application(
+        fixture,
+        retain_checkpoints=True,
+        external_actions_factory=outside_adapter,
+        client_tools=(spec,),
+        action_review_modes=REVIEW_MODES,
+    )
+    assert application.project.project_id is not None
+    assert application.action_settings()["review_mode"] == "review-outside-effects"
+    token = records.token(application.project.project_id)
+    fixture.provider.forbidden_values += (token,)
+    with serve_records(records) as url, records_client(url, token) as client:
+        adapter = RecordsAdapter(client)
+        service = application._service("composition")
+        try:
+            _submit(
+                application,
+                CommandKind.CHAT,
+                {"prompt": "Write the contained marker, then propose the synthetic result."},
+            )
+            backend = service.backend
+            assert isinstance(backend, OpenHandsSdkBackend)
+            # No researcher command is sent: only the gateway can have let the command run.
+            deadline = time.monotonic() + 180
+            while time.monotonic() < deadline:
+                service.reconcile()
+                proposals = [
+                    event
+                    for event in service.replay_events()
+                    if event.kind == EventKind.TOOL_CALL_PROPOSED
+                    and event.payload.get("tool_name") == "propose_record"
+                ]
+                if proposals and backend.wait_for_idle(0):
+                    break
+                time.sleep(0.1)
+            else:
+                raise AssertionError("Native worker did not reach the outside proposal")
+            assert len(proposals) == 1
+            assert len(fixture.provider.observations) == 2
+            attempt = service.worker_attempt()
+            assert attempt is not None
+            assert attempt.phase == "active"
+            assert service.action_review_mode() == "review-outside-effects"
+
+            events = service.replay_events()
+            (contained,) = [
+                event
+                for event in events
+                if event.kind == EventKind.TOOL_CALL_PROPOSED
+                and event.payload.get("tool_name") == "terminal"
+            ]
+            assert contained.payload["arguments"] == {"command": terminal}
+            assert contained.payload["review_class"] == "workspace"
+            assert proposals[0].payload["review_class"] == "other"
+            (approval,) = [event for event in events if event.kind == EventKind.APPROVAL_RECORDED]
+            assert approval.payload["actor_id"] == "gateway"
+            assert approval.payload["decision"] == "approved"
+            assert approval.payload["review"] == {
+                "mode": "review-outside-effects",
+                "rule": "sandbox.contained",
+            }
+            assert approval.payload["tool_call_ids"] == [contained.payload["tool_call_id"]]
+            assert approval.payload["worker_attempt_id"] == str(attempt.intent.attempt_id)
+            assert approval.payload["evidence_mode"] == "required"
+            assert [
+                event.payload["actor_id"]
+                for event in events
+                if event.kind == EventKind.COMMAND_RECEIVED
+                and event.payload.get("command_kind") == CommandKind.APPROVE.value
+            ] == ["gateway"]
+            executed = [
+                event.payload["tool_call_id"]
+                for event in events
+                if event.kind == EventKind.TOOL_EXECUTION_RECORDED
+            ]
+            assert executed == [contained.payload["tool_call_id"]]
+            observation = fixture.control.exec(
+                f"hw-{attempt.intent.attempt_id.hex[:16]}",
+                ["/usr/bin/test", "-s", "/workspace/contained.txt"],
+                workspace="default",
+                timeout_seconds=15,
+                no_login_shell=True,
+            )
+            assert observation.exit_code == 0, observation.stderr
+            assert fixture.evidence is not None
+            evidence = fixture.evidence("composition")
+            assert evidence.records.history()
+
+            # The action that leaves the worker waits, on its own digest-bound review.
+            pending = backend.pending_action_group(session_id="composition")
+            assert pending is not None
+            assert [action.tool_name for action in pending.actions] == ["propose_record"]
+            records.active = attempt.intent
+            outside = service.propose_external_action(proposals[0].event_id)
+            record = ExternalActionRecord.model_validate(outside.payload["record"])
+            assert record.phase == "proposed"
+            for _ in range(20):
+                service.reconcile()
+                time.sleep(0.1)
+            events = service.replay_events()
+            assert len([e for e in events if e.kind == EventKind.APPROVAL_RECORDED]) == 1
+            retained = external_action_records(events)[record.proposal.operation_id]
+            assert retained.phase == "proposed"
+            assert retained.decision is None
+            assert records.effects() == records.submit_calls == 0
+            assert len(fixture.provider.observations) == 2
+            assert token not in str(events)
+            assert token not in str(service.audit_log.read())
+            service.audit_log.verify()
+            worker_id = str(attempt.intent.attempt_id)
+            _stop(application)
+            # Ending the session never dispatches the operation the researcher did not decide.
+            assert records.effects() == records.submit_calls == 0
+            (fixture.output / "evidence.json").write_text(
+                json.dumps(
+                    {
+                        "drill_id": "native-contained-review.v1",
+                        "review_mode": "review-outside-effects",
+                        "worker_attempt_id": worker_id,
+                        "worker_image": fixture.worker,
+                        "automatic_actor": approval.payload["actor_id"],
+                        "automatic_rule": "sandbox.contained",
+                        "automatic_group_id": approval.payload["group_id"],
+                        "contained_effect_present": True,
+                        "operation_id": str(record.proposal.operation_id),
+                        "proposal_sha256": record.proposal.sha256,
+                        "outside_decision_recorded": False,
+                        "effect_count": records.effects(),
+                        "submission_calls": records.submit_calls,
                         "sensitive_data_ready": False,
                     },
                     indent=2,

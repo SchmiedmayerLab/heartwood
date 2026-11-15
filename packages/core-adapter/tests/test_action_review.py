@@ -332,7 +332,16 @@ def test_selection_is_clamped_to_the_ceiling_and_the_execution_boundary(
     sandboxed: bool,
     effective: ActionReviewMode,
 ) -> None:
-    assert effective_review_mode(selected, allowed=allowed, sandboxed=sandboxed) == effective
+    assert (
+        effective_review_mode(
+            selected, allowed=allowed, sandboxed=sandboxed, credentials_isolated=True
+        )
+        == effective
+    )
+    gated = effective_review_mode(
+        selected, allowed=allowed, sandboxed=sandboxed, credentials_isolated=False
+    )
+    assert gated == (effective if sandboxed else "review-all")
 
 
 def test_only_a_stricter_or_equal_mode_counts_as_tightening() -> None:
@@ -595,6 +604,60 @@ def test_loosening_or_restarting_never_decides_an_already_requested_group(
     assert _approvals(restarted) == []
     assert _pending(restarted) == ("read-1",)
     restarted.close()
+
+
+def test_a_request_first_journaled_by_a_status_read_is_still_decided(tmp_path: Path) -> None:
+    """Reconciliation can win the race against the backend's settle callback."""
+
+    class _Reconciled(_ScriptedBackend):
+        def reconcile(
+            self, *, session_id: str, known_source_event_ids: frozenset[str]
+        ) -> tuple[BackendEvent, ...]:
+            del session_id, known_source_event_ids
+            return self._propose() if not self._group else ()
+
+    backend = _Reconciled((_action("read-1", "read"),), (_action("run-1", "workspace"),))
+    service = _service(tmp_path, backend, mode="review-changes")
+
+    service.reconcile()
+
+    assert backend.executed == ["read-1"]
+    assert _pending(service) == ("run-1",)
+    service.reconcile()
+    assert backend.executed == ["read-1"]
+    service.close()
+
+
+@pytest.mark.parametrize("isolated", [True, False, None])
+def test_a_local_session_beside_an_unisolated_credential_reviews_every_action(
+    tmp_path: Path, isolated: bool | None
+) -> None:
+    def credentials_isolated() -> bool:
+        if isolated is None:
+            raise OSError("model settings are unavailable")
+        return isolated
+
+    backend = _ScriptedBackend((_action("read-1", "read"),))
+    service = _service(tmp_path, backend, mode="review-changes")
+    service._credentials_isolated = credentials_isolated
+
+    _chat(service)
+
+    assert backend.executed == (["read-1"] if isolated else [])
+    assert service.action_review_mode() == ("review-changes" if isolated else "review-all")
+    service.close()
+
+
+def test_the_credential_gate_does_not_apply_inside_an_admitted_sandbox(tmp_path: Path) -> None:
+    backend = _ScriptedBackend((_action("run-1", "workspace"),))
+    service = _service(tmp_path, backend, sandboxed=True)
+    service._credentials_isolated = lambda: False
+
+    _chat(service)
+
+    assert backend.executed == ["run-1"]
+    assert service.action_review_mode() == "review-outside-effects"
+    service.close()
 
 
 def test_tightening_applies_to_the_next_action_group(tmp_path: Path) -> None:

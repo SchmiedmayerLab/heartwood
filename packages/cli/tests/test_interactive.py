@@ -23,6 +23,7 @@ from heartwood.cli._interactive import (
     InteractionResult,
     InteractiveSession,
     format_action_record_lines,
+    format_action_settings,
     format_projection_lines,
     interaction_activity,
 )
@@ -1367,6 +1368,26 @@ def test_terminal_presentation_uses_researcher_facing_labels() -> None:
     assert _unavailable_mode_summary((unavailable_mode,)) == (
         "Review Outside Effects unavailable: Requires an isolated worker."
     )
+
+
+def test_terminal_shows_why_a_review_mode_is_unavailable() -> None:
+    settings = _test_action_settings()
+    settings["modes"].append(
+        {
+            "allowed": False,
+            "automatic": ["read.file-view"],
+            "description": "Heartwood allows viewing project files.",
+            "label": "Review Changes",
+            "mode": "review-changes",
+            "unavailable_reason": "synthetic credential boundary reason",
+        }
+    )
+
+    rendered = format_action_settings(settings)
+
+    assert "Review Changes (unavailable)" in rendered
+    assert "synthetic credential boundary reason" in rendered
+    assert "/permissions review-changes" not in rendered
 
 
 def test_textual_terminal_offers_only_modes_the_launch_can_apply(

@@ -151,6 +151,7 @@ class SessionService:
         external_actions: ExternalActionAdapter | None = None,
         checkpoint_evidence: SessionCheckpointEvidence | None = None,
         action_review_mode: Callable[[], str | None] | None = None,
+        credentials_isolated: Callable[[], bool] | None = None,
     ) -> None:
         self.store = store
         self.audit_log = AuditLog(store.audit_path)
@@ -173,6 +174,7 @@ class SessionService:
         self._external_actions = external_actions
         self._checkpoint_evidence = checkpoint_evidence
         self._selected_review_mode = action_review_mode
+        self._credentials_isolated = credentials_isolated
         self._worker_project_id = worker_project_id
         self._worker_lease: WorkerAttemptLease | None = None
         self._worker_attempt_created = False
@@ -224,6 +226,7 @@ class SessionService:
         external_actions: ExternalActionAdapter | None = None,
         checkpoint_evidence: SessionCheckpointEvidence | None = None,
         action_review_mode: Callable[[], str | None] | None = None,
+        credentials_isolated: Callable[[], bool] | None = None,
     ) -> SessionService:
         """Build a local service with an explicitly supplied or deterministic backend."""
         active_env = os.environ if env is None else env
@@ -249,6 +252,7 @@ class SessionService:
             external_actions=external_actions,
             checkpoint_evidence=checkpoint_evidence,
             action_review_mode=action_review_mode,
+            credentials_isolated=credentials_isolated,
         )
 
     def handle(
@@ -359,7 +363,7 @@ class SessionService:
                 CommandKind.REPLAY.value,
                 CommandKind.AUDIT_EXPORT.value,
             }:
-                automatic = self._review_automatically_locked(result.events)
+                automatic = self._review_automatically_locked((*reconciled, *result.events))
                 if automatic:
                     self._event_sink(automatic)
             return result
@@ -372,7 +376,8 @@ class SessionService:
         Every decision is an accepted command with its own receipt, so it is journaled,
         checkpointed, bound to the group digest and recovered exactly like a researcher
         decision. Only a request journaled by the current operation is considered, and
-        only once, so a group retained across a restart waits for the researcher.
+        only once, so a group that was already requested before a restart or a mode
+        change waits for the researcher.
         """
         emitted: list[SessionEvent] = []
         while not self.store.unresolved_command_ids() and any(
@@ -453,12 +458,14 @@ class SessionService:
         """Return the mode in force; an unreadable selection reviews every action."""
         try:
             selected = None if self._selected_review_mode is None else self._selected_review_mode()
+            isolated = self._credentials_isolated is None or self._credentials_isolated()
         except Exception:
             return "review-all"
         return effective_review_mode(
             selected,
             allowed=self.policy_profile.allowed_action_review_modes,
             sandboxed=sandboxed,
+            credentials_isolated=isolated,
         )
 
     @staticmethod
@@ -576,6 +583,8 @@ class SessionService:
                     *self._reconcile_locked(),
                     *self._recover_approval_commands_locked(),
                 )
+                # A status read can journal a request before the backend's own callback does.
+                events = (*events, *self._review_automatically_locked(events))
         if events:
             self._event_sink(events)
         return events

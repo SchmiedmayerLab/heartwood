@@ -23,7 +23,8 @@ Model-written summaries and risk ratings never influence whether you are asked.
 | `review-outside-effects` · **Review Outside Effects** | Terminal commands, file operations, and plan updates that run inside the isolated worker | Anything that leaves the worker, specialist tasks, flagged actions, and anything else |
 
 **Review Every Action** is the default when a session runs on your own machine without an isolated worker.
-**Review Changes** is available there as an opt-in.
+**Review Changes** is available there as an opt-in when the selected model route is credential-free or platform-isolated.
+With any other model credential, a session outside an isolated worker reviews every action, and each interface lists **Review Changes** as unavailable with that reason.
 **Review Outside Effects** is the default when sessions run in an isolated worker, and it cannot be selected or applied anywhere else.
 
 Each automatic decision applies one named rule to the complete action set.
@@ -62,6 +63,14 @@ heartwood actions set review-changes
 
 Without a deployment manifest, project state is inside the research directory, so Heartwood never stores or reads a review mode there.
 A selection made in the terminal or browser lasts until that Heartwood process exits, and the next launch starts with **Review Every Action**.
+To select a mode when starting, pass `--review-mode`:
+
+```bash
+heartwood --review-mode review-changes
+```
+
+The flag is the same selection made at start, so the deployment ceiling, the isolated-worker requirement, and the credential check still apply.
+Heartwood stops with the reason instead of starting in a different mode when they do not permit the value.
 
 A stricter mode can be selected at any time and applies to the next action set.
 A looser mode can be selected only while no session is running, paused, or waiting for review.

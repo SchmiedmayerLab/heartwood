@@ -454,8 +454,8 @@ An application-scrubbed route excludes provider material from supported tool inp
 A platform-isolated route requires a separately authorized model transport plus live synthetic qualification.
 
 The classification is part of the shared model-settings and readiness projections.
-The classification is informational for action review: review modes depend on the typed action, the policy ceiling, and worker admission, not on the credential boundary.
-Terminal, browser, and notebook clients render the classification rather than implementing credential rules.
+The gateway passes the classification to the session service, which reviews every action in a session outside an isolated worker while the route is application-scrubbed.
+Terminal, browser, and notebook clients render that decision and its reason rather than implementing credential rules.
 
 OpenHands Agent Server and RemoteWorkspace are retained as upstream deployment options, but they place the model client and tools in the same remote agent environment.
 They are not treated as model-only isolation without an additional platform boundary.

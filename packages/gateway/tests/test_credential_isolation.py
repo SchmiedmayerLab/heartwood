@@ -183,7 +183,7 @@ def test_platform_isolation_requires_the_exact_managed_identity_profile() -> Non
     )
 
 
-def test_secret_backed_model_reports_scrubbing_without_widening_review(
+def test_secret_backed_model_requires_complete_review_across_interfaces(
     tmp_path: Path,
 ) -> None:
     project = _configured_project(tmp_path, profile=_hosted_profile())
@@ -202,9 +202,10 @@ def test_secret_backed_model_reports_scrubbing_without_widening_review(
         assert isolation["status"] == "review-required"
         assert isolation["boundary"] == "application-scrubbed"
         assert action_settings["review_mode"] == "review-all"
-        assert not next(
-            mode for mode in action_settings["modes"] if mode["mode"] == "review-outside-effects"
-        )["allowed"]
+        reduced = [mode for mode in action_settings["modes"] if mode["mode"] != "review-all"]
+        assert [mode["allowed"] for mode in reduced] == [False, False]
+        assert all(mode["unavailable_reason"] for mode in reduced)
+        assert notebook.action_settings() == action_settings
         isolation_check = next(
             check for check in readiness.checks if check.check_id == "credential-isolation"
         )
@@ -212,8 +213,10 @@ def test_secret_backed_model_reports_scrubbing_without_widening_review(
         assert isolation_check.status == "warning"
         assert validation["credential_isolation"] == isolation
 
-        with pytest.raises(ActionSettingsError):
-            gateway.select_action_review_mode("review-outside-effects")
+        for mode in ("review-changes", "review-outside-effects"):
+            with pytest.raises(ActionSettingsError):
+                gateway.select_action_review_mode(mode)
+        assert gateway.action_settings()["review_mode"] == "review-all"
 
         exposed = json.dumps(
             {
@@ -225,6 +228,30 @@ def test_secret_backed_model_reports_scrubbing_without_widening_review(
         )
         assert _SECRET not in exposed
         assert _SECRET not in project.config_path.read_text(encoding="utf-8")
+    finally:
+        gateway.stop()
+
+
+def test_reduced_review_follows_the_active_credential_boundary(tmp_path: Path) -> None:
+    project = _configured_project(tmp_path, profile=_local_profile())
+    gateway = SessionGateway(
+        project=project, env={"OPENAI_API_KEY": _SECRET}, backend_id="deterministic"
+    )
+    try:
+        assert gateway.select_action_review_mode("review-changes")["review_mode"] == (
+            "review-changes"
+        )
+        service = gateway._service("session-main")
+        assert service.action_review_mode() == "review-changes"
+
+        gateway._save_model_selection(
+            "openai",
+            ModelSettings(profiles=(_local_profile(), _hosted_profile()), active_profile="openai"),
+        )
+
+        # The earlier selection is not applied beside a credential the tools could reach.
+        assert gateway.action_settings()["review_mode"] == "review-all"
+        assert service.action_review_mode() == "review-all"
     finally:
         gateway.stop()
 

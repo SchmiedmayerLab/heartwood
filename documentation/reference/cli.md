@@ -38,7 +38,17 @@ heartwood [--session-id ID] [--interface terminal|web] [--plain] [--prompt TEXT]
 | `heartwood actions set review-outside-effects` | Actions inside the isolated worker run without asking; you decide on anything that leaves it |
 
 `heartwood actions set` stores the mode in protected project state and requires a deployment manifest.
-Without one, select the mode in a running terminal or browser interface; it applies until that process exits.
+Without one, select the mode in a running terminal or browser interface, or start with `--review-mode`; it applies until that process exits.
+
+| Option | Purpose |
+|---|---|
+| `heartwood --review-mode MODE` | Start the terminal or browser interface with this review mode selected |
+| `heartwood --review-mode MODE runtime start` | Carry the selection to the interface started after the model runtime |
+| `heartwood gateway serve --review-mode MODE` | Serve the gateway with this review mode selected; with `--deployment` it is stored like any other selection |
+
+`--review-mode` accepts `review-all`, `review-changes`, or `review-outside-effects` and is never read from or written to the research directory.
+The command stops with the reason when the deployment ceiling, the isolated-worker requirement, or the model credential boundary does not permit the value.
+`review-changes` additionally requires a credential-free or platform-isolated model route outside an isolated worker.
 `review-outside-effects` is accepted only where sessions run in an isolated worker.
 See [Review Modes](../use/actions-audit.md#review-modes).
 

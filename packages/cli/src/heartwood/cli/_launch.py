@@ -102,6 +102,12 @@ class LaunchOptions:
     startup_timeout: int
     prompt: str | None
     prompt_file: Path | None
+    review_mode: str | None = None
+
+    @property
+    def review_arguments(self) -> tuple[str, ...]:
+        """Carry the launch selection to the process that serves the interface."""
+        return () if self.review_mode is None else ("--review-mode", self.review_mode)
 
 
 @dataclass(frozen=True, slots=True)
@@ -559,6 +565,7 @@ def _reentry_command(options: LaunchOptions) -> tuple[str, ...]:
         "heartwood.cli",
         "--session-id",
         options.session_id,
+        *options.review_arguments,
     ]
     if options.plain:
         command.append("--plain")
@@ -828,6 +835,7 @@ def _interaction_command(
                 "--port",
                 str(options.web_port),
                 *publication,
+                *options.review_arguments,
             ],
             f"Open the launch link printed for {options.web_host}:{options.web_port}",
         )
@@ -837,6 +845,7 @@ def _interaction_command(
         "heartwood.cli",
         "--session-id",
         options.session_id,
+        *options.review_arguments,
     ]
     if options.plain:
         command.append("--plain")

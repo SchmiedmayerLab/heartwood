@@ -1166,10 +1166,12 @@ def test_first_browser_launch_opens_guided_setup_without_terminal_input(
         web_root: Path,
         base_path: str,
         host_loopback_publication: bool,
+        review_mode: str | None,
     ) -> int:
         assert web_root.name == "dist"
         assert base_path == "/"
         assert host_loopback_publication is True
+        assert review_mode is None
         observed.append((project.root, host, port))
         return 0
 
@@ -2823,3 +2825,54 @@ def test_installed_cli_does_not_select_project_or_ancestor_assets(
     assert not expected.exists()
     expected.mkdir(parents=True)
     assert cli._bundled_path(relative) == expected
+
+
+def test_review_mode_flag_is_parsed_only_for_commands_that_start_an_interface(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from heartwood.cli import _build_parser
+
+    parser = _build_parser()
+    assert parser.parse_args([]).review_mode is None
+    assert parser.parse_args(["--review-mode", "review-changes"]).review_mode == "review-changes"
+    served = parser.parse_args(["gateway", "serve", "--review-mode", "review-all"])
+    assert served.review_mode == "review-all"
+    inherited = parser.parse_args(["--review-mode", "review-changes", "gateway", "serve"])
+    assert inherited.review_mode == "review-changes"
+    for arguments in (
+        ["--review-mode", "auto-approve-low-risk"],
+        ["gateway", "serve", "--review-mode", "confirm-risky"],
+    ):
+        with pytest.raises(SystemExit) as unknown:
+            parser.parse_args(arguments)
+        assert unknown.value.code == 2
+
+    with pytest.raises(SystemExit) as misplaced:
+        _run(tmp_path / "analysis", monkeypatch, ["--review-mode", "review-changes", "actions"])
+    assert misplaced.value.code == 2
+
+
+def test_review_mode_flag_selects_through_the_gateway_or_stops_with_its_reason(
+    tmp_path: Path,
+) -> None:
+    from heartwood.cli import _select_launch_review_mode
+
+    project = ProjectContext(tmp_path)
+    gateway = RealSessionGateway(project=project, env={})
+    _select_launch_review_mode(gateway, None)
+    assert gateway.action_settings()["review_mode"] == "review-all"
+    _select_launch_review_mode(gateway, "review-changes")
+    assert gateway.action_settings()["review_mode"] == "review-changes"
+    # A launch selection is never written into the research directory.
+    assert not project.state_root.exists()
+
+    refused = next(
+        option["unavailable_reason"]
+        for option in gateway.action_settings()["modes"]
+        if option["mode"] == "review-outside-effects"
+    )
+    with pytest.raises(SystemExit) as stopped:
+        _select_launch_review_mode(gateway, "review-outside-effects")
+    assert refused is not None
+    assert refused in str(stopped.value)

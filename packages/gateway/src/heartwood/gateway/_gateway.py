@@ -13,7 +13,7 @@ import json
 import os
 import shutil
 from collections.abc import Callable, Mapping, Sequence
-from contextlib import AbstractContextManager
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from functools import wraps
@@ -1747,7 +1747,8 @@ class SessionGateway:
         try:
             policy_allowed = self.config_store.load().policy.allowed_action_review_modes
             selected = self.action_settings_store.load().review_mode
-        except ProjectConfigError as error:
+            isolated = self._credentials_isolated()
+        except (ProjectConfigError, ModelSettingsError) as error:
             raise ActionSettingsError(str(error)) from error
         sandboxed = self._worker_plan_factory is not None
         blocking_sessions = self._active_service_session_ids()
@@ -1757,10 +1758,16 @@ class SessionGateway:
             {
                 "schema_version": "heartwood.action-settings.v1",
                 "review_mode": effective_review_mode(
-                    selected, allowed=policy_allowed, sandboxed=sandboxed
+                    selected,
+                    allowed=policy_allowed,
+                    sandboxed=sandboxed,
+                    credentials_isolated=isolated,
                 ),
                 "default_mode": effective_review_mode(
-                    None, allowed=policy_allowed, sandboxed=sandboxed
+                    None,
+                    allowed=policy_allowed,
+                    sandboxed=sandboxed,
+                    credentials_isolated=isolated,
                 ),
                 "scope": "project" if stored else "launch",
                 "scope_description": (
@@ -1781,7 +1788,10 @@ class SessionGateway:
                         **option.safe_dict(),
                         "allowed": (
                             reason := _review_mode_unavailable_reason(
-                                option.mode, allowed=policy_allowed, sandboxed=sandboxed
+                                option.mode,
+                                allowed=policy_allowed,
+                                sandboxed=sandboxed,
+                                credentials_isolated=isolated,
                             )
                         )
                         is None,
@@ -1797,26 +1807,28 @@ class SessionGateway:
     def select_action_review_mode(self, mode: str) -> ActionSettingsResponse:
         """Select a review mode within the deployment ceiling and execution boundary."""
         current = self.action_settings()["review_mode"]
+        # Only a stored selection touches project state; a launch selection stays in memory.
+        stored = isinstance(self.action_settings_store, ProjectActionSettingsStore)
         try:
-            lock = self.config_store.locked()
-        except ProjectConfigError as error:
-            raise ActionSettingsError(str(error)) from error
-        with lock:
-            policy_allowed = self.config_store.load().policy.allowed_action_review_modes
-            settings = self.action_settings_store.load().selecting(mode)
-            selected = cast(ActionReviewMode, mode)
-            reason = _review_mode_unavailable_reason(
-                selected,
-                allowed=policy_allowed,
-                sandboxed=self._worker_plan_factory is not None,
-            )
-            if reason is not None:
-                raise ActionSettingsError(reason)
-            if not is_tightening(current, selected) and self._active_service_session_ids():
-                raise ActionSettingsError(
-                    "action review can be reduced only while no session is active"
+            with self.config_store.locked() if stored else nullcontext():
+                policy_allowed = self.config_store.load().policy.allowed_action_review_modes
+                settings = self.action_settings_store.load().selecting(mode)
+                selected = cast(ActionReviewMode, mode)
+                reason = _review_mode_unavailable_reason(
+                    selected,
+                    allowed=policy_allowed,
+                    sandboxed=self._worker_plan_factory is not None,
+                    credentials_isolated=self._credentials_isolated(),
                 )
-            self.action_settings_store.save(settings)
+                if reason is not None:
+                    raise ActionSettingsError(reason)
+                if not is_tightening(current, selected) and self._active_service_session_ids():
+                    raise ActionSettingsError(
+                        "action review can be reduced only while no session is active"
+                    )
+                self.action_settings_store.save(settings)
+        except (ProjectConfigError, ModelSettingsError) as error:
+            raise ActionSettingsError(str(error)) from error
         return self.action_settings()
 
     @gateway_operation
@@ -2472,6 +2484,7 @@ class SessionGateway:
             worker_project_id=self.project.project_id,
             checkpoint_evidence=checkpoint_evidence,
             action_review_mode=lambda: self.action_settings_store.load().review_mode,
+            credentials_isolated=self._credentials_isolated,
             external_actions=(
                 self._external_actions_factory(session_id)
                 if self._external_actions_factory is not None
@@ -3032,6 +3045,12 @@ class SessionGateway:
         self.settings_store.save(settings)
         self.config_store.select_model_source(source, settings)
 
+    def _credentials_isolated(self) -> bool:
+        """Return whether the active model credential is kept from the agent tool runtime."""
+        return self._credential_isolation(
+            self.settings_store.load(), model_source=self.config_store.load().model_source
+        ).unattended_actions_allowed
+
     def _credential_isolation(
         self,
         settings: ModelSettings,
@@ -3445,11 +3464,16 @@ def _starts_streaming_text(event: SessionEvent) -> bool:
 
 
 def _review_mode_unavailable_reason(
-    mode: ActionReviewMode, *, allowed: Sequence[str], sandboxed: bool
+    mode: ActionReviewMode, *, allowed: Sequence[str], sandboxed: bool, credentials_isolated: bool
 ) -> str | None:
-    """Explain why the deployment ceiling or execution boundary excludes a mode."""
+    """Explain why the ceiling, execution boundary or credential boundary excludes a mode."""
     if mode not in allowed:
         return "Not permitted by this deployment's policy."
+    if mode != "review-all" and not sandboxed and not credentials_isolated:
+        return (
+            "Unavailable because the selected model credential is not isolated from the agent "
+            "tool runtime. Use a credential-free or platform-isolated model route."
+        )
     if mode == "review-outside-effects" and not sandboxed:
         return "Requires sessions that run in an isolated worker."
     return None

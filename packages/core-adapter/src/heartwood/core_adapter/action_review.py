@@ -58,16 +58,19 @@ def effective_review_mode(
     *,
     allowed: Collection[str],
     sandboxed: bool,
+    credentials_isolated: bool,
 ) -> ActionReviewMode:
     """Apply the policy ceiling and execution boundary to a selection.
 
     A mode the policy does not list, a mode that needs a sandbox the session does
     not have, and any unknown value all resolve to complete researcher review.
+    So does reduced review outside a sandbox while the model credential shares the
+    tool runtime's identity; a sandboxed worker never holds that credential.
     """
     requested = default_review_mode(sandboxed=sandboxed) if selected is None else selected
     for mode in REVIEW_MODES:
         if mode == requested and mode in allowed:
-            if mode == "review-outside-effects" and not sandboxed:
+            if not sandboxed and (mode == "review-outside-effects" or not credentials_isolated):
                 break
             return mode
     return "review-all"

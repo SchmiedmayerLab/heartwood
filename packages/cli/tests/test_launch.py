@@ -1906,3 +1906,18 @@ def test_model_staging_progress_waits_for_a_stable_eta(
     assert "seconds remaining" not in lines[0]
     assert "seconds remaining" in lines[1]
     assert lines[2].endswith("complete)")
+
+
+def test_launch_selection_reaches_the_process_that_serves_the_interface(tmp_path: Path) -> None:
+    selected = _options(tmp_path, review_mode="review-changes")
+    flag = ("--review-mode", "review-changes")
+
+    for command in (
+        _reentry_command(selected),
+        _interaction_command(selected)[0],
+        _interaction_command(_options(tmp_path, review_mode="review-changes", web=True))[0],
+    ):
+        position = command.index("--review-mode")
+        assert tuple(command[position : position + 2]) == flag
+    assert "--review-mode" not in _reentry_command(_options(tmp_path))
+    assert "--review-mode" not in _interaction_command(_options(tmp_path))[0]
