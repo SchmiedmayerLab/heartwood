@@ -161,7 +161,7 @@ jobs:
         uses: actions/cache@v6.1.0
         with:
           path: test-results/records-cache
-          key: records-linux-amd64-${{ hashFiles('images/worker/candidate/records.json') }}
+          key: records-linux-amd64-${{ hashFiles('images/worker/candidate/records.json', 'deploy/build-records-fixture.py') }}
       - name: Build verified sources
         run: >-
           python3 deploy/build-records-fixture.py

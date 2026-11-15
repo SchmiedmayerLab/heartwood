@@ -134,8 +134,12 @@ def build(output: Path, cache: Path) -> None:
                     "--workdir",
                     "/source",
                     "--entrypoint",
-                    "go",
+                    "sh",
                     manifest["builder"],
+                    "-c",
+                    # A restored module cache is not rehashed by a build; verify it first.
+                    'go mod verify && exec go "$@"',
+                    "go",
                     "build",
                     "-mod=readonly",
                     "-trimpath",

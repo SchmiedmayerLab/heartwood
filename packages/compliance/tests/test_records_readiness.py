@@ -117,3 +117,34 @@ def test_records_qualification_requires_an_enforced_create_only_policy(
     with pytest.raises(module.RecordsPolicyNotEnforcedError, match="create-only"):
         module.require_create_only_enforcement(report)
     module.require_create_only_enforcement({"conditional_write_enforcement": True})
+
+
+@pytest.mark.parametrize("unready", ["iam", "gateway"])
+def test_records_readiness_closes_its_clients(
+    unready: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    module = _qualification()
+    server = object.__new__(module.ObjectStore)
+    server._binary, server._state, server._ports = tmp_path / "server", tmp_path / "state", [1, 2]
+    server._listen_host = "127.0.0.1"
+    server.access, server.secret, server.certificates = "access", "secret", None
+    iam, client = Mock(), Mock()
+    server.iam = Mock(return_value=iam)
+    server.client = Mock(return_value=client)
+    monkeypatch.setattr(module.subprocess, "Popen", Mock())
+
+    def wait(_process: object, probe: object) -> None:
+        if probe is (iam.list_users if unready == "iam" else client.list_buckets):
+            raise TimeoutError("synthetic object store did not become ready")
+
+    monkeypatch.setattr(module.ObjectStore, "_wait_ready", staticmethod(wait))
+    try:
+        with pytest.raises(TimeoutError):
+            server._start()
+    finally:
+        server._private.rmdir()
+    iam.close.assert_called_once_with()
+    if unready == "gateway":
+        client.close.assert_called_once_with()
+    else:
+        server.client.assert_not_called()

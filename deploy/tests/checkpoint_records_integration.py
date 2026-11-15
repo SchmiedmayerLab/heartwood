@@ -34,7 +34,11 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from heartwood.audit import CheckpointSignerError, LocalEd25519CheckpointSigner
+from heartwood.audit import (
+    AuditCheckpointError,
+    CheckpointSignerError,
+    LocalEd25519CheckpointSigner,
+)
 from heartwood.audit._anchored_signer import AnchoredCheckpointSigner
 from heartwood.audit._checkpoint import _canonical_checkpoint
 from heartwood.audit._continuity import RetainedCheckpoint, checkpoint_context
@@ -544,7 +548,7 @@ class ConcurrentSigner:
 
 
 def records_writer(server: ObjectStore, bucket: str) -> tuple[str, str]:
-    """Create the ordinary account that publishes records; the root account bypasses policy."""
+    """Create the ordinary account that publishes records; root and admin bypass bucket policy."""
     return server.identity(
         "records-writer",
         [
@@ -722,6 +726,36 @@ def run(binary: Path, image: str, output: Path) -> None:
         assert len(race_records.history()) == 1
         checks.append("concurrent publication preserves exactly one ordinal")
 
+        # Root and admin-role accounts are exempt from the bucket policy; a checkpoint
+        # they replace with identical bytes and retention must still be rejected.
+        raced = race_records.history()[0]
+        raced_key = next(
+            item["Key"]
+            for item in admin.list_object_versions(Bucket=bucket, Prefix="race/")["Versions"]
+            if "/checkpoints/" in item["Key"]
+        )
+        admin.put_object(
+            Bucket=bucket,
+            Key=raced_key,
+            Body=_canonical_checkpoint(raced.checkpoint).encode(),
+            ChecksumAlgorithm="SHA256",
+            ObjectLockMode="COMPLIANCE",
+            ObjectLockRetainUntilDate=race_scope.retention_deadline,
+        )
+        with pytest.raises(AuditCheckpointError, match="ambiguous"):
+            race_records.history()
+        following, following_content = candidate(
+            race_scope, raced, publication_id="after-exempt-replacement"
+        )
+        race_records.stage_audit(following, following_content)
+        with pytest.raises(CheckpointSignerError):
+            AnchoredCheckpointSigner(
+                records=race_records, signer=rotated, trusted_keys=trusted
+            ).sign(following)
+        checks.append(
+            "a policy-exempt checkpoint replacement is detected even when bytes are identical"
+        )
+
         qualify_session_gate(server, writer, bucket, scope, rotated, trusted, output)
         checks.append(
             "records outage blocks dispatch and recovery; "
@@ -807,12 +841,12 @@ def run(binary: Path, image: str, output: Path) -> None:
             refused(restored_client.put_object, "AccessDenied", **replacement_write)
             restored_authority.sign(next_statement)
             checks.append("restored store refuses an unconditional candidate overwrite")
-        # The root account is exempt from the bucket policy, as an owner may be.
+        # Root and admin-role accounts are exempt from the bucket policy.
         restored_admin.put_object(**replacement_write)
         with pytest.raises(CheckpointSignerError):
             restored_authority.sign(next_statement)
         checks.append(
-            "a policy-exempt replacement version is detected even when bytes are identical"
+            "a policy-exempt candidate replacement is detected even when bytes are identical"
         )
         report["records_policy_qualified"] = enforced
         require_create_only_enforcement(report)
@@ -834,8 +868,9 @@ def run(binary: Path, image: str, output: Path) -> None:
                     "duplicate-version detection"
                 ]
             ),
-            "The store's root account is exempt from the bucket policy and bound only by "
-            "Object Lock; replacement versions it writes are detected, not refused",
+            "The store's root and admin-role accounts are exempt from the bucket policy and "
+            "bound only by Object Lock; replacement versions they write are detected, not "
+            "refused, so publishing credentials must be ordinary accounts",
             "Synthetic object-store implementation, not institutional S3 qualification",
             "Synthetic signing key, not a KMS/HSM deployment",
             "No native worker or independently deployed gateway/signing-service integration",

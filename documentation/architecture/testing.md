@@ -112,7 +112,7 @@ uv run --no-project --python 3.12.15 deploy/build-worker-candidate.py \
 The cache keeps source archives and the Cargo registry, and compiled objects are keyed by the manifest so changed inputs never reuse them.
 The record binds source, manifest, lockfile, binary, and image identities; it establishes build provenance, not byte-identical gateway builds.
 These artifacts are qualification inputs, not a supported production gateway; an operator's gateway must provide the [behavior qualification depends on](../operate/platform-requirements.md).
-`deploy/build-records-fixture.py` builds a versitygw server from a digest-verified source archive using a pinned Go 1.26 image, read-only sources and a bounded build container; Go verifies module checksums against the source's `go.sum`.
+`deploy/build-records-fixture.py` builds a versitygw server from a digest-verified source archive using a pinned Go 1.26 image, read-only sources and a bounded build container; `go mod verify` checks the downloaded or restored module cache against the source's `go.sum` before the build.
 Its artifacts retain the source archive, license and notice, binary hash and build inputs; they provide synthetic storage behavior, not a records-service recommendation.
 
 ## Native Qualification

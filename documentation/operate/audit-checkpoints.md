@@ -149,8 +149,8 @@ Each suite records the store, the policy and `conditional_write_enforcement` in 
 Enforcement is observed, not inferred from an accepted policy: an ordinary account must be refused an unconditional write and allowed a conditional one.
 The records-service suite checks that the store refuses conditional and unconditional overwrites of a published checkpoint, retention denial, lost-reply reconciliation, concurrent publication, outage recovery, backup and restore into a fresh server, and delete-marker and replacement-version detection against that same configuration.
 It fails, and with it native qualification, unless the store itself enforces the conditional-write policy.
-The store's root account is exempt from bucket policies and bound only by Object Lock, as a bucket owner may be elsewhere; the suite therefore also requires Heartwood to reject a replacement version written by that account.
-Keep administrative identities away from the gateway and signer.
+The store's root account and its admin-role accounts are exempt from bucket policies and bound only by Object Lock; the suite therefore also requires Heartwood to reject checkpoint and candidate replacement versions written by such an account.
+The gateway and signer must therefore publish with ordinary accounts: root or admin-role credentials would bypass create-only enforcement, leaving only Heartwood's detection of replacement versions.
 This qualifies Heartwood's publication path against a store that enforces create-only writes; it does not replace qualification of the institution's own store, institutional retention approval, or a production KMS or HSM signer.
 
 A working manifest does not prove that the signer authorizes requests, that the storage identities are restricted, or that the institution approves the deployment.
