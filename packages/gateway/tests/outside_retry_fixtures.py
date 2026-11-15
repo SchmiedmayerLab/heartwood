@@ -43,7 +43,7 @@ from heartwood.core_adapter.external_actions import (
     canonical_request,
     external_action_records,
 )
-from heartwood.core_adapter.worker_attempts import WorkerRuntimeBinding
+from heartwood.core_adapter.worker_attempts import WorkerControlPlane, WorkerRuntimeBinding
 from heartwood.gateway import ProjectContext, SessionGateway
 from heartwood.schemas import AuditRetention, JsonValue, PlatformOperationObservation
 from heartwood.session import CommandKind, SessionCommand
@@ -214,7 +214,12 @@ def outside_review(tmp_path: Path) -> Iterator[OutsideReview]:
             checkpoint_evidence=controller,
         )
         intent = service.prepare_worker_attempt(
-            image_digest=_IMAGE, sandbox_policy_sha256="b" * 64, input_manifest_sha256="c" * 64
+            image_digest=_IMAGE,
+            sandbox_policy_sha256="b" * 64,
+            input_manifest_sha256="c" * 64,
+            control_plane=WorkerControlPlane(
+                control_plane_sha256="1" * 64, container_runtime_sha256="2" * 64
+            ),
         )
         service.bind_worker_runtime(
             attempt_id=intent.attempt_id,
