@@ -13,12 +13,17 @@ from pathlib import Path
 
 import pytest
 
-from heartwood.core_adapter import BackendErrorCode, BackendErrorEvent
+from heartwood.core_adapter import BackendErrorCode, BackendErrorEvent, SessionService
 from heartwood.core_adapter._state import SessionRecoveryError
 from heartwood.core_adapter.checkpoint_evidence import CheckpointEvidenceUnavailableError
 from heartwood.gateway import approval_retry_unavailable_reason, retained_approval
 from heartwood.session import SessionCommand
-from packages.gateway.tests.outside_retry_fixtures import SESSION, OutsideReview, outside_review
+from packages.gateway.tests.outside_retry_fixtures import (
+    NOW,
+    SESSION,
+    OutsideReview,
+    outside_review,
+)
 
 
 @pytest.fixture
@@ -91,6 +96,49 @@ def test_rejecting_the_review_withdraws_a_retained_approval_through_the_gateway(
     )
     if not fatal:
         assert review.gateway.handle(approved).replayed
+    assert review.outside.submissions == 0
+
+
+@pytest.mark.parametrize("read_first", [False, True])
+def test_rejection_after_a_fatal_error_and_a_service_release_starts_no_worker(
+    review: OutsideReview, read_first: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The services the gateway builds itself read the same clock as the review's service.
+    monkeypatch.setattr("heartwood.core_adapter._service._utc_now", lambda: NOW.isoformat())
+    approved = _interrupted_approval(review)
+    review.service.backend.emit(  # type: ignore[attr-defined]
+        (BackendErrorEvent(error_code=BackendErrorCode.ACTION_OUTCOME_UNKNOWN),)
+    )
+    gateway = review.gateway
+    # A restart or an idle release leaves no live service; the deployment's records remain.
+    with gateway._state_lock:
+        gateway._close_service(gateway._services.pop(SESSION))
+        gateway._service_configurations.pop(SESSION, None)
+    gateway._checkpoint_evidence_factory = lambda _: review.evidence
+    opened: list[str] = []
+    factory = gateway._service_factory
+    assert factory is not None
+
+    def counting(root: Path, session_id: str) -> SessionService:
+        opened.append(session_id)
+        return factory(root, session_id)
+
+    gateway._service_factory = counting
+
+    if read_first:
+        projection = gateway.session_projection(session_id=SESSION)
+        assert projection.available_commands == ("deny",)
+    gateway.handle(review.decision(approved=False))
+
+    # The session cannot continue, so nothing may prepare or launch a worker for it.
+    assert opened == []
+    assert review.phase() == "withdrawn"
+    withdrawn = gateway.session_projection(session_id=SESSION)
+    assert withdrawn.pending_approval is None
+    assert withdrawn.available_commands == ()
+    assert approval_retry_unavailable_reason(withdrawn, approved) == (
+        "The approval is no longer waiting to be sent: Approval withdrawn before dispatch."
+    )
     assert review.outside.submissions == 0
 
 

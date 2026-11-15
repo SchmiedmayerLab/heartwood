@@ -171,6 +171,7 @@ class OutsideReview:
     service: SessionService
     outside: OutsideService
     records: MemoryS3
+    evidence: SessionCheckpointEvidence
     group_id: str
     operation_id: UUID
 
@@ -230,7 +231,11 @@ def outside_review(tmp_path: Path) -> Iterator[OutsideReview]:
     workspace = tmp_path / "project"
     workspace.mkdir()
     gateway = SessionGateway(
-        project=ProjectContext(workspace),
+        project=ProjectContext(
+            workspace,
+            protected_state=tmp_path / "protected" / str(project_id),
+            project_id=project_id,
+        ),
         env={},
         backend_id="deterministic",
         service_factory=service_factory,
@@ -262,6 +267,7 @@ def outside_review(tmp_path: Path) -> Iterator[OutsideReview]:
             service=service,
             outside=outside,
             records=client,
+            evidence=controller,
             group_id=record.proposal.group_id,
             operation_id=record.proposal.operation_id,
         )

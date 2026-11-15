@@ -876,15 +876,17 @@ class SessionGateway:
                 FileSessionStore(self.sessions_root, command.session_id).replay_events(),
                 session_id=command.session_id,
             )
-            fatal_unavailable_reason = (
-                command_unavailable_reason(persisted_projection, command_kind)
-                if persisted_projection.lifecycle.status == SessionLifecycle.ERROR
+            if (
+                persisted_projection.lifecycle.status == SessionLifecycle.ERROR
                 and not persisted_projection.lifecycle.can_steer
-                else None
-            )
-            if fatal_unavailable_reason is not None:
+            ):
+                # A session that cannot continue is never given a worker: the withdrawal it
+                # still admits sends nothing and is recorded by a service without a backend.
                 return self._handle_stored_command(
-                    command, unavailable_reason=fatal_unavailable_reason
+                    command,
+                    unavailable_reason=command_unavailable_reason(
+                        persisted_projection, command_kind
+                    ),
                 )
         if self._worker_revoked(command.session_id):
             # Only a command replaces a revoked worker's service; a read keeps it.
@@ -2435,16 +2437,7 @@ class SessionGateway:
     ) -> SessionService:
         from heartwood.gateway._research_evaluation import ResearchStageEvaluator
 
-        checkpoint_evidence = (
-            self._checkpoint_evidence_factory(session_id)
-            if self._checkpoint_evidence_factory is not None
-            else None
-        )
-        if checkpoint_evidence is not None and (
-            checkpoint_evidence.records.scope.project_id != self.project.project_id
-            or checkpoint_evidence.records.scope.session_id != session_id
-        ):
-            raise ValueError("Checkpoint evidence does not authorize this project and session")
+        checkpoint_evidence = self._checkpoint_evidence(session_id)
         worker: ManagedWorkerSession | None = None
 
         def worker_context() -> WorkerConversationContext:
@@ -2517,6 +2510,17 @@ class SessionGateway:
                 bind_workflow_review_execution(backend, service)
         return service
 
+    def _checkpoint_evidence(self, session_id: str) -> SessionCheckpointEvidence | None:
+        if self._checkpoint_evidence_factory is None:
+            return None
+        checkpoint_evidence = self._checkpoint_evidence_factory(session_id)
+        if (
+            checkpoint_evidence.records.scope.project_id != self.project.project_id
+            or checkpoint_evidence.records.scope.session_id != session_id
+        ):
+            raise ValueError("Checkpoint evidence does not authorize this project and session")
+        return checkpoint_evidence
+
     def _storage_service(self, session_id: str) -> SessionService:
         """Build an uncached service for commands that only access durable state."""
         from heartwood.gateway._research_evaluation import ResearchStageEvaluator
@@ -2529,6 +2533,8 @@ class SessionGateway:
             policy_profile=configuration.policy_profile,
             env=self.env,
             worker_project_id=self.project.project_id,
+            # Durable state stays bound to the deployment's trusted records.
+            checkpoint_evidence=self._checkpoint_evidence(session_id),
             workflow_evaluator=ResearchStageEvaluator(
                 self.workspace_inspector,
                 parallel_review_preparer=self._parallel_review_preparer,

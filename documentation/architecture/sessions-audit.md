@@ -99,6 +99,7 @@ Outside decisions distinguish authorization from dispatch: an `authorized` recor
 When checkpoint evidence is configured, in either mode, the authorization checkpoint must be retained before submission is recorded.
 An authorization that could not be sent is dispatched only by an exact retry of its own approval command, with the same identifier and content, a live matching worker, and renewed input, policy, and expiry checks.
 The projection reports a retained authorization as the pending action set with the decision `approved` and offers only `deny`, so no interface presents it as a new review.
+In a session that cannot continue, the gateway records that withdrawal through a service bound to the deployment's trusted records but to no backend, so neither a restart nor a released service causes a worker to be prepared or launched for it.
 The terminal and notebook clients keep the approval command that ended without a receipt, as the browser does, and resend it unchanged only while the projection still reports that authorization as retained.
 Denying the same review withdraws it, and an authorization that outlives its validity interval is recorded as expired; both close the original approval command so the session can continue.
 Reconciliation records only such expiry and never turns an observation into submission authority.
