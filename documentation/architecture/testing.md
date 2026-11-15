@@ -124,13 +124,14 @@ Reports identify the model as operator-requested configuration and usage as work
 No credentialed run occurs automatically in pull-request CI; the ordinary capable-model workflow continues to qualify its local inference runtime separately.
 A successful synthetic run does not establish sensitive-data readiness.
 
-## Native Worker Dependency Candidates
+## Maintained Runtime Dependencies
 
-The native worker qualification path needs SDK admission and remote-event hooks that are not available in the public application lock.
-`deploy/build-worker-candidate.py` builds a separate, explicitly versioned wheel set from immutable upstream source archives and reviewed patches in `images/worker/candidate/`.
+Heartwood uses explicitly versioned SDK builds for admission, remote-event handling and compatible security dependencies.
+`deploy/build-worker-candidate.py` builds those wheels from immutable upstream source archives and reviewed patches in `images/worker/candidate/`.
 It verifies source, patch and build-tool hashes, uses a fixed source timestamp, preserves upstream licenses, and records each wheel digest.
 The candidate workflow repeats the build and requires byte-identical wheel records.
-Building these artifacts supports integration tests; it does not replace the application lock, install dependencies, publish upstream packages, or establish a supported deployment.
+The default application lock references the reviewed wheel digests, and native release archives include the same wheels and provenance record.
+Building or installing them does not publish upstream packages or establish deployment qualification.
 
 ```bash
 uv run --no-project --python 3.12.15 deploy/build-worker-candidate.py --output test-results/worker-candidate
@@ -138,18 +139,19 @@ uv run --no-project --python 3.12.15 deploy/build-worker-candidate.py --output t
 
 The builder requires the uv version recorded in the source manifest and a new output directory.
 The conversation patch adds bounded remote-event admission, terminal failure propagation and explicit outside client-tool control.
+The terminal patch exposes explicit environment replacement across terminal backends and session resets, allowing the gateway to pass only documented task variables.
 The sandbox patch exposes the native configuration-admission record needed to bind a worker to its admitted policy and process generation.
 The dependency patch supplies the inference-client constraint, public imports and usage-cost handling required by the candidate SDK dependency graph.
 The local package version suffix distinguishes these reviewed candidates from upstream releases.
 Source revisions, patch digests and wheel records must accompany any qualification result that uses them.
-Promotion into the production dependency lock requires compatible upstream releases or an explicitly maintained patched dependency source, followed by integrated qualification of the exact resulting image.
+Changes to a patched SDK require a distinct local package version, reviewed source and patch digests, reproducible wheel hashes, and integrated qualification of the resulting application artifact.
 
 The candidate environment command compiles a separate hash-pinned dependency graph and installs it only into a new environment.
 It fixes the Python and package-manager versions, runtime hashes and isolated build dependencies, and checks installed-package consistency.
 The fixed release cutoff has explicit exceptions for the file-lock security update and the inference-client version required by the reviewed SDK patch.
 The lock includes test tools.
 The application builder archives the current Heartwood commit and its pinned Skill submodule, then builds wheels from that snapshot.
-Only the temporary Heartwood package metadata receives the declared candidate dependency pins and local version suffix; source checkouts and public dependency metadata are unchanged.
+The application builder verifies the same dependency pins as the default workspace and adds a local version suffix only to temporary Heartwood package metadata for qualification.
 The pinned Skill catalog is built without source or metadata changes.
 The application record includes both source commits, wheel hashes and a hash-pinned installation manifest.
 Installation uses those local wheels without dependency resolution, then verifies that their declared dependencies are satisfied by the locked environment.

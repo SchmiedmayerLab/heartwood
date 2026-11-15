@@ -144,6 +144,7 @@ COPY vendor/heartwood-skills ./vendor/heartwood-skills
 COPY agents ./agents
 COPY evals ./evals
 COPY images ./images
+COPY deploy/build-worker-candidate.py ./deploy/build-worker-candidate.py
 COPY README.md NOTICE ./
 COPY documentation ./documentation
 COPY --from=webui-build /src/packages/webui/dist ./packages/webui/dist
@@ -164,6 +165,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
       cp /qualification/sdk/build-record.json /qualification/application/application-build-record.json \
         /opt/heartwood/qualification/; \
     elif [ "${HEARTWOOD_DEPENDENCY_PROFILE}" = "locked" ]; then \
+      uv run --no-project --python 3.12.15 deploy/build-worker-candidate.py --bootstrap; \
       uv sync --locked --no-dev --all-extras --python 3.12; \
     else \
       echo "unsupported dependency profile: ${HEARTWOOD_DEPENDENCY_PROFILE}" >&2; exit 64; \
