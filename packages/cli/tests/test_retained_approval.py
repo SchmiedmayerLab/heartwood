@@ -17,6 +17,8 @@ from textual.widgets import OptionList, Static
 
 from heartwood.cli._interactive import InteractiveSession, format_projection_lines
 from heartwood.cli._tui import HeartwoodTerminalApp
+from heartwood.core_adapter import BackendErrorCode, BackendErrorEvent
+from heartwood.gateway._action_presentation import UNSENDABLE_APPROVAL_NOTICE
 from packages.gateway.tests.outside_retry_fixtures import SESSION, OutsideReview, outside_review
 
 
@@ -100,6 +102,48 @@ def test_another_terminal_can_only_reject_a_retained_approval(review: OutsideRev
     assert retry.message is not None
     assert "another window" in retry.message
     other.submit("/reject")
+    assert review.phase() == "withdrawn"
+    assert review.outside.submissions == 0
+
+
+def test_terminal_offers_only_rejection_once_the_session_cannot_continue(
+    review: OutsideReview,
+) -> None:
+    session = _interrupted(review)
+    review.service.backend.emit(  # type: ignore[attr-defined]
+        (BackendErrorEvent(error_code=BackendErrorCode.ACTION_OUTCOME_UNKNOWN),)
+    )
+
+    rendered = "\n".join(format_projection_lines(session.replay()))
+    assert "session cannot continue" in rendered
+    assert "/retry" not in rendered
+    assert "Reject the review to withdraw it: /reject" in rendered
+    retry = session.submit("/retry")
+    assert retry.failed
+    assert retry.message == UNSENDABLE_APPROVAL_NOTICE
+    allow = session.submit("/allow")
+    assert allow.failed
+    assert allow.message is not None
+    assert "/retry" not in allow.message
+    assert review.phase() == "authorized"
+
+    async def exercise() -> None:
+        app = HeartwoodTerminalApp(session)
+        async with app.run_test(size=(80, 30)) as pilot:
+            options = app.query_one("#approval-options", OptionList)
+            for _ in range(100):
+                if options.has_focus:
+                    break
+                await pilot.pause(0.05)
+            assert "session cannot continue" in str(
+                app.query_one("#approval-help", Static).render()
+            )
+            retry_option = options.get_option_at_index(1)
+            assert retry_option.disabled
+            assert "Unavailable" in str(retry_option.prompt)
+
+    asyncio.run(exercise())
+    session.submit("/reject")
     assert review.phase() == "withdrawn"
     assert review.outside.submissions == 0
 

@@ -171,6 +171,7 @@ The window, terminal, or notebook that made the approval keeps it and resends th
 A retry sends the approval at most once; after it has been sent, withdrawn, or expired, nothing is offered for a retry, and `/retry` and `session.retry()` say why.
 A new approval from any interface is refused while the recorded one waits, and an interface that did not make the approval, or was restarted since, can only reject the review or wait for it to expire.
 Rejection stays available while the approval waits, even after an unrecoverable session error or a restart, because it sends nothing and needs no worker.
+After an unrecoverable session error the approval can no longer be sent, so no interface offers its retry, and each says that only rejection remains.
 Opening or refreshing the session, other commands, and automatic decisions never send it.
 An approval not sent before the review's validity ends is recorded as expired.
 

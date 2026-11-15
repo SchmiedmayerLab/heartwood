@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from heartwood.core_adapter import BackendErrorCode, BackendErrorEvent
 from heartwood.core_adapter.checkpoint_evidence import CheckpointEvidenceUnavailableError
 from heartwood.notebook import NotebookSession, build_widget_spec
 from packages.gateway.tests.outside_retry_fixtures import SESSION, OutsideReview, outside_review
@@ -82,6 +83,31 @@ def test_notebook_retry_reports_why_a_closed_approval_cannot_be_sent(
         )
     )
     assert review.phase() == ending
+    assert review.outside.submissions == 0
+
+
+def test_notebook_offers_only_rejection_once_the_session_cannot_continue(
+    review: OutsideReview,
+) -> None:
+    session = _interrupted(review)
+    review.service.backend.emit(  # type: ignore[attr-defined]
+        (BackendErrorEvent(error_code=BackendErrorCode.ACTION_OUTCOME_UNKNOWN),)
+    )
+
+    review_items = next(
+        section.items
+        for section in build_widget_spec(session.replay())
+        if section.title == "Action Review"
+    )
+    assert "session cannot continue" in review_items[0]
+    with pytest.raises(RuntimeError, match="session cannot continue"):
+        session.retry()
+    with pytest.raises(RuntimeError) as refused:
+        session.approve(group_id=review.group_id)
+    assert "session.retry()" not in str(refused.value)
+    session.deny(group_id=review.group_id)
+
+    assert review.phase() == "withdrawn"
     assert review.outside.submissions == 0
 
 

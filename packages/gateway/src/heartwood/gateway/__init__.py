@@ -52,6 +52,8 @@ from heartwood.gateway._action_presentation import (
     outside_review_lines,
     outside_review_title,
     retained_approval,
+    retained_approval_notice,
+    retained_approval_sendable,
     specialist_review_lines,
 )
 from heartwood.gateway._action_settings import (
@@ -462,6 +464,8 @@ __all__ = [
     "plan_startup",
     "project_session",
     "retained_approval",
+    "retained_approval_notice",
+    "retained_approval_sendable",
     "specialist_review_lines",
     "user_checkpoint_signer_registry_path",
     "verify_model_artifact",

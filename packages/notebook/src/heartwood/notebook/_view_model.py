@@ -34,6 +34,8 @@ from heartwood.gateway import (
     SessionProjection,
     approval_retry_unavailable_reason,
     retained_approval,
+    retained_approval_notice,
+    retained_approval_sendable,
 )
 from heartwood.schemas import (
     ActionSettingsResponse,
@@ -518,9 +520,17 @@ class NotebookSession:
 
     def approve(self, *, group_id: str) -> NotebookViewModel:
         """Allow every action in the pending OpenHands action group once."""
-        if retained_approval(self._view_model().projection) is not None:
+        projection = self._view_model().projection
+        if retained_approval(projection) is not None:
             # A new approval is refused while the recorded one waits to be sent.
-            raise RuntimeError(f"{RETAINED_APPROVAL_NOTICE} {_RETAINED_APPROVAL_CHOICES}")
+            raise RuntimeError(
+                f"{retained_approval_notice(projection)} "
+                + (
+                    _RETAINED_APPROVAL_CHOICES
+                    if retained_approval_sendable(projection)
+                    else "Withdraw it with session.deny(group_id=...)."
+                )
+            )
         return self._approve(
             self._command(CommandKind.APPROVE, {"target_type": "action-set", "target_id": group_id})
         )

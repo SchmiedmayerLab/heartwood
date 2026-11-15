@@ -35,6 +35,11 @@ from packages.gateway.tests.outside_retry_fixtures import (
     outside_review,
 )
 
+UNSENDABLE_APPROVAL_REASON = (
+    "This session cannot continue, so the approval can no longer be sent; "
+    "rejecting the review withdraws it."
+)
+
 
 @pytest.fixture
 def review(tmp_path: Path) -> Iterator[OutsideReview]:
@@ -95,6 +100,9 @@ def test_rejecting_the_review_withdraws_a_retained_approval_through_the_gateway(
         assert not projection.lifecycle.can_steer
         # Withdrawal sends nothing, so it stays available in an unrecoverable session.
         assert projection.available_commands == ("deny",)
+        assert approval_retry_unavailable_reason(projection, approved) == (
+            UNSENDABLE_APPROVAL_REASON
+        )
 
     review.gateway.handle(review.decision(approved=False))
 
@@ -145,6 +153,10 @@ def test_rejection_after_a_fatal_error_and_a_service_release_starts_no_worker(
         for _ in range(2):
             projection = gateway.session_projection(session_id=SESSION)
             assert projection.available_commands == ("deny",)
+            # The approval can no longer be sent, so no interface may offer its retry.
+            assert approval_retry_unavailable_reason(projection, approved) == (
+                UNSENDABLE_APPROVAL_REASON
+            )
         # Reading the session records nothing and binds nothing to the records service.
         assert FileSessionStore(gateway.sessions_root, SESSION).replay_events() == journal
     gateway.handle(review.decision(approved=False))

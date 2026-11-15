@@ -12,6 +12,7 @@ import type {
   ActionRisk,
   ActionSettings,
   ProjectionActionRecord,
+  SessionProjection,
 } from "./types";
 
 export const actionCountLabel = (count: number): string =>
@@ -71,6 +72,12 @@ export const summarySourceLabel = (action: ProjectionActionRecord): string =>
   action.summarySource === "gateway" ?
     "Gateway-provided summary"
   : "Model-provided summary";
+
+/** Whether the exact retry of a retained approval can still send it, as the gateway decides. */
+export const retainedApprovalSendable = (
+  projection: SessionProjection,
+): boolean =>
+  projection.lifecycle.status !== "error" || projection.lifecycle.canSteer;
 
 /** Model-written fields of a specialist task review, each named as model-provided. */
 export const specialistModelFields = (

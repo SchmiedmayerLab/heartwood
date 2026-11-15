@@ -33,6 +33,7 @@ import {
   actionStateLabel,
   actionToolLabel,
   modelProposedOperation,
+  retainedApprovalSendable,
   specialistModelFields,
   summarySourceLabel,
 } from "../actionPresentation";
@@ -187,6 +188,9 @@ export const ConversationWorkspace = ({
             busy={requestStatus === "busy"}
             onDecision={onDecision}
             onRetry={onRetryApproval}
+            sendable={
+              projection === null || retainedApprovalSendable(projection)
+            }
           />
         : (
           conversation.length > 0 &&
@@ -579,6 +583,8 @@ const retainedApprovalNotice =
   "Your approval is recorded but was not sent. Nothing is sent until that same approval is retried, and rejecting the review withdraws it.";
 const retainedElsewhereNotice =
   "This approval was made in another window or before Heartwood restarted, so only rejecting the review, or waiting until it expires, ends it here.";
+const unsendableApprovalNotice =
+  "Your approval is recorded but was not sent. This session cannot continue, so the approval can no longer be sent; rejecting the review withdraws it.";
 
 const outsideReviewCopy = {
   "outside-operation": {
@@ -846,6 +852,7 @@ const ApprovalRequest = ({
   canDeny,
   onDecision,
   onRetry,
+  sendable,
 }: {
   actionPresentation: ActionPresentation | null;
   approval: ProjectionApprovalGroup;
@@ -857,6 +864,8 @@ const ApprovalRequest = ({
     approval: ProjectionApprovalGroup,
   ) => void;
   onRetry: (() => void) | null;
+  /** Whether a retained approval's retry can still send it. */
+  sendable: boolean;
 }) => {
   const headingRef = useRef<HTMLHeadingElement>(null);
   useEffect(() => {
@@ -884,14 +893,16 @@ const ApprovalRequest = ({
           </h2>
           <p>
             {retained ?
-              retainedApprovalNotice
+              sendable ?
+                retainedApprovalNotice
+              : unsendableApprovalNotice
             : (outsideCopy?.introduction ??
               (approval.actions.length === 1 ?
                 "Allow runs it once. Reject skips it."
               : "Allow runs all of them once. Reject runs none."))
             }
           </p>
-          {retained && onRetry === null ?
+          {retained && sendable && onRetry === null ?
             <p>{retainedElsewhereNotice}</p>
           : null}
         </div>
@@ -975,13 +986,15 @@ const ApprovalRequest = ({
           {rejectLabel}
         </Button>
         {retained ?
-          <Button
-            disabled={busy || onRetry === null}
-            size="sm"
-            onClick={() => onRetry?.()}
-          >
-            Retry request
-          </Button>
+          sendable ?
+            <Button
+              disabled={busy || onRetry === null}
+              size="sm"
+              onClick={() => onRetry?.()}
+            >
+              Retry request
+            </Button>
+          : null
         : <Button
             aria-label={`Allow ${countLabel} once`}
             disabled={busy || !canApprove}

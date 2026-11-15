@@ -222,6 +222,10 @@ RETAINED_APPROVAL_NOTICE = (
     "Your approval is recorded but was not sent. Nothing is sent until that same approval "
     "is retried, and rejecting the review withdraws it."
 )
+UNSENDABLE_APPROVAL_NOTICE = (
+    "This session cannot continue, so the approval can no longer be sent; "
+    "rejecting the review withdraws it."
+)
 
 
 def retained_approval(projection: SessionProjection) -> ProjectionApprovalGroup | None:
@@ -230,12 +234,30 @@ def retained_approval(projection: SessionProjection) -> ProjectionApprovalGroup 
     return approval if approval is not None and approval.decision == "approved" else None
 
 
+def retained_approval_sendable(projection: SessionProjection) -> bool:
+    """Return whether a retained approval's exact retry can still send it."""
+    lifecycle = projection.lifecycle
+    # After an unrecoverable error the gateway gives the session no worker to send it.
+    return lifecycle.status != "error" or lifecycle.can_steer
+
+
+def retained_approval_notice(projection: SessionProjection) -> str:
+    """Say what a retained approval waits for: its exact retry, or only its rejection."""
+    return (
+        RETAINED_APPROVAL_NOTICE
+        if retained_approval_sendable(projection)
+        else f"Your approval is recorded but was not sent. {UNSENDABLE_APPROVAL_NOTICE}"
+    )
+
+
 def approval_retry_unavailable_reason(
     projection: SessionProjection, command: SessionCommand | None
 ) -> str | None:
     """Say why a kept approval cannot be resent, or return None while the gateway retains it."""
     retained = retained_approval(projection)
     target = None if command is None else command.payload.get("target_id")
+    if retained is not None and not retained_approval_sendable(projection):
+        return UNSENDABLE_APPROVAL_NOTICE
     if retained is not None and retained.group_id == target:
         return None
     if retained is not None:
@@ -290,5 +312,7 @@ __all__ = [
     "outside_review_lines",
     "outside_review_title",
     "retained_approval",
+    "retained_approval_notice",
+    "retained_approval_sendable",
     "specialist_review_lines",
 ]

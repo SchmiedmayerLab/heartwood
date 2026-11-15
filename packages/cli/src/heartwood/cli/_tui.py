@@ -54,7 +54,6 @@ from heartwood.cli._workspace_presentation import (
     format_workspace_file,
 )
 from heartwood.gateway import (
-    RETAINED_APPROVAL_NOTICE,
     ActionSettingsError,
     SessionProjection,
     action_arguments_label,
@@ -65,6 +64,8 @@ from heartwood.gateway import (
     action_tool_label,
     outside_review_lines,
     outside_review_title,
+    retained_approval_notice,
+    retained_approval_sendable,
     specialist_review_lines,
 )
 from heartwood.gateway import (
@@ -670,7 +671,7 @@ class HeartwoodTerminalApp(App[None]):
             else f"Review Agent Actions · {len(actions)} {label.title()}"
         )
         self.query_one("#approval-help", Static).update(
-            RETAINED_APPROVAL_NOTICE
+            retained_approval_notice(projection)
             if self._review_retained
             else "Allow sends exactly this content once. Reject sends nothing."
             if outside_title
@@ -714,10 +715,20 @@ class HeartwoodTerminalApp(App[None]):
         options = self.query_one("#approval-options", OptionList)
         count_label = f"{len(actions)} {label.title()}"
         options.replace_option_prompt("reject", f"Reject {count_label}")
+        sendable = not self._review_retained or retained_approval_sendable(projection)
         options.replace_option_prompt(
             "allow",
-            "Retry the Recorded Approval" if self._review_retained else f"Allow {count_label} Once",
+            f"Allow {count_label} Once"
+            if not self._review_retained
+            else "Retry the Recorded Approval"
+            if sendable
+            else "Retry Unavailable: the Session Cannot Continue",
         )
+        # An approval the session can no longer send is only rejected.
+        if sendable:
+            options.enable_option("allow")
+        else:
+            options.disable_option("allow")
         options.disabled = self._busy
         options.highlighted = 0
         options.focus()

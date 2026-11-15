@@ -35,7 +35,10 @@ import {
   useRef,
   useState,
 } from "react";
-import { selectedActionMode } from "./actionPresentation";
+import {
+  retainedApprovalSendable,
+  selectedActionMode,
+} from "./actionPresentation";
 import {
   GatewayClient,
   createCommand,
@@ -927,7 +930,13 @@ export const App = ({ client, initialSessionId }: AppProps) => {
           {error ?
             <div className="error-banner" role="alert">
               <span>{error}</span>
-              {retryCommand?.session_id === sessionId ?
+              {(
+                retryCommand?.session_id === sessionId &&
+                // An approval the session can no longer send is only rejected.
+                (retryCommand.kind !== "approve" ||
+                  projection === null ||
+                  retainedApprovalSendable(projection))
+              ) ?
                 <Button
                   size="sm"
                   variant="outline"
@@ -1018,6 +1027,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
                     retryCommand?.session_id === sessionId &&
                     retryCommand.kind === "approve" &&
                     projection?.pendingApproval?.decision === "approved" &&
+                    retainedApprovalSendable(projection) &&
                     retryCommand.payload.target_id ===
                       projection.pendingApproval.groupId
                   ) ?

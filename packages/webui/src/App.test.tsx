@@ -3918,6 +3918,7 @@ class OutsidePendingClient extends PendingClient {
 
 class RetainedOutsideClient extends OutsidePendingClient {
   retainedOnReplay = false;
+  unrecoverable = false;
 
   constructor(private readonly outside: ReturnType<typeof syntheticAction>) {
     super(outside);
@@ -3941,6 +3942,16 @@ class RetainedOutsideClient extends OutsidePendingClient {
       availableCommands: ["deny"],
       eventCount: 8,
       revision: 7,
+      ...(this.unrecoverable ?
+        {
+          lifecycle: {
+            status: "error" as const,
+            canPause: false,
+            canResume: false,
+            canSteer: false,
+          },
+        }
+      : {}),
     });
   }
 
@@ -4249,6 +4260,37 @@ describe("App error handling", () => {
 
     await waitFor(() => expect(client.commands).toHaveLength(2));
     expect(client.commands[1]).toEqual(client.commands[0]);
+  });
+
+  it("offers no retry for an approval an unrecoverable session cannot send", async () => {
+    const client = new RetainedOutsideClient(syntheticOutsideOperation());
+    client.unrecoverable = true;
+    render(<App client={client} initialSessionId="session-test" />);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Allow 1 action once" }),
+    );
+    expect(
+      await screen.findByText("records service unavailable"),
+    ).toBeVisible();
+    act(() => client.emitStream(client.retainedProjection()));
+
+    const review = await screen.findByRole("region", {
+      name: "Approval not sent",
+    });
+    expect(within(review).getByText(/session cannot continue/u)).toBeVisible();
+    expect(
+      within(review).queryByText(/made in another window/u),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Retry request" }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(
+      within(review).getByRole("button", { name: "Reject 1 action" }),
+    );
+
+    await waitFor(() => expect(client.commands).toHaveLength(2));
+    expect(client.commands[1]?.kind).toBe("deny");
   });
 
   it("offers only rejection for an approval retained by another window", async () => {

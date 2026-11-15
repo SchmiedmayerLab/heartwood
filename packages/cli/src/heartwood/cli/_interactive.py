@@ -42,6 +42,8 @@ from heartwood.gateway import (
     outside_review_lines,
     outside_review_title,
     retained_approval,
+    retained_approval_notice,
+    retained_approval_sendable,
     specialist_review_lines,
 )
 from heartwood.gateway import (
@@ -184,6 +186,14 @@ _STABLE_WAIT_TIMEOUT_SECONDS = 3600.0
 _RETAINED_APPROVAL_CHOICES = "Resend it with /retry, or withdraw it with /reject."
 
 
+def _retained_approval_choices(projection: SessionProjection) -> str:
+    return (
+        _RETAINED_APPROVAL_CHOICES
+        if retained_approval_sendable(projection)
+        else "Withdraw it with /reject."
+    )
+
+
 class InteractiveSession:
     """Translate terminal input into the shared gateway command contract."""
 
@@ -295,10 +305,12 @@ class InteractiveSession:
             if directive == "/reject":
                 events = self._handle(CommandKind.DENY, payload)
                 return InteractionResult(events=events, projection=self.replay())
-            if retained_approval(self.replay()) is not None:
+            projection = self.replay()
+            if retained_approval(projection) is not None:
                 # A new approval is refused while the recorded one waits to be sent.
                 return InteractionResult(
-                    message=f"{RETAINED_APPROVAL_NOTICE}\n{_RETAINED_APPROVAL_CHOICES}",
+                    message=f"{retained_approval_notice(projection)}\n"
+                    + _retained_approval_choices(projection),
                     error=True,
                 )
             return self._approve(self._command(CommandKind.APPROVE, payload))
@@ -562,7 +574,7 @@ def format_projection_lines(
             else f"Review {len(approval.actions)} {label} as one OpenHands action set:"
         )
         if retained:
-            lines.append(RETAINED_APPROVAL_NOTICE)
+            lines.append(retained_approval_notice(projection))
         for index, action in enumerate(approval.actions, 1):
             tool_label = terminal_safe_text(action_tool_label(action.tool_name))
             risk_label = action_risk_label(action.risk)
@@ -579,7 +591,11 @@ def format_projection_lines(
                 lines.extend(f"       {line}" for line in argument_lines)
         lines.extend(
             (
-                "Resend the recorded approval: /retry",
+                *(
+                    ("Resend the recorded approval: /retry",)
+                    if retained_approval_sendable(projection)
+                    else ()
+                ),
                 "Reject the review to withdraw it: /reject",
             )
             if retained
