@@ -53,6 +53,7 @@ export type EventKind =
   | "session.resumed"
   | "audit.export.recorded"
   | "error.recorded"
+  | "worker_attempt.recorded"
   | "workflow.updated"
   | "workflow.execution.recorded";
 export type Reference = string;
