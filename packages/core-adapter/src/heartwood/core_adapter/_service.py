@@ -15,15 +15,16 @@ import os
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from threading import RLock
-from typing import Literal, assert_never, cast
+from typing import assert_never, cast
 from uuid import UUID, uuid4
 
 from heartwood.adapters import PlatformAdapter
 from heartwood.adapters.platform import GenericPlatformAdapter, select_platform_adapter
 from heartwood.audit import AuditIntegrityError, AuditLog, prepare_audit_event
+from heartwood.core_adapter._audit_projection import project_audit_payload
 from heartwood.core_adapter._facade import (
     AgentBackend,
     BackendAgentMessageEvent,
@@ -55,22 +56,25 @@ from heartwood.core_adapter.action_review import (
 from heartwood.core_adapter.checkpoint_evidence import SessionCheckpointEvidence
 from heartwood.core_adapter.external_actions import (
     ExternalActionAdapter,
-    ExternalActionDecision,
     ExternalActionError,
-    ExternalActionProposal,
     ExternalActionRecord,
-    ExternalActionRequest,
-    canonical_request,
     external_action_records,
     reserved_external_identity,
-    validate_external_transition,
+)
+from heartwood.core_adapter.external_decisions import (
+    close_external,
+    decide_external_action,
+    decide_external_result,
+    external_decision_boundary,
+    external_now,
+    observe_external_actions_locked,
+    propose_external_action_locked,
+    propose_external_result_locked,
 )
 from heartwood.core_adapter.external_results import (
     RESULT_PREFIX,
-    ExternalResultProposal,
     ExternalResultRecord,
     external_result_records,
-    validate_result_transition,
 )
 from heartwood.core_adapter.reproduction_journal import (
     JournaledReproduction,
@@ -87,6 +91,7 @@ from heartwood.core_adapter.worker_attempts import (
     WorkerRevocationEvidence,
     WorkerRuntimeBinding,
     current_worker_attempt,
+    gateway_policy_sha256,
     validate_worker_transition,
     worker_replacement_blocker,
 )
@@ -764,124 +769,9 @@ class SessionService:
     def propose_external_action(self, source_event_id: str) -> SessionEvent:
         """Prepare review of a retained worker proposal through a trusted service adapter."""
         with self._command_lock:
-            self._require_worker_owner_locked()
-            lease = self._worker_lease
-            adapter = self._external_actions
-            if (
-                lease is None
-                or adapter is None
-                or self._worker_admission_error_locked() is not None
-            ):
-                raise ExternalActionError(
-                    "outside operation requires an admitted worker and service"
-                )
-            events = self.replay_events()
-            existing = next(
-                (
-                    item
-                    for item in external_action_records(events).values()
-                    if item.proposal.source_event_id == source_event_id and item.phase != "expired"
-                ),
-                None,
-            )
-            closed = self._expire_external_review(existing)
-            if existing is not None and closed is None:
-                raise ExternalActionError("worker proposal already has an outside operation")
-            source = next((event for event in events if event.event_id == source_event_id), None)
-            if (
-                source is None
-                or source.kind != EventKind.TOOL_CALL_PROPOSED
-                or source.payload.get("worker_attempt_id") != str(lease.intent.attempt_id)
-            ):
-                raise ExternalActionError("outside operation requires a current worker proposal")
-            tool_name, arguments = source.payload.get("tool_name"), source.payload.get("arguments")
-            if (
-                not isinstance(tool_name, str)
-                or tool_name not in adapter.tool_names
-                or not isinstance(arguments, dict)
-            ):
-                raise ExternalActionError("worker tool has no trusted outside service binding")
-            policy = adapter.policy_sha256
-            request = ExternalActionRequest.model_validate(adapter.prepare(tool_name, arguments))
-            if request.tool_name != tool_name:
-                raise ExternalActionError("service request changed the proposed tool")
-            created_at = self._external_now()
-            proposal = ExternalActionProposal(
-                operation_id=uuid4(),
-                worker=lease.intent,
-                source_event_id=source_event_id,
-                service_policy_sha256=policy,
-                request=request,
-                created_at=created_at,
-                expires_at=created_at + timedelta(minutes=5),
-            )
-            self._check_external_authority(proposal)
-            event = self._record_external_action(
-                ExternalActionRecord(phase="proposed", proposal=proposal)
-            )
-        self._event_sink((event,) if closed is None else (closed, event))
-        return event
-
-    def _expire_external_review(
-        self, record: ExternalActionRecord | ExternalResultRecord | None
-    ) -> SessionEvent | None:
-        """Close an undecided review after its validity so the same content can be re-proposed.
-
-        The expired proposal can never be approved; a fresh review has its own identity,
-        validity interval and decision.
-        """
-        if (
-            record is None
-            or record.phase != "proposed"
-            or self._external_now() < record.proposal.expires_at
-        ):
-            return None
-        return self._close_external(record, "expired")
-
-    def _close_external(
-        self,
-        record: ExternalActionRecord | ExternalResultRecord,
-        phase: Literal["expired", "withdrawn"],
-        withdrawal: ExternalActionDecision | None = None,
-    ) -> SessionEvent:
-        """Record that a review or undispatched authorization can no longer cause an effect."""
-        if isinstance(record, ExternalActionRecord):
-            return self._record_external_action(
-                ExternalActionRecord(
-                    phase=phase,
-                    proposal=record.proposal,
-                    decision=record.decision,
-                    withdrawal=withdrawal,
-                )
-            )
-        return self._record_external_result(
-            ExternalResultRecord(
-                phase=phase,
-                proposal=record.proposal,
-                decision=record.decision,
-                withdrawal=withdrawal,
-            )
-        )
-
-    def _withdraw_external_authorization(
-        self, command: SessionCommand, current: ExternalActionRecord | ExternalResultRecord
-    ) -> tuple[SessionEvent, ...]:
-        """Let the researcher's denial close an approval that provably never dispatched."""
-        assert current.decision is not None
-        boundary = self._close_external(
-            current,
-            "withdrawn",
-            ExternalActionDecision(
-                command_id=command.command_id,
-                actor_id=command.actor_id,
-                decision="denied",
-                decided_at=self._external_now(),
-                proposal_sha256=current.proposal.sha256,
-            ),
-        )
-        emitted = (boundary, *self._checkpoint_boundary(boundary))
-        self._complete_external_command(current.decision.command_id)
-        return emitted
+            events = propose_external_action_locked(self, source_event_id)
+        self._event_sink(events)
+        return events[-1]
 
     def _undispatched_authorizations(self, events: tuple[SessionEvent, ...]) -> dict[str, str]:
         """Map each approval command awaiting dispatch to its reviewed action set."""
@@ -913,222 +803,12 @@ class SessionService:
             last_sequence=self.replay_events()[-1].sequence,
         )
 
-    def _result_model_route(self) -> str:
-        return canonical_request(
-            json.dumps(
-                {
-                    "backend_id": self.backend.backend_id,
-                    "model_id": self.backend.model_id,
-                    "profile_id": self.backend.model_profile_id,
-                    "endpoint": self.backend.model_endpoint,
-                    "credential_reference": self.backend.credential_reference,
-                    "capability_tier": self.backend.capability_tier,
-                    "action_review_mode": self._review_mode_locked(
-                        sandboxed=self._sandboxed_locked()
-                    ),
-                }
-            )
-        )
-
     def propose_external_result(self, operation_id: UUID) -> SessionEvent:
         """Prepare separate review before outside content can enter worker/model context."""
         with self._command_lock:
-            self._require_worker_owner_locked()
-            adapter, lease = self._external_actions, self._worker_lease
-            events = self.replay_events()
-            outside = external_action_records(events).get(operation_id)
-            closed: SessionEvent | None = None
-            existing = next(
-                (
-                    item
-                    for item in external_result_records(events).values()
-                    if item.proposal.operation_id == operation_id and item.phase != "expired"
-                ),
-                None,
-            )
-            if (
-                adapter is None
-                or lease is None
-                or outside is None
-                or not outside.terminal
-                or outside.observation is None
-                or outside.proposal.worker != lease.intent
-                or (
-                    existing is not None
-                    and (closed := self._expire_external_review(existing)) is None
-                )
-            ):
-                raise ExternalActionError("result release requires a unique current worker outcome")
-            source = next(
-                event
-                for event in reversed(events)
-                if event.kind == EventKind.EXTERNAL_ACTION_RECORDED
-                and ExternalActionRecord.model_validate_json(json.dumps(event.payload["record"]))
-                == outside
-            )
-            policy = adapter.policy_sha256
-            route = self._result_model_route()
-            created_at = self._external_now()
-            proposal = ExternalResultProposal(
-                release_id=uuid4(),
-                operation_id=operation_id,
-                operation_sha256=outside.proposal.sha256,
-                observation_event_id=source.event_id,
-                worker=lease.intent,
-                service_policy_sha256=policy,
-                model_route_json=route,
-                content_json="{}",
-                created_at=created_at,
-                expires_at=created_at + timedelta(minutes=5),
-            )
-            self._check_result_authority(proposal)
-            try:
-                content = canonical_request(adapter.prepare_result(outside))
-                proposal = ExternalResultProposal.model_validate(
-                    proposal.model_copy(update={"content_json": content})
-                )
-            except Exception:
-                raise ExternalActionError("outside result is unavailable or invalid") from None
-            self._check_result_authority(proposal)
-            event = self._record_external_result(
-                ExternalResultRecord(phase="proposed", proposal=proposal)
-            )
-        self._event_sink((event,) if closed is None else (closed, event))
-        return event
-
-    def _check_result_authority(self, proposal: ExternalResultProposal) -> None:
-        adapter, lease = self._external_actions, self._worker_lease
-        policy = json.dumps(
-            self.policy_profile.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
-        )
-        if (
-            adapter is None
-            or lease is None
-            or not lease.active
-            or lease.intent != proposal.worker
-            or self._worker_project_id != proposal.worker.project_id
-            or self._worker_admission_error_locked() is not None
-            or hashlib.sha256(policy.encode()).hexdigest() != proposal.worker.gateway_policy_sha256
-            or adapter.policy_sha256 != proposal.service_policy_sha256
-            or self._result_model_route() != proposal.model_route_json
-            or not proposal.created_at <= self._external_now() < proposal.expires_at
-        ):
-            raise ExternalActionError("result release authority or destination changed")
-
-    def _record_external_result(self, record: ExternalResultRecord) -> SessionEvent:
-        previous = external_result_records(self.replay_events()).get(record.proposal.release_id)
-        validate_result_transition(previous, record)
-        return self._record_event(
-            EventKind.EXTERNAL_RESULT_RECORDED,
-            {
-                "record": cast(dict[str, JsonValue], record.model_dump(mode="json")),
-                **self._evidence_policy(required=record.phase == "authorized"),
-                "worker_attempt_id": str(record.proposal.worker.attempt_id),
-                "worker_project_id": str(record.proposal.worker.project_id),
-            },
-        )
-
-    def _decide_external_result(
-        self, command: SessionCommand, current: ExternalResultRecord
-    ) -> tuple[SessionEvent, ...]:
-        proposal, adapter = current.proposal, self._external_actions
-        approved = _kind_value(command.kind) == CommandKind.APPROVE.value
-        if current.phase == "authorized" and not approved:
-            return self._withdraw_external_authorization(command, current)
-        if current.phase == "authorized" and (
-            current.decision is None
-            or current.decision.command_id != command.command_id
-            or current.decision.actor_id != command.actor_id
-        ):
-            raise SessionRecoveryError("Retained outside authorization belongs to another command")
-        emitted: list[SessionEvent] = []
-        try:
-            if current.phase not in {"proposed", "authorized"}:
-                raise ExternalActionError("result release already has a decision")
-            if approved:
-                self._check_result_authority(proposal)
-                if (
-                    not self.backend.wait_for_idle(0)
-                    or self.backend.pending_action_group(session_id=command.session_id) is not None
-                ):
-                    raise ExternalActionError("worker has unfinished execution or review")
-                assert adapter is not None
-                outside = external_action_records(self.replay_events())[proposal.operation_id]
-                adapter.check_result_policy(
-                    outside,
-                    proposal.content_json,
-                    proposal.model_route_json,
-                    command.actor_id,
-                    self._external_now(),
-                )
-                self._check_result_authority(proposal)
-                authorized, authorization_events = self._authorize_backend(
-                    command, purpose="release reviewed outside result to the worker model"
-                )
-                emitted.extend(authorization_events)
-                if not authorized:
-                    return tuple(emitted)
-                self._check_result_authority(proposal)
-            decision = ExternalActionDecision(
-                command_id=command.command_id,
-                actor_id=command.actor_id,
-                decision="approved" if approved else "denied",
-                decided_at=self._external_now(),
-                proposal_sha256=proposal.sha256,
-            )
-            intent = ExternalResultRecord(
-                phase="authorized" if approved else "denied",
-                proposal=proposal,
-                decision=current.decision or decision,
-            )
-        except Exception:
-            return (
-                *emitted,
-                self._record_event(
-                    EventKind.ERROR_RECORDED,
-                    {
-                        "reason": "outside result release validation failed",
-                        "affects_lifecycle": False,
-                    },
-                ),
-            )
-        # Journal failure must prevent disclosure, not be reduced to a delivery error.
-        boundary = (
-            self._external_decision_boundary(current)
-            if current.phase == "authorized"
-            else self._record_external_result(intent)
-        )
-        if current.phase != "authorized":
-            emitted.append(boundary)
-        emitted.extend(self._checkpoint_boundary(boundary, required=approved))
-        if not approved:
-            return tuple(emitted)
-        assert intent.decision is not None
-        decision = intent.decision
-        emitted.append(
-            self._record_external_result(intent.model_copy(update={"phase": "submitting"}))
-        )
-        stream: tuple[BackendEvent, ...] = ()
-        phase: Literal["unknown", "submitted"]
-        try:
-            self._check_result_authority(proposal)
-            stream = self.backend.submit_context(
-                session_id=command.session_id, content=proposal.message
-            )
-            phase = (
-                "unknown"
-                if any(isinstance(event, BackendErrorEvent) for event in stream)
-                else "submitted"
-            )
-        except Exception:
-            phase = "unknown"
-        emitted.append(
-            self._record_external_result(
-                ExternalResultRecord(phase=phase, proposal=proposal, decision=decision)
-            )
-        )
-        emitted.extend(self._translate_backend_events(stream))
-        return tuple(emitted)
+            events = propose_external_result_locked(self, operation_id)
+        self._event_sink(events)
+        return events[-1]
 
     def reconcile_external_actions(self) -> tuple[SessionEvent, ...]:
         """Query retained outside operation IDs without reviving a worker or submitting work."""
@@ -1140,160 +820,13 @@ class SessionService:
             adapter = self._external_actions
             if adapter is None:
                 return ()
-            emitted: list[SessionEvent] = []
-            for record in external_action_records(self.replay_events()).values():
-                if record.phase in {"proposed", "authorized", "denied"} or record.terminal:
-                    continue
-                if record.proposal.worker.project_id != self._worker_project_id:
-                    raise ExternalActionError("outside journal belongs to another project")
-                try:
-                    observed = ExternalActionRecord(
-                        phase="observed",
-                        proposal=record.proposal,
-                        decision=record.decision,
-                        observation=adapter.observe(record.proposal),
-                    )
-                    # Validate even an adapter returning an unchecked model_copy.
-                    observed = ExternalActionRecord.model_validate_json(observed.model_dump_json())
-                except Exception:
-                    observed = ExternalActionRecord(
-                        phase="unknown",
-                        proposal=record.proposal,
-                        decision=record.decision,
-                    )
-                if observed != record:
-                    emitted.append(self._record_external_action(observed))
-            emitted.extend(self._recover_external_approvals_locked())
+            emitted = (
+                *observe_external_actions_locked(self, adapter),
+                *self._recover_external_approvals_locked(),
+            )
         if emitted:
-            self._event_sink(tuple(emitted))
-        return tuple(emitted)
-
-    def _external_now(self) -> datetime:
-        value = datetime.fromisoformat(self.clock().replace("Z", "+00:00"))
-        if value.tzinfo is None or value.utcoffset() is None:
-            raise ExternalActionError("outside operation requires a timezone-aware clock")
-        return value
-
-    def _check_external_authority(self, proposal: ExternalActionProposal) -> None:
-        lease, adapter = self._worker_lease, self._external_actions
-        policy = json.dumps(
-            self.policy_profile.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
-        )
-        if (
-            lease is None
-            or adapter is None
-            or not lease.active
-            or lease.intent != proposal.worker
-            or self._worker_project_id != proposal.worker.project_id
-            or self._worker_admission_error_locked() is not None
-            or hashlib.sha256(policy.encode()).hexdigest() != proposal.worker.gateway_policy_sha256
-            or adapter.policy_sha256 != proposal.service_policy_sha256
-            or proposal.request.tool_name not in adapter.tool_names
-            or not proposal.created_at <= self._external_now() < proposal.expires_at
-        ):
-            raise ExternalActionError("outside operation authority is stale or unavailable")
-
-    def _record_external_action(self, record: ExternalActionRecord) -> SessionEvent:
-        previous = external_action_records(self.replay_events()).get(record.proposal.operation_id)
-        validate_external_transition(previous, record)
-        return self._record_event(
-            EventKind.EXTERNAL_ACTION_RECORDED,
-            {
-                "record": cast(dict[str, JsonValue], record.model_dump(mode="json")),
-                **self._evidence_policy(required=record.phase == "authorized"),
-                "worker_attempt_id": str(record.proposal.worker.attempt_id),
-                "worker_project_id": str(record.proposal.worker.project_id),
-            },
-        )
-
-    def _decide_external_action(
-        self, command: SessionCommand, current: ExternalActionRecord
-    ) -> tuple[SessionEvent, ...]:
-        proposal, adapter = current.proposal, self._external_actions
-        approved = _kind_value(command.kind) == CommandKind.APPROVE.value
-        if current.phase == "authorized" and not approved:
-            return self._withdraw_external_authorization(command, current)
-        if current.phase == "authorized" and (
-            current.decision is None
-            or current.decision.command_id != command.command_id
-            or current.decision.actor_id != command.actor_id
-        ):
-            raise SessionRecoveryError("Retained outside authorization belongs to another command")
-        if current.phase not in {"proposed", "authorized"}:
-            return (
-                self._record_event(
-                    EventKind.ERROR_RECORDED,
-                    {
-                        "reason": "outside operation already has a decision",
-                        "affects_lifecycle": False,
-                    },
-                ),
-            )
-        inputs: list[bytes] = []
-        try:
-            if approved:
-                self._check_external_authority(proposal)
-                assert adapter is not None
-                for reference in proposal.request.inputs:
-                    content = adapter.read_input(reference)
-                    if (
-                        type(content) is not bytes
-                        or len(content) != reference.size_bytes
-                        or hashlib.sha256(content).hexdigest() != reference.sha256
-                    ):
-                        raise ExternalActionError("reviewed outside input changed")
-                    inputs.append(content)
-                adapter.check_policy(proposal, command.actor_id, self._external_now())
-                self._check_external_authority(proposal)
-            decision = ExternalActionDecision(
-                command_id=command.command_id,
-                actor_id=command.actor_id,
-                decision="approved" if approved else "denied",
-                decided_at=self._external_now(),
-                proposal_sha256=proposal.sha256,
-            )
-            intent = ExternalActionRecord(
-                phase="authorized" if approved else "denied",
-                proposal=proposal,
-                decision=current.decision or decision,
-            )
-        except Exception:
-            return (
-                self._record_event(
-                    EventKind.ERROR_RECORDED,
-                    {
-                        "reason": "outside authorization or input validation failed",
-                        "affects_lifecycle": False,
-                    },
-                ),
-            )
-        # Commit the decision before any service effect. Journal failures must propagate.
-        boundary = (
-            self._external_decision_boundary(current)
-            if current.phase == "authorized"
-            else self._record_external_action(intent)
-        )
-        emitted = [] if current.phase == "authorized" else [boundary]
-        emitted.extend(self._checkpoint_boundary(boundary, required=approved))
-        if not approved:
-            return tuple(emitted)
-        assert adapter is not None
-        assert intent.decision is not None
-        decision = intent.decision
-        emitted.append(
-            self._record_external_action(intent.model_copy(update={"phase": "submitting"}))
-        )
-        try:
-            self._check_external_authority(proposal)
-            observation = adapter.submit(proposal, decision, tuple(inputs))
-            result = ExternalActionRecord(
-                phase="observed", proposal=proposal, decision=decision, observation=observation
-            )
-            result = ExternalActionRecord.model_validate_json(result.model_dump_json())
-        except Exception:
-            result = ExternalActionRecord(phase="unknown", proposal=proposal, decision=decision)
-        emitted.append(self._record_external_action(result))
-        return tuple(emitted)
+            self._event_sink(emitted)
+        return emitted
 
     def _reserved_external_event(self, event: BackendEvent) -> bool:
         if isinstance(
@@ -1417,16 +950,13 @@ class SessionService:
             ):
                 raise WorkerAttemptError("local execution history requires explicit migration")
             assert self._worker_project_id is not None
-            policy = json.dumps(
-                self.policy_profile.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
-            ).encode()
             intent = WorkerAttemptIntent(
                 project_id=self._worker_project_id,
                 session_id=self.store.session_id,
                 attempt_id=uuid4(),
                 conversation_id=previous.intent.conversation_id if previous else uuid4(),
                 image_digest=image_digest,
-                gateway_policy_sha256=hashlib.sha256(policy).hexdigest(),
+                gateway_policy_sha256=gateway_policy_sha256(self.policy_profile),
                 sandbox_policy_sha256=sandbox_policy_sha256,
                 input_manifest_sha256=input_manifest_sha256,
             )
@@ -1795,7 +1325,7 @@ class SessionService:
             None,
         )
         if release is not None:
-            return self._decide_external_result(command, release)
+            return decide_external_result(self, command, release)
         outside = next(
             (
                 record
@@ -1805,7 +1335,7 @@ class SessionService:
             None,
         )
         if outside is not None:
-            return self._decide_external_action(command, outside)
+            return decide_external_action(self, command, outside)
         approved = _kind_value(command.kind) == CommandKind.APPROVE.value
         pending_group = self.backend.pending_action_group(session_id=command.session_id)
         if pending_group is None or pending_group.group_id != action_group_id:
@@ -2278,22 +1808,6 @@ class SessionService:
                 return True
         return False
 
-    def _external_decision_boundary(
-        self, record: ExternalActionRecord | ExternalResultRecord
-    ) -> SessionEvent:
-        """Locate the original durable decision, never a request-supplied checkpoint."""
-        kind = (
-            EventKind.EXTERNAL_ACTION_RECORDED
-            if isinstance(record, ExternalActionRecord)
-            else EventKind.EXTERNAL_RESULT_RECORDED
-        )
-        payload = record.model_dump(mode="json")
-        return next(
-            event
-            for event in self.replay_events()
-            if event.kind == kind and event.payload.get("record") == payload
-        )
-
     def _recover_external_approvals_locked(
         self, command: SessionCommand | None = None
     ) -> tuple[SessionEvent, ...]:
@@ -2330,9 +1844,9 @@ class SessionService:
             _, digest = self._external_command_receipt(command_id)
             if (
                 decided.phase == "authorized"
-                and self._external_now() >= decided.proposal.expires_at
+                and external_now(self.clock) >= decided.proposal.expires_at
             ):
-                boundary = self._close_external(decided, "expired")
+                boundary = close_external(self, decided, "expired")
                 recovered.extend((boundary, *self._checkpoint_boundary(boundary)))
             elif decided.phase == "authorized":
                 if (
@@ -2356,12 +1870,12 @@ class SessionService:
                 )
                 current: ExternalActionRecord | ExternalResultRecord
                 if isinstance(decided, ExternalActionRecord):
-                    recovered.extend(self._decide_external_action(retained, decided))
+                    recovered.extend(decide_external_action(self, retained, decided))
                     current = external_action_records(self.replay_events())[
                         decided.proposal.operation_id
                     ]
                 else:
-                    recovered.extend(self._decide_external_result(retained, decided))
+                    recovered.extend(decide_external_result(self, retained, decided))
                     current = external_result_records(self.replay_events())[
                         decided.proposal.release_id
                     ]
@@ -2371,7 +1885,7 @@ class SessionService:
                     )
             elif decided.phase in {"denied", "expired", "withdrawn"}:
                 recovered.extend(
-                    self._checkpoint_boundary(self._external_decision_boundary(decided))
+                    self._checkpoint_boundary(external_decision_boundary(self, decided))
                 )
             self._complete_external_command(command_id)
 
@@ -2569,7 +2083,7 @@ class SessionService:
             previous_event_hash=previous_event_hash,
         )
         audit_payload = {
-            **_audit_payload(kind, payload),
+            **project_audit_payload(kind, payload),
             **correlation,
             "session_event_hash": compute_session_event_hash(event),
         }
@@ -2597,263 +2111,6 @@ class SessionService:
         ):
             self._known_source_event_ids.add(source_event_id)
         return event
-
-
-def _audit_payload(kind: EventKind, payload: dict[str, JsonValue]) -> dict[str, JsonValue]:
-    """Project an operational event into its content-minimized audit representation."""
-    if kind == EventKind.EXTERNAL_RESULT_RECORDED:
-        release = ExternalResultRecord.model_validate_json(json.dumps(payload["record"]))
-        decided = release.withdrawal or release.decision
-        return {
-            "release_id": str(release.proposal.release_id),
-            "operation_id": str(release.proposal.operation_id),
-            "proposal_sha256": release.proposal.sha256,
-            "phase": release.phase,
-            **_selected_audit_fields(payload, "evidence_mode"),
-            "actor_id": decided.actor_id if decided else None,
-            "command_id": decided.command_id if decided else None,
-        }
-    if kind == EventKind.EXTERNAL_ACTION_RECORDED:
-        outside = ExternalActionRecord.model_validate_json(json.dumps(payload["record"]))
-        decided = outside.withdrawal or outside.decision
-        return {
-            "operation_id": str(outside.proposal.operation_id),
-            "proposal_sha256": outside.proposal.sha256,
-            "phase": outside.phase,
-            **_selected_audit_fields(payload, "evidence_mode"),
-            "actor_id": decided.actor_id if decided else None,
-            "command_id": decided.command_id if decided else None,
-            "status": outside.observation.operation.status if outside.observation else None,
-        }
-    if kind == EventKind.WORKER_ATTEMPT_RECORDED:
-        record = WorkerAttemptRecord.model_validate(payload)
-        return {
-            "phase": record.phase,
-            "project_id": str(record.intent.project_id),
-            "attempt_id": str(record.intent.attempt_id),
-            "conversation_id": str(record.intent.conversation_id),
-            "binding_sha256": hashlib.sha256(
-                json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
-            ).hexdigest(),
-        }
-    if kind == EventKind.WORKFLOW_EXECUTION_RECORDED:
-        return _selected_audit_fields(
-            payload,
-            "run_id",
-            "stage_id",
-            "tool_call_id",
-            "group_id",
-            "status",
-            "observation_fingerprint",
-            "preparation_event_id",
-            "execution_event_id",
-        )
-    if kind == EventKind.WORKFLOW_UPDATED:
-        return _selected_audit_fields(
-            payload,
-            "command_id",
-            "actor_id",
-            "run_id",
-            "stage_id",
-            "phase",
-            "revision",
-            "transition",
-            "approved",
-            "workflow_fingerprint",
-            "evidence_fingerprint",
-            "assessed_stage_id",
-            "experiment_fingerprint",
-            "research_review_fingerprint",
-            "research_correction_fingerprint",
-        )
-    if kind == EventKind.COMMAND_RECEIVED:
-        return _selected_audit_fields(
-            payload,
-            "actor_id",
-            "command_id",
-            "command_hash",
-            "command_kind",
-        )
-    if kind == EventKind.MODEL_CALL_DECISION_RECORDED:
-        decision = payload.get("decision")
-        model_profile = payload.get("model_profile")
-        return {
-            "decision": (
-                _selected_audit_fields(
-                    decision,
-                    "decision_id",
-                    "policy_profile_id",
-                    "endpoint",
-                    "capability_tier",
-                    "decision",
-                )
-                if isinstance(decision, dict)
-                else {}
-            ),
-            "model_profile": (
-                _selected_audit_fields(
-                    model_profile,
-                    "backend_id",
-                    "profile_id",
-                    "capability_tier",
-                    "action_review_mode",
-                )
-                if isinstance(model_profile, dict)
-                else {}
-            ),
-        }
-    if kind == EventKind.APPROVAL_RECORDED:
-        tool_call_ids = payload.get("tool_call_ids")
-        return {
-            **_selected_audit_fields(
-                payload,
-                "command_id",
-                "actor_id",
-                "group_id",
-                "decision",
-                "review",
-                "evidence_mode",
-            ),
-            "action_count": len(tool_call_ids) if isinstance(tool_call_ids, list) else 0,
-        }
-    if kind == EventKind.USER_MESSAGE_RECORDED:
-        content = payload.get("content")
-        return {
-            "actor_id": payload.get("actor_id", ""),
-            "command_id": payload.get("command_id", ""),
-            "content_chars": len(content) if isinstance(content, str) else 0,
-        }
-    if kind == EventKind.AGENT_MESSAGE_EMITTED:
-        content = payload.get("content")
-        return {
-            "content_chars": len(content) if isinstance(content, str) else 0,
-        }
-    if kind == EventKind.TOOL_CALL_PROPOSED:
-        return _selected_audit_fields(
-            payload,
-            "tool_call_id",
-            "tool_name",
-            "risk",
-        )
-    if kind == EventKind.CONFIRMATION_REQUESTED:
-        request = payload.get("request")
-        if not isinstance(request, dict):
-            return {"request": "invalid"}
-        return {
-            "request": _selected_audit_fields(
-                request,
-                "request_id",
-                "group_id",
-                "tool_call_id",
-                "tool_name",
-                "risk",
-            )
-        }
-    if kind == EventKind.CONFIRMATION_RESOLVED:
-        return _selected_audit_fields(
-            payload,
-            "group_id",
-            "tool_call_id",
-            "decision",
-        )
-    if kind == EventKind.TOOL_EXECUTION_RECORDED:
-        return _selected_audit_fields(
-            payload,
-            "backend_id",
-            "tool_call_id",
-            "action_id",
-            "tool_name",
-            "exit_code",
-        )
-    if kind == EventKind.TASK_PLAN_UPDATED:
-        tasks = payload.get("tasks")
-        task_items = tasks if isinstance(tasks, list) else []
-        counts: dict[str, int] = {}
-        for task in task_items:
-            if isinstance(task, dict):
-                status = str(task.get("status", "unknown"))
-                counts[status] = counts.get(status, 0) + 1
-        normalized_counts: dict[str, JsonValue] = dict(counts)
-        return {
-            "task_count": len(task_items),
-            "status_counts": normalized_counts,
-        }
-    if kind == EventKind.MODEL_USAGE_UPDATED:
-        usage = payload.get("usage")
-        return {
-            "usage": (
-                _selected_audit_fields(
-                    usage,
-                    "usage_id",
-                    "model_name",
-                    "call_count",
-                    "prompt_tokens",
-                    "completion_tokens",
-                    "cache_read_tokens",
-                    "cache_write_tokens",
-                    "reasoning_tokens",
-                    "context_window",
-                    "accumulated_cost",
-                )
-                if isinstance(usage, dict)
-                else {}
-            )
-        }
-    if kind == EventKind.SUBAGENT_UPDATED:
-        subagent = payload.get("subagent")
-        return {
-            "subagent": (
-                _selected_audit_fields(
-                    subagent,
-                    "invocation_id",
-                    "task_id",
-                    "agent_name",
-                    "role_label",
-                    "status",
-                    "parent_session_id",
-                    "parent_action_id",
-                )
-                if isinstance(subagent, dict)
-                else {}
-            )
-        }
-    if kind == EventKind.AGENT_LIFECYCLE_UPDATED:
-        return _selected_audit_fields(payload, "status")
-    if kind in {EventKind.SESSION_PAUSED, EventKind.SESSION_RESUMED, EventKind.SESSION_CLOSED}:
-        return _selected_audit_fields(payload, "command_id")
-    if kind == EventKind.ERROR_RECORDED:
-        minimized = _selected_audit_fields(
-            payload,
-            "backend_id",
-            "code",
-            "command",
-        )
-        if "reason" in payload:
-            minimized["reason"] = "[scrubbed]"
-        return minimized
-    if kind == EventKind.AUDIT_EXPORT_RECORDED:
-        return _selected_audit_fields(
-            payload, "event_count", "scrubbed", "experiment_export", "checkpoint_context"
-        )
-    if kind == EventKind.AUDIT_EVIDENCE_RECORDED:
-        return _selected_audit_fields(
-            payload,
-            "boundary_event_id",
-            "boundary_sequence",
-            "mode",
-            "status",
-            "code",
-            "checkpoint_sha256",
-            "covered_through_sequence",
-        )
-    return {"payload_omitted": True}
-
-
-def _selected_audit_fields(
-    payload: Mapping[str, JsonValue],
-    *names: str,
-) -> dict[str, JsonValue]:
-    return {name: payload[name] for name in names if name in payload}
 
 
 def _utc_now() -> str:
