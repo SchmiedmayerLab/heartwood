@@ -13,8 +13,12 @@ import os
 import shutil
 import subprocess
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
+
+from qualification_evidence import MANIFEST, cases, failures, image_source, write_checksums
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -58,6 +62,44 @@ def controller_socket_group(image: str) -> str:
     ).strip()
 
 
+def embedded_build_records(image: str) -> dict[str, Any]:
+    """Read the build records a candidate image retains about its own contents."""
+    records: dict[str, Any] = json.loads(
+        subprocess.check_output(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "--cap-drop",
+                "ALL",
+                "--security-opt",
+                "no-new-privileges",
+                "--network",
+                "none",
+                "--read-only",
+                "--entrypoint",
+                "/opt/heartwood/.venv/bin/python",
+                image,
+                "-I",
+                "-c",
+                "import json; from pathlib import Path; "
+                "root = Path('/opt/heartwood/qualification'); print(json.dumps({"
+                "'sdk': json.loads((root / 'build-record.json').read_text()), "
+                "'application': "
+                "json.loads((root / 'application-build-record.json').read_text())}))",
+            ],
+            text=True,
+            timeout=60,
+        )
+    )
+    return records
+
+
+def timestamp() -> str:
+    """Record run boundaries in Coordinated Universal Time."""
+    return datetime.now(UTC).isoformat(timespec="seconds")
+
+
 def qualify(
     worker: str,
     runtime: str,
@@ -68,6 +110,15 @@ def qualify(
     model_profile: Path | None = None,
 ) -> None:
     """Assemble the trusted controller and retain the installed test outcome."""
+    started_at = timestamp()
+    invocation = {
+        "worker_image": worker,
+        "runtime_image": runtime,
+        "gateway_artifacts": str(artifacts),
+        "records_artifacts": str(records),
+        "output": str(output),
+        "model_profile": None if model_profile is None else str(model_profile),
+    }
     profile = None
     if model_profile is not None:
         from worker_model_profile import QualificationModelProfile
@@ -77,6 +128,7 @@ def qualify(
             raise ValueError("Supply the qualification credential through protected stdin")
     source_paths = (
         ROOT / "deploy/qualify-native-worker.py",
+        ROOT / "deploy/qualification_evidence.py",
         ROOT / "deploy/worker_model_profile.py",
         ROOT / "deploy/tests/test_worker_model_integration.py",
         ROOT / "deploy/tests/test_worker_native_integration.py",
@@ -151,11 +203,19 @@ def qualify(
         if digest(records / name) != expected:
             raise ValueError("Records artifact digest mismatch")
     source_hashes = {str(path.relative_to(ROOT)): digest(path) for path in source_paths}
-    image_ids = {}
+    source = {
+        "commit": subprocess.check_output(
+            ["git", "-C", str(ROOT), "rev-parse", "HEAD"], text=True
+        ).strip(),
+        "tree_clean": not subprocess.check_output(
+            ["git", "-C", str(ROOT), "status", "--porcelain"], text=True
+        ).strip(),
+    }
+    image_ids, image_sources = {}, {}
     for name, image in (("worker", worker), ("runtime", runtime)):
-        image_ids[name] = subprocess.check_output(
-            ["docker", "image", "inspect", "--format", "{{.Id}}", image], text=True
-        ).strip()
+        inspected = json.loads(subprocess.check_output(["docker", "image", "inspect", image]))[0]
+        image_ids[name] = inspected["Id"]
+        image_sources[name] = image_source(inspected, embedded_build_records(inspected["Id"]))
     host = json.loads(
         subprocess.check_output(
             [
@@ -398,23 +458,36 @@ def qualify(
     sources_unchanged = source_hashes == {
         str(path.relative_to(ROOT)): digest(path) for path in source_paths
     }
-    evidence = {
+    evidence: dict[str, Any] = {
         "qualification_kind": "capable-model-native" if profile else "synthetic-native",
+        "source": source,
+        "started_at": started_at,
+        "finished_at": timestamp(),
+        "invocation": invocation,
         "requested_model_profile": profile.mapping() if profile else None,
         "host": host,
         "controller_socket_group": socket_group,
         "qualification_sources": source_hashes,
         "qualification_sources_unchanged": sources_unchanged,
         "images": image_ids,
+        "image_sources": image_sources,
         "gateway_build": record,
         "records_build": records_build,
         "returncode": result.returncode,
-        "passed": result.returncode == 0 and not retained and sources_unchanged,
+        "network_retained": retained,
+        "cases": cases(output / "junit.xml"),
         "sensitive_data_ready": False,
     }
-    (output / "qualification.json").write_text(json.dumps(evidence, indent=2) + "\n")
-    if result.returncode or retained or not sources_unchanged:
-        raise RuntimeError("Native qualification failed; inspect qualification.log and junit.xml")
+    evidence["failures"] = failures(evidence)
+    evidence["passed"] = not evidence["failures"]
+    (output / MANIFEST).write_text(json.dumps(evidence, indent=2) + "\n")
+    write_checksums(output)
+    if evidence["failures"]:
+        raise RuntimeError(
+            "Native qualification failed: "
+            + "; ".join(evidence["failures"])
+            + "; inspect qualification.log and junit.xml"
+        )
 
 
 if __name__ == "__main__":
