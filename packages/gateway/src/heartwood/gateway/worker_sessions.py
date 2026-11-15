@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     from heartwood.gateway._project import ProjectContext
     from heartwood.gateway._skill_settings import SkillManager
     from heartwood.gateway._specialists import SpecialistCatalog
-    from heartwood.schemas import ActionConfirmationMode, PolicyProfile
+    from heartwood.schemas import PolicyProfile
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,7 +39,6 @@ class WorkerSessionRequest:
     session_id: str
     profile: ModelProfile
     policy: PolicyProfile
-    action_confirmation_mode: ActionConfirmationMode
     skills: SkillManager
     specialists: SpecialistCatalog
 
@@ -93,7 +92,6 @@ class ManagedWorkerSession:
         decision = self._service.policy.evaluate(
             endpoint=profile.policy_endpoint,
             capability_tier=profile.capability_tier,
-            action_confirmation_mode=self._request.action_confirmation_mode,
             credential_reference=profile.credential_reference,
             decision_id="worker-launch",
             purpose="worker launch",

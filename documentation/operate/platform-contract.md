@@ -301,7 +301,7 @@ A platform defines restrictions that every project on it must obey: the model an
 
 - **Required:** define the policy per platform, deny egress by default, and list exact model and catalog endpoints.
 - **Required:** let researchers narrow the policy for a project, never widen it.
-- **Recommended:** offer Review Every Action as the only review mode for secret-backed or unqualified routes.
+- **Recommended:** list only `review-all` in `allowed_action_review_modes` until the action-review benchmark and, for `review-outside-effects`, the worker sandbox are qualified for the platform.
 - **Optional:** publish approved Skill sources through the deployment-owned registry at `/etc/heartwood/skill-sources.toml`; only that registry can approve a Skill for controlled data.
 
 Heartwood builds each platform's default policy in its [platform adapter](platform-integration.md#define-policy-and-connections) and evaluates model routes, review modes, and credentials against it.

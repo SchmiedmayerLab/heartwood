@@ -95,8 +95,8 @@ If the account should no longer be used, run `heartwood models forget openai-sub
 ### `HW-CREDENTIAL-002` — Model Credential Isolation Is Unavailable
 
 The selected model uses a credential, but the active platform provides application scrubbing rather than a separate model-only credential boundary.
-Select **Review Every Action**, or choose a credential-free model route.
-Low-Risk Automation remains unavailable for every route; credential isolation does not qualify automatic tool execution.
+Outside an isolated worker the session then reviews every action, and **Review Changes** is listed as unavailable with this reason.
+Choose a credential-free or platform-isolated model route to select it.
 
 Application scrubbing still keeps the credential out of supported tool inputs, project state, browser and notebook output, session events, logs, and audit exports.
 It does not isolate same-identity process memory or every operating-system resource.

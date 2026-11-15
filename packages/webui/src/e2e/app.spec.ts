@@ -213,7 +213,7 @@ test("supports the researcher conversation and session workflow", async ({
     page.getByRole("radio", { name: /Review Every Action/u }),
   ).toBeChecked();
   await expect(
-    page.getByRole("radio", { name: /Low-Risk Automation/u }),
+    page.getByRole("radio", { name: /Review Changes/u }),
   ).toBeVisible();
   await approvalsTab.press("ArrowLeft");
   await expect(modelsTab).toHaveAttribute("aria-selected", "true");
@@ -286,9 +286,13 @@ test("keeps session navigation usable on a narrow notebook viewport", async ({
   await expect(approval).toBeVisible();
   await expect(page.getByLabel("Allow 1 action once")).toBeVisible();
   await page.getByLabel("Open action review settings").click();
-  await expect(
-    page.getByRole("radio", { name: /Review Every Action/u }),
-  ).toBeDisabled();
+  // A pending action set keeps waiting for the researcher; the gateway decides
+  // whether the mode may change, and tightening stays available.
+  const reviewEveryAction = page.getByRole("radio", {
+    name: /Review Every Action/u,
+  });
+  await expect(reviewEveryAction).toBeChecked();
+  await expect(reviewEveryAction).toBeEnabled();
   await page.keyboard.press("Escape");
   const conversationTab = page.getByRole("tab", { name: "Conversation" });
   await conversationTab.focus();
@@ -1056,7 +1060,7 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
       profile: modelSettings.profiles[0],
       credential_status: "configured",
       credential_isolation: credentialIsolation(),
-      action_confirmation_mode: "always-confirm",
+      action_review_mode: "review-all",
       policy_decision: {
         decision: "allow",
         endpoint: "https://api.openai.com/v1/chat/completions",
@@ -1067,7 +1071,9 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
   await page.route("**/settings/actions", (route) =>
     json(route, {
       schema_version: "heartwood.action-settings.v1",
-      confirmation_mode: "always-confirm",
+      review_mode: "review-all",
+      default_mode: "review-all",
+      scope: "launch",
       scope_description:
         "Shared by every Heartwood interface in this project and applied to future action sets.",
       presentation: {
@@ -1099,26 +1105,19 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
       change_blocked_reason: null,
       modes: [
         {
-          mode: "always-confirm",
-          command_value: "ask-every-time",
+          mode: "review-all",
           label: "Review Every Action",
-          description:
-            "Heartwood pauses before every proposed action set so you can inspect it before anything runs.",
-          automatic_risks: [],
-          reviewed_risks: ["low", "medium", "high", "unknown"],
-          recommended: true,
+          description: "You decide on every action before it runs.",
+          automatic: [],
           allowed: true,
           unavailable_reason: null,
         },
         {
-          mode: "confirm-risky",
-          command_value: "auto-approve-low-risk",
-          label: "Low-Risk Automation",
+          mode: "review-changes",
+          label: "Review Changes",
           description:
-            "An action set continues automatically only when every action is low risk. Any medium-, high-, or unclassified-risk action pauses the complete set for review.",
-          automatic_risks: ["low"],
-          reviewed_risks: ["medium", "high", "unknown"],
-          recommended: false,
+            "Heartwood allows viewing project files and plan updates. You decide on every command, file change, and anything else.",
+          automatic: ["read.file-view", "plan.task-tracker"],
           allowed: true,
           unavailable_reason: null,
         },

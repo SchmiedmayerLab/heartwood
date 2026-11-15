@@ -43,7 +43,7 @@ from heartwood.gateway._workspace import WorkspaceInspector
 from heartwood.gateway.worker_deployment import OpenShellWorkerDeployment
 from heartwood.gateway.worker_inputs import WorkerInputManifest
 from heartwood.gateway.worker_native import _NativeWorkerAttempt, native_worker_plan_factory
-from heartwood.schemas import PolicyProfile
+from heartwood.schemas import ActionReviewMode, PolicyProfile
 from heartwood.session import CommandKind, EventKind, SessionCommand
 
 
@@ -163,7 +163,9 @@ def _application(
     project_name: str = "project",
     input_marker: str | None = None,
     deployment: OpenShellWorkerDeployment | None = None,
+    action_review_modes: tuple[ActionReviewMode, ...] = ("review-all",),
 ) -> SessionGateway:
+    """Compose a managed gateway; cases review every worker action unless they widen the ceiling."""
     root = fixture.private / project_name
     root.mkdir()
     (root / "summary.json").write_text(
@@ -218,6 +220,7 @@ def _application(
                 platform_id="generic",
                 allowed_model_endpoints=(profile.policy_endpoint,),
                 credential_allowlist=("SYNTHETIC_MODEL_KEY",),
+                allowed_action_review_modes=action_review_modes,
             ),
         )
     )

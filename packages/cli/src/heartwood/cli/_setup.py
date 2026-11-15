@@ -37,7 +37,6 @@ from heartwood.gateway import (
     ProjectConfigStore,
     ProjectContext,
     SessionGateway,
-    action_mode_label,
     custom_model_connection_requires_token,
     inspect_deployment,
     model_source_options,
@@ -226,11 +225,6 @@ def _configure_setup(
         None,
     )
     print(f"  Model source: {source_option.label if source_option else source}")
-    print(
-        "  Action review: Existing project setting"
-        if resume_existing
-        else f"  Action review: {action_mode_label('always-confirm')}"
-    )
     if not confirmed and not resume_existing:
         if non_interactive:
             parser.error("--yes is required with --non-interactive")
@@ -252,8 +246,6 @@ def _configure_setup(
         if not resume_existing:
             gateway.configure_model_source(source)
         gateway.start()
-        if not resume_existing:
-            gateway.select_action_confirmation_mode("always-confirm")
         if source == "heartwood":
             if not resume_managed_local:
                 _configure_local_model(

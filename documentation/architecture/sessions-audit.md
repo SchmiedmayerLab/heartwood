@@ -107,6 +107,8 @@ Both closures are terminal journal and audit records that complete the original 
 Read-only reconciliation skips undispatched authorizations; it never converts observation into submission authority.
 Otherwise, the session rejects further mutation so a second approval or task cannot repeat an uncertain side effect.
 An action is recorded as approved only when the session holds a recorded decision for its action set.
+A decision the gateway makes under a review mode is such a record: an accepted command and an `approval.recorded` event with the actor `gateway` and the applied mode and rule, followed by the same checkpoint boundary, digest check, and resolution events as a researcher decision.
+The session projection labels an action as decided only from these records, and names the rule for a gateway decision.
 If a backend reports execution of an action without one, the session records an error instead of an approval and fences the worker attempt.
 After replaying and verifying the available evidence, continue in a new session.
 

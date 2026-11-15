@@ -16,7 +16,7 @@ from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
-from heartwood.schemas._records import ActionConfirmationMode
+from heartwood.schemas._records import ActionReviewMode
 from heartwood.schemas.execution import ExecutionBudget, ExecutionUsage
 
 type EvaluationIdentifier = Annotated[
@@ -89,7 +89,7 @@ class EvaluationRuntimeObservation(EvaluationRecord):
     model_options_fingerprint: Sha256 | None
     platform: EvaluationIdentifier
     policy_fingerprint: Sha256
-    action_confirmation: ActionConfirmationMode
+    action_review: ActionReviewMode
     max_input_tokens: int | None = Field(default=None, gt=0)
     max_output_tokens: int | None = Field(default=None, gt=0)
     tool_concurrency: int = Field(default=1, ge=1, strict=True)

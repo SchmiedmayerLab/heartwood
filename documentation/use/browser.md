@@ -71,9 +71,10 @@ These suggestions come from the gateway and are the same ones shown by the termi
 - Open **Activity & audit** to inspect route decisions, tool results, and errors.
 - Open **Skills** to inspect repository-verified and installed Skills.
 - Open **Specialists** to inspect the bounded research specialists available to the parent agent.
-- Select the current **Action review** value in the session header to change when Heartwood pauses.
+- Select the current **Action review** value in the session header to choose which actions need your decision.
 - Use the appearance button in the session header to switch between light and dark mode.
-- Open **Settings** to change the selected model or action-review mode.
+- Open **Settings** to change the selected model or [action-review mode](actions-audit.md#review-modes); modes the deployment does not permit are listed with the reason.
+- In **Agent actions**, an action that Heartwood allowed under a review rule is marked as allowed automatically with that rule.
 - Export the audit record from the session controls.
 
 The session header and conversation use the same gateway-owned states as the other interfaces, including ready, working, waiting for review, paused, complete, rejected, and recovery-required conditions.

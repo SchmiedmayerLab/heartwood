@@ -153,8 +153,10 @@ def test_checked_in_project_config_compatibility_fixture_loads(tmp_path: Path) -
 
     config = project_config_from_mapping(payload, project=ProjectContext(tmp_path))
 
-    assert config.schema_version == "heartwood.project-config.v1"
+    assert config.schema_version == "heartwood.project-config.v2"
     assert config.platform_id == "generic"
+    assert config.action_settings.review_mode is None
+    assert config.policy.allowed_action_review_modes == ("review-all",)
 
 
 def test_project_config_lock_is_reentrant_across_store_instances(tmp_path: Path) -> None:
@@ -174,7 +176,11 @@ def test_project_config_rejects_action_mode_outside_project_policy(tmp_path: Pat
     project = ProjectContext(tmp_path)
     restricted = ProjectConfig(
         platform_id="generic",
-        policy=PolicyProfile(policy_id="restricted", platform_id="generic"),
+        policy=PolicyProfile(
+            policy_id="restricted",
+            platform_id="generic",
+            allowed_action_review_modes=("review-all",),
+        ),
     )
     store = ProjectConfigStore(project, restricted)
 
@@ -182,7 +188,7 @@ def test_project_config_rejects_action_mode_outside_project_policy(tmp_path: Pat
         store.save(
             replace(
                 restricted,
-                action_settings=ActionSettings(confirmation_mode="confirm-risky"),
+                action_settings=ActionSettings(review_mode="review-changes"),
             )
         )
 

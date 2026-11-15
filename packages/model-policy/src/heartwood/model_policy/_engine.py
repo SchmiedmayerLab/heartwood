@@ -15,10 +15,8 @@ from urllib.parse import urlsplit
 from heartwood.schemas import EgressAttestationRecord, ModelCallDecision, PolicyProfile
 
 type CapabilityTier = Literal["autonomous", "supervised", "experimental"]
-type ActionConfirmationMode = Literal["always-confirm", "confirm-risky"]
 
 _VALID_CAPABILITY_TIERS = {"autonomous", "supervised", "experimental"}
-_VALID_ACTION_CONFIRMATION_MODES = {"always-confirm", "confirm-risky"}
 
 
 class PolicyInputError(ValueError):
@@ -90,7 +88,7 @@ def validate_policy_restriction(profile: PolicyProfile, ceiling: PolicyProfile) 
             raise PolicyInputError(f"project {field} exceeds deployment policy")
     for field in (
         "allowed_capability_tiers",
-        "allowed_action_confirmation_modes",
+        "allowed_action_review_modes",
         "credential_allowlist",
     ):
         if not set(getattr(profile, field)) <= set(getattr(ceiling, field)):
@@ -113,7 +111,6 @@ class ModelPolicyEngine:
         *,
         endpoint: str,
         capability_tier: str,
-        action_confirmation_mode: str = "always-confirm",
         credential_reference: str | None = None,
         decision_id: str,
         purpose: str,
@@ -121,9 +118,6 @@ class ModelPolicyEngine:
         """Evaluate a proposed model call and return an auditable decision."""
         if capability_tier not in _VALID_CAPABILITY_TIERS:
             msg = f"unsupported capability tier: {capability_tier}"
-            raise PolicyInputError(msg)
-        if action_confirmation_mode not in _VALID_ACTION_CONFIRMATION_MODES:
-            msg = f"unsupported action confirmation mode: {action_confirmation_mode}"
             raise PolicyInputError(msg)
         checked_capability_tier = cast(CapabilityTier, capability_tier)
         try:
@@ -146,19 +140,6 @@ class ModelPolicyEngine:
                 capability_tier=checked_capability_tier,
                 decision="deny",
                 reason=f"capability tier {capability_tier} is not allowed for {purpose}",
-            )
-
-        if action_confirmation_mode not in self.profile.allowed_action_confirmation_modes:
-            return ModelCallDecision(
-                decision_id=decision_id,
-                policy_profile_id=self.profile.policy_id,
-                endpoint=normalized_endpoint,
-                capability_tier=checked_capability_tier,
-                decision="deny",
-                reason=(
-                    f"action confirmation mode {action_confirmation_mode} "
-                    f"is not allowed for {purpose}"
-                ),
             )
 
         if (

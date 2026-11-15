@@ -1957,38 +1957,45 @@ def test_rest_rejects_invalid_local_model_imports(
     assert response.status_code == expected_status
 
 
-def test_rest_reads_and_selects_action_confirmation_mode(tmp_path: Path) -> None:
+def test_rest_reads_and_selects_action_review_mode(tmp_path: Path) -> None:
     rest = RestGateway(_gateway(tmp_path / "sessions"))
 
     initial = rest.handle(RestRequest(method="GET", path="/settings/actions"))
     selected = rest.handle(
         RestRequest(
             method="PUT",
-            path="/settings/actions/confirmation",
-            body=json.dumps({"mode": "confirm-risky"}),
+            path="/settings/actions/review",
+            body=json.dumps({"mode": "review-changes"}),
+        )
+    )
+    refused = rest.handle(
+        RestRequest(
+            method="PUT",
+            path="/settings/actions/review",
+            body=json.dumps({"mode": "review-outside-effects"}),
         )
     )
 
     assert initial.status_code == 200
-    assert initial.body["confirmation_mode"] == "always-confirm"
-    assert selected.status_code == 422
-    assert "risk hints cannot authorize execution" in str(selected.body)
+    assert initial.body["review_mode"] == "review-all"
+    assert selected.status_code == 200
+    assert refused.status_code == 422
     assert (
-        rest.handle(RestRequest(method="GET", path="/settings/actions")).body["confirmation_mode"]
-        == "always-confirm"
+        rest.handle(RestRequest(method="GET", path="/settings/actions")).body["review_mode"]
+        == "review-changes"
     )
 
 
-def test_rest_rejects_malformed_action_confirmation_selection(tmp_path: Path) -> None:
+def test_rest_rejects_malformed_action_review_selection(tmp_path: Path) -> None:
     rest = RestGateway(_gateway(tmp_path / "sessions"))
 
     responses = [
-        rest.handle(RestRequest(method="PUT", path="/settings/actions/confirmation", body="{")),
-        rest.handle(RestRequest(method="PUT", path="/settings/actions/confirmation", body="{}")),
+        rest.handle(RestRequest(method="PUT", path="/settings/actions/review", body="{")),
+        rest.handle(RestRequest(method="PUT", path="/settings/actions/review", body="{}")),
         rest.handle(
             RestRequest(
                 method="PUT",
-                path="/settings/actions/confirmation",
+                path="/settings/actions/review",
                 body=json.dumps({"mode": "never-confirm"}),
             )
         ),
@@ -2947,7 +2954,6 @@ def test_gateway_downloads_recommended_artifacts_and_snapshots_through_one_inter
     gateway.backend_id = "auto"
     gateway._backend(
         model_settings=gateway.settings_store.load(),
-        action_settings=gateway.action_settings_store.load(),
         selected_model=gateway.config_store.load().local_model,
         session_id="hermes-wiring",
     )

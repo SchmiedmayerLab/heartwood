@@ -14,8 +14,9 @@
     "supervised",
     "experimental"
   ],
-  "allowed_action_confirmation_modes": [
-    "always-confirm"
+  "allowed_action_review_modes": [
+    "review-all",
+    "review-changes"
   ],
   "credential_allowlist": [],
   "aggregate_count_floor": 20,

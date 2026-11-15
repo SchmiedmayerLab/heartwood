@@ -28,7 +28,7 @@ Heartwood treats the folder from which you start it as the project, so begin in 
 
 ### Review Actions Before They Run
 
-Heartwood presents related proposed actions together before execution under the default **Review Every Action** setting.
+Heartwood presents related proposed actions together before execution under the default **Review Every Action** setting; other [review modes](use/actions-audit.md#review-modes) let the gateway allow narrowly defined actions and record each decision.
 You can allow or reject the complete set after inspecting every proposed command and file operation.
 
 ### Reuse Research Skills

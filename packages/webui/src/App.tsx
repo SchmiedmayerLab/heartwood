@@ -60,7 +60,7 @@ import {
   type RequestActivity,
 } from "./requestActivity";
 import type {
-  ActionConfirmationMode,
+  ActionReviewMode,
   ActionSettings,
   JsonValue,
   LocalModelImportRequest,
@@ -517,13 +517,13 @@ export const App = ({ client, initialSessionId }: AppProps) => {
       activeProfile !== null &&
       validation.profile.profile_id === activeProfile.profile_id &&
       validation.profile.model === activeProfile.model &&
-      validation.action_confirmation_mode === actionSettings?.confirmation_mode
+      validation.action_review_mode === actionSettings?.review_mode
     ) ?
       validation
     : null;
   const activeValidationKey =
     activeProfile === null ? null : (
-      modelValidationKey(activeProfile, actionSettings?.confirmation_mode)
+      modelValidationKey(activeProfile, actionSettings?.review_mode)
     );
   const modelStatus = useMemo(() => {
     if (modelSettings === null || projectReadiness === null) {
@@ -600,15 +600,6 @@ export const App = ({ client, initialSessionId }: AppProps) => {
   const actionModeLockedReason =
     requestStatus === "busy" ?
       "Wait for the active request to finish before changing this setting."
-    : (
-      projection?.pendingApproval !== null &&
-      projection?.pendingApproval !== undefined
-    ) ?
-      "Resolve the pending action set before changing this setting."
-    : projection?.lifecycle.status === "running" ?
-      "Wait for the active task to reach a review point before changing this setting."
-    : actionSettings?.change_allowed === false ?
-      actionSettings.change_blocked_reason
     : null;
 
   useEffect(() => {
@@ -625,7 +616,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
     let active = true;
     const requestKey = modelValidationKey(
       activeProfile,
-      actionSettings?.confirmation_mode,
+      actionSettings?.review_mode,
     );
     void resolvedClient
       .validateModelProfile(activeProfile.profile_id)
@@ -645,7 +636,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
     return () => {
       active = false;
     };
-  }, [actionSettings?.confirmation_mode, activeProfile, resolvedClient]);
+  }, [actionSettings?.review_mode, activeProfile, resolvedClient]);
 
   const send = async (
     kind: Parameters<typeof createCommand>[1],
@@ -798,11 +789,9 @@ export const App = ({ client, initialSessionId }: AppProps) => {
       target_type: "action-set",
     });
 
-  const selectActionMode = async (mode: ActionConfirmationMode) => {
+  const selectActionMode = async (mode: ActionReviewMode) => {
     try {
-      setActionSettings(
-        await resolvedClient.selectActionConfirmationMode(mode),
-      );
+      setActionSettings(await resolvedClient.selectActionReviewMode(mode));
       setValidation(null);
       await refreshReadiness();
     } catch (caught) {
@@ -872,7 +861,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
     );
     const requestKey =
       profile === undefined ? null : (
-        modelValidationKey(profile, actionSettings?.confirmation_mode)
+        modelValidationKey(profile, actionSettings?.review_mode)
       );
     try {
       setValidation(
@@ -1438,7 +1427,7 @@ const modelOperationsActive = (artifacts: ModelArtifacts): boolean =>
 
 const modelValidationKey = (
   profile: ModelProfile,
-  confirmationMode: ActionConfirmationMode | undefined,
+  confirmationMode: ActionReviewMode | undefined,
 ): string =>
   JSON.stringify([profile.profile_id, profile.model, confirmationMode ?? null]);
 

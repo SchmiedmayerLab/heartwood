@@ -31,7 +31,7 @@ import {
   syntheticProjection,
 } from "./test/fixtures";
 import type {
-  ActionConfirmationMode,
+  ActionReviewMode,
   ActionSettings,
   AuditExport,
   CustomLocalModelDownloadRequest,
@@ -151,7 +151,9 @@ const settings = (): ModelSettings => ({
 
 const actions = (): ActionSettings => ({
   schema_version: "heartwood.action-settings.v1",
-  confirmation_mode: "always-confirm",
+  review_mode: "review-all",
+  default_mode: "review-all",
+  scope: "launch",
   scope_description:
     "Shared by every Heartwood interface in this project and applied to future action sets.",
   presentation: {
@@ -183,26 +185,19 @@ const actions = (): ActionSettings => ({
   change_blocked_reason: null,
   modes: [
     {
-      mode: "always-confirm",
-      command_value: "ask-every-time",
+      mode: "review-all",
       label: "Review Every Action",
-      description:
-        "Heartwood pauses before every proposed action set so you can inspect it before anything runs.",
-      automatic_risks: [],
-      reviewed_risks: ["low", "medium", "high", "unknown"],
-      recommended: true,
+      description: "You decide on every action before it runs.",
+      automatic: [],
       allowed: true,
       unavailable_reason: null,
     },
     {
-      mode: "confirm-risky",
-      command_value: "auto-approve-low-risk",
-      label: "Low-Risk Automation",
+      mode: "review-changes",
+      label: "Review Changes",
       description:
-        "An action set continues automatically only when every action is low risk. Any medium-, high-, or unclassified-risk action pauses the complete set for review.",
-      automatic_risks: ["low"],
-      reviewed_risks: ["medium", "high", "unknown"],
-      recommended: false,
+        "Heartwood allows viewing project files and plan updates. You decide on every command, file change, and anything else.",
+      automatic: ["read.file-view", "plan.task-tracker"],
       allowed: true,
       unavailable_reason: null,
     },
@@ -866,10 +861,8 @@ class FakeClient implements HeartwoodClient {
     return Promise.resolve(this.currentActions);
   }
 
-  selectActionConfirmationMode(
-    mode: ActionConfirmationMode,
-  ): Promise<ActionSettings> {
-    this.currentActions = { ...this.currentActions, confirmation_mode: mode };
+  selectActionReviewMode(mode: ActionReviewMode): Promise<ActionSettings> {
+    this.currentActions = { ...this.currentActions, review_mode: mode };
     return Promise.resolve(this.currentActions);
   }
 
@@ -1193,7 +1186,7 @@ class FakeClient implements HeartwoodClient {
       profile: this.currentSettings.profiles[0] ?? localProfile(),
       credential_status: "configured",
       credential_isolation: credentialIsolation(),
-      action_confirmation_mode: this.currentActions.confirmation_mode,
+      action_review_mode: this.currentActions.review_mode,
       policy_decision: {
         schema_version: "heartwood.model-call-decision.v1",
         decision_id: "decision-test",
@@ -1492,6 +1485,39 @@ describe("App", () => {
       within(history).getByText("Action output (truncated)"),
     ).toBeInTheDocument();
     expect(within(history).getByText("synthetic failure")).toBeInTheDocument();
+  });
+
+  it("marks an action the gateway allowed apart from a researcher approval", async () => {
+    const client = new FakeClient();
+    client.projections.set(
+      "session-test",
+      syntheticProjection({
+        actions: [
+          syntheticAction({
+            toolCallId: "automatic",
+            decision: "approved",
+            automaticRule: "read.file-view",
+            state: "succeeded",
+          }),
+          syntheticAction({
+            toolCallId: "reviewed",
+            decision: "approved",
+            state: "succeeded",
+          }),
+        ],
+        pendingApproval: null,
+      }),
+    );
+
+    render(<App client={client} initialSessionId="session-test" />);
+
+    const history = await screen.findByRole("region", {
+      name: "Agent actions",
+    });
+    expect(within(history).getAllByText(/read\.file-view/u)).toHaveLength(1);
+    expect(
+      within(history).getAllByText("Complete action set · approved"),
+    ).toHaveLength(1);
   });
 
   it("ignores a delayed command response after selecting another session", async () => {
@@ -2365,8 +2391,12 @@ describe("App", () => {
         "Finish or resolve active session work before changing approvals.",
       ),
     ).toBeVisible();
-    const mode = screen.getByRole("radio", { name: /Low-Risk Automation/u });
-    expect(mode).toBeDisabled();
+    expect(
+      screen.queryByRole("radio", { name: /Review Changes/u }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("radio", { name: /Review Every Action/u }),
+    ).toBeEnabled();
   });
 
   it("honors the action-mode change gate without requiring a reason", async () => {
@@ -2384,8 +2414,9 @@ describe("App", () => {
     });
 
     expect(
-      screen.getByRole("radio", { name: /Low-Risk Automation/u }),
-    ).toBeDisabled();
+      screen.queryByRole("radio", { name: /Review Changes/u }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText("Review Changes")).toBeVisible();
   });
 
   it("configures and validates model profiles in the settings panel", async () => {
@@ -2425,11 +2456,9 @@ describe("App", () => {
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Action Review" }), {
       button: 0,
     });
-    fireEvent.click(
-      screen.getByRole("radio", { name: /Low-Risk Automation/u }),
-    );
+    fireEvent.click(screen.getByRole("radio", { name: /Review Changes/u }));
     await waitFor(() =>
-      expect(client.currentActions.confirmation_mode).toBe("confirm-risky"),
+      expect(client.currentActions.review_mode).toBe("review-changes"),
     );
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Models" }), {
       button: 0,
@@ -3207,9 +3236,9 @@ describe("App", () => {
       ...client.currentActions,
       modes: client.currentActions.modes.map((option) => ({
         ...option,
-        allowed: option.mode === "always-confirm",
+        allowed: option.mode === "review-all",
         unavailable_reason:
-          option.mode === "always-confirm" ?
+          option.mode === "review-all" ?
             null
           : "Unavailable under the active platform policy.",
       })),
@@ -3223,10 +3252,10 @@ describe("App", () => {
     );
 
     expect(
-      await screen.findByText("Low-Risk Automation", { exact: true }),
+      await screen.findByText("Review Changes", { exact: true }),
     ).toBeVisible();
     expect(
-      screen.queryByRole("radio", { name: /Low-Risk Automation/u }),
+      screen.queryByRole("radio", { name: /Review Changes/u }),
     ).not.toBeInTheDocument();
     expect(
       screen.getByText("Unavailable under the active platform policy."),
@@ -3584,13 +3613,8 @@ describe("App", () => {
 
     fireEvent.click(screen.getByLabelText("Open action review settings"));
     expect(
-      await screen.findByText(
-        "Resolve the pending action set before changing this setting.",
-      ),
-    ).toBeVisible();
-    expect(
-      screen.getByRole("radio", { name: /Review Every Action/u }),
-    ).toBeDisabled();
+      await screen.findByRole("radio", { name: /Review Every Action/u }),
+    ).toBeChecked();
   });
 
   it("inspects and explicitly approves a local Skill extension", async () => {

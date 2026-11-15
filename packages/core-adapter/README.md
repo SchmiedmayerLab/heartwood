@@ -14,4 +14,6 @@ Core harness orchestration for Heartwood sessions.
 
 This package defines the stable event-streaming execution facade used by the session service. The deterministic backend keeps tests and replay offline, while runtime packages can inject local or OpenHands-backed implementations behind the same assistant-message, tool-proposal, confirmation, and tool-execution event contract.
 
+The session service also owns action review: it applies the review mode, policy ceiling, and worker admission to each pending action set and records every automatic decision as the `gateway` actor with its rule.
+
 The file-backed session service enforces one interprocess writer per session, persists idempotent command receipts, and commits each event with its audit record through a deterministic recovery journal.

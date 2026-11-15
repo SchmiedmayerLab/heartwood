@@ -22,6 +22,14 @@ from heartwood.schemas.execution import NativeTaskExecution
 from heartwood.schemas.review import ReviewProposals
 from heartwood.schemas.workflows import WorkflowOutcomeStatus
 
+type ReviewClass = Literal["read", "plan", "workspace", "other"]
+"""What a typed action can affect, as established by the gateway and never by the model.
+
+``read`` views a file the gateway resolved inside the project, ``plan`` updates the
+task tracker, ``workspace`` runs a command or changes a file in the session workspace,
+and ``other`` is everything the gateway cannot classify.
+"""
+
 
 class BackendEventKind(StrEnum):
     """Kinds of event emitted by an execution backend."""
@@ -166,6 +174,7 @@ class ProposedToolCall:
     project_path: str | None = None
     specialist_label: str | None = None
     specialist_capability: Literal["advisory", "project-actions"] | None = None
+    review_class: ReviewClass = "other"
 
 
 @dataclass(frozen=True, slots=True)
@@ -414,10 +423,6 @@ class AgentBackend(Protocol):
         """Return the non-secret credential reference evaluated by policy."""
 
     @property
-    def action_confirmation_mode(self) -> str:
-        """Return the selected OpenHands action-confirmation mode."""
-
-    @property
     def continuation_requires_model_authorization(self) -> bool:
         """Return whether approval or resume can continue model execution."""
 
@@ -476,16 +481,7 @@ class AgentBackend(Protocol):
 class DeterministicAgentBackend:
     """Deterministic conversation used by unit tests and replay fixtures."""
 
-    def __init__(
-        self,
-        *,
-        action_confirmation_mode: str = "always-confirm",
-        persistence_path: Path | None = None,
-    ) -> None:
-        if action_confirmation_mode not in {"always-confirm", "confirm-risky"}:
-            msg = f"unsupported action confirmation mode: {action_confirmation_mode}"
-            raise ValueError(msg)
-        self._action_confirmation_mode = "always-confirm"
+    def __init__(self, *, persistence_path: Path | None = None) -> None:
         self._persistence_path = None if persistence_path is None else persistence_path.resolve()
         self._pending = self._load_pending()
         self._event_sink: BackendEventSink = lambda _events: None
@@ -525,11 +521,6 @@ class DeterministicAgentBackend:
     def credential_reference(self) -> str | None:
         """Return no credential for the deterministic backend."""
         return None
-
-    @property
-    def action_confirmation_mode(self) -> str:
-        """Return the effective deterministic confirmation mode."""
-        return self._action_confirmation_mode
 
     @property
     def continuation_requires_model_authorization(self) -> bool:
@@ -709,6 +700,7 @@ class DeterministicAgentBackend:
                 if isinstance(raw.get("project_path"), str) and raw["project_path"]
                 else None
             ),
+            review_class=_persisted_review_class(raw.get("review_class")),
         )
 
     def _persist_pending(self) -> None:
@@ -730,6 +722,7 @@ class DeterministicAgentBackend:
                 "kind": self._pending.kind,
                 "affected_paths": list(self._pending.affected_paths),
                 "project_path": self._pending.project_path,
+                "review_class": self._pending.review_class,
             },
         )
 
@@ -852,6 +845,16 @@ def _persisted_tool_kind(
         return "file-editor"
     if value == "task":
         return "task"
+    return "other"
+
+
+def _persisted_review_class(value: object) -> ReviewClass:
+    if value == "read":
+        return "read"
+    if value == "plan":
+        return "plan"
+    if value == "workspace":
+        return "workspace"
     return "other"
 
 

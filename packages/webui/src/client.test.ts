@@ -1129,10 +1129,12 @@ describe("GatewayClient", () => {
     );
   });
 
-  it("selects the shared action-confirmation mode", async () => {
+  it("selects the action-review mode", async () => {
     const actions = {
       schema_version: "heartwood.action-settings.v1",
-      confirmation_mode: "always-confirm",
+      review_mode: "review-all",
+      default_mode: "review-all",
+      scope: "project",
       scope_description:
         "Shared by every Heartwood interface in this project and applied to future action sets.",
       presentation: {
@@ -1152,14 +1154,14 @@ describe("GatewayClient", () => {
       .mockResolvedValueOnce(new Response(JSON.stringify(actions)))
       .mockResolvedValueOnce(
         new Response(
-          JSON.stringify({ ...actions, confirmation_mode: "confirm-risky" }),
+          JSON.stringify({ ...actions, review_mode: "review-changes" }),
         ),
       );
     vi.stubGlobal("fetch", fetch);
     const client = new GatewayClient("/proxy/8767");
 
     await client.getActionSettings();
-    await client.selectActionConfirmationMode("confirm-risky");
+    await client.selectActionReviewMode("review-changes");
 
     expect(fetch).toHaveBeenNthCalledWith(
       1,
@@ -1171,9 +1173,9 @@ describe("GatewayClient", () => {
     );
     expect(fetch).toHaveBeenNthCalledWith(
       2,
-      "/proxy/8767/settings/actions/confirmation",
+      "/proxy/8767/settings/actions/review",
       expect.objectContaining({
-        body: JSON.stringify({ mode: "confirm-risky" }),
+        body: JSON.stringify({ mode: "review-changes" }),
         method: "PUT",
       }),
     );

@@ -111,7 +111,9 @@ def _bundled_path(relative: Path) -> Path:
 
 _DEFAULT_WEB_ROOT = _bundled_path(Path("packages") / "webui" / "dist")
 _DEFAULT_FIXTURE_ROOT = _bundled_path(Path("fixtures") / "synthetic")
-_ACTION_MODE_ARGUMENTS = {option.command_value: option.mode for option in ACTION_MODE_OPTIONS}
+
+
+_REVIEW_MODE_CHOICES = tuple(option.mode for option in ACTION_MODE_OPTIONS)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -139,6 +141,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--plain",
         action="store_true",
         help="Use the line-oriented terminal instead of the full-screen interface.",
+    )
+    parser.add_argument(
+        "--review-mode",
+        choices=_REVIEW_MODE_CHOICES,
+        help="Select the action-review mode for this launch; policy limits still apply.",
     )
     parser.add_argument("--prompt", "-p", help="Submit one task and exit.")
     parser.add_argument("--prompt-file", type=Path, help=argparse.SUPPRESS)
@@ -233,7 +240,7 @@ def _build_parser() -> argparse.ArgumentParser:
     action_set = action_subparsers.add_parser(
         "set", help="Select an action-review mode allowed by platform policy."
     )
-    action_set.add_argument("mode", choices=tuple(_ACTION_MODE_ARGUMENTS))
+    action_set.add_argument("mode", choices=_REVIEW_MODE_CHOICES)
 
     configure_models(
         subparsers.add_parser(
@@ -295,6 +302,12 @@ def _build_parser() -> argparse.ArgumentParser:
         "--capability-fd",
         type=int,
         help="Consume an inherited file or pipe descriptor containing the operator capability.",
+    )
+    gateway_serve.add_argument(
+        "--review-mode",
+        choices=_REVIEW_MODE_CHOICES,
+        default=argparse.SUPPRESS,
+        help="Select the action-review mode at start; policy limits still apply.",
     )
     gateway_serve.add_argument(
         "--deployment",
@@ -403,6 +416,12 @@ def _main(argv: Sequence[str] | None = None) -> int:
         parser.error("--port must be between 1 and 65535")
     if args.plain and args.interface != "terminal":
         parser.error("--plain can be used only with --interface terminal")
+    if args.review_mode is not None and not (
+        args.command is None
+        or (args.command == "gateway" and args.gateway_command == "serve")
+        or (args.command == "runtime" and args.runtime_command == "start")
+    ):
+        parser.error("--review-mode applies only to commands that start an interface")
     if args.prompt is not None and args.prompt_file is not None:
         parser.error("--prompt and the internal prompt handoff cannot be combined")
     has_prompt = args.prompt is not None or args.prompt_file is not None
@@ -432,6 +451,7 @@ def _main(argv: Sequence[str] | None = None) -> int:
             host_loopback_publication=args.host_loopback_publication,
             deployment_path=args.deployment,
             capability_descriptor=args.capability_fd,
+            review_mode=args.review_mode,
         )
     if args.command == "doctor":
         return _handle_doctor(project=project, as_json=args.json)
@@ -487,6 +507,7 @@ def _main(argv: Sequence[str] | None = None) -> int:
                 web_root=_DEFAULT_WEB_ROOT,
                 base_path="/",
                 host_loopback_publication=args.host_loopback_publication,
+                review_mode=args.review_mode,
             )
         if startup.phase == "project-review" and not _review_project(project):
             print("No project files were changed.")
@@ -531,6 +552,7 @@ def _main(argv: Sequence[str] | None = None) -> int:
                 web_root=_DEFAULT_WEB_ROOT,
                 base_path="/",
                 host_loopback_publication=args.host_loopback_publication,
+                review_mode=args.review_mode,
             )
 
     gateway = configured_gateway or _run_with_progress(
@@ -553,6 +575,7 @@ def _main(argv: Sequence[str] | None = None) -> int:
         if args.command == "changes":
             return _handle_changes(gateway, session_id=args.session_id, path=args.path)
         if args.command is None:
+            _select_launch_review_mode(gateway, args.review_mode)
             if has_prompt:
                 try:
                     prompt = _consume_prompt(project, args.prompt, args.prompt_file)
@@ -655,6 +678,16 @@ def _inspect_startup(
         raise
 
 
+def _select_launch_review_mode(gateway: SessionGateway, mode: str | None) -> None:
+    """Apply --review-mode as the researcher's selection, or stop with the gateway's reason."""
+    if mode is None:
+        return
+    try:
+        gateway.select_action_review_mode(mode)
+    except ActionSettingsError as error:
+        raise SystemExit(f"--review-mode {mode} cannot be used: {error}") from error
+
+
 def _launch_options(project: ProjectContext, args: argparse.Namespace) -> LaunchOptions:
     return LaunchOptions(
         project=project,
@@ -676,6 +709,7 @@ def _launch_options(project: ProjectContext, args: argparse.Namespace) -> Launch
         web_port=args.port,
         host_loopback_publication=args.host_loopback_publication,
         startup_timeout=getattr(args, "startup_timeout", 600),
+        review_mode=args.review_mode,
         prompt=args.prompt,
         prompt_file=args.prompt_file,
     )
@@ -743,10 +777,16 @@ def _handle_actions(
     gateway: SessionGateway,
     args: argparse.Namespace,
 ) -> int:
-    """Show or update the shared OpenHands action-review mode."""
+    """Show or update the action-review mode."""
     try:
         if getattr(args, "actions_command", None) == "set":
-            settings = gateway.select_action_confirmation_mode(_ACTION_MODE_ARGUMENTS[args.mode])
+            if gateway.action_settings()["scope"] == "launch":
+                parser.error(
+                    "this project has no deployment manifest, so the review mode is not stored; "
+                    "select it in a running Heartwood interface with /permissions or in the "
+                    "browser settings"
+                )
+            settings = gateway.select_action_review_mode(args.mode)
         else:
             settings = gateway.action_settings()
     except ActionSettingsError as error:
@@ -803,6 +843,7 @@ def _interactive_chat(gateway: SessionGateway, *, session_id: str, plain: bool =
 
         return run_terminal(session)
     print(f"Heartwood agent. Commands: {command_help()}.")
+    displayed_group_id: str | None = None
     while True:
         try:
             line = input("heartwood> ").strip()
@@ -814,6 +855,17 @@ def _interactive_chat(gateway: SessionGateway, *, session_id: str, plain: bool =
         if not line:
             continue
         directive = line.split(maxsplit=1)[0]
+        if line in {"/allow", "/reject"}:
+            # A bare decision applies to the action set this terminal printed.
+            if displayed_group_id is None:
+                projection = session.replay()
+                if (approval := projection.pending_approval) is not None:
+                    displayed_group_id = approval.group_id
+                    print("\n".join(format_projection_lines(projection)))
+                    print("Review the action set above, then repeat the decision.")
+                    continue
+            else:
+                line = f"{line} {shlex.quote(displayed_group_id)}"
         result = (
             _submit_with_progress(session, line)
             if not line.startswith("/") or directive in {"/allow", "/resume"}
@@ -824,6 +876,8 @@ def _interactive_chat(gateway: SessionGateway, *, session_id: str, plain: bool =
         if result.message:
             print(result.message)
         if result.projection is not None:
+            approval = result.projection.pending_approval
+            displayed_group_id = None if approval is None else approval.group_id
             after_sequence = (
                 None
                 if result.replace_transcript or not result.events
@@ -943,6 +997,7 @@ def _handle_serve(
     host_loopback_publication: bool = False,
     deployment_path: Path | None = None,
     capability_descriptor: int | None = None,
+    review_mode: str | None = None,
 ) -> int:
     deployment = (
         load_project_deployment(deployment_path, project_root=project.root)
@@ -1014,6 +1069,7 @@ def _handle_serve(
             if deployment is not None
             else SessionGateway(project=project)
         )
+        _select_launch_review_mode(gateway, review_mode)
         for session_id in gateway.reconcile_workers():
             print(
                 f"Worker revocation was not observed for session {session_id}; "

@@ -42,11 +42,14 @@ heartwood --prompt "Inspect this project and summarize its test failures. Do not
 
 ## Review Actions
 
-The default mode is **Review Every Action**.
-When OpenHands proposes an action set, the interface lists every member and makes clear that allowing runs the complete set once while rejecting runs none of it.
+The default mode is **Review Every Action**, or **Review Outside Effects** when sessions run in an isolated worker.
+Enter `/permissions` to see or change the [review mode](actions-audit.md#review-modes).
+When an action set needs your decision, the interface lists every member and makes clear that allowing runs the complete set once while rejecting runs none of it.
 
 Use arrow keys and Enter in the full-screen interface.
 In the plain interface, use `/allow` or `/reject`; you do not need to copy an internal tool-call identifier.
+Both interfaces apply your decision to the action set they displayed, so a set you have not seen is never decided.
+Actions that Heartwood allowed under a review rule appear as allowed automatically with that rule.
 
 After execution, **Agent actions** correlates each proposal with its decision, state, exit status, bounded output, and explicitly attributed project paths.
 An interrupted action whose result cannot be established is marked **outcome unknown** rather than treated as safe to repeat.
@@ -73,7 +76,7 @@ Press `Ctrl-P` to open the command palette for these views, action review, statu
 |---|---|
 | `/help` | Show available conversation commands |
 | `/status` | Show model, credential, policy, and action-review status |
-| `/permissions` | Review or change when Heartwood pauses before actions |
+| `/permissions [MODE]` | Show or select the action-review mode: `review-all`, `review-changes`, or `review-outside-effects` |
 | `/specialists` | Show the bounded research specialists available to the parent agent |
 | `/workflow` | Set up or review a [research workflow](research-workflows.md); show its state and available commands in plain mode |
 | `/allow` | Allow the complete pending action set once |

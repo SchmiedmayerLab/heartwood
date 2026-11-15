@@ -55,6 +55,7 @@ EXPECTED_CASES = {
             _EXTERNAL + "test_native_outside_effect_requires_retained_authorization[denied]",
             _EXTERNAL + "test_native_outside_effect_requires_retained_authorization[pending]",
             _EXTERNAL + "test_native_outside_effect_requires_retained_authorization[lost-reply]",
+            _EXTERNAL + "test_native_contained_action_is_automatic_and_outside_effect_waits",
             "test_worker_pair_integration::"
             "test_two_native_workers_keep_authority_and_effects_separate",
         }

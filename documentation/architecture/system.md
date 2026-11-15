@@ -54,8 +54,8 @@ Gateway-local parallel-review executors are not installed on remote agent copies
 This embedding contract does not provision a sandbox or enable remote execution in the default gateway launch path.
 
 A managed `SessionGateway` can receive an operator-owned worker-plan factory when its project uses protected external state.
-The factory receives the selected profile, effective session policy and action-confirmation mode, and prepares image, effective sandbox policy and input identities plus native launch, connection and outside-revocation callbacks.
-Before calling the factory, the gateway validates the worker inference route and evaluates the endpoint, credential reference, capability tier and confirmation mode through the existing model policy engine.
+The factory receives the selected profile and effective session policy, and prepares image, effective sandbox policy and input identities plus native launch, connection and outside-revocation callbacks.
+Before calling the factory, the gateway validates the worker inference route and evaluates the endpoint, credential reference and capability tier through the existing model policy engine.
 A denied or unsupported route reaches no platform callback and creates no worker attempt.
 This launch gate precedes any platform preparation; normal per-command model authorization remains required, and the platform must enforce the admitted restrictions outside the worker.
 Preparation must not create a worker or grant service access; launch occurs only after the session retains its attempt.
@@ -218,7 +218,7 @@ Ordinary conversations retain their existing finish behavior.
 Each transition records a run identity and revision in the paired event and audit journal; command receipts prevent repeated submissions across retries and restarts.
 An interruption with an uncertain dispatch outcome requires the existing session recovery procedure rather than automatic resubmission.
 
-A stage runs as an ordinary OpenHands turn with the existing coding tools and action-confirmation policy.
+A stage runs as an ordinary OpenHands turn with the existing coding tools and action review.
 Advancement requires settled workers, resolved tool approvals, a structured outcome from the latest stage turn, and independent artifact checks.
 Previously accepted inputs and results are checked again before another stage starts.
 Researcher review binds the exact assessment to the observed run revision and does not approve future tool actions.
@@ -311,7 +311,7 @@ Gateway lifecycle startup imports the SDK before accepting concurrent browser re
 Approval requests are published only after native execution settles, so every interface receives the complete action group rather than a partially appended batch.
 This initializes modules only; model clients, conversations, and tool executors are created when agent work is requested.
 
-The adapter creates an OpenHands conversation with `OpenHandsAgentSettings`, the selected LiteLLM-compatible model profile, project workspace, Skills, persistence directory, and confirmation policy.
+The adapter creates an OpenHands conversation with `OpenHandsAgentSettings`, the selected LiteLLM-compatible model profile, project workspace, Skills, persistence directory, and an always-pausing confirmation policy; the session service decides which paused action sets continue without the researcher.
 It uses public typed OpenHands events and conversation state to derive lifecycle, unmatched actions, task progress, usage, and errors.
 For remote state, each reconciliation reads one native branch snapshot containing the conversation identity, active events, execution status, and reported usage.
 The adapter rejects a snapshot for another conversation and reports unavailable snapshots without exposing worker response content.
@@ -454,8 +454,8 @@ An application-scrubbed route excludes provider material from supported tool inp
 A platform-isolated route requires a separately authorized model transport plus live synthetic qualification.
 
 The classification is part of the shared model-settings and readiness projections.
-The gateway disables Low-Risk Automation for every route and interprets retained automation preferences as Review Every Action before an agent starts.
-Terminal, browser, and notebook clients render that decision rather than implementing credential rules.
+The gateway passes the classification to the session service, which reviews every action in a session outside an isolated worker while the route is application-scrubbed.
+Terminal, browser, and notebook clients render that decision and its reason rather than implementing credential rules.
 
 OpenHands Agent Server and RemoteWorkspace are retained as upstream deployment options, but they place the model client and tools in the same remote agent environment.
 They are not treated as model-only isolation without an additional platform boundary.
@@ -467,7 +467,7 @@ Generic, Terra, and Carina behavior differs only through these boundaries and st
 
 A trusted embedding launcher can supply an immutable `deployment_policy` to `SessionGateway`.
 That profile is the default and the maximum authority for every project configuration read, write, update, and restore in that gateway.
-Project rules may narrow endpoint, credential, capability, and confirmation allowlists or raise the aggregate-count floor; they cannot disable default-deny egress or change platforms.
+Project rules may narrow endpoint, credential, capability, and action-review allowlists or raise the aggregate-count floor; they cannot disable default-deny egress or change platforms.
 Selecting a Custom API route does not add endpoints or credentials when a deployment policy is supplied.
 Malformed or broader persisted rules fail closed rather than silently changing the operator's policy.
 The ceiling is a constructor dependency, never selected by project content or an interface request.

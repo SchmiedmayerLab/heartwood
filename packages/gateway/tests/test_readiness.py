@@ -598,11 +598,11 @@ def test_local_setup_uses_one_private_project_configuration(tmp_path: Path) -> N
             "actions.json",
         )
     )
-    assert gateway.action_settings()["confirmation_mode"] == "always-confirm"
-    assert all(
-        not mode["allowed"]
+    assert gateway.action_settings()["review_mode"] == "review-all"
+    assert not next(
+        mode["allowed"]
         for mode in gateway.action_settings()["modes"]
-        if mode["mode"] == "confirm-risky"
+        if mode["mode"] == "review-outside-effects"
     )
 
 

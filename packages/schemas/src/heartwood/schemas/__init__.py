@@ -9,9 +9,9 @@
 from __future__ import annotations
 
 from heartwood.schemas._api import (
-    ActionConfirmationRequest,
     ActionModeOptionResponse,
     ActionPresentationResponse,
+    ActionReviewRequest,
     ActionSettingsResponse,
     ApiRequest,
     AuditExportResponse,
@@ -112,7 +112,7 @@ from heartwood.schemas._platform_metadata import (
     PlatformModelMetadataManifest,
 )
 from heartwood.schemas._records import (
-    ActionConfirmationMode,
+    ActionReviewMode,
     ApprovalRecord,
     AuditCheckpoint,
     AuditCheckpointContext,
@@ -134,10 +134,10 @@ from heartwood.schemas._records import (
 
 __all__ = [
     "PLATFORM_CONTRACT_VERSION",
-    "ActionConfirmationMode",
-    "ActionConfirmationRequest",
     "ActionModeOptionResponse",
     "ActionPresentationResponse",
+    "ActionReviewMode",
+    "ActionReviewRequest",
     "ActionSettingsResponse",
     "ApiRequest",
     "ApprovalRecord",

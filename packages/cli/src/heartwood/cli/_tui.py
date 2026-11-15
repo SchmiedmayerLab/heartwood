@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 import time
 from collections.abc import Iterable, Sequence
 from pathlib import PurePosixPath
@@ -66,8 +67,8 @@ from heartwood.gateway import (
     display_safe_text as terminal_safe_text,
 )
 from heartwood.schemas import (
-    ActionConfirmationMode,
     ActionModeOptionResponse,
+    ActionReviewMode,
     ActionSettingsResponse,
     WorkspaceChangesResponse,
     WorkspaceDiffResponse,
@@ -163,22 +164,33 @@ class ActionModeScreen(ModalScreen[str | None]):
         self.locked_reason = locked_reason
         self.modes = tuple(settings["modes"])
 
+    def _selectable(self, index: int) -> bool:
+        """Offer permitted modes; while changes are held, only stricter ones."""
+        item = self.modes[index]
+        if not item["allowed"] or self.locked_reason is not None:
+            return False
+        selected = next(
+            position
+            for position, mode in enumerate(self.modes)
+            if mode["mode"] == self.settings["review_mode"]
+        )
+        return self.settings["change_allowed"] or index < selected
+
     def compose(self) -> ComposeResult:
-        selected = self.settings["confirmation_mode"]
+        selected = self.settings["review_mode"]
         with Vertical(id="action-mode-dialog"):
             yield Static("Action Review", id="action-mode-title")
             yield Static(self.settings["scope_description"], id="action-mode-scope")
             yield OptionList(
                 *(
                     Option(
-                        _mode_option_prompt(item, selected=selected),
-                        id=item["command_value"],
-                        disabled=(
-                            not item["allowed"]
-                            or (self.locked_reason is not None and item["mode"] != selected)
+                        _mode_option_prompt(
+                            item, selected=selected, default=self.settings["default_mode"]
                         ),
+                        id=item["mode"],
+                        disabled=item["mode"] != selected and not self._selectable(index),
                     )
-                    for item in self.modes
+                    for index, item in enumerate(self.modes)
                 ),
                 id="action-mode-options",
                 markup=False,
@@ -191,13 +203,14 @@ class ActionModeScreen(ModalScreen[str | None]):
             )
             yield Static(
                 self.locked_reason
+                or self.settings["change_blocked_reason"]
                 or "Use the arrow keys to compare modes, then press Enter to select one.",
                 id="action-mode-help",
             )
 
     def on_mount(self) -> None:
         """Focus the active mode and show its complete behavior."""
-        selected = self.settings["confirmation_mode"]
+        selected = self.settings["review_mode"]
         options = self.query_one("#action-mode-options", OptionList)
         for index, item in enumerate(self.modes):
             if item["mode"] == selected:
@@ -215,16 +228,16 @@ class ActionModeScreen(ModalScreen[str | None]):
             self._update_detail(event.option_index)
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
-        """Return the selected public command value."""
+        """Return the selected mode."""
         if event.option_list.id != "action-mode-options":
             return
-        selected = self.settings["confirmation_mode"]
+        selected = self.settings["review_mode"]
         item = self.modes[event.option_index]
         if item["mode"] == selected:
             self.dismiss(None)
             return
-        if self.locked_reason is None and item["allowed"]:
-            self.dismiss(item["command_value"])
+        if self._selectable(event.option_index):
+            self.dismiss(item["mode"])
 
     def action_cancel(self) -> None:
         """Close without changing the project setting."""
@@ -310,6 +323,7 @@ class HeartwoodTerminalApp(App[None]):
         self._rendered_sequence: int | None = None
         self._retired_stream_epochs: set[str] = set()
         self._mode_label = "Action Review"
+        self._review_group_id = ""
         self._workspace_revision: int | None = None
         self._workspace_overview_generation = 0
         self._workspace_file_generation = 0
@@ -638,6 +652,7 @@ class HeartwoodTerminalApp(App[None]):
                 composer.focus()
             return
         actions = approval.actions
+        self._review_group_id = approval.group_id
         panel.display = True
         label = "action" if len(actions) == 1 else "actions"
         outside_title = outside_review_title(actions[0]) if len(actions) == 1 else None
@@ -706,7 +721,8 @@ class HeartwoodTerminalApp(App[None]):
             return
         directive = "/allow" if event.option_id == "allow" else "/reject"
         self._set_busy(True, activity=interaction_activity(directive))
-        self._submit(directive)
+        # Decide the action set this panel rendered, not whatever is pending by now.
+        self._submit(f"{directive} {shlex.quote(self._review_group_id)}")
 
     def action_focus_composer(self) -> None:
         """Focus the prompt input."""
@@ -1070,7 +1086,7 @@ class HeartwoodTerminalApp(App[None]):
                 self.notify(str(error), title="Action Review", severity="error")
             return
         assert settings is not None
-        self._mode_label = action_mode_label(settings["confirmation_mode"])
+        self._mode_label = action_mode_label(settings["review_mode"])
         if not self._busy:
             if self._projection is None:
                 self.query_one("#status", Static).update(self._idle_status("ready"))
@@ -1078,14 +1094,6 @@ class HeartwoodTerminalApp(App[None]):
                 self._sync_runtime_status(self._projection)
         if not show_screen:
             return
-        if locked_reason is None and projection is not None:
-            if projection.pending_approval is not None:
-                locked_reason = "Resolve the pending action set before changing this setting."
-            elif projection.lifecycle.status == "running":
-                locked_reason = (
-                    "Wait for the active task to reach a review point before changing this setting."
-                )
-        locked_reason = locked_reason or settings["change_blocked_reason"]
         self.push_screen(
             ActionModeScreen(
                 settings,
@@ -1165,16 +1173,16 @@ class HeartwoodTerminalApp(App[None]):
             self.action_export_audit,
         )
 
-    def _action_mode_selected(self, command_value: str | None) -> None:
-        if command_value is None:
+    def _action_mode_selected(self, mode: str | None) -> None:
+        if mode is None:
             return
         self._set_busy(True, activity=interaction_activity("/permissions"))
-        self._select_action_mode(command_value)
+        self._select_action_mode(mode)
 
     @work(thread=True, exclusive=True)
-    def _select_action_mode(self, command_value: str) -> None:
+    def _select_action_mode(self, mode: str) -> None:
         try:
-            settings = self.session.select_action_mode(command_value)
+            settings = self.session.select_action_mode(mode)
         except Exception as error:
             self.call_from_thread(self._finish_action_mode_selection, None, error)
         else:
@@ -1190,10 +1198,10 @@ class HeartwoodTerminalApp(App[None]):
             self.notify(str(error), title="Action Review", severity="error")
             return
         assert settings is not None
-        self._mode_label = action_mode_label(settings["confirmation_mode"])
+        self._mode_label = action_mode_label(settings["review_mode"])
         self._set_busy(False)
         self.notify(
-            f"Using {self._mode_label} for future action sets.",
+            f"Using {self._mode_label} for the next action set.",
             title="Action Review",
         )
 
@@ -1235,13 +1243,14 @@ def _line_style(line: str) -> str | None:
 def _mode_option_prompt(
     item: ActionModeOptionResponse,
     *,
-    selected: ActionConfirmationMode,
+    selected: ActionReviewMode,
+    default: ActionReviewMode,
 ) -> Text:
     prompt = Text()
     prompt.append("● " if item["mode"] == selected else "  ", style="green")
     prompt.append(item["label"], style="bold")
-    if item["recommended"]:
-        prompt.append(" · Recommended", style="green")
+    if item["mode"] == default:
+        prompt.append(" · Default", style="green")
     if not item["allowed"]:
         prompt.append(" · Unavailable", style="dim")
     return prompt

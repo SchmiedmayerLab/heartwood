@@ -12,7 +12,7 @@ import hashlib
 import json
 import math
 import os
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -41,10 +41,17 @@ from heartwood.core_adapter._facade import (
     BackendUsageEvent,
     DeterministicAgentBackend,
     PendingActionGroup,
+    ProposedToolCall,
     backend_error_is_fatal,
     backend_error_message,
 )
 from heartwood.core_adapter._state import FileSessionStore, SessionRecoveryError
+from heartwood.core_adapter.action_review import (
+    AUTOMATIC_REVIEW_ACTOR,
+    AutomaticReview,
+    automatic_review,
+    effective_review_mode,
+)
 from heartwood.core_adapter.checkpoint_evidence import SessionCheckpointEvidence
 from heartwood.core_adapter.external_actions import (
     ExternalActionAdapter,
@@ -92,7 +99,7 @@ from heartwood.core_adapter.workflow_runtime import (
     workflow_run,
 )
 from heartwood.model_policy import ModelPolicyEngine
-from heartwood.schemas import ConfirmationRequest, JsonValue, PolicyProfile
+from heartwood.schemas import ActionReviewMode, ConfirmationRequest, JsonValue, PolicyProfile
 from heartwood.schemas.experiments import ExperimentExportBinding
 from heartwood.schemas.parallel_reviews import ReviewDispatchAction, ReviewExecutionPlan
 from heartwood.schemas.workflows import WorkflowRun
@@ -143,6 +150,8 @@ class SessionService:
         worker_project_id: UUID | None = None,
         external_actions: ExternalActionAdapter | None = None,
         checkpoint_evidence: SessionCheckpointEvidence | None = None,
+        action_review_mode: Callable[[], str | None] | None = None,
+        credentials_isolated: Callable[[], bool] | None = None,
     ) -> None:
         self.store = store
         self.audit_log = AuditLog(store.audit_path)
@@ -164,6 +173,8 @@ class SessionService:
         self._workflow_evaluator = workflow_evaluator
         self._external_actions = external_actions
         self._checkpoint_evidence = checkpoint_evidence
+        self._selected_review_mode = action_review_mode
+        self._credentials_isolated = credentials_isolated
         self._worker_project_id = worker_project_id
         self._worker_lease: WorkerAttemptLease | None = None
         self._worker_attempt_created = False
@@ -214,6 +225,8 @@ class SessionService:
         worker_project_id: UUID | None = None,
         external_actions: ExternalActionAdapter | None = None,
         checkpoint_evidence: SessionCheckpointEvidence | None = None,
+        action_review_mode: Callable[[], str | None] | None = None,
+        credentials_isolated: Callable[[], bool] | None = None,
     ) -> SessionService:
         """Build a local service with an explicitly supplied or deterministic backend."""
         active_env = os.environ if env is None else env
@@ -238,6 +251,8 @@ class SessionService:
             worker_project_id=worker_project_id,
             external_actions=external_actions,
             checkpoint_evidence=checkpoint_evidence,
+            action_review_mode=action_review_mode,
+            credentials_isolated=credentials_isolated,
         )
 
     def handle(
@@ -256,6 +271,8 @@ class SessionService:
             raise ValueError(msg)
         if "checkpoint_context" in command.payload:
             raise CommandConflictError("Checkpoint bindings must be computed by the session owner")
+        if command.actor_id == AUTOMATIC_REVIEW_ACTOR:
+            raise CommandConflictError("The gateway actor is reserved for automatic review")
         with self._command_lock:
             if self._closed:
                 raise RuntimeError("Session service is closed")
@@ -342,13 +359,128 @@ class SessionService:
                 first_sequence=first_sequence,
                 last_sequence=result.events[-1].sequence,
             )
+            if unavailable_reason is None and command_kind not in {
+                CommandKind.REPLAY.value,
+                CommandKind.AUDIT_EXPORT.value,
+            }:
+                automatic = self._review_automatically_locked((*reconciled, *result.events))
+                if automatic:
+                    self._event_sink(automatic)
             return result
+
+    def _review_automatically_locked(
+        self, requested: Sequence[SessionEvent]
+    ) -> tuple[SessionEvent, ...]:
+        """Decide each newly requested action group a review rule allows, as the gateway actor.
+
+        Every decision is an accepted command with its own receipt, so it is journaled,
+        checkpointed, bound to the group digest and recovered exactly like a researcher
+        decision. Only a request journaled by the current operation is considered, and
+        only once, so a group that was already requested before a restart or a mode
+        change waits for the researcher.
+        """
+        emitted: list[SessionEvent] = []
+        while not self.store.unresolved_command_ids() and any(
+            event.kind == EventKind.CONFIRMATION_REQUESTED for event in requested
+        ):
+            group = self.backend.pending_action_group(session_id=self.store.session_id)
+            if group is None or self._automatic_review_locked(group) is None:
+                break
+            command = SessionCommand(
+                session_id=self.store.session_id,
+                command_id=f"automatic-review-{group.group_id}",
+                actor_id=AUTOMATIC_REVIEW_ACTOR,
+                kind=CommandKind.APPROVE,
+                created_at=self.clock(),
+                payload={"target_type": "action-set", "target_id": group.group_id},
+            )
+            if self.store.command_record(command.command_id) is not None:
+                break
+            command_hash = _command_hash(command)
+            first_sequence = self.store.next_sequence()
+            self.store.accept_command(
+                command_id=command.command_id,
+                command_hash=command_hash,
+                first_sequence=first_sequence,
+            )
+            events = self._handle_new_command(command, unavailable_reason=None, automatic=True)
+            self.store.complete_command(
+                command_id=command.command_id,
+                command_hash=command_hash,
+                first_sequence=first_sequence,
+                last_sequence=events.events[-1].sequence,
+            )
+            requested = events.events
+            emitted.extend(requested)
+        return tuple(emitted)
+
+    def _automatic_review_locked(self, group: PendingActionGroup) -> AutomaticReview | None:
+        """Apply the review rules to the backend's current group; any doubt asks the researcher."""
+        try:
+            events = self.replay_events()
+            if (
+                self._worker_admission_error_locked() is not None
+                or not self._pending_proposal_is_durable(group)
+                or any(
+                    event.kind == EventKind.ERROR_RECORDED
+                    and backend_error_is_fatal(event.payload.get("code"))
+                    for event in events
+                )
+                or any(
+                    outside.proposal.group_id == group.group_id
+                    for outside in external_action_records(events).values()
+                )
+                or any(
+                    release.proposal.group_id == group.group_id
+                    for release in external_result_records(events).values()
+                )
+                or any(self._reserved_external_identity(action) for action in group.actions)
+            ):
+                return None
+            sandboxed = self._sandboxed_locked()
+            return automatic_review(
+                group, mode=self._review_mode_locked(sandboxed=sandboxed), sandboxed=sandboxed
+            )
+        except Exception:
+            return None
+
+    def action_review_mode(self) -> ActionReviewMode:
+        """Return the review mode in force for this session's next action group."""
+        with self._command_lock:
+            return self._review_mode_locked(sandboxed=self._sandboxed_locked())
+
+    def _sandboxed_locked(self) -> bool:
+        """Return whether this session's actions run in its admitted sandbox worker."""
+        self._known_source_event_ids_locked()
+        return self._worker_record is not None and self._worker_admission_error_locked() is None
+
+    def _review_mode_locked(self, *, sandboxed: bool) -> ActionReviewMode:
+        """Return the mode in force; an unreadable selection reviews every action."""
+        try:
+            selected = None if self._selected_review_mode is None else self._selected_review_mode()
+            isolated = self._credentials_isolated is None or self._credentials_isolated()
+        except Exception:
+            return "review-all"
+        return effective_review_mode(
+            selected,
+            allowed=self.policy_profile.allowed_action_review_modes,
+            sandboxed=sandboxed,
+            credentials_isolated=isolated,
+        )
+
+    @staticmethod
+    def _reserved_external_identity(action: ProposedToolCall) -> bool:
+        return any(
+            reserved_external_identity(identity) or (identity or "").startswith(RESULT_PREFIX)
+            for identity in (action.tool_call_id, action.action_id)
+        )
 
     def _handle_new_command(
         self,
         command: SessionCommand,
         *,
         unavailable_reason: str | None,
+        automatic: bool = False,
     ) -> SessionResult:
         """Execute a command that has not previously been accepted."""
         command_kind = _kind_value(command.kind)
@@ -380,7 +512,7 @@ class SessionService:
         elif command_kind == CommandKind.CHAT.value:
             events.extend(self._handle_task(command))
         elif command_kind in {CommandKind.APPROVE.value, CommandKind.DENY.value}:
-            events.extend(self._handle_action_decision(command))
+            events.extend(self._handle_action_decision(command, automatic=automatic))
         elif command_kind == CommandKind.PAUSE.value:
             backend_events = self.backend.pause(session_id=command.session_id)
             if not any(isinstance(event, BackendErrorEvent) for event in backend_events):
@@ -451,6 +583,8 @@ class SessionService:
                     *self._reconcile_locked(),
                     *self._recover_approval_commands_locked(),
                 )
+                # A status read can journal a request before the backend's own callback does.
+                events = (*events, *self._review_automatically_locked(events))
         if events:
             self._event_sink(events)
         return events
@@ -636,7 +770,9 @@ class SessionService:
                     "endpoint": self.backend.model_endpoint,
                     "credential_reference": self.backend.credential_reference,
                     "capability_tier": self.backend.capability_tier,
-                    "action_confirmation_mode": self.backend.action_confirmation_mode,
+                    "action_review_mode": self._review_mode_locked(
+                        sandboxed=self._sandboxed_locked()
+                    ),
                 }
             )
         )
@@ -1015,13 +1151,7 @@ class SessionService:
                 BackendConfirmationResolutionEvent,
             ),
         ):
-            call = event.tool_call
-            if (
-                reserved_external_identity(call.tool_call_id)
-                or reserved_external_identity(call.action_id)
-                or call.tool_call_id.startswith(RESULT_PREFIX)
-                or (call.action_id or "").startswith(RESULT_PREFIX)
-            ):
+            if self._reserved_external_identity(event.tool_call):
                 return True
             if isinstance(
                 event, (BackendConfirmationRequestEvent, BackendConfirmationResolutionEvent)
@@ -1405,7 +1535,6 @@ class SessionService:
         decision = self.policy.evaluate(
             endpoint=self.backend.model_endpoint,
             capability_tier=self.backend.capability_tier,
-            action_confirmation_mode=self.backend.action_confirmation_mode,
             credential_reference=self.backend.credential_reference,
             decision_id=f"{command.command_id}-model-route",
             purpose=purpose,
@@ -1425,7 +1554,9 @@ class SessionService:
                     "backend_id": self.backend.backend_id,
                     "profile_id": self.backend.model_profile_id,
                     "capability_tier": self.backend.capability_tier,
-                    "action_confirmation_mode": self.backend.action_confirmation_mode,
+                    "action_review_mode": self._review_mode_locked(
+                        sandboxed=self._sandboxed_locked()
+                    ),
                 },
             },
         )
@@ -1442,7 +1573,9 @@ class SessionService:
             ]
         return True, [policy_event]
 
-    def _handle_action_decision(self, command: SessionCommand) -> tuple[SessionEvent, ...]:
+    def _handle_action_decision(
+        self, command: SessionCommand, *, automatic: bool = False
+    ) -> tuple[SessionEvent, ...]:
         target_type = str(command.payload.get("target_type", "action-set"))
         if target_type != "action-set":
             return (
@@ -1469,7 +1602,7 @@ class SessionService:
             (
                 record
                 for record in external_result_records(self.replay_events()).values()
-                if record.proposal.group_id == action_group_id
+                if record.proposal.group_id == action_group_id and not automatic
             ),
             None,
         )
@@ -1479,7 +1612,7 @@ class SessionService:
             (
                 record
                 for record in external_action_records(self.replay_events()).values()
-                if record.proposal.group_id == action_group_id
+                if record.proposal.group_id == action_group_id and not automatic
             ),
             None,
         )
@@ -1504,6 +1637,18 @@ class SessionService:
                     {
                         "command": _kind_value(command.kind),
                         "reason": "the complete action proposal is not yet durably published",
+                        "affects_lifecycle": False,
+                    },
+                ),
+            )
+        review = self._automatic_review_locked(pending_group) if automatic else None
+        if automatic and review is None:
+            return (
+                self._record_event(
+                    EventKind.ERROR_RECORDED,
+                    {
+                        "command": _kind_value(command.kind),
+                        "reason": "the pending action group requires researcher review",
                         "affects_lifecycle": False,
                     },
                 ),
@@ -1541,6 +1686,7 @@ class SessionService:
                     "actor_id": command.actor_id,
                     "group_id": pending_group.group_id,
                     "decision": decision,
+                    **({"review": {"mode": review.mode, "rule": review.rule}} if review else {}),
                     **self._evidence_policy(),
                     "tool_call_ids": [action.tool_call_id for action in pending_group.actions],
                 },
@@ -1664,6 +1810,7 @@ class SessionService:
                             "project_path": tool_call.project_path,
                             "specialist_label": tool_call.specialist_label,
                             "specialist_capability": tool_call.specialist_capability,
+                            "review_class": tool_call.review_class,
                             **source_payload,
                         },
                     )
@@ -1861,6 +2008,7 @@ class SessionService:
         request_payload["kind"] = tool_call.kind
         request_payload["affected_paths"] = list(tool_call.affected_paths)
         request_payload["project_path"] = tool_call.project_path
+        request_payload["review_class"] = tool_call.review_class
         if event.source_event_id is not None:
             request_payload["source_event_id"] = event.source_event_id
         return self._record_event(
@@ -1886,7 +2034,8 @@ class SessionService:
             self._recover_pending_commit_locked()
             if self._worker_admission_error_locked() is not None:
                 return
-            events = tuple(self._translate_backend_events(stream))
+            translated = self._translate_backend_events(stream)
+            events = (*translated, *self._review_automatically_locked(translated))
         if events:
             self._event_sink(events)
 
@@ -2330,7 +2479,7 @@ def _audit_payload(kind: EventKind, payload: dict[str, JsonValue]) -> dict[str, 
                     "backend_id",
                     "profile_id",
                     "capability_tier",
-                    "action_confirmation_mode",
+                    "action_review_mode",
                 )
                 if isinstance(model_profile, dict)
                 else {}
@@ -2342,8 +2491,10 @@ def _audit_payload(kind: EventKind, payload: dict[str, JsonValue]) -> dict[str, 
             **_selected_audit_fields(
                 payload,
                 "command_id",
+                "actor_id",
                 "group_id",
                 "decision",
+                "review",
                 "evidence_mode",
             ),
             "action_count": len(tool_call_ids) if isinstance(tool_call_ids, list) else 0,

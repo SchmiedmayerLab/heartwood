@@ -13,7 +13,7 @@ import json
 import os
 import shutil
 from collections.abc import Callable, Mapping, Sequence
-from contextlib import AbstractContextManager
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from functools import wraps
@@ -47,21 +47,22 @@ from heartwood.core_adapter import (
     SessionService,
     TokenDeltaSink,
 )
+from heartwood.core_adapter.action_review import effective_review_mode, is_tightening
 from heartwood.core_adapter.checkpoint_evidence import SessionCheckpointEvidence
 from heartwood.core_adapter.external_actions import ExternalActionAdapter
 from heartwood.core_adapter.worker_attempts import current_worker_attempt
 from heartwood.gateway._action_presentation import action_presentation
 from heartwood.gateway._action_settings import (
+    ACTION_MODE_LAUNCH_SCOPE_DESCRIPTION,
     ACTION_MODE_OPTIONS,
     ACTION_MODE_SCOPE_DESCRIPTION,
-    AUTOMATION_UNAVAILABLE_REASON,
     ActionSettings,
     ActionSettingsError,
+    LaunchActionSettingsStore,
 )
 from heartwood.gateway._credential_isolation import (
     CredentialIsolation,
     assess_credential_isolation,
-    credential_isolation_unavailable_reason,
 )
 from heartwood.gateway._credentials import CredentialStore, CredentialStoreError
 from heartwood.gateway._experiment_store import ExperimentStore
@@ -179,7 +180,7 @@ from heartwood.gateway.worker_sessions import (
 from heartwood.model_policy import ModelPolicyEngine
 from heartwood.persistence import DurableFileError, write_private_text_atomic
 from heartwood.schemas import (
-    ActionConfirmationMode,
+    ActionReviewMode,
     ActionSettingsResponse,
     AuditExportResponse,
     CredentialSettingsResponse,
@@ -314,7 +315,6 @@ class _ServiceConfiguration:
     """Configuration snapshot that owns one cached agent service."""
 
     model_settings: ModelSettings
-    action_settings: ActionSettings
     policy_profile: PolicyProfile
     local_model: LocalModelSelection | None
     managed_inference: bool
@@ -322,9 +322,6 @@ class _ServiceConfiguration:
 
 class _UnconfiguredAgentBackend:
     """Fail clearly until a model profile has been selected."""
-
-    def __init__(self, action_confirmation_mode: str) -> None:
-        self._action_confirmation_mode = action_confirmation_mode
 
     @property
     def backend_id(self) -> str:
@@ -357,10 +354,6 @@ class _UnconfiguredAgentBackend:
     @property
     def credential_reference(self) -> str | None:
         return None
-
-    @property
-    def action_confirmation_mode(self) -> str:
-        return self._action_confirmation_mode
 
     @property
     def continuation_requires_model_authorization(self) -> bool:
@@ -530,8 +523,11 @@ class SessionGateway:
             initialize_project=self._project_activity.initialize,
         )
         self.settings_store = settings_store or ProjectModelSettingsStore(self.config_store)
-        self.action_settings_store = action_settings_store or ProjectActionSettingsStore(
-            self.config_store
+        # Review can loosen only through state that research-directory content cannot write.
+        self.action_settings_store = action_settings_store or (
+            ProjectActionSettingsStore(self.config_store)
+            if self.project.protected_state is not None
+            else LaunchActionSettingsStore()
         )
         self._base_model_connections = (
             tuple(model_connections)
@@ -1197,7 +1193,9 @@ class SessionGateway:
         backend = service.backend
         if isinstance(backend, OpenHandsSdkBackend):
             return backend.evaluation_observation(
-                platform=service.platform_adapter.adapter_id, policy_fingerprint=digest
+                platform=service.platform_adapter.adapter_id,
+                policy_fingerprint=digest,
+                action_review=service.action_review_mode(),
             )
         return EvaluationRuntimeObservation(
             backend=backend.backend_id,
@@ -1213,7 +1211,7 @@ class SessionGateway:
             model_options_fingerprint=None,
             platform=service.platform_adapter.adapter_id,
             policy_fingerprint=digest,
-            action_confirmation=cast(ActionConfirmationMode, backend.action_confirmation_mode),
+            action_review=service.action_review_mode(),
         )
 
     @gateway_operation
@@ -1745,62 +1743,59 @@ class SessionGateway:
 
     @gateway_operation
     def action_settings(self) -> ActionSettingsResponse:
-        """Return the selected and deployment-allowed confirmation modes."""
+        """Return the review mode for new action sets and what the deployment allows."""
         try:
-            config = self.config_store.load()
-        except ProjectConfigError as error:
+            policy_allowed = self.config_store.load().policy.allowed_action_review_modes
+            selected = self.action_settings_store.load().review_mode
+            isolated = self._credentials_isolated()
+        except (ProjectConfigError, ModelSettingsError) as error:
             raise ActionSettingsError(str(error)) from error
-        settings = (
-            config.action_settings
-            if isinstance(self.action_settings_store, ProjectActionSettingsStore)
-            else self.action_settings_store.load()
-        )
-        model_settings = (
-            config.model_settings
-            if isinstance(self.settings_store, ProjectModelSettingsStore)
-            else self.settings_store.load()
-        )
-        policy_profile = config.policy
-        policy_allowed = set(policy_profile.allowed_action_confirmation_modes)
-        isolation = self._credential_isolation(
-            model_settings,
-            model_source=config.model_source,
-        )
+        sandboxed = self._worker_plan_factory is not None
         blocking_sessions = self._active_service_session_ids()
+        stored = isinstance(self.action_settings_store, ProjectActionSettingsStore)
         return api_response(
             ActionSettingsResponse,
             {
-                **settings.safe_dict(),
-                "scope_description": ACTION_MODE_SCOPE_DESCRIPTION,
+                "schema_version": "heartwood.action-settings.v1",
+                "review_mode": effective_review_mode(
+                    selected,
+                    allowed=policy_allowed,
+                    sandboxed=sandboxed,
+                    credentials_isolated=isolated,
+                ),
+                "default_mode": effective_review_mode(
+                    None,
+                    allowed=policy_allowed,
+                    sandboxed=sandboxed,
+                    credentials_isolated=isolated,
+                ),
+                "scope": "project" if stored else "launch",
+                "scope_description": (
+                    ACTION_MODE_SCOPE_DESCRIPTION
+                    if stored
+                    else ACTION_MODE_LAUNCH_SCOPE_DESCRIPTION
+                ),
                 "presentation": action_presentation(),
                 "change_allowed": not blocking_sessions,
                 "change_blocked_reason": (
                     None
                     if not blocking_sessions
-                    else "Finish or resolve active session work before changing approvals."
+                    else "Finish or resolve active session work before reducing review. "
+                    "A stricter mode can be selected at any time."
                 ),
                 "modes": [
                     {
                         **option.safe_dict(),
                         "allowed": (
-                            option.mode == "always-confirm"
-                            and option.mode in policy_allowed
-                            and isolation.allows(option.mode)
-                        ),
-                        "unavailable_reason": (
-                            AUTOMATION_UNAVAILABLE_REASON
-                            if option.mode == "confirm-risky"
-                            else None
-                            if (option.mode in policy_allowed and isolation.allows(option.mode))
-                            else (
-                                "Unavailable under the active platform policy."
-                                if option.mode not in policy_allowed
-                                else credential_isolation_unavailable_reason(
-                                    isolation,
-                                    option.mode,
-                                )
+                            reason := _review_mode_unavailable_reason(
+                                option.mode,
+                                allowed=policy_allowed,
+                                sandboxed=sandboxed,
+                                credentials_isolated=isolated,
                             )
-                        ),
+                        )
+                        is None,
+                        "unavailable_reason": reason,
                     }
                     for option in ACTION_MODE_OPTIONS
                 ],
@@ -1809,41 +1804,31 @@ class SessionGateway:
 
     @gateway_operation
     @_serialized_state
-    def select_action_confirmation_mode(self, mode: str) -> ActionSettingsResponse:
-        """Select a deployment-allowed OpenHands confirmation mode."""
-        blocking_sessions = self._active_service_session_ids()
-        if blocking_sessions:
-            raise ActionSettingsError(
-                "action confirmation mode cannot change while a session is active"
-            )
-        validated_mode = ActionSettings().selecting(mode).confirmation_mode
-        config = self.config_store.load()
-        isolation = self._credential_isolation(
-            self.settings_store.load(),
-            model_source=config.model_source,
-        )
-        reason = credential_isolation_unavailable_reason(
-            isolation,
-            validated_mode,
-        )
-        if reason is not None:
-            raise ActionSettingsError(reason)
-        if isinstance(self.action_settings_store, ProjectActionSettingsStore):
-            try:
-                self.config_store.update(
-                    lambda config: _select_action_confirmation_mode(config, mode)
-                )
-            except ProjectConfigError as error:
-                raise ActionSettingsError(str(error)) from error
-        else:
-            with self.config_store.locked():
-                config = self.config_store.load()
-                if mode not in config.policy.allowed_action_confirmation_modes:
-                    msg = f"action confirmation mode is not allowed by platform policy: {mode}"
-                    raise ActionSettingsError(msg)
+    def select_action_review_mode(self, mode: str) -> ActionSettingsResponse:
+        """Select a review mode within the deployment ceiling and execution boundary."""
+        current = self.action_settings()["review_mode"]
+        # Only a stored selection touches project state; a launch selection stays in memory.
+        stored = isinstance(self.action_settings_store, ProjectActionSettingsStore)
+        try:
+            with self.config_store.locked() if stored else nullcontext():
+                policy_allowed = self.config_store.load().policy.allowed_action_review_modes
                 settings = self.action_settings_store.load().selecting(mode)
+                selected = cast(ActionReviewMode, mode)
+                reason = _review_mode_unavailable_reason(
+                    selected,
+                    allowed=policy_allowed,
+                    sandboxed=self._worker_plan_factory is not None,
+                    credentials_isolated=self._credentials_isolated(),
+                )
+                if reason is not None:
+                    raise ActionSettingsError(reason)
+                if not is_tightening(current, selected) and self._active_service_session_ids():
+                    raise ActionSettingsError(
+                        "action review can be reduced only while no session is active"
+                    )
                 self.action_settings_store.save(settings)
-        self._reset_services()
+        except (ProjectConfigError, ModelSettingsError) as error:
+            raise ActionSettingsError(str(error)) from error
         return self.action_settings()
 
     @gateway_operation
@@ -1856,16 +1841,6 @@ class SessionGateway:
                 f"model profile id is reserved by Heartwood: {profile.profile_id}"
             )
         settings = self.settings_store.load().with_profile(profile)
-        isolation = self._credential_isolation(
-            settings,
-            model_source=self.config_store.load().model_source,
-        )
-        reason = credential_isolation_unavailable_reason(
-            isolation,
-            self.action_settings_store.load().confirmation_mode,
-        )
-        if reason is not None:
-            raise ModelSettingsError(reason)
         self.settings_store.save(settings)
         self._reset_services()
         return self.model_settings()
@@ -1898,7 +1873,6 @@ class SessionGateway:
     ) -> ModelValidationResponse:
         """Validate credential availability and platform route authorization."""
         profile = self.settings_store.load().profile(profile_id)
-        action_settings = self.action_settings_store.load()
         policy_profile = self._policy_profile()
         purpose = (
             "selected Heartwood-managed model"
@@ -1908,7 +1882,6 @@ class SessionGateway:
         decision = ModelPolicyEngine(policy_profile).evaluate(
             endpoint=profile.policy_endpoint,
             capability_tier=profile.capability_tier,
-            action_confirmation_mode=action_settings.confirmation_mode,
             credential_reference=profile.credential_reference,
             decision_id=f"model-profile-{profile.profile_id}",
             purpose=purpose,
@@ -1928,7 +1901,7 @@ class SessionGateway:
                     model_source=self._model_source_for_profile(profile),
                     model_connections=self._model_connections.values(),
                 ).safe_dict(),
-                "action_confirmation_mode": action_settings.confirmation_mode,
+                "action_review_mode": self.action_settings()["review_mode"],
                 "policy_decision": decision.model_dump(mode="json"),
             },
         )
@@ -2464,24 +2437,8 @@ class SessionGateway:
             if isinstance(self.settings_store, ProjectModelSettingsStore)
             else self.settings_store.load()
         )
-        action_settings = (
-            config.action_settings
-            if isinstance(self.action_settings_store, ProjectActionSettingsStore)
-            else self.action_settings_store.load()
-        )
-        isolation = self._credential_isolation(
-            model_settings,
-            model_source=config.model_source,
-        )
-        reason = credential_isolation_unavailable_reason(
-            isolation,
-            action_settings.confirmation_mode,
-        )
-        if reason is not None:
-            raise ActionSettingsError(reason)
         return _ServiceConfiguration(
             model_settings=model_settings,
-            action_settings=action_settings,
             policy_profile=config.policy,
             local_model=config.local_model,
             managed_inference=config.model_source == "heartwood",
@@ -2513,7 +2470,6 @@ class SessionGateway:
 
         backend = self._backend(
             model_settings=configuration.model_settings,
-            action_settings=configuration.action_settings,
             selected_model=configuration.local_model,
             managed_inference=configuration.managed_inference,
             session_id=session_id,
@@ -2527,6 +2483,8 @@ class SessionGateway:
             env=self.env,
             worker_project_id=self.project.project_id,
             checkpoint_evidence=checkpoint_evidence,
+            action_review_mode=lambda: self.action_settings_store.load().review_mode,
+            credentials_isolated=self._credentials_isolated,
             external_actions=(
                 self._external_actions_factory(session_id)
                 if self._external_actions_factory is not None
@@ -2557,7 +2515,6 @@ class SessionGateway:
                         session_id=session_id,
                         profile=backend.profile,
                         policy=service.policy_profile,
-                        action_confirmation_mode=configuration.action_settings.confirmation_mode,
                         skills=self.skill_manager,
                         specialists=backend.specialist_catalog,
                     ),
@@ -2580,7 +2537,7 @@ class SessionGateway:
         return SessionService.local_default(
             self.sessions_root,
             session_id=session_id,
-            backend=_UnconfiguredAgentBackend(configuration.action_settings.confirmation_mode),
+            backend=_UnconfiguredAgentBackend(),
             policy_profile=configuration.policy_profile,
             env=self.env,
             worker_project_id=self.project.project_id,
@@ -2594,7 +2551,6 @@ class SessionGateway:
         self,
         *,
         model_settings: ModelSettings,
-        action_settings: ActionSettings,
         selected_model: LocalModelSelection | None,
         session_id: str,
         worker_context: Callable[[], WorkerConversationContext] | None = None,
@@ -2603,7 +2559,6 @@ class SessionGateway:
         backend_id = self.backend_id
         if backend_id in {"deterministic", "deterministic-local"}:
             return DeterministicAgentBackend(
-                action_confirmation_mode=action_settings.confirmation_mode,
                 persistence_path=(self.sessions_root / session_id / ".deterministic-backend.json"),
             )
         if backend_id not in {"auto", "openhands", "openhands-sdk"}:
@@ -2612,7 +2567,7 @@ class SessionGateway:
         try:
             profile = model_settings.profile()
         except ModelSettingsError:
-            return _UnconfiguredAgentBackend(action_settings.confirmation_mode)
+            return _UnconfiguredAgentBackend()
         selected_model = selected_model if profile.is_local else None
         from heartwood.core_adapter.workflow_runtime import workflow_run
         from heartwood.gateway._openhands_sdk import OpenHandsSdkBackend
@@ -2631,7 +2586,6 @@ class SessionGateway:
                 if configured_profile.credential_kind == "environment"
                 and configured_profile.api_key_env is not None
             ),
-            action_confirmation_mode=action_settings.confirmation_mode,
             env={} if worker_context is not None else self._credential_environment(strict=False),
             worker_context=worker_context,
             managed_inference=managed_inference,
@@ -2970,11 +2924,9 @@ class SessionGateway:
         catalog_policy = policy.model_copy(
             update={"allowed_model_endpoints": policy.allowed_model_catalog_endpoints}
         )
-        action_settings = self.action_settings_store.load()
         decision = ModelPolicyEngine(catalog_policy).evaluate(
             endpoint=connection.catalog_endpoint,
             capability_tier="supervised",
-            action_confirmation_mode=action_settings.confirmation_mode,
             credential_reference=connection.credential_reference,
             decision_id=f"model-catalog-{connection.connection_id}",
             purpose=f"model catalog {connection.connection_id}",
@@ -3087,22 +3039,17 @@ class SessionGateway:
 
     @_serialized_state
     def _save_model_selection(self, source: str | None, settings: ModelSettings) -> None:
-        isolation = self._credential_isolation(
-            settings,
-            model_source=source,
-        )
-        action_settings = self.action_settings_store.load()
-        reason = credential_isolation_unavailable_reason(
-            isolation,
-            action_settings.confirmation_mode,
-        )
-        if reason is not None:
-            raise ModelSettingsError(reason)
         if isinstance(self.settings_store, ProjectModelSettingsStore):
             self.settings_store.save_selection(source, settings)
             return
         self.settings_store.save(settings)
         self.config_store.select_model_source(source, settings)
+
+    def _credentials_isolated(self) -> bool:
+        """Return whether the active model credential is kept from the agent tool runtime."""
+        return self._credential_isolation(
+            self.settings_store.load(), model_source=self.config_store.load().model_source
+        ).unattended_actions_allowed
 
     def _credential_isolation(
         self,
@@ -3516,14 +3463,20 @@ def _starts_streaming_text(event: SessionEvent) -> bool:
     )
 
 
-def _select_action_confirmation_mode(
-    config: ProjectConfig,
-    mode: str,
-) -> ProjectConfig:
-    if mode not in config.policy.allowed_action_confirmation_modes:
-        msg = f"action confirmation mode is not allowed by platform policy: {mode}"
-        raise ActionSettingsError(msg)
-    return config.with_action_settings(config.action_settings.selecting(mode))
+def _review_mode_unavailable_reason(
+    mode: ActionReviewMode, *, allowed: Sequence[str], sandboxed: bool, credentials_isolated: bool
+) -> str | None:
+    """Explain why the ceiling, execution boundary or credential boundary excludes a mode."""
+    if mode not in allowed:
+        return "Not permitted by this deployment's policy."
+    if mode != "review-all" and not sandboxed and not credentials_isolated:
+        return (
+            "Unavailable because the selected model credential is not isolated from the agent "
+            "tool runtime. Use a credential-free or platform-isolated model route."
+        )
+    if mode == "review-outside-effects" and not sandboxed:
+        return "Requires sessions that run in an isolated worker."
+    return None
 
 
 def _selected_local_model_choice(selection: LocalModelSelection) -> LocalModelChoice:

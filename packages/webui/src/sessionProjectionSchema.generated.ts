@@ -401,6 +401,7 @@ export const sessionProjectionJsonSchema = {
           additionalProperties: { $ref: "#/$defs/JsonValue" },
           type: "object",
         },
+        automaticRule: { anyOf: [{ type: "string" }, { type: "null" }] },
         decision: {
           anyOf: [
             { enum: ["approved", "rejected"], type: "string" },
@@ -451,6 +452,7 @@ export const sessionProjectionJsonSchema = {
         "affectedPaths",
         "state",
         "decision",
+        "automaticRule",
         "outcome",
         "proposedSequence",
         "updatedSequence",

@@ -360,20 +360,10 @@ def inspect_deployment(
                 ),
             ),
         )
-        isolation_action_mode = (
-            config.action_settings.confirmation_mode if config is not None else "always-confirm"
-        )
-        isolation_status: Literal["pass", "warning", "fail"]
-        if isolation.status in {"not-required", "qualified"}:
-            isolation_status = "pass"
-        elif isolation.allows(isolation_action_mode):
-            isolation_status = "warning"
-        else:
-            isolation_status = "fail"
         checks.append(
             ReadinessCheck(
                 "credential-isolation",
-                isolation_status,
+                "pass" if isolation.status in {"not-required", "qualified"} else "warning",
                 isolation.summary,
             )
         )
@@ -411,12 +401,13 @@ def inspect_deployment(
                 "Deployment policy is valid",
             )
         )
-        action_mode = str(config.action_settings.confirmation_mode)
+        action_mode = config.action_settings.review_mode
         checks.append(
             ReadinessCheck(
-                "action-confirmation",
+                "action-review",
                 "pass",
-                f"Action review: {action_mode_label(action_mode)}",
+                "Action review: "
+                + ("deployment default" if action_mode is None else action_mode_label(action_mode)),
             )
         )
         coherent = active_model is not None and _configuration_is_coherent(config)
@@ -524,9 +515,7 @@ def persist_deployment_profile(
                 ],
                 "allowed_model_catalog_endpoints": [f"{_STANFORD_ROOT}/models"],
                 "allowed_capability_tiers": ["supervised", "experimental"],
-                "allowed_action_confirmation_modes": list(
-                    platform_policy.allowed_action_confirmation_modes
-                ),
+                "allowed_action_review_modes": list(platform_policy.allowed_action_review_modes),
                 "credential_allowlist": ["STANFORD_AI_API_KEY"],
                 "aggregate_count_floor": 20,
                 "notes": "Stanford gateway route; data eligibility requires deployment approval.",
@@ -684,7 +673,6 @@ def _configuration_is_coherent(config: ProjectConfig) -> bool:
     decision = ModelPolicyEngine(config.policy).evaluate(
         endpoint=model.policy_endpoint,
         capability_tier=model.capability_tier,
-        action_confirmation_mode=config.action_settings.confirmation_mode,
         credential_reference=model.credential_reference,
         decision_id="deployment-readiness",
         purpose="deployment readiness",

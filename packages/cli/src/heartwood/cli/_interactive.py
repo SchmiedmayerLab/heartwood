@@ -22,7 +22,6 @@ from heartwood.cli._workspace_presentation import (
     format_workspace_tree,
 )
 from heartwood.gateway import (
-    ACTION_MODE_OPTIONS,
     ActionSettingsError,
     ModelSettingsError,
     ProjectionActionRecord,
@@ -212,7 +211,7 @@ class InteractiveSession:
             time.sleep(min(poll_interval, remaining))
 
     def action_settings(self) -> ActionSettingsResponse:
-        """Return the shared project action-confirmation settings."""
+        """Return the shared action-review settings."""
         return self.gateway.action_settings()
 
     def specialist_settings(self) -> SpecialistSettingsResponse:
@@ -252,28 +251,8 @@ class InteractiveSession:
         return self.gateway.workspace_diff(session_id=self.session_id, path=path)
 
     def select_action_mode(self, value: str) -> ActionSettingsResponse:
-        """Select an action-confirmation mode by its public command value."""
-        mode = next(
-            (
-                option.mode
-                for option in ACTION_MODE_OPTIONS
-                if value in {option.command_value, option.mode}
-            ),
-            None,
-        )
-        if mode is None:
-            raise ActionSettingsError(f"unsupported action confirmation mode: {value}")
-        projection = self.replay()
-        if projection.pending_approval is not None:
-            raise ActionSettingsError(
-                "resolve the pending action set before changing the action-review mode"
-            )
-        if projection.lifecycle.status == "running":
-            raise ActionSettingsError(
-                "wait for the active task to reach a review point before changing "
-                "the action-review mode"
-            )
-        return self.gateway.select_action_confirmation_mode(mode)
+        """Select an action-review mode; the gateway applies ceiling and timing rules."""
+        return self.gateway.select_action_review_mode(value)
 
     def submit(self, line: str) -> InteractionResult:
         """Submit a prompt or slash command."""
@@ -752,10 +731,12 @@ def format_action_record_lines(action: ProjectionActionRecord) -> tuple[str, ...
     else:
         heading = f"  [{state}] {terminal_safe_text(action.summary)}"
     lines = [heading]
-    if action.group_id is not None:
+    if action.automatic_rule is not None:
+        lines.append(
+            "    allowed automatically (rule " + terminal_safe_text(action.automatic_rule) + ")"
+        )
+    elif action.group_id is not None:
         lines.append(f"    decision {action.decision or 'pending'} (complete action set)")
-    elif action.decision is not None:
-        lines.append(f"    decision {action.decision} (automatic policy)")
     if action.arguments:
         lines.append(
             "    arguments: "
@@ -793,7 +774,7 @@ def format_model_status(gateway: SessionGateway) -> str:
         (
             f"Model: {terminal_safe_text(profile['model'])}",
             f"Credentials: {validation['credential_status']}",
-            f"Action review: {action_mode_label(validation['action_confirmation_mode'])}",
+            f"Action review: {action_mode_label(validation['action_review_mode'])}",
             f"Policy: {decision['decision']} ({terminal_safe_text(decision['reason'])})",
         )
     )
@@ -817,18 +798,18 @@ def format_action_settings(settings: ActionSettingsResponse) -> str:
                 "",
             )
         )
-    selected = settings["confirmation_mode"]
+    selected = settings["review_mode"]
     for item in settings["modes"]:
         marker = "*" if item["mode"] == selected else " "
-        recommended = " (recommended)" if item["recommended"] else ""
+        default = " (default)" if item["mode"] == settings["default_mode"] else ""
         allowed = item["allowed"]
         availability = "" if allowed else " (unavailable)"
-        lines.append(f"{marker} {terminal_safe_text(item['label'])}{recommended}{availability}")
+        lines.append(f"{marker} {terminal_safe_text(item['label'])}{default}{availability}")
         lines.append(f"  {terminal_safe_text(item['description'], preserve_newlines=True)}")
         if not allowed and (reason := item["unavailable_reason"]):
             lines.append(f"  {terminal_safe_text(reason, preserve_newlines=True)}")
         else:
-            lines.append(f"  Select: /permissions {terminal_safe_text(item['command_value'])}")
+            lines.append(f"  Select: /permissions {terminal_safe_text(item['mode'])}")
         lines.append("")
     return "\n".join(lines).rstrip()
 

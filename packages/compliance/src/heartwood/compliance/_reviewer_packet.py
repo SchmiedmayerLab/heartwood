@@ -145,9 +145,10 @@ class ReviewerPacketGenerator:
                     "model capability and unattended operation remain deployment-specific gates."
                 ),
                 (
-                    "- `always-confirm` is the required action policy. "
-                    "Low-risk labels are advisory; "
-                    "automatic approval is unavailable without a qualified deterministic allowlist."
+                    "- `review-all` is the default without an isolated worker. "
+                    "The gateway, never a model label, decides which actions a looser "
+                    "review mode allows; terminal commands are automatic only inside an "
+                    "admitted sandbox worker."
                 ),
                 (
                     "- Published documentation and artifacts are release-scoped; development "
@@ -202,9 +203,10 @@ class ReviewerPacketGenerator:
                     "installation review."
                 ),
                 (
-                    "- `always-confirm` requires one allow or reject decision for each pending "
-                    "OpenHands action set. Retained `confirm-risky` preferences are interpreted as "
-                    "`always-confirm`; risk labels cannot authorize execution."
+                    "- `review-all` requires one allow or reject decision for each pending "
+                    "OpenHands action set. `review-changes` and `review-outside-effects` let "
+                    "the gateway allow rule-matched sets and record each decision with its rule; "
+                    "risk labels cannot authorize execution."
                 ),
                 "- Audit exports use scrubbed JSONL records with a verified hash chain.",
                 "",
@@ -227,8 +229,8 @@ class ReviewerPacketGenerator:
                 f"- Platform: `{policy.platform_id}`",
                 f"- Deny egress by default: `{policy.deny_egress_by_default}`",
                 (
-                    "- Allowed action-confirmation modes: `"
-                    f"{', '.join(policy.allowed_action_confirmation_modes)}`"
+                    "- Allowed action-review modes: `"
+                    f"{', '.join(policy.allowed_action_review_modes)}`"
                 ),
                 f"- Aggregate count floor: `{policy.aggregate_count_floor}`",
                 "",

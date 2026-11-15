@@ -29,8 +29,8 @@ Ingress support describes the gateway contract available to platform operators; 
 Terra and Carina continue to advertise only the interfaces in the **Interfaces** row.
 
 Application-scrubbed routes exclude provider credentials from supported tools and persisted or interface state, but they do not isolate an in-process OpenHands tool from the model client.
-Secret-backed model routes therefore require **Review Every Action** on all built-in platforms.
-Credential-free Heartwood-managed inference does not place a model credential in Heartwood; registered action sets still require review.
+Secret-backed model routes therefore require **Review Every Action** outside an isolated worker on all built-in platforms.
+Credential-free Heartwood-managed inference does not place a model credential in Heartwood, so **Review Changes** can be selected there.
 
 ## Startup Projection
 

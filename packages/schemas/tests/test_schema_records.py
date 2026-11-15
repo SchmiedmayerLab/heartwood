@@ -81,17 +81,26 @@ def test_policy_profile_enforces_aggregate_count_floor() -> None:
         )
 
 
-def test_policy_profile_defaults_to_confirmation_for_every_action() -> None:
-    policy = PolicyProfile(policy_id="generic-default", platform_id="generic")
+@pytest.mark.parametrize("modes", [["review-changes"], ["review-all", "review-all"], []])
+def test_policy_profile_always_keeps_complete_review_available(modes: list[str]) -> None:
+    with pytest.raises(ValidationError):
+        PolicyProfile.model_validate(
+            {
+                "policy_id": "generic-default",
+                "platform_id": "generic",
+                "allowed_action_review_modes": modes,
+            }
+        )
 
-    assert policy.allowed_action_confirmation_modes == ("always-confirm",)
+
+def test_policy_profile_rejects_unknown_review_modes() -> None:
 
     with pytest.raises(ValidationError):
         PolicyProfile.model_validate(
             {
                 "policy_id": "generic-default",
                 "platform_id": "generic",
-                "allowed_action_confirmation_modes": ["never-confirm"],
+                "allowed_action_review_modes": ["never-confirm"],
             }
         )
 
