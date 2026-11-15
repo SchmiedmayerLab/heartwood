@@ -716,7 +716,7 @@ def test_cli_startup_and_doctor_resolve_a_remembered_keyring_credential(
         model_catalog_service=catalog,
     )
     configured.configure_model_source("openai")
-    configured.select_action_confirmation_mode("always-confirm")
+    configured.select_action_review_mode("review-all")
     configured.discover_models(
         "openai",
         token="remembered-secret",
@@ -1166,10 +1166,12 @@ def test_first_browser_launch_opens_guided_setup_without_terminal_input(
         web_root: Path,
         base_path: str,
         host_loopback_publication: bool,
+        review_mode: str | None,
     ) -> int:
         assert web_root.name == "dist"
         assert base_path == "/"
         assert host_loopback_publication is True
+        assert review_mode is None
         observed.append((project.root, host, port))
         return 0
 
@@ -1492,18 +1494,22 @@ def test_actions_and_advanced_model_profile_persist_in_config_toml(
     ]
 
     assert _run(project, monkeypatch, model_args) == 0
-    with pytest.raises(SystemExit) as rejected:
-        _run(project, monkeypatch, ["actions", "set", "auto-approve-low-risk"])
-    assert rejected.value.code == 2
+    # Without a deployment manifest no command stores a review mode for later launches.
+    for mode in ("review-changes", "review-outside-effects", "auto-approve-low-risk"):
+        with pytest.raises(SystemExit) as rejected:
+            _run(project, monkeypatch, ["actions", "set", mode])
+        assert rejected.value.code == 2
+    assert _run(project, monkeypatch, ["actions"]) == 0
     assert _run(project, monkeypatch, ["models", "validate", "local-test"]) == 0
 
     contents = (project / ".heartwood" / "config.toml").read_text(encoding="utf-8")
     captured = capsys.readouterr()
     output = captured.out + captured.err
     assert 'active_profile = "local-test"' in contents
-    assert 'confirmation_mode = "always-confirm"' in contents
+    assert "\nreview_mode" not in contents
     assert "Profile: local-test" in output
-    assert "Low-Risk Automation" in output
+    assert "* Review Every Action" in output
+    assert "* Review Changes" not in output
 
 
 def test_cli_and_browser_gateway_observe_the_same_project_configuration(
@@ -1515,7 +1521,7 @@ def test_cli_and_browser_gateway_observe_the_same_project_configuration(
     catalog = _local_catalog()
 
     with pytest.raises(SystemExit) as rejected:
-        _run(project, monkeypatch, ["actions", "set", "auto-approve-low-risk"])
+        _run(project, monkeypatch, ["actions", "set", "review-outside-effects"])
     assert rejected.value.code == 2
     capsys.readouterr()
 
@@ -1527,13 +1533,13 @@ def test_cli_and_browser_gateway_observe_the_same_project_configuration(
     )
     browser = RestGateway(gateway)
     action_settings = browser.handle(RestRequest(method="GET", path="/settings/actions"))
-    assert action_settings.body["confirmation_mode"] == "always-confirm"
+    assert action_settings.body["review_mode"] == "review-all"
     assert (
         browser.handle(
             RestRequest(
                 method="PUT",
-                path="/settings/actions/confirmation",
-                body=json.dumps({"mode": "always-confirm"}),
+                path="/settings/actions/review",
+                body=json.dumps({"mode": "review-all"}),
             )
         ).status_code
         == 200
@@ -2819,3 +2825,54 @@ def test_installed_cli_does_not_select_project_or_ancestor_assets(
     assert not expected.exists()
     expected.mkdir(parents=True)
     assert cli._bundled_path(relative) == expected
+
+
+def test_review_mode_flag_is_parsed_only_for_commands_that_start_an_interface(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from heartwood.cli import _build_parser
+
+    parser = _build_parser()
+    assert parser.parse_args([]).review_mode is None
+    assert parser.parse_args(["--review-mode", "review-changes"]).review_mode == "review-changes"
+    served = parser.parse_args(["gateway", "serve", "--review-mode", "review-all"])
+    assert served.review_mode == "review-all"
+    inherited = parser.parse_args(["--review-mode", "review-changes", "gateway", "serve"])
+    assert inherited.review_mode == "review-changes"
+    for arguments in (
+        ["--review-mode", "auto-approve-low-risk"],
+        ["gateway", "serve", "--review-mode", "confirm-risky"],
+    ):
+        with pytest.raises(SystemExit) as unknown:
+            parser.parse_args(arguments)
+        assert unknown.value.code == 2
+
+    with pytest.raises(SystemExit) as misplaced:
+        _run(tmp_path / "analysis", monkeypatch, ["--review-mode", "review-changes", "actions"])
+    assert misplaced.value.code == 2
+
+
+def test_review_mode_flag_selects_through_the_gateway_or_stops_with_its_reason(
+    tmp_path: Path,
+) -> None:
+    from heartwood.cli import _select_launch_review_mode
+
+    project = ProjectContext(tmp_path)
+    gateway = RealSessionGateway(project=project, env={})
+    _select_launch_review_mode(gateway, None)
+    assert gateway.action_settings()["review_mode"] == "review-all"
+    _select_launch_review_mode(gateway, "review-changes")
+    assert gateway.action_settings()["review_mode"] == "review-changes"
+    # A launch selection is never written into the research directory.
+    assert not project.state_root.exists()
+
+    refused = next(
+        option["unavailable_reason"]
+        for option in gateway.action_settings()["modes"]
+        if option["mode"] == "review-outside-effects"
+    )
+    with pytest.raises(SystemExit) as stopped:
+        _select_launch_review_mode(gateway, "review-outside-effects")
+    assert refused is not None
+    assert refused in str(stopped.value)

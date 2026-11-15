@@ -64,6 +64,5 @@ export const actionStateLabel = (
 export const selectedActionMode = (
   settings: ActionSettings | null,
 ): ActionModeOption | null =>
-  settings?.modes.find(
-    (option) => option.mode === settings.confirmation_mode,
-  ) ?? null;
+  settings?.modes.find((option) => option.mode === settings.review_mode) ??
+  null;

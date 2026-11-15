@@ -95,8 +95,8 @@ The built-in **Run with Heartwood** route is different: Heartwood downloads or i
 
 Heartwood never accepts provider API keys as normal command-line arguments and never writes API keys or subscription tokens to project configuration, session events, logs, browser storage, or audit exports.
 Unless a route is explicitly qualified as platform-isolated, OpenHands model calls and tools share the Heartwood operating-system identity and the route is application-scrubbed rather than process-isolated.
-Heartwood requires **Review Every Action** for non-isolated API keys, subscription credentials, mounted secrets, and managed identities.
-Credential-free local inference and platform-isolated routes also require Review Every Action; isolation does not establish that a command is safe to run automatically.
+Heartwood requires **Review Every Action** outside an isolated worker for non-isolated API keys, subscription credentials, mounted secrets, and managed identities.
+Credential-free local inference and platform-isolated routes can use **Review Changes**; see [Review Modes](../use/actions-audit.md#review-modes).
 
 API-key resolution follows this order:
 

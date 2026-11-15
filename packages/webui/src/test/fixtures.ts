@@ -16,7 +16,6 @@ import type {
 export const credentialIsolation = (): CredentialIsolation => ({
   status: "not-required",
   boundary: "credential-free",
-  unattended_actions_allowed: true,
   summary: "The selected model route does not place a credential in Heartwood.",
 });
 
@@ -75,7 +74,7 @@ export const syntheticEvents = (): SessionEvent[] => [
       backend_id: "openhands-sdk",
       profile_id: "local-smoke",
       capability_tier: "supervised",
-      action_confirmation_mode: "always-confirm",
+      action_review_mode: "review-all",
     },
   }),
   event(3, "agent_message.emitted", {
@@ -126,6 +125,7 @@ export const syntheticAction = (
   affectedPaths: [],
   state: "awaiting-review",
   decision: null,
+  automaticRule: null,
   outcome: null,
   proposedSequence: 4,
   updatedSequence: 5,

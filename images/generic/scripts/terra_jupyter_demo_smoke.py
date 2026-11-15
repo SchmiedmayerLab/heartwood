@@ -266,16 +266,16 @@ def _verify_gateway_session(external_base: str) -> None:
 
     _trace("reading action settings")
     actions = _request_json(urllib.parse.urljoin(external_base, "settings/actions"))
-    if actions.get("confirmation_mode") != "always-confirm":
-        raise AssertionError("gateway did not expose the default action confirmation mode")
-    _trace("persisting action settings")
+    if actions.get("review_mode") != "review-all":
+        raise AssertionError("gateway did not expose the default action review mode")
+    _trace("selecting action review")
     selected_actions = _request_json(
-        urllib.parse.urljoin(external_base, "settings/actions/confirmation"),
-        data={"mode": "always-confirm"},
+        urllib.parse.urljoin(external_base, "settings/actions/review"),
+        data={"mode": "review-all"},
         method="PUT",
     )
-    if selected_actions.get("confirmation_mode") != "always-confirm":
-        raise AssertionError("gateway did not persist action confirmation through the proxy")
+    if selected_actions.get("review_mode") != "review-all":
+        raise AssertionError("gateway did not accept an action review selection through the proxy")
 
     _trace("submitting session pause command")
     response = _request_json(

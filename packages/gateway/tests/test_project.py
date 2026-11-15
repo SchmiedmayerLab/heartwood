@@ -31,7 +31,7 @@ def test_project_context_initializes_private_state_layout(tmp_path: Path) -> Non
             "experiment_entry": "heartwood.experiment-entry.v1",
             "experiment_event": "heartwood.experiment-event.v1",
             "openhands_state": "heartwood.openhands-state.v1",
-            "project_config": "heartwood.project-config.v1",
+            "project_config": "heartwood.project-config.v2",
             "session_command_receipt": "heartwood.session-command-receipt.v1",
             "session_commit": "heartwood.session-commit.v1",
             "session_event": "heartwood.session-event.v1",
@@ -39,7 +39,7 @@ def test_project_context_initializes_private_state_layout(tmp_path: Path) -> Non
             "session_writer": "heartwood.session-writer.v1",
             "skill_installations": "heartwood.skill-installations.v1",
         },
-        "schema_version": "heartwood.project-state.v3",
+        "schema_version": "heartwood.project-state.v4",
     }
     assert project.config_path == tmp_path / ".heartwood" / "config.toml"
     for directory in (
@@ -171,7 +171,7 @@ def test_project_context_migrates_supported_state_only_during_initialization(
     project.initialize()
 
     state = json.loads(project.state_path.read_text(encoding="utf-8"))
-    assert state["schema_version"] == "heartwood.project-state.v3"
+    assert state["schema_version"] == "heartwood.project-state.v4"
     assert state["formats"]["openhands_state"] == "heartwood.openhands-state.v1"
 
 
@@ -227,7 +227,7 @@ def test_project_format_upgrade_preserves_records_and_retries_atomic_publication
 
     project.initialize()
     upgraded = project.state_path.read_bytes()
-    assert json.loads(upgraded) == json.loads((fixtures / "project-state-v3.json").read_bytes())
+    assert json.loads(upgraded) == json.loads((fixtures / "project-state-v4.json").read_bytes())
     assert all(path.read_bytes() == content for path, content in records.items())
     project.initialize()
     assert project.state_path.read_bytes() == upgraded

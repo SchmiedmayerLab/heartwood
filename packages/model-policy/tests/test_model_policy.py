@@ -163,30 +163,6 @@ def test_policy_allows_only_capability_tiers_selected_by_deployment() -> None:
     assert decision.decision == "allow"
 
 
-def test_policy_requires_explicit_risk_based_confirmation_authorization() -> None:
-    denied = ModelPolicyEngine(_policy()).evaluate(
-        endpoint="https://model.local.invalid/v1/chat/completions",
-        capability_tier="supervised",
-        action_confirmation_mode="confirm-risky",
-        decision_id="decision-1",
-        purpose="synthetic model call",
-    )
-    allowed_profile = _policy().model_copy(
-        update={"allowed_action_confirmation_modes": ("always-confirm", "confirm-risky")}
-    )
-    allowed = ModelPolicyEngine(allowed_profile).evaluate(
-        endpoint="https://model.local.invalid/v1/chat/completions",
-        capability_tier="supervised",
-        action_confirmation_mode="confirm-risky",
-        decision_id="decision-2",
-        purpose="synthetic model call",
-    )
-
-    assert denied.decision == "deny"
-    assert "confirm-risky" in denied.reason
-    assert allowed.decision == "allow"
-
-
 def test_policy_requires_explicit_non_secret_credential_reference() -> None:
     denied = ModelPolicyEngine(_policy()).evaluate(
         endpoint="https://model.local.invalid/v1/chat/completions",
@@ -214,17 +190,6 @@ def test_policy_rejects_unknown_capability_tier() -> None:
         ModelPolicyEngine(_policy()).evaluate(
             endpoint="https://model.local.invalid/v1/chat/completions",
             capability_tier="unknown",
-            decision_id="decision-1",
-            purpose="synthetic model call",
-        )
-
-
-def test_policy_rejects_unknown_action_confirmation_mode() -> None:
-    with pytest.raises(PolicyInputError, match="action confirmation mode"):
-        ModelPolicyEngine(_policy()).evaluate(
-            endpoint="https://model.local.invalid/v1/chat/completions",
-            capability_tier="supervised",
-            action_confirmation_mode="never-confirm",
             decision_id="decision-1",
             purpose="synthetic model call",
         )

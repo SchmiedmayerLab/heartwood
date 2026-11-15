@@ -21,15 +21,15 @@ from pydantic import (
     with_config,
 )
 
-from heartwood.schemas._records import ActionConfirmationMode, CapabilityTier
+from heartwood.schemas._records import ActionReviewMode, CapabilityTier
 from heartwood.schemas.experiments import ExperimentCollection, ExperimentExport
 from heartwood.schemas.python_environment import PythonEnvironmentSnapshot
 from heartwood.schemas.workflows import WorkflowCatalog, WorkflowRequest
 
 __all__ = [
-    "ActionConfirmationRequest",
     "ActionModeOptionResponse",
     "ActionPresentationResponse",
+    "ActionReviewRequest",
     "ActionSettingsResponse",
     "ApiRequest",
     "AuditExportResponse",
@@ -115,7 +115,6 @@ type CredentialIsolationBoundary = Literal[
     "platform-isolated",
 ]
 type InterfaceKind = Literal["terminal", "web", "notebook"]
-type ActionRisk = Literal["high", "low", "medium", "unknown"]
 type LocalModelQualification = Literal["unvalidated", "qualified"]
 type LocalModelRuntime = Literal["llama-cpp", "vllm"]
 type LocalModelTier = Literal["standard", "powerful", "maximum"]
@@ -149,10 +148,10 @@ class SessionRenameRequest(ApiRequest):
     title: str = Field(min_length=1)
 
 
-class ActionConfirmationRequest(ApiRequest):
-    """Select the shared action-confirmation policy."""
+class ActionReviewRequest(ApiRequest):
+    """Select the action-review mode."""
 
-    mode: ActionConfirmationMode
+    mode: ActionReviewMode
 
 
 class ModelDownloadRequest(ApiRequest):
@@ -419,15 +418,12 @@ class WorkspaceDiffResponse(_ApiResponse):
 
 
 class ActionModeOptionResponse(_ApiResponse):
-    """One selectable confirmation mode."""
+    """One review mode, the rules it applies automatically, and its availability."""
 
-    mode: ActionConfirmationMode
-    command_value: str
+    mode: ActionReviewMode
     label: str
     description: str
-    automatic_risks: list[ActionRisk]
-    reviewed_risks: list[ActionRisk]
-    recommended: bool
+    automatic: list[str]
     allowed: bool
     unavailable_reason: str | None
 
@@ -444,10 +440,12 @@ class ActionPresentationResponse(_ApiResponse):
 
 
 class ActionSettingsResponse(_ApiResponse):
-    """Shared action-confirmation settings."""
+    """The review mode for new action sets and each mode the deployment permits."""
 
     schema_version: Literal["heartwood.action-settings.v1"]
-    confirmation_mode: ActionConfirmationMode
+    review_mode: ActionReviewMode
+    default_mode: ActionReviewMode
+    scope: Literal["project", "launch"]
     scope_description: str
     presentation: ActionPresentationResponse
     change_allowed: bool
@@ -659,7 +657,6 @@ class CredentialIsolationResponse(_ApiResponse):
 
     status: CredentialIsolationStatus
     boundary: CredentialIsolationBoundary
-    unattended_actions_allowed: bool
     summary: str
 
 
@@ -719,7 +716,7 @@ class ModelValidationResponse(_ApiResponse):
     profile: ModelProfileResponse
     credential_status: CredentialStatus
     credential_isolation: CredentialIsolationResponse
-    action_confirmation_mode: ActionConfirmationMode
+    action_review_mode: ActionReviewMode
     policy_decision: PolicyDecisionResponse
 
 
@@ -1016,7 +1013,7 @@ type PublicApiContract = (
     | ExperimentExport
     | WorkflowCatalog
     | WorkflowRequest
-    | ActionConfirmationRequest
+    | ActionReviewRequest
     | CustomLocalModelDownloadRequest
     | LocalModelImportRequest
     | ModelCatalogRequest

@@ -19,7 +19,7 @@ export type HeartwoodApiContract =
   | ExperimentExport
   | WorkflowCatalog
   | WorkflowRequest
-  | ActionConfirmationRequest
+  | ActionReviewRequest
   | CustomLocalModelDownloadRequest
   | LocalModelImportRequest
   | ModelCatalogRequest
@@ -67,8 +67,8 @@ export type ApiResponse =
   | WorkspaceDiffResponse
   | WorkspaceFileResponse
   | WorkspaceTreeResponse;
-export type ActionConfirmationMode = "always-confirm" | "confirm-risky";
-export type ActionRisk = "high" | "low" | "medium" | "unknown";
+export type ActionReviewMode =
+  "review-all" | "review-changes" | "review-outside-effects";
 export type LocalModelQualification = "unvalidated" | "qualified";
 export type ReasoningParser = "muse_glimmer";
 export type LocalModelRuntime = "llama-cpp" | "vllm";
@@ -108,29 +108,28 @@ export type WorkflowRequest =
 export type WorkflowInputValue = string;
 
 /**
- * Shared action-confirmation settings.
+ * The review mode for new action sets and each mode the deployment permits.
  */
 export interface ActionSettingsResponse {
   change_allowed: boolean;
   change_blocked_reason: string | null;
-  confirmation_mode: ActionConfirmationMode;
+  default_mode: ActionReviewMode;
   modes: ActionModeOptionResponse[];
   presentation: ActionPresentationResponse;
+  review_mode: ActionReviewMode;
   schema_version: "heartwood.action-settings.v1";
+  scope: "project" | "launch";
   scope_description: string;
 }
 /**
- * One selectable confirmation mode.
+ * One review mode, the rules it applies automatically, and its availability.
  */
 export interface ActionModeOptionResponse {
   allowed: boolean;
-  automatic_risks: ActionRisk[];
-  command_value: string;
+  automatic: string[];
   description: string;
   label: string;
-  mode: ActionConfirmationMode;
-  recommended: boolean;
-  reviewed_risks: ActionRisk[];
+  mode: ActionReviewMode;
   unavailable_reason: string | null;
 }
 /**
@@ -454,7 +453,6 @@ export interface CredentialIsolationResponse {
   boundary: CredentialIsolationBoundary;
   status: CredentialIsolationStatus;
   summary: string;
-  unattended_actions_allowed: boolean;
 }
 /**
  * Advanced non-secret provider defaults.
@@ -517,7 +515,7 @@ export interface ModelTransferPlanResponse {
  * Selected model, credential, confirmation, and policy validation.
  */
 export interface ModelValidationResponse {
-  action_confirmation_mode: ActionConfirmationMode;
+  action_review_mode: ActionReviewMode;
   credential_isolation: CredentialIsolationResponse;
   credential_status: CredentialStatus;
   policy_decision: PolicyDecisionResponse;
@@ -1056,10 +1054,10 @@ export interface WorkflowCorrectionRequest {
   run_id: string;
 }
 /**
- * Select the shared action-confirmation policy.
+ * Select the action-review mode.
  */
-export interface ActionConfirmationRequest {
-  mode: ActionConfirmationMode;
+export interface ActionReviewRequest {
+  mode: ActionReviewMode;
 }
 /**
  * Download one automatically inspected Hugging Face model.

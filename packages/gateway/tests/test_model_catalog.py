@@ -609,7 +609,7 @@ def test_gateway_authorizes_discovery_before_retaining_transient_token(
         allowed_model_endpoints=("http://127.0.0.1:8765/v1/chat/completions",),
         allowed_model_catalog_endpoints=("http://127.0.0.1:8765/v1/models",),
         allowed_capability_tiers=("supervised", "experimental"),
-        allowed_action_confirmation_modes=("always-confirm",),
+        allowed_action_review_modes=("review-all",),
         credential_allowlist=(),
     )
     denied_config = ProjectConfig(platform_id="generic", policy=local_only_policy)
@@ -859,7 +859,7 @@ def _catalog_project(root: Path) -> ProjectContext:
             "https://custom.example/v1/models",
         ),
         allowed_capability_tiers=("supervised", "experimental"),
-        allowed_action_confirmation_modes=("always-confirm", "confirm-risky"),
+        allowed_action_review_modes=("review-all", "review-changes"),
         credential_allowlist=(
             "HEARTWOOD_CUSTOM_MODEL_API_KEY",
             "OPENAI_API_KEY",

@@ -629,7 +629,7 @@ def _service_for_profile(
         platform_id="generic",
         allowed_model_endpoints=(profile.policy_endpoint,),
         allowed_capability_tiers=("supervised",),
-        allowed_action_confirmation_modes=("always-confirm",),
+        allowed_action_review_modes=("review-all",),
         credential_allowlist=(_API_KEY_NAME,),
     )
     return SessionService.local_default(

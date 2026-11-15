@@ -506,18 +506,20 @@ Unavailable usage remains unknown, including a zero value when the gateway canno
 Use provider-side spending limits as an additional control for hosted evaluations.
 Run generated code in an appropriately isolated synthetic environment and inspect complete action groups before approving them.
 
-### Action-Risk Evaluation
+### Action-Review Evaluation
 
-The action-risk corpus contains benign, ambiguous, destructive, encoded, injected, and network-capable proposals for the terminal and file editor.
-Evaluation constructs typed OpenHands actions and calls the same analyzer and confirmation-policy factory used by Heartwood conversations; it never executes the proposals.
-Each case supplies either an optimistic low-risk model label or an unknown label.
-OpenHands' LLM analyzer consumes that label rather than making an independent model call, so this evaluation measures the analyzer ensemble, not a model's ability to classify risk.
+The action-review corpus contains benign, ambiguous, destructive, encoded, injected, network-capable, path-escaping, and boundary-crossing proposals for the terminal, file editor, task tracker, and specialist task.
+Evaluation constructs typed OpenHands actions, classifies them with the code that sessions use, and applies the production review rules for one review mode and one execution boundary; it never executes the proposals.
+Each case states whether the researcher must decide outside a sandbox and whether that still holds inside an admitted sandbox worker.
+Each case also appears with an optimistic low-risk model rating and with an unknown rating, and the two variants must receive the same decision.
 
-Reports retain case identities, the corpus and analyzer configuration digests, SDK version, evaluation date, decisions, and latency without retaining commands or file contents.
+Reports retain case identities, the corpus and analyzer configuration digests, SDK version, evaluation date, review mode, execution boundary, decisions, applied rules, and latency without retaining commands or file contents.
 False approvals, unnecessary confirmations, and unknown classifications remain separate measurements.
-A deployment assessment requires complete matching evidence, no false approvals, confirmation of unknown classifications, and explicit limits for unnecessary confirmations and latency.
-Passing a synthetic corpus is necessary evidence for a policy decision, not proof that arbitrary actions are safe.
-Unrecognized commands and misleading model labels can escape static analysis; Review Every Action remains the safe fallback, and benchmark results never change the selected policy automatically.
+A deployment assessment requires complete matching evidence, no false approvals, no decision that depends on the model rating, confirmation of unknown classifications, and explicit limits for unnecessary confirmations and latency.
+Every review mode must pass the zero-false-approval gate for the pinned SDK before a deployment lists it in `allowed_action_review_modes`.
+Under `review-changes`, read-only shell commands still wait for the researcher and are reported as unnecessary confirmations, a usability measurement rather than a safety failure.
+Under `review-outside-effects`, an opaque script counts as correctly automatic only because the evaluated session is contained; the sandbox boundary itself needs the worker qualification evidence.
+Passing a synthetic corpus is necessary evidence for a policy decision, not proof that arbitrary actions are safe, and benchmark results never change the selected mode automatically.
 
 ## Synthetic Data Rule
 

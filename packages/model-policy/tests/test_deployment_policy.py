@@ -19,7 +19,7 @@ def _ceiling() -> PolicyProfile:
         allowed_model_endpoints=("https://model.example/v1/chat/completions",),
         allowed_model_catalog_endpoints=("https://model.example/v1/models",),
         allowed_capability_tiers=("supervised", "experimental"),
-        allowed_action_confirmation_modes=("always-confirm",),
+        allowed_action_review_modes=("review-all",),
         credential_allowlist=("MODEL_KEY",),
         aggregate_count_floor=30,
     )
@@ -33,7 +33,7 @@ def _ceiling() -> PolicyProfile:
         ("allowed_model_endpoints", ("https://other.example/v1/chat/completions",)),
         ("allowed_model_catalog_endpoints", ("https://other.example/v1/models",)),
         ("allowed_capability_tiers", ("autonomous",)),
-        ("allowed_action_confirmation_modes", ("confirm-risky",)),
+        ("allowed_action_review_modes", ("review-all", "review-changes")),
         ("credential_allowlist", ("OTHER_KEY",)),
         ("aggregate_count_floor", 20),
     ],

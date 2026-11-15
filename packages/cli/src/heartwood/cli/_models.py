@@ -386,7 +386,7 @@ def _format_model_validation(validation: ModelValidationResponse) -> str:
             f"Model: {profile['model']}",
             f"Credentials: {validation['credential_status']}",
             f"Credential isolation: {validation['credential_isolation']['summary']}",
-            f"Action review: {action_mode_label(validation['action_confirmation_mode'])}",
+            f"Action review: {action_mode_label(validation['action_review_mode'])}",
             f"Policy: {decision['decision']} ({decision['reason']})",
         )
     )

@@ -23,12 +23,12 @@ from heartwood.schemas._connections import ModelConnectionsManifest
 _SAFE_IDENTIFIER_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
 
 type CapabilityTier = Literal["autonomous", "supervised", "experimental"]
-type ActionConfirmationMode = Literal["always-confirm", "confirm-risky"]
+type ActionReviewMode = Literal["review-all", "review-changes", "review-outside-effects"]
 type CheckpointSignatureAlgorithm = Literal["ed25519", "ecdsa-p256-sha256"]
 type Decision = Literal["allow", "deny"]
 
 __all__ = [
-    "ActionConfirmationMode",
+    "ActionReviewMode",
     "ApprovalRecord",
     "AuditCheckpoint",
     "AuditCheckpointContext",
@@ -72,13 +72,23 @@ class PolicyProfile(_HeartwoodRecord):
         default=("supervised",),
         min_length=1,
     )
-    allowed_action_confirmation_modes: tuple[ActionConfirmationMode, ...] = Field(
-        default=("always-confirm",),
+    allowed_action_review_modes: tuple[ActionReviewMode, ...] = Field(
+        default=("review-all", "review-changes", "review-outside-effects"),
         min_length=1,
     )
     credential_allowlist: tuple[str, ...] = ()
     aggregate_count_floor: int = Field(default=20, ge=20)
     notes: str | None = None
+
+    @field_validator("allowed_action_review_modes")
+    @classmethod
+    def _require_complete_review(
+        cls, value: tuple[ActionReviewMode, ...]
+    ) -> tuple[ActionReviewMode, ...]:
+        """Keep the mode every fail-closed path falls back to."""
+        if "review-all" not in value or len(set(value)) != len(value):
+            raise ValueError("allowed_action_review_modes must list review-all once")
+        return value
 
 
 class ModelCallDecision(_HeartwoodRecord):

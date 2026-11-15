@@ -253,10 +253,10 @@ def _action_items(view_model: NotebookViewModel) -> tuple[str, ...]:
             else ""
         )
         lines = [f"{action_state_label(action.state)}: {label}{outcome}{truncated}"]
-        if action.group_id is not None:
+        if action.automatic_rule is not None:
+            lines.append(f"Allowed automatically (rule {action.automatic_rule})")
+        elif action.group_id is not None:
             lines.append(f"Complete action set decision: {action.decision or 'pending'}")
-        elif action.decision is not None:
-            lines.append(f"Decision: {action.decision} (automatic policy)")
         if action.arguments:
             lines.append("Arguments:\n" + json.dumps(action.arguments, indent=2, sort_keys=True))
         if action.affected_paths:

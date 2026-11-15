@@ -338,13 +338,11 @@ class ProjectConfig:
                 connection.validate()
         except (ActionSettingsError, ModelCatalogError, ModelSettingsError) as error:
             raise ProjectConfigError(str(error)) from error
-        if (
-            self.action_settings.confirmation_mode
-            not in self.policy.allowed_action_confirmation_modes
-        ):
-            raise ProjectConfigError(
-                "action confirmation mode is not allowed by the project policy"
-            )
+        if self.action_settings.review_mode not in {
+            None,
+            *self.policy.allowed_action_review_modes,
+        }:
+            raise ProjectConfigError("action review mode is not allowed by the project policy")
         if any(connection.source != "platform" for connection in self.additional_connections):
             raise ProjectConfigError("project connections must be platform-provided")
         connection_ids = [
@@ -423,6 +421,19 @@ class ProjectConfigStore:
         except (DurableFileError, OSError, tomllib.TOMLDecodeError) as error:
             raise ProjectConfigError(f"unable to load .heartwood/config.toml: {error}") from error
         config = project_config_from_mapping(value, project=self.project)
+        if self._deployment_policy is not None:
+            # The operator's review ceiling applies at every start; stored state keeps no copy
+            # that could outlive a manifest change.
+            config = replace(
+                config,
+                policy=config.policy.model_copy(
+                    update={
+                        "allowed_action_review_modes": (
+                            self._deployment_policy.allowed_action_review_modes
+                        )
+                    }
+                ),
+            )
         self._validate_config(config)
         return config
 

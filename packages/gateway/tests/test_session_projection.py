@@ -598,7 +598,7 @@ def test_resolution_contradicting_atomic_group_decision_fails_closed() -> None:
     assert projection.available_commands == ()
 
 
-def test_executed_action_records_automatic_policy_decision_and_workspace_revision() -> None:
+def test_execution_without_a_recorded_decision_is_never_shown_as_approved() -> None:
     projection = project_session(
         (
             _event(
@@ -627,8 +627,62 @@ def test_executed_action_records_automatic_policy_decision_and_workspace_revisio
     )
 
     assert projection.workspace_revision == 1
-    assert projection.actions[0].decision == "approved"
+    assert projection.actions[0].decision is None
+    assert projection.actions[0].automatic_rule is None
     assert projection.actions[0].group_id is None
+
+
+def _reviewed_events(approval: dict[str, JsonValue]) -> tuple[SessionEvent, ...]:
+    action: dict[str, JsonValue] = {
+        "tool_call_id": "call-1",
+        "tool_name": "file_editor",
+        "kind": "file-editor",
+        "arguments": {"command": "view", "path": "data.csv"},
+        "risk": "low",
+    }
+    return (
+        _event(0, EventKind.TOOL_CALL_PROPOSED, action),
+        _event(1, EventKind.CONFIRMATION_REQUESTED, {"request": {**action, "group_id": "set-1"}}),
+        _event(
+            2,
+            EventKind.APPROVAL_RECORDED,
+            {"group_id": "set-1", "decision": "approved", "tool_call_ids": ["call-1"], **approval},
+        ),
+        _event(
+            3,
+            EventKind.CONFIRMATION_RESOLVED,
+            {"group_id": "set-1", "tool_call_id": "call-1", "decision": "approved"},
+        ),
+        _event(
+            4,
+            EventKind.TOOL_EXECUTION_RECORDED,
+            {"tool_call_id": "call-1", "tool_name": "file_editor", "exit_code": 0},
+        ),
+    )
+
+
+def test_gateway_decisions_are_distinct_from_researcher_approvals() -> None:
+    review: dict[str, JsonValue] = {"mode": "review-changes", "rule": "read.file-view"}
+    automatic = project_session(
+        _reviewed_events({"actor_id": "gateway", "review": review}), session_id="session-1"
+    )
+    researcher = project_session(_reviewed_events({"actor_id": "human"}), session_id="session-1")
+    forged = project_session(
+        _reviewed_events({"actor_id": "human", "review": review}), session_id="session-1"
+    )
+
+    assert automatic.actions[0].decision == researcher.actions[0].decision == "approved"
+    assert automatic.actions[0].state == researcher.actions[0].state == "succeeded"
+    assert automatic.actions[0].automatic_rule == "read.file-view"
+    assert researcher.actions[0].automatic_rule is None
+    assert forged.actions[0].automatic_rule is None
+    assert automatic.pending_approval is None
+    assert [message.content for message in automatic.conversation] != [
+        message.content for message in researcher.conversation
+    ]
+    assert automatic.model_dump(mode="json", by_alias=True)["actions"][0]["automaticRule"] == (
+        "read.file-view"
+    )
 
 
 def test_projection_displays_stable_error_code_without_technical_details() -> None:

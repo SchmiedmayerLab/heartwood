@@ -61,7 +61,7 @@ import {
 import { Fragment, useEffect, useRef, useState } from "react";
 import { modelProfileLabel } from "../modelPresentation";
 import type {
-  ActionConfirmationMode,
+  ActionReviewMode,
   ActionSettings,
   CredentialIsolation,
   CredentialKind,
@@ -151,7 +151,7 @@ interface UtilitySheetProps {
   onRemoveSkill: (name: string) => void;
   onReviewSkill: (skill: SkillSummary) => void;
   onSaveProfile: () => void;
-  onSelectActionMode: (mode: ActionConfirmationMode) => Promise<void>;
+  onSelectActionMode: (mode: ActionReviewMode) => Promise<void>;
   onSelectProfile: (profileId: string) => void;
   onSetSkillApproved: (approved: boolean) => void;
   onSetSkillSource: (source: string) => void;
@@ -877,11 +877,9 @@ const ActionReviewSettings = ({
 }: {
   actions: ActionSettings | null;
   lockedReason: string | null;
-  onSelect: (mode: ActionConfirmationMode) => Promise<void>;
+  onSelect: (mode: ActionReviewMode) => Promise<void>;
 }) => {
-  const [pendingMode, setPendingMode] = useState<ActionConfirmationMode | null>(
-    null,
-  );
+  const [pendingMode, setPendingMode] = useState<ActionReviewMode | null>(null);
   if (actions === null) {
     return (
       <section className="panel-section action-mode-section" aria-live="polite">
@@ -890,17 +888,26 @@ const ActionReviewSettings = ({
       </section>
     );
   }
-  const available = actions.modes.filter((option) => option.allowed);
+  // While session work is active the gateway accepts only a stricter mode.
+  const selectedIndex = actions.modes.findIndex(
+    (option) => option.mode === actions.review_mode,
+  );
+  const selectable = (mode: ActionReviewMode) =>
+    actions.change_allowed ||
+    actions.modes.findIndex((option) => option.mode === mode) <= selectedIndex;
+  const available = actions.modes.filter(
+    (option) => option.allowed && selectable(option.mode),
+  );
+  const held = actions.modes.filter(
+    (option) => option.allowed && !selectable(option.mode),
+  );
   const unavailable = actions.modes.filter((option) => !option.allowed);
   const effectiveLockedReason =
     lockedReason ??
     (actions.change_allowed ? null : actions.change_blocked_reason);
-  const disabled =
-    !actions.change_allowed ||
-    effectiveLockedReason !== null ||
-    pendingMode !== null;
-  const select = async (mode: ActionConfirmationMode) => {
-    if (mode === actions.confirmation_mode || disabled) return;
+  const disabled = lockedReason !== null || pendingMode !== null;
+  const select = async (mode: ActionReviewMode) => {
+    if (mode === actions.review_mode || disabled) return;
     setPendingMode(mode);
     try {
       await onSelect(mode);
@@ -929,7 +936,7 @@ const ActionReviewSettings = ({
           <span>{effectiveLockedReason}</span>
         </div>
       : null}
-      <RadioGroup<ActionConfirmationMode>
+      <RadioGroup<ActionReviewMode>
         aria-label="Action review mode"
         className="action-mode-options"
         disabled={disabled}
@@ -939,8 +946,8 @@ const ActionReviewSettings = ({
             <span className="action-mode-option">
               <span className="action-mode-option-heading">
                 <strong>{option.label}</strong>
-                {option.recommended ?
-                  <Badge variant="secondary">Recommended</Badge>
+                {option.mode === actions.default_mode ?
+                  <Badge variant="secondary">Default</Badge>
                 : null}
                 {pendingMode === option.mode ?
                   <span>Saving</span>
@@ -950,9 +957,20 @@ const ActionReviewSettings = ({
             </span>
           ),
         }))}
-        value={actions.confirmation_mode}
+        value={actions.review_mode}
         onChange={(mode) => void select(mode)}
       />
+      {held.length ?
+        <div className="action-mode-unavailable">
+          <strong>Available when no session is active</strong>
+          {held.map((option) => (
+            <div aria-disabled="true" key={option.mode}>
+              <span>{option.label}</span>
+              <small>{option.description}</small>
+            </div>
+          ))}
+        </div>
+      : null}
       {unavailable.length ?
         <div className="action-mode-unavailable">
           <strong>Limited by this environment</strong>
@@ -961,7 +979,7 @@ const ActionReviewSettings = ({
               <span>{option.label}</span>
               <small>
                 {option.unavailable_reason ??
-                  "Unavailable under the active platform policy."}
+                  "Not permitted by this deployment's policy."}
               </small>
             </div>
           ))}

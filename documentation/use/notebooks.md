@@ -100,6 +100,8 @@ The decision applies to every action displayed in that OpenHands action set.
 
 All correlated action records remain available through `view.actions`.
 Each record includes its OpenHands identifiers, grouped decision, typed details, state, bounded outcome, and explicit affected-path evidence.
+An action that Heartwood allowed under a review rule has that rule in `automatic_rule` and never appears as your approval.
+Read the review mode with `session.action_settings()` and select one with `session.select_action_review_mode("review-all")`; see [Review Modes](actions-audit.md#review-modes).
 
 Task progress is available through `view.task_plan`.
 Combined model usage is available through `view.usage`, and agent and condenser usage are separated in `view.usage_by_purpose`.

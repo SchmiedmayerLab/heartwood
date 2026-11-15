@@ -28,8 +28,8 @@ OPENHANDS_STATE_KIND = "openhands-state"
 EXPERIMENT_EVENT_KIND = "experiment-event"
 EXPERIMENT_ENTRY_KIND = "experiment-entry"
 
-PROJECT_STATE_VERSION = "heartwood.project-state.v3"
-PROJECT_CONFIG_VERSION = "heartwood.project-config.v1"
+PROJECT_STATE_VERSION = "heartwood.project-state.v4"
+PROJECT_CONFIG_VERSION = "heartwood.project-config.v2"
 SESSION_EVENT_VERSION = "heartwood.session-event.v1"
 SESSION_METADATA_VERSION = "heartwood.session-metadata.v1"
 SESSION_COMMAND_RECEIPT_VERSION = "heartwood.session-command-receipt.v1"
@@ -51,6 +51,12 @@ _PROJECT_STATE_V2_FORMATS: dict[str, str] = {
     "session_metadata": "heartwood.session-metadata.v1",
     "session_writer": "heartwood.session-writer.v1",
     "skill_installations": "heartwood.skill-installations.v1",
+}
+
+_PROJECT_STATE_V3_FORMATS: dict[str, str] = {
+    **_PROJECT_STATE_V2_FORMATS,
+    "experiment_event": "heartwood.experiment-event.v1",
+    "experiment_entry": "heartwood.experiment-entry.v1",
 }
 
 PROJECT_STATE_FORMATS: dict[str, str] = {
@@ -213,7 +219,60 @@ def _project_state_v2_to_v3(payload: Mapping[str, object]) -> JsonObject:
         "formats": _PROJECT_STATE_V2_FORMATS,
     }:
         raise MigrationError("project state contains unsupported format declarations")
+    return {
+        "schema_version": "heartwood.project-state.v3",
+        "formats": dict(_PROJECT_STATE_V3_FORMATS),
+    }
+
+
+def _project_state_v3_to_v4(payload: Mapping[str, object]) -> JsonObject:
+    if dict(payload) != {
+        "schema_version": "heartwood.project-state.v3",
+        "formats": _PROJECT_STATE_V3_FORMATS,
+    }:
+        raise MigrationError("project state contains unsupported format declarations")
     return {"schema_version": PROJECT_STATE_VERSION, "formats": dict(PROJECT_STATE_FORMATS)}
+
+
+def _project_config_v1_to_v2(payload: Mapping[str, object]) -> JsonObject:
+    """Rename review settings; a migrated project keeps complete review as its ceiling.
+
+    The only effective earlier mode reviewed every action, so it records no
+    researcher selection and the migrated project uses its deployment default.
+    """
+    migrated = dict(payload)
+    migrated["schema_version"] = PROJECT_CONFIG_VERSION
+    action = payload.get("action")
+    if action is not None:
+        if not isinstance(action, Mapping) or action.get("confirmation_mode") not in {
+            "always-confirm",
+            "confirm-risky",
+        }:
+            raise MigrationError("project configuration has an unsupported action section")
+        migrated["action"] = {
+            key: value for key, value in action.items() if key != "confirmation_mode"
+        }
+    policy = payload.get("policy")
+    if policy is not None:
+        if not isinstance(policy, Mapping) or not set(
+            _strings(policy.get("allowed_action_confirmation_modes", ["always-confirm"]))
+        ) <= {"always-confirm", "confirm-risky"}:
+            raise MigrationError("project configuration has unsupported action modes")
+        migrated["policy"] = {
+            **{
+                key: value
+                for key, value in policy.items()
+                if key != "allowed_action_confirmation_modes"
+            },
+            "allowed_action_review_modes": ["review-all"],
+        }
+    return migrated
+
+
+def _strings(value: object) -> list[str]:
+    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+        raise MigrationError("project configuration has unsupported action modes")
+    return value
 
 
 def _openhands_unversioned_to_v1(payload: Mapping[str, object]) -> JsonObject:
@@ -259,8 +318,20 @@ def _build_registry() -> MigrationRegistry:
     registry.register(
         PROJECT_STATE_KIND,
         source_version="heartwood.project-state.v2",
-        target_version=PROJECT_STATE_VERSION,
+        target_version="heartwood.project-state.v3",
         migrate=_project_state_v2_to_v3,
+    )
+    registry.register(
+        PROJECT_STATE_KIND,
+        source_version="heartwood.project-state.v3",
+        target_version=PROJECT_STATE_VERSION,
+        migrate=_project_state_v3_to_v4,
+    )
+    registry.register(
+        PROJECT_CONFIG_KIND,
+        source_version="heartwood.project-config.v1",
+        target_version=PROJECT_CONFIG_VERSION,
+        migrate=_project_config_v1_to_v2,
     )
     registry.register(
         OPENHANDS_STATE_KIND,

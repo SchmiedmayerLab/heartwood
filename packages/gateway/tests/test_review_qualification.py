@@ -33,7 +33,7 @@ def runtime() -> EvaluationRuntimeObservation:
         model_options_fingerprint="a" * 64,
         platform="generic",
         policy_fingerprint="b" * 64,
-        action_confirmation="always-confirm",
+        action_review="review-all",
         max_input_tokens=32768,
         max_output_tokens=4096,
         tool_concurrency=1,

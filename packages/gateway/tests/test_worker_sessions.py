@@ -46,7 +46,6 @@ class Platform:
         assert self.gateway is not None
         service = self.gateway._services[request.session_id]
         assert request.policy == service.policy_profile
-        assert request.action_confirmation_mode == service.backend.action_confirmation_mode
         self.calls.append("prepare")
         if self.fail == "prepare":
             raise RuntimeError("synthetic preparation failure")
@@ -584,3 +583,27 @@ def test_gateway_without_a_reconciler_leaves_retained_attempts_untouched(tmp_pat
         SessionGateway(
             project=ProjectContext(tmp_path / "project"), env={}, worker_reconciler=Reconciler()
         )
+
+
+def test_sandbox_review_applies_only_while_the_worker_attempt_is_admitted(tmp_path: Path) -> None:
+    platform = Platform()
+    gateway = configured_gateway(tmp_path, platform)
+    service = gateway._service("session-worker")
+    backend = service.backend
+    assert isinstance(backend, OpenHandsSdkBackend)
+    assert backend._worker_context is not None
+    assert gateway.action_settings()["review_mode"] == "review-outside-effects"
+    assert service.action_review_mode() == "review-all"
+
+    backend._worker_context()
+    assert service.action_review_mode() == "review-outside-effects"
+
+    gateway.select_action_review_mode("review-all")
+    assert service.action_review_mode() == "review-all"
+    gateway.select_action_review_mode("review-outside-effects")
+    assert service.action_review_mode() == "review-outside-effects"
+
+    assert platform.lease is not None
+    platform.lease.fence()
+    assert service.action_review_mode() == "review-all"
+    gateway.stop()

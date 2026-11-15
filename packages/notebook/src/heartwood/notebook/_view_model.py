@@ -398,7 +398,7 @@ class NotebookSession:
         return self.gateway.cancel_model_transfer(transfer_id)
 
     def action_settings(self) -> ActionSettingsResponse:
-        """Return the shared action-confirmation settings."""
+        """Return the shared action-review settings."""
         return self.gateway.action_settings()
 
     def skill_settings(self) -> SkillSettingsResponse:
@@ -460,9 +460,9 @@ class NotebookSession:
         """Return the same bounded specialist catalog used by terminal and browser clients."""
         return self.gateway.specialist_settings()
 
-    def select_action_confirmation_mode(self, mode: str) -> ActionSettingsResponse:
-        """Select a deployment-allowed action-confirmation mode."""
-        return self.gateway.select_action_confirmation_mode(mode)
+    def select_action_review_mode(self, mode: str) -> ActionSettingsResponse:
+        """Select a deployment-allowed action-review mode."""
+        return self.gateway.select_action_review_mode(mode)
 
     def browser_url(self, *, port: int = 8767) -> str | None:
         """Return the supported browser URL, or ``None`` on terminal-only platforms."""

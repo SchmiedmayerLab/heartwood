@@ -15,7 +15,6 @@ from typing import Literal
 from heartwood.adapters import PlatformCapabilities
 from heartwood.gateway._model_catalog import ModelConnection, matching_model_connection
 from heartwood.gateway._model_settings import ModelProfile
-from heartwood.schemas import ActionConfirmationMode
 
 type CredentialIsolationStatus = Literal[
     "not-configured",
@@ -37,16 +36,16 @@ class CredentialIsolation:
 
     status: CredentialIsolationStatus
     boundary: CredentialIsolationBoundary
-    unattended_actions_allowed: bool
     summary: str
 
     def safe_dict(self) -> dict[str, object]:
         """Return the interface-safe isolation assessment."""
         return asdict(self)
 
-    def allows(self, mode: ActionConfirmationMode) -> bool:
-        """Return whether the boundary permits the requested confirmation mode."""
-        return mode == "always-confirm" or self.unattended_actions_allowed
+    @property
+    def unattended_actions_allowed(self) -> bool:
+        """Return whether actions may run unreviewed beside this model credential."""
+        return self.status != "review-required"
 
 
 def assess_credential_isolation(
@@ -61,14 +60,12 @@ def assess_credential_isolation(
         return CredentialIsolation(
             status="not-configured",
             boundary="none",
-            unattended_actions_allowed=True,
             summary="Choose a model before Heartwood evaluates credential isolation.",
         )
     if profile.credential_kind == "none":
         return CredentialIsolation(
             status="not-required",
             boundary="credential-free",
-            unattended_actions_allowed=True,
             summary="The selected model route does not place a credential in Heartwood.",
         )
     matching_connection = matching_model_connection(profile, model_connections)
@@ -82,29 +79,13 @@ def assess_credential_isolation(
         return CredentialIsolation(
             status="qualified",
             boundary="platform-isolated",
-            unattended_actions_allowed=True,
             summary=("The deployment isolates model authentication from the agent tool runtime."),
         )
     return CredentialIsolation(
         status="review-required",
         boundary="application-scrubbed",
-        unattended_actions_allowed=False,
         summary=(
             "Heartwood removes the model credential from tool inputs, but this deployment "
-            "does not provide a separate process or platform identity boundary. Review every "
-            "action."
+            "does not provide a separate process or platform identity boundary."
         ),
-    )
-
-
-def credential_isolation_unavailable_reason(
-    isolation: CredentialIsolation,
-    mode: ActionConfirmationMode,
-) -> str | None:
-    """Return an approachable reason when a confirmation mode is unsafe."""
-    if isolation.allows(mode):
-        return None
-    return (
-        "Unavailable because the selected model credential is not isolated from the agent "
-        "tool runtime. Use Review Every Action or a credential-free or platform-isolated route."
     )
