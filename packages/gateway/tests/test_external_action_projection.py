@@ -479,3 +479,37 @@ def test_result_release_has_independent_review_and_delivery_outcome(
         assert action.outcome is not None
         assert action.outcome.result is not None
         assert "execution is not established" in action.outcome.result
+
+
+def test_retained_outside_authorization_blocks_a_replacement_worker(
+    proposal: ExternalActionProposal,
+) -> None:
+    authorized = ExternalActionRecord(
+        phase="authorized",
+        proposal=proposal,
+        decision=ExternalActionDecision(
+            command_id="synthetic-approval",
+            actor_id="researcher",
+            decision="approved",
+            decided_at=_NOW,
+            proposal_sha256=proposal.sha256,
+        ),
+    )
+    revoked = SessionEvent(
+        event_id="event-3",
+        session_id="synthetic-session",
+        sequence=3,
+        kind=EventKind.WORKER_ATTEMPT_RECORDED,
+        occurred_at=_NOW.isoformat(),
+        payload={"phase": "revoked", "intent": {"attempt_id": str(proposal.worker.attempt_id)}},
+    )
+    events = (
+        _source(proposal),
+        _event(ExternalActionRecord(phase="proposed", proposal=proposal), 1),
+        _event(authorized, 2),
+        revoked,
+    )
+    notice = project_session(events, session_id="synthetic-session").researcher_notice
+    assert notice is not None
+    assert notice.code == "worker-replacement-unavailable"
+    assert "outside operation" in notice.detail

@@ -30,6 +30,7 @@ from heartwood.core_adapter import (
     SessionService,
     TokenDeltaSink,
 )
+from heartwood.core_adapter.session_activity import worker_replacement_blocker
 from heartwood.core_adapter.worker_attempts import (
     WorkerAttemptError,
     WorkerAttemptIntent,
@@ -37,7 +38,6 @@ from heartwood.core_adapter.worker_attempts import (
     WorkerAttemptRecord,
     WorkerRevocationEvidence,
     WorkerRuntimeBinding,
-    worker_replacement_blocker,
 )
 from heartwood.schemas import ModelDataHandling
 from heartwood.session import CommandKind, EventKind, JsonValue, SessionCommand, SessionEvent

@@ -645,7 +645,10 @@ export const sessionProjectionJsonSchema = {
     ProjectionResearcherNotice: {
       additionalProperties: false,
       properties: {
-        code: { const: "request-not-applied", type: "string" },
+        code: {
+          enum: ["request-not-applied", "worker-replacement-unavailable"],
+          type: "string",
+        },
         detail: { type: "string" },
         label: { type: "string" },
         noticeId: { type: "string" },
@@ -778,7 +781,10 @@ export const sessionProjectionJsonSchema = {
     ProjectionTask: {
       additionalProperties: false,
       properties: {
-        status: { enum: ["todo", "in-progress", "done"], type: "string" },
+        status: {
+          enum: ["todo", "in-progress", "done", "superseded"],
+          type: "string",
+        },
         statusLabel: { type: "string" },
         title: { type: "string" },
       },

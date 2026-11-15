@@ -13,6 +13,8 @@ from dataclasses import dataclass
 
 from heartwood.core_adapter._facade import backend_error_is_fatal
 from heartwood.core_adapter.action_review import AUTOMATIC_REVIEW_ACTOR
+from heartwood.core_adapter.external_actions import external_action_records
+from heartwood.core_adapter.external_results import external_result_records
 from heartwood.session import CommandKind, EventKind, SessionEvent
 
 # Researcher commands that continue the agent and so end a pause; the gateway's own
@@ -95,3 +97,25 @@ def session_activity(events: Sequence[SessionEvent]) -> SessionActivity:
     return SessionActivity(
         status=status, paused=paused, fatal=fatal, awaiting_review=frozenset(awaiting_review)
     )
+
+
+def worker_replacement_blocker(events: Sequence[SessionEvent]) -> str | None:
+    """Explain why retained work still depends on the revoked worker's own conversation.
+
+    A replacement worker starts a new conversation in a new sandbox, so it cannot finish
+    a run, a pause or an action review that the revoked worker left open, and outside
+    reviews and operations stay bound to the attempt that proposed them.
+    """
+    activity = session_activity(events)
+    if activity.awaiting_review:
+        return "an action proposed by the revoked worker still awaits review"
+    if activity.fatal:
+        return "the session recorded an outcome that cannot be recovered"
+    if not activity.settled:
+        return "the revoked worker's run did not settle"
+    if any(not record.terminal for record in external_action_records(events).values()) or any(
+        record.phase not in {"denied", "expired", "withdrawn", "submitted"}
+        for record in external_result_records(events).values()
+    ):
+        return "an outside operation or result release of the revoked worker is unresolved"
+    return None

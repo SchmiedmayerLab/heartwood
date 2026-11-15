@@ -84,7 +84,7 @@ from heartwood.core_adapter.reproduction_journal import (
     prepare_reproduction,
     reproduction_records,
 )
-from heartwood.core_adapter.session_activity import session_activity
+from heartwood.core_adapter.session_activity import session_activity, worker_replacement_blocker
 from heartwood.core_adapter.worker_attempts import (
     WorkerAttemptError,
     WorkerAttemptIntent,
@@ -95,7 +95,6 @@ from heartwood.core_adapter.worker_attempts import (
     current_worker_attempt,
     gateway_policy_sha256,
     validate_worker_transition,
-    worker_replacement_blocker,
 )
 from heartwood.core_adapter.workflow_review import validate_parallel_review_plan
 from heartwood.core_adapter.workflow_runtime import (
@@ -1265,16 +1264,7 @@ class SessionService:
             self._worker_replacement_admitted = True
 
     def _worker_replacement_blocker_locked(self) -> str | None:
-        events = self.replay_events()
-        if reason := worker_replacement_blocker(events):
-            return reason
-        # Outside reviews and operations stay bound to the attempt that proposed them.
-        if any(not record.terminal for record in external_action_records(events).values()) or any(
-            record.phase not in {"denied", "expired", "withdrawn", "submitted"}
-            for record in external_result_records(events).values()
-        ):
-            return "an outside operation or result release of the revoked worker is unresolved"
-        return None
+        return worker_replacement_blocker(self.replay_events())
 
     def _accept_worker_events(
         self, lease: WorkerAttemptLease, events: tuple[BackendEvent, ...]

@@ -914,3 +914,69 @@ def test_lost_create_retains_writer_until_native_revocation(
         )
     finally:
         _stop(application)
+
+
+def _settled_attempt(service: SessionService, phase: str) -> None:
+    deadline = time.monotonic() + 240
+    while time.monotonic() < deadline:
+        attempt = service.worker_attempt()
+        if attempt is not None and attempt.phase == phase:
+            return
+        time.sleep(0.5)
+    raise AssertionError(f"Native worker attempt did not reach {phase}")
+
+
+def test_native_revoked_worker_is_replaced_for_the_next_command(
+    infrastructure: NativeFixture,
+) -> None:
+    fixture = infrastructure
+    application = _application(fixture)
+    service = application._service("composition")
+    try:
+        _submit(application, CommandKind.CHAT, {"prompt": "Synthetic task before revocation."})
+        backend = service.backend
+        assert isinstance(backend, OpenHandsSdkBackend)
+        assert backend.wait_for_idle(60)
+        first = service.worker_attempt()
+        assert first is not None
+        assert first.phase == "active"
+        assert backend._worker_context is not None
+        # A failed runtime observation or exhausted budget fences in the same way.
+        backend._worker_context().workspace.attempt.fence()
+        _settled_attempt(service, "revoked")
+        _assert_absent(str(first.intent.attempt_id))
+
+        _submit(application, CommandKind.CHAT, {"prompt": "Synthetic task after revocation."})
+        replacement = application._services["composition"]
+        assert replacement is not service
+        assert not service.store.owns_writer
+        second = replacement.worker_attempt()
+        assert second is not None
+        assert second.phase == "active"
+        assert second.intent.attempt_id != first.intent.attempt_id
+        assert second.intent.conversation_id == first.intent.conversation_id
+        replacement_backend = replacement.backend
+        assert isinstance(replacement_backend, OpenHandsSdkBackend)
+        assert replacement_backend.wait_for_idle(60)
+        projection = application.session_projection(session_id="composition")
+        assert projection.researcher_notice is None
+        assert any("new worker" in message.content for message in projection.conversation)
+        _stop(application)
+        _assert_revoked(replacement)
+        (fixture.output / "evidence.json").write_text(
+            json.dumps(
+                {
+                    "worker_image": fixture.worker,
+                    "gateway_image": fixture.gateway_image,
+                    "revoked_attempt_id": str(first.intent.attempt_id),
+                    "replacement_attempt_id": str(second.intent.attempt_id),
+                    "replaced_without_restart": True,
+                    "revoked_resources_absent": True,
+                    "sensitive_data_ready": False,
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+    finally:
+        _stop(application)

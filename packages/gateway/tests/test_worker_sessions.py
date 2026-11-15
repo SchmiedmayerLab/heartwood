@@ -12,14 +12,22 @@ from dataclasses import replace
 from pathlib import Path
 from threading import Event, Thread, Timer
 from time import monotonic, sleep
-from typing import Literal, cast
+from typing import Literal, Never, cast
 from unittest.mock import Mock
 from uuid import uuid4
 
 import pytest
 from pydantic import AnyHttpUrl, SecretStr
 
-from heartwood.core_adapter import FileSessionStore, SessionResult, SessionService
+from heartwood.core_adapter import (
+    BackendConfirmationRequestEvent,
+    BackendLifecycle,
+    BackendLifecycleEvent,
+    FileSessionStore,
+    ProposedToolCall,
+    SessionResult,
+    SessionService,
+)
 from heartwood.core_adapter.external_actions import ExternalActionAdapter
 from heartwood.core_adapter.worker_attempts import (
     WorkerAttemptError,
@@ -32,7 +40,11 @@ from heartwood.core_adapter.worker_attempts import (
 )
 from heartwood.gateway import ProjectContext, SessionGateway
 from heartwood.gateway._model_settings import ModelProfile, ModelSettings
-from heartwood.gateway._openhands_sdk import OpenHandsSdkBackend, WorkerConversationContext
+from heartwood.gateway._openhands_sdk import (
+    OpenHandsSdkBackend,
+    OpenHandsSdkError,
+    WorkerConversationContext,
+)
 from heartwood.gateway._session_projection import project_session
 from heartwood.gateway._worker_events import AdmittedWorkerWorkspace
 from heartwood.gateway.worker_sessions import WorkerSessionPlan, WorkerSessionRequest
@@ -964,7 +976,7 @@ def test_close_during_launch_returns_at_once_and_the_launch_revokes_and_closes(
     assert platform.calls.count("revoke") == 1
 
 
-def _chat(command_id: str, session_id: str = "session-worker") -> SessionCommand:
+def _chat_command(command_id: str, session_id: str = "session-worker") -> SessionCommand:
     return SessionCommand(
         command_id=command_id,
         session_id=session_id,
@@ -1027,7 +1039,7 @@ def test_settings_change_during_a_stalled_launch_revokes_it_and_relaunches_with_
 
     def chat() -> None:
         try:
-            outcomes.append(gateway.handle(_chat("chat-during-launch")))
+            outcomes.append(gateway.handle(_chat_command("chat-during-launch")))
         except BaseException as error:
             outcomes.append(error)
 
@@ -1071,7 +1083,7 @@ def test_settings_change_during_a_stalled_launch_revokes_it_and_relaunches_with_
         assert isinstance(refused, SessionResult)
         assert refused.events[-1].kind == EventKind.ERROR_RECORDED
         if len(launched) == 1:
-            gateway.handle(_chat("chat-after-launch"))
+            gateway.handle(_chat_command("chat-after-launch"))
         assert len(launched) == 2
         replacement, request, skills = launched[1]
         assert replacement is not first
@@ -1083,4 +1095,136 @@ def test_settings_change_during_a_stalled_launch_revokes_it_and_relaunches_with_
         assert platform.calls.count("connect") == 1
     finally:
         release.set()
+        gateway.stop()
+
+
+def _chat(gateway: SessionGateway, command_id: str) -> None:
+    gateway.handle(_chat_command(command_id))
+
+
+def _open_worker_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Admit the worker as a conversation would, then stop before any remote request."""
+
+    def open_worker(backend: OpenHandsSdkBackend, *_args: object) -> Never:
+        assert backend._worker_context is not None
+        backend._worker_context()
+        raise OpenHandsSdkError("synthetic worker conversation is not opened")
+
+    monkeypatch.setattr(OpenHandsSdkBackend, "_worker_conversation_factory", open_worker)
+
+
+def _revoke_launched(gateway: SessionGateway, service: SessionService) -> WorkerAttemptLease:
+    backend = service.backend
+    assert isinstance(backend, OpenHandsSdkBackend)
+    assert backend._worker_context is not None
+    lease = backend._worker_context().workspace.attempt
+    lease.fence()
+    assert _settles(service, "revoked")
+    worker = gateway._worker_sessions[id(service)]
+    assert worker._revocation is not None
+    worker._revocation.join(timeout=10)
+    return lease
+
+
+def test_revoked_worker_is_replaced_by_the_next_command_without_a_restart(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _open_worker_only(monkeypatch)
+    platform = Platform()
+    gateway = configured_gateway(tmp_path, platform)
+    service = gateway._service("session-worker")
+    backend = service.backend
+    assert isinstance(backend, OpenHandsSdkBackend)
+    try:
+        revoked = _revoke_launched(gateway, service)
+        assert platform.calls == ["prepare", "launch", "connect", "revoke"]
+        # A late event from the revoked worker is discarded, and a read starts nothing.
+        before = len(service.replay_events())
+        backend._event_sink(
+            (BackendLifecycleEvent(lifecycle=BackendLifecycle.RUNNING, source_event_id="late"),)
+        )
+        assert len(service.replay_events()) == before
+        assert gateway.session_projection(session_id="session-worker").researcher_notice is None
+        assert platform.calls == ["prepare", "launch", "connect", "revoke"]
+
+        _chat(gateway, "chat-after-revocation")
+
+        replacement = gateway._services["session-worker"]
+        assert replacement is not service
+        assert not service.store.owns_writer
+        assert backend._closed
+        assert platform.calls == [
+            "prepare",
+            "launch",
+            "connect",
+            "revoke",
+            "prepare",
+            "launch",
+            "connect",
+        ]
+        assert platform.lease is not None
+        assert platform.lease is not revoked
+        assert platform.lease.active
+        assert platform.lease.intent.conversation_id == revoked.intent.conversation_id
+        assert not revoked.active
+        assert replacement.worker_attempt() == WorkerAttemptRecord(
+            phase="active", intent=platform.lease.intent, runtime=platform.lease.runtime
+        )
+    finally:
+        gateway.stop()
+    assert platform.calls.count("revoke") == 2
+
+
+@pytest.mark.parametrize("left", ["run", "review"])
+def test_revoked_worker_with_open_work_reports_why_no_replacement_starts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, left: str
+) -> None:
+    _open_worker_only(monkeypatch)
+    platform = Platform()
+    gateway = configured_gateway(tmp_path, platform)
+    service = gateway._service("session-worker")
+    backend = service.backend
+    assert isinstance(backend, OpenHandsSdkBackend)
+    assert backend._worker_context is not None
+    lease = backend._worker_context().workspace.attempt
+    call = ProposedToolCall(
+        tool_call_id="call-open", tool_name="terminal", risk="medium", summary="Synthetic action"
+    )
+    backend._event_sink(
+        (BackendLifecycleEvent(lifecycle=BackendLifecycle.RUNNING, source_event_id="running"),)
+        if left == "run"
+        else (
+            BackendConfirmationRequestEvent(
+                tool_call=call, action_group_id="group-open", source_event_id="request"
+            ),
+        )
+    )
+    try:
+        lease.fence()
+        assert _settles(service, "revoked")
+        expected = "run did not settle" if left == "run" else "still awaits review"
+        projection = gateway.session_projection(session_id="session-worker")
+        notice = projection.researcher_notice
+        assert notice is not None
+        assert notice.code == "worker-replacement-unavailable"
+        assert expected in notice.detail
+        command = "pause" if left == "run" else "deny"
+        gateway.handle(
+            SessionCommand(
+                command_id=f"{command}-after-revocation",
+                session_id="session-worker",
+                kind=CommandKind(command),
+                created_at="2026-01-01T00:00:00Z",
+                payload={}
+                if left == "run"
+                else {"target_type": "action-set", "target_id": "group-open"},
+            )
+        )
+        assert platform.calls.count("launch") == 1
+        record = _retained(gateway)
+        assert (record.phase, record.intent) == ("revoked", lease.intent)
+        refused = gateway.session_projection(session_id="session-worker")
+        assert refused.researcher_notice is not None
+        assert expected in refused.researcher_notice.detail
+    finally:
         gateway.stop()

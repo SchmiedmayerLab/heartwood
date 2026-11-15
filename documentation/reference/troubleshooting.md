@@ -321,7 +321,9 @@ Do not delete the session's records or writer files to release it.
 
 A session whose earlier worker was revoked shows "A new worker replaced the earlier one" when its next task starts a replacement.
 The replacement does not remember the earlier conversation and starts with an empty sandbox workspace; restate the context it needs.
-A session is refused instead while its earlier worker left an unsettled run, an unended pause, an action awaiting review, an unrecoverable outcome, or a non-terminal outside operation or result release; inspect its record and continue in a new session.
+The earlier worker's unfinished tasks are shown as superseded, and its model usage is listed as "Earlier Workers" and included in the session total.
+A session is refused instead while its earlier worker left an unsettled run, an unended pause, an action awaiting review, an unrecoverable outcome, or a non-terminal outside operation or result release; the session shows "New Worker Unavailable" with the reason.
+Inspect its record and continue in a new session.
 
 ## Action Review Mode
 

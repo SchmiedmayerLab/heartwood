@@ -54,6 +54,7 @@ class StallingBackend(DeterministicAgentBackend):
 
 class _Owner:
     closing = False
+    replaceable = False
 
     def __init__(self, service: SessionService) -> None:
         self._service = service

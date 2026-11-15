@@ -19,7 +19,6 @@ from uuid import UUID
 
 from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, model_validator
 
-from heartwood.core_adapter.session_activity import session_activity
 from heartwood.schemas import ModelDataHandling, PolicyProfile
 from heartwood.schemas.experiments import Digest, Reference
 from heartwood.session import EventKind, SessionEvent, validate_session_id
@@ -173,22 +172,6 @@ def current_worker_attempt(events: Sequence[SessionEvent]) -> WorkerAttemptRecor
             attempts.add(candidate.intent.attempt_id)
         current = candidate
     return current
-
-
-def worker_replacement_blocker(events: Sequence[SessionEvent]) -> str | None:
-    """Explain why retained work still depends on the revoked worker's own conversation.
-
-    A replacement worker starts a new conversation in a new sandbox, so it cannot finish
-    a run, a pause or an action review that the revoked worker left open.
-    """
-    activity = session_activity(events)
-    if activity.awaiting_review:
-        return "an action proposed by the revoked worker still awaits review"
-    if activity.fatal:
-        return "the session recorded an outcome that cannot be recovered"
-    if not activity.settled:
-        return "the revoked worker's run did not settle"
-    return None
 
 
 class WorkerAttemptLease:

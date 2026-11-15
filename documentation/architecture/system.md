@@ -174,8 +174,13 @@ OpenShell deletion is name-scoped rather than conditional on a generation; uniqu
 
 After a recorded revocation, a gateway configured to launch workers can start one replacement attempt with a new identity, key, placeholder, and response budget in a new sandbox.
 The replacement starts a new conversation in an empty workspace; the session projection marks where it became active.
+At that point the projection marks the earlier worker's unfinished tasks as superseded, and adds the earlier workers' reported model usage to the session total and lists it separately, because each new worker reports its usage from zero.
 Replacement is refused while the journal holds work only the revoked worker's conversation could finish: an unsettled run, an unended pause, an action awaiting review, an unrecoverable outcome, or a non-terminal outside operation or result release.
+While a revoked session is refused for one of these reasons, the shared projection carries the reason as a researcher notice, which the terminal, browser, and notebook present.
 A gateway without a worker configuration refuses commands for a revoked session instead of running it locally; the session stays readable.
+Once a running gateway records the revocation of a session's attempt, it replaces that session's service at the session's next command, so the command can admit a replacement without a restart or configuration change.
+A read alone does not replace the service or start a worker.
+The revoked attempt's backend is closed with its service, and events that arrive from it after fencing are discarded.
 
 ### Budgets and Deadlines
 

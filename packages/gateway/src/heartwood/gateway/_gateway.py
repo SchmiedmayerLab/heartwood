@@ -822,6 +822,9 @@ class SessionGateway:
                         f"{persisted_projection.lifecycle.status}"
                     ),
                 )
+        if self._worker_revoked(command.session_id):
+            # Only a command replaces a revoked worker's service; a read keeps it.
+            self._retire_service_locked(command.session_id)
         service = self._service(command.session_id)
         all_events = self._reconciled_session_events(
             session_id=command.session_id, service=service, reconciled=reconciled
@@ -2303,13 +2306,7 @@ class SessionGateway:
         configuration = self._service_configuration()
         service = self._services.get(session_id)
         if service is not None and self._service_configurations.get(session_id) != configuration:
-            closed = self._close_service(service)
-            self._services.pop(session_id, None)
-            previous = self._service_configurations.pop(session_id, None)
-            self._discard_transient_state(session_id)
-            if not closed:
-                self._releasing[session_id] = (service, previous)
-                raise _SessionReleasingError(session_id)
+            self._retire_service_locked(session_id)
             service = None
         if service is None:
             if self._service_factory is not None:
@@ -2319,6 +2316,32 @@ class SessionGateway:
             self._services[session_id] = service
             self._service_configurations[session_id] = configuration
         return service
+
+    def _retire_service_locked(self, session_id: str) -> None:
+        """Close and forget a session's cached service before another replaces it.
+
+        A service whose close fails stays cached and owned. One whose worker finishes the
+        close on its own thread is detached, and no service starts for the session until
+        that close settles.
+        """
+        service = self._services[session_id]
+        closed = self._close_service(service)
+        self._services.pop(session_id, None)
+        previous = self._service_configurations.pop(session_id, None)
+        self._discard_transient_state(session_id)
+        if not closed:
+            self._releasing[session_id] = (service, previous)
+            raise _SessionReleasingError(session_id)
+
+    def _worker_revoked(self, session_id: str) -> bool:
+        """Return whether the session's cached service holds only a revoked worker attempt.
+
+        Such a service refuses every command, so the next command replaces it and the new
+        service may admit a replacement worker; a read alone does not.
+        """
+        service = self._services.get(session_id)
+        worker = None if service is None else self._worker_sessions.get(id(service))
+        return worker is not None and worker.replaceable
 
     def _service_configuration(self) -> _ServiceConfiguration:
         config = self.config_store.load()
@@ -2625,10 +2648,12 @@ class SessionGateway:
     ) -> tuple[Literal["journal", "storage", "service"], tuple[SessionEvent, ...]]:
         """Return what reconciles a session, its journal alone, a storage or a live service.
 
-        A session whose earlier worker service is still closing is read from its journal.
+        A session whose earlier worker service is still closing, or whose revoked worker
+        left no open work, is read from its journal.
         """
         self._settle_releases_locked()
-        if session_id in self._services:
+        served = session_id in self._services
+        if served and not self._worker_revoked(session_id):
             return "service", ()
         store = FileSessionStore(self.sessions_root, session_id)
         persisted = store.replay_events()
@@ -2645,6 +2670,9 @@ class SessionGateway:
             and not unresolved_command_ids
         ):
             return "journal", persisted
+        # A revoked worker's service with open work is read, never replaced, by a read.
+        if served:
+            return "service", ()
         if (
             lifecycle == SessionLifecycle.ERROR
             and not persisted_projection.lifecycle.can_steer

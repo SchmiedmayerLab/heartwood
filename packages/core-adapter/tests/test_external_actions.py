@@ -1289,6 +1289,50 @@ def test_denial_withdraws_an_undispatched_authorization(
     service.audit_log.verify()
 
 
+@pytest.mark.parametrize("release", [False, True])
+def test_retained_authorization_is_not_handed_to_a_replacement_worker(
+    setup: Setup,
+    evidence: tuple[SessionCheckpointEvidence, MemoryS3],
+    tmp_path: Path,
+    release: bool,
+) -> None:
+    service, _worker, platform = setup
+    _, client = evidence
+    _record, _approved, before = interrupted_authorization(setup, client, release)
+    client.unavailable = False
+    assert phase_of(service, release) == "authorized"
+    attempt = service.worker_attempt()
+    assert attempt is not None
+    service.fence_worker_attempt(attempt_id=attempt.intent.attempt_id)
+    service.record_worker_revocation(
+        WorkerRevocationEvidence(
+            attempt_id=attempt.intent.attempt_id,
+            sandbox_id="synthetic-worker",
+            observer_id="synthetic-control-plane",
+            evidence_sha256="d" * 64,
+            outcome="revoked",
+        )
+    )
+    service.close()
+    restored = SessionService.local_default(
+        tmp_path,
+        backend=Worker(),
+        worker_project_id=_PROJECT,
+        external_actions=platform,
+        clock=lambda: _NOW.isoformat(),
+    )
+    try:
+        restored.admit_worker_replacement()
+        with pytest.raises(WorkerAttemptError, match="outside operation"):
+            restored.prepare_worker_attempt(
+                image_digest=_IMAGE, sandbox_policy_sha256="b" * 64, input_manifest_sha256="c" * 64
+            )
+        assert phase_of(restored, release) == "authorized"
+        assert len(platform.submissions) == before
+    finally:
+        restored.close()
+
+
 @pytest.mark.parametrize("gateway_order", [False, True])
 @pytest.mark.parametrize("release", [False, True])
 def test_only_the_original_approval_dispatches_a_retained_authorization(
