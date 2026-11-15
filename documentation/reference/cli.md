@@ -262,7 +262,7 @@ files = []
 ```
 
 `gateway_versions` is required and lists every version string that the registered sandbox gateway may report and that the operator has [qualification evidence](../operate/platform-requirements.md#gateway-behavior-behind-native-qualification) for.
-Serving stops with [`HW-WORKER-001`](troubleshooting.md#hw-worker-001-sandbox-gateway-version-is-not-declared-as-qualified) when the gateway reports another version or its version cannot be read.
+Serving stops with [`HW-WORKER-001`](troubleshooting.md) when the gateway reports another version or its version cannot be read.
 The value is a declaration checked against the gateway's self-report, not proof of how that gateway behaves.
 The selected application profile must match the configured profile, model and endpoint, and remain allowed by the deployment policy.
 Each selected input entry declares a project-relative `path`, `sha256` and `size_bytes`; an empty selection transfers no research files.
