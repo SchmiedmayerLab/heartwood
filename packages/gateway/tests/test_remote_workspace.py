@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 import json
 import socket
 import sys
@@ -316,11 +317,11 @@ def test_every_conversation_field_of_the_pinned_sdk_has_an_admission_rule() -> N
 
     fields = set(ConversationState.model_fields)
     try:
-        from openhands.agent_server.models import ConversationInfo
+        server_models = importlib.import_module("openhands.agent_server.models")
     except ImportError:  # The agent server is installed only with the worker dependencies.
         pass
     else:
-        fields |= set(ConversationInfo.model_fields)
+        fields |= set(server_models.ConversationInfo.model_fields)
     sent = set(StartConversationRequest.model_fields) | {"secret_registry"}
     assert fields - sent - _REPORTED_FIELDS == set()
     assert not _REPORTED_FIELDS & sent
