@@ -617,6 +617,10 @@ The trusted adapter must bound reads, exclude credentials from the reviewable re
 The decision and submission intent are committed through the paired session and audit journal before contacting the service.
 With a bound evidence controller, the authorization must also be independently retained before submission, including when ordinary session evidence uses buffered mode.
 After an evidence outage, recovery rechecks the proposal's inputs, policy, expiry, destination and current worker authority before proceeding.
+Until submission is recorded, the researcher can deny the review to withdraw the authorization, and no command other than the original approval dispatches it.
+An authorization that is still undispatched when its validity interval ends is recorded as expired and never submitted.
+A review that expires without a decision stays closed to approval; calling `propose_external_action` again for the same worker proposal records the expiry and issues a new operation identifier, validity interval and review.
+Neither an expired review nor its authorization is extended or reused.
 The private session retains review content; the audit records operation identifiers, digests, decisions, and status without copying request or input payloads.
 A worker acknowledgement or completion event cannot settle the separately identified outside operation.
 
@@ -646,11 +650,14 @@ Sender labels are descriptive metadata and never establish approval or authentic
 The paired journal retains the decision and delivery intent before sending the reviewed snapshot through the native conversation message and run APIs.
 When an evidence controller is bound, result disclosure requires an independently retained authorization checkpoint even in buffered mode.
 Result data is untrusted context; the worker retains its enforced tool and network restrictions.
+The native message API accepts only user-role messages, so the model receives the result in a user turn whose JSON envelope identifies it as an outside result; that label is not an instruction boundary.
 The operational audit records release and operation identifiers, digests, actor, command, and phase without copying the result.
 A submitted result means the native delivery path accepted it; it does not establish that the worker used it correctly or completed subsequent work.
 
-There is one result-release review per outside operation.
+There is one open result-release review per outside operation.
 Denial is final for that release; changed content or destinations require a separately authorized workflow.
+After a release review or its undispatched authorization expires, `propose_external_result` records the expiry, reads the result again and issues a new release identifier for a separate review.
+A denial withdraws an authorized release that has not been delivered.
 An interrupted or uncertain delivery is never retried automatically, including after gateway restart.
 The retained record and native conversation must be inspected before continuing in a new authorized session.
 This optional boundary does not establish protected result storage, deployed isolation, provider eligibility, or controlled-data readiness.

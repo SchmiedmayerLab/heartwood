@@ -100,6 +100,9 @@ Outside decisions distinguish authorization from attempted dispatch.
 An authorized record proves that the native call has not started; a submitting record means its outcome may be uncertain.
 A configured required-evidence gate must observe the authorization checkpoint before recording submission and calling the adapter.
 An interrupted authorization can resume only with the original decision, a live matching worker and renewed input, policy and expiry checks.
+While a command is handled, only an exact retry of the original approval resumes it; any other command is refused without dispatching.
+Denying the same review withdraws the undispatched authorization, and one that outlives its validity interval is recorded as expired.
+Both closures are terminal journal and audit records that complete the original approval command, so the session can continue.
 Read-only reconciliation skips undispatched authorizations; it never converts observation into submission authority.
 Otherwise, the session rejects further mutation so a second approval or task cannot repeat an uncertain side effect.
 An action is recorded as approved only when the session holds a recorded decision for its action set.

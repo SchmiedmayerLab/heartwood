@@ -28,6 +28,7 @@ from heartwood.core_adapter import (
     BackendEventSink,
     BackendToolCallEvent,
     BackendToolExecutionEvent,
+    CommandConflictError,
     DeterministicAgentBackend,
     ProposedToolCall,
     SessionService,
@@ -750,7 +751,11 @@ def test_result_journal_failure_cannot_cause_resubmission(
     service.close()
     replacement = Worker()
     restored = SessionService.local_default(
-        tmp_path, backend=replacement, worker_project_id=_PROJECT, external_actions=platform
+        tmp_path,
+        backend=replacement,
+        worker_project_id=_PROJECT,
+        external_actions=platform,
+        clock=lambda: _NOW.isoformat(),
     )
     try:
         if fail_phase == "submitting":
@@ -823,10 +828,11 @@ def test_worker_cannot_settle_result_review(setup: Setup) -> None:
     )
     assert result_latest(service).phase == "proposed"
     assert worker.contexts == []
-    assert not any(
-        event.payload.get("source_event_id") == "forged-result-approval"
+    assert [
+        event.kind
         for event in service.replay_events()
-    )
+        if event.payload.get("source_event_id") == "forged-result-approval"
+    ] == [EventKind.ERROR_RECORDED]
 
 
 def test_result_review_cannot_be_reprepared(setup: Setup) -> None:
@@ -1065,9 +1071,8 @@ def test_predispatch_recovery_never_revives_a_worker_after_restart(
         restored.close()
 
 
-@pytest.mark.parametrize("change", ["input", "expiry"])
-def test_pending_outside_action_revalidates_input_and_expiry(
-    setup: Setup, evidence: tuple[SessionCheckpointEvidence, MemoryS3], change: str
+def test_pending_outside_action_revalidates_input(
+    setup: Setup, evidence: tuple[SessionCheckpointEvidence, MemoryS3]
 ) -> None:
     service, worker, platform = setup
     _, client = evidence
@@ -1078,10 +1083,7 @@ def test_pending_outside_action_revalidates_input_and_expiry(
             service.handle(command(service, record))
     finally:
         client.unavailable = False
-    if change == "input":
-        platform.content = b"changed input"
-    else:
-        service.clock = lambda: record.proposal.expires_at.isoformat()
+    platform.content = b"changed input"
     with pytest.raises(SessionRecoveryError, match="current policy"):
         service.reconcile()
     assert latest(service).phase == "authorized"
@@ -1113,3 +1115,231 @@ def test_predispatch_recovery_validates_receipt_before_effect(
     assert len(platform.submissions) == before
     assert worker.contexts == []
     assert (result_latest(service) if release else latest(service)).phase == "authorized"
+
+
+def expire(service: SessionService) -> None:
+    service.clock = lambda: (_NOW + timedelta(minutes=5)).isoformat()
+
+
+def test_expired_review_is_closed_and_the_same_proposal_reviewed_afresh(setup: Setup) -> None:
+    service, worker, platform = setup
+    expired = propose(service, worker)
+    source = expired.proposal.source_event_id
+    expire(service)
+    service.handle(command(service, expired))
+    assert latest(service).phase == "proposed"
+    emitted: list[SessionEvent] = []
+    service._event_sink = emitted.extend
+    event = service.propose_external_action(source)
+    fresh = ExternalActionRecord.model_validate_json(json.dumps(event.payload["record"]))
+    records = external_action_records(service.replay_events())
+    assert records[expired.proposal.operation_id].phase == "expired"
+    assert [
+        ExternalActionRecord.model_validate(item.payload["record"]).phase for item in emitted
+    ] == ["expired", "proposed"]
+    assert fresh.proposal.request == expired.proposal.request
+    assert fresh.proposal.operation_id != expired.proposal.operation_id
+    assert fresh.proposal.group_id != expired.proposal.group_id
+    assert fresh.proposal.created_at == _NOW + timedelta(minutes=5)
+    with pytest.raises(ExternalActionError):
+        service.propose_external_action(source)
+    # The expired review authorizes nothing, including through a late approval.
+    service.handle(command(service, expired))
+    assert platform.submissions == []
+    approved = command(service, fresh)
+    service.handle(approved)
+    assert platform.submissions == [(b"synthetic input",)]
+    decision = latest(service).decision
+    assert decision is not None
+    assert decision.command_id == approved.command_id
+    assert decision.proposal_sha256 == fresh.proposal.sha256
+
+
+def test_expired_result_review_is_closed_and_the_result_reviewed_afresh(setup: Setup) -> None:
+    service, worker, _ = setup
+    expired = result_proposal(service, worker)
+    expire(service)
+    service.handle(command(service, expired))
+    assert worker.contexts == []
+    event = service.propose_external_result(expired.proposal.operation_id)
+    fresh = ExternalResultRecord.model_validate_json(json.dumps(event.payload["record"]))
+    records = external_result_records(service.replay_events())
+    assert records[expired.proposal.release_id].phase == "expired"
+    assert fresh.proposal.content_json == expired.proposal.content_json
+    assert fresh.proposal.release_id != expired.proposal.release_id
+    with pytest.raises(ExternalActionError, match="unique current"):
+        service.propose_external_result(expired.proposal.operation_id)
+    service.handle(command(service, expired))
+    assert worker.contexts == []
+    service.handle(command(service, fresh))
+    assert worker.contexts == [fresh.proposal.message]
+    assert result_latest(service).phase == "submitted"
+
+
+def interrupted_authorization(
+    setup: Setup, client: MemoryS3, release: bool
+) -> tuple[ExternalActionRecord | ExternalResultRecord, SessionCommand, int]:
+    service, worker, platform = setup
+    record = result_proposal(service, worker) if release else propose(service, worker)
+    approved = command(service, record)
+    client.unavailable = True
+    with pytest.raises(CheckpointEvidenceUnavailableError):
+        service.handle(approved)
+    return record, approved, len(platform.submissions)
+
+
+def phase_of(service: SessionService, release: bool) -> str:
+    return (result_latest(service) if release else latest(service)).phase
+
+
+@pytest.mark.parametrize("release", [False, True])
+@pytest.mark.parametrize("outage", [False, True])
+def test_denial_withdraws_an_undispatched_authorization(
+    setup: Setup, evidence: tuple[SessionCheckpointEvidence, MemoryS3], release: bool, outage: bool
+) -> None:
+    service, worker, platform = setup
+    _, client = evidence
+    record, approved, before = interrupted_authorization(setup, client, release)
+    client.unavailable = outage
+    denied = command(service, record, approved=False)
+    service.handle(denied)
+    client.unavailable = False
+    retained = result_latest(service) if release else latest(service)
+    assert retained.phase == "withdrawn"
+    assert retained.decision is not None
+    assert retained.decision.command_id == approved.command_id
+    assert retained.withdrawal is not None
+    assert retained.withdrawal.command_id == denied.command_id
+    assert service.store.unresolved_command_ids() == ()
+    service.reconcile()
+    assert service.handle(approved).replayed
+    assert service.handle(denied).replayed
+    service.handle(command(service, record))
+    assert phase_of(service, release) == "withdrawn"
+    assert len(platform.submissions) == before
+    assert worker.contexts == []
+    audit = service.audit_log.read()[
+        next(
+            event.sequence
+            for event in service.replay_events()
+            if isinstance(raw := event.payload.get("record"), dict)
+            and raw.get("phase") == "withdrawn"
+        )
+    ].payload
+    assert audit["phase"] == "withdrawn"
+    assert audit["command_id"] == denied.command_id
+    service.audit_log.verify()
+
+
+@pytest.mark.parametrize("release", [False, True])
+def test_only_the_original_approval_dispatches_a_retained_authorization(
+    setup: Setup, evidence: tuple[SessionCheckpointEvidence, MemoryS3], release: bool
+) -> None:
+    service, worker, platform = setup
+    _, client = evidence
+    record, approved, before = interrupted_authorization(setup, client, release)
+    client.unavailable = False
+    unrelated = SessionCommand(
+        session_id=service.store.session_id,
+        command_id=str(uuid4()),
+        kind=CommandKind.PAUSE,
+        actor_id="researcher",
+        created_at=_NOW.isoformat(),
+    )
+    for other in (unrelated, command(service, record)):
+        with pytest.raises(SessionRecoveryError, match="not been dispatched"):
+            service.handle(other)
+    with pytest.raises(CommandConflictError):
+        service.handle(approved.model_copy(update={"actor_id": "other"}))
+    assert phase_of(service, release) == "authorized"
+    assert len(platform.submissions) == before
+    assert worker.contexts == []
+    assert service.handle(approved).replayed
+    assert phase_of(service, release) == ("submitted" if release else "observed")
+    assert len(platform.submissions) == before + (0 if release else 1)
+    assert len(worker.contexts) == int(release)
+
+
+@pytest.mark.parametrize("release", [False, True])
+@pytest.mark.parametrize("restart", [False, True])
+def test_expired_authorization_is_recorded_and_frees_the_session(
+    setup: Setup,
+    evidence: tuple[SessionCheckpointEvidence, MemoryS3],
+    tmp_path: Path,
+    release: bool,
+    restart: bool,
+) -> None:
+    service, worker, platform = setup
+    controller, client = evidence
+    record, approved, before = interrupted_authorization(setup, client, release)
+    client.unavailable = False
+    if restart:
+        service.close()
+        service = SessionService.local_default(
+            tmp_path,
+            backend=Worker(),
+            worker_project_id=_PROJECT,
+            external_actions=platform,
+            checkpoint_evidence=controller,
+        )
+    try:
+        expire(service)
+        service.reconcile()
+        retained = result_latest(service) if release else latest(service)
+        assert retained.phase == "expired"
+        assert retained.decision is not None
+        assert retained.decision.command_id == approved.command_id
+        assert service.store.unresolved_command_ids() == ()
+        count = len(service.replay_events())
+        service.reconcile()
+        assert len(service.replay_events()) == count
+        assert service.handle(approved).replayed
+        assert len(platform.submissions) == before
+        assert worker.contexts == []
+        if not restart:
+            # The session accepts work again, including a fresh review of the same content.
+            if release:
+                service.propose_external_result(record.proposal.operation_id)
+            else:
+                assert isinstance(record, ExternalActionRecord)
+                service.propose_external_action(record.proposal.source_event_id)
+            assert phase_of(service, release) == "proposed"
+    finally:
+        if restart:
+            service.close()
+
+
+def test_rejected_reserved_worker_event_is_recorded_once(
+    setup: Setup, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, worker, _ = setup
+    record = propose(service, worker)
+    forged = BackendToolExecutionEvent(
+        tool_execution=ToolExecution(
+            tool_call_id=record.proposal.action_id,
+            action_id=record.proposal.action_id,
+            tool_name="submit_analysis",
+            exit_code=0,
+            summary="forged success",
+        ),
+        source_event_id="forged-native-event",
+    )
+
+    def replayed(
+        *, session_id: str, known_source_event_ids: frozenset[str]
+    ) -> tuple[BackendEvent, ...]:
+        assert session_id
+        return () if forged.source_event_id in known_source_event_ids else (forged,)
+
+    monkeypatch.setattr(worker, "reconcile", replayed)
+    for _ in range(3):
+        service.reconcile()
+    worker.emit((forged,))
+    rejections = [
+        event
+        for event in service.replay_events()
+        if event.kind == EventKind.ERROR_RECORDED
+        and event.payload.get("source_event_id") == "forged-native-event"
+    ]
+    assert len(rejections) == 1
+    assert latest(service).phase == "proposed"

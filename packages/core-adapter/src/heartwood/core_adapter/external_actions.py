@@ -177,16 +177,27 @@ class ExternalActionObservation(_Record):
 class ExternalActionRecord(_Record):
     """One complete observation in the existing paired session and audit journal."""
 
-    phase: Literal["proposed", "authorized", "denied", "submitting", "unknown", "observed"]
+    phase: Literal[
+        "proposed",
+        "authorized",
+        "denied",
+        "expired",
+        "withdrawn",
+        "submitting",
+        "unknown",
+        "observed",
+    ]
     proposal: ExternalActionProposal
     decision: ExternalActionDecision | None = None
+    withdrawal: ExternalActionDecision | None = None
     observation: ExternalActionObservation | None = None
 
     @model_validator(mode="after")
     def _binding(self) -> Self:
-        if self.phase == "proposed":
+        validate_withdrawal(self.phase, self.proposal.sha256, self.decision, self.withdrawal)
+        if self.phase == "proposed" or (self.phase == "expired" and self.decision is None):
             if self.decision is not None or self.observation is not None:
-                raise ValueError("a proposed operation has no decision or result")
+                raise ValueError("an undecided operation has no decision or result")
             return self
         if self.decision is None or self.decision.proposal_sha256 != self.proposal.sha256:
             raise ValueError("outside decision does not match the reviewed proposal")
@@ -214,7 +225,7 @@ class ExternalActionRecord(_Record):
     @property
     def terminal(self) -> bool:
         """Whether the trusted record establishes a terminal operation outcome."""
-        return self.phase == "denied" or (
+        return self.phase in {"denied", "expired", "withdrawn"} or (
             self.observation is not None
             and self.observation.operation.status in {"completed", "failed", "denied", "cancelled"}
         )
@@ -224,7 +235,7 @@ def external_action_records(events: Sequence[SessionEvent]) -> dict[UUID, Extern
     """Reduce canonical records without converting replay into execution authority."""
     records: dict[UUID, ExternalActionRecord] = {}
     sources = {event.event_id: event for event in events}
-    used_sources: set[str] = set()
+    used_sources: dict[str, UUID] = {}
     decisions: dict[str, UUID] = {}
     for event in events:
         if event.kind != EventKind.EXTERNAL_ACTION_RECORDED:
@@ -245,15 +256,21 @@ def external_action_records(events: Sequence[SessionEvent]) -> dict[UUID, Extern
                 or source.payload.get("worker_project_id")
                 != str(current.proposal.worker.project_id)
                 or source.payload.get("tool_name") != current.proposal.request.tool_name
-                or source.event_id in used_sources
+                # Only an expired review releases its worker proposal for a fresh one.
+                or (
+                    source.event_id in used_sources
+                    and records[used_sources[source.event_id]].phase != "expired"
+                )
             ):
                 raise ExternalActionError("outside operation has no unique worker proposal")
-            used_sources.add(source.event_id)
-        if current.decision is not None:
-            command_id = current.decision.command_id
-            if command_id in decisions and decisions[command_id] != current.proposal.operation_id:
+            used_sources[source.event_id] = current.proposal.operation_id
+        for decision in (current.decision, current.withdrawal):
+            if (
+                decision is not None
+                and decisions.setdefault(decision.command_id, current.proposal.operation_id)
+                != current.proposal.operation_id
+            ):
                 raise ExternalActionError("outside decision was reused for another operation")
-            decisions[command_id] = current.proposal.operation_id
         validate_external_transition(previous, current)
         records[current.proposal.operation_id] = current
     return records
@@ -270,15 +287,37 @@ def validate_external_transition(
     if current.proposal != previous.proposal or previous.terminal:
         raise ExternalActionError("outside operation identity changed or is already terminal")
     if previous.phase == "proposed":
-        if current.phase not in {"authorized", "denied", "submitting"}:
+        if current.phase not in {"authorized", "denied", "expired", "submitting"}:
             raise ExternalActionError("outside operation requires a trusted decision")
     elif previous.phase == "authorized":
-        if current.phase != "submitting" or current.decision != previous.decision:
+        if (
+            current.phase not in {"submitting", "expired", "withdrawn"}
+            or current.decision != previous.decision
+        ):
             raise ExternalActionError(
                 "authorized operation requires its original dispatch decision"
             )
     elif current.phase not in {"unknown", "observed"} or current.decision != previous.decision:
         raise ExternalActionError("outside operation cannot reuse or change its decision")
+
+
+def validate_withdrawal(
+    phase: str,
+    proposal_sha256: str,
+    decision: ExternalActionDecision | None,
+    withdrawal: ExternalActionDecision | None,
+) -> None:
+    """Require a withdrawn authorization to retain the separate denial that closed it."""
+    if (phase == "withdrawn") != (withdrawal is not None) or (
+        withdrawal is not None
+        and (
+            decision is None
+            or withdrawal.command_id == decision.command_id
+            or withdrawal.decision != "denied"
+            or withdrawal.proposal_sha256 != proposal_sha256
+        )
+    ):
+        raise ValueError("outside withdrawal does not match the reviewed proposal")
 
 
 def reserved_external_identity(value: str | None) -> bool:

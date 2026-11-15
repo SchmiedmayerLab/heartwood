@@ -511,6 +511,19 @@ def project_session(
                 approval_group_decisions[outside_proposal.group_id] = None
             if outside.phase == "authorized":
                 state = "approved"
+            if outside.phase in {"expired", "withdrawn"}:
+                # Closed before dispatch: neither awaiting review nor an uncertain effect.
+                approval_group_decisions[outside_proposal.group_id] = "denied"
+                state = "failed"
+                outcome = ProjectionActionOutcome(
+                    exit_code=1,
+                    summary=(
+                        "Review expired before dispatch"
+                        if outside.phase == "expired"
+                        else "Approval withdrawn before dispatch"
+                    ),
+                    result="Nothing was sent.",
+                )
             if isinstance(outside, ExternalResultRecord) and outside.phase == "submitted":
                 state = "succeeded"
                 outcome = ProjectionActionOutcome(
