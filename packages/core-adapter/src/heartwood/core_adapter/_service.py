@@ -12,12 +12,13 @@ import hashlib
 import json
 import math
 import os
+from collections import deque
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from threading import RLock
+from threading import Lock, RLock, get_ident
 from typing import assert_never, cast
 from uuid import UUID, uuid4
 
@@ -154,6 +155,64 @@ class CommandConflictError(ValueError):
 _BACKEND_READ_ATTEMPTS = 3
 
 
+class _FairLock:
+    """A reentrant lock that is granted in the order it was requested.
+
+    A thread that releases a Python lock can take it again before a waiting thread wakes,
+    so reads that follow one another could keep a command, fencing or revocation waiting
+    without bound. Releasing this lock hands it to the thread that has waited longest.
+    """
+
+    def __init__(self) -> None:
+        self._state = Lock()
+        self._owner: int | None = None
+        self._depth = 0
+        self._waiters: deque[tuple[int, Lock]] = deque()
+
+    def acquire(self) -> None:
+        thread = get_ident()
+        with self._state:
+            if self._owner == thread:
+                self._depth += 1
+                return
+            if self._owner is None:
+                self._owner, self._depth = thread, 1
+                return
+            turn = Lock()
+            turn.acquire()
+            self._waiters.append((thread, turn))
+        try:
+            # The releasing thread makes this one the owner before it releases its turn.
+            turn.acquire()
+        except BaseException:
+            with self._state:
+                if (thread, turn) in self._waiters:
+                    self._waiters.remove((thread, turn))
+                    raise
+            self.release()
+            raise
+
+    def release(self) -> None:
+        with self._state:
+            if self._owner != get_ident():
+                raise RuntimeError("cannot release un-acquired lock")
+            self._depth -= 1
+            if self._depth:
+                return
+            if self._waiters:
+                self._owner, turn = self._waiters.popleft()
+                self._depth = 1
+                turn.release()
+            else:
+                self._owner = None
+
+    def __enter__(self) -> None:
+        self.acquire()
+
+    def __exit__(self, *_: object) -> None:
+        self.release()
+
+
 class SessionService:
     """Core session service shared by every interaction surface."""
 
@@ -187,8 +246,9 @@ class SessionService:
         # the command lock, the worker lease lock, then the stream lock an event or token
         # sink takes. A worker response budget takes its own lock and then the lease lock.
         # A backend read after the first holds none of them, and fencing a lease needs
-        # only the lease lock.
-        self._command_lock = RLock()
+        # only the lease lock. The command lock is granted in request order, so reads that
+        # follow one another cannot keep a command, fencing or revocation waiting.
+        self._command_lock = _FairLock()
         self._worker_control_lock = RLock()
         self._worker_control_active = False
         self._closed = False

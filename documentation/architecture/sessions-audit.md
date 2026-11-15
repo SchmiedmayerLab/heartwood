@@ -45,6 +45,7 @@ The gateway incrementally translates persisted OpenHands messages, actions, obse
 While a run is executing or publishing its final events, its live publisher owns event delivery, and read-side reconciliation waits for it so it cannot consume an observation before live reproduction evidence is recorded.
 After the publisher exits, reconciliation can recover persisted events without claiming that replay observed their execution.
 Except for a service's first read, reconciliation reads the backend without the session command lock and journals what it read only if no event was appended and the worker attempt was neither fenced nor replaced meanwhile.
+The session command lock is granted in the order it is requested, so reads that follow one another cannot keep a command, fencing, or revocation waiting.
 Token deltas stay in process memory.
 
 ### Writer Ownership
