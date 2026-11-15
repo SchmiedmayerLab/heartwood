@@ -25,6 +25,7 @@ from heartwood.core_adapter.external_actions import (
 from heartwood.core_adapter.external_results import ExternalResultProposal, ExternalResultRecord
 from heartwood.core_adapter.worker_attempts import WorkerAttemptIntent
 from heartwood.gateway._action_presentation import (
+    action_arguments_label,
     action_summary_label,
     outside_review_lines,
     outside_review_title,
@@ -107,6 +108,8 @@ def test_outside_review_uses_shared_action_group(proposal: ExternalActionProposa
     assert action.action_id == proposal.action_id
     assert action.state == "awaiting-review"
     assert action.arguments == proposal.review_call.arguments
+    # The gateway, not the model, prepared the reviewed proposal.
+    assert action_arguments_label(action) == "Complete reviewed proposal prepared by the gateway"
     assert projection.actions[0].tool_call_id == "worker-native-id"
     assert projection.activity[-1].label == "Outside operation"
 

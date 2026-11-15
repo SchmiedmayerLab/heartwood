@@ -30,8 +30,10 @@ from heartwood.gateway import (
     SessionGateway,
     SessionProjection,
     WorkspaceInspectionError,
+    action_arguments_label,
     action_heading,
     action_mode_label,
+    action_review_heading,
     action_risk_label,
     action_state_label,
     action_summary_label,
@@ -564,14 +566,7 @@ def format_projection_lines(
         for index, action in enumerate(approval.actions, 1):
             tool_label = terminal_safe_text(action_tool_label(action.tool_name))
             risk_label = action_risk_label(action.risk)
-            details = action.details
-            summary = terminal_safe_text(
-                f"$ {details.command}"
-                if details.kind == "terminal"
-                else f"{details.operation} {details.path or 'path unavailable'}"
-                if details.kind == "file-editor"
-                else outside_review_title(action) or action_tool_label(action.tool_name)
-            )
+            summary = action_review_heading(action)
             lines.append(f"  {index}. {summary} [{tool_label} · {risk_label}]")
             lines.extend(f"     {line}" for line in outside_review_lines(action))
             if action.summary:
@@ -580,7 +575,7 @@ def format_projection_lines(
                 )
             lines.extend(f"     {line}" for line in specialist_review_lines(action))
             if argument_lines := format_action_arguments(action.arguments):
-                lines.append("     Arguments:")
+                lines.append(f"     {action_arguments_label(action)}:")
                 lines.extend(f"       {line}" for line in argument_lines)
         lines.extend(
             (

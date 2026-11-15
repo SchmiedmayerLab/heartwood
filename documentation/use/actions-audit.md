@@ -28,11 +28,12 @@ An interrupted action whose result cannot be established is marked **Outcome Unk
 An allowed set is sent to run at most once.
 If it appears to wait for review again after a restart, it may already have run: Heartwood marks it **Outcome Unknown** and refuses to allow or reject it again.
 
-A specialist task review is headed by the role from the specialist catalog; its task description, task prompt, and any specialist name that is not in the catalog were written by the model and are labelled **Model-provided** in the terminal, browser, and notebook.
+The command, file operation and path, and the exact arguments are shown exactly as the model proposed them and are labelled **Model-proposed command**, **Model-proposed file operation**, and **Exact arguments proposed by the model** in the terminal, browser, and notebook; the gateway does not verify that they do what the summary says.
+A specialist task review is headed by the role from the specialist catalog; its task description, task prompt, and any specialist name that is not in the catalog were written by the model and are labelled **Model-provided**, and its exact arguments repeat them under the arguments label.
 An action heading that falls back to model-written text carries the same label.
 
 Your approval never overrides deployment policy.
-The sandbox policy, the deployment's model-route and egress rules, and an outside service's policy check apply to an action you allowed exactly as to any other, and an action they refuse does not run.
+The sandbox policy, the deployment's model-route and egress rules, and an outside service's policy check apply to an action you allowed exactly as to any other, and an allowed action still cannot do what they forbid.
 
 ## Review Modes
 
@@ -160,7 +161,7 @@ Without expanding anything, the review shows:
 - the time until which the review is valid.
 
 The browser shows the request or result content directly.
-When it is longer than the 2,000-character preview, the browser marks the preview as truncated and offers all of it under **Complete reviewed proposal**; the terminal and notebook print the complete proposal.
+When it is longer than the 2,000-character preview, the browser marks the preview as truncated and offers all of it under **Complete reviewed proposal prepared by the gateway**; the terminal and notebook print the complete proposal.
 The summary of these reviews comes from the outside-service adapter or the gateway and is labelled **Gateway-provided summary**.
 A released result reaches the model as message content; it is data from the service, not instructions Heartwood has checked.
 

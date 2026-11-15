@@ -39,8 +39,10 @@ from heartwood.core_adapter import (
 from heartwood.gateway._access import LaunchCapability
 from heartwood.gateway._action_presentation import (
     RETAINED_APPROVAL_NOTICE,
+    action_arguments_label,
     action_heading,
     action_mode_label,
+    action_review_heading,
     action_risk_label,
     action_state_label,
     action_summary_label,
@@ -400,8 +402,10 @@ __all__ = [
     "WorkspaceInspectionError",
     "WorkspaceInspector",
     "WorkspaceLimits",
+    "action_arguments_label",
     "action_heading",
     "action_mode_label",
+    "action_review_heading",
     "action_risk_label",
     "action_settings_from_mapping",
     "action_state_label",

@@ -27,10 +27,12 @@ import {
 import { useEffect, useRef, useState, type RefObject } from "react";
 import {
   actionCountLabel,
+  actionArgumentsLabel,
   actionHeading,
   actionRiskPresentation,
   actionStateLabel,
   actionToolLabel,
+  modelProposedOperation,
   specialistModelFields,
   summarySourceLabel,
 } from "../actionPresentation";
@@ -509,7 +511,7 @@ const ActionHistory = ({
                   : null}
                   {Object.keys(action.arguments).length > 0 ?
                     <details className="trace-details">
-                      <summary>Exact arguments</summary>
+                      <summary>{actionArgumentsLabel(action)}</summary>
                       <pre tabIndex={0}>
                         {displaySafeText(
                           JSON.stringify(action.arguments, null, 2),
@@ -903,17 +905,16 @@ const ApprovalRequest = ({
             const specialist =
               control.details.kind === "task" ? control.details : null;
             const outside = outsideCopyFor(control);
+            const operation = modelProposedOperation(control);
             return (
               <li key={control.toolCallId}>
                 <div className="approval-action-heading">
                   <strong>
                     {displaySafeText(
-                      (
-                        control.details.kind === "terminal" ||
-                          control.details.kind === "file-editor"
-                      ) ?
-                        actionHeading(control)
-                      : (outside?.title ?? specialist?.roleLabel ?? tool),
+                      operation?.label ??
+                        outside?.title ??
+                        specialist?.roleLabel ??
+                        tool,
                     )}
                   </strong>
                   <Badge className={risk.className} variant="outline">
@@ -943,21 +944,14 @@ const ApprovalRequest = ({
                     {field.label}: {displaySafeText(field.value)}
                   </p>
                 ))}
-                {(
-                  control.details.kind === "terminal" ||
-                  control.details.kind === "file-editor"
-                ) ?
+                {operation !== null ?
                   <code className="approval-action-command">
-                    {displaySafeText(actionHeading(control))}
+                    {displaySafeText(operation.value)}
                   </code>
                 : null}
                 {Object.keys(control.arguments).length > 0 ?
                   <details className="approval-details">
-                    <summary>
-                      {outside === null ?
-                        "Exact arguments"
-                      : "Complete reviewed proposal"}
-                    </summary>
+                    <summary>{actionArgumentsLabel(control)}</summary>
                     <pre tabIndex={0} aria-label={`Arguments for ${tool}`}>
                       {displaySafeText(
                         JSON.stringify(control.arguments, null, 2),

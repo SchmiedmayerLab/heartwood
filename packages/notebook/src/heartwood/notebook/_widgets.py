@@ -18,14 +18,15 @@ from typing import Protocol, cast
 from heartwood.gateway import (
     RETAINED_APPROVAL_NOTICE,
     ProjectionSubagent,
+    action_arguments_label,
     action_heading,
+    action_review_heading,
     action_risk_label,
     action_state_label,
     action_summary_label,
     action_tool_label,
     display_safe_text,
     outside_review_lines,
-    outside_review_title,
     specialist_review_lines,
 )
 from heartwood.notebook._view_model import NotebookViewModel
@@ -207,14 +208,7 @@ def _approval_items(view_model: NotebookViewModel) -> tuple[str, ...]:
         else f"Review {len(group.actions)} {action_label} as one complete set: pending"
     ]
     for index, action in enumerate(group.actions, 1):
-        details = action.details
-        heading = (
-            f"$ {details.command}"
-            if details.kind == "terminal"
-            else f"{details.operation} {details.path or 'path unavailable'}"
-            if details.kind == "file-editor"
-            else outside_review_title(action) or action_tool_label(action.tool_name)
-        )
+        heading = action_review_heading(action)
         lines = [
             f"{index}. {heading}",
             f"{action_tool_label(action.tool_name)} · {action_risk_label(action.risk)}",
@@ -224,7 +218,10 @@ def _approval_items(view_model: NotebookViewModel) -> tuple[str, ...]:
             lines.append(f"{action_summary_label(action)}: {action.summary}")
         lines.extend(specialist_review_lines(action))
         if action.arguments:
-            lines.append(f"Arguments:\n{json.dumps(action.arguments, indent=2, sort_keys=True)}")
+            lines.append(
+                f"{action_arguments_label(action)}:\n"
+                + json.dumps(action.arguments, indent=2, sort_keys=True)
+            )
         items.append("\n".join(lines))
     return tuple(items)
 
@@ -249,7 +246,10 @@ def _action_items(view_model: NotebookViewModel) -> tuple[str, ...]:
         elif action.group_id is not None:
             lines.append(f"Complete action set decision: {action.decision or 'pending'}")
         if action.arguments:
-            lines.append("Arguments:\n" + json.dumps(action.arguments, indent=2, sort_keys=True))
+            lines.append(
+                f"{action_arguments_label(action)}:\n"
+                + json.dumps(action.arguments, indent=2, sort_keys=True)
+            )
         if action.affected_paths:
             lines.append(
                 "Paths: "

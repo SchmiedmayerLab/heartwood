@@ -118,13 +118,40 @@ def outside_review_title(action: ProjectionActionRecord) -> str | None:
     return OUTSIDE_REVIEW_TITLES.get(action.details.kind)
 
 
+def model_proposed_operation(action: ProjectionActionRecord) -> tuple[str, str] | None:
+    """Return the label and text of a command or file operation exactly as the model proposed it."""
+    details = action.details
+    if details.kind == "terminal":
+        return "Model-proposed command", f"$ {details.command}"
+    if details.kind == "file-editor":
+        return (
+            "Model-proposed file operation",
+            f"{details.operation} {details.path or 'path unavailable'}",
+        )
+    return None
+
+
+def action_arguments_label(action: ProjectionActionRecord) -> str:
+    """Name who wrote an action's exact arguments: the model, or the gateway for outside reviews."""
+    return (
+        "Complete reviewed proposal prepared by the gateway"
+        if outside_review_title(action)
+        else "Exact arguments proposed by the model"
+    )
+
+
+def action_review_heading(action: ProjectionActionRecord) -> str:
+    """Head a pending action with its labelled operation, outside review title or tool name."""
+    if operation := model_proposed_operation(action):
+        return display_safe_text(": ".join(operation))
+    return display_safe_text(outside_review_title(action) or action_tool_label(action.tool_name))
+
+
 def action_heading(action: ProjectionActionRecord) -> str:
     """Head an action with its command, path or trusted name, labelling any model-written text."""
     details = action.details
-    if details.kind == "terminal":
-        heading = f"$ {details.command}"
-    elif details.kind == "file-editor":
-        heading = f"{details.operation} {details.path or 'path unavailable'}"
+    if operation := model_proposed_operation(action):
+        heading = ": ".join(operation)
     elif details.kind == "task" and details.role_label:
         heading = details.role_label
     elif details.kind == "task" and details.description:

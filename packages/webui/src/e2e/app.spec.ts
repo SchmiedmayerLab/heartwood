@@ -372,7 +372,9 @@ test("supports keyboard review, reduced motion, and high-zoom reflow", async ({
     name: "Review 1 action",
   });
   await expect(heading).toBeFocused();
-  const argumentsDisclosure = approval.getByText("Exact arguments");
+  const argumentsDisclosure = approval.getByText(
+    "Exact arguments proposed by the model",
+  );
   await argumentsDisclosure.focus();
   await page.keyboard.press("Enter");
   await expect(argumentsDisclosure.locator("..")).toHaveAttribute("open", "");

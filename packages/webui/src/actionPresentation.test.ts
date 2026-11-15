@@ -8,13 +8,15 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  actionArgumentsLabel,
   actionHeading,
   actionRiskPresentation,
   actionStateLabel,
   actionToolLabel,
+  modelProposedOperation,
   specialistModelFields,
 } from "./actionPresentation";
-import { syntheticAction } from "./test/fixtures";
+import { syntheticAction, syntheticOutsideOperation } from "./test/fixtures";
 import type { ActionPresentation } from "./types";
 
 const presentation: ActionPresentation = {
@@ -100,5 +102,36 @@ describe("action presentation", () => {
         value: "Review the synthetic plan.",
       },
     ]);
+  });
+
+  it("labels model-proposed commands, file operations and arguments", () => {
+    const command = syntheticAction();
+    const edit = syntheticAction({
+      toolName: "file_editor",
+      details: {
+        kind: "file-editor",
+        operation: "str_replace",
+        path: "analysis/plan.md",
+      },
+    });
+
+    expect(actionHeading(command)).toBe(
+      "Model-proposed command: $ python run.py --output /project/cohort-summary.json",
+    );
+    expect(modelProposedOperation(edit)).toEqual({
+      label: "Model-proposed file operation",
+      value: "str_replace analysis/plan.md",
+    });
+    expect(actionHeading(edit)).toBe(
+      "Model-proposed file operation: str_replace analysis/plan.md",
+    );
+    expect(actionArgumentsLabel(command)).toBe(
+      "Exact arguments proposed by the model",
+    );
+    // An outside review's content is prepared by the gateway, not by the model.
+    expect(modelProposedOperation(syntheticOutsideOperation())).toBeNull();
+    expect(actionArgumentsLabel(syntheticOutsideOperation())).toBe(
+      "Complete reviewed proposal prepared by the gateway",
+    );
   });
 });

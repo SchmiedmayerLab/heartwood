@@ -91,15 +91,37 @@ export const specialistModelFields = (
   ];
 };
 
-/** Head an action with its command, path or trusted name; any model-written fallback is labelled. */
+/** The command or file operation exactly as the model proposed it, labelled as such. */
+export const modelProposedOperation = (
+  action: ProjectionActionRecord,
+): { label: string; value: string } | null => {
+  const details = action.details;
+  if (details.kind === "terminal") {
+    return { label: "Model-proposed command", value: `$ ${details.command}` };
+  }
+  if (details.kind === "file-editor") {
+    return {
+      label: "Model-proposed file operation",
+      value: `${details.operation} ${details.path ?? "path unavailable"}`,
+    };
+  }
+  return null;
+};
+
+/** Name who wrote an action's exact arguments: the model, or the gateway for an outside review. */
+export const actionArgumentsLabel = (action: ProjectionActionRecord): string =>
+  (
+    action.details.kind === "outside-operation" ||
+    action.details.kind === "outside-result"
+  ) ?
+    "Complete reviewed proposal prepared by the gateway"
+  : "Exact arguments proposed by the model";
+
+/** Head an action with its labelled command or path, or its trusted name; model text is labelled. */
 export const actionHeading = (action: ProjectionActionRecord): string => {
   const details = action.details;
-  if (details.kind === "terminal") return `$ ${details.command}`;
-  if (details.kind === "file-editor") {
-    return `${details.operation.replace("_", " ")} ${
-      details.path ?? "path unavailable"
-    }`;
-  }
+  const operation = modelProposedOperation(action);
+  if (operation !== null) return `${operation.label}: ${operation.value}`;
   if (details.kind === "task") {
     if (details.roleLabel !== null) return details.roleLabel;
     if (details.description !== null) {

@@ -1517,7 +1517,9 @@ describe("App", () => {
       name: "Agent actions",
     });
     expect(
-      within(history).getByText("create results/cohort-summary.json"),
+      within(history).getByText(
+        "Model-proposed file operation: create results/cohort-summary.json",
+      ),
     ).toBeInTheDocument();
     expect(within(history).getByText("Failed")).toBeInTheDocument();
     expect(
@@ -1531,7 +1533,9 @@ describe("App", () => {
     expect(
       within(history).getByText("Complete action set · approved"),
     ).toBeInTheDocument();
-    expect(within(history).getByText("Exact arguments")).toBeInTheDocument();
+    expect(
+      within(history).getByText("Exact arguments proposed by the model"),
+    ).toBeInTheDocument();
     expect(
       within(history).getByText("Action output (truncated)"),
     ).toBeInTheDocument();
@@ -2385,6 +2389,11 @@ describe("App", () => {
     expect(argumentsRegion).toHaveTextContent(
       "python run.py --output /project/cohort-summary.json",
     );
+    // The command and its arguments are the model's proposal, not gateway-verified text.
+    expect(screen.getByText("Model-proposed command")).toBeInTheDocument();
+    expect(
+      screen.getByText("Exact arguments proposed by the model"),
+    ).toBeInTheDocument();
     fireEvent.click(allow);
 
     await waitFor(() => expect(client.commands.at(-1)?.kind).toBe("approve"));
@@ -3585,7 +3594,9 @@ describe("App", () => {
     ).toHaveAttribute("datetime", "2026-01-01T00:05:00+00:00");
     expect(within(approval).queryByText(/preview truncated/u)).toBeNull();
     expect(
-      within(approval).getByText("Complete reviewed proposal"),
+      within(approval).getByText(
+        "Complete reviewed proposal prepared by the gateway",
+      ),
     ).toBeVisible();
 
     fireEvent.click(screen.getByLabelText("Allow 1 action once"));
@@ -3657,7 +3668,9 @@ describe("App", () => {
     expect(
       within(approval).queryByText(/Model-provided summary/u),
     ).not.toBeInTheDocument();
-    const complete = within(approval).getByText("Complete reviewed proposal");
+    const complete = within(approval).getByText(
+      "Complete reviewed proposal prepared by the gateway",
+    );
     expect(
       within(approval).getByText(/synthetic final row/u),
     ).not.toBeVisible();
@@ -3684,6 +3697,9 @@ describe("App", () => {
     const fileAction = within(approval).getAllByRole("listitem")[1];
     if (!fileAction) throw new Error("file action is missing");
     expect(fileAction.querySelector("strong")).toHaveTextContent(
+      "Model-proposed file operation",
+    );
+    expect(fileAction.querySelector("code")).toHaveTextContent(
       "create cohort-summary.md",
     );
     expect(
@@ -3701,8 +3717,9 @@ describe("App", () => {
       screen.getByRole("button", { name: "Allow 2 actions once" }),
     ).toBeVisible();
 
-    const argumentDisclosure =
-      within(approval).getAllByText("Exact arguments")[0];
+    const argumentDisclosure = within(approval).getAllByText(
+      "Exact arguments proposed by the model",
+    )[0];
     if (!argumentDisclosure)
       throw new Error("action argument disclosure is missing");
     argumentDisclosure.focus();

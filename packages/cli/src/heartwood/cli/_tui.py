@@ -57,7 +57,9 @@ from heartwood.gateway import (
     RETAINED_APPROVAL_NOTICE,
     ActionSettingsError,
     SessionProjection,
+    action_arguments_label,
     action_mode_label,
+    action_review_heading,
     action_risk_label,
     action_summary_label,
     action_tool_label,
@@ -678,14 +680,7 @@ class HeartwoodTerminalApp(App[None]):
         action_log.clear()
         for index, action in enumerate(actions, 1):
             risk_label, risk_style = _risk_presentation(action.risk)
-            details = action.details
-            summary = terminal_safe_text(
-                f"$ {details.command}"
-                if details.kind == "terminal"
-                else f"{details.operation} {details.path or 'path unavailable'}"
-                if details.kind == "file-editor"
-                else outside_review_title(action) or action_tool_label(action.tool_name)
-            )
+            summary = action_review_heading(action)
             tool_label = terminal_safe_text(action_tool_label(action.tool_name))
             heading = Text()
             heading.append(
@@ -704,7 +699,7 @@ class HeartwoodTerminalApp(App[None]):
             if action.arguments:
                 rendered.extend(
                     (
-                        "   Exact arguments:",
+                        f"   {action_arguments_label(action)}:",
                         *(f"     {line}" for line in format_action_arguments(action.arguments)),
                     )
                 )

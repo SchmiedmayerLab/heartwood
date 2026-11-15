@@ -394,14 +394,15 @@ def test_notebook_groups_every_pending_member_under_one_action_set() -> None:
     assert approval_items == (
         "Review 2 actions as one complete set: pending",
         (
-            "1. $ python run.py --output cohort-summary.json\n"
+            "1. Model-proposed command: $ python run.py --output cohort-summary.json\n"
             "Terminal Command · Advisory Medium Risk\n"
             "Model-provided summary: Run the synthetic cohort command\n"
-            "Arguments:\n{\n"
+            "Exact arguments proposed by the model:\n{\n"
             '  "command": "python run.py --output cohort-summary.json"\n'
             "}"
         ),
-        "2. unknown path unavailable\nFile Change · Not Classified\n"
+        "2. Model-proposed file operation: unknown path unavailable\n"
+        "File Change · Not Classified\n"
         "Model-provided summary: Write the aggregate result",
     )
 
@@ -434,8 +435,10 @@ def test_notebook_review_shows_commands_and_paths_without_model_summaries() -> N
         if section.title == "Action Review"
     )
     rendered = "\n".join(review.items)
-    assert f"$ {command}" in rendered
+    assert f"Model-proposed command: $ {command}" in rendered
+    assert "Model-proposed file operation: " in rendered
     assert path in rendered
+    assert "Exact arguments proposed by the model:" in rendered
     assert '"command": "create"' in rendered
     assert "Model-provided summary:" not in rendered
 
@@ -1008,9 +1011,11 @@ def test_notebook_marks_bounded_action_output_as_truncated() -> None:
     }
 
     assert sections["Agent Actions"] == (
-        "Failed: $ pytest tests/test_analysis.py · exit 1: terminal failed · output truncated\n"
+        "Failed: Model-proposed command: $ pytest tests/test_analysis.py · exit 1: terminal "
+        "failed · output truncated\n"
         "Complete action set decision: approved\n"
-        'Arguments:\n{\n  "command": "pytest tests/test_analysis.py"\n}\n'
+        "Exact arguments proposed by the model:\n"
+        '{\n  "command": "pytest tests/test_analysis.py"\n}\n'
         "Output:\nsynthetic failure\n",
     )
 
@@ -1066,7 +1071,7 @@ def test_notebook_renders_every_typed_action_and_automatic_decision() -> None:
     }
     rendered = "\n".join(sections["Agent Actions"])
 
-    assert "Succeeded: unknown path unavailable" in rendered
+    assert "Succeeded: Model-proposed file operation: unknown path unavailable" in rendered
     assert "Allowed automatically (rule read.file-view)" in rendered
     researcher = projection.model_copy(
         update={"actions": (file_action.model_copy(update={"automatic_rule": None}),)}

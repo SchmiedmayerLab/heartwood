@@ -16,7 +16,9 @@ from heartwood.core_adapter.session_activity import session_activity
 from heartwood.gateway import (
     ProjectionTaskActionDetails,
     SessionLifecycle,
+    action_arguments_label,
     action_heading,
+    action_review_heading,
     project_session,
     specialist_review_lines,
 )
@@ -1646,6 +1648,42 @@ def test_projection_normalizes_malformed_action_enums_without_raising() -> None:
     assert action.risk == "unknown"
     assert action.state == "awaiting-review"
     assert projection.pending_approval is not None
+
+
+def test_commands_paths_and_arguments_are_labelled_as_the_model_proposal() -> None:
+    projection = project_session(
+        (
+            _event(
+                0,
+                EventKind.TOOL_CALL_PROPOSED,
+                {
+                    "tool_call_id": "call-1",
+                    "tool_name": "terminal",
+                    "kind": "terminal",
+                    "arguments": {"command": "ls"},
+                },
+            ),
+            _event(
+                1,
+                EventKind.TOOL_CALL_PROPOSED,
+                {
+                    "tool_call_id": "call-2",
+                    "tool_name": "file_editor",
+                    "kind": "file-editor",
+                    "project_path": "notes.md",
+                    "arguments": {"command": "create", "path": "/workspace/notes.md"},
+                },
+            ),
+        ),
+        session_id="session-1",
+    )
+    command, edit = projection.actions
+
+    assert action_heading(command) == "Model-proposed command: $ ls"
+    assert action_review_heading(command) == "Model-proposed command: $ ls"
+    assert action_heading(edit) == "Model-proposed file operation: create notes.md"
+    assert action_review_heading(edit) == "Model-proposed file operation: create notes.md"
+    assert action_arguments_label(command) == "Exact arguments proposed by the model"
 
 
 def test_specialist_review_labels_every_model_written_field() -> None:
