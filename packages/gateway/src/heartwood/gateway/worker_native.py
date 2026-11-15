@@ -54,8 +54,6 @@ from heartwood.gateway.worker_volumes import (
 
 # After a creation whose outcome is unknown, absence is observed for this long, then counts
 # only once observed again after the attempt's unique name was deleted.
-_CREATION_SETTLE_SECONDS = 60.0
-_CREATION_OBSERVATION_INTERVAL_SECONDS = 2.0
 
 
 def native_worker_plan_factory(
@@ -117,7 +115,9 @@ def native_worker_reconciler(
             volumes = WorkerVolumes(volume_settings, record.intent)
             retained = record.runtime.sandbox_id if record.runtime else None
             # Without a recorded runtime, an ended process may have left creation unresolved.
-            sandbox_id = _owned_sandbox(control, volumes, retained, settle=record.runtime is None)
+            sandbox_id = _owned_sandbox(
+                control, volumes, retained, uncertain=record.runtime is None
+            )
             if sandbox_id is not None:
                 _delete_sandbox(control, volumes, sandbox_id)
             volumes.remove_after_revocation()
@@ -156,52 +156,29 @@ def _owned_sandbox(
     volumes: WorkerVolumes,
     sandbox_id: str | None,
     *,
-    settle: bool = False,
+    uncertain: bool = False,
 ) -> str | None:
     """Resolve the uniquely named sandbox only while it carries the complete attempt identity.
 
-    With `settle`, a creation may still be completing, so absence is observed repeatedly
-    until it has persisted for the settle interval, and then counts only when observed
-    again after the attempt's unique name was deleted.
+    With `uncertain`, a creation request may still be queued or provisioning, and the
+    sandbox gateway does not report a creation it has not recorded yet, so absence is not
+    evidence that nothing was created and the attempt stays unresolved.
     """
-    deadline = monotonic() + _CREATION_SETTLE_SECONDS
-    confirmed = not settle
-    while True:
-        try:
-            observed = control.client.get(volumes.worker_name, workspace=control.settings.workspace)
-            break
-        except control.grpc.RpcError as error:
-            if error.code() != control.grpc.StatusCode.NOT_FOUND:
-                raise WorkerAttemptError("native worker absence was not observed") from None
-        if confirmed:
-            return None
-        if monotonic() >= deadline:
-            _delete_unobserved(control, volumes)
-            confirmed = True
-            continue
-        sleep(_CREATION_OBSERVATION_INTERVAL_SECONDS)
+    try:
+        observed = control.client.get(volumes.worker_name, workspace=control.settings.workspace)
+    except control.grpc.RpcError as error:
+        if error.code() != control.grpc.StatusCode.NOT_FOUND:
+            raise WorkerAttemptError("native worker absence was not observed") from None
+        if uncertain:
+            raise WorkerAttemptError(
+                "native worker absence after an unresolved creation is not evidence of revocation"
+            ) from None
+        return None
     if dict(observed.labels) != volumes.labels or (
         sandbox_id is not None and observed.id != sandbox_id
     ):
         raise WorkerAttemptError("native worker identity changed before revocation")
     return str(observed.id)
-
-
-def _delete_unobserved(control: NativeWorkerControl, volumes: WorkerVolumes) -> None:
-    """Delete the attempt's unique name, so a creation the control plane completes later ends.
-
-    Only a control plane that reports the name as absent confirms that nothing was created;
-    a deletion of a sandbox no observation identified leaves the attempt unresolved.
-    """
-    try:
-        control.client.delete(
-            volumes.worker_name, workspace=control.settings.workspace, timeout_seconds=90
-        )
-    except control.grpc.RpcError as error:
-        if error.code() == control.grpc.StatusCode.NOT_FOUND:
-            return
-        raise WorkerAttemptError("native worker absence was not confirmed") from None
-    raise WorkerAttemptError("native worker absence was not confirmed by its deletion")
 
 
 def _delete_sandbox(control: NativeWorkerControl, volumes: WorkerVolumes, sandbox_id: str) -> None:
@@ -419,13 +396,13 @@ class _NativeWorkerAttempt:
                 "native worker launch requires outside reconciliation"
             ) from None
 
-    def _stop_sandbox(self, *, settle: bool = False) -> None:
+    def _stop_sandbox(self, *, revoking: bool = False) -> None:
         assert self._volumes is not None
         observed = _owned_sandbox(
             self.control,
             self._volumes,
             self._sandbox_id,
-            settle=settle and self._creation_uncertain and self._sandbox_id is None,
+            uncertain=revoking and self._creation_uncertain and self._sandbox_id is None,
         )
         if observed is not None:
             # Retained before deletion so an interrupted deletion is still recorded as revoked.
@@ -594,7 +571,7 @@ print(json.dumps({'files':files,'uid':os.getuid(),
             # The connected client keeps the identity admitted at launch, so stopping the
             # worker does not wait for local cleanup or a repeated configuration check.
             try:
-                self._stop_sandbox(settle=True)
+                self._stop_sandbox(revoking=True)
             except Exception:
                 # A forwarder to a sandbox that is being stopped is never useful.
                 if self._forward is not None:
