@@ -21,7 +21,6 @@ from heartwood.gateway import (
     ModelConnection,
     ModelProfile,
     ModelSettings,
-    ModelSettingsError,
     ProjectConfig,
     ProjectConfigStore,
     ProjectContext,
@@ -91,11 +90,17 @@ def _configured_project(
     config = ProjectConfig(
         platform_id="generic",
         model_source="heartwood" if profile.credential_kind == "none" else profile.profile_id,
-        action_settings=ActionSettings().selecting(confirmation_mode),
+        action_settings=ActionSettings(),
         model_settings=settings,
         policy=platform.default_policy_profile(),
     )
     ProjectConfigStore(project, config).save(config)
+    if confirmation_mode == "confirm-risky":
+        project.config_path.write_text(
+            project.config_path.read_text().replace(
+                'confirmation_mode = "always-confirm"', 'confirmation_mode = "confirm-risky"'
+            )
+        )
     return project
 
 
@@ -210,7 +215,7 @@ def test_secret_backed_model_disables_low_risk_automation_across_interfaces(
             mode for mode in action_settings["modes"] if mode["mode"] == "confirm-risky"
         )
         assert low_risk["allowed"] is False
-        assert "not isolated" in str(low_risk["unavailable_reason"])
+        assert "risk hints cannot authorize" in str(low_risk["unavailable_reason"])
         isolation_check = next(
             check for check in readiness.checks if check.check_id == "credential-isolation"
         )
@@ -218,7 +223,7 @@ def test_secret_backed_model_disables_low_risk_automation_across_interfaces(
         assert isolation_check.status == "warning"
         assert validation["credential_isolation"] == isolation
 
-        with pytest.raises(ActionSettingsError, match="not isolated"):
+        with pytest.raises(ActionSettingsError, match="risk hints cannot authorize"):
             gateway.select_action_confirmation_mode("confirm-risky")
 
         exposed = json.dumps(
@@ -235,7 +240,7 @@ def test_secret_backed_model_disables_low_risk_automation_across_interfaces(
         gateway.stop()
 
 
-def test_unsafe_persisted_combination_fails_readiness_and_agent_start(
+def test_legacy_automation_preference_cannot_bypass_review_for_secret_route(
     tmp_path: Path,
 ) -> None:
     project = _configured_project(
@@ -253,32 +258,33 @@ def test_unsafe_persisted_combination_fails_readiness_and_agent_start(
             check for check in readiness.checks if check.check_id == "credential-isolation"
         )
 
-        assert readiness.state == "recovery-required"
-        assert isolation.status == "fail"
-        with pytest.raises(ActionSettingsError, match="not isolated"):
-            gateway._service_configuration()
+        assert readiness.state == "ready"
+        assert isolation.status == "warning"
+        assert gateway.action_settings()["confirmation_mode"] == "always-confirm"
+        gateway._service_configuration()
     finally:
         gateway.stop()
 
 
-def test_credential_free_model_allows_low_risk_automation(tmp_path: Path) -> None:
+def test_credential_free_model_still_requires_action_review(tmp_path: Path) -> None:
     project = _configured_project(tmp_path, profile=_local_profile())
     gateway = SessionGateway(project=project, env={})
     try:
-        selected = gateway.select_action_confirmation_mode("confirm-risky")
+        with pytest.raises(ActionSettingsError, match="risk hints cannot authorize"):
+            gateway.select_action_confirmation_mode("confirm-risky")
         readiness = gateway.deployment_readiness()
         isolation = next(
             check for check in readiness.checks if check.check_id == "credential-isolation"
         )
 
-        assert selected["confirmation_mode"] == "confirm-risky"
+        assert gateway.action_settings()["confirmation_mode"] == "always-confirm"
         assert isolation.status == "pass"
         assert gateway.model_settings()["credential_isolation"]["status"] == "not-required"
     finally:
         gateway.stop()
 
 
-def test_model_selection_rejects_secret_route_while_automation_is_active(
+def test_legacy_automation_preference_is_safe_when_selecting_secret_route(
     tmp_path: Path,
 ) -> None:
     project = _configured_project(
@@ -292,9 +298,9 @@ def test_model_selection_rejects_secret_route_while_automation_is_active(
         active_profile="openai",
     )
     try:
-        with pytest.raises(ModelSettingsError, match="not isolated"):
-            gateway._save_model_selection("openai", settings)
-        assert gateway.model_settings()["active_profile"] == "heartwood"
+        gateway._save_model_selection("openai", settings)
+        assert gateway.model_settings()["active_profile"] == "openai"
+        assert gateway.action_settings()["confirmation_mode"] == "always-confirm"
     finally:
         gateway.stop()
 

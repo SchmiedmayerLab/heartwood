@@ -794,14 +794,23 @@ const ApprovalRequest = ({
                 <div className="approval-action-heading">
                   <strong>
                     {displaySafeText(
-                      specialist?.roleLabel ??
-                        (control.summary.length > 0 ? control.summary : tool),
+                      (
+                        control.details.kind === "terminal" ||
+                          control.details.kind === "file-editor"
+                      ) ?
+                        actionHeading(control)
+                      : (specialist?.roleLabel ?? tool),
                     )}
                   </strong>
                   <Badge className={risk.className} variant="outline">
                     {risk.label}
                   </Badge>
                 </div>
+                {control.summary ?
+                  <p>
+                    Model-provided summary: {displaySafeText(control.summary)}
+                  </p>
+                : null}
                 <div className="approval-action-meta">
                   <span>{tool}</span>
                   {specialist?.capability ?
