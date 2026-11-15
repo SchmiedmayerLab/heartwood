@@ -53,7 +53,8 @@ Heartwood sets no expiry on the provider credential behind that placeholder.
 Credential lifetime, rotation and detachment are the operator's OpenShell provider configuration; native qualification checks only that its own fixture's expired credential is refused.
 
 The worker's attempt key, `SESSION_API_KEY`, authenticates only requests to that worker's own agent server.
-Agent commands do not inherit it, but they run as the worker user that started the agent server, so code in the worker can read the key from that process's start-up environment under `/proc`; it grants no authority beyond what code in the worker already has.
+Agent commands do not inherit it, but they run as the worker user that started the agent server, so code in the worker may be able to read the key from that process's start-up environment under `/proc`; native qualification records whether it can.
+The key grants no authority beyond what code in the worker already has.
 
 Heartwood does not inspect commands the worker runs.
 In [`review-outside-effects`](#action-review), these controls are the only limit on what an automatically allowed command can do inside the worker.

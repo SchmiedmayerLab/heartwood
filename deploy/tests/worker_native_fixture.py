@@ -13,6 +13,7 @@ import os
 import secrets
 import shlex
 import shutil
+import socket
 import ssl
 import subprocess
 import threading
@@ -29,12 +30,12 @@ from uuid import uuid4
 import grpc
 from google.protobuf.json_format import MessageToDict
 from worker_model_profile import QualificationModelProfile
-from worker_network_qualification import qualify_network
+from worker_network_qualification import qualify_network, reachable
 from worker_telemetry import InfrastructureCollector
 
 from deploy.tests.checkpoint_transport_integration import RecordsTransport, records_transport
 from heartwood.core_adapter.checkpoint_evidence import SessionCheckpointEvidence
-from heartwood.gateway import ProjectContext, SessionGateway
+from heartwood.gateway import GatewayAsgiApp, ProjectContext, SessionGateway
 from heartwood.gateway.checkpoint_deployment import deployment_checkpoint_evidence
 from heartwood.gateway.worker_deployment import OpenShellWorkerDeployment
 from heartwood.gateway.worker_inputs import WorkerInputManifest
@@ -69,9 +70,6 @@ class SyntheticProvider:
             ("finish", {"message": "Synthetic aggregate check completed."}),
         ]
         self.scripts: dict[str, list[tuple[str, dict[str, Any]]]] = {}
-        # A case can hold each reply until it releases this event; `held` reports a waiting reply.
-        self.hold: threading.Event | None = None
-        self.held = threading.Event()
         self._request_lock = threading.Lock()
         owner = self
 
@@ -130,10 +128,6 @@ class SyntheticProvider:
                                 "route": route,
                             }
                         )
-                    if owner.hold is not None:
-                        owner.held.set()
-                        if not owner.hold.wait(120):
-                            raise TimeoutError("held synthetic reply was not released")
                     if (
                         not authorized
                         or self.path != "/v1/chat/completions"
@@ -222,6 +216,68 @@ class SyntheticProvider:
         self.thread.join(timeout=5)
         if self.thread.is_alive() or self.errors:
             raise RuntimeError(f"Synthetic provider did not finish cleanly: {self.errors}")
+
+
+# The cloud metadata addresses the worker probe must be denied, by probe check name.
+METADATA_ADDRESSES = {"metadata-ipv4": "169.254.169.254", "metadata-ipv6": "fd00:ec2::254"}
+_METADATA_LISTENER = """import socket,sys,threading
+def serve(family,address):
+ listener=socket.socket(family,socket.SOCK_STREAM)
+ listener.bind((address,80))
+ listener.listen()
+ while True:
+  connection,_=listener.accept()
+  connection.close()
+for address in sys.argv[1:]:
+ family=socket.AF_INET6 if ':' in address else socket.AF_INET
+ threading.Thread(target=serve,args=(family,address)).start()
+"""
+
+
+@contextmanager
+def researcher_gateway(application: SessionGateway) -> Iterator[int]:
+    """Serve a case's researcher gateway on every controller address while the probe runs.
+
+    Binding all addresses, unlike the loopback default, makes the gateway reachable from
+    the networks the worker shares, so only the sandbox can keep the worker from it.
+    """
+    import uvicorn
+
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("0.0.0.0", 0))
+    listener.listen()
+    server = uvicorn.Server(
+        uvicorn.Config(
+            GatewayAsgiApp(application), lifespan="off", log_level="warning", access_log=False
+        )
+    )
+    thread = threading.Thread(target=server.run, kwargs={"sockets": [listener]})
+    thread.start()
+    try:
+        deadline = time.monotonic() + 30
+        while not server.started:
+            if not thread.is_alive() or time.monotonic() > deadline:
+                raise RuntimeError("Researcher gateway listener did not start")
+            time.sleep(0.05)
+        yield listener.getsockname()[1]
+    finally:
+        server.should_exit = True
+        thread.join(timeout=15)
+        listener.close()
+        if thread.is_alive():
+            raise RuntimeError("Researcher gateway listener did not stop")
+
+
+def host_service_targets(
+    services: dict[str, int], routes: dict[str, str]
+) -> dict[str, tuple[str, int]]:
+    """Name every real service endpoint by each address that leads to the controller."""
+    return {
+        f"{service}-via-{route}": (address, port)
+        for service, port in services.items()
+        for route, address in routes.items()
+    }
 
 
 WORKER_CONTAINERS = "worker-container.json"
@@ -362,6 +418,8 @@ class NativeFixture:
                 self.private / "records",
                 project=project,
                 session_id="composition",
+                # Reachable from the worker's networks, so only the sandbox keeps the worker out.
+                listen_host="0.0.0.0",
             )
         )
         self.provider.forbidden_values += self.records.forbidden_values
@@ -473,6 +531,13 @@ class NativeFixture:
         )
         self.ipv4 = ipaddress.IPv4Address(network["IPAddress"])
         self.ipv6 = ipaddress.IPv6Address(network["GlobalIPv6Address"])
+        self.control_address = control_address
+        bridge = json.loads(command(["docker", "network", "inspect", "bridge"]))[0]
+        self.bridge_gateway = next(
+            ipaddress.IPv4Address(item["Gateway"])
+            for item in bridge["IPAM"]["Config"]
+            if ":" not in item.get("Gateway", ":")
+        )
 
         tls = self.private / "tls"
         command(
@@ -824,8 +889,148 @@ print(json.dumps(result))
         if self.protected_canary.read_text() != self.sentinel:
             raise AssertionError("Outside state canary changed")
 
-    def qualify_direct_network(self, worker: str) -> dict[str, object]:
-        """Verify actual dual-stack routes from a separate, unprivileged outside client."""
+    def _peer_command(self, network: str, program: str, *arguments: str) -> str:
+        """Run a program in a separate, unprivileged outside client on one network."""
+        return command(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "--network",
+                network,
+                "--read-only",
+                "--cap-drop",
+                "ALL",
+                "--security-opt",
+                "no-new-privileges",
+                "--memory",
+                "128m",
+                "--pids-limit",
+                "32",
+                "--user",
+                "10001:10001",
+                "--entrypoint",
+                PYTHON,
+                self.controller_image,
+                "-I",
+                "-B",
+                "-c",
+                program,
+                *arguments,
+            ]
+        )
+
+    def _peer(self, network: str, targets: list[tuple[str, int]]) -> list[bool]:
+        """Report which endpoints an outside client on one network reaches."""
+        program = (
+            "import json,sys;sys.path.insert(0,'/opt/qualification/tests');"
+            "from worker_network_qualification import reachable;"
+            "print(json.dumps(reachable([tuple(item) for item in json.loads(sys.argv[1])])))"
+        )
+        observed: list[bool] = json.loads(self._peer_command(network, program, json.dumps(targets)))
+        return observed
+
+    @contextmanager
+    def metadata_listener(self) -> Iterator[Callable[[], dict[str, str]]]:
+        """Give each metadata probe an outside positive control, and name what answers.
+
+        A metadata service that an outside client on the workers' bridge network reaches is
+        the control on the workers' own route; such a host is never given a second listener,
+        which would shadow its service. Otherwise a listener on a disposable network shows
+        that an outside client reaches the address, though not along the workers' route.
+        """
+        names = list(METADATA_ADDRESSES)
+        targets = [(METADATA_ADDRESSES[name], 80) for name in names]
+        present = self._peer("bridge", targets)
+        origins = {
+            name: "host-service" if found else "disposable-listener"
+            for name, found in zip(names, present, strict=True)
+        }
+        served = [target for target, found in zip(targets, present, strict=True) if found]
+        missing = [target for target, found in zip(targets, present, strict=True) if not found]
+        network = self.identity + "-metadata"
+        listener = network + "-listener"
+        owner = "heartwood-qualification-owner=" + self.identity
+
+        def control() -> dict[str, str]:
+            observed = (self._peer("bridge", served) if served else []) + (
+                self._peer(network, missing) if missing else []
+            )
+            if not all(observed):
+                raise AssertionError("An outside client did not reach a metadata listener")
+            return origins
+
+        try:
+            if missing:
+                addresses = [address for address, _ in missing]
+                subnets = []
+                placement = []
+                if METADATA_ADDRESSES["metadata-ipv4"] in addresses:
+                    subnets += ["--subnet", "169.254.169.248/29"]
+                    placement += ["--ip", METADATA_ADDRESSES["metadata-ipv4"]]
+                if METADATA_ADDRESSES["metadata-ipv6"] in addresses:
+                    subnets += ["--ipv6", "--subnet", "fd00:ec2::/64"]
+                    placement += ["--ip6", METADATA_ADDRESSES["metadata-ipv6"]]
+                command(["docker", "network", "create", "--label", owner, *subnets, network])
+                command(
+                    [
+                        "docker",
+                        "run",
+                        "--detach",
+                        "--name",
+                        listener,
+                        "--label",
+                        owner,
+                        "--network",
+                        network,
+                        *placement,
+                        "--sysctl",
+                        "net.ipv4.ip_unprivileged_port_start=80",
+                        "--read-only",
+                        "--cap-drop",
+                        "ALL",
+                        "--security-opt",
+                        "no-new-privileges",
+                        "--memory",
+                        "128m",
+                        "--pids-limit",
+                        "32",
+                        "--user",
+                        "10001:10001",
+                        "--entrypoint",
+                        PYTHON,
+                        self.controller_image,
+                        "-I",
+                        "-B",
+                        "-c",
+                        _METADATA_LISTENER,
+                        *addresses,
+                    ]
+                )
+                for _ in range(20):
+                    if all(self._peer(network, missing)):
+                        break
+                    time.sleep(0.5)
+                else:
+                    raise AssertionError("An outside client did not reach a metadata listener")
+            yield control
+        finally:
+            if missing:
+                with suppress(subprocess.CalledProcessError):
+                    observed = json.loads(command(["docker", "inspect", listener]))[0]
+                    if observed["Config"]["Labels"].get(owner.partition("=")[0]) != self.identity:
+                        raise RuntimeError("Refusing cleanup of a listener with changed ownership")
+                    command(["docker", "rm", "--force", listener])
+                command(["docker", "network", "rm", network])
+
+    def qualify_direct_network(self, worker: str, application: SessionGateway) -> dict[str, object]:
+        """Verify actual routes, with every outside control from outside the worker.
+
+        The worker probes the real endpoints of the sandbox gateway, the case's researcher
+        gateway, which also serves the browser origin, and, where the case retains
+        checkpoints, the records service and signer, by every address that leads to the
+        controller that serves them.
+        """
         program = (
             "import ipaddress,sys;sys.path.insert(0,'/opt/qualification/tests');"
             "from worker_network_qualification import send_positive_controls;"
@@ -834,47 +1039,44 @@ print(json.dumps(result))
         )
 
         def peer() -> None:
-            command(
-                [
-                    "docker",
-                    "run",
-                    "--rm",
-                    "--network",
-                    self.network,
-                    "--read-only",
-                    "--cap-drop",
-                    "ALL",
-                    "--security-opt",
-                    "no-new-privileges",
-                    "--memory",
-                    "128m",
-                    "--pids-limit",
-                    "32",
-                    "--user",
-                    "10001:10001",
-                    "--entrypoint",
-                    PYTHON,
-                    self.controller_image,
-                    "-I",
-                    "-B",
-                    "-c",
-                    program,
-                    str(self.ipv4),
-                    str(self.ipv6),
-                ]
-            )
+            self._peer_command(self.network, program, str(self.ipv4), str(self.ipv6))
 
-        return qualify_network(
-            self.control,
-            worker,
-            workspace="default",
-            ipv4=self.ipv4,
-            ipv6=self.ipv6,
-            port=19672,
-            ipv6_port=19673,
-            allowed_host=urlsplit(self.base_url).hostname or "",
-            peer=peer,
-        )
+        with researcher_gateway(application) as gateway_port, self.metadata_listener() as metadata:
+            services = {"sandbox-gateway": 19670, "researcher-gateway": gateway_port}
+            if self.records is not None:
+                services["records-service"] = urlsplit(self.records.settings.endpoint).port or 0
+                services["signer"] = urlsplit(self.records.endpoint).port or 0
+            routes = {
+                "host-alias": "host.docker.internal",
+                "host-gateway": str(self.control_address),
+                "qualification-network": str(self.ipv4),
+                "bridge-gateway": str(self.bridge_gateway),
+            }
+
+            def service_controls() -> int:
+                # The host alias resolves to the host-gateway address inside the worker, and
+                # nothing of the deployment listens on the bridge gateway, which is the host.
+                local = [(str(self.control_address), port) for port in services.values()]
+                outside = [(str(self.ipv4), port) for port in services.values()]
+                observed = reachable(local) + self._peer(self.network, outside)
+                if not all(observed):
+                    raise AssertionError("An outside client did not reach a host service")
+                return len(observed)
+
+            return qualify_network(
+                self.control,
+                worker,
+                workspace="default",
+                ipv4=self.ipv4,
+                ipv6=self.ipv6,
+                port=19672,
+                ipv6_port=19673,
+                allowed_host=urlsplit(self.base_url).hostname or "",
+                peer=peer,
+                host_services=host_service_targets(services, routes),
+                service_controls=service_controls,
+                metadata_control=metadata,
+            )
 
     def _stop_gateway(self) -> None:
         observed = json.loads(command(["docker", "inspect", self.identity]))[0]

@@ -114,7 +114,7 @@ def serve_authority(path: Path) -> None:
             self.end_headers()
             self.wfile.write(response)
 
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server = ThreadingHTTPServer((config.get("listen_host", "127.0.0.1"), 0), Handler)
     tls = Path(config["tls"])
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.load_cert_chain(tls / "public.crt", tls / "private.key")
@@ -162,8 +162,12 @@ def records_transport(
     *,
     project: ProjectContext | None = None,
     session_id: str = "synthetic-session",
+    listen_host: str = "127.0.0.1",
 ) -> Iterator[RecordsTransport]:
-    """Own one outside records deployment and independent signing process."""
+    """Own one outside records deployment and independent signing process.
+
+    Both listen on `listen_host`; clients always use the loopback address.
+    """
     output.mkdir(mode=0o700)
     owned: list[ObjectStore] = []
     authority_process: subprocess.Popen[bytes] | None = None
@@ -171,7 +175,9 @@ def records_transport(
     checks = report["checks"]
     try:
         ca = server_certificates(output / "tls")
-        server = ObjectStore(binary, output / "store", owned, certificates=ca.parent)
+        server = ObjectStore(
+            binary, output / "store", owned, certificates=ca.parent, listen_host=listen_host
+        )
         root = server.client()
         bucket, prefix = "synthetic-evidence", "audit"
         root.create_bucket(Bucket=bucket, ObjectLockEnabledForBucket=True)
@@ -329,6 +335,7 @@ def records_transport(
                     "token_file": str(token),
                     "tls": str(ca.parent),
                     "ready": str(ready),
+                    "listen_host": listen_host,
                 }
             ),
         )

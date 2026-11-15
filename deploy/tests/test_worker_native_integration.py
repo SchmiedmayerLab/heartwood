@@ -597,7 +597,7 @@ print('readable' if readable else 'unreadable')
             no_login_shell=True,
         )
         assert key_observation.exit_code == 0, key_observation.stderr
-        network_evidence = fixture.qualify_direct_network(worker_name)
+        network_evidence = fixture.qualify_direct_network(worker_name, application)
         hostile_checks = None
         if fixture.hostile:
             hostile = fixture.control.exec(

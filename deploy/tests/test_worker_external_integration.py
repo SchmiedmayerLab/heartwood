@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import json
-import threading
 import time
 from contextlib import suppress
 from datetime import UTC, datetime
@@ -349,33 +348,59 @@ def test_native_contained_action_is_automatic_and_outside_effect_waits(
 def test_native_contained_action_is_refused_after_revocation(
     infrastructure: NativeFixture,
 ) -> None:
-    """A worker revoked before its next action is no longer a sandbox the gateway trusts."""
+    """A contained action proposed before its worker is revoked can never run afterwards."""
     fixture = infrastructure
     terminal = "printf revoked > /workspace/revoked.txt"
     fixture.provider.script = [
         ("terminal", {"command": terminal}),
         ("finish", {"message": "Synthetic contained step completed."}),
     ]
-    release = threading.Event()
-    fixture.provider.hold = release
     application = _application(fixture, action_review_modes=REVIEW_MODES)
+    # Under the sandbox default the gateway would allow this action in the operation that
+    # journals it; reviewing every action keeps the proposal undecided until revocation.
+    assert application.action_settings()["default_mode"] == "review-outside-effects"
+    application.select_action_review_mode("review-all")
     service = application._service("composition")
     try:
         _submit(application, CommandKind.CHAT, {"prompt": "Write the contained marker."})
-        # The worker waits for the model reply that proposes its contained action.
-        assert fixture.provider.held.wait(120)
+        backend = service.backend
+        assert isinstance(backend, OpenHandsSdkBackend)
+        deadline = time.monotonic() + 180
+        while time.monotonic() < deadline:
+            service.reconcile()
+            requests = [
+                event.payload["request"]
+                for event in service.replay_events()
+                if event.kind == EventKind.CONFIRMATION_REQUESTED
+                and isinstance(event.payload.get("request"), dict)
+            ]
+            if requests and backend.wait_for_idle(0):
+                break
+            time.sleep(0.1)
+        else:
+            raise AssertionError("Native worker did not propose the contained action")
+        (request,) = requests
+        events = service.replay_events()
+        (proposal,) = [
+            event
+            for event in events
+            if event.kind == EventKind.TOOL_CALL_PROPOSED
+            and event.payload.get("tool_name") == "terminal"
+        ]
+        assert proposal.payload["arguments"] == {"command": terminal}
+        assert proposal.payload["review_class"] == "workspace"
         attempt = service.worker_attempt()
         assert attempt is not None
         assert attempt.phase == "active"
-        assert service.action_review_mode() == "review-outside-effects"
+        assert proposal.payload["worker_attempt_id"] == str(attempt.intent.attempt_id)
+        assert not [e for e in events if e.kind == EventKind.APPROVAL_RECORDED]
+        assert len(fixture.provider.observations) == 1
+
         # The same fence a failed worker exchange raises; prompt revocation follows from it.
         service.fence_worker_attempt(attempt_id=attempt.intent.attempt_id)
-        assert service.action_review_mode() == "review-all"
-        release.set()
         deadline = time.monotonic() + 180
         while time.monotonic() < deadline:
-            # Give the gateway every chance to journal and decide the proposal; a fenced
-            # worker exchange may fail, which is the expected refusal.
+            # A fenced worker exchange may fail, which is the expected refusal.
             with suppress(Exception):
                 service.reconcile()
             revoked = service.worker_attempt()
@@ -388,27 +413,17 @@ def test_native_contained_action_is_refused_after_revocation(
         assert revoked.revocation is not None
         assert revoked.revocation.outcome == "revoked"
         _assert_absent(str(attempt.intent.attempt_id))
-        assert service.action_review_mode() == "review-all"
-        events = service.replay_events()
-        assert not [e for e in events if e.kind == EventKind.APPROVAL_RECORDED]
-        assert not [e for e in events if e.kind == EventKind.TOOL_EXECUTION_RECORDED]
-        requests = [
-            event.payload["request"]
-            for event in events
-            if event.kind == EventKind.CONFIRMATION_REQUESTED
-            and isinstance(event.payload.get("request"), dict)
-        ]
-        # A researcher's approval cannot reach the revoked worker either.
-        for group_id in {request["group_id"] for request in requests}:
-            before = len(service.replay_events())
-            _submit(
-                application,
-                CommandKind.APPROVE,
-                {"target_type": "action-set", "target_id": group_id},
-            )
-            later = service.replay_events()[before:]
-            assert any(event.kind == EventKind.ERROR_RECORDED for event in later)
-            assert not any(event.kind == EventKind.APPROVAL_RECORDED for event in later)
+
+        # The researcher's approval of the action proposed before revocation is refused.
+        before = len(service.replay_events())
+        _submit(
+            application,
+            CommandKind.APPROVE,
+            {"target_type": "action-set", "target_id": request["group_id"]},
+        )
+        later = service.replay_events()[before:]
+        assert any(event.kind == EventKind.ERROR_RECORDED for event in later)
+        assert not [e for e in service.replay_events() if e.kind == EventKind.APPROVAL_RECORDED]
         # An executed action would return its result to the model in another request.
         assert len(fixture.provider.observations) == 1
         _stop(application)
@@ -418,14 +433,15 @@ def test_native_contained_action_is_refused_after_revocation(
         (fixture.output / "evidence.json").write_text(
             json.dumps(
                 {
-                    "drill_id": "native-revoked-contained.v1",
-                    "review_mode_before_revocation": "review-outside-effects",
-                    "review_mode_after_revocation": "review-all",
+                    "drill_id": "native-revoked-contained.v2",
+                    "default_review_mode": "review-outside-effects",
+                    "review_mode": "review-all",
                     "worker_attempt_id": str(attempt.intent.attempt_id),
                     "worker_image": fixture.worker,
-                    "contained_proposals_journaled": len(requests),
-                    "automatic_decisions": 0,
-                    "researcher_approvals_refused": len({r["group_id"] for r in requests}),
+                    "contained_proposals_before_revocation": 1,
+                    "review_class": "workspace",
+                    "decisions_before_revocation": 0,
+                    "researcher_approvals_refused": 1,
                     "executions": 0,
                     "provider_requests": len(fixture.provider.observations),
                     "attempt_resources_absent": True,
@@ -436,5 +452,4 @@ def test_native_contained_action_is_refused_after_revocation(
             + "\n"
         )
     finally:
-        release.set()
         _stop(application)

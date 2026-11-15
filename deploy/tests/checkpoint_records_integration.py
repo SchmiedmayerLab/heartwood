@@ -80,6 +80,7 @@ class ObjectStore:
         owned: list[ObjectStore],
         *,
         certificates: Path | None = None,
+        listen_host: str = "127.0.0.1",
     ) -> None:
         self.access = "synthetic-" + secrets.token_hex(8)
         self.secret = secrets.token_hex(32)
@@ -91,11 +92,13 @@ class ObjectStore:
         }
         state.mkdir(mode=0o700)
         with socket.socket() as listener:
-            listener.bind(("127.0.0.1", 0))
+            listener.bind((listen_host, 0))
             port = listener.getsockname()[1]
         self.certificates = certificates
+        # Clients use the loopback address, which every listen address includes.
         self.endpoint = f"{'https' if certificates else 'http'}://127.0.0.1:{port}"
         self._binary, self._state, self._port = binary, state, port
+        self._listen_host = listen_host
         self._start()
         owned.append(self)
         self._wait_ready()
@@ -107,7 +110,7 @@ class ObjectStore:
                     str(self._binary),
                     "server",
                     str(self._state),
-                    f"--address=127.0.0.1:{self._port}",
+                    f"--address={self._listen_host}:{self._port}",
                     *(["--certs-dir", str(self.certificates)] if self.certificates else []),
                 ],
                 env=self._environment,

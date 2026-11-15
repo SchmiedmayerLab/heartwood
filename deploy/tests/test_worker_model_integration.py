@@ -354,7 +354,7 @@ def test_native_capable_model(monkeypatch: pytest.MonkeyPatch) -> None:
         assert not fixture.provider.observations
         assert fixture.provider.canary_requests == 1
         assert fixture.protected_canary.read_text() == fixture.sentinel
-        network = fixture.qualify_direct_network(name)
+        network = fixture.qualify_direct_network(name, application)
         revocation = revoke_model_provider(fixture, name)
         service.audit_log.verify()
         _stop(application)
