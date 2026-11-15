@@ -42,7 +42,7 @@
     "rehype-sanitize": "6.0.0",
     "remark-gfm": "4.0.1",
     "unist-util-visit": "5.1.0",
-    "zod": "4.4.3"
+    "zod": "4.6.7"
   },
   "overrides": {
     "@firebase/firestore": {
@@ -51,9 +51,14 @@
     "brace-expansion@1.1.16": "1.1.18",
     "esbuild": "0.28.1",
     "js-yaml": "4.3.2",
-    "next": "16.3.8",
+    "next": "16.4.1",
     "postcss": "8.5.23",
-    "sharp": "0.35.5"
+    "sharp": "0.35.5",
+    "re2js": "2.8.7",
+    "zod": "$zod",
+    "undici@>=8.0.0 <8.12.2": "8.12.4",
+    "minimatch@>=7.0.0 <=11.0.0": "11.0.5",
+    "eslint-plugin-import-x": "4.18.0"
   },
   "devDependencies": {
     "@axe-core/playwright": "4.12.1",
@@ -67,7 +72,7 @@
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.4",
     "@vitejs/plugin-react": "6.0.5",
-    "@vitest/coverage-v8": "5.0.0",
+    "@vitest/coverage-v8": "5.0.3",
     "eslint": "10.8.0",
     "eslint-import-resolver-typescript": "4.4.5",
     "jscpd": "5.0.14",
@@ -76,7 +81,7 @@
     "prettier": "3.9.6",
     "tailwindcss": "4.3.3",
     "typescript": "6.0.3",
-    "vite": "8.2.0",
-    "vitest": "5.0.0"
+    "vite": "8.3.6",
+    "vitest": "5.0.3"
   }
 }

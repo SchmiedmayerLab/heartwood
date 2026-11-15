@@ -232,11 +232,6 @@ class SkillArtifactStore:
                 self._verified_manifest(record) for record in records if record.status == "active"
             )
 
-    def active_skill_roots(self) -> tuple[Path, ...]:
-        """Return verified parent directories consumable by OpenHands."""
-        manifests = self.active_manifests()
-        return tuple(manifest.root.parent for manifest in manifests)
-
     def artifact_path(self, record: InstalledSkillRecord) -> Path:
         """Return the confined content-addressed directory for one record."""
         return self._artifact_path(record)
@@ -283,6 +278,7 @@ class SkillArtifactStore:
                     raise SkillStoreError(
                         f"Unable to install Skill {record.name}: {error}"
                     ) from error
+                self._verify_artifact_directory_is_exclusive(destination)
             self._write_index((*index.skills, record))
             return record
 
@@ -315,7 +311,20 @@ class SkillArtifactStore:
             raise SkillStoreError(
                 f"Installed Skill artifact does not match its index: {record.name}"
             )
+        self._verify_artifact_directory_is_exclusive(path)
         return manifest
+
+    def _verify_artifact_directory_is_exclusive(self, path: Path) -> None:
+        """Reject content that verification does not cover beside one installed Skill."""
+        try:
+            entries = {entry.name for entry in path.parent.iterdir()}
+        except OSError as error:
+            raise SkillStoreError(f"Unable to inspect installed Skill: {path.name}") from error
+        if entries != {path.name}:
+            raise SkillStoreError(
+                f"Installed Skill directory contains unexpected content: {path.name}; "
+                f"remove everything except {path.name} from {path.parent}"
+            )
 
     def _verify_existing_artifact(self, record: InstalledSkillRecord) -> None:
         self._verified_manifest(record)

@@ -458,7 +458,7 @@ class SkillManager:
         self._record_removal(summary)
 
     def active_skill_roots(self) -> tuple[Path, ...]:
-        """Return verified installed roots consumable by OpenHands."""
+        """Return the exact verified installed Skill directories OpenHands may load."""
         with self._lifecycle_lock():
             return self._active_skill_roots()
 
@@ -486,7 +486,7 @@ class SkillManager:
                     continue
                 manifest = self.store.manifest(record)
                 if self._compatibility_reason(manifest) is None:
-                    roots.append(manifest.root.parent)
+                    roots.append(manifest.root)
             return tuple(roots)
         except SkillStoreError as error:
             raise SkillSettingsError(str(error)) from error
