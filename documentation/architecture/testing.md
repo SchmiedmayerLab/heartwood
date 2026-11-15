@@ -47,8 +47,9 @@ Pull-request and main-branch validation both end in the required `Release Candid
 On a pull request, native qualification and its candidate builds are skipped only when every changed path is under `documentation/` or `.github/` other than the worker candidate and pull-request validation workflows; any other path, including one the selection does not recognize, requires them.
 Every main-branch commit runs the complete native qualification, and main validation adds an evidence attestation job to the aggregate.
 
-Pull-request jobs that build and run candidate code hold no signing or identity-token permission.
-Registry writes, multi-platform manifests, moving tags, and evidence attestation run only on the main branch.
+Pull-request jobs that build and run candidate code hold no signing or package-write permission; the Python job holds an identity token only to upload coverage to Codecov.
+Multi-platform manifests, moving tags, and evidence attestation run only on the main branch.
+Registry writes run on the main branch, except that the manual Terra GPU Qualification Candidate workflow pushes a `candidate-sha-<commit>-terra-gpu-nvidia` image from the branch it is started on.
 Release creation requires `Release Candidate Ready` and the `Analyze (python)` and `Analyze (javascript-typescript)` code-scanning checks for the exact commit.
 
 ## Capable-Model Acceptance

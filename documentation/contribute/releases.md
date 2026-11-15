@@ -29,7 +29,7 @@ The workflow stops unless all of the following hold for the commit:
 - immutable container candidates exist for the commit.
 
 `Release Candidate Ready` requires every Main Validation job, including capable-model acceptance, native worker qualification, and the attestation of its evidence.
-That job verifies the native qualification evidence against the commit with `deploy/qualification_evidence.py` and creates a GitHub artifact attestation for its `SHA256SUMS`; the job builds and runs no application code.
+Its `evidence-attestation` job verifies the native qualification evidence against the commit with `deploy/qualification_evidence.py` and creates a GitHub artifact attestation for its `SHA256SUMS`; the job builds and runs no application code.
 The evidence stays a workflow artifact, `worker-native-qualification-<commit>`, retained for 90 days; it is not attached to the release.
 Verify it with `gh attestation verify` bound to this repository, the Main Validation workflow, `refs/heads/main`, and the commit.
 Pull-request runs are not attested.

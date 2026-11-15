@@ -17,7 +17,7 @@ Review the price Terra shows before creating the environment, and use synthetic 
 
 The Terra images are built from the Terra Jupyter base and tested in CI for Jupyter inheritance, the prefixed internal gateway route, persistence and the Docker manifest shape Terra requires.
 The Terra adapter reports validation level `ci`; CI does not start a live Terra workspace.
-The two-T4 Qwen3 Coder 30B AWQ configuration completed Heartwood's coding-agent qualification in a Terra workspace on 2026-08-15 with the vLLM runtime this release ships; see [GPU Compatibility](../reference/gpu-compatibility.md).
+The two-T4 Qwen3 Coder 30B AWQ configuration completed Heartwood's coding-agent qualification in a Terra workspace on 2026-08-15 with the pinned vLLM runtime listed in [GPU Compatibility](../reference/gpu-compatibility.md).
 A Terra launch is a local launch with `.heartwood/` state on the persistent disk; the isolated worker deployment is not qualified on Terra.
 Operators preparing Terra for a group should also [record a standard environment](../operate/index.md#record-a-standard-environment).
 

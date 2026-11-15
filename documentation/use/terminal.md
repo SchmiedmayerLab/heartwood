@@ -21,7 +21,7 @@ Task Tracker progress, model activity, and specialist status appear when OpenHan
 
 When the agent proposes an action set, the interface lists every member and waits for your decision.
 Use the arrow keys and Enter to allow or reject the complete set; see [Review an Action Set](actions-audit.md#review-an-action-set).
-After the work settles, Heartwood may offer up to two suggested next requests that you can edit before sending.
+After the work settles, Heartwood may offer up to two suggested next requests.
 
 Heartwood falls back to the plain interface when the terminal cannot run the full-screen application.
 
@@ -79,7 +79,7 @@ In a project without Git, it shows only successful file changes from typed file-
 | `/specialists` | Show the [research specialists](specialists.md) available to the agent |
 | `/workflows` | List the [research workflows](research-workflows.md) |
 | `/workflow` | Set up a research workflow or show its current stage and next commands |
-| `/experiments` | Show the experiment records of this project |
+| `/experiments` | Show the experiment records of this session |
 | `/files [DIRECTORY]` | List the project tree |
 | `/show FILE` | Show one UTF-8 project file |
 | `/changes [FILE]` | List changed paths or show one read-only diff |
@@ -91,7 +91,7 @@ In the plain interface, use these commands in place of keyboard selection; `/all
 
 ## Stop and Return
 
-Use `/exit` or `Ctrl-C` to close the interface.
+Use `/exit` to close the interface, or `Ctrl-Q` in the full-screen interface and `Ctrl-C` in the plain one.
 Run the same command in the same project to resume, with the same `--session-id` if you used one.
 A review mode selected during the session is not kept; the next launch starts at the default.
 

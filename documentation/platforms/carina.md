@@ -14,7 +14,7 @@ Do not access protected health information while evaluating Heartwood unless the
 ## Qualification
 
 The Carina installer and its installation layout are tested in CI with a simulated Slurm environment; the Carina adapter reports validation level `ci`.
-The two-L40S Muse Glimmer 30B BF16 configuration completed Heartwood's coding-agent qualification on Carina on 2026-08-14 with the vLLM runtime this release ships; see [GPU Compatibility](../reference/gpu-compatibility.md).
+The two-L40S Muse Glimmer 30B BF16 configuration completed Heartwood's coding-agent qualification on Carina on 2026-08-14 with the pinned vLLM runtime listed in [GPU Compatibility](../reference/gpu-compatibility.md).
 A Carina launch is a local launch: `.heartwood/` state lives in the project directory and agent tools run with your account's permissions.
 The isolated worker deployment is not qualified on Carina.
 

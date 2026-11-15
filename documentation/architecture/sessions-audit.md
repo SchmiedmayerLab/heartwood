@@ -89,7 +89,7 @@ An interrupted approval is completed automatically only when its recorded intent
 Otherwise the session rejects further mutation, so a second approval or task cannot repeat an uncertain side effect; verify the evidence and continue in a new session.
 
 Outside decisions distinguish authorization from dispatch: an `authorized` record proves the native call has not started, and a `submitting` record means its outcome may be uncertain.
-With required checkpoint evidence, the authorization checkpoint must be retained before submission is recorded.
+When checkpoint evidence is configured, in either mode, the authorization checkpoint must be retained before submission is recorded.
 An authorization that could not be sent is dispatched only by an exact retry of its own approval command, with the same identifier and content, a live matching worker, and renewed input, policy, and expiry checks.
 Denying the same review withdraws it, and an authorization that outlives its validity interval is recorded as expired; both close the original approval command so the session can continue.
 Reconciliation records only such expiry and never turns an observation into submission authority.
