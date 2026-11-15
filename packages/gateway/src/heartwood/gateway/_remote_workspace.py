@@ -373,9 +373,25 @@ def _same_agent(returned: object, sent: object, redacted: object) -> bool:
     )
 
 
-def _with_server_context(returned: object, agent: AgentContract) -> AgentContract:
-    """Accept the two prompt-context values the agent server replaces in its responses."""
-    context = returned.get("agent_context") if isinstance(returned, dict) else None
+def _with_server_context(
+    returned: object, agent: AgentContract, client_tools: Mapping[str, str]
+) -> AgentContract:
+    """Accept what the agent server adds to the gateway's agent in its responses.
+
+    It appends one tool entry per authorized client tool, carrying its exact
+    specification, and replaces two prompt-context values.
+    """
+    if not isinstance(returned, dict):
+        return agent
+    registered = [
+        {"name": name, "params": {"spec": json.loads(spec)}} for name, spec in client_tools.items()
+    ]
+    tools = returned.get("tools")
+    if registered and isinstance(tools, list) and tools[len(agent[0]["tools"]) :] == registered:
+        agent = tuple(  # type: ignore[assignment]
+            {**side, "tools": [*side["tools"], *registered]} for side in agent
+        )
+    context = returned.get("agent_context")
     if not isinstance(context, dict) or not isinstance(agent[0].get("agent_context"), dict):
         return agent
     owned: dict[str, Any] = {}
@@ -412,7 +428,8 @@ def _admit_metadata(
     # the configured model route, so only the gateway's own agent is admitted.
     returned = value.get("agent")
     if returned is not None and (
-        agent is None or not _same_agent(returned, *_with_server_context(returned, agent))
+        agent is None
+        or not _same_agent(returned, *_with_server_context(returned, agent, client_tools or {}))
     ):
         raise WorkerResponseError("worker agent is not authorized")
 
