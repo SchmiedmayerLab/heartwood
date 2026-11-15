@@ -89,7 +89,7 @@ def main() -> None:
             "-B",
             "-u",
             "-m",
-            "openhands.agent_server",
+            "heartwood.gateway.worker_server",
             "--host",
             "127.0.0.1",
             "--port",

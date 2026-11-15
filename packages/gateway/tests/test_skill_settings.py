@@ -731,3 +731,122 @@ def _skills_root() -> Path:
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[3]
+
+
+def test_runtime_selection_applies_new_revocations_immediately(tmp_path: Path) -> None:
+    entry, archive = _catalog_skill(tmp_path)
+    client = _CatalogClient(_snapshot(entry), archive)
+    manager = _manager(tmp_path, client=client)
+    manager.install_catalog(
+        entry.name, source_id=None, expected_tree_sha256=entry.tree_sha256, approved=True
+    )
+    client.snapshot = _snapshot(
+        entry.model_copy(update={"revoked": True, "revocation_reason": "Synthetic withdrawal"})
+    )
+
+    assert manager.active_skill_roots() == ()
+    assert manager.store.records()[0].status == "revoked"
+
+
+def test_worker_skill_projection_contains_only_active_packages(tmp_path: Path) -> None:
+    entry, archive = _catalog_skill(tmp_path)
+    client = _CatalogClient(_snapshot(entry), archive)
+    manager = _manager(tmp_path, client=client)
+    manager.install_catalog(
+        entry.name, source_id=None, expected_tree_sha256=entry.tree_sha256, approved=True
+    )
+    (manager.store.root / "private-sentinel").write_text("synthetic operator state")
+    parent = tmp_path / "staging"
+    parent.mkdir(mode=0o700)
+    project = tmp_path / "project"
+    project.mkdir()
+    with manager.stage_worker_skills(project_root=project, staging_parent=parent) as projection:
+        assert {name for name, _digest in projection.bindings} == {
+            "aggregate-export",
+            "baseline-model",
+            "omop-cohort-summary",
+            entry.name,
+        }
+        assert (entry.name, entry.tree_sha256) in projection.bindings
+        assert {path.name for path in projection.root.iterdir()} == {
+            name for name, _digest in projection.bindings
+        }
+        assert not list(projection.root.rglob("private-sentinel"))
+        assert not list(projection.root.rglob("index.json"))
+        assert not list(projection.root.rglob("*.root.json"))
+        skills = projection.agent_skills()
+        for skill in skills:
+            assert skill.source == f"/skills/{skill.name}/SKILL.md"
+            if skill.resources is not None:
+                assert skill.resources.skill_root == f"/skills/{skill.name}"
+            assert str(tmp_path) not in skill.model_dump_json()
+            assert str(_skills_root()) not in skill.model_dump_json()
+        digest = projection.sha256
+        snapshot = projection.root
+    assert not snapshot.exists()
+    assert not list(parent.iterdir())
+    with manager.stage_worker_skills(project_root=project, staging_parent=parent) as projection:
+        assert projection.sha256 == digest
+        assert projection.root != snapshot
+    assert (manager.store.root / "private-sentinel").read_text() == "synthetic operator state"
+
+
+def test_worker_projection_refreshes_revocations_before_copy(tmp_path: Path) -> None:
+    entry, archive = _catalog_skill(tmp_path)
+    client = _CatalogClient(_snapshot(entry), archive)
+    manager = _manager(tmp_path, client=client)
+    manager.install_catalog(
+        entry.name, source_id=None, expected_tree_sha256=entry.tree_sha256, approved=True
+    )
+    parent = tmp_path / "staging"
+    parent.mkdir(mode=0o700)
+    client.snapshot = _snapshot(
+        entry.model_copy(update={"revoked": True, "revocation_reason": "Synthetic withdrawal"})
+    )
+    with manager.stage_worker_skills(
+        project_root=tmp_path / "project", staging_parent=parent
+    ) as projection:
+        assert entry.name not in {name for name, _digest in projection.bindings}
+    assert manager.store.records()[0].status == "revoked"
+
+
+@pytest.mark.parametrize("failure", ["refresh", "audit", "content"])
+def test_worker_projection_refuses_unverified_installed_state(tmp_path: Path, failure: str) -> None:
+    entry, archive = _catalog_skill(tmp_path)
+    client = _CatalogClient(_snapshot(entry), archive)
+    manager = _manager(tmp_path, client=client)
+    manager.install_catalog(
+        entry.name, source_id=None, expected_tree_sha256=entry.tree_sha256, approved=True
+    )
+    parent = tmp_path / "staging"
+    parent.mkdir(mode=0o700)
+    if failure == "refresh":
+        client.failure = SkillCatalogError("Synthetic source unavailable")
+    elif failure == "audit":
+        manager.audit_path.write_text("invalid journal\n")
+    else:
+        (manager.active_skill_roots()[0] / "SKILL.md").write_text("tampered content")
+    with (
+        pytest.raises(SkillSettingsError),
+        manager.stage_worker_skills(project_root=tmp_path / "project", staging_parent=parent),
+    ):
+        pytest.fail("Unverified active content was projected")
+    assert not list(parent.iterdir())
+
+
+def test_worker_projection_excludes_incompatible_bundled_content(tmp_path: Path) -> None:
+    manager = _manager(tmp_path)
+    manager.bundled_dir = tmp_path / "bundled"
+    shutil.copytree(_skills_root(), manager.bundled_dir)
+    path = manager.bundled_dir / "aggregate-export/SKILL.md"
+    path.write_text(
+        path.read_text().replace(
+            'heartwood.requires-network: "false"', 'heartwood.requires-network: "true"'
+        )
+    )
+    parent = tmp_path / "staging"
+    parent.mkdir(mode=0o700)
+    with manager.stage_worker_skills(
+        project_root=tmp_path / "project", staging_parent=parent
+    ) as projection:
+        assert "aggregate-export" not in {name for name, _digest in projection.bindings}

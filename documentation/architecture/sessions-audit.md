@@ -38,6 +38,9 @@ sequenceDiagram
 Session directories contain metadata, event records, audit records, exports, and OpenHands persistence for that conversation.
 Session identifiers are validated before any state path is created.
 The gateway incrementally translates persisted OpenHands messages, actions, observations, lifecycle, task, usage, specialist, and error state into Heartwood events.
+While a native run is executing or publishing its final events, its live publisher owns event delivery.
+Read-side reconciliation waits for that publisher to finish so it cannot consume an observation before live reproduction evidence is recorded.
+After the publisher exits, reconciliation can recover persisted events without claiming that replay observed their execution.
 Incremental token deltas remain in process memory and disappear after the run reaches a stable boundary or the process stops.
 Each REST, WebSocket, and server-sent-events response pairs an event batch with the projection produced from the same serialized snapshot.
 A transient revision orders token-only updates that share a durable event revision.
@@ -52,6 +55,14 @@ Final events delivered during shutdown remain durable; this lifecycle fence does
 A second process cannot reconcile or mutate that session until the owner releases the lease or exits.
 Replay and live updates remain available through the interface connected to the owning gateway.
 Distinct sessions have independent leases.
+Trusted worker launch uses `SessionService.launch_worker` to retain an attempt before invoking the platform launcher and bind the observed runtime only after that call succeeds.
+The launcher must use the retained identity with the native sandbox lifecycle and verify the authorized image, effective policy, active configuration, and process generation before returning a binding.
+Missing generation, failed admission, interruption, or an uncertain create response leaves the attempt fenced for outside reconciliation; Heartwood does not retry creation or infer that no worker exists.
+`revoke_worker` closes local admission before invoking the platform's revocation observer and records only returned evidence matching the retained attempt and runtime.
+A failed or uncertain revocation does not permit replacement.
+Launch, revocation, and service shutdown are serialized independently of command and event handling, so shutdown cannot release writer ownership while a launch may still return.
+Platform callbacks must bound their control-plane operations and must not wait for session shutdown or recursively start another worker lifecycle operation.
+These coordination methods do not install a platform launcher, terminate workers themselves, or infer infrastructure enforcement from a worker acknowledgement.
 Writer admission and session-catalog changes briefly hold one admission lock for the session root.
 An internal maintenance context holds that gate while acquiring every existing session writer lock; an active writer prevents maintenance from starting.
 The context leaves writer metadata and historical records unchanged and releases its locks after failure or process exit.
@@ -108,6 +119,8 @@ SDK profile and provider-connection storage is scoped to private conversation st
 
 OpenHands can supply several proposed tool calls through one confirmation callback.
 Heartwood displays every member as one action set and applies one decision to the complete set; it does not imply that members can be approved independently.
+The complete proposal and confirmation request must already be durable before the gateway accepts a decision.
+If native pending state arrives ahead of its live publisher, a decision is rejected without resolving the callback; a fresh command can be submitted after publication.
 The gateway commits that complete-set decision before OpenHands can continue into model or tool execution.
 The pending set is reconstructed from unmatched OpenHands actions after restart rather than from a separate Heartwood cache.
 Its identifier contains a full SHA-256 digest of the ordered tool-call identifiers, native action identifiers, tool names, action kinds, and exact structured arguments.
