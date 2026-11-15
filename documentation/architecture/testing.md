@@ -65,7 +65,17 @@ The protected self-hosted GPU workflow runs the same acceptance contract with ex
 
 The default lock installs the patched SDK wheels from `vendor/runtime-wheels/`, which is not committed.
 `deploy/build-worker-candidate.py` builds them from immutable upstream archives and the patches in `images/worker/candidate/`, verifying source, patch, and build-tool hashes and using a fixed source timestamp.
-The patches add bounded remote-event admission and outside client-tool control (conversation), explicit environment replacement for terminal backends (terminal), the configuration-admission record that binds a sandbox to its policy and process generation and the gateway's negotiated driver capabilities that show its deletion behavior (sandbox), and a security-fixed file-lock requirement (dependency).
+Each carried patch stays until a pinned upstream release provides its behavior and native qualification passes without it:
+
+| Patch | Purpose | Related upstream work | Why it remains |
+|---|---|---|---|
+| `conversation-admission.patch` (OpenHands) | Rebuilds the model view after a cold-loaded approval, reads the active branch, status and statistics as one snapshot, runs and cancels remote conversations without blocking the event loop, admits the event socket and its frames before parsing, and keeps ownership of a socket thread that has not stopped | Cold-loaded view: OpenHands/software-agent-sdk#4498 and #4501. Socket shutdown: #4670 and #5187. Socket admission overlaps #6067 | No release contains any unit. The public run-and-interrupt path keeps polling a lost worker until its run timeout, and the public event paging cannot read the branch, status and statistics atomically |
+| `dependency-compatibility.patch` (OpenHands) | Requires the security-fixed file-lock release and the inference-client series that permits it | OpenHands/software-agent-sdk#6811 | Overriding the bounds only in Heartwood's lock would leave the published SDK metadata admitting the vulnerable file-lock release |
+| `terminal-environment.patch` (OpenHands tools) | Starts every terminal backend from an allowlisted environment instead of the inherited, denylist-filtered one | None | A shell-level environment reset leaves the terminal's parent process with the inherited environment, and drops the persistent terminal backend |
+| `sandbox-admission.patch` (OpenShell Python SDK) | Exposes the configuration-admission record, activation and process identity already on the wire, and the gateway info call with negotiated driver capabilities | ai-openshell/sdk-python#41 changes the same generated protocol | The released SDK exposes neither; reading them through its private stub is not an acceptable basis for an admission check |
+| `docker-provisioning.patch` (OpenShell gateway, qualification only) | Rejects deletion until Docker provisioning settles, and reports it as a driver capability | None | Without it a container can appear after deletion was reported, see [gateway behavior](../operate/platform-requirements.md#gateway-behavior-behind-native-qualification) |
+| `gateway-delete-retry.patch` (OpenShell gateway, qualification only) | Calls the driver again for an explicit delete of a sandbox already marked deleting, and reports it as a compute capability | None | Without it a failed deletion never converges and revocation has no evidence of absence |
+
 A local version suffix such as `+heartwood.3` marks a patched build; the recorded upstream source revision, not the version number, identifies the upstream code.
 
 ```bash
