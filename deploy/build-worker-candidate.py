@@ -299,7 +299,9 @@ def build_gateway(output: Path, cache: Path, *, gateway_tests: bool = False) -> 
     if arch is None:
         raise ValueError("Gateway qualification requires a Linux amd64 or arm64 Docker engine")
     output.mkdir(parents=True, exist_ok=False)
-    for directory in (cache / "archives", cache / "cargo", cache / arch / "target"):
+    # Cargo trusts modification times, and a fresh extraction predates earlier objects.
+    target = cache / arch / _digest(manifest_bytes)[:16] / "target"
+    for directory in (cache / "archives", cache / "cargo", target):
         directory.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(prefix="gateway-source-", dir=output) as temporary:
         staging = Path(temporary)
@@ -346,7 +348,7 @@ def build_gateway(output: Path, cache: Path, *, gateway_tests: bool = False) -> 
             "--mount",
             f"type=bind,src={cache / 'cargo'},dst=/cargo",
             "--mount",
-            f"type=bind,src={cache / arch / 'target'},dst=/target",
+            f"type=bind,src={target},dst=/target",
             "--env",
             "CARGO_HOME=/cargo",
             "--env",
@@ -386,9 +388,7 @@ def build_gateway(output: Path, cache: Path, *, gateway_tests: bool = False) -> 
         subprocess.run(build, check=True)
         binaries = output / "bin"
         binaries.mkdir()
-        shutil.copyfile(
-            cache / arch / "target/release/openshell-gateway", binaries / "openshell-gateway"
-        )
+        shutil.copyfile(target / "release/openshell-gateway", binaries / "openshell-gateway")
         shutil.copyfile(cli / "openshell", binaries / "openshell")
         for binary in binaries.iterdir():
             binary.chmod(0o555)

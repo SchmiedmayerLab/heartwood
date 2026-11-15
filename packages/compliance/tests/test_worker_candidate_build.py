@@ -377,6 +377,46 @@ def test_gateway_regression_failure_prevents_binary_build(
     assert not (output / "gateway-build-record.json").exists()
 
 
+def test_gateway_objects_are_not_reused_across_manifests(
+    builder: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest = {
+        "version": "0.1.8+heartwood.1",
+        "source": {},
+        "patches": [],
+        "cmake": {"amd64": {}},
+        "cli": {"amd64": {}},
+        "images": {"rust": "rust@sha256:" + "a" * 64},
+    }
+
+    def extract(_source: object, staging: Path, **_kwargs: object) -> Path:
+        staging.mkdir(parents=True, exist_ok=True)
+        (staging / "Cargo.toml").write_text('[workspace.package]\nversion = "0.0.0"\n')
+        (staging / "Cargo.lock").write_text(
+            'version = 4\n[[package]]\nname = "openshell-server"\nversion = "0.0.0"\n'
+        )
+        return staging
+
+    monkeypatch.setattr(builder, "_source", extract)
+    monkeypatch.setattr(builder.subprocess, "check_output", lambda *_args, **_kwargs: "linux/amd64")
+    targets: list[str] = []
+
+    def stop(command: list[str], **_kwargs: object) -> None:
+        targets.extend(item for item in command if item.endswith(",dst=/target"))
+        raise builder.subprocess.CalledProcessError(101, command)
+
+    monkeypatch.setattr(builder.subprocess, "run", stop)
+    # The version stays the same, as when a patch is withdrawn without a new suffix.
+    for attempt, content in enumerate((b"reviewed", b"reviewed", b"changed")):
+        monkeypatch.setattr(
+            builder, "_gateway_configuration", lambda content=content: (manifest, content)
+        )
+        with pytest.raises(builder.subprocess.CalledProcessError):
+            builder.build_gateway(tmp_path / f"output-{attempt}", tmp_path / "cache")
+    assert len(targets) == 3
+    assert targets[0] == targets[1] != targets[2]
+
+
 @pytest.mark.parametrize("gateway", [False, True])
 def test_gateway_tests_cli_requires_gateway(
     builder: ModuleType, monkeypatch: pytest.MonkeyPatch, gateway: bool
