@@ -247,9 +247,9 @@ def test_openapi_resolves_references_and_declares_path_parameters() -> None:
 
 def test_security_streaming_and_schema_modes_describe_the_current_transport() -> None:
     document = gateway_openapi(api_version="synthetic")
-    assert document["security"] == [{"CapabilityHeader": []}, {"CapabilityCookie": []}]
-    assert document["paths"]["/launch"]["get"]["security"] == []
-    assert "303" in document["paths"]["/launch"]["get"]["responses"]
+    assert document["security"] == [{"CapabilityHeader": []}]
+    assert document["paths"]["/launch"]["post"]["security"] == []
+    assert "200" in document["paths"]["/launch"]["post"]["responses"]
     command = document["paths"]["/sessions/{session_id}/commands"]["post"]
     snapshot = command["responses"]["200"]["content"]["application/json"]["schema"]
     stream = document["paths"]["/sessions/{session_id}/events/stream"]["get"]

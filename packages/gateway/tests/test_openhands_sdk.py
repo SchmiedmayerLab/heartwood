@@ -1069,6 +1069,32 @@ def test_confirmation_groups_are_published_only_after_native_execution_settles(
         backend.close()
 
 
+def test_native_confirmation_rechecks_arguments_when_identifiers_are_reused(tmp_path: Path) -> None:
+    conversation = _ControlledConversation()
+    state = _BranchState(conversation.id)
+    conversation.state = state
+    state.execution_status = ConversationExecutionStatus.WAITING_FOR_CONFIRMATION
+    state.events = (_terminal_action_event("action-1", "call-1", "printf reviewed"),)
+    backend = _backend(
+        tmp_path,
+        cast(ConversationFactory, lambda _event_callback, _token_callback: conversation),
+    )
+    try:
+        reviewed = backend.pending_action_group(session_id="session-1")
+        assert reviewed is not None
+        state.events = (_terminal_action_event("action-1", "call-1", "printf substituted"),)
+        result = backend.resolve_confirmation(
+            session_id="session-1", action_group_id=reviewed.group_id, approved=True
+        )
+        assert len(result) == 1
+        assert isinstance(result[0], BackendErrorEvent)
+        assert result[0].error_code == BackendErrorCode.INVALID_STATE
+        assert not conversation.started.is_set()
+        assert state.execution_status == ConversationExecutionStatus.WAITING_FOR_CONFIRMATION
+    finally:
+        backend.close()
+
+
 def test_openhands_adapter_uses_typed_public_state_only() -> None:
     source = inspect.getsource(openhands_sdk_module)
 
