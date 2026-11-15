@@ -72,8 +72,9 @@ The complete worker runs behind the sandbox boundary, receives selected read-onl
 Canonical state, deployment authority, provider credentials, management sockets and signing material remain outside its mounts and process identity.
 The gateway independently checks attempt identity, admits untrusted responses and retains approval authority; the sandbox and outside services enforce filesystem, process and network restrictions.
 An uncertain revocation fences the attempt and retains writer ownership until reconciliation establishes that its resources are gone.
-The launcher deletes a worker that fails launch admission without waiting for the session to close, and the next managed gateway start deletes workers that an ended gateway process left running.
-Until that start, such a worker keeps its sandbox policy and provider attachment.
+The launcher deletes a worker that fails launch admission without waiting for the session to close.
+A worker whose attempt is fenced later is revoked as soon as the fence is raised: after any session command already in progress, its sandbox and provider attachment are removed within the control-plane timeouts of about three minutes.
+If that revocation fails, the worker keeps its sandbox policy and provider attachment until the session closes, the gateway stops or the next managed gateway start, which also deletes workers that an ended gateway process left running.
 After revocation is recorded, a session can continue with a replacement worker in a new sandbox; it shares no credential, placeholder, conversation memory or workspace file with the revoked worker, and the session shows where the replacement began.
 Outside inspection rejects a worker container that is privileged, has added Linux capabilities, runs with unconfined seccomp, AppArmor or SELinux labeling, or shares the host process, IPC or user namespace.
 Recorded worker absence relies on the sandbox gateway completing deletion as the qualified gateway does.

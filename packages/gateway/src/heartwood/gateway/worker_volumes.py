@@ -59,6 +59,15 @@ class WorkerVolumeSettings(BaseModel):
         return self
 
 
+def _path_forms(path: str) -> set[PurePosixPath]:
+    """Return a host path as written and as resolved, so an alias cannot hide an overlap.
+
+    Resolution only reads link targets; a link changed afterwards cannot remove the
+    normalized form that is always compared.
+    """
+    return {PurePosixPath(os.path.normpath(path)), PurePosixPath(os.path.realpath(path))}
+
+
 class WorkerVolumes:
     """Own only resources carrying the complete project and attempt identity."""
 
@@ -255,14 +264,16 @@ class WorkerVolumes:
         mounts = observed.get("Mounts")
         if not isinstance(mounts, list) or any(not isinstance(m, dict) for m in mounts):
             raise WorkerAttemptError("native worker projection mounts were not observed")
-        withheld = [
-            PurePosixPath(urlsplit(self.settings.docker_host).path),
-            *map(PurePosixPath, self.settings.protected_paths),
-        ]
+        withheld = {
+            form
+            for path in (urlsplit(self.settings.docker_host).path, *self.settings.protected_paths)
+            for form in _path_forms(str(path))
+        }
         for observed_mount in mounts:
             source = observed_mount.get("Source")
             if isinstance(source, str) and any(
-                path.is_relative_to(source) or PurePosixPath(source).is_relative_to(path)
+                path.is_relative_to(form) or form.is_relative_to(path)
+                for form in _path_forms(source)
                 for path in withheld
             ):
                 raise WorkerAttemptError("native worker mount exposes a withheld host location")

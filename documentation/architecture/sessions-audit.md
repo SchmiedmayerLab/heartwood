@@ -57,7 +57,8 @@ Replay and live updates remain available through the interface connected to the 
 Distinct sessions have independent leases.
 Trusted worker launch uses `SessionService.launch_worker` to retain an attempt before invoking the platform launcher and bind the observed runtime only after that call succeeds.
 The launcher must use the retained identity with the native sandbox lifecycle and verify the authorized image, effective policy, active configuration, and process generation before returning a binding.
-Missing generation, failed admission, interruption, or an uncertain create response leaves the attempt fenced for outside reconciliation; Heartwood does not retry creation or infer that no worker exists.
+Missing generation, failed admission, interruption, or an uncertain create response leaves the attempt fenced; Heartwood does not retry creation or infer that no worker exists.
+The managed session then revokes the fenced attempt without waiting for the session to close, and records `revoked` only with the platform's evidence; when that revocation fails, the attempt remains fenced for session close or start-up reconciliation.
 `revoke_worker` closes local admission before invoking the platform's revocation observer and records only returned evidence matching the retained attempt and runtime.
 A failed or uncertain revocation does not permit replacement.
 An attempt retained by an ended process can be fenced and revoked by a later owner of the session writer through the same `revoke_worker` contract.

@@ -84,6 +84,11 @@ The adapter reuses native sandbox creation, configuration admission, provider at
 Input, Skill and specialist identities are bound before launch; the worker is admitted only after its image, effective policy, runtime generation, projected bytes, non-root identity and authenticated API match the outside observations.
 When launch or the first runtime observation fails, the launcher deletes the sandbox that carries the attempt's identity and stops its forwarder without waiting for the session to close.
 The attempt still remains fenced until revocation observes worker absence and removes its projections.
+Fencing an attempt at any later point, including an exhausted response budget, a failed admission or runtime observation, a missed deadline or execution reported without a decision, starts that revocation at once.
+The component that fenced only signals the managed session, which revokes on one short-lived thread, so no control-plane call runs under a session lock or on a transport thread.
+Revocation waits for a session command already in progress and is then bounded by the control-plane timeouts: 15 seconds to observe the sandbox, 90 seconds for the delete request and 90 seconds to observe its absence.
+It is attempted once; if it fails, the attempt stays fenced and the worker can keep running until the session closes, the gateway stops or the next gateway start reconciles it.
+A fence is raised only when the gateway observes the condition, so a worker the gateway is not exchanging data with is not detected by this path.
 Native provider credentials remain in the sandbox control plane; the gateway receives an opaque placeholder from the worker environment.
 Model and tenant restrictions must be enforced by the qualified provider endpoint or existing institutional inference service; the selected model name and a provider attachment alone do not enforce them against a compromised worker.
 
@@ -92,7 +97,9 @@ It uses an explicit local daemon and an empty client configuration, with no inhe
 A short-lived preparation container receives only those named volumes and runs only the qualified image's permission utility; its root filesystem is read-only, its network is disabled, and its sole added capability is `FOWNER` to set permissions on copied files.
 The worker receives `/inputs` and `/skills` as read-only mounts; outside inspection checks the image, network and exact volume identities and rejects overlapping mounts.
 Inspection also rejects a privileged container and any mount whose host source overlaps the research directory, protected state, native configuration home or Docker socket.
-It compares the reported source paths lexically and does not restrict other supervisor-owned mounts.
+It compares each reported source and each withheld location both as written, after lexical normalization, and as resolved on the gateway host, so a symbolic link or platform path alias on either side does not hide an overlap.
+The resolved forms describe the gateway host's filesystem; a container runtime that reports paths from another filesystem namespace is covered only by the forms as written.
+Inspection does not restrict other supervisor-owned mounts.
 Inspection rejects any added Linux capability, a security option that leaves seccomp, AppArmor or SELinux labeling unconfined, and a host process, IPC or user namespace.
 Each of these fields must be present in the runtime's report; an absent field fails admission.
 Transfer is attempted once, and uncertainty requires reconciliation instead of repeating the copy.
@@ -389,6 +396,7 @@ Native worker selection is explicit and requires qualified runtime dependencies;
 After an uncertain creation response, revocation may resolve the uniquely named sandbox only when its full project and attempt ownership match this process's retained intent.
 Revocation deletes the sandbox through the control client connected at launch before it stops the forwarder, rechecks the native configuration or removes projections.
 A failure in those later steps therefore leaves the attempt fenced for retry but does not leave the worker running.
+When the sandbox itself cannot be stopped, revocation still closes the forwarder before it reports the failure.
 Cleanup verifies native worker absence and removes only owned staging resources before releasing the session writer.
 If provisioning is still unresolved, deletion can require retry while the attempt remains fenced and the writer remains owned.
 A control-plane absence response alone is insufficient when the container runtime still retains attempt resources; never release ownership or repeat creation to bypass that discrepancy.

@@ -563,3 +563,27 @@ def test_settled_review_and_run_allow_a_replacement(
         assert _activate(restored).intent.conversation_id == lease.intent.conversation_id
     finally:
         restored.close()
+
+
+def test_fencing_notifies_the_launcher_once_without_reopening_admission(
+    service: SessionService,
+) -> None:
+    lease = _activate(service)
+    notified: list[bool] = []
+    lease.on_fenced(lambda: notified.append(lease.active))
+    with pytest.raises(WorkerAttemptError, match="cannot be replaced"):
+        lease.on_fenced(lambda: None)
+    assert notified == []
+    lease.fence()
+    service.fence_worker_attempt(attempt_id=lease.intent.attempt_id)
+    assert notified == [False]
+
+
+def test_launcher_registered_after_fencing_is_notified_immediately(
+    service: SessionService,
+) -> None:
+    lease = _activate(service)
+    lease.fence()
+    notified: list[bool] = []
+    lease.on_fenced(lambda: notified.append(True))
+    assert notified == [True]

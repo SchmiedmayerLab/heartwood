@@ -199,6 +199,7 @@ class WorkerAttemptLease:
         self._runtime = record.runtime
         self._owns_writer = owns_writer
         self._fenced = False
+        self._on_fenced: Callable[[], None] | None = None
         self._runtime_observer: Callable[[WorkerRuntimeBinding], None] | None = None
         self._lock = RLock()
 
@@ -245,7 +246,24 @@ class WorkerAttemptLease:
     def fence(self) -> None:
         """Permanently close this capability without claiming infrastructure revocation."""
         with self._lock:
+            notify = None if self._fenced else self._on_fenced
             self._fenced = True
+        if notify is not None:
+            notify()
+
+    def on_fenced(self, notify: Callable[[], None]) -> None:
+        """Tell the trusted launcher once that this capability closed.
+
+        Fencing runs under session locks and on transport threads, so the callback must
+        return without waiting for the control plane or for session state.
+        """
+        with self._lock:
+            if self._on_fenced is not None:
+                raise WorkerAttemptError("worker fencing observer cannot be replaced")
+            self._on_fenced = notify
+            fenced = self._fenced
+        if fenced:
+            notify()
 
     @contextmanager
     def admit_callback(self) -> Iterator[None]:

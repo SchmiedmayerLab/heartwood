@@ -254,6 +254,40 @@ def test_worker_inspection_rejects_mounts_of_withheld_host_locations(
         volumes.inspect_worker(observed["Name"].removeprefix("/"))
 
 
+@pytest.mark.parametrize("declared", ["alias", "target"])
+@pytest.mark.parametrize(
+    "reported", ["alias", "target", "alias/data", "target/data", "target/", "target/../target"]
+)
+def test_worker_inspection_compares_resolved_withheld_locations(
+    volumes: WorkerVolumes,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    declared: str,
+    reported: str,
+) -> None:
+    (tmp_path / "target" / "data").mkdir(parents=True)
+    (tmp_path / "alias").symlink_to(tmp_path / "target", target_is_directory=True)
+    protected = volumes
+    protected.settings = volumes.settings.model_copy(
+        update={"protected_paths": (tmp_path / declared,)}
+    )
+    observed = _container(protected)
+    observed["Mounts"].append(
+        {
+            "Destination": "/mnt/extra",
+            "Source": f"{tmp_path}/{reported}",
+            "Type": "bind",
+            "RW": False,
+        }
+    )
+    monkeypatch.setattr(protected, "command", Mock(return_value=json.dumps([observed]).encode()))
+    with pytest.raises(WorkerAttemptError, match="withheld host location"):
+        protected.inspect_worker(observed["Name"].removeprefix("/"))
+    observed["Mounts"][-1]["Source"] = str(tmp_path / "targeted")
+    monkeypatch.setattr(protected, "command", Mock(return_value=json.dumps([observed]).encode()))
+    protected.inspect_worker(observed["Name"].removeprefix("/"))
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [

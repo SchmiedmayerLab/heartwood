@@ -9,6 +9,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
+from threading import Event
+from time import monotonic, sleep
 from typing import Literal, cast
 from unittest.mock import Mock
 from uuid import uuid4
@@ -16,7 +18,7 @@ from uuid import uuid4
 import pytest
 from pydantic import AnyHttpUrl, SecretStr
 
-from heartwood.core_adapter import FileSessionStore
+from heartwood.core_adapter import FileSessionStore, SessionService
 from heartwood.core_adapter.external_actions import ExternalActionAdapter
 from heartwood.core_adapter.worker_attempts import (
     WorkerAttemptError,
@@ -207,15 +209,93 @@ def test_failed_worker_initialization_is_not_retried_or_replaced_with_local(
             backend._get_conversation()
         assert platform.calls.count("prepare") == 1
         assert platform.calls.count("launch") <= 1
-        record = service.worker_attempt()
-        assert (
-            record is None
-            if failure == "prepare"
-            else record is not None and record.phase == "fenced"
-        )
+        if failure == "prepare":
+            assert service.worker_attempt() is None
+        else:
+            assert _settles(service, "revoked")
+            assert platform.calls.count("revoke") == 1
     finally:
         platform.fail = None
         gateway.stop()
+    assert platform.calls.count("revoke") == (0 if failure == "prepare" else 1)
+
+
+def _settles(service: SessionService, phase: str) -> bool:
+    deadline = monotonic() + 10
+    while monotonic() < deadline:
+        record = service.worker_attempt()
+        if record is not None and record.phase == phase:
+            return True
+        sleep(0.01)
+    return False
+
+
+def test_fenced_worker_is_revoked_without_waiting_for_session_close(tmp_path: Path) -> None:
+    platform = Platform()
+    gateway = configured_gateway(tmp_path, platform)
+    service = gateway._service("session-worker")
+    backend = service.backend
+    assert isinstance(backend, OpenHandsSdkBackend)
+    assert backend._worker_context is not None
+    lease = backend._worker_context().workspace.attempt
+    started, release = Event(), Event()
+    prepare = platform.prepare
+
+    def revoke(record: WorkerAttemptRecord) -> WorkerRevocationEvidence:
+        started.set()
+        assert release.wait(timeout=10)
+        return WorkerRevocationEvidence(
+            attempt_id=record.intent.attempt_id,
+            sandbox_id="synthetic-worker",
+            observer_id="synthetic-outside-observer",
+            evidence_sha256="e" * 64,
+            outcome="revoked",
+        )
+
+    worker = gateway._worker_sessions[id(service)]
+    assert worker._plan is not None
+    worker._plan = replace(worker._plan, revoke=revoke)
+    try:
+        lease.fence()
+        lease.fence()
+        # The caller that fenced has returned while the control plane is still being asked.
+        assert started.wait(timeout=10)
+        fenced = service.worker_attempt()
+        assert fenced is not None
+        assert fenced.phase == "fenced"
+        release.set()
+        assert _settles(service, "revoked")
+        assert platform.calls == ["prepare", "launch", "connect"]
+        assert prepare is not None
+    finally:
+        release.set()
+        gateway.stop()
+    assert platform.calls == ["prepare", "launch", "connect"]
+    assert not service.store.owns_writer
+
+
+def test_failed_prompt_revocation_leaves_the_attempt_fenced_for_close(tmp_path: Path) -> None:
+    platform = Platform()
+    gateway = configured_gateway(tmp_path, platform)
+    service = gateway._service("session-worker")
+    backend = service.backend
+    assert isinstance(backend, OpenHandsSdkBackend)
+    assert backend._worker_context is not None
+    lease = backend._worker_context().workspace.attempt
+    platform.fail = "revoke"
+    lease.fence()
+    deadline = monotonic() + 10
+    while platform.calls.count("revoke") < 1 and monotonic() < deadline:
+        sleep(0.01)
+    assert _settles(service, "fenced")
+    with pytest.raises(ExceptionGroup, match="unable to close"):
+        gateway.stop()
+    assert platform.calls.count("revoke") == 2
+    assert bool(service.store.owns_writer)
+    platform.fail = None
+    gateway.stop()
+    assert platform.calls.count("revoke") == 3
+    assert _settles(service, "revoked")
 
 
 def test_failed_revocation_retains_service_and_writer_until_retry(tmp_path: Path) -> None:
@@ -495,17 +575,17 @@ def test_new_gateway_reconciles_attempt_left_by_an_ended_process(
     backend = service.backend
     assert isinstance(backend, OpenHandsSdkBackend)
     assert backend._worker_context is not None
-    if left == "active":
-        backend._worker_context()
-    else:
-        platform.fail = "connect"
-        with pytest.raises(RuntimeError):
-            backend._worker_context()
+    lease = backend._worker_context().workspace.attempt
+    if left == "fenced":
+        platform.fail = "revoke"
+        lease.fence()
+        assert _settles(service, "fenced")
+        gateway._worker_sessions[id(service)]._revocation.join(timeout=10)  # type: ignore[union-attr]
+        assert platform.calls.count("revoke") == 1
     orphan = service.worker_attempt()
     assert orphan is not None
     assert orphan.phase == left
     _end_without_revocation(gateway)
-    assert "revoke" not in platform.calls
 
     reconciler = Reconciler()
     relaunch = Platform()

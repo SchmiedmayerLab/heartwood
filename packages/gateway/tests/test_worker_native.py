@@ -856,6 +856,38 @@ def test_revocation_deletes_the_sandbox_before_local_cleanup_can_fail(
     assert native.sandboxes.closed
 
 
+@pytest.mark.parametrize("obstacle", ["control", "replaced"])
+def test_forwarder_is_closed_when_the_sandbox_cannot_be_deleted(
+    native: _Native, monkeypatch: pytest.MonkeyPatch, obstacle: str
+) -> None:
+    runtime = native.attempt.launch(native.intent)
+    assert native.sandboxes.sandbox is not None
+    if obstacle == "replaced":
+        native.sandboxes.sandbox.labels["heartwood.attempt"] = str(uuid4())
+    else:
+
+        def unavailable(_name: str, **_options: object) -> SimpleNamespace:
+            raise native.sandboxes.error(native.sandboxes.grpc.StatusCode.UNAVAILABLE)
+
+        monkeypatch.setattr(native.sandboxes, "get", unavailable)
+    with pytest.raises(WorkerAttemptError):
+        native.attempt.revoke(native.record("fenced", runtime))
+    assert native.sandboxes.deleted == []
+    assert [forward.active for forward in native.forwards] == [False]
+    assert len(native.docker.volumes) == 2
+
+
+def test_interrupted_launch_stops_the_sandbox_it_created(native: _Native) -> None:
+    def interrupt(_sandbox: SimpleNamespace) -> None:
+        raise KeyboardInterrupt
+
+    native.sandboxes.after_probe = interrupt
+    with pytest.raises(KeyboardInterrupt):
+        native.attempt.launch(native.intent)
+    assert not native.sandboxes.running
+    assert native.sandboxes.deleted == ["hw-" + native.intent.attempt_id.hex[:16]]
+
+
 @pytest.mark.parametrize("phase", ["prepared", "active"])
 def test_new_process_reconciles_an_attempt_its_owner_left_running(
     native: _Native, phase: str
