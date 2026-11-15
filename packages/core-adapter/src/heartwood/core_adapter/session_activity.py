@@ -19,12 +19,12 @@ from heartwood.core_adapter.external_actions import external_action_records
 from heartwood.core_adapter.external_results import external_result_records
 from heartwood.session import CommandKind, EventKind, SessionEvent
 
-# Researcher commands that continue the agent and so end a pause; the gateway's own
-# decisions and anything the backend reports never do.
+# Researcher commands that continue the agent and so end a pause once the service accepts
+# them; a resume ends it when it is recorded. The gateway's own decisions, a refused
+# command and anything the backend reports never do.
 _CONTINUING_COMMANDS = frozenset(
     {
         CommandKind.CHAT.value,
-        CommandKind.RESUME.value,
         CommandKind.APPROVE.value,
         CommandKind.WORKFLOW.value,
     }
@@ -40,7 +40,7 @@ class SessionActivity:
     status: str
     """The last recorded run state; a recorded error alone never ends a run."""
     paused: bool
-    """A researcher pause that no later researcher command continuing the agent has ended."""
+    """A researcher pause that no later accepted researcher command continuing the agent ended."""
     fatal: bool
     """An error after which the session accepts no further work."""
     awaiting_review: frozenset[str]
@@ -88,6 +88,8 @@ class SessionActivityReducer:
     review_decisions: dict[str, ReviewDecision | None] = field(default_factory=dict)
     review_resolutions: dict[str, dict[str, ReviewDecision]] = field(default_factory=dict)
     retained_groups: set[str] = field(default_factory=set)
+    continuing: bool = False
+    """A researcher command received during a pause whose acceptance is not yet recorded."""
 
     def review_group(self, tool_call_id: str) -> str:
         """Return the action set that reviewed a tool call, or an empty identifier."""
@@ -104,17 +106,16 @@ class SessionActivityReducer:
         """Reduce one verified journal event."""
         payload = event.payload
         kind = str(event.kind)
+        if self.continuing:
+            self._continuing_command_answered(kind, payload)
         if kind == EventKind.AGENT_LIFECYCLE_UPDATED.value:
             self.status, self.stopped_by = str(payload.get("status")), None
         elif kind == EventKind.COMMAND_RECEIVED.value:
-            if (
-                payload.get("command_kind") in _CONTINUING_COMMANDS
+            self.continuing = (
+                self.paused
+                and payload.get("command_kind") in _CONTINUING_COMMANDS
                 and payload.get("actor_id") != AUTOMATIC_REVIEW_ACTOR
-            ):
-                self.paused = False
-                if self.status == "paused":
-                    # The researcher continued the agent; neither state is settled.
-                    self.status = "running"
+            )
         elif kind == EventKind.SESSION_PAUSED.value:
             self.status, self.paused, self.stopped_by = "paused", True, None
         elif kind == EventKind.SESSION_RESUMED.value:
@@ -158,6 +159,26 @@ class SessionActivityReducer:
                 group_id for group_id in self.review_groups if group_id in self.retained_groups
             ),
         )
+
+    def _continuing_command_answered(self, kind: str, payload: Mapping[str, object]) -> None:
+        """End the pause at the first record that the service accepted the command.
+
+        The service records a refusal as an error before any effect: after the prompt,
+        and after a model-route decision that did not allow the turn.
+        """
+        decision = payload.get("decision")
+        if kind == EventKind.USER_MESSAGE_RECORDED.value or (
+            kind == EventKind.MODEL_CALL_DECISION_RECORDED.value
+            and not (isinstance(decision, dict) and decision.get("decision") == "allow")
+        ):
+            return
+        self.continuing = False
+        if kind in {EventKind.ERROR_RECORDED.value, EventKind.COMMAND_RECEIVED.value}:
+            return
+        self.paused = False
+        if self.status == "paused":
+            # The researcher continued the agent; neither state is settled.
+            self.status = "running"
 
     def _review_requested(self, request: object) -> None:
         if not isinstance(request, dict):

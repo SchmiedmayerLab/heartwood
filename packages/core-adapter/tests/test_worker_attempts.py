@@ -30,7 +30,7 @@ from heartwood.core_adapter import (
     SessionService,
     TokenDeltaSink,
 )
-from heartwood.core_adapter.session_activity import worker_replacement_blocker
+from heartwood.core_adapter.session_activity import session_activity, worker_replacement_blocker
 from heartwood.core_adapter.worker_attempts import (
     WorkerAttemptError,
     WorkerAttemptIntent,
@@ -562,6 +562,31 @@ def test_verified_revocation_lets_a_new_owner_continue_with_a_new_attempt(
             _prepare(restored)
     finally:
         restored.close()
+
+
+def test_a_turn_refused_by_worker_admission_leaves_the_pause_in_effect(
+    service: SessionService,
+) -> None:
+    lease = _activate(service)
+    service.handle(
+        SessionCommand(
+            command_id="pause",
+            session_id=service.store.session_id,
+            kind=CommandKind.PAUSE,
+            created_at="2026-01-01T00:00:00Z",
+            payload={},
+        )
+    )
+    assert session_activity(service.replay_events()).paused
+    service.fence_worker_attempt(attempt_id=lease.intent.attempt_id)
+
+    _task(service)
+
+    events = service.replay_events()
+    assert "reconciliation" in str(events[-1].payload)
+    # The worker is still paused, so the service and every interface must say so.
+    assert session_activity(events).paused
+    assert session_activity(events).status == "paused"
 
 
 def test_revoked_attempt_does_not_block_the_next_owners_first_dispatch(

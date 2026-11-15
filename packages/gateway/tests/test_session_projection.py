@@ -1843,24 +1843,62 @@ def test_a_review_requested_during_a_pause_is_decided_first_and_a_rejection_keep
     assert still_paused.paused
     assert still_paused.available_commands == ("chat", "resume")
 
-    approved = project_session((*requested, _command(4, "approve")), session_id="session-1")
-    assert not session_activity((*requested, _command(4, "approve"))).paused
-    assert approved.available_commands == ("approve", "deny")
+    approving = (*requested, _command(4, "approve"))
+    # Until the service records the approval, the pause and the review stay as they were.
+    assert session_activity(approving).paused
+    assert project_session(approving, session_id="session-1").available_commands == (
+        "approve",
+        "deny",
+    )
+    approved = (
+        *approving,
+        _event(
+            5,
+            EventKind.APPROVAL_RECORDED,
+            {"group_id": "group-1", "decision": "approved", "tool_call_ids": ["call-1"]},
+        ),
+    )
+    assert not session_activity(approved).paused
+    assert not project_session(approved, session_id="session-1").paused
 
 
-@pytest.mark.parametrize("kind", ["chat", "workflow", "resume"])
-def test_a_researcher_command_ends_the_projected_pause_when_it_ends_the_service_pause(
-    kind: str,
+@pytest.mark.parametrize(
+    ("kind", "accepted", "payload"),
+    [
+        ("chat", EventKind.MODEL_CALL_DECISION_RECORDED, {"decision": {"decision": "allow"}}),
+        ("workflow", EventKind.AGENT_LIFECYCLE_UPDATED, {"status": "running"}),
+        ("resume", EventKind.SESSION_RESUMED, {}),
+    ],
+)
+def test_a_researcher_command_ends_the_projected_pause_when_the_service_accepts_it(
+    kind: str, accepted: EventKind, payload: dict[str, JsonValue]
 ) -> None:
-    events = (
+    paused = (
         _event(0, EventKind.AGENT_LIFECYCLE_UPDATED, {"status": "running"}),
         _command(1, "pause"),
         _event(2, EventKind.SESSION_PAUSED, {}),
         _command(3, kind),
     )
+    refused = (
+        *paused,
+        _event(
+            4,
+            EventKind.ERROR_RECORDED,
+            {"command": kind, "reason": "synthetic refusal", "affects_lifecycle": False},
+        ),
+    )
+    events = (
+        *paused,
+        _event(4, accepted, payload),
+    )
 
+    for still_paused in (paused, refused):
+        assert session_activity(still_paused).paused
+        assert project_session(still_paused, session_id="session-1").available_commands == (
+            "chat",
+            "resume",
+        )
     projection = project_session(events, session_id="session-1")
-
     assert not session_activity(events).paused
     assert not projection.paused
     assert projection.lifecycle.status == SessionLifecycle.RUNNING

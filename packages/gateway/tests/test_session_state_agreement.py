@@ -4,7 +4,10 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Generated journals: the projection advertises exactly what the gateway and service accept."""
+"""Generated journals: the projection advertises exactly what gateway admission accepts.
+
+Its pause, reviews and unrecoverable state agree with the reduction the service decides with.
+"""
 
 from __future__ import annotations
 
@@ -90,6 +93,11 @@ class _Journal:
             EventKind.COMMAND_RECEIVED,
             {"command_id": f"command-{len(self.events)}", "command_kind": kind, "actor_id": actor},
         )
+        if self.rng.random() < 0.3:
+            self.add(
+                EventKind.ERROR_RECORDED,
+                {"command": kind, "reason": "synthetic refusal", "affects_lifecycle": False},
+            )
 
     def error(self) -> None:
         payload: dict[str, JsonValue] = {
@@ -283,6 +291,14 @@ def test_advertised_commands_are_admitted_and_agree_with_the_service_state(
         if not unrecoverable:
             assert ("deny" in commands) == (retained is not None)
             assert ("approve" in commands) == (retained is not None and not withdrawal_only)
+        # A refused command changes neither the pause nor what is advertised for it.
+        if end >= 2 and journal[end - 1].payload.get("reason") == "synthetic refusal":
+            before = journal[: end - 2]
+            assert activity.paused == session_activity(before).paused
+            if not activity.fatal:
+                assert ("resume" in commands) == (
+                    "resume" in project_session(before, session_id=_SESSION).available_commands
+                )
         # Pause and open reviews are the service's own; the backend may also report a pause.
         assert not projection.paused or activity.paused or activity.status == "paused"
         if activity.paused and retained is None and not activity.fatal:

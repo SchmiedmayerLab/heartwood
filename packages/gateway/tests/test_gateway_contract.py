@@ -38,6 +38,8 @@ from heartwood.core_adapter import (
     SessionResult,
     SessionService,
 )
+from heartwood.core_adapter._state import FileSessionStore
+from heartwood.core_adapter.session_activity import session_activity
 from heartwood.gateway import (
     GpuCapacity,
     GpuEnvironment,
@@ -57,6 +59,7 @@ from heartwood.gateway import (
     RestRequest,
     RestResponse,
     SessionGateway,
+    SessionLifecycle,
     SkillSettingsError,
 )
 from heartwood.gateway._openhands_sdk import OpenHandsSdkError
@@ -240,6 +243,65 @@ def test_a_backend_report_after_a_pause_leaves_resume_available(tmp_path: Path) 
         assert all("unavailable" not in str(event.payload.get("reason")) for event in result.events)
         assert any(event.kind == EventKind.SESSION_RESUMED for event in result.events)
         assert not gateway.session_projection(session_id="session-1").paused
+    finally:
+        gateway.stop()
+
+
+def test_a_refused_command_leaves_the_pause_and_resume_in_effect(tmp_path: Path) -> None:
+    gateway = _gateway(tmp_path)
+    try:
+        with gateway._state_lock:
+            gateway._project_activity.initialize()
+            backend = gateway._service("session-1").backend
+        assert isinstance(backend, DeterministicAgentBackend)
+        backend._event_sink((BackendLifecycleEvent(lifecycle=BackendLifecycle.RUNNING),))
+        gateway.handle(SessionCommand.model_validate_json(_command(CommandKind.PAUSE)))
+
+        # A stale decision from another window: no review is open, so it is refused.
+        refused = gateway.handle(
+            SessionCommand.model_validate_json(
+                _command(CommandKind.APPROVE, target_type="action-set", target_id="closed")
+            )
+        )
+
+        assert refused.events[-1].kind == EventKind.ERROR_RECORDED
+        projection = gateway.session_projection(session_id="session-1")
+        assert projection.paused
+        assert projection.available_commands == ("chat", "resume")
+        assert session_activity(
+            FileSessionStore(gateway.sessions_root, "session-1").replay_events()
+        ).paused
+        result = gateway.handle(SessionCommand.model_validate_json(_command(CommandKind.RESUME)))
+        assert any(event.kind == EventKind.SESSION_RESUMED for event in result.events)
+        assert not gateway.session_projection(session_id="session-1").paused
+    finally:
+        gateway.stop()
+
+
+def test_a_command_refused_in_an_unrecoverable_session_leaves_its_pause(tmp_path: Path) -> None:
+    gateway = _gateway(tmp_path)
+    try:
+        with gateway._state_lock:
+            gateway._project_activity.initialize()
+            backend = gateway._service("session-1").backend
+        assert isinstance(backend, DeterministicAgentBackend)
+        backend._event_sink((BackendLifecycleEvent(lifecycle=BackendLifecycle.RUNNING),))
+        gateway.handle(SessionCommand.model_validate_json(_command(CommandKind.PAUSE)))
+        backend._event_sink(
+            (BackendErrorEvent(error_code=BackendErrorCode.ACTION_OUTCOME_UNKNOWN),)
+        )
+
+        refused = gateway.handle(
+            SessionCommand.model_validate_json(_command(CommandKind.CHAT, prompt="Continue"))
+        )
+
+        assert refused.events[-1].kind == EventKind.ERROR_RECORDED
+        events = FileSessionStore(gateway.sessions_root, "session-1").replay_events()
+        # The service, which holds automatic review and replacement for a pause, still sees it.
+        assert session_activity(events).paused
+        projection = gateway.session_projection(session_id="session-1")
+        assert projection.lifecycle.status == SessionLifecycle.ERROR
+        assert projection.available_commands == ()
     finally:
         gateway.stop()
 

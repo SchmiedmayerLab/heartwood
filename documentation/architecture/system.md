@@ -358,7 +358,8 @@ The terminal, browser, and notebook bridge submit typed commands and render one 
 - The session projection contains the conversation, versioned action records, lifecycle, the complete pending action set, task plan, usage by purpose, specialist lineage, available commands, status, and bounded next-step suggestions.
   The gateway admits exactly the available commands the projection advertises, so a control an interface shows is never refused as unavailable.
   The projection's lifecycle, pause, unrecoverable errors, and open and retained reviews come from the same journal reduction that the session service uses for automatic review, approval gating, and worker replacement.
-  A pause therefore stays in effect, whatever the backend reports, until a researcher command continues the agent: chat, resume, a workflow command, or an approval, but not a rejection.
+  A pause therefore stays in effect, whatever the backend reports, until the service accepts a researcher command that continues the agent: a recorded resume, or chat, a workflow command, or an approval whose first record is not a refusal.
+  A refused command, a rejection, and the gateway's own decisions leave the pause and resume in effect.
   An open review is decided first: while one waits, only approval and rejection are available, and a pause it interrupted applies again after a rejection.
   A recoverable error recorded during a pause is shown in the conversation while the session stays paused.
   An error that makes further work unsafe ends steering and every review decision, even when it was recorded without changing the displayed lifecycle; only the withdrawal of a retained outside approval, which sends nothing, stays available.

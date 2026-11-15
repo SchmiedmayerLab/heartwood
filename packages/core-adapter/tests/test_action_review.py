@@ -49,7 +49,7 @@ from heartwood.core_adapter.action_review import (
 )
 from heartwood.core_adapter.external_actions import ExternalActionAdapter
 from heartwood.core_adapter.external_results import RESULT_PREFIX
-from heartwood.core_adapter.session_activity import session_activity
+from heartwood.core_adapter.session_activity import SessionActivity, session_activity
 from heartwood.core_adapter.worker_attempts import (
     WorkerAttemptIntent,
     WorkerControlPlane,
@@ -948,8 +948,76 @@ def test_only_the_researcher_ends_a_pause() -> None:
     assert session_activity(events(paused, researcher("replay"), running)).paused
     resumed: _Entry = (EventKind.SESSION_RESUMED, {})
     assert not session_activity(events(paused, resumed)).paused
-    for kind in ("chat", "resume", "approve", "workflow"):
+    assert not session_activity(events(paused, researcher("resume"), resumed)).paused
+    for kind in ("chat", "approve", "workflow"):
         assert not session_activity(events(paused, researcher(kind), running)).paused
+
+
+def test_a_refused_command_never_ends_a_pause() -> None:
+    def activity(*entries: _Entry) -> SessionActivity:
+        return session_activity(
+            tuple(
+                SessionEvent(
+                    event_id=f"event-{sequence}",
+                    session_id=_SESSION,
+                    sequence=sequence,
+                    kind=kind,
+                    occurred_at="2026-01-01T00:00:00Z",
+                    payload=payload,
+                )
+                for sequence, (kind, payload) in enumerate(
+                    ((EventKind.SESSION_PAUSED, {}), *entries)
+                )
+            )
+        )
+
+    def received(kind: str) -> _Entry:
+        return (EventKind.COMMAND_RECEIVED, {"actor_id": "human", "command_kind": kind})
+
+    def refused(kind: str) -> _Entry:
+        return (
+            EventKind.ERROR_RECORDED,
+            {"command": kind, "reason": "synthetic refusal", "affects_lifecycle": False},
+        )
+
+    def route(decision: str) -> _Entry:
+        return (EventKind.MODEL_CALL_DECISION_RECORDED, {"decision": {"decision": decision}})
+
+    prompt: _Entry = (EventKind.USER_MESSAGE_RECORDED, {"content": "Continue"})
+    backend_failed: _Entry = (
+        EventKind.ERROR_RECORDED,
+        {"code": BackendErrorCode.WORKER_STOPPED.value, "reason": "synthetic"},
+    )
+    # Refused by gateway admission, worker admission or the service, after the prompt,
+    # by platform policy, or a resume the backend did not perform.
+    refusals: tuple[tuple[_Entry, ...], ...] = (
+        (received("approve"), refused("approve")),
+        (received("chat"), refused("chat")),
+        (received("chat"), prompt, refused("chat")),
+        (received("chat"), prompt, route("deny"), refused("chat")),
+        (received("workflow"), refused("workflow")),
+        (received("resume"), refused("resume")),
+        (received("resume"), route("allow"), backend_failed),
+        (received("chat"), received("pause")),
+    )
+    for entries in refusals:
+        state = activity(*entries)
+        assert state.paused, entries
+        assert state.status == "paused", entries
+        # A later backend report still does not end the pause.
+        assert activity(*entries, (EventKind.AGENT_LIFECYCLE_UPDATED, {"status": "idle"})).paused
+
+    # The first record of an accepted command ends it.
+    acceptances: tuple[tuple[_Entry, ...], ...] = (
+        (received("chat"), prompt, route("allow")),
+        (received("approve"), (EventKind.APPROVAL_RECORDED, {"group_id": "group-1"})),
+        (received("workflow"), (EventKind.WORKFLOW_UPDATED, {})),
+        (received("resume"), route("allow"), (EventKind.SESSION_RESUMED, {})),
+    )
+    for entries in acceptances:
+        state = activity(*entries)
+        assert not state.paused, entries
+        assert state.status == "running", entries
 
 
 @pytest.mark.parametrize("surfaced_by", ["status-read", "pause"])
