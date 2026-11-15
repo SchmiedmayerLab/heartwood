@@ -653,6 +653,8 @@ def test_native_create_attach_and_fork_preserve_admission(
         },
     )
 
+    served = agent.model_dump(mode="json")
+
     async def metadata(request: Request) -> JSONResponse:
         assert request.headers.get("X-Session-API-Key") == worker_key
         if request.url.path.endswith("/events/search"):
@@ -668,7 +670,17 @@ def test_native_create_attach_and_fork_preserve_admission(
         return JSONResponse(
             {
                 "id": identity,
-                "agent": agent.model_dump(mode="json"),
+                # The agent server appends one tool entry per client tool it registered.
+                "agent": {
+                    **served,
+                    "tools": [
+                        *served["tools"],
+                        *(
+                            {"name": spec.name, "params": {"spec": spec.model_dump(mode="json")}}
+                            for spec in workspace.authorized_client_tools
+                        ),
+                    ],
+                },
                 "max_iterations": 10,
                 "execution_status": "idle",
                 "tool_module_qualnames": {"forged": "unlisted"} if poisoned and is_fork else {},
