@@ -3493,6 +3493,18 @@ def test_bundled_skill_drift_is_diagnosed_without_server_errors(
     assert drift["status"] == "fail"
     assert "baseline-model" in cast(str, drift["summary"])
     assert gateway.project_readiness()["state"] == "recovery-required"
+    rest_startup = rest.handle(RestRequest(method="GET", path="/project/startup"))
+    assert rest_startup.status_code == 200
+    startup_checks = cast(
+        list[dict[str, object]],
+        cast(dict[str, object], rest_startup.body["readiness"])["checks"],
+    )
+    assert {
+        check["check_id"]: (check["status"], check.get("code")) for check in startup_checks
+    }.items() >= {
+        "bundled-skills": ("fail", "HW-SKILL-002"),
+        "installed-skills": ("pass", None),
+    }.items()
     # A gateway keeps its verified specialist catalog in memory; a new one must refuse.
     restarted = _gateway(tmp_path / "project")
     restarted.skill_manager.bundled_dir = bundled

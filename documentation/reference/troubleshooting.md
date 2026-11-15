@@ -254,6 +254,7 @@ The same check fails when the installation index cannot be read or locked, becau
 Heartwood pins the complete-tree digest of every Skill bundled with the release.
 A failing check names a bundled Skill that is missing or has changed; Skills and specialists stay unavailable until it is restored.
 In a source checkout, run `git submodule update --init` and discard local changes under `vendor/heartwood-skills`.
+Restoring tracked files does not remove git-ignored files inside a Skill folder, such as `__pycache__/` or `.DS_Store`, and any extra file changes the Skill's digest; list them with `git -C vendor/heartwood-skills status --ignored skills` and delete them.
 In a native installation, reinstall the same release; in a container, use the published image unchanged.
 A warning names entries in the bundled Skill directory that are not part of the release, such as `.DS_Store`; Heartwood never loads them, and you can delete them.
 

@@ -1528,6 +1528,8 @@ class SessionGateway:
             interface=interface,
             port=port,
             env=self._credential_environment(strict=False),
+            bundled_skills_dir=self.skill_manager.bundled_dir,
+            bundled_skill_digests=self.skill_manager.bundled_digests,
         )
 
     @gateway_operation
