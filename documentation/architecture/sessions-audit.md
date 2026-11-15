@@ -103,11 +103,12 @@ An interrupted approval is completed automatically only when its recorded intent
 Outside decisions distinguish authorization from attempted dispatch.
 An authorized record proves that the native call has not started; a submitting record means its outcome may be uncertain.
 A configured required-evidence gate must observe the authorization checkpoint before recording submission and calling the adapter.
-An interrupted authorization can resume only with the original decision, a live matching worker and renewed input, policy and expiry checks.
-While a command is handled, only an exact retry of the original approval resumes it; any other command is refused without dispatching.
-Denying the same review withdraws the undispatched authorization, and one that outlives its validity interval is recorded as expired.
+An approved outside operation or result release that could not be sent is sent only by an exact retry of its own approval command, never by another command, a status or projection read, reconciliation, or an automatic decision.
+That retry carries the same command identifier and content, and it still requires a live matching worker and renewed input, policy and expiry checks.
+Any other command is refused without dispatching.
+Denying the same review withdraws the undispatched authorization without requiring an admitted worker, and one that outlives its validity interval is recorded as expired.
 Both closures are terminal journal and audit records that complete the original approval command, so the session can continue.
-Read-only reconciliation skips undispatched authorizations; it never converts observation into submission authority.
+Reconciliation skips undispatched authorizations except to record their expiry; it never converts observation into submission authority.
 Otherwise, the session rejects further mutation so a second approval or task cannot repeat an uncertain side effect.
 An action is recorded as approved only when the session holds a recorded decision for its action set.
 A decision the gateway makes under a review mode is such a record: an accepted command and an `approval.recorded` event with the actor `gateway` and the applied mode and rule, followed by the same checkpoint boundary, digest check, and resolution events as a researcher decision.

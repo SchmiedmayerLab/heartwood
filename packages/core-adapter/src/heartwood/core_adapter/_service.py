@@ -297,7 +297,8 @@ class SessionService:
                 return _command_result_from_receipt(persisted, command, command_hash, record)
             unresolved = self.store.unresolved_command_ids()
             undispatched = self._undispatched_authorizations(persisted) if unresolved else {}
-            if unresolved and unresolved[0] in undispatched:
+            withdrawal = bool(unresolved) and unresolved[0] in undispatched
+            if withdrawal:
                 # Only its own approval may dispatch a retained authorization, and only
                 # its denial may pass it; any other command leaves it untouched.
                 if (
@@ -325,9 +326,18 @@ class SessionService:
                     last_sequence=duplicate.events[-1].sequence,
                 )
                 return duplicate
-            if command_kind not in {CommandKind.REPLAY.value, CommandKind.AUDIT_EXPORT.value}:
+            # A withdrawal sends nothing, so it depends on neither an admitted worker
+            # nor a known execution outcome.
+            if not withdrawal and command_kind not in {
+                CommandKind.REPLAY.value,
+                CommandKind.AUDIT_EXPORT.value,
+            }:
                 unavailable_reason = unavailable_reason or self._worker_admission_error_locked()
-            if unavailable_reason is None and command_kind != CommandKind.AUDIT_EXPORT.value:
+            if (
+                not withdrawal
+                and unavailable_reason is None
+                and command_kind != CommandKind.AUDIT_EXPORT.value
+            ):
                 fatal_error = next(
                     (
                         event
@@ -2128,13 +2138,14 @@ class SessionService:
         )
 
     def _recover_external_approvals_locked(
-        self, *, dispatch_pending: bool = False, command: SessionCommand | None = None
+        self, command: SessionCommand | None = None
     ) -> tuple[SessionEvent, ...]:
         """Resume only proven pre-dispatch decisions; never repeat uncertain effects.
 
-        While a command is being handled, only an exact retry of the original approval
-        resumes its authorization. An authorization that outlived its validity is
-        recorded as expired instead of blocking the session.
+        Only the exact retry of the original approval, given as the command being
+        handled, resumes its authorization; reads and every other command leave it
+        undispatched. An authorization that outlived its validity is recorded as
+        expired instead of blocking the session.
         """
         unresolved = self.store.unresolved_command_ids()
         if not unresolved:
@@ -2168,12 +2179,10 @@ class SessionService:
                 recovered.extend((boundary, *self._checkpoint_boundary(boundary)))
             elif decided.phase == "authorized":
                 if (
-                    not dispatch_pending
+                    command is None
+                    or command.command_id != command_id
+                    or _command_hash(command) != digest
                     or self._worker_admission_error_locked() is not None
-                    or (
-                        command is not None
-                        and (command.command_id != command_id or _command_hash(command) != digest)
-                    )
                 ):
                     continue
                 assert decided.decision is not None
@@ -2215,9 +2224,7 @@ class SessionService:
         self, command: SessionCommand | None = None
     ) -> tuple[SessionEvent, ...]:
         """Finish approvals whose retained state makes recovery unambiguous."""
-        recovered = list(
-            self._recover_external_approvals_locked(dispatch_pending=True, command=command)
-        )
+        recovered = list(self._recover_external_approvals_locked(command))
         if self._worker_admission_error_locked() is not None:
             return tuple(recovered)
         for command_id in self.store.unresolved_command_ids():

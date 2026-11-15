@@ -109,6 +109,10 @@ When that content is longer than the 2,000-character preview, the browser says t
 Inputs submitted with an operation are listed by reference, size, and digest; their bytes are not displayed.
 The summary of these reviews comes from the trusted service adapter or the gateway and is labelled **Gateway-provided summary**, while summaries written by the model keep the **Model-provided summary** label.
 
+If an approval is recorded but cannot be sent, for example while the records service is unavailable, nothing is sent until you choose.
+Retry the same approval to send it, or reject the review to withdraw it; opening or refreshing the session, other commands, and automatic decisions never send it.
+An approval that is not sent before the review's validity ends is recorded as expired.
+
 ## Grouped Decisions
 
 OpenHands may propose several related tool calls as one action set.

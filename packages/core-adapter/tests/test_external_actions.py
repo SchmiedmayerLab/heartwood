@@ -23,7 +23,10 @@ from heartwood.audit import LocalEd25519CheckpointSigner, checkpoint_public_key_
 from heartwood.audit._anchored_signer import AnchoredCheckpointSigner
 from heartwood.audit._records_s3 import CheckpointAuthorityScope, S3CheckpointRecords
 from heartwood.core_adapter import (
+    BackendConfirmationRequestEvent,
     BackendConfirmationResolutionEvent,
+    BackendErrorCode,
+    BackendErrorEvent,
     BackendEvent,
     BackendEventSink,
     BackendToolCallEvent,
@@ -34,6 +37,7 @@ from heartwood.core_adapter import (
     SessionService,
     TokenDeltaSink,
     ToolExecution,
+    pending_action_group,
 )
 from heartwood.core_adapter._state import SessionRecoveryError
 from heartwood.core_adapter.checkpoint_evidence import (
@@ -1022,7 +1026,7 @@ def test_outside_evidence_outage_preserves_predispatch_recovery(
         assert service.reconcile_external_actions() == ()
         assert len(platform.observations) == observations
         with pytest.raises(CheckpointEvidenceUnavailableError):
-            service.reconcile()
+            service.handle(approved)
         assert len(platform.submissions) == before
         assert worker.contexts == []
     finally:
@@ -1047,7 +1051,7 @@ def test_outside_evidence_outage_preserves_predispatch_recovery(
         worker.delivery_hook = check_evidence
     else:
         platform.before_submit = check_evidence
-    service.reconcile()
+    assert service.handle(approved).replayed
     assert service.store.unresolved_command_ids() == ()
     assert (result_latest(service) if release else latest(service)).phase == (
         "submitted" if release else "observed"
@@ -1066,17 +1070,18 @@ def test_pending_outside_authorization_rechecks_policy_after_outage(
     service, worker, platform = setup
     _, client = evidence
     record = result_proposal(service, worker) if release else propose(service, worker)
+    approved = command(service, record)
     before = len(platform.submissions)
     client.unavailable = True
     try:
         with pytest.raises(CheckpointEvidenceUnavailableError):
-            service.handle(command(service, record))
+            service.handle(approved)
     finally:
         client.unavailable = False
     platform.release_authorized = False
     platform.authorized = False
     with pytest.raises(SessionRecoveryError, match="current policy"):
-        service.reconcile()
+        service.handle(approved)
     assert (result_latest(service) if release else latest(service)).phase == "authorized"
     assert len(platform.submissions) == before
     assert worker.contexts == []
@@ -1128,16 +1133,16 @@ def test_pending_outside_action_revalidates_input(
 ) -> None:
     service, worker, platform = setup
     _, client = evidence
-    record = propose(service, worker)
+    approved = command(service, propose(service, worker))
     client.unavailable = True
     try:
         with pytest.raises(CheckpointEvidenceUnavailableError):
-            service.handle(command(service, record))
+            service.handle(approved)
     finally:
         client.unavailable = False
     platform.content = b"changed input"
     with pytest.raises(SessionRecoveryError, match="current policy"):
-        service.reconcile()
+        service.handle(approved)
     assert latest(service).phase == "authorized"
     assert platform.submissions == []
 
@@ -1163,7 +1168,7 @@ def test_predispatch_recovery_validates_receipt_before_effect(
     with monkeypatch.context() as patch:
         patch.setattr(service.store, "command_record", lambda _command_id: {})
         with pytest.raises(SessionRecoveryError, match="receipt is invalid"):
-            service.reconcile()
+            service.handle(approved)
     assert len(platform.submissions) == before
     assert worker.contexts == []
     assert (result_latest(service) if release else latest(service)).phase == "authorized"
@@ -1303,8 +1308,14 @@ def test_only_the_original_approval_dispatches_a_retained_authorization(
             service.handle(other)
     with pytest.raises(CommandConflictError):
         service.handle(approved.model_copy(update={"actor_id": "other"}))
+    # Reads and status checks never send a retained authorization.
+    observations = len(platform.observations)
+    assert service.reconcile() == ()
+    assert service.reconcile_external_actions() == ()
     assert phase_of(service, release) == "authorized"
+    assert service.store.unresolved_command_ids() == (approved.command_id,)
     assert len(platform.submissions) == before
+    assert len(platform.observations) == observations
     assert worker.contexts == []
     assert service.handle(approved).replayed
     assert phase_of(service, release) == ("submitted" if release else "observed")
@@ -1395,3 +1406,135 @@ def test_rejected_reserved_worker_event_is_recorded_once(
     ]
     assert len(rejections) == 1
     assert latest(service).phase == "proposed"
+
+
+@pytest.mark.parametrize("release", [False, True])
+@pytest.mark.parametrize("worker_state", ["fenced", "revoked", "unknown-outcome"])
+def test_denial_withdraws_an_authorization_without_an_admitted_worker(
+    setup: Setup,
+    evidence: tuple[SessionCheckpointEvidence, MemoryS3],
+    release: bool,
+    worker_state: str,
+) -> None:
+    service, worker, platform = setup
+    _, client = evidence
+    record, approved, before = interrupted_authorization(setup, client, release)
+    client.unavailable = False
+    if worker_state == "fenced":
+        service.fence_worker_attempt(attempt_id=record.proposal.worker.attempt_id)
+    elif worker_state == "unknown-outcome":
+        worker.emit((BackendErrorEvent(error_code=BackendErrorCode.ACTION_OUTCOME_UNKNOWN),))
+    else:
+        service.revoke_worker(
+            lambda current: WorkerRevocationEvidence(
+                attempt_id=current.intent.attempt_id,
+                sandbox_id="synthetic-worker",
+                observer_id="synthetic-control-plane",
+                evidence_sha256="d" * 64,
+                outcome="revoked",
+            )
+        )
+    assert service.reconcile() == ()
+    denied = command(service, record, approved=False)
+    service.handle(denied)
+    retained = result_latest(service) if release else latest(service)
+    assert retained.phase == "withdrawn"
+    assert retained.withdrawal is not None
+    assert retained.withdrawal.command_id == denied.command_id
+    assert service.store.unresolved_command_ids() == ()
+    assert service.handle(approved).replayed
+    assert len(platform.submissions) == before
+    assert worker.contexts == []
+    # Only the withdrawal proceeds without the worker.
+    again = service.handle(command(service, record, approved=False))
+    assert again.events[-1].kind == EventKind.ERROR_RECORDED
+    assert phase_of(service, release) == "withdrawn"
+
+
+def test_automatic_review_never_passes_a_retained_authorization(
+    setup: Setup,
+    evidence: tuple[SessionCheckpointEvidence, MemoryS3],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, worker, platform = setup
+    _, client = evidence
+    service._selected_review_mode = lambda: "review-changes"
+    pending: list[ProposedToolCall] = []
+    resolved: list[str] = []
+
+    def resolve(
+        *, session_id: str, action_group_id: str, approved: bool
+    ) -> tuple[BackendEvent, ...]:
+        assert session_id
+        resolved.append(action_group_id)
+        events = tuple(
+            BackendConfirmationResolutionEvent(
+                tool_call=action, action_group_id=action_group_id, approved=approved
+            )
+            for action in pending
+        )
+        pending.clear()
+        return events
+
+    monkeypatch.setattr(
+        worker, "pending_action_group", lambda **_scope: pending_action_group(tuple(pending))
+    )
+    monkeypatch.setattr(worker, "resolve_confirmation", resolve)
+
+    def request(name: str) -> str:
+        action = ProposedToolCall(
+            tool_call_id=name,
+            action_id=f"action-{name}",
+            tool_name="file-editor",
+            kind="file-editor",
+            risk="low",
+            summary="View a synthetic file",
+            arguments={"target": name},
+            review_class="read",
+        )
+        pending.append(action)
+        group = pending_action_group((action,))
+        assert group is not None
+        worker.emit(
+            (
+                BackendToolCallEvent(tool_call=action, source_event_id=f"{name}-proposal"),
+                BackendConfirmationRequestEvent(
+                    tool_call=action,
+                    action_group_id=group.group_id,
+                    source_event_id=f"{name}-request",
+                ),
+            )
+        )
+        return group.group_id
+
+    assert resolved == [request("before")]
+    record, approved, before = interrupted_authorization(setup, client, False)
+    client.unavailable = False
+    waiting = request("during")
+    service.reconcile()
+    for target in (waiting, record.proposal.group_id):
+        with pytest.raises(CommandConflictError):
+            service.handle(
+                SessionCommand(
+                    session_id=service.store.session_id,
+                    command_id=str(uuid4()),
+                    kind=CommandKind.APPROVE,
+                    actor_id="gateway",
+                    created_at=_NOW.isoformat(),
+                    payload={"target_type": "action-set", "target_id": target},
+                )
+            )
+    assert len(resolved) == 1
+    assert latest(service).phase == "authorized"
+    assert service.store.unresolved_command_ids() == (approved.command_id,)
+    assert len(platform.submissions) == before
+    decisions = [
+        event.payload["actor_id"]
+        for event in service.replay_events()
+        if event.kind == EventKind.APPROVAL_RECORDED
+    ]
+    assert decisions == ["gateway"]
+    # Withdrawing the authorization does not let the waiting group be decided for the researcher.
+    service.handle(command(service, record, approved=False))
+    assert latest(service).phase == "withdrawn"
+    assert len(resolved) == 1
