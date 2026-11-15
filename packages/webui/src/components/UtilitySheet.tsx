@@ -1072,7 +1072,45 @@ const ProjectReadinessSummary = ({
           </ul>
         </div>
       </details>
+      <EffectivePolicySummary policy={readiness.policy} />
     </section>
+  );
+};
+
+const EffectivePolicySummary = ({
+  policy,
+}: {
+  policy: ProjectReadiness["policy"];
+}) => {
+  const listed = (values: string[]) =>
+    values.length > 0 ? values.join(", ") : "None";
+  return (
+    <details className="effective-policy">
+      <summary>Effective policy</summary>
+      <div className="project-detail-content">
+        <small>
+          Source:{" "}
+          {policy.source === "deployment" ?
+            ["Operator deployment manifest", policy.manifest]
+              .filter(Boolean)
+              .join(" ")
+          : `Platform policy (${policy.platform_id})`}
+        </small>
+        <small>Policy: {policy.policy_id}</small>
+        <small>Review modes: {listed(policy.action_review_modes)}</small>
+        <small>Model endpoints: {listed(policy.model_endpoints)}</small>
+        <small>Capability tiers: {listed(policy.capability_tiers)}</small>
+        <small>Credential backends: {listed(policy.credential_backends)}</small>
+        <small>
+          Checkpoint signers:{" "}
+          {policy.checkpoint_signer_profiles === null ?
+            "Deployment registry"
+          : listed(policy.checkpoint_signer_profiles)}
+        </small>
+        <small>Isolated worker: {policy.isolated_worker}</small>
+        <small>Checkpoint evidence: {policy.checkpoint_evidence}</small>
+      </div>
+    </details>
   );
 };
 

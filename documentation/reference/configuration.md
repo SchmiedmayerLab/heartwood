@@ -91,11 +91,13 @@ Outside operations and result releases always wait for the researcher, in every 
 | `allowed_action_review_modes` | all three modes | Review-mode ceiling; must list `review-all` exactly once |
 | `credential_allowlist` | `[]` | Credential binding names the policy permits |
 | `aggregate_count_floor` | `20` | Minimum aggregate count; at least `20` |
+| `allowed_credential_backends` | all four backends | Any of `process`, `keyring`, `mounted-file`, `managed-identity` |
+| `allowed_checkpoint_signer_profiles` | none | Optional list of signer registry profiles a project may select; none leaves selection to the deployment registry |
 | `allowed_data_destinations` | none | Optional list of permitted [declared data destinations](../models/index.md#data-and-compliance-boundary); a route without a declaration is then refused at selection and before each model call |
 | `notes` | none | Free text |
 
 The built-in platform policies for local launches permit `review-all` and `review-changes`.
-Under a deployment manifest the project policy can only narrow the manifest's: endpoints, tiers, review modes, credential names, and data destinations must be subsets, a deployment's data-destination list cannot be removed, and the aggregate floor cannot be lower.
+Under a deployment manifest the project policy can only narrow the manifest's: endpoints, tiers, review modes, credential names, credential backends, signer profiles, and data destinations must be subsets, a deployment's data-destination list cannot be removed, and the aggregate floor cannot be lower.
 The effective review ceiling is the intersection of the two lists; a project list equal to the manifest's is not stored, so a later manifest change applies.
 The gateway applies a manifest's `allowed_data_destinations` every time it loads the project, so adding or changing it applies to existing projects at the next start:
 a project without its own list uses the manifest's, and a project list keeps only the destinations both permit.
@@ -122,8 +124,14 @@ allowed_model_catalog_endpoints = ["https://models.example.invalid/v1/models"]
 allowed_capability_tiers = ["supervised"]
 allowed_action_review_modes = ["review-all"]
 credential_allowlist = ["HEARTWOOD_CUSTOM_MODEL_API_KEY"]
+allowed_credential_backends = ["mounted-file"]
+allowed_checkpoint_signer_profiles = ["research-records"]
 allowed_data_destinations = ["same-compute", "institution-managed"]
 aggregate_count_floor = 20
+
+[requirements]
+isolated_worker = false
+checkpoint_evidence = false
 ```
 
 | Key | Requirement |
@@ -132,14 +140,15 @@ aggregate_count_floor = 20
 | `project_id` | Canonical lowercase UUID |
 | `workspace` | Exact research directory; Heartwood must be started from it |
 | `state_root` | Absolute protected state directory outside the research directory, whose final component is `project_id`; its parent must exist |
-| `[policy]` | Required; see [Policy Fields](#policy-fields) |
+| `[policy]` | Required; must narrow the detected platform adapter's policy, as described in [Security](../operate/security.md#deployment-policy); see [Policy Fields](#policy-fields) |
+| `[requirements]` | Optional; `isolated_worker` and `checkpoint_evidence` set to `true` stop the launch with `HW-DEPLOY-003` unless the manifest configures `[worker]` or required-mode `[evidence]` |
 | `[worker]` | Optional managed worker; see [Managed Worker](#managed-worker) |
 | `[evidence]` | Optional automatic checkpointing; requires `[worker]`; see [Configure Managed Evidence](../operate/audit-checkpoints.md#configure-managed-evidence) |
 
 Any other key, at any level, is rejected.
 The manifest must be an absolute path that traverses no symbolic link, lie outside the research directory and the state root, be a regular file of at most 64 KiB owned by root or the gateway user, and not be writable by group or others.
 Every parent directory of the manifest and of `state_root` must be owned by root or the gateway user and not be group- or world-writable, except a root-owned sticky directory such as `/tmp`.
-An omitted `allowed_action_review_modes` permits all three modes, which makes `review-outside-effects` the default for sessions in an isolated worker; list the modes explicitly.
+An omitted `allowed_action_review_modes` permits the platform's modes, plus `review-outside-effects` with a `[worker]` section, which makes `review-outside-effects` the default for sessions in an isolated worker; list the modes explicitly.
 Credential names are references; credentials never belong in the manifest.
 See [Projects and Private State](../start/project.md#operator-bound-external-state) for the operator workflow.
 

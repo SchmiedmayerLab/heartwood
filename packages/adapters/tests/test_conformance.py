@@ -66,7 +66,11 @@ class FakePlatformAdapter:
 
     def default_policy_profile(self) -> PolicyProfile:
         """Return a deny-egress default policy."""
-        return PolicyProfile(policy_id="generic-default", platform_id=self.adapter_id)
+        return PolicyProfile(
+            policy_id="generic-default",
+            platform_id=self.adapter_id,
+            allowed_credential_backends=("process",),
+        )
 
 
 class FakeDataSourceAdapter:

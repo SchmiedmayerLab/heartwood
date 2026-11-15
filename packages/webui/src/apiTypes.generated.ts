@@ -181,7 +181,7 @@ export interface CredentialBindingStatusResponse {
  */
 export interface CredentialStoreAvailabilityResponse {
   backends: ("process" | "keyring")[];
-  default_backend: "process" | "keyring";
+  default_backend: "process" | "keyring" | "deployment";
   persistence_available: boolean;
   persistence_description: string;
 }
@@ -593,6 +593,7 @@ export interface ProjectReadinessResponse {
   checks: ReadinessCheckResponse[];
   evidence: string[];
   platform_id: string;
+  policy: EffectivePolicyResponse;
   project_root: string;
   state: "ready" | "setup-required" | "compute-required" | "recovery-required";
   state_root: string;
@@ -608,6 +609,28 @@ export interface ReadinessCheckResponse {
   status: "pass" | "warning" | "fail";
   summary: string;
   title?: string;
+}
+/**
+ * The policy in force for a project and the trusted configuration that bounds it.
+ */
+export interface EffectivePolicyResponse {
+  action_review_modes: ActionReviewMode[];
+  capability_tiers: CapabilityTier[];
+  change_refused: string | null;
+  checkpoint_evidence: "required" | "configured" | "not-configured";
+  checkpoint_signer_profiles: string[] | null;
+  credential_backends: (
+    "process" | "keyring" | "mounted-file" | "managed-identity"
+  )[];
+  credential_references: string[];
+  isolated_worker: "required" | "configured" | "not-configured";
+  manifest: string | null;
+  manifest_sha256: string | null;
+  model_catalog_endpoints: string[];
+  model_endpoints: string[];
+  platform_id: string;
+  policy_id: string;
+  source: "deployment" | "platform";
 }
 /**
  * Ordered session collection.

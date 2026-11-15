@@ -12,23 +12,50 @@ import hashlib
 import os
 import stat
 import tomllib
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit
 from uuid import UUID
 
+from pydantic import BaseModel, ConfigDict
+
+from heartwood.adapters.platform import select_platform_adapter
+from heartwood.gateway._diagnostics import diagnostic_for
 from heartwood.gateway._project import ProjectContext, ProjectStateError
+from heartwood.gateway._readiness import platform_policy_ceiling
 from heartwood.gateway.checkpoint_deployment import (
     CheckpointEvidenceDeployment,
     validate_evidence_deployment,
 )
 from heartwood.gateway.worker_deployment import OpenShellWorkerDeployment
-from heartwood.model_policy import validate_policy_restriction
+from heartwood.model_policy import PolicyInputError, validate_policy_restriction
 from heartwood.persistence import read_private_text
 from heartwood.schemas import PolicyProfile
 
 _SCHEMA = "heartwood.project-deployment.v1"
 _FIELDS = {"schema_version", "project_id", "workspace", "state_root", "policy"}
+_OPTIONAL_FIELDS = {"worker", "evidence", "requirements"}
+# An omitted ceiling list follows the platform instead of the permissive schema default.
+_PLATFORM_DEFAULTS = ("allowed_action_review_modes", "allowed_credential_backends")
+
+
+class DeploymentError(ProjectStateError):
+    """A refused operator deployment, reported with its stable diagnostic code."""
+
+    def __init__(self, check_id: str, message: str) -> None:
+        self.code = diagnostic_for(check_id).code
+        super().__init__(f"{self.code}: {message}")
+
+
+class DeploymentRequirements(BaseModel):
+    """Controls the operator requires before any project in the deployment starts."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    # A separately mediated executor: the complete agent worker runs in the sandbox.
+    isolated_worker: bool = False
+    checkpoint_evidence: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,17 +66,55 @@ class ProjectDeployment:
     policy: PolicyProfile
     worker: OpenShellWorkerDeployment | None = None
     evidence: CheckpointEvidenceDeployment | None = None
+    requirements: DeploymentRequirements = field(default_factory=DeploymentRequirements)
+    manifest: Path | None = None
+    manifest_sha256: str | None = None
 
 
-def load_project_deployment(path: Path, *, project_root: Path) -> ProjectDeployment:
+def load_project_deployment(
+    path: Path, *, project_root: Path, env: Mapping[str, str] | None = None
+) -> ProjectDeployment:
     """Read a bounded operator manifest and reject missing or conflicting authority."""
-    return _read_project_deployment(path, project_root=project_root, validate_state=True)
+    return _read_project_deployment(path, project_root=project_root, validate_state=True, env=env)
+
+
+def read_manifest_sha256(path: Path) -> str:
+    """Return the digest of the manifest bytes a trusted launch would read."""
+    try:
+        return hashlib.sha256(read_private_text(path, max_bytes=64 * 1024).encode()).hexdigest()
+    except (OSError, ValueError) as error:
+        raise DeploymentError(
+            "deployment-manifest", "deployment manifest is unavailable"
+        ) from error
 
 
 def _read_project_deployment(
-    path: Path, *, project_root: Path, validate_state: bool
+    path: Path,
+    *,
+    project_root: Path,
+    validate_state: bool,
+    env: Mapping[str, str] | None = None,
 ) -> ProjectDeployment:
     """Validate operator authority independently of state during explicit migration."""
+    try:
+        deployment = _read_manifest(path, project_root=project_root, env=env)
+    except DeploymentError:
+        raise
+    except ProjectStateError as error:
+        raise DeploymentError("deployment-manifest", str(error)) from error
+    except (OSError, ValueError, TypeError, AttributeError) as error:
+        raise DeploymentError(
+            "deployment-manifest", "deployment manifest is unavailable or invalid"
+        ) from error
+    # Fail before opening gateway stores, including when legacy state is present.
+    if validate_state:
+        deployment.project.state_exists()
+    return deployment
+
+
+def _read_manifest(
+    path: Path, *, project_root: Path, env: Mapping[str, str] | None
+) -> ProjectDeployment:
     workspace = project_root.resolve(strict=True)
     if not path.is_absolute() or path.is_symlink():
         raise ProjectStateError("deployment manifest must be an absolute non-symlink path")
@@ -58,65 +123,107 @@ def _read_project_deployment(
         raise ProjectStateError("deployment manifest must not traverse symbolic links")
     if resolved == workspace or workspace in resolved.parents:
         raise ProjectStateError("deployment manifest must be outside the research directory")
-    try:
-        _validate_trusted_parents(resolved.parent)
-        metadata = resolved.stat()
-        if (
-            not stat.S_ISREG(metadata.st_mode)
-            or metadata.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
-            or metadata.st_uid not in {0, os.geteuid()}
-        ):
-            raise ProjectStateError(
-                "deployment manifest must be operator-owned and write-protected"
-            )
-        record = tomllib.loads(read_private_text(resolved, max_bytes=64 * 1024))
-        if (
-            not set(record) >= _FIELDS
-            or set(record) - _FIELDS - {"worker", "evidence"}
-            or record["schema_version"] != _SCHEMA
-        ):
-            raise ValueError("invalid deployment schema")
-        identity = UUID(record["project_id"])
-        if str(identity) != record["project_id"]:
-            raise ValueError("noncanonical project identity")
-        bound_workspace = Path(record["workspace"])
-        state_root = Path(record["state_root"])
-        if bound_workspace != workspace:
-            raise ProjectStateError(
-                "deployment manifest does not authorize this research directory"
-            )
-        project = ProjectContext(workspace, protected_state=state_root, project_id=identity)
-        _validate_trusted_parents(project.state_root.parent)
-        if resolved == project.state_root or project.state_root in resolved.parents:
-            raise ProjectStateError("deployment manifest must remain separate from project state")
-        policy = PolicyProfile.model_validate(record["policy"])
-        validate_policy_restriction(policy, policy)
-        worker = (
-            OpenShellWorkerDeployment.model_validate(record["worker"])
-            if "worker" in record
-            else None
+    _validate_trusted_parents(resolved.parent)
+    metadata = resolved.stat()
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+        or metadata.st_uid not in {0, os.geteuid()}
+    ):
+        raise ProjectStateError("deployment manifest must be operator-owned and write-protected")
+    content = read_private_text(resolved, max_bytes=64 * 1024)
+    record = tomllib.loads(content)
+    if (
+        not set(record) >= _FIELDS
+        or set(record) - _FIELDS - _OPTIONAL_FIELDS
+        or record["schema_version"] != _SCHEMA
+        or not isinstance(record["policy"], dict)
+    ):
+        raise ValueError("invalid deployment schema")
+    identity = UUID(record["project_id"])
+    if str(identity) != record["project_id"]:
+        raise ValueError("noncanonical project identity")
+    bound_workspace = Path(record["workspace"])
+    state_root = Path(record["state_root"])
+    if bound_workspace != workspace:
+        raise ProjectStateError("deployment manifest does not authorize this research directory")
+    project = ProjectContext(workspace, protected_state=state_root, project_id=identity)
+    _validate_trusted_parents(project.state_root.parent)
+    if resolved == project.state_root or project.state_root in resolved.parents:
+        raise ProjectStateError("deployment manifest must remain separate from project state")
+    requirements = DeploymentRequirements.model_validate(record.get("requirements", {}))
+    worker = (
+        OpenShellWorkerDeployment.model_validate(record["worker"]) if "worker" in record else None
+    )
+    evidence = (
+        CheckpointEvidenceDeployment.model_validate(record["evidence"])
+        if "evidence" in record
+        else None
+    )
+    policy = _platform_restricted_policy(
+        record["policy"], isolated_worker=worker is not None, env=env
+    )
+    if requirements.isolated_worker and worker is None:
+        raise DeploymentError(
+            "deployment-requirement", "the deployment requires an isolated worker"
         )
-        if worker is not None:
-            validate_worker_deployment(worker, project)
-        evidence = (
-            CheckpointEvidenceDeployment.model_validate(record["evidence"])
-            if "evidence" in record
-            else None
+    if requirements.checkpoint_evidence and (evidence is None or evidence.mode != "required"):
+        raise DeploymentError(
+            "deployment-requirement", "the deployment requires required-mode checkpoint evidence"
         )
-        if evidence is not None:
-            if worker is None:
-                raise ProjectStateError(
-                    "managed checkpoint evidence requires complete worker isolation"
+    signers = policy.allowed_checkpoint_signer_profiles
+    if evidence is not None and signers is not None and evidence.signer_profile not in signers:
+        raise DeploymentError(
+            "deployment-policy", "checkpoint evidence uses a signer profile the policy excludes"
+        )
+    if worker is not None:
+        validate_worker_deployment(worker, project)
+    if evidence is not None:
+        if worker is None:
+            raise ProjectStateError(
+                "managed checkpoint evidence requires complete worker isolation"
+            )
+        validate_evidence_deployment(evidence, project)
+    return ProjectDeployment(
+        project=project,
+        policy=policy,
+        worker=worker,
+        evidence=evidence,
+        requirements=requirements,
+        manifest=resolved,
+        manifest_sha256=hashlib.sha256(content.encode()).hexdigest(),
+    )
+
+
+def _platform_restricted_policy(
+    value: dict[str, object], *, isolated_worker: bool, env: Mapping[str, str] | None
+) -> PolicyProfile:
+    """Accept the manifest policy only as a restriction of the detected platform's policy."""
+    adapter = select_platform_adapter(os.environ if env is None else env)
+    requested = PolicyProfile.model_validate(value)
+    ceiling = platform_policy_ceiling(adapter, requested)
+    if isolated_worker:
+        # The worker boundary, not the platform adapter, is what makes this mode applicable.
+        ceiling = ceiling.model_copy(
+            update={
+                "allowed_action_review_modes": (
+                    *ceiling.allowed_action_review_modes,
+                    "review-outside-effects",
                 )
-            validate_evidence_deployment(evidence, project)
-        # Fail before opening gateway stores, including when legacy state is present.
-        if validate_state:
-            project.state_exists()
-        return ProjectDeployment(project=project, policy=policy, worker=worker, evidence=evidence)
-    except ProjectStateError:
-        raise
-    except (OSError, ValueError, TypeError, AttributeError) as error:
-        raise ProjectStateError("deployment manifest is unavailable or invalid") from error
+            }
+        )
+    policy = requested.model_copy(
+        update={name: getattr(ceiling, name) for name in _PLATFORM_DEFAULTS if name not in value}
+    )
+    try:
+        validate_policy_restriction(policy, ceiling)
+    except PolicyInputError as error:
+        raise DeploymentError(
+            "deployment-policy",
+            f"the manifest policy widens the {adapter.adapter_id} platform policy "
+            + (f"in {error.field}" if error.field else f"({error})"),
+        ) from error
+    return policy
 
 
 def _validate_trusted_parents(directory: Path) -> None:

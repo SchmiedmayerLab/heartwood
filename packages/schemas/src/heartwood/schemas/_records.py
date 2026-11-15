@@ -24,6 +24,7 @@ _SAFE_IDENTIFIER_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
 
 type CapabilityTier = Literal["autonomous", "supervised", "experimental"]
 type ActionReviewMode = Literal["review-all", "review-changes", "review-outside-effects"]
+type CredentialBackend = Literal["process", "keyring", "mounted-file", "managed-identity"]
 type CheckpointSignatureAlgorithm = Literal["ed25519", "ecdsa-p256-sha256"]
 type Decision = Literal["allow", "deny"]
 
@@ -39,6 +40,7 @@ __all__ = [
     "AuditRetention",
     "CheckpointSignatureAlgorithm",
     "ConfirmationRequest",
+    "CredentialBackend",
     "DetectorEvidence",
     "EgressAttestationRecord",
     "JsonValue",
@@ -85,8 +87,22 @@ class PolicyProfile(_HeartwoodRecord):
             "without a data-handling descriptor is denied."
         ),
     )
+    allowed_credential_backends: tuple[CredentialBackend, ...] = Field(
+        default=("process", "keyring", "mounted-file", "managed-identity"),
+        min_length=1,
+    )
+    # None leaves signer selection to the deployment registry; a list fixes the choices.
+    allowed_checkpoint_signer_profiles: tuple[str, ...] | None = Field(default=None, min_length=1)
     aggregate_count_floor: int = Field(default=20, ge=20)
     notes: str | None = None
+
+    @field_validator("allowed_credential_backends", "allowed_checkpoint_signer_profiles")
+    @classmethod
+    def _unique_entries(cls, value: tuple[str, ...] | None) -> tuple[str, ...] | None:
+        """Keep each permitted entry once so narrowing compares exact sets."""
+        if value is not None and len(set(value)) != len(value):
+            raise ValueError("policy lists must not repeat an entry")
+        return value
 
     @field_validator("allowed_action_review_modes")
     @classmethod

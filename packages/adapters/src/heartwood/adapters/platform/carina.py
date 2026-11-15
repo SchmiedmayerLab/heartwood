@@ -77,6 +77,7 @@ class CarinaPlatformAdapter:
             allowed_capability_tiers=("supervised", "experimental"),
             allowed_action_review_modes=("review-all", "review-changes"),
             credential_allowlist=(),
+            allowed_credential_backends=self.capabilities().credential_backends,
             notes=(
                 "Synthetic-only Carina policy with loopback inference and review of every action."
             ),

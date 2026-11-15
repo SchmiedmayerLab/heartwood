@@ -118,6 +118,7 @@ def project_audit_payload(kind: EventKind, payload: dict[str, JsonValue]) -> dic
                         "profile_id",
                         "capability_tier",
                         "action_review_mode",
+                        "policy_sha256",
                     ),
                     **_data_handling_audit_fields(model_profile),
                 }
@@ -125,6 +126,16 @@ def project_audit_payload(kind: EventKind, payload: dict[str, JsonValue]) -> dic
                 else {}
             ),
         }
+    if kind == EventKind.POLICY_DECISION_RECORDED:
+        return _selected_audit_fields(
+            payload,
+            "change",
+            "policy_profile_id",
+            "policy_sha256",
+            "action_review_mode",
+            "previous_policy_sha256",
+            "previous_action_review_mode",
+        )
     if kind == EventKind.APPROVAL_RECORDED:
         tool_call_ids = payload.get("tool_call_ids")
         return {
@@ -271,7 +282,8 @@ def project_audit_payload(kind: EventKind, payload: dict[str, JsonValue]) -> dic
             "checkpoint_sha256",
             "covered_through_sequence",
         )
-    return {"payload_omitted": True}
+    # Every kind is projected above; a kind added without a projection still fails closed.
+    return {"payload_omitted": True}  # type: ignore[unreachable]
 
 
 def _selected_audit_fields(

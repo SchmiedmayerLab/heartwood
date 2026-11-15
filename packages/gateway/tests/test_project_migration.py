@@ -54,7 +54,7 @@ def _fixture(tmp_path: Path) -> tuple[ProjectContext, Path, Path, Path]:
                 "project_id": identity,
                 "workspace": str(workspace),
                 "state_root": str(target),
-                "policy": policy.model_dump(exclude_none=True),
+                "policy": {"policy_id": "synthetic", "platform_id": "generic"},
             }
         )
     )

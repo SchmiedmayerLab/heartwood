@@ -34,7 +34,8 @@ export type ProjectionActionDetails =
  * The stream translates OpenHands conversation events so every surface renders
  * the same turns. ``MODEL_CALL_DECISION_RECORDED`` records route authorization
  * before task submission or a continuation that may call the model;
- * ``POLICY_DECISION_RECORDED`` is reserved for other policy decisions.
+ * ``POLICY_DECISION_RECORDED`` records that the policy or review mode governing
+ * that dispatch changed since the session's previous one.
  * ``ACTION_DISPATCH_STARTED`` is journaled before an approved action set is handed
  * to the backend; without its resolution, the set's outcome is unknown.
  */

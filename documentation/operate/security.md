@@ -96,7 +96,8 @@ Outside operations and result releases are never allowed automatically; see [Out
 ### Deployment Ceiling
 
 `allowed_action_review_modes` in the manifest's `[policy]` table lists every mode the deployment permits and must include `review-all`.
-When it is omitted, all three modes are permitted.
+It can contain only modes the platform policy permits, plus `review-outside-effects` when the manifest has a `[worker]` section; any other entry stops the launch with `HW-DEPLOY-002`.
+When it is omitted, those same modes are permitted.
 A session in an isolated worker with no selection then uses `review-outside-effects`, so in-worker commands run without a researcher decision.
 List the modes explicitly, and list only `review-all` until a mode has passed the [action-review evaluation](../architecture/testing.md#action-review-evaluation) for the deployment.
 
@@ -108,6 +109,20 @@ At decision time the ceiling is applied again, and any mode outside it, unknown,
 Without a deployment manifest, the built-in workstation and container, Terra and Carina policies permit `review-all` and `review-changes`.
 State is then inside the research directory, so the gateway keeps the researcher's selection in process memory and ignores any review mode in `.heartwood/config.toml`.
 `--review-mode` on `heartwood` or `heartwood gateway serve` makes the same selection at start and stops with the reason when the ceiling, worker or credential gate refuses it.
+
+### Deployment Policy
+
+The manifest's `[policy]` table narrows the detected platform adapter's policy; it never replaces it.
+At launch, Heartwood refuses a manifest whose policy permits a review mode, capability tier, credential backend, credential name or model endpoint the platform does not, or a lower aggregate count floor, with `HW-DEPLOY-002`.
+A platform that offers **Other compatible service** already lets its own setup add any compatible endpoint and credential name, so on the workstation/container and Terra adapters a manifest may name such a route; on Carina it may use only the loopback and Stanford AI API Gateway routes.
+`allowed_credential_backends` limits where provider credentials may come from: without `process`, interfaces cannot enter a credential and only bindings in the trusted launch environment resolve, and without `keyring` nothing is read from or saved to a system credential store.
+`allowed_checkpoint_signer_profiles` limits the signer registry's profiles a project may select; a list with one profile fixes it, and a project cannot select or store another.
+The optional `[requirements]` table makes a missing control a launch failure with `HW-DEPLOY-003`: `isolated_worker = true` requires a `[worker]` section, the separately mediated executor that review of registered tool calls does not replace, and `checkpoint_evidence = true` requires an `[evidence]` section in `required` mode.
+
+`heartwood doctor --deployment`, the browser's project details and the notebook bridge's `project_readiness()` report the same effective policy, its source and the manifest digest.
+The gateway rereads the manifest before each command that can continue agent work.
+A change that only narrows the policy applies before that command, and a change to the policy or to the review mode in force, whether it comes from the manifest or from a selection in any interface, is recorded as a `policy.decision.recorded` event before the session's next model dispatch.
+Any other manifest change, including a change to `allowed_credential_backends`, stops dispatch with `HW-DEPLOY-004` until the gateway restarts, so loosening always requires the operator to restart under the changed manifest.
 
 ### Failure Behavior
 

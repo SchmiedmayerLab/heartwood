@@ -58,6 +58,36 @@ _DIAGNOSTICS: dict[str, DiagnosticDefinition] = {
         "/start/project/#choose-the-project-boundary",
         "path-sensitive",
     ),
+    "project-migration": DiagnosticDefinition(
+        "HW-PROJECT-004",
+        "Project state migration is incomplete",
+        "Complete `heartwood project migrate`, or run `heartwood project recover-migration`.",
+        "/reference/troubleshooting/#hw-project-004-project-state-migration-is-incomplete",
+    ),
+    "deployment-manifest": DiagnosticDefinition(
+        "HW-DEPLOY-001",
+        "Deployment manifest is unavailable or invalid",
+        "Ask the operator to correct the deployment manifest, then start Heartwood again.",
+        "/reference/troubleshooting/#hw-deploy-001-deployment-manifest-is-unavailable-or-invalid",
+    ),
+    "deployment-policy": DiagnosticDefinition(
+        "HW-DEPLOY-002",
+        "Deployment policy is wider than the platform policy",
+        "Remove the endpoints, modes, tiers, credentials or backends the platform does not allow.",
+        "/reference/troubleshooting/#hw-deploy-002-deployment-policy-is-wider-than-the-platform-policy",
+    ),
+    "deployment-requirement": DiagnosticDefinition(
+        "HW-DEPLOY-003",
+        "Deployment requirement is not met",
+        "Configure the isolated worker or checkpoint evidence the deployment requires.",
+        "/reference/troubleshooting/#hw-deploy-003-deployment-requirement-is-not-met",
+    ),
+    "deployment-change": DiagnosticDefinition(
+        "HW-DEPLOY-004",
+        "Deployment manifest changed while Heartwood was running",
+        "Restart the gateway so the operator's change applies from a clean start.",
+        "/reference/troubleshooting/#hw-deploy-004-deployment-manifest-changed-while-heartwood-was-running",
+    ),
     "configuration": DiagnosticDefinition(
         "HW-SETUP-001",
         "Project configuration needs attention",

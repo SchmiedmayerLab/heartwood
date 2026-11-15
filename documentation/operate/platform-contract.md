@@ -142,7 +142,7 @@ Required:
 
 Recommended:
 
-- List only `review-all` in `allowed_action_review_modes` until each further mode has been evaluated for the platform; the default when the key is omitted permits all three.
+- List only `review-all` in `allowed_action_review_modes` until each further mode has been evaluated for the platform; the default when the key is omitted permits the platform's modes, plus `review-outside-effects` with a worker.
 
 Optional:
 

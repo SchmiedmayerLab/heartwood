@@ -37,7 +37,7 @@ Without a terminal on standard input and without `--prompt`, it prints usage and
 
 | Command | Purpose |
 |---|---|
-| `heartwood doctor [--json]` | Report project, model, credential, policy, and compute readiness without changing state |
+| `heartwood doctor [--json] [--deployment MANIFEST]` | Report project, model, credential, policy, and compute readiness without changing state; with a deployment manifest, report its effective policy and source |
 | `heartwood setup` | Configure a model connection without opening a conversation |
 | `heartwood actions` | Show the review mode in use, the default, its scope, and why any mode is unavailable |
 | `heartwood specialists` | List research specialists and any disabled role with its reason |

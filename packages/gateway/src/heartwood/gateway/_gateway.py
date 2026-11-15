@@ -26,6 +26,7 @@ from heartwood.audit import (
     AuditCheckpointVerification,
     AuditVerification,
     CheckpointSigner,
+    CheckpointSignerError,
     CheckpointSignerProfile,
     CheckpointSignerRegistry,
     create_audit_checkpoint,
@@ -64,6 +65,12 @@ from heartwood.gateway._credential_isolation import (
     assess_credential_isolation,
 )
 from heartwood.gateway._credentials import CredentialStore, CredentialStoreError
+from heartwood.gateway._deployment import (
+    DeploymentError,
+    ProjectDeployment,
+    load_project_deployment,
+    read_manifest_sha256,
+)
 from heartwood.gateway._experiment_store import ExperimentStore
 from heartwood.gateway._gpu_environment import (
     GpuEnvironment,
@@ -119,7 +126,9 @@ from heartwood.gateway._project_config import (
     ProjectModelSettingsStore,
 )
 from heartwood.gateway._readiness import (
+    DeploymentControl,
     DeploymentReadiness,
+    EffectivePolicy,
     inspect_deployment,
     model_source_for_connection,
     model_source_options,
@@ -150,7 +159,7 @@ from heartwood.gateway.worker_sessions import (
     WorkerReconciler,
     WorkerSessionRequest,
 )
-from heartwood.model_policy import ModelPolicyEngine
+from heartwood.model_policy import ModelPolicyEngine, PolicyInputError, validate_policy_restriction
 from heartwood.persistence import DurableFileError, write_private_text_atomic
 from heartwood.schemas import (
     ActionReviewMode,
@@ -229,6 +238,15 @@ _PROJECTED_COMMANDS = frozenset(
         CommandKind.DENY.value,
         CommandKind.PAUSE.value,
         CommandKind.RESUME.value,
+    }
+)
+# Commands that may continue agent execution; pause and denial always remain available.
+_DISPATCH_COMMANDS = frozenset(
+    {
+        CommandKind.APPROVE.value,
+        CommandKind.CHAT.value,
+        CommandKind.RESUME.value,
+        CommandKind.WORKFLOW.value,
     }
 )
 _STREAMING_COMMANDS = frozenset(
@@ -436,11 +454,21 @@ class SessionGateway:
         skill_source_registry: SkillSourceRegistry | None = None,
         parallel_review_preparer: ParallelReviewPreparer | None = None,
         deployment_policy: PolicyProfile | None = None,
+        deployment: ProjectDeployment | None = None,
         worker_plan_factory: WorkerPlanFactory | None = None,
         worker_reconciler: WorkerReconciler | None = None,
         backend_id: str = "auto",
     ) -> None:
         prepare_openhands_import()
+        if deployment is not None:
+            if deployment_policy is not None or (
+                project is not None and project != deployment.project
+            ):
+                raise ValueError("A deployment binding supplies its own project and policy")
+            project, deployment_policy = deployment.project, deployment.policy
+        self._deployment = deployment
+        # A manifest change that cannot apply safely stops dispatch until the next start.
+        self._deployment_refusal: str | None = None
         self.project = ProjectContext.current() if project is None else project
         if checkpoint_evidence_factory is not None and (
             self.project.protected_state is None or service_factory is not None
@@ -521,7 +549,14 @@ class SessionGateway:
         self._reload_model_connections()
         self.credential_store = credential_store or CredentialStore(
             project_root=self.project.root,
-            capabilities=self._platform_capabilities,
+            capabilities=replace(
+                self._platform_capabilities,
+                credential_backends=tuple(
+                    backend
+                    for backend in self._platform_capabilities.credential_backends
+                    if backend in self.config_store.default.policy.allowed_credential_backends
+                ),
+            ),
             env=self.env,
             use_system_keyring=env is None,
         )
@@ -669,6 +704,11 @@ class SessionGateway:
                 self.session_catalog.default()
             else:
                 self.session_catalog.ensure(command.session_id)
+            deployment_refusal = (
+                self._deployment_change_refusal()
+                if not storage_only and command_kind in _DISPATCH_COMMANDS
+                else None
+            )
             fatal_unavailable_reason: str | None = None
             if not storage_only and command_kind in _PROJECTED_COMMANDS:
                 persisted = FileSessionStore(
@@ -711,13 +751,17 @@ class SessionGateway:
                         session_id=command.session_id,
                         all_events=all_events,
                     ).projection
-                    unavailable_reason = fatal_unavailable_reason or (
-                        None
-                        if command_kind not in _PROJECTED_COMMANDS
-                        or command_kind in projection.available_commands
-                        else (
-                            f"{command_kind} is unavailable while the agent is "
-                            f"{projection.lifecycle.status}"
+                    unavailable_reason = (
+                        fatal_unavailable_reason
+                        or deployment_refusal
+                        or (
+                            None
+                            if command_kind not in _PROJECTED_COMMANDS
+                            or command_kind in projection.available_commands
+                            else (
+                                f"{command_kind} is unavailable while the agent is "
+                                f"{projection.lifecycle.status}"
+                            )
                         )
                     )
                     streaming_started = (
@@ -915,15 +959,30 @@ class SessionGateway:
     @gateway_operation
     def active_checkpoint_signer(self) -> CheckpointSignerProfile:
         """Resolve the project selection or deployment-owned default profile."""
-        selected = self.config_store.load().audit_settings.signer_profile
-        return self._checkpoint_signer_registry().profile(selected)
+        config = self.config_store.load()
+        return self._permitted_checkpoint_signer(
+            config.audit_settings.signer_profile, config.policy
+        )
 
     @gateway_operation
     def select_checkpoint_signer(self, profile_id: str | None) -> CheckpointSignerProfile:
-        """Persist a project selection after deployment-registry validation."""
-        registry = self._checkpoint_signer_registry()
-        profile = registry.profile(profile_id)
+        """Persist a project selection after deployment-registry and policy validation."""
+        profile = self._permitted_checkpoint_signer(profile_id, self.config_store.load().policy)
         self.config_store.select_checkpoint_signer(profile_id)
+        return profile
+
+    def _permitted_checkpoint_signer(
+        self, profile_id: str | None, policy: PolicyProfile
+    ) -> CheckpointSignerProfile:
+        permitted = policy.allowed_checkpoint_signer_profiles
+        if profile_id is None and permitted is not None and len(permitted) == 1:
+            # A policy that fixes one signer replaces the registry default.
+            profile_id = permitted[0]
+        profile = self._checkpoint_signer_registry().profile(profile_id)
+        if permitted is not None and profile.profile_id not in permitted:
+            raise CheckpointSignerError(
+                "the deployment policy does not permit this checkpoint signer profile"
+            )
         return profile
 
     @gateway_operation
@@ -1520,6 +1579,39 @@ class SessionGateway:
             self._credential_environment(strict=False),
             bundled_skills_dir=self.skill_manager.bundled_dir,
             bundled_skill_digests=self.skill_manager.bundled_digests,
+            policy=self.effective_policy(),
+        )
+
+    @gateway_operation
+    def effective_policy(self) -> EffectivePolicy:
+        """Return the policy in force and the trusted configuration it came from."""
+        self._deployment_change_refusal()
+        try:
+            policy = self.config_store.load().policy
+        except ProjectConfigError:
+            policy = self.config_store.default.policy
+        if self._deployment_policy is None:
+            return EffectivePolicy("platform", policy)
+        deployment = self._deployment
+        requirements = None if deployment is None else deployment.requirements
+
+        def control(required: bool, configured: bool) -> DeploymentControl:
+            return "required" if required else "configured" if configured else "not-configured"
+
+        return EffectivePolicy(
+            "deployment",
+            policy,
+            manifest=None if deployment is None else str(deployment.manifest),
+            manifest_sha256=None if deployment is None else deployment.manifest_sha256,
+            isolated_worker=control(
+                requirements is not None and requirements.isolated_worker,
+                self._worker_plan_factory is not None,
+            ),
+            checkpoint_evidence=control(
+                requirements is not None and requirements.checkpoint_evidence,
+                self._checkpoint_evidence_factory is not None,
+            ),
+            change_refused=self._deployment_refusal,
         )
 
     @gateway_operation
@@ -1550,6 +1642,7 @@ class SessionGateway:
             env=self._credential_environment(strict=False),
             bundled_skills_dir=self.skill_manager.bundled_dir,
             bundled_skill_digests=self.skill_manager.bundled_digests,
+            policy=self.effective_policy(),
         )
 
     @gateway_operation
@@ -2537,6 +2630,49 @@ class SessionGateway:
 
     def _policy_profile(self) -> PolicyProfile:
         return self.config_store.load().policy
+
+    @_serialized_state
+    def _deployment_change_refusal(self) -> str | None:
+        """Apply a narrowing manifest change before dispatch, and refuse any other change."""
+        deployment = self._deployment
+        if deployment is None or deployment.manifest is None or self._deployment_refusal:
+            return self._deployment_refusal
+        try:
+            if read_manifest_sha256(deployment.manifest) == deployment.manifest_sha256:
+                return None
+            updated = load_project_deployment(
+                deployment.manifest, project_root=self.project.root, env=self.env
+            )
+            unchanged = replace(
+                updated, policy=deployment.policy, manifest_sha256=deployment.manifest_sha256
+            )
+            # Credential backends bind the credential store when the gateway starts.
+            if (
+                unchanged != deployment
+                or updated.policy.allowed_credential_backends
+                != deployment.policy.allowed_credential_backends
+            ):
+                raise DeploymentError(
+                    "deployment-change", "the manifest changed more than its policy"
+                )
+            try:
+                validate_policy_restriction(updated.policy, deployment.policy)
+                self.config_store.apply_deployment_policy(updated.policy)
+            except (PolicyInputError, ProjectConfigError) as error:
+                raise DeploymentError(
+                    "deployment-change",
+                    "the changed manifest policy is wider or conflicts with project settings",
+                ) from error
+        except ProjectStateError as error:
+            self._deployment_refusal = (
+                str(error)
+                if isinstance(error, DeploymentError)
+                else str(DeploymentError("deployment-manifest", str(error)))
+            )
+            return self._deployment_refusal
+        self._deployment = updated
+        self._deployment_policy = updated.policy
+        return None
 
     def _prepare_model_connection(self, connection_id: str) -> None:
         if connection_id in self._model_connections:

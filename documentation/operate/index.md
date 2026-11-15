@@ -53,7 +53,7 @@ Existing local `.heartwood/` state is never adopted silently; move it with `hear
 
 The `[policy]` table replaces the platform adapter's built-in policy as the ceiling for the project, and project settings can only narrow it.
 `platform_id` must equal the detected platform adapter, and `deny_egress_by_default` must stay `true`.
-When `allowed_action_review_modes` is omitted, all three modes are permitted, and a session in an isolated worker with no researcher selection uses `review-outside-effects`.
+When `allowed_action_review_modes` is omitted, the platform's modes are permitted, plus `review-outside-effects` with a `[worker]` section, and a session in an isolated worker with no researcher selection uses `review-outside-effects`.
 Set the list explicitly; [Action Review](security.md#action-review) describes each mode and the evidence required before listing it.
 
 ### Isolated Worker

@@ -39,7 +39,6 @@ from heartwood.gateway.checkpoint_deployment import (
     validate_evidence_deployment,
 )
 from heartwood.gateway.worker_deployment import OpenShellWorkerDeployment
-from heartwood.schemas import PolicyProfile
 from packages.audit.tests.tls_fixture import server_certificates
 from packages.gateway.tests import test_worker_native
 
@@ -262,9 +261,7 @@ def test_deployment_manifest_binds_evidence_and_requires_worker_isolation(
         "project_id": str(project.project_id),
         "workspace": str(project.root),
         "state_root": str(project.state_root),
-        "policy": PolicyProfile(policy_id="synthetic", platform_id="generic").model_dump(
-            exclude_none=True
-        ),
+        "policy": {"policy_id": "synthetic", "platform_id": "generic"},
         "worker": worker.model_dump(mode="json", exclude_none=True),
         "evidence": configured.model_dump(mode="json", exclude_none=True),
     }
@@ -329,9 +326,7 @@ def test_gateway_cli_owns_the_evidence_client_and_binds_sessions(
                 "project_id": str(project.project_id),
                 "workspace": str(project.root),
                 "state_root": str(project.state_root),
-                "policy": PolicyProfile(policy_id="synthetic", platform_id="generic").model_dump(
-                    exclude_none=True
-                ),
+                "policy": {"policy_id": "synthetic", "platform_id": "generic"},
                 "worker": worker.model_dump(mode="json", exclude_none=True),
                 "evidence": configured.model_dump(mode="json", exclude_none=True),
             }

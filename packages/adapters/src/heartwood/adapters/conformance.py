@@ -40,6 +40,7 @@ def assert_platform_adapter_conforms(
     profile = adapter.default_policy_profile()
     assert profile.platform_id == adapter.adapter_id
     assert profile.deny_egress_by_default is True
+    assert set(profile.allowed_credential_backends) <= set(capabilities.credential_backends)
 
 
 def assert_data_source_adapter_conforms(
