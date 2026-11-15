@@ -44,8 +44,11 @@ class CredentialIsolation:
 
     @property
     def unattended_actions_allowed(self) -> bool:
-        """Return whether actions may run unreviewed beside this model credential."""
-        return self.status != "review-required"
+        """Return whether actions may run unreviewed beside this model credential.
+
+        An unconfigured or unassessed route is not treated as isolated.
+        """
+        return self.status in {"not-required", "qualified"}
 
 
 def assess_credential_isolation(

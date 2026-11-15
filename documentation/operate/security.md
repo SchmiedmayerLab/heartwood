@@ -18,7 +18,9 @@ The modes, rules, and records are described in [Actions, Sessions, and Audit His
 ### Deployment Ceiling
 
 `allowed_action_review_modes` in the deployment manifest's `[policy]` section lists every mode the deployment permits.
-It must include `review-all`, and it defaults to all three modes when omitted.
+It must include `review-all`.
+A manifest that omits the list permits all three modes, so a deployment with a `[worker]` section then starts sessions in `review-outside-effects` and in-worker commands run without a researcher decision.
+List the modes explicitly to require an operator decision for that behavior, and list only `review-all` until the deployment has qualified the others.
 
 ```toml
 [policy]
@@ -28,9 +30,11 @@ allowed_action_review_modes = ["review-all", "review-changes"]
 ```
 
 The gateway reads this ceiling from the manifest every time it loads the project, so a change to the manifest applies at the next start and stored project state never keeps an older or wider list.
+A project policy that lists fewer modes narrows the ceiling for that project: the modes in force are those both lists permit, and never more than the manifest's.
 A stored selection that the manifest no longer permits stops the gateway from loading the project until the selection is reset or the manifest permits it.
 At decision time the session service applies the ceiling again, so a mode outside it resolves to `review-all`.
-`review-outside-effects` additionally requires an admitted, active worker attempt for that session and resolves to `review-all` whenever the attempt is missing, fenced, or revoked.
+`review-outside-effects` additionally requires an admitted, active worker attempt with a live lease for that session and resolves to `review-all` whenever the attempt is missing, fenced, revoked, or being replaced.
+A session whose worker was revoked accepts a command only on a gateway that launches workers, where the command starts a replacement; any other gateway refuses it and never runs the session on its own backend.
 A manifest without a `[worker]` section therefore never applies it.
 
 Without a manifest, the built-in workstation/container, Terra, and Carina policies permit `review-all` and `review-changes`.
@@ -50,10 +54,12 @@ Outside operations and release of outside results stay on their separate, digest
 
 ### Failure Behavior
 
-The researcher is asked whenever the selection or the credential boundary cannot be read, the model credential is not isolated from a local session's tools, the mode is unknown or outside the ceiling, the worker attempt is not admitted, the action set is not fully journaled, an action has no rule, the fixed threat checks flag or cannot assess an action, or the session has an unresolved or unknown outcome.
+The researcher is asked whenever the session is paused or not waiting for a review, the researcher's last command paused, denied, or was refused, the selection or the credential boundary cannot be read or the model route is not configured, the model credential is not isolated from a local session's tools, the mode is unknown or outside the ceiling, the worker attempt is not admitted, the action set is not fully journaled, an action has no rule, the fixed threat checks flag or cannot assess an action, or the session has an unresolved or unknown outcome.
 The decision is computed again on the pending action set that it binds, and a set whose identity changed is not executed.
 A pending set is considered once, when its review request is journaled; a set whose request was already journaled before a restart or a mode change waits for the researcher.
-Interrupted automatic decisions are recovered by the same rules as interrupted researcher decisions.
+An automatic decision that fails after it was recorded, for example because checkpoint evidence is unavailable, is withdrawn: the journal records once that it was not applied, the recorded approval authorizes nothing, and the action set waits for the researcher.
+The command or status read that triggered it completes normally.
+An interrupted automatic decision is recovered only if its rule still allows the action set under the mode and state then in force; otherwise it is withdrawn in the same way.
 
 Qualify a mode for a deployment with the action-review benchmark described in [Testing and Evidence](../architecture/testing.md), which requires zero automatic decisions on actions labelled as requiring review.
 
@@ -71,11 +77,15 @@ Managed native execution requires an explicit operator-owned deployment binding 
 The complete worker runs behind the sandbox boundary, receives selected read-only input and verified Skill projections, and keeps its writable workspace, home and temporary files inside the sandbox.
 Canonical state, deployment authority, provider credentials, management sockets and signing material remain outside its mounts and process identity.
 The gateway independently checks attempt identity, admits untrusted responses and retains approval authority; the sandbox and outside services enforce filesystem, process and network restrictions.
+A worker response can report status, usage and events, but every conversation setting it returns must equal what the gateway sent, so it cannot make the gateway construct an agent, model client, analyzer or secret source of its choosing.
+Each worker request has a 120-second deadline and each history read a fixed size, and a worker that exceeds either is fenced; [the system architecture](../architecture/system.md) lists the limits.
 An uncertain revocation fences the attempt and retains writer ownership until reconciliation establishes that its resources are gone.
-The launcher deletes a worker that fails launch admission without waiting for the session to close, and the next managed gateway start deletes workers that an ended gateway process left running.
-Until that start, such a worker keeps its sandbox policy and provider attachment.
+The launcher deletes a worker that fails launch admission without waiting for the session to close.
+A worker whose attempt is fenced later is revoked as soon as the fence is raised: after any session command already in progress, its sandbox and provider attachment are removed within the control-plane timeouts of about three minutes.
+If that revocation fails, the worker keeps its sandbox policy and provider attachment until the session closes, the gateway stops or the next managed gateway start, which also deletes workers that an ended gateway process left running.
 After revocation is recorded, a session can continue with a replacement worker in a new sandbox; it shares no credential, placeholder, conversation memory or workspace file with the revoked worker, and the session shows where the replacement began.
-Outside inspection rejects a worker container that is privileged, has added Linux capabilities, runs with unconfined seccomp, AppArmor or SELinux labeling, or shares the host process, IPC or user namespace.
+Outside inspection rejects a worker container that is privileged, has added Linux capabilities, shares the host's or another container's process, IPC or user namespace, or reports a security option other than `no-new-privileges`, the default AppArmor profile, or an SELinux label.
+A custom seccomp or AppArmor profile is refused because the inspection cannot establish that it confines the worker.
 Recorded worker absence relies on the sandbox gateway completing deletion as the qualified gateway does.
 Heartwood requires the registered gateway to report a version that the operator declared in the deployment manifest, and refuses to launch or reconcile workers otherwise.
 That check compares a declaration with the gateway's self-report and does not verify its behavior, so the operator must still confirm the [gateway behavior behind native qualification](platform-requirements.md#gateway-behavior-behind-native-qualification).

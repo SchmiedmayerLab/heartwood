@@ -9,7 +9,9 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass
+from threading import Lock, Thread
 from typing import TYPE_CHECKING
 
 from heartwood.core_adapter import SessionService
@@ -77,7 +79,12 @@ class ManagedWorkerSession:
         self._attempted = False
         self._plan: WorkerSessionPlan | None = None
         self._launched: WorkerAttemptIntent | None = None
+        self._revocation: Thread | None = None
+        self._revocation_lock = Lock()
+        self._closing = False
         self._context: WorkerConversationContext | None = None
+        # This owner reaches a worker only through `context`, so it may replace a revoked one.
+        service.admit_worker_replacement()
 
     def context(self) -> WorkerConversationContext:
         """Launch once after retaining intent, then admit only that exact session lease."""
@@ -106,12 +113,18 @@ class ManagedWorkerSession:
             self._launched = intent
             return plan.launch(intent)
 
-        lease = self._service.launch_worker(
-            launch,
-            image_digest=plan.image_digest,
-            sandbox_policy_sha256=plan.sandbox_policy_sha256,
-            input_manifest_sha256=plan.input_manifest_sha256,
-        )
+        try:
+            lease = self._service.launch_worker(
+                launch,
+                image_digest=plan.image_digest,
+                sandbox_policy_sha256=plan.sandbox_policy_sha256,
+                input_manifest_sha256=plan.input_manifest_sha256,
+            )
+        except BaseException:
+            if self._launched is not None:
+                self._revoke_promptly()
+            raise
+        lease.on_fenced(self._revoke_promptly)
         try:
             context = plan.connect(lease)
             if (
@@ -121,13 +134,37 @@ class ManagedWorkerSession:
                 raise WorkerAttemptError("worker context does not match the session launch")
             lease.ensure_active()
         except BaseException:
-            self._service.fence_worker_attempt(attempt_id=lease.intent.attempt_id)
+            # Prompt revocation may already have recorded the attempt as revoked; the
+            # connection's own failure is the one to report.
+            with suppress(Exception):
+                self._service.fence_worker_attempt(attempt_id=lease.intent.attempt_id)
             raise
         self._context = context
         return context
 
+    def _revoke_promptly(self) -> None:
+        """Hand a fenced attempt to its own short-lived thread; the caller that fenced returns."""
+        with self._revocation_lock:
+            if self._closing or self._revocation is not None:
+                return
+            self._revocation = Thread(
+                target=self._revoke_fenced, daemon=True, name="worker-revocation"
+            )
+            self._revocation.start()
+
+    def _revoke_fenced(self) -> None:
+        # A failure leaves the attempt fenced for session close or start-up reconciliation.
+        with suppress(Exception):
+            assert self._plan is not None
+            self._service.revoke_worker(self._plan.revoke)
+
     def close(self) -> None:
         """Keep ownership until outside revocation and native client shutdown succeed."""
+        with self._revocation_lock:
+            self._closing = True
+            revocation = self._revocation
+        if revocation is not None:
+            revocation.join()
         if self._plan is not None:
             # An attempt retained by another owner is left for start-up reconciliation.
             current = self._service.worker_attempt()

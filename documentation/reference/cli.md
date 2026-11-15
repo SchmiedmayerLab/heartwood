@@ -219,7 +219,8 @@ credential_allowlist = ["HEARTWOOD_CUSTOM_MODEL_API_KEY"]
 aggregate_count_floor = 20
 ```
 
-`allowed_action_review_modes` is the most permissive set of [review modes](../use/actions-audit.md#review-modes) the deployment permits; it must include `review-all` and defaults to all three.
+`allowed_action_review_modes` is the most permissive set of [review modes](../use/actions-audit.md#review-modes) the deployment permits; it must include `review-all`.
+A manifest that omits it permits all three modes, which makes `review-outside-effects` the default for sessions in an isolated worker; list the modes explicitly to decide that.
 Credential names are references; actual credentials never belong in this manifest.
 Launch from the manifest's exact research directory and use the detected platform identifier.
 Keep the manifest operator-owned and not writable by group or other users, and exclude it and the external state volume from worker mounts.

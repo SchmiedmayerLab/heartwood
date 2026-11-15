@@ -234,9 +234,7 @@ def test_secret_backed_model_requires_complete_review_across_interfaces(
 
 def test_reduced_review_follows_the_active_credential_boundary(tmp_path: Path) -> None:
     project = _configured_project(tmp_path, profile=_local_profile())
-    gateway = SessionGateway(
-        project=project, env={"OPENAI_API_KEY": _SECRET}, backend_id="deterministic"
-    )
+    gateway = SessionGateway(project=project, env={"OPENAI_API_KEY": _SECRET})
     try:
         assert gateway.select_action_review_mode("review-changes")["review_mode"] == (
             "review-changes"
@@ -249,9 +247,11 @@ def test_reduced_review_follows_the_active_credential_boundary(tmp_path: Path) -
             ModelSettings(profiles=(_local_profile(), _hosted_profile()), active_profile="openai"),
         )
 
-        # The earlier selection is not applied beside a credential the tools could reach.
+        # The earlier selection is not applied beside a credential the tools could reach,
+        # and each session answers for the route its own backend was built with.
         assert gateway.action_settings()["review_mode"] == "review-all"
-        assert service.action_review_mode() == "review-all"
+        assert gateway._service("session-main").action_review_mode() == "review-all"
+        assert gateway._service("session-main") is not service
     finally:
         gateway.stop()
 

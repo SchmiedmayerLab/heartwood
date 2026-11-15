@@ -12,8 +12,8 @@ import hashlib
 import json
 import os
 import shutil
-from collections.abc import Callable, Mapping, Sequence
-from contextlib import AbstractContextManager, nullcontext, suppress
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import AbstractContextManager, contextmanager, nullcontext, suppress
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from functools import wraps
@@ -315,6 +315,7 @@ class _ServiceConfiguration:
     """Configuration snapshot that owns one cached agent service."""
 
     model_settings: ModelSettings
+    model_source: str | None
     policy_profile: PolicyProfile
     local_model: LocalModelSelection | None
     managed_inference: bool
@@ -506,6 +507,9 @@ class SessionGateway:
         self._checkpoint_signer_registry_override = checkpoint_signer_registry
         self._checkpoint_signer_registry_cache: CheckpointSignerRegistry | None = None
         self._checkpoint_signer_factory = checkpoint_signer_factory
+        # Lock order, outermost first: the state lock, the project-configuration lock, a
+        # session service's locks, then the stream lock. A backend read after a service's
+        # first holds none of them, so one session's worker cannot delay another session.
         self._state_lock: AbstractContextManager[object] = RLock()
         self._stream_lock = RLock()
         self._stream_epoch = uuid4().hex
@@ -714,20 +718,19 @@ class SessionGateway:
             raise CommandConflictError("Checkpoint bindings must be computed by the gateway")
         return self._handle_command(command)
 
-    @_serialized_state
     def _handle_command(self, command: SessionCommand) -> SessionResult:
-        with self.config_store.locked():
+        command_kind = str(command.kind)
+        starting_workflow = (
+            command_kind == CommandKind.WORKFLOW.value and command.payload.get("action") == "start"
+        )
+        storage_only = command_kind == CommandKind.AUDIT_EXPORT.value or starting_workflow
+        reconciled = None if storage_only else self._reconcile_before_lock(command.session_id)
+        with self._state_lock, self.config_store.locked():
             self._project_activity.initialize()
             if command.session_id == DEFAULT_SESSION_ID:
                 self.session_catalog.default()
             else:
                 self.session_catalog.ensure(command.session_id)
-            command_kind = str(command.kind)
-            starting_workflow = (
-                command_kind == CommandKind.WORKFLOW.value
-                and command.payload.get("action") == "start"
-            )
-            storage_only = command_kind == CommandKind.AUDIT_EXPORT.value or starting_workflow
             fatal_unavailable_reason: str | None = None
             if not storage_only and command_kind in _PROJECTED_COMMANDS:
                 persisted = FileSessionStore(
@@ -760,6 +763,7 @@ class SessionGateway:
                     self._reconciled_session_events(
                         session_id=command.session_id,
                         service=service,
+                        reconciled=reconciled,
                     )
                     if state_reconciled
                     else service.replay_events()
@@ -1099,10 +1103,9 @@ class SessionGateway:
         )
 
     @gateway_operation
-    @_serialized_state
     def session_projection(self, *, session_id: str) -> SessionProjection:
         """Return the sole interface projection for one session."""
-        return self._session_snapshot_locked(session_id=session_id).projection
+        return self._session_snapshot(session_id=session_id).projection
 
     @gateway_operation
     def wait_for_session_idle(self, *, session_id: str, timeout: float = 0) -> bool:
@@ -1115,10 +1118,12 @@ class SessionGateway:
             service = self._service(session_id)
         if not service.wait_for_idle(timeout):
             return False
+        reconciled = self._reconcile_before_lock(session_id)
         with self._state_lock:
             if self._services.get(session_id) is not service or not service.wait_for_idle(0):
                 return False
-            service.reconcile()
+            if reconciled is not service:
+                service.reconcile()
             return True
 
     @gateway_operation
@@ -1361,7 +1366,6 @@ class SessionGateway:
             )
 
     @gateway_operation
-    @_serialized_state
     def session_snapshot(
         self,
         *,
@@ -1369,13 +1373,12 @@ class SessionGateway:
         after_sequence: int | None = None,
     ) -> GatewaySessionSnapshot:
         """Return events and projection from one serialized gateway snapshot."""
-        return self._session_snapshot_locked(
+        return self._session_snapshot(
             session_id=session_id,
             after_sequence=after_sequence,
         )
 
     @gateway_operation
-    @_serialized_state
     def websocket(
         self,
         *,
@@ -1383,8 +1386,7 @@ class SessionGateway:
         after_sequence: int | None = None,
     ) -> GatewayEventStream:
         """Connect an event stream with replay."""
-        all_events = self._reconciled_session_events(session_id=session_id)
-        with self._stream_lock:
+        with self._reconciled_session(session_id) as all_events, self._stream_lock:
             snapshot = self._snapshot_from_events_locked(
                 session_id=session_id,
                 all_events=all_events,
@@ -1396,7 +1398,6 @@ class SessionGateway:
             )
 
     @gateway_operation
-    @_serialized_state
     def open_event_stream(
         self,
         *,
@@ -1404,8 +1405,7 @@ class SessionGateway:
         after_sequence: int | None = None,
     ) -> tuple[GatewayEventStream, GatewaySessionSnapshot]:
         """Connect a stream and capture its first coherent snapshot atomically."""
-        all_events = self._reconciled_session_events(session_id=session_id)
-        with self._stream_lock:
+        with self._reconciled_session(session_id) as all_events, self._stream_lock:
             snapshot = self._snapshot_from_events_locked(
                 session_id=session_id,
                 all_events=all_events,
@@ -1757,7 +1757,9 @@ class SessionGateway:
         try:
             policy_allowed = self.config_store.load().policy.allowed_action_review_modes
             selected = self.action_settings_store.load().review_mode
-            isolated = self._credentials_isolated()
+            isolated = self._credentials_isolated(
+                self.settings_store.load(), model_source=self.config_store.load().model_source
+            )
         except (ProjectConfigError, ModelSettingsError) as error:
             raise ActionSettingsError(str(error)) from error
         sandboxed = self._worker_plan_factory is not None
@@ -1828,7 +1830,10 @@ class SessionGateway:
                     selected,
                     allowed=policy_allowed,
                     sandboxed=self._worker_plan_factory is not None,
-                    credentials_isolated=self._credentials_isolated(),
+                    credentials_isolated=self._credentials_isolated(
+                        self.settings_store.load(),
+                        model_source=self.config_store.load().model_source,
+                    ),
                 )
                 if reason is not None:
                     raise ActionSettingsError(reason)
@@ -2335,8 +2340,11 @@ class SessionGateway:
     def refresh_skills(self, source_id: str | None = None) -> SkillSettingsResponse:
         """Refresh signed Skill sources and apply their current revocation state."""
         self._project_activity.initialize()
-        self.skill_manager.refresh(source_id)
-        self._reset_services()
+        try:
+            self.skill_manager.refresh(source_id)
+        finally:
+            # A failure after a persisted revocation must not leave sessions with the Skill.
+            self._reset_services()
         return self.skill_settings()
 
     @gateway_operation
@@ -2409,8 +2417,11 @@ class SessionGateway:
     @_serialized_state
     def remove_skill(self, name: str) -> SkillSettingsResponse:
         """Remove one installed extension and reset active conversations."""
-        self.skill_manager.remove(name)
-        self._reset_services()
+        try:
+            self.skill_manager.remove(name)
+        finally:
+            # A failure after the index change must not leave sessions with the Skill.
+            self._reset_services()
         return self.skill_settings()
 
     @_serialized_state
@@ -2449,6 +2460,7 @@ class SessionGateway:
         )
         return _ServiceConfiguration(
             model_settings=model_settings,
+            model_source=config.model_source,
             policy_profile=config.policy,
             local_model=config.local_model,
             managed_inference=config.model_source == "heartwood",
@@ -2494,7 +2506,10 @@ class SessionGateway:
             worker_project_id=self.project.project_id,
             checkpoint_evidence=checkpoint_evidence,
             action_review_mode=lambda: self.action_settings_store.load().review_mode,
-            credentials_isolated=self._credentials_isolated,
+            # The boundary of the route this session's backend was built with, not a later one.
+            credentials_isolated=lambda: self._credentials_isolated(
+                configuration.model_settings, model_source=configuration.model_source
+            ),
             external_actions=(
                 self._external_actions_factory(session_id)
                 if self._external_actions_factory is not None
@@ -2648,25 +2663,52 @@ class SessionGateway:
             self._advance_stream_revision(session_id)
             self._streams.notify(session_id=session_id)
 
-    def _session_snapshot_locked(
+    def _session_snapshot(
         self,
         *,
         session_id: str,
         after_sequence: int | None = None,
     ) -> GatewaySessionSnapshot:
-        all_events = self._reconciled_session_events(session_id=session_id)
-        with self._stream_lock:
+        with self._reconciled_session(session_id) as all_events, self._stream_lock:
             return self._snapshot_from_events_locked(
                 session_id=session_id,
                 all_events=all_events,
                 after_sequence=after_sequence,
             )
 
+    def _reconcile_before_lock(self, session_id: str) -> SessionService | None:
+        """Read a served session's backend before the state lock is taken.
+
+        The session's worker answers this read, so it must not delay other sessions or
+        settings. A service's first read can launch its worker and stays under the lock,
+        as does the first read of a service that replaces this one meanwhile.
+        """
+        with self._state_lock:
+            service = self._services.get(session_id)
+        if service is None or not service.backend_opened:
+            return None
+        try:
+            service.reconcile()
+        except RuntimeError:
+            with self._state_lock:
+                if self._services.get(session_id) is service:
+                    raise
+            return None
+        return service
+
+    @contextmanager
+    def _reconciled_session(self, session_id: str) -> Iterator[tuple[SessionEvent, ...]]:
+        """Hold the state lock with one session's reconciled durable events."""
+        reconciled = self._reconcile_before_lock(session_id)
+        with self._state_lock:
+            yield self._reconciled_session_events(session_id=session_id, reconciled=reconciled)
+
     def _reconciled_session_events(
         self,
         *,
         session_id: str,
         service: SessionService | None = None,
+        reconciled: SessionService | None = None,
     ) -> tuple[SessionEvent, ...]:
         """Resolve the service and reconcile durable state without holding the stream lock."""
         self._project_activity.initialize()
@@ -2708,7 +2750,8 @@ class SessionGateway:
             active_service = service
             close_service = False
         try:
-            active_service.reconcile()
+            if active_service is not reconciled:
+                active_service.reconcile()
             return active_service.replay_events()
         finally:
             if close_service:
@@ -3055,10 +3098,13 @@ class SessionGateway:
         self.settings_store.save(settings)
         self.config_store.select_model_source(source, settings)
 
-    def _credentials_isolated(self) -> bool:
-        """Return whether the active model credential is kept from the agent tool runtime."""
+    def _credentials_isolated(self, settings: ModelSettings, *, model_source: str | None) -> bool:
+        """Return whether a model route keeps its credential from the agent tool runtime."""
+        if self.backend_id in {"deterministic", "deterministic-local"}:
+            # The deterministic backend calls no model and holds no credential.
+            return True
         return self._credential_isolation(
-            self.settings_store.load(), model_source=self.config_store.load().model_source
+            settings, model_source=model_source
         ).unattended_actions_allowed
 
     def _credential_isolation(
@@ -3481,8 +3527,8 @@ def _review_mode_unavailable_reason(
         return "Not permitted by this deployment's policy."
     if mode != "review-all" and not sandboxed and not credentials_isolated:
         return (
-            "Unavailable because the selected model credential is not isolated from the agent "
-            "tool runtime. Use a credential-free or platform-isolated model route."
+            "Unavailable until the selected model route is credential-free or platform-isolated: "
+            "a model credential is otherwise not isolated from the agent tool runtime."
         )
     if mode == "review-outside-effects" and not sandboxed:
         return "Requires sessions that run in an isolated worker."

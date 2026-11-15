@@ -32,7 +32,7 @@ from heartwood.core_adapter.worker_attempts import WorkerAttemptLease
 from heartwood.gateway._remote_workspace import (
     _MAX_RESPONSE_BYTES,
     AdmittedRemoteWorkspace,
-    AgentContract,
+    RequestContract,
     WorkerResponseBudget,
     WorkerResponseError,
     _admit_event,
@@ -59,11 +59,11 @@ class WorkerEventAdmission:
         tool_modules: Mapping[str, str],
         budget: WorkerResponseBudget,
         client_tools: Sequence[ClientToolSpec] = (),
-        agent: Callable[[], AgentContract | None] = lambda: None,
+        request: Callable[[], RequestContract | None] = lambda: None,
     ) -> None:
         self._origin = _worker_origin(host)
         self._budget = budget
-        self._agent = agent
+        self._request = request
         self._tool_modules = dict(tool_modules)
         self._client_tools = _client_tool_contract(client_tools)
         if budget.attempt is not None and self._origin != _worker_origin(
@@ -148,11 +148,16 @@ class WorkerEventAdmission:
             self._budget.charge(len(content))
             if len(content) > _MAX_RESPONSE_BYTES:
                 raise ValueError
-            agent = self._agent()
-            value = _admit_json(content, self._tool_modules, self._client_tools, agent)
+            value = _admit_json(content, self._budget)
             if not isinstance(value, dict):
                 raise ValueError
-            _admit_event(value, self._tool_modules, self._client_tools, agent, self._budget.attempt)
+            _admit_event(
+                value,
+                self._tool_modules,
+                self._client_tools,
+                self._request(),
+                self._budget.attempt,
+            )
             Event.model_validate(value)
             self._budget.charge(0)
         except Exception:
@@ -190,7 +195,7 @@ class AdmittedWorkerWorkspace(AdmittedRemoteWorkspace):
                 tool_modules=dict(self.tool_modules),
                 budget=self._response_budget,
                 client_tools=self.authorized_client_tools,
-                agent=lambda: self._agent_contract,
+                request=lambda: self._request_contract,
             )
         return self._event_admission
 

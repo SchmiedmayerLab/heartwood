@@ -70,6 +70,7 @@ The projection likewise reports controlled-data approval for an installed Skill 
 OpenHands receives only the exact directory of each verified installed Skill, so content written beside it cannot load as trusted context.
 Heartwood refuses to install a Skill whose content-addressed directory holds anything else, including a leftover from an interrupted installation.
 Such content beside an active installed Skill stops Skill listing and starting agent sessions until it is removed, and the error names the directory to clean up.
+Removing that Skill still deactivates it, records the removal, and resets open sessions, because removal does not load the retained artifact again.
 
 ## Worker Projection
 

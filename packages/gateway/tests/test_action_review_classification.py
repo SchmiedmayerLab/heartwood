@@ -331,6 +331,7 @@ def test_real_sdk_session_allows_project_reads_and_stops_before_a_command(
         backend=backend,
         env={},
         action_review_mode=lambda: "review-changes",
+        credentials_isolated=lambda: True,
     )
 
     def pending_for_researcher() -> PendingActionGroup:

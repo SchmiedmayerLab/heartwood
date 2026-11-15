@@ -73,7 +73,9 @@ Pull-request validation and main-branch validation both call the shared capable-
 Every pull request includes capable-model acceptance in the required `Release Candidate Ready` aggregate so changes cannot bypass the real model, OpenHands, approval, replay, and audit contract.
 The same aggregate requires the native worker candidate workflow on pull requests and on the main branch.
 Every main-branch commit runs the complete synthetic native qualification, so a release candidate cannot be ready without a pass recorded for that exact commit.
-A pull request repeats the candidate builds and native qualification only when it changes the application packages, worker or candidate image inputs, the builders, or the qualification sources; other pull requests record the selection and skip those jobs.
+A pull request skips the candidate builds and native qualification only when every changed path is documentation or repository automation other than the candidate and pull-request validation workflows; a change to any other path, including one the selection does not recognize, requires them.
+Documentation is copied into the images as files that no build step or runtime component reads, so a skipped pull request leaves the qualified behavior unchanged.
+Pull-request jobs that build and run candidate code hold no signing or identity-token permission.
 Registry writes, multi-platform manifest assembly, and moving-tag promotion remain main-only; pull requests build the same image stages and validate the promotion scripts without receiving package-write access.
 Release creation also requires the repository-managed Python and JavaScript/TypeScript CodeQL analyses for the exact commit.
 Capable-model acceptance runs on the organization's large hosted runner because CPU inference does not finish inside its command deadline on a standard runner; every other job runs on standard GitHub-hosted runners, and container builds reclaim unused preinstalled toolchains first and reuse bounded GitHub Actions BuildKit caches.
@@ -306,18 +308,33 @@ Each case that launches a worker also retains `worker-container.json`: the image
 A case that fails because inspection rejected a sandbox default therefore still shows the observed values.
 Private gateway state and generated credentials share the output directory during a run and are excluded from the checksums and from CI retention.
 The candidate workflow verifies the evidence against its own commit, uploads exactly the listed files, and keeps main-branch evidence for 90 days and pull-request evidence for 14 days.
-Main-branch and manually started runs also publish a GitHub build-provenance attestation for `SHA256SUMS`; pull-request runs qualify a temporary merge commit and are not attested.
+Main validation then attests `SHA256SUMS` in a separate job that is part of `Release Candidate Ready`.
+That job runs no candidate build or test code: it checks out the qualified commit, downloads the retained evidence, repeats the verification below, and publishes a GitHub build-provenance attestation.
+Pull-request runs and manual runs of the candidate workflow qualify without attestation.
 
 To verify a downloaded evidence directory, check out the Heartwood commit it claims to qualify and run these commands inside the evidence directory:
 
 ```bash
-gh attestation verify SHA256SUMS --repo SchmiedmayerLab/heartwood
+commit="$(git -C "$HEARTWOOD_CHECKOUT" rev-parse HEAD)"
+gh attestation verify SHA256SUMS --repo SchmiedmayerLab/heartwood \
+  --signer-workflow SchmiedmayerLab/heartwood/.github/workflows/main-validation.yml \
+  --source-ref refs/heads/main --source-digest "$commit"
 sha256sum --check SHA256SUMS
-python3 "$HEARTWOOD_CHECKOUT/deploy/qualification_evidence.py" . \
-  --commit "$(git -C "$HEARTWOOD_CHECKOUT" rev-parse HEAD)"
+python3 "$HEARTWOOD_CHECKOUT/deploy/qualification_evidence.py" . --commit "$commit"
 ```
 
-The attestation shows that the candidate workflow of this repository produced the checksums, and its certificate names the workflow run and commit.
+Each attestation option checks a field of the signing certificate that GitHub issues to the workflow run, which the run itself cannot choose:
+
+| Option | Establishes |
+|---|---|
+| `--repo` | The attestation is stored for, and was signed by a run of, this repository |
+| `--signer-workflow` | Main validation signed it, not another workflow that holds attestation permission |
+| `--source-ref` | The run built the main branch, not a pull request, tag, or other branch |
+| `--source-digest` | The run built exactly the commit being verified |
+
+Without the last three options the command accepts any attestation of the same file from any workflow and branch of the repository.
+The command also requires the default build-provenance predicate type and GitHub's token issuer.
+An attestation shows where and from which commit the checksums were produced; it does not show that the qualification passed.
 The checksum command shows that the files are the ones the workflow recorded.
 The last command checks the listed digests again, compares the recorded cases with `junit.xml`, re-evaluates every pass condition against the expected set of the checkout it runs from, and requires the stated commit; it exits with a non-zero status and prints each reason otherwise.
 

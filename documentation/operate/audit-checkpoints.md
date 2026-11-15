@@ -63,8 +63,8 @@ It is not a deployed production signing service: the operator supplies authentic
 The gateway's `evidence` configuration does not provision or confer those controls.
 
 An outside approval is first recorded as authorized, then checkpointed, then marked submitting before the native call.
-A retained authorization can resume only after current input, policy, expiry, destination and worker authority checks.
-Read-only reconciliation never submits it, and recovery does not revive a worker after restart.
+A retained authorization is submitted only by an exact retry of its own approval command, after current input, policy, expiry, destination and worker authority checks.
+Reads and reconciliation never submit it, and recovery does not revive a worker after restart.
 A denial withdraws it, and after its validity interval it is recorded as expired; neither closure submits anything.
 A failed attempt records one pending evidence event for its boundary, and identical retries add none.
 Once submission may have occurred, Heartwood observes the native operation identity instead of repeating the effect.

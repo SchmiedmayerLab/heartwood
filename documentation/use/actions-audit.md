@@ -23,7 +23,7 @@ Model-written summaries and risk ratings never influence whether you are asked.
 | `review-outside-effects` · **Review Outside Effects** | Terminal commands, file operations, and plan updates that run inside the isolated worker | Anything that leaves the worker, specialist tasks, flagged actions, and anything else |
 
 **Review Every Action** is the default when a session runs on your own machine without an isolated worker.
-**Review Changes** is available there as an opt-in when the selected model route is credential-free or platform-isolated.
+**Review Changes** is available there as an opt-in when a model route is selected and it is credential-free or platform-isolated.
 With any other model credential, a session outside an isolated worker reviews every action, and each interface lists **Review Changes** as unavailable with that reason.
 **Review Outside Effects** is the default when sessions run in an isolated worker, and it cannot be selected or applied anywhere else.
 
@@ -75,6 +75,8 @@ Heartwood stops with the reason instead of starting in a different mode when the
 A stricter mode can be selected at any time and applies to the next action set.
 A looser mode can be selected only while no session is running, paused, or waiting for review.
 Changing the mode never decides an action set that is already waiting for you.
+Pausing a session, rejecting an action set, or sending a message that Heartwood refuses also stops automatic decisions: whatever is proposed next waits for you.
+If Heartwood cannot apply an automatic decision, for example because required audit evidence is unavailable, the action set returns to you with a note that automatic review was not applied.
 
 An operator limits the available modes for a deployment, as described in [Security](../operate/security.md#action-review).
 A project or researcher can select a stricter mode than the deployment permits, never a looser one.
@@ -108,6 +110,11 @@ The browser shows the request or result content directly.
 When that content is longer than the 2,000-character preview, the browser says that the preview is truncated and offers all of it under **Complete reviewed proposal**; the terminal and notebook print the complete proposal.
 Inputs submitted with an operation are listed by reference, size, and digest; their bytes are not displayed.
 The summary of these reviews comes from the trusted service adapter or the gateway and is labelled **Gateway-provided summary**, while summaries written by the model keep the **Model-provided summary** label.
+
+If an approval is recorded but cannot be sent, for example while the records service is unavailable, nothing is sent until you choose.
+In the browser, **Retry request** resends that same approval and sends it; a new approval from any interface is refused while it waits.
+Reject the review to withdraw it; opening or refreshing the session, other commands, and automatic decisions never send it.
+An approval that is not sent before the review's validity ends is recorded as expired.
 
 ## Grouped Decisions
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import stat
 import subprocess
 from pathlib import Path, PurePosixPath
@@ -57,6 +58,53 @@ class WorkerVolumeSettings(BaseModel):
         ):
             raise ValueError("Docker staging requires an explicit local socket")
         return self
+
+
+def _path_forms(path: str) -> set[PurePosixPath]:
+    """Return a host path as written and as resolved, so an alias cannot hide an overlap.
+
+    Resolution only reads link targets; a link changed afterwards cannot remove the
+    normalized form that is always compared.
+    """
+    return {PurePosixPath(os.path.normpath(path)), PurePosixPath(os.path.realpath(path))}
+
+
+# Docker reports an empty mode for the container's own PID and user namespace, and
+# `private` or `none` for an IPC namespace that nothing else can join.
+_PRIVATE_NAMESPACE_MODES: dict[str, frozenset[str]] = {
+    "PidMode": frozenset({""}),
+    "IpcMode": frozenset({"", "private", "none"}),
+    "UsernsMode": frozenset({""}),
+}
+# The container runtime's standard confined process type, under its current and former name.
+# A user or role field, or any other type, could select an unconfined or privileged domain.
+_CONFINED_SELINUX_TYPES = frozenset({"container_t", "svirt_lxc_net_t"})
+# One sensitivity with individual categories, as the runtime assigns them; a category range
+# such as `c0.c1023` would give the worker every other container's categories.
+_SELINUX_LEVEL = re.compile(r"s[0-9]+(?::c[0-9]+(?:,c[0-9]+)*)?")
+
+
+def _confining_selinux_label(value: str) -> bool:
+    field, _, setting = value.partition(":")
+    if field == "type":
+        return setting in _CONFINED_SELINUX_TYPES
+    return field == "level" and _SELINUX_LEVEL.fullmatch(setting) is not None
+
+
+def _confining_security_option(option: object) -> bool:
+    """Accept only options that keep or add confinement, never one that replaces a default."""
+    if not isinstance(option, str):
+        return False
+    # Docker accepts either separator after the option name.
+    cut = min((i for i in (option.find("="), option.find(":")) if i >= 0), default=len(option))
+    name, separator, value = option[:cut], option[cut : cut + 1], option[cut + 1 :]
+    if name == "no-new-privileges":
+        return not separator or value == "true"
+    if name == "apparmor":
+        return value == "docker-default"
+    if name == "label":
+        return _confining_selinux_label(value)
+    return False
 
 
 class WorkerVolumes:
@@ -241,28 +289,28 @@ class WorkerVolumes:
         if (
             host["CapAdd"] not in (None, [])
             or not isinstance(options, list)
+            or any(not _confining_security_option(option) for option in options)
+            # Only namespaces private to the container are accepted; `host`, another
+            # container's namespace and any value not listed here are refused.
             or any(
-                not isinstance(option, str)
-                or option.replace(":", "=", 1).endswith(("=unconfined", "=disable"))
-                for option in options
-            )
-            or any(
-                not isinstance(host[name], str) or host[name] == "host"
-                for name in ("PidMode", "IpcMode", "UsernsMode")
+                not isinstance(host[name], str) or host[name] not in allowed
+                for name, allowed in _PRIVATE_NAMESPACE_MODES.items()
             )
         ):
             raise WorkerAttemptError("native worker confinement does not match admission")
         mounts = observed.get("Mounts")
         if not isinstance(mounts, list) or any(not isinstance(m, dict) for m in mounts):
             raise WorkerAttemptError("native worker projection mounts were not observed")
-        withheld = [
-            PurePosixPath(urlsplit(self.settings.docker_host).path),
-            *map(PurePosixPath, self.settings.protected_paths),
-        ]
+        withheld = {
+            form
+            for path in (urlsplit(self.settings.docker_host).path, *self.settings.protected_paths)
+            for form in _path_forms(str(path))
+        }
         for observed_mount in mounts:
             source = observed_mount.get("Source")
             if isinstance(source, str) and any(
-                path.is_relative_to(source) or PurePosixPath(source).is_relative_to(path)
+                path.is_relative_to(form) or form.is_relative_to(path)
+                for form in _path_forms(source)
                 for path in withheld
             ):
                 raise WorkerAttemptError("native worker mount exposes a withheld host location")
