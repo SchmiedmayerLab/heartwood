@@ -356,6 +356,9 @@ def test_gateway_cli_owns_the_evidence_client_and_binds_sessions(
         "heartwood.gateway.worker_native.native_worker_plan_factory",
         lambda *_args: lambda _request: pytest.fail("no worker should start during launch"),
     )
+    monkeypatch.setattr(
+        "heartwood.gateway.worker_native.require_declared_gateway", lambda *_args: None
+    )
     observed = []
 
     def run(server: uvicorn.Server, **_kwargs: object) -> None:

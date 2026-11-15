@@ -76,6 +76,7 @@ class ManagedWorkerSession:
         self._prepare = prepare
         self._attempted = False
         self._plan: WorkerSessionPlan | None = None
+        self._launched: WorkerAttemptIntent | None = None
         self._context: WorkerConversationContext | None = None
 
     def context(self) -> WorkerConversationContext:
@@ -100,8 +101,13 @@ class ManagedWorkerSession:
             raise WorkerAttemptError("worker launch is denied by session policy")
         plan = self._prepare(self._request)
         self._plan = plan
+
+        def launch(intent: WorkerAttemptIntent) -> WorkerRuntimeBinding:
+            self._launched = intent
+            return plan.launch(intent)
+
         lease = self._service.launch_worker(
-            plan.launch,
+            launch,
             image_digest=plan.image_digest,
             sandbox_policy_sha256=plan.sandbox_policy_sha256,
             input_manifest_sha256=plan.input_manifest_sha256,
@@ -123,7 +129,9 @@ class ManagedWorkerSession:
     def close(self) -> None:
         """Keep ownership until outside revocation and native client shutdown succeed."""
         if self._plan is not None:
-            if self._service.worker_attempt() is not None:
+            # An attempt retained by another owner is left for start-up reconciliation.
+            current = self._service.worker_attempt()
+            if current is not None and current.intent == self._launched:
                 self._service.revoke_worker(self._plan.revoke)
             if self._plan.release_preparation is not None:
                 self._plan.release_preparation()

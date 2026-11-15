@@ -503,6 +503,7 @@ def project_session(
     usage: ProjectionUsage | None = None
     usage_by_purpose: dict[str, ProjectionUsage] = {}
     subagents: dict[str, ProjectionSubagent] = {}
+    worker_attempts: set[str] = set()
 
     external_result_records(events)
     for event in events:
@@ -916,6 +917,23 @@ def project_session(
             subagent = _subagent(_mapping(event.payload.get("subagent")))
             if subagent.invocation_id:
                 subagents[subagent.invocation_id] = subagent
+        elif kind == EventKind.WORKER_ATTEMPT_RECORDED.value:
+            attempt_id = _string(_mapping(event.payload.get("intent")).get("attempt_id"))
+            if event.payload.get("phase") == "active" and attempt_id not in worker_attempts:
+                if worker_attempts:
+                    _append_message(
+                        conversation,
+                        event,
+                        role="trace",
+                        label="System",
+                        content="A new worker replaced the earlier one",
+                        detail=(
+                            "The earlier sandboxed worker was stopped and removed. "
+                            "This session's record is retained, but the new worker does not "
+                            "remember the earlier conversation and starts with an empty workspace."
+                        ),
+                    )
+                worker_attempts.add(attempt_id)
         elif kind == EventKind.SESSION_PAUSED.value:
             lifecycle_status = SessionLifecycle.PAUSED
             lifecycle_sequence = event.sequence
@@ -1459,6 +1477,8 @@ def _activity_detail(event: SessionEvent) -> str:
         return _string(event.payload.get("status"))
     if kind == EventKind.ERROR_RECORDED.value:
         return _string(event.payload.get("code")) or _string(event.payload.get("reason"))
+    if kind == EventKind.WORKER_ATTEMPT_RECORDED.value:
+        return _string(event.payload.get("phase"))
     return _string(event.payload.get("command_id"))
 
 
@@ -1903,6 +1923,7 @@ _ACTIVITY_LABELS = {
     EventKind.TOOL_EXECUTION_RECORDED.value: "Tool execution",
     EventKind.TOOL_CALL_PROPOSED.value: "Tool proposed",
     EventKind.USER_MESSAGE_RECORDED.value: "Researcher message",
+    EventKind.WORKER_ATTEMPT_RECORDED.value: "Worker attempt",
 }
 
 __all__ = [

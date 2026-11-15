@@ -302,6 +302,8 @@ A reduced, extended, or skipped selection therefore fails, as does a run against
 Adding, removing, or renaming a native case requires changing the expected set in the same commit.
 
 `SHA256SUMS` lists the manifest, test report, logs, and per-case evidence files.
+Each case that launches a worker also retains `worker-container.json`: the image, privilege flag, added and dropped capabilities, security options, network, process, IPC and user namespace modes, and mount types and destinations that Docker reported for every worker container, recorded before Heartwood decided its admission and without host paths, labels or environment.
+A case that fails because inspection rejected a sandbox default therefore still shows the observed values.
 Private gateway state and generated credentials share the output directory during a run and are excluded from the checksums and from CI retention.
 The candidate workflow verifies the evidence against its own commit, uploads exactly the listed files, and keeps main-branch evidence for 90 days and pull-request evidence for 14 days.
 Main-branch and manually started runs also publish a GitHub build-provenance attestation for `SHA256SUMS`; pull-request runs qualify a temporary merge commit and are not attested.

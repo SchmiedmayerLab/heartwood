@@ -13,7 +13,7 @@ import json
 import os
 import shutil
 from collections.abc import Callable, Mapping, Sequence
-from contextlib import AbstractContextManager, nullcontext
+from contextlib import AbstractContextManager, nullcontext, suppress
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from functools import wraps
@@ -691,8 +691,18 @@ class SessionGateway:
                 retained = current_worker_attempt(
                     FileSessionStore(self.sessions_root, session_id).replay_events()
                 )
-                if retained is not None and retained.phase != "revoked":
-                    self._service(session_id).revoke_worker(self._worker_reconciler)
+                if retained is None or retained.phase == "revoked":
+                    continue
+                service = self._service(session_id)
+                try:
+                    service.revoke_worker(self._worker_reconciler)
+                finally:
+                    # Releasing the session keeps a later read from starting a replacement
+                    # worker; only a command to the session does that.
+                    self._services.pop(session_id, None)
+                    self._service_configurations.pop(session_id, None)
+                    with suppress(Exception):
+                        self._close_service(service)
             except Exception:
                 unresolved.append(session_id)
         return tuple(unresolved)

@@ -16,9 +16,14 @@ from pydantic import ValidationError
 import heartwood.core_adapter._state as state_module
 from heartwood.core_adapter import (
     BackendAgentMessageEvent,
+    BackendConfirmationRequestEvent,
+    BackendConfirmationResolutionEvent,
     BackendEvent,
     BackendEventSink,
+    BackendLifecycle,
+    BackendLifecycleEvent,
     DeterministicAgentBackend,
+    ProposedToolCall,
     SessionService,
     TokenDeltaSink,
 )
@@ -412,3 +417,149 @@ def test_fencing_during_outside_observation_prevents_callback(service: SessionSe
     with pytest.raises(WorkerAttemptError, match="closed"):
         lease.require_runtime_observation(lambda _runtime: lease.fence())
     assert not lease.active
+
+
+def _task(service: SessionService) -> None:
+    service.handle(
+        SessionCommand(
+            command_id=str(uuid4()),
+            session_id=service.store.session_id,
+            kind=CommandKind.CHAT,
+            created_at="2026-01-01T00:00:00Z",
+            payload={"prompt": "Synthetic task"},
+        )
+    )
+
+
+def _revoke(service: SessionService, lease: WorkerAttemptLease) -> None:
+    service.fence_worker_attempt(attempt_id=lease.intent.attempt_id)
+    service.record_worker_revocation(_revocation(lease.intent.attempt_id))
+
+
+def test_verified_revocation_lets_a_new_owner_continue_with_a_new_attempt(
+    service: SessionService, tmp_path: Path
+) -> None:
+    first_backend = service.backend
+    assert isinstance(first_backend, RecordingBackend)
+    lease = _activate(service)
+    stale_events, stale_token = first_backend.bindings[-1]
+    _revoke(service, lease)
+    _task(service)
+    assert first_backend.dispatches == 0
+    assert "reconciliation" in str(service.replay_events()[-1].payload)
+    service.close()
+
+    backend = RecordingBackend()
+    tokens: list[str] = []
+    restored = SessionService.local_default(
+        tmp_path, worker_project_id=_PROJECT, backend=backend, token_sink=tokens.append
+    )
+    try:
+        replacement = _activate(restored)
+        assert replacement.active
+        assert not lease.active
+        assert replacement.intent.attempt_id != lease.intent.attempt_id
+        assert replacement.intent.conversation_id == lease.intent.conversation_id
+        _task(restored)
+        assert backend.dispatches == 1
+        recorded = restored.replay_events()[-1]
+        assert recorded.payload["worker_attempt_id"] == str(replacement.intent.attempt_id)
+        count = len(restored.replay_events())
+        stale_events((BackendAgentMessageEvent(message="stale", source_event_id="late"),))
+        stale_token("stale")
+        assert len(restored.replay_events()) == count
+        assert tokens == []
+        with pytest.raises(WorkerAttemptError, match="fresh idle"):
+            _prepare(restored)
+    finally:
+        restored.close()
+
+
+def test_revoked_attempt_does_not_block_the_next_owners_first_dispatch(
+    service: SessionService, tmp_path: Path
+) -> None:
+    _revoke(service, _activate(service))
+    service.close()
+    backend = RecordingBackend()
+    restored = SessionService.local_default(tmp_path, worker_project_id=_PROJECT, backend=backend)
+    try:
+        _task(restored)
+        assert backend.dispatches == 1
+        assert _record(restored).phase == "revoked"
+    finally:
+        restored.close()
+
+
+@pytest.mark.parametrize("left", ["running", "paused", "waiting-for-confirmation", "review"])
+def test_work_left_open_by_a_revoked_worker_is_not_handed_to_a_replacement(
+    service: SessionService, tmp_path: Path, left: str
+) -> None:
+    backend = service.backend
+    assert isinstance(backend, RecordingBackend)
+    lease = _activate(service)
+    event_sink, _token_sink = backend.bindings[-1]
+    call = ProposedToolCall(
+        tool_call_id="call-open", tool_name="terminal", risk="medium", summary="Synthetic action"
+    )
+    if left == "review":
+        event_sink(
+            (
+                BackendConfirmationRequestEvent(
+                    tool_call=call, action_group_id="group-open", source_event_id="request"
+                ),
+                BackendLifecycleEvent(lifecycle=BackendLifecycle.IDLE, source_event_id="idle"),
+            )
+        )
+    else:
+        event_sink(
+            (BackendLifecycleEvent(lifecycle=BackendLifecycle(left), source_event_id="left"),)
+        )
+    _revoke(service, lease)
+    service.close()
+    restored_backend = RecordingBackend()
+    restored = SessionService.local_default(
+        tmp_path, worker_project_id=_PROJECT, backend=restored_backend
+    )
+    try:
+        _task(restored)
+        assert restored_backend.dispatches == restored_backend.reconciliations == 0
+        assert "continue in a new session" in str(restored.replay_events()[-1].payload)
+        with pytest.raises(WorkerAttemptError, match="replacement is unavailable"):
+            _prepare(restored)
+        assert _record(restored).phase == "revoked"
+    finally:
+        restored.close()
+
+
+def test_settled_review_and_run_allow_a_replacement(
+    service: SessionService, tmp_path: Path
+) -> None:
+    backend = service.backend
+    assert isinstance(backend, RecordingBackend)
+    lease = _activate(service)
+    event_sink, _token_sink = backend.bindings[-1]
+    call = ProposedToolCall(
+        tool_call_id="call-settled", tool_name="terminal", risk="medium", summary="Synthetic"
+    )
+    event_sink(
+        (
+            BackendLifecycleEvent(lifecycle=BackendLifecycle.RUNNING, source_event_id="running"),
+            BackendConfirmationRequestEvent(
+                tool_call=call, action_group_id="group-settled", source_event_id="request"
+            ),
+            BackendConfirmationResolutionEvent(
+                tool_call=call,
+                action_group_id="group-settled",
+                approved=False,
+                source_event_id="resolution",
+            ),
+            BackendLifecycleEvent(lifecycle=BackendLifecycle.FINISHED, source_event_id="finished"),
+        )
+    )
+    _revoke(service, lease)
+    service.close()
+    restored = SessionService.local_default(tmp_path, worker_project_id=_PROJECT)
+    try:
+        assert _activate(restored).intent.conversation_id == lease.intent.conversation_id
+    finally:
+        restored.close()

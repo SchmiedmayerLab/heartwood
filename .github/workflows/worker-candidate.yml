@@ -276,4 +276,5 @@ jobs:
             test-results/native-qualification/*/credential-expiry.json
             test-results/native-qualification/*/provider-profile.json
             test-results/native-qualification/*/model-qualification.json
+            test-results/native-qualification/*/worker-container.json
           retention-days: ${{ github.event_name == 'pull_request' && 14 || 90 }}

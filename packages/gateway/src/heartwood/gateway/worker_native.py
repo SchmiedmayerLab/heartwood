@@ -73,6 +73,15 @@ def native_worker_plan_factory(
     return prepare
 
 
+def require_declared_gateway(settings: OpenShellWorkerDeployment, project: ProjectContext) -> None:
+    """Read the registered gateway's reported version once before serving managed sessions."""
+    control = NativeWorkerControl(settings, project)
+    try:
+        control.connect()
+    finally:
+        control.close()
+
+
 def native_worker_reconciler(
     settings: OpenShellWorkerDeployment, project: ProjectContext
 ) -> WorkerReconciler:
