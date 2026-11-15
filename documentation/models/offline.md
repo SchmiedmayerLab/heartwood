@@ -6,28 +6,28 @@ SPDX-License-Identifier: MIT
 
 # Move a Model Into an Offline Environment
 
-Heartwood can package a selected model in a connected project and verify it into a different project that has no network access.
-The portable bundle includes the immutable model source, license record, runtime settings, selected files, and a SHA-256 digest for every file.
+Heartwood can package the model selected in a connected project as a bundle and verify it into a project without network access.
+The bundle holds the immutable model source, license record, runtime settings, selected files and a SHA-256 digest for every file.
+It imports into a local launch's `.heartwood/models/`.
 
 The bundle does not authorize the transfer or approve the model for a dataset.
-Use an institution-approved transfer channel and review the displayed license and deployment warnings before import.
+Use an institution-approved transfer channel and review the displayed license and warnings before import.
 
 ## Before You Begin
 
 You need:
 
 - the same Heartwood release in the connected and offline environments;
-- enough connected storage for the selected model and one additional uncompressed bundle;
-- enough destination storage for the bundle, the imported model, and at least 512 MiB of import reserve;
-- a model runtime compatible with the destination compute; and
+- connected storage for the selected model plus one uncompressed bundle;
+- destination storage for the bundle, the imported model and a 512 MiB import reserve;
+- a model runtime that matches the destination compute; and
 - an approved way to move the bundle between environments.
 
-Heartwood images and installers contain inference software but no model weights.
-The bundle is a separate file and must remain outside source control and container images.
+Keep the bundle out of source control and container images.
 
 ## 1. Prepare the Model While Connected
 
-Enter the project that already has the intended model, or create a staging project and download one:
+Enter the project that already uses the model, or create a staging project and download one:
 
 ```bash
 mkdir heartwood-model-staging
@@ -36,32 +36,27 @@ heartwood models download qwen25-7b-instruct-q4_k_m
 heartwood doctor
 ```
 
-`heartwood models managed` lists the recommendations available for the detected environment.
-For another supported Hugging Face model, follow [Choose a Heartwood-Managed Model](choose-managed.md#other-hugging-face-models) before continuing.
+`heartwood models managed` lists the catalog for the detected environment.
+For another Hugging Face model, follow [Other Hugging Face Models](choose-managed.md#other-hugging-face-models) first.
 
-## 2. Create the Verified Bundle
+## 2. Create the Bundle
 
-Create the destination directory first, then export the model selected in the current project:
+Create the destination directory, then export the model selected in the current project:
 
 ```bash
 mkdir -p /approved-transfer
 heartwood models export /approved-transfer/heartwood-model.heartwood-model.zip
 ```
 
-Heartwood verifies the source model before writing the bundle, hashes the bytes again while writing, and never replaces an existing output file.
-Repeating an export from unchanged model files and metadata produces the same bundle bytes.
+Heartwood verifies the source model, hashes the bytes again while writing, and never replaces an existing file.
+Exporting unchanged model files and metadata again produces the same bundle bytes.
+The terminal and browser report byte progress and can cancel an export without publishing a partial bundle.
 
-Large models can take several minutes to verify and copy.
-The terminal and browser report byte progress and allow a transfer to be cancelled without publishing a partial bundle.
-Gateway shutdown also requests transfer cancellation and waits for the worker and any final model-selection callback.
-A timeout leaves shutdown incomplete; retry it after the worker finishes before moving project state.
-
-Move the completed `.heartwood-model.zip` file through the approved transfer process.
-Do not include provider credentials or unrelated `.heartwood/` state.
+Move the completed `.heartwood-model.zip` file through the approved transfer process, without provider credentials or other `.heartwood/` content.
 
 ## 3. Inspect the Bundle in the Destination
 
-Enter the empty destination project and inspect the bundle before making changes:
+Enter an empty destination project and inspect the bundle before changing anything:
 
 ```bash
 mkdir offline-analysis
@@ -69,54 +64,38 @@ cd offline-analysis
 heartwood models inspect-bundle /approved-transfer/heartwood-model.heartwood-model.zip
 ```
 
-Review the model, immutable revision, license, runtime, file count, size, and platform warnings.
-Checksums establish that the imported files match this bundle; they do not establish who supplied it.
-Heartwood therefore does not accept bundle-supplied platform qualification for an unknown model.
-An exact match to the installed Heartwood catalog uses the catalog's trusted qualification metadata; every other imported model remains **Not tested**.
-For a vLLM model directory, the catalog pins the upstream revision but not the file contents, so a matching bundle is only as trustworthy as its source; import vLLM bundles only from a transfer path you control.
+Review the model, immutable revision, license, runtime, file count, size and platform warnings.
+Checksums establish that imported files match the bundle, not who supplied it.
+Heartwood therefore ignores any qualification a bundle claims: a model that exactly matches the installed catalog uses the catalog's qualification, and every other imported model is **Not tested**.
+For a vLLM directory the catalog pins the upstream revision but not the file contents, so import vLLM bundles only from a transfer path you control.
 
 ## 4. Approve and Import
-
-Import from the same project directory:
 
 ```bash
 heartwood models import /approved-transfer/heartwood-model.heartwood-model.zip
 ```
 
-Heartwood displays the review again and asks for explicit license approval.
-For reviewed automation, `--approve-license` supplies that explicit decision without an interactive prompt.
-The import is bound to the exact manifest shown during review and stops if the bundle changes before copying begins.
-
-The import streams every file into private staging storage, checks its size and SHA-256 digest, verifies the runtime-specific model structure, and publishes it atomically under `.heartwood/models/`.
-It also selects the imported model through the normal project configuration path; no manual state edit is needed.
-Cancellation or a selection failure retains files that have already been fully verified and published in the model cache.
-A retry verifies those cached files again before selecting the model; incomplete staging is removed.
+Heartwood shows the review again and asks for explicit license approval; `--approve-license` gives that decision for reviewed automation.
+The import is bound to the manifest you reviewed and stops if the bundle changes before copying begins.
+It streams each file into private staging, checks its size and digest, verifies the runtime-specific model structure, publishes the model atomically under `.heartwood/models/`, and selects it in the project configuration.
+If it is cancelled or selection fails, fully verified files stay in the model cache and are verified again on retry; incomplete staging is removed.
 
 ## 5. Verify and Start
-
-Confirm readiness and inspect the runtime plan without starting inference:
 
 ```bash
 heartwood doctor
 heartwood runtime start --dry-run
-```
-
-Then start Heartwood normally:
-
-```bash
 heartwood
 ```
 
-The runtime planner uses the transferred model's verified files and compatibility settings in the same way as a connected download.
-It does not try to retrieve transferred model files from Hugging Face after a restart.
+The runtime planner uses the transferred files and settings exactly as for a connected download and never fetches them from Hugging Face after a restart.
 
 ## Use the Browser or Notebook
 
-On a platform with a supported browser route, open **Settings → Models → Move a model between environments**.
-Export and import use server-visible paths rather than uploading multi-gigabyte files through the page.
-The browser shows the same plan, warnings, byte progress, cancellation state, and final project selection as the terminal.
+Where the browser interface is available, open **Settings → Models → Move a model between environments**.
+Export and import use paths visible to the server rather than uploading files through the page, and show the same plan, warnings, progress, cancellation and final selection as the terminal.
 
-The notebook bridge exposes the same gateway operations for programmatic workflows:
+The notebook bridge calls the same gateway operations:
 
 ```python
 from pathlib import Path
@@ -134,11 +113,11 @@ with NotebookSession() as session:
     )
 ```
 
-Use the terminal or browser for the license review unless a notebook workflow already has an equivalent human approval step.
+Use the terminal or browser for the license review unless the notebook workflow has an equivalent human approval step.
 
 ## Run a Container Without Networking
 
-After the bundle has been imported into the mounted project, a strict terminal-only container can start without a network namespace:
+After the bundle is imported into the mounted project, a terminal-only container can run without a network namespace:
 
 ```bash
 docker run --rm -it \
@@ -150,32 +129,28 @@ docker run --rm -it \
   heartwood
 ```
 
-The mounted host directory remains the durable project and appears as `/workspace` in the container.
-Docker's `none` network removes external network interfaces while retaining container-local loopback.
-The explicit bind mount still gives the container access to the current host directory, so this is a network-access boundary rather than full host isolation.
-Because the container has no externally reachable network route, this recipe does not provide a browser route.
-An offline browser deployment requires an authenticated or loopback-only inbound route and a separately enforced outbound network boundary.
+Docker's `none` network removes external interfaces and keeps container-local loopback.
+The bind mount still exposes the current host directory, so this is a network boundary, not host isolation, and there is no browser route.
 
 ## Recover From an Interrupted Transfer
 
-- **Export stopped:** rerun the export after confirming that the intended output path does not contain a completed bundle.
-- **Import stopped:** rerun the same import; Heartwood removes private incomplete staging state before retrying.
-- **Bundle changed after review:** inspect the transferred file again and investigate the transfer channel rather than bypassing the error.
-- **Checksum or file-list mismatch:** obtain a new bundle from the connected project.
-- **Destination already contains different files:** choose a clean project or remove the model only after confirming that no needed project uses it.
-- **Runtime is unavailable or incompatible:** install the matching Heartwood runtime or choose a model supported by the destination; importing weights does not install GPU drivers or inference software.
+- If an export stopped, confirm that the output path holds no completed bundle and export again.
+- If an import stopped, rerun the same import; private incomplete staging is removed first.
+- If the bundle changed after review, inspect it again and investigate the transfer channel rather than bypassing the error.
+- If checksums or the file list do not match, obtain a new bundle from the connected project.
+- If the destination already holds different files, use a clean project, or remove the model only after confirming that no project needs it.
+- If the runtime is unavailable or incompatible, install the matching Heartwood runtime or choose a model the destination supports; importing weights installs no drivers or inference software.
 
-Importing the same unchanged bundle again is safe: Heartwood fully verifies the existing project copy and returns it without duplicating model storage.
+Importing the same unchanged bundle again verifies the existing copy and returns it without duplicating storage.
 
-## Verify the Deployment Boundary
+## Verify the Offline Boundary
 
 Before using project data, confirm that:
 
-- the active managed model uses the launcher's private Unix socket;
-- no hosted model credential is configured;
+- the active model is Heartwood-managed and no hosted model credential is configured;
 - the platform independently denies outbound network traffic;
 - project and model storage meet the environment's handling requirements; and
-- audit exports remain in approved storage.
+- audit exports stay in approved storage.
 
-Heartwood CI performs the connected export, clean no-network import, normal launcher plan, real model inference, OpenHands tool proposal, grouped approval and rejection, file verification, replay, and audit export as one acceptance path.
-Deployment isolation and transfer authorization remain infrastructure responsibilities.
+CI runs the connected export, a no-network import into a read-only container, the runtime plan, real model inference, an OpenHands tool proposal, approval and rejection, file checks, replay and audit export as one acceptance path on Linux AMD64.
+Transfer authorization and the environment's network isolation remain infrastructure responsibilities.

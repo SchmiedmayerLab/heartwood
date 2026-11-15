@@ -51,9 +51,7 @@ Their content-minimized fingerprints are included in the security audit; the ful
 Project queries rebuild `experiments.jsonl` in the bound state directory from those verified source events using idempotent appends.
 Rebuilding never reads newer artifact contents or repeats model calls or tool actions.
 
-The gateway exposes `experiment_records()` and `export_experiments()` for project-wide inspection and export.
-The corresponding authenticated HTTP routes are `GET /research/experiments` and `GET /research/experiments/export`.
-An export includes canonical JSON Lines and its SHA-256 digest; it is not a signed audit checkpoint.
+The gateway's `experiment_records()` and `export_experiments()`, and the authenticated routes `GET /research/experiments` and `GET /research/experiments/export`, serve the same collection and export.
 The project collection also includes analyses explicitly recorded through the Python API and command-line recorder below.
 
 ## Record a Command-Line Analysis
@@ -162,7 +160,7 @@ That execution witness supplements the stage record; it does not turn package me
 The gateway, `heartwood experiments environment`, browser export, and `NotebookSession.verification_environment()` share the same metadata capture.
 The terminal and notebook accept an explicitly selected analysis interpreter; the browser export describes server Python and does not execute arbitrary client-supplied executables.
 The local Independent Result Verification workflow reconstructs a wheel-only `pylock.toml` with uv in a fresh `.heartwood/runtime/` environment through a reviewed tool action.
-That local workflow is not permission to expose protected runtime state to a sandboxed worker; remote execution requires separately qualified workspace and evidence handling.
+That local workflow is not permission to expose protected runtime state to an isolated worker; remote execution requires separately qualified workspace and evidence handling.
 Its execution witness binds the original lock and inputs to the observed environment artifact, then guards that artifact before analysis execution.
 Package installation uses a private lock snapshot and cache without inherited credentials, installer overrides, source builds, or automatic interpreter downloads.
 Metadata probing and analysis execution also exclude inherited environment variables so Python startup hooks do not receive provider credentials.

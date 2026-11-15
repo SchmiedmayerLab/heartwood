@@ -6,43 +6,64 @@ SPDX-License-Identifier: MIT
 
 # Release Guide
 
-Heartwood releases are created by an approval-gated GitHub Actions workflow after required checks pass for the exact `main` commit.
-Release versions use strict Semantic Versioning without a `v` prefix.
+A release is created by the **Create Release** workflow from the exact current `main` commit after that commit's required checks pass.
+Versions use strict Semantic Versioning without a `v` prefix, such as `0.4.0` or `0.4.0-beta.1`.
 
 ## Prepare a Release
 
-1. Update `VERSION.toml` and every version-owned package, Skill, lock, image, installer, and documentation reference together.
+1. Update `VERSION.toml` and every version-owned package, lock, image, installer, and documentation reference together; `deploy/verify_release_candidate.py` lists any that differ.
 2. Run the complete test and documentation suites.
-3. Merge the reviewed change to `main` only after required checks pass.
-4. Start the **Create Release** workflow with the exact version.
-5. Review the editable draft, generated release notes, native assets, checksums, and target commit.
+3. Merge the reviewed change to `main` and wait for **Main Validation** to pass on that commit.
+4. Start **Create Release** from `main` with the exact version.
+5. Review the draft release: generated notes, assets, checksums, and target commit.
 6. Approve the `release` environment to publish.
 
-The workflow verifies immutable container candidates, builds and tests native assets, creates a draft with GitHub-generated notes, waits for approval, publishes immutable image tags and the GitHub Release, then publishes versioned documentation.
+## What the Workflow Checks
+
+The workflow stops unless all of the following hold for the commit:
+
+- the version is valid, matches every version-owned source, and has no published release or tag;
+- the commit is still the tip of `main`, checked again before the draft and before publication;
+- every catalog model source verifies, and the curated Skill revision is published on `heartwood-skills` `main`;
+- the `Release Candidate Ready`, `Analyze (python)`, and `Analyze (javascript-typescript)` checks passed;
+- immutable container candidates exist for the commit.
+
+`Release Candidate Ready` requires every Main Validation job, including capable-model acceptance, native worker qualification, and the attestation of its evidence.
+That job verifies the native qualification evidence against the commit with `deploy/qualification_evidence.py` and creates a GitHub artifact attestation for its `SHA256SUMS`; the job builds and runs no application code.
+The evidence stays a workflow artifact, `worker-native-qualification-<commit>`, retained for 90 days; it is not attached to the release.
+Verify it with `gh attestation verify` bound to this repository, the Main Validation workflow, `refs/heads/main`, and the commit.
+Pull-request runs are not attested.
+
+The workflow then builds the native assets from the commit, tests the installer layout and an installation from an empty Ubuntu container, attests every asset, and creates a draft release with GitHub-generated notes.
+After approval it publishes the immutable image tags and the release, then the versioned documentation.
+
+## Authority
 
 `CODEOWNERS` identifies the current release maintainer.
-The protected `release` environment is the release-authority boundary and requires explicit approval after the candidate has passed the exact-commit gate.
-Repository administrators may recover interrupted workflows, but they must not replace or retarget an existing immutable release.
+The protected `release` environment is the release-authority boundary: it accepts deployments only from protected branches and requires the maintainer's approval.
+The **Semantic Version Releases** tag ruleset forbids updating, deleting, or force-moving any tag; organization administrators can bypass it.
+Administrators may recover an interrupted workflow, which replaces an unpublished draft for the same commit, but must never replace or retarget a published release.
+
+## Release Contents
+
+| Item | Contents |
+|---|---|
+| `heartwood-installer` | Native installer script |
+| `heartwood-native.tar.gz` | Application source, curated Skills, maintained runtime wheels, and browser assets |
+| vLLM wheel | The CUDA 12.9 wheel pinned in `images/gpu/compatibility.toml`, for restricted environments such as Carina |
+| `SHA256SUMS` | Checksums of the native archive and the vLLM wheel |
+| Image tags | `VERSION`, `VERSION-gpu-nvidia`, `VERSION-terra`, and `VERSION-terra-gpu-nvidia`, promoted from the commit's candidate images |
+| Documentation | The `VERSION` path of the versioned site |
+
+Every release asset carries a build provenance attestation.
+Releases contain no worker image, sandbox gateway, model weights, or credentials.
+The platform contract bundle is not a release asset; partners export it from the release commit as described in [Platform Contract](../operate/platform-contract.md#generate-and-review-the-current-artifacts).
+A prerelease is marked as a GitHub prerelease and never becomes `latest`.
 
 ## Stable and Preview Documentation
 
-A stable version such as `0.4.0` updates the `stable` alias and the documentation root.
-A prerelease such as `0.4.0-beta.1` updates the `preview` alias without replacing the stable root.
-
-The version store is deployed to GitHub Pages and retains immutable version paths.
-Publishing the same version with different content is rejected.
-
-## Release Artifacts
-
-Each release includes:
-
-- `heartwood-installer`;
-- `heartwood-native.tar.gz`;
-- the release-pinned CUDA 12.9 vLLM wheel used by Carina;
-- `SHA256SUMS`;
-- standard, GPU, Terra, and Terra GPU image tags; and
-- versioned documentation.
-
-The release workflow marks prerelease versions as GitHub prereleases and never moves a `latest` release designation to them.
+A stable version such as `0.4.0` moves the `stable` alias and the documentation root to it.
+A prerelease such as `0.4.0-beta.1` moves the `preview` alias without changing the root.
+Documentation is published only for the latest release of its channel, and republishing a version with different content is rejected.
 
 See [Support and Compatibility](../operate/support.md) for the maintained release line and pre-1.0 change policy.

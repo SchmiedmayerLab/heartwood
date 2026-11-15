@@ -6,124 +6,91 @@ SPDX-License-Identifier: MIT
 
 # Add a Platform
 
-A platform integration adapts storage, identity, scheduler, browser routing, model connections, and policy while retaining the shared Heartwood project, gateway, OpenHands, session, and interface contracts.
-Do not add a platform-specific agent loop or separate web/CLI state.
-
-The adapter implements `PlatformCapabilities`; `SessionGateway` remains the application boundary for every supported interface.
-Start from the [Platform Contract](platform-contract.md), which defines what Heartwood and the platform each own and what the platform provides.
+A platform adapter adapts storage, identity, scheduling, browser routing, model connections and policy to one environment while the project, gateway, OpenHands, session and interface contracts stay shared.
+Do not add a platform-specific agent loop or separate terminal or browser state.
+The adapter implements the `PlatformAdapter` protocol in `heartwood.adapters`; start from the [Platform Contract](platform-contract.md) for what the platform itself must provide.
 
 ## Define Capabilities
 
-Implement `PlatformAdapter.capabilities()` with:
+`PlatformAdapter.capabilities()` returns a `PlatformCapabilities` record with:
 
-- a stable platform identifier and display name;
-- supported interfaces;
-- browser routing mode;
-- supported gateway ingress modes and one default;
-- Heartwood-managed inference runtimes;
-- scheduler behavior;
-- durable-storage guidance;
-- credential backends;
-- the model-credential boundary;
-- permitted model-source categories;
-- managed model connections; and
-- validation level.
+- `platform_id` and `display_name`;
+- supported `interfaces` and the `browser_route`;
+- supported `ingress_modes` and one `default_ingress_mode`;
+- `managed_runtimes` for Heartwood-managed inference;
+- `scheduler` and `persistent_storage` guidance;
+- `credential_backends`;
+- permitted `model_sources` and any `platform_isolated_model_sources`;
+- `managed_model_connections`; and
+- `validation_level`, either `ci` or `ci-and-live-synthetic`.
 
-The gateway exposes this typed manifest at `GET /project/capabilities` and every interface uses it to hide unsupported choices.
+The gateway serves this record at `GET /project/capabilities`, and every interface uses it to hide unsupported choices.
 
 ## Detect the Environment
 
-Detection must use deterministic, content-safe evidence such as explicit deployment markers, scheduler identity, or Jupyter platform variables.
+`PlatformAdapter.detect()` must use deterministic, content-safe evidence such as explicit deployment markers, scheduler identity or Jupyter platform variables.
 Do not inspect research data or infer institutional authorization.
-
-The generic adapter remains the fallback when no managed platform evidence matches.
+The generic adapter is the fallback when no other adapter matches.
 
 ## Define Policy and Connections
 
-Provide a deny-by-default `PolicyProfile` containing exact model catalog and completion endpoints, allowed capability tiers, action-review modes, and credential reference names.
-Expose managed connection metadata without secret values.
-
-User-entered compatible endpoints must not silently widen managed-platform policy.
+`PlatformAdapter.default_policy_profile()` returns a deny-by-default `PolicyProfile` with exact model catalog and completion endpoints, capability tiers, action-review modes and credential reference names.
+It applies when no deployment manifest is supplied; a manifest's `[policy]` table replaces it.
+The built-in generic, Terra and Carina adapters permit `review-all` and `review-changes`.
+Expose managed connection metadata without secret values, and never let a user-entered compatible endpoint widen managed-platform policy.
 
 ## Gateway Ingress
 
-Choose from the shared ingress modes instead of adding platform-specific request parsing:
+Choose one of the shared ingress modes instead of adding platform-specific request parsing:
 
 - `direct-loopback` for a client that connects directly to a loopback gateway;
 - `jupyter-proxy` for an authenticated local Jupyter proxy that strips one exact external prefix and supplies only validated Jupyter route metadata; or
-- `trusted-proxy` for a non-loopback deployment with exact proxy source ranges, external origin, base path, and forwarded metadata.
+- `trusted-proxy` for a non-loopback deployment with exact proxy source ranges, external origin, base path and forwarded metadata.
 
-The deployment supplies route values to `heartwood gateway serve`.
-The gateway validates and normalizes them once for the REST API, server-sent events, WebSockets, browser assets, and generated browser base path.
-Interface clients do not inspect Terra, Carina, Jupyter, or proxy-specific environment variables.
+The deployment supplies route values to `heartwood gateway serve`, which validates them once for the REST API, server-sent events, WebSockets, browser assets and the generated browser base path.
+Interface clients do not read Terra, Carina, Jupyter or proxy environment variables.
+A trusted proxy removes inbound forwarding and identity headers before setting its own, and its upstream route reaches only the configured gateway bind.
 
-A trusted proxy must remove inbound forwarding and identity headers before setting its own complete values.
-Restrict its upstream network route to the configured gateway bind.
-Heartwood validates that request metadata agrees with the declared route; the proxy remains responsible for end-user authentication, authorization, TLS, and network isolation.
-
-Every gateway API request also needs the launch capability.
-Let the researcher open the launch link that `heartwood gateway serve` prints, and forward the browser’s capability header and WebSocket authentication frame unchanged, or supply the gateway capability through `--capability-fd` and inject `X-Heartwood-Capability` from the proxy for callers the platform has already authenticated.
-Never expose the secret to the agent workspace or to other users of the platform.
-The gateway consumes and closes the inherited descriptor before serving requests and rejects environment delivery.
-Protect the descriptor source from worker access and never forward researcher capabilities to the agent server.
+Every request also needs the launch capability.
+Either let the researcher open the launch link that `heartwood gateway serve` prints and forward the browser's header and WebSocket authentication frame unchanged, or supply the capability through `--capability-fd` and inject `X-Heartwood-Capability` from the proxy for callers it has authenticated.
+Keep the descriptor source and the capability away from the worker and from other users.
 
 ## Model Credential Isolation
 
 Leave `platform_isolated_model_sources` empty unless an exact model source uses a transport separated from the operating-system identity that runs OpenHands tools.
-Application scrubbing keeps secrets out of supported tool inputs and persisted surfaces, but it does not justify unattended secret-backed operation.
+Listing a source lets `review-changes` apply in local execution for that source, and the gateway does not check the claim, so add a source only after live synthetic validation on the platform shows that terminal, file-editor and Task tools cannot read its credential.
+Qualification is per source: isolating an institutional gateway does not qualify a subscription, hosted-provider or custom endpoint on the same platform.
+The selected profile must use the exact model-source identifier and a managed-identity binding; an environment variable or mounted credential file stays application-scrubbed.
+Cover restart, every advertised interface, research files, state, inherited process resources, logs, events, browser and notebook outputs and audit exports, and keep model authorization and tool execution independently revocable.
 
-Add a model source to `platform_isolated_model_sources` only when the adapter has `ci-and-live-synthetic` validation and the deployment demonstrates that terminal, file-editor, Task, and future supported tools cannot read that source's credentials.
-Qualification is source-specific: isolating an institution-managed gateway must not qualify a subscription, hosted-provider, or custom endpoint on the same platform.
-The selected profile must use the exact model-source identifier and a managed-identity binding; an environment variable or mounted credential file remains application-scrubbed even when another route on the platform is isolated.
-The validation must cover restart, every advertised interface, research files, local or operator-bound state, inherited process resources, logs, events, browser and notebook outputs, and audit exports.
-Model authorization and tool execution must remain independently revocable.
-
-OpenHands RemoteWorkspace is useful for isolating an agent environment from its caller.
-Because its Agent Server still owns both model orchestration and tools, it is not a model-only credential boundary without an additional platform control.
-Prefer a platform-native model proxy or separately authorized service identity over a Heartwood-managed secret store.
+An OpenHands remote workspace isolates the agent environment from its caller, but its agent server holds both the model client and the tools, so it is not a model-only credential boundary.
+Prefer a platform-native model proxy or a separately authorized service identity to a Heartwood-managed secret store.
 
 ## Protected State and Worker Execution
 
-Managed launch must bind the exact research directory, project UUID, external state root and policy ceiling through the existing operator deployment parser.
-Keep that manifest outside research files and canonical state, with operator-owned parents and no worker access.
-Project preferences can narrow the ceiling; platform detection and project files cannot establish deployment authority.
-See [Operator-Bound External State](../start/project.md#operator-bound-external-state).
+Managed launch binds the research directory, project UUID, state directory and policy ceiling through the [deployment manifest](../reference/configuration.md#deployment-manifest).
+Platform detection and project files cannot establish deployment authority.
 
-A worker adapter confines the complete agent server, model client, tools and subprocesses.
-Reuse native infrastructure for sandbox creation, mandatory filesystem and network controls, resource limits and inference credential delivery.
-The reference adapter uses OpenShell and the native OpenHands remote contracts; those product-specific control objects are not mandatory platform-facing schemas.
-Keep the trusted gateway, canonical records, approvals, signing authority and management sockets outside the worker.
-Supply only selected read-only inputs and verified Skills, with separate writable work storage.
-
-Bind each attempt to its project, session, image, effective policy and input manifest before admitting events.
-Observe admission and revocation through the outside control plane, independently of worker reports.
-Retain fenced ownership when creation or deletion has an uncertain outcome and reconcile before replacement.
-Use the existing [worker ownership contract](../architecture/system.md#worker-attempt-ownership) and [native integration checks](../architecture/testing.md#installed-native-integration).
-A sandbox does not independently qualify provider model authorization, data eligibility or output release.
+A worker adapter confines the complete agent server, model client, tools and subprocesses, and reuses native infrastructure for sandbox creation, mandatory filesystem and network controls, resource limits and credential delivery.
+The reference adapter uses OpenShell on a local Docker engine and the native OpenHands remote contracts; its control objects are not portable platform schemas.
+Keep the gateway, canonical records, approvals, signing authority and management sockets outside the worker, and supply only selected read-only inputs and verified Skills with separate writable storage.
+Bind each attempt to project, session, image, effective policy and input manifest before admitting events; observe admission and revocation through the outside control plane; and keep ownership fenced while creation or deletion is uncertain.
+The [worker ownership contract](../architecture/system.md#worker-attempt-ownership) and [native integration checks](../architecture/testing.md#installed-native-integration) define the expected behavior.
 
 ## Package the Shared Application
 
-Prefer extending the platform's supported base image with the shared Heartwood payload.
-Preserve its entrypoint, user, Jupyter paths, proxy behavior, and required libraries unless a documented platform contract requires a change.
-
-Declare image targets in `images/platforms.toml`, parameterize the shared `images/Dockerfile` assembly in `docker-bake.hcl`, and add platform-specific validation scripts only where the inherited environment requires them.
-
-Keep model weights and credentials out of image layers.
-Publish the manifest media type and architectures accepted by the platform, not a generic index when the platform cannot consume it.
+Extend the platform's supported base image with the shared Heartwood payload, preserving its entrypoint, user, Jupyter paths, proxy behavior and required libraries unless the platform requires a change.
+Declare image targets in `images/platforms.toml`, parameterize the shared `images/Dockerfile` assembly in `docker-bake.hcl`, and add platform validation scripts only where the inherited environment requires them.
+Keep model weights and credentials out of image layers, and publish the manifest media type and architectures the platform accepts.
 
 ## Configure Checkpoint Signing
 
-When the platform retains authoritative audit checkpoints, install one deployment-owned signer registry at `/etc/heartwood/checkpoint-signers.toml` or set `HEARTWOOD_CHECKPOINT_SIGNER_REGISTRY` to an absolute operator-controlled path.
-For containers, mount the registry and trusted public keys read-only and inject any bearer token as a separate runtime secret file.
-For native or shared-computing installations without `/etc` access, the launcher can reference a read-only installation-level registry outside every researcher project.
-
-Publish a production profile as the registry default and expose only profiles users are permitted to select.
-Keep KMS/HSM credentials and private keys in the isolated signer service.
-Do not bake tokens, private keys, or project-specific signer choices into an image.
-See [Audit Checkpoints and Retention](audit-checkpoints.md) for the registry contract and validation workflow.
+When the platform retains authoritative checkpoints, install one deployment-owned signer registry at `/etc/heartwood/checkpoint-signers.toml`, or set `HEARTWOOD_CHECKPOINT_SIGNER_REGISTRY` to an absolute operator-controlled path.
+In containers, mount the registry and public keys read-only and inject any bearer token as a separate secret file.
+Publish a production profile as the registry default, keep KMS or HSM credentials and private keys in the signer service, and never bake tokens, keys or project-specific signer choices into an image.
+See [Audit Checkpoints and Retention](audit-checkpoints.md).
 
 ## Validate Conformance
 
-Add adapter protocol tests, capability serialization tests, ingress adversarial tests, read-only startup tests, project persistence tests, model-policy tests, credential-boundary tests, and interface tests for every advertised surface.
-
-Use a production-derived CI image where the real base cannot run in pull-request CI, then validate the exact published artifact in a synthetic live environment before claiming live support.
+Add adapter protocol, capability serialization, ingress adversarial, read-only startup, project persistence, model-policy, credential-boundary and interface tests for every advertised surface.
+Use a production-derived CI image where the real base cannot run in pull-request CI, then validate the published artifact in a synthetic live environment before setting `validation_level` to `ci-and-live-synthetic`.

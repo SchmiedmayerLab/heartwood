@@ -10,23 +10,27 @@ Heartwood is a Python workspace with a TypeScript researcher web interface built
 
 ## Set Up the Repository
 
+The bootstrap requires uv 0.13.7 exactly.
+If another uv is installed, select the pinned one for these commands:
+
 ```bash
 git clone --recurse-submodules https://github.com/SchmiedmayerLab/heartwood.git
 cd heartwood
-uv run --no-project --python 3.12.15 deploy/build-worker-candidate.py --bootstrap
-uv sync --locked --all-groups --all-extras
+UV=$(uvx --from uv==0.13.7 which uv)
+$UV run --no-project --python 3.12.15 deploy/build-worker-candidate.py --bootstrap --uv "$UV"
+$UV sync --locked --all-groups --all-extras
 npm ci --prefix packages/webui
 ```
 
-Use the repository's pinned Python and Node dependency locks.
-The dependency builder requires uv 0.13.7 and prepares reviewed runtime wheels in `vendor/runtime-wheels/` before workspace resolution.
-It verifies upstream source and patch hashes, preserved licenses, reproducible wheel digests and the build record; subsequent bootstrap calls verify the existing files without replacing them.
-These locally versioned SDK wheels are distributed inside the native release archive and built through the shared container assembly.
-Installing individual Heartwood packages from a package registry without those wheels is not a supported installation route.
-If dependency verification fails, retain the failed files for inspection and use a clean checkout rather than bypassing hashes or overriding dependency constraints.
-Resolution ignores releases younger than seven days through uv's `exclude-newer` setting, npm's `min-release-age`, and the Dependabot cooldown; security updates are not delayed.
-Base images are pinned by digest, and third-party GitHub Actions use exact versions from immutable releases, with Dependabot proposing updates in the weekly group.
-Do not add a new language, agent implementation, UI stack, or service when an existing contract or upstream dependency can own the behavior.
+`--recurse-submodules` checks out the curated Skill source in `vendor/heartwood-skills`; in an existing clone run `git submodule update --init`.
+The bootstrap builds the maintained OpenHands and OpenShell wheels into `vendor/runtime-wheels/`, which the workspace lock resolves from, after verifying upstream source and patch hashes, preserved licenses, wheel digests, and the build record.
+A later bootstrap only verifies the existing wheels.
+If verification fails, keep the files for inspection and start from a clean checkout; never bypass hashes or override constraints.
+`--all-groups` adds the `dev`, `docs`, and `worker` dependency groups.
+Installing Heartwood packages from a package registry without these wheels is not supported; the native release archive and container images build them through the same bootstrap.
+
+Resolution ignores releases younger than seven days through uv's `exclude-newer`, npm's `min-release-age`, and the Dependabot cooldown; security updates are not delayed.
+Base images are pinned by digest, and third-party GitHub Actions use exact versions from immutable releases.
 
 ## Reuse Before Variants
 
@@ -40,29 +44,14 @@ Add a parameter, platform adapter, or validation target for a real platform diff
 
 ### Worker Image
 
-`docker buildx bake worker` builds the native agent server through the same image stages and workspace lock.
-The optional `worker` dependency group pins the server to the SDK and tool version; it is not installed in the ordinary application image.
-Use `uv sync --locked --all-groups --all-extras` to include its configuration checks locally.
-Run `python images/worker/smoke.py IMAGE` against the locally loaded worker image to verify native command execution, authentication, private workspace persistence, read-only configuration, and removal of synthetic inherited secrets.
-The check creates a disposable container with no network or host mounts and removes it afterward.
-The worker target is a Linux CPU qualification artifact and is not connected to the gateway's local conversation factory.
+`docker buildx bake worker` builds the managed worker image, the OpenHands agent server from the `worker` dependency group, through the same image stages and workspace lock; the application image does not contain it.
+`python images/worker/smoke.py IMAGE` checks a locally loaded worker image in a disposable container with no network or host mounts: native command execution, authentication, private workspace persistence, read-only configuration, and removal of synthetic inherited secrets.
+Local launches run OpenHands in the gateway process; only a deployment manifest's `[worker]` table launches this image, through OpenShell.
 
-The entry point requires a fresh URL-safe `SESSION_API_KEY` with at least 43 characters and accepts only the optional `HEARTWOOD_INFERENCE_PLACEHOLDER` from the launching environment.
-Generate the key with a cryptographically secure random source for each attempt, never reuse it between workers, and deliver it through the sandbox's secret mechanism.
-The placeholder must be issued by the outside inference transport; never supply an actual provider credential under that name.
-The worker also admits OpenShell's exact supervisor certificate and combined trust-bundle paths under `/run/openshell-supervisor-ca/material/` for Python, Requests, curl, Git, Node, and Deno TLS clients.
-The sandbox owns these public trust files and must keep them outside worker-writable paths.
-This preserves inference credential substitution through the supervisor's authenticated TLS interception without accepting arbitrary certificate overrides.
-All other environment values are fixed in the image: system paths and locale, private worker home, disabled telemetry, and the read-only server configuration.
-Proxy settings, other certificate paths, dynamic loader settings, Python import paths, arbitrary server overrides, host identity, and other credentials are not forwarded.
-The entry point closes inherited descriptors other than standard input, output, and error before replacing itself with the native server.
-It binds to sandbox loopback, disables browser and editor services, and admits one concurrent native conversation run.
-
-Launch this target through a qualified sandbox with no host environment inheritance, scoped volumes, non-root identity, resource limits, and outside network enforcement.
-The initial executable must already be launched under that boundary: cleaning its environment cannot undo a malicious dynamic-loader setting used before the bootstrap runs.
-Worker conversation and command state is private, untrusted runtime data under the worker home; it is never canonical gateway state and can contain sensitive content.
-Its retention and deletion require deployment controls.
-An image, a loopback bind, and environment filtering alone do not establish isolation, independent approval enforcement, or sensitive-data readiness.
+The entry point, `images/worker/launch.py`, requires a fresh URL-safe `SESSION_API_KEY` of at least 43 characters and accepts only an optional `HEARTWOOD_INFERENCE_PLACEHOLDER` and OpenShell's supervisor trust files under `/run/openshell-supervisor-ca/material/` from the launching environment.
+Every other environment value is fixed in the image, inherited descriptors beyond standard streams are closed, and the server binds to sandbox loopback with one concurrent conversation run.
+These measures do not create isolation: the image must be started inside a qualified sandbox with no inherited host environment, scoped volumes, a non-root identity, resource limits, and outside network enforcement.
+[Security and Controlled Data](../operate/security.md) describes the worker boundary and what it does not establish.
 
 ### Installed Gateway Resources
 
@@ -94,9 +83,11 @@ The candidate workflow tests the installed wheels with isolated Python imports, 
 ## Run Checks
 
 ```bash
+uv run ruff format --check .
 uv run ruff check .
 uv run vulture
 uv run mypy packages
+uv run heartwood-fixtures fixtures evals
 uv run pytest
 npm run --prefix packages/webui lint
 npm run --prefix packages/webui duplicates:check
@@ -108,7 +99,7 @@ uv run --group docs zensical build --clean --strict
 ```
 
 Run focused tests while iterating, then run the complete affected suites before review.
-Container and capable-model checks have higher resource requirements and run through their documented workflows.
+Container, capable-model, and native worker checks need more resources and run through their workflows; see [Testing and Evidence](../architecture/testing.md).
 
 The curated Skill source must be initialized at the exact Git revision recorded by the superproject.
 CI rejects missing, modified, or substituted submodule content.
@@ -125,12 +116,15 @@ The candidate does not move release or `edge` tags.
 
 ## CI Runners and Runtime Locks
 
-Standard GitHub-hosted runners run every job except capable-model acceptance: `ubuntu-24.04` for x64 jobs and `ubuntu-24.04-arm` for ARM images.
-Container builds start with the shared `reclaim-runner-disk` action, which removes preinstalled toolchains the job does not use and reports the remaining space.
-The Terra image jobs carry longer timeouts because the Terra base image is large.
-Capable-model acceptance runs on the organization's `heartwood-ubuntu-large` hosted runner because llama.cpp prompt processing on a standard runner does not finish inside the qualification command deadline.
-The job verifies at least 30 GiB of memory so it cannot silently run on a standard runner, and it matches llama.cpp threads to the runner's cores.
-The runner group is limited to this repository, and fork pull requests need approval before their workflows run; keep the large-runner label out of every other workflow.
+Pull-request and main validation run on standard GitHub-hosted runners (`ubuntu-24.04`, `ubuntu-24.04-arm` for ARM images, and `ubuntu-latest` for some checks), with two exceptions.
+Capable-model acceptance runs on the organization's `heartwood-ubuntu-large` hosted runner, because llama.cpp prompt processing on a standard runner misses the qualification deadline; the job requires at least 30 GiB of memory and matches llama.cpp threads to the runner's cores.
+That runner group is limited to this repository and fork pull requests need approval before their workflows run; keep its label out of every other workflow.
+GPU coding-agent qualification is a manually started workflow on a self-hosted GPU runner.
+GPU image builds start with the `reclaim-runner-disk` action, which removes unused preinstalled toolchains.
+
+Hosted jobs differ from a local checkout in two ways that matter when a result differs.
+The Python job installs with `uv sync --locked --all-extras` (default groups only) after the same bootstrap, and installed-wheel and native qualification jobs set `OPENHANDS_SUPPRESS_BANNER=1` and `LITELLM_LOCAL_MODEL_COST_MAP=True` so no model cost map is fetched from the network.
+Native worker qualification needs Docker and builds the qualification-only sandbox gateway; it runs for every main commit and for pull requests that change anything outside `documentation/` and `.github/`, or its own or the pull-request validation workflow.
 
 Regenerate the isolated GPU dependency lock with `bash images/gpu/compile_requirements.sh`.
 This is the same command CI uses to verify the lock, including its release-date cutoff and hashes.

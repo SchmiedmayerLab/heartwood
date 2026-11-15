@@ -7,324 +7,270 @@ SPDX-License-Identifier: MIT
 # Command Reference
 
 Run every command from the directory that should be the Heartwood project.
-Use `heartwood COMMAND --help` for generated argument details in the installed release.
+`heartwood COMMAND --help` prints the arguments of the installed release.
 
 ## Start Heartwood
 
 ```text
-heartwood [--session-id ID] [--interface terminal|web] [--plain] [--prompt TEXT] [--port PORT]
+heartwood [--session-id ID] [--interface {terminal,web}] [--plain]
+          [--review-mode {review-all,review-changes,review-outside-effects}]
+          [--prompt PROMPT] [--port PORT] [--host HOST] [--host-loopback-publication]
 ```
 
 | Option | Meaning |
 |---|---|
-| `--session-id ID` | Select a persistent conversation; default `session-main` |
-| `--interface terminal` | Open the normal full-screen or fallback plain terminal |
-| `--interface web` | Start the browser gateway and print the valid access route |
-| `--plain` | Force the line-oriented terminal interface |
-| `--prompt TEXT` | Submit one terminal task and exit |
-| `--port PORT` | Set the browser gateway port; default `8767` |
+| `--session-id ID` | Persistent conversation to open; default `session-main` |
+| `--interface terminal` | Full-screen terminal, or the plain terminal when the full-screen interface is unavailable; the default |
+| `--interface web` | Start the browser gateway and print its one-time launch link |
+| `--plain` | Line-oriented terminal; only with `--interface terminal` |
+| `--review-mode MODE` | Action-review mode for this launch; see [Review Mode Selection](#review-mode-selection) |
+| `--prompt PROMPT`, `-p PROMPT` | Submit one task in the terminal and exit |
+| `--port PORT` | Browser gateway port, 1 to 65535; default `8767` |
+| `--host HOST` | Browser gateway bind host; default `127.0.0.1`; not shown by `--help`, and a wildcard such as `0.0.0.0` also needs `--host-loopback-publication` |
+| `--host-loopback-publication` | Assert that a wildcard container bind is published only on the host loopback interface |
+| `--version` | Print the installed version |
 
-`heartwood` performs project review, guided setup, Heartwood-managed runtime orchestration when required, and interface startup.
+`heartwood` reviews the project, runs guided setup when a model or credential is missing, starts a Heartwood-managed runtime when one is required, and opens the selected interface.
+Without a terminal on standard input and without `--prompt`, it prints usage and exits.
 
 ## Inspect and Configure
 
 | Command | Purpose |
 |---|---|
-| `heartwood doctor [--json]` | Inspect content-safe project, model, credential, policy, and compute readiness without changing state |
-| `heartwood setup` | Run model setup without opening a conversation |
-| `heartwood actions` | Show the action-review mode in use, the default, and each mode this launch cannot use, with the reason |
+| `heartwood doctor [--json]` | Report project, model, credential, policy, and compute readiness without changing state |
+| `heartwood setup` | Configure a model connection without opening a conversation |
+| `heartwood actions` | Show the review mode in use, the default, its scope, and why any mode is unavailable |
+| `heartwood specialists` | List research specialists and any disabled role with its reason |
 
-Select the mode when starting with `--review-mode`, or in a running terminal (`/permissions`) or browser interface.
-Without a deployment manifest the selection applies until that process exits; with one, `gateway serve --deployment` stores it in protected project state.
+`heartwood setup` options:
 
-| Option | Purpose |
+| Option | Meaning |
 |---|---|
-| `heartwood --review-mode MODE` | Start the terminal or browser interface with this review mode selected |
-| `heartwood --review-mode MODE runtime start` | Carry the selection to the interface started after the model runtime |
-| `heartwood gateway serve --review-mode MODE` | Serve the gateway with this review mode selected; with `--deployment` it is stored like any other selection |
+| `--model-source SOURCE` | `heartwood`, `stanford-ai-api-gateway`, `openai-subscription`, `openai`, `anthropic`, or `custom` |
+| `--model-id ID` | Exact model identifier reported by the service |
+| `--base-url URL` | Base URL of another compatible model service |
+| `--remember-credential` | Store the provider API key in the system credential store when one is available |
+| `--non-interactive` | Require explicit inputs and never prompt |
+| `--yes` | Confirm the displayed configuration |
+| `--yes-download` | Confirm the displayed model download |
 
-`--review-mode` accepts `review-all`, `review-changes`, or `review-outside-effects` and is never read from or written to the research directory.
-The command stops with the reason when the deployment ceiling, the isolated-worker requirement, or the model credential boundary does not permit the value.
-`review-changes` additionally requires a credential-free or platform-isolated model route outside an isolated worker.
-`review-outside-effects` is accepted only where sessions run in an isolated worker.
-See [Review Modes](../use/actions-audit.md#review-modes).
+Provider API keys are never command arguments.
+`--model-source heartwood` downloads or imports a model and supervises its runtime in the current environment.
+The first `openai-subscription` setup stays interactive because OpenHands displays consent and completes the account sign-in.
 
-For unattended setup, use `heartwood setup --non-interactive --yes` with explicit model-source and model identifiers.
-Use `--model-source heartwood` when Heartwood should download or import the model and supervise its runtime in the current environment.
-Provider API keys are not accepted as setup command arguments.
-Use `--model-source openai-subscription` for ChatGPT account access; the first setup remains interactive because OpenHands must display consent and complete account sign-in.
+### Review Mode Selection
+
+The three modes are `review-all`, `review-changes`, and `review-outside-effects`; see [Review Modes](../use/actions-audit.md#review-modes).
+The gateway resolves a selection against three limits and stops with the reason when one excludes it:
+
+- the deployment's `allowed_action_review_modes` ceiling;
+- `review-outside-effects` requires sessions that run in an isolated worker;
+- outside an isolated worker, any mode other than `review-all` requires a credential-free or platform-isolated model route.
+
+A local launch never runs an isolated worker, so `review-outside-effects` is available only under `gateway serve --deployment` with a `[worker]` table.
+Reducing review is refused while a session is active; a stricter mode can be selected at any time.
+
+| Form | Scope |
+|---|---|
+| `heartwood --review-mode MODE` | This terminal or browser launch |
+| `heartwood --review-mode MODE runtime start` | The interface started after the managed runtime |
+| `heartwood gateway serve --review-mode MODE` | This gateway process; with `--deployment`, stored in protected project state |
+| `/permissions MODE` in the terminal | This terminal launch |
+| Browser settings | The serving gateway process; stored under `gateway serve --deployment` |
+
+Without a deployment manifest, a selection lasts until the process exits and is never written to the research directory.
+`--review-mode` is rejected on commands that do not start an interface.
 
 ## Models
 
 | Command | Purpose |
 |---|---|
-| `heartwood models list` | Show connections, credential status, profiles, and active model |
-| `heartwood models refresh CONNECTION` | Refresh models exposed by a connection |
-| `heartwood models connect CONNECTION MODEL` | Select a discovered model |
-| `heartwood models validate [PROFILE]` | Evaluate credential and route policy for a profile |
+| `heartwood models list` | Connections, credential status, profiles, and the active model |
+| `heartwood models refresh [--base-url URL] CONNECTION` | List every model a connection currently exposes |
+| `heartwood models connect [--base-url URL] [--manual] CONNECTION MODEL` | Select and activate one discovered model; `--manual` accepts a Custom API identifier the server cannot list |
+| `heartwood models validate [PROFILE]` | Check credential availability and platform route authorization |
 | `heartwood models forget CONNECTION` | Remove a saved API key or OpenHands subscription credential |
-| `heartwood models managed` | Show qualified recommendations, not-tested configurations, and user-selected models Heartwood can run |
-| `heartwood models inspect OWNER/MODEL` | Inspect a public Hugging Face repository without downloading weights |
-| `heartwood models download MODEL` | Download and select a recommendation or `OWNER/MODEL` repository |
-| `heartwood models export PATH` | Verify and export the selected model as a portable bundle without replacing an existing file |
-| `heartwood models inspect-bundle PATH` | Verify bundle structure and display model, source, license, runtime, size, and warnings without importing |
-| `heartwood models import BUNDLE` | Review, verify, atomically import, and select a portable bundle |
-| `heartwood models import PATH --source ...` | Copy and select a raw GGUF or vLLM snapshot with explicit provenance |
+| `heartwood models managed` | Models Heartwood can run in this environment, with qualification status |
+| `heartwood models inspect [--revision REV] OWNER/MODEL` | Inspect supported models in a Hugging Face repository without downloading weights |
+| `heartwood models download [--revision REV] MODEL` | Download and select a recommendation or `OWNER/MODEL` repository |
+| `heartwood models export PATH` | Export the selected model as a verified bundle to a new path |
+| `heartwood models inspect-bundle PATH` | Verify a bundle and show its model, source, license, runtime, size, and warnings without importing |
+| `heartwood models import [--approve-license] PATH` | Verify, import, and select a Heartwood bundle |
+| `heartwood models import --source OWNER/MODEL --revision COMMIT --license TEXT [--context-window N] PATH` | Copy and select a raw GGUF or vLLM snapshot with explicit provenance |
+| `heartwood models add PROFILE --model MODEL --policy-endpoint URL [...]` | Advanced: add or update a non-secret LiteLLM profile |
+| `heartwood models select PROFILE` | Advanced: select a saved profile |
+| `heartwood models remove PROFILE` | Remove a profile |
 
-`models add`, `models select`, and `models remove` manage advanced non-secret LiteLLM-compatible profiles.
-Use guided setup for normal provider and managed connections.
-
-Bundle imports ask for explicit license approval.
-Use `--approve-license` only in automation that already presented and approved the same bundle plan.
-Export, inspection, import, progress, cancellation, and final selection use the same gateway contract in the terminal, browser, and notebook bridge.
-See [Move a Model Into an Offline Environment](../models/offline.md) for the complete connected-to-offline workflow.
-
-`heartwood models forget openai-subscription` signs out of ChatGPT for the current operating-system user.
-The selected non-secret model profile remains in the project until another connection is selected.
+`models add` also accepts `--base-url`, `--credential-kind {environment,file,managed-identity,none}`, `--api-key-env`, `--api-key-file`, `--api-version`, `--aws-region-name`, `--aws-profile-name`, `--capability-tier {autonomous,supervised,experimental}`, `--description`, and `--select`.
+Use `--approve-license` only in automation that already presented and approved the same bundle.
+`heartwood models forget openai-subscription` signs the current operating-system user out of ChatGPT; the project keeps its non-secret profile until another connection is selected.
+See [Move a Model Into an Offline Environment](../models/offline.md) for the bundle workflow.
 
 ## Skills
 
 | Command | Purpose |
 |---|---|
-| `heartwood skills list` | List bundled, available, installed, revoked, and unsupported Skills |
+| `heartwood skills list` | Bundled, available, installed, revoked, and unsupported Skills |
 | `heartwood skills refresh [--source ID]` | Refresh deployment-approved signed sources and apply revocations |
-| `heartwood skills inspect NAME [--source ID]` | Review one current signed catalog entry without downloading it |
-| `heartwood skills install NAME [--source ID]` | Show, confirm, reverify, and install one exact signed revision |
-| `heartwood skills inspect-local PATH` | Validate an advanced local, unreviewed Agent Skill directory |
-| `heartwood skills install-local PATH` | Show, confirm, and install the exact local directory as unreviewed content |
+| `heartwood skills inspect [--source ID] NAME` | Review one signed catalog entry without installing it |
+| `heartwood skills install [--source ID] [--approve --expected-tree-sha256 SHA256] NAME` | Install one exact signed revision after review |
+| `heartwood skills inspect-local SOURCE` | Inspect a local, unreviewed Agent Skill directory |
+| `heartwood skills install-local [--approve --expected-tree-sha256 SHA256] SOURCE` | Install that exact directory as unreviewed content |
 | `heartwood skills remove NAME` | Remove an installed extension |
 
-The browser uses the same gateway operations and approval fields.
-Source selection is required only when more than one signed source is configured.
-For non-interactive use, add `--approve --expected-tree-sha256 sha256:DIGEST` with the complete digest returned by the matching inspect command.
-
-## Research Specialists
-
-| Command | Purpose |
-|---|---|
-| `heartwood specialists` | Show available advisory specialists and any disabled roles with their reason |
-
-Inside an interactive terminal session, `/specialists` presents the same gateway-owned catalog.
-
-`/workflow` opens research workflow setup or stage review in the full-screen terminal.
-In plain mode, `/workflows` lists definitions and `/workflow` shows the current stage and available commands.
-Use `/experiments` to inspect recorded stage identities, output fingerprints, and links to recorded actions in the current session.
-See [Experiment Records](../architecture/experiments.md) for project-wide queries and export.
-See [Research Workflows](../use/research-workflows.md) for input requirements, stage controls, and completion checks.
-Workflows with unimplemented checks are marked unavailable.
-Specialists are selected by the parent OpenHands agent during a task; this command inspects the available roles rather than launching a separate agent session.
+`--source` is required only when more than one signed source is configured.
+`--approve` requires the complete digest printed by the matching inspect command.
 
 ## Experiment Records
 
 | Command | Purpose |
 |---|---|
-| `heartwood experiments record --input FILE --output NEW_FILE SCRIPT [ARGS...]` | Record an explicit user-run analysis using Heartwood's Python |
-| `heartwood experiments list [--json]` | Inspect project-wide workflow and script records without starting a model |
-| `heartwood experiments export` | Write verified scientific record JSONL to standard output |
-| `heartwood experiments environment [--python EXECUTABLE]` | Export Python version metadata; defaults to Heartwood's interpreter, not an unrelated analysis environment |
-| `heartwood experiments recover RUN_ID` | Mark an abandoned script attempt interrupted without executing or stopping it |
-| `heartwood experiments cancel RUN_ID` | Close an abandoned script record without deleting outputs or stopping processes |
+| `heartwood experiments record [OPTIONS] SCRIPT [ARGUMENTS...]` | Run a declared analysis script and record its outcome |
+| `heartwood experiments list [--json]` | Project-wide workflow and script records, without starting a model |
+| `heartwood experiments export` | Verified experiment JSONL on standard output |
+| `heartwood experiments environment [--python EXECUTABLE]` | Version metadata of a Python environment; defaults to Heartwood's interpreter |
+| `heartwood experiments recover RUN_ID` | Mark an abandoned script record interrupted; does not stop processes |
+| `heartwood experiments cancel RUN_ID` | Close an abandoned script record; does not stop processes or delete outputs |
 
-Put recorder options before `SCRIPT`; following arguments belong to the script.
-Repeat `--input`, `--output`, and `--code` for dependencies and outputs.
-An alternative `--runner` requires a declared `--environment-sha256`.
-Script recording is not agent execution or a sandbox, and scientific records are not signed audit exports.
-See [Experiment Records](../architecture/experiments.md) for examples, evidence boundaries, and safe recovery.
+`record` options come before `SCRIPT`; everything after it is passed to the script.
+Repeat `--input`, `--output` (a new file), and `--code` as needed.
+`--run-id` gives a stable identity that never repeats execution, `--actor` a non-sensitive actor reference, and `--runner` another interpreter such as `bash` or `Rscript`, which requires `--environment-sha256`.
+Script recording is neither agent execution nor a sandbox; see [Experiment Records](../architecture/experiments.md).
 
 ## Session Automation
 
 | Command | Purpose |
 |---|---|
-| `heartwood allow [ACTION_SET_ID]` | Allow the complete pending action set once |
-| `heartwood reject [ACTION_SET_ID]` | Reject the complete pending action set |
+| `heartwood allow [ACTION_SET_ID]` | Allow the complete pending action set once; alias `approve` |
+| `heartwood reject [ACTION_SET_ID]` | Reject the complete pending action set; alias `deny` |
 | `heartwood pause` | Pause the selected session |
 | `heartwood resume` | Resume the selected session |
-| `heartwood replay` | Replay persisted events after audit verification |
-| `heartwood audit export [--output PATH]` | Generate a scrubbed audit record and optionally copy it outside private project state |
-| `heartwood audit verify` | Fully verify the paired session and audit history |
+| `heartwood replay` | Replay the persisted session event stream |
+| `heartwood audit export [--output PATH]` | Export scrubbed audit JSONL, optionally copied to `PATH` |
+| `heartwood audit verify` | Fully verify the session and audit history |
 
-The aliases `approve` and `deny` remain command-line synonyms for automation.
-Interactive users should use the visible controls or `/allow` and `/reject` without internal identifiers.
+Select the session with the top-level `--session-id`, for example `heartwood --session-id study-a pause`.
 
 ## Project Inspection
 
 | Command | Purpose |
 |---|---|
-| `heartwood files list [DIRECTORY] [--depth N]` | List a bounded project tree |
-| `heartwood files show FILE` | Print one bounded UTF-8 text file |
-| `heartwood changes` | List Git changes or successful typed file actions for the selected non-Git session |
-| `heartwood changes FILE` | Print one bounded read-only diff or non-Git current-file view |
+| `heartwood files list [--depth N] [DIRECTORY]` | Bounded project tree; default `.` |
+| `heartwood files show FILE` | One bounded UTF-8 text file |
+| `heartwood changes` | Changed paths: Git changes, or typed file actions of the session outside Git |
+| `heartwood changes FILE` | One bounded read-only diff, or the current file outside Git |
 
-These commands use the same gateway service as the full-screen terminal, browser, and notebook bridge.
-They exclude private project state and return a nonzero status for unavailable, binary, or unsupported content.
+These commands never show private project state and exit nonzero for unavailable, binary, or unsupported content.
 
 ## Operator Commands
 
 | Command | Purpose |
 |---|---|
-| `heartwood runtime start` | Inspect and start the selected Heartwood-managed runtime, optionally requesting Slurm compute |
-| `heartwood gateway serve` | Serve the gateway and packaged browser files without unified setup/runtime orchestration |
-| `heartwood audit signer list` | List signer profiles approved by the deployment |
-| `heartwood audit signer select PROFILE` | Select an approved signer profile for the current project |
-| `heartwood audit signer default` | Return the project to the deployment default signer |
-| `heartwood audit checkpoint ... [--include-experiments]` | Create a signed audit bundle outside the project, optionally retaining the exact project experiment export |
-| `heartwood audit verify-checkpoint BUNDLE [--public-key KEY]` | Verify a checkpoint against the active profile or an independently trusted public key |
-| `heartwood signer init-local` | Initialize the explicit development and offline signer fallback outside the project |
-| `heartwood signer serve-local` | Run the initialized signer on its owner-only Unix socket |
+| `heartwood runtime start [OPTIONS]` | Review and start the selected Heartwood-managed model runtime, requesting Slurm compute where required |
+| `heartwood gateway serve [OPTIONS]` | Serve the gateway and packaged browser interface, without guided setup or runtime start |
+| `heartwood audit signer list` | Signer profiles the deployment approves |
+| `heartwood audit signer select PROFILE` | Select an approved signer profile for this project |
+| `heartwood audit signer default` | Return to the deployment default signer |
+| `heartwood audit checkpoint --output DIR --deployment-id ID --retention-policy ID --retain-until YYYY-MM-DD [--include-experiments]` | Create a signed audit bundle outside the project, optionally binding the project's experiment records |
+| `heartwood audit verify-checkpoint [--public-key KEY] BUNDLE` | Verify a bundle with the active signer profile or an independently trusted key |
+| `heartwood signer init-local [--directory DIR] [--profile ID] [--key-version V]` | Create the local fallback signer outside the project; defaults `local-development` and `v1` |
+| `heartwood signer serve-local [--registry PATH] [--profile ID] [--private-key PATH]` | Run that signer on its owner-only Unix socket |
 
-These commands support deployment automation and diagnostics.
-Researchers should normally use `heartwood` with `--interface` when needed.
+Checkpoints never replace an existing output, and private signing keys are never command arguments or project state.
+See [Audit Checkpoints and Retention](../operate/audit-checkpoints.md).
 
-Checkpoint creation requires an approved signer profile, output directory, deployment identifier, retention-policy identifier, and retention end date.
-Private signing keys are never command arguments or project state.
-It never replaces an existing output.
-See [Audit Checkpoints and Retention](../operate/audit-checkpoints.md) for the complete operator workflow and trust boundary.
+The operator deployment manifest that `gateway serve --deployment` and the migration commands read is specified in [Deployment Manifest](configuration.md#deployment-manifest).
 
-`heartwood gateway serve` prints one launch link after binding and listening on its configured port.
-Open that link once; the page exchanges its fragment token for a tab-scoped gateway capability used by API requests and event streams.
-The link is invalid afterwards, but the same tab retains access across reloads while the gateway runs.
-Automation can supply a random token of at least 32 printable ASCII characters through `--capability-fd N`, where `N` is an inherited file or pipe descriptor numbered at least 3.
-For example, `heartwood gateway serve --capability-fd 3 3</run/secrets/heartwood-capability` reads an operator-protected secret file without putting its contents in arguments or the environment.
-The gateway consumes at most 4096 bytes, accepts one optional trailing newline, requires pipe EOF within five seconds, closes the descriptor, and prints no launch link.
-The proxy or automation client sends the same secret in the `X-Heartwood-Capability` header.
-The source must remain outside worker access; environment capability delivery is rejected.
-Restart the gateway to obtain a new link.
-
-An operator can bind canonical state and model policy outside the research directory:
-
-```bash
-heartwood gateway serve --deployment /etc/heartwood/projects/research.toml
-```
-
-The manifest uses this format, with deployment-specific canonical paths and approved endpoints:
-
-```toml
-schema_version = "heartwood.project-deployment.v1"
-project_id = "93d29ccd-6177-4817-9806-44ea579818c9"
-workspace = "/research/project"
-state_root = "/var/lib/heartwood/projects/93d29ccd-6177-4817-9806-44ea579818c9"
-
-[policy]
-policy_id = "deployment-models"
-platform_id = "generic"
-deny_egress_by_default = true
-allowed_model_endpoints = ["https://models.example.invalid/v1/chat/completions"]
-allowed_model_catalog_endpoints = ["https://models.example.invalid/v1/models"]
-allowed_capability_tiers = ["supervised"]
-allowed_action_review_modes = ["review-all", "review-changes", "review-outside-effects"]
-credential_allowlist = ["HEARTWOOD_CUSTOM_MODEL_API_KEY"]
-aggregate_count_floor = 20
-```
-
-`allowed_action_review_modes` is the most permissive set of [review modes](../use/actions-audit.md#review-modes) the deployment permits; it must include `review-all`.
-A manifest that omits it permits all three modes, which makes `review-outside-effects` the default for sessions in an isolated worker; list the modes explicitly to decide that.
-Credential names are references; actual credentials never belong in this manifest.
-Launch from the manifest's exact research directory and use the detected platform identifier.
-Keep the manifest operator-owned and not writable by group or other users, and exclude it and the external state volume from worker mounts.
-Only a trusted launcher selects `--deployment`; no browser request or project-local hint can replace its policy or paths.
-See [Projects and Private State](../start/project.md#operator-bound-external-state) for path, ownership, and legacy-state requirements.
-
-A qualified operator deployment can add the following worker selection.
-Replace the example identities and hashes with independently qualified values; the effective policy hash must not be learned from the same worker whose admission is being decided.
-The policy file is native sandbox-policy JSON, while `native_config_home` contains the native CLI's registered gateway metadata and mutual TLS files.
-All native tools, configuration and the local Docker socket must have trusted ownership and paths outside research files and project state.
-If the socket grants group write access, the operator must explicitly set `docker_socket_group` to its trusted numeric group ID.
-Membership in that group grants Docker control-plane authority; never add a worker identity to it.
-A changed group or world-writable socket is rejected.
-
-```toml
-[worker]
-driver = "openshell-docker"
-gateway = "research-workers"
-gateway_versions = ["0.0.0+replace.with.qualified.version"]
-native_config_home = "/etc/heartwood/native"
-openshell_cli = "/opt/heartwood/bin/openshell"
-docker_cli = "/opt/heartwood/bin/docker"
-docker_host = "unix:///run/docker.sock"
-workspace = "research"
-image_digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-sandbox_policy_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
-policy_path = "/etc/heartwood/native/worker-policy.json"
-policy_file_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
-profile_id = "approved-research"
-model = "provider/approved-model"
-model_endpoint = "https://models.example.invalid/v1/chat/completions"
-provider = "approved-research"
-placeholder_env = "HEARTWOOD_CUSTOM_MODEL_API_KEY"
-cpu = "1"
-memory = "2Gi"
-
-[worker.inputs]
-schema_version = "heartwood.worker-inputs.v1"
-files = []
-```
-
-`gateway_versions` is required and lists every version string that the registered sandbox gateway may report and that the operator has [qualification evidence](../operate/platform-requirements.md#gateway-behavior-behind-native-qualification) for.
-Serving stops with [`HW-WORKER-001`](troubleshooting.md) when the gateway reports another version or its version cannot be read.
-The value is a declaration checked against the gateway's self-report, not proof of how that gateway behaves.
-The selected application profile must match the configured profile, model and endpoint, and remain allowed by the deployment policy.
-Each selected input entry declares a project-relative `path`, `sha256` and `size_bytes`; an empty selection transfers no research files.
-The launcher projects verified Skills separately and binds the complete selection to the retained worker attempt.
-Provider attachments supply placeholders, not real inference secrets, to the worker.
-The qualified inference endpoint must independently enforce approved models and tenant scope; this manifest does not add a model router or override provider authorization.
-Unavailable native dependencies, unsupported admission hooks, mismatched observed policy or failed outside revocation stop the operation without local fallback.
-Stopping an uncertain worker requires outside reconciliation; do not delete its records or release its writer merely because a client disconnected.
-Before serving, the gateway revokes worker attempts that an earlier gateway process for the same deployment left unrevoked.
-It prints one line for each session whose revocation could not be observed; that attempt stays fenced and is retried at the next start.
-A session whose previous worker is recorded as revoked starts a replacement worker with its next task; the replacement has no memory of the earlier conversation and an empty workspace, and the session shows a notice where it began.
-
-The same manifest can select automatic checkpointing through an `evidence` table.
-Evidence configuration requires complete worker isolation and explicitly binds the records service, credential source, retention and approved production signer profile.
-The operator-owned records client is closed when gateway serving exits, including failed startup.
-See [Configure Managed Evidence](../operate/audit-checkpoints.md#configure-managed-evidence) for the complete table and storage permissions.
-
-`heartwood gateway serve` uses the detected platform's declared default ingress mode.
-Workstations and Carina default to direct loopback and refuse a non-loopback bind.
-A generic container can use a wildcard bind only when the operator explicitly declares loopback-only host publication.
-Terra defaults to Jupyter proxy mode and requires its exact public origin and proxy base path.
-Platform operators can select one explicit route:
+### Runtime Start
 
 | Option | Meaning |
 |---|---|
-| `--ingress-mode direct-loopback` | Accept direct requests through a loopback boundary; the default |
-| `--ingress-mode jupyter-proxy` | Accept a loopback Jupyter proxy that strips one exact external prefix |
-| `--ingress-mode trusted-proxy` | Accept only configured proxy source ranges and one complete forwarding set |
-| `--public-origin ORIGIN` | Set the exact browser-visible `http` or `https` origin |
-| `--base-path PATH` | Set the exact browser-visible gateway prefix |
-| `--trusted-proxy-source IP_OR_CIDR` | Trust one proxy source; repeat the option for multiple exact ranges |
-| `--trusted-identity-header NAME` | Require an additional non-secret proxy identity assertion header |
-| `--trusted-identity VALUE` | Set the exact non-secret assertion value; configure it with the header |
-| `--proxy-strips-prefix` | Declare that a trusted proxy removes the external prefix before forwarding |
-| `--host-loopback-publication` | Assert that a wildcard container bind is published only on the host loopback interface |
+| `--dry-run` | Print the model, resource, and scheduler plan without downloading, starting inference, or requesting compute |
+| `--task-profile {auto,standard,powerful,maximum}` | Capability tier for the automatic recommendation; default `auto` |
+| `--partition NAME` | Slurm GPU partition; default is the available default partition |
+| `--gpus N` | Advanced: must match a qualified tensor-parallel configuration |
+| `--cpus N`, `--memory SIZE`, `--time HH:MM:SS` | Allocation request; `--time` defaults to `02:00:00` |
+| `--startup-timeout SECONDS` | Wait for runtime readiness; default `600` |
+| `--no-allocate` | Never request scheduler compute; stop when the plan needs an allocation |
+| `--yes-request-allocation` | Confirm the displayed scheduler request |
+| `--yes-download` | Confirm the displayed pinned model download |
 
-The trusted identity assertion is a route marker, not a credential or substitute for proxy authentication.
-The host-loopback assertion is valid only with a host mapping such as `-p 127.0.0.1:8767:8767`; it does not inspect or authenticate the container image.
-The proxy must remove client-supplied forwarding and identity headers before setting its own values.
+Unattended operation needs both `--yes-download` and `--yes-request-allocation`; no other flag implies either.
+Top-level `--interface`, `--port`, `--plain`, `--prompt`, and `--review-mode` select the interface started afterwards.
+
+### Gateway Serve
+
+| Option | Meaning |
+|---|---|
+| `--host HOST` | Bind host; default `127.0.0.1` |
+| `--port PORT` | Bind port; default `8767` |
+| `--web-root DIR` | Browser asset directory; default the packaged assets |
+| `--deployment PATH` | Absolute operator manifest binding the project to external state, policy, and optional managed workers |
+| `--review-mode MODE` | Review mode selected at start; policy limits still apply |
+| `--capability-fd N` | Read the operator capability from inherited descriptor `N` instead of printing a launch link |
+| `--ingress-mode {direct-loopback,jupyter-proxy,trusted-proxy}` | Network route; default the platform's declared mode |
+| `--public-origin ORIGIN` | Exact browser-visible `http` or `https` origin of a proxy route |
+| `--base-path PATH` | Exact browser-visible gateway prefix; default `/` |
+| `--trusted-proxy-source IP_OR_CIDR` | Trusted proxy source; repeat for several |
+| `--trusted-identity-header NAME` | Header carrying a non-secret proxy identity assertion |
+| `--trusted-identity VALUE` | Exact value of that assertion |
+| `--proxy-strips-prefix` | The trusted proxy removes the external base path before forwarding |
+| `--host-loopback-publication` | A wildcard container bind is published only on the host loopback interface |
+
+Without `--capability-fd`, the gateway prints one launch link after it starts listening.
+The page exchanges the link's fragment token for a tab-scoped capability; the link then stops working, the tab keeps access across reloads, and a gateway restart prints a new link.
+With `--capability-fd N` (`N` at least 3), the gateway reads at most 4096 bytes, accepts one trailing newline, requires end of input within five seconds, closes the descriptor, and prints no link:
+
+```bash
+heartwood gateway serve --capability-fd 3 3</run/secrets/heartwood-capability
+```
+
+The secret is 32 to 4096 printable ASCII characters without spaces, quotes, commas, semicolons, or backslashes, and stays outside worker access; the proxy sends it in `X-Heartwood-Capability`.
+`HEARTWOOD_GATEWAY_CAPABILITY` in the environment is rejected.
+
+Workstations and Carina default to direct loopback and refuse a non-loopback bind; Terra defaults to Jupyter proxy mode and needs its exact public origin and base path.
+`--host-loopback-publication` is valid only with a host mapping such as `-p 127.0.0.1:8767:8767` and does not inspect the image.
+A trusted identity assertion is a route marker, not a credential; the proxy must strip client-supplied forwarding and identity headers.
 See [Add a Platform](../operate/platform-integration.md#gateway-ingress).
 
-`heartwood runtime start --dry-run` prints the model, resource, and scheduler plan without downloading, starting inference, or requesting compute.
-On a scheduler-managed GPU platform, `--task-profile standard|powerful|maximum` constrains automatic recommendation to the requested capability tier.
-`--gpus` is an advanced constraint and must match a qualified catalog tensor-parallel configuration.
-Unattended operation requires separate `--yes-download` and `--yes-request-allocation` approvals; neither is implied by `--non-interactive` or another confirmation flag.
+With a manifest that declares a `[worker]` table, `gateway serve` first checks the sandbox gateway's reported version against `gateway_versions` and stops with [`HW-WORKER-001`](troubleshooting.md#hw-worker-001-sandbox-gateway-version-is-not-declared-as-qualified) on a mismatch.
+It then reconciles worker attempts that an earlier gateway process for the same deployment left unrevoked, and prints one line for each session whose revocation was not observed; that attempt stays fenced and is retried at the next start.
 
 ## Project State Migration
 
-Run these commands from the research directory with an explicit operator deployment manifest:
+Run these from the research directory with an operator deployment manifest:
 
-```sh
+```bash
 heartwood project migrate --deployment /absolute/path/project.toml --backup /absolute/protected/original
 heartwood project recover-migration --deployment /absolute/path/project.toml
 heartwood project recover-migration --deployment /absolute/path/project.toml --rollback
 ```
 
-Migration requires stopped project activity, a new target and backup, and verified source records.
-The backup parent must be on the research directory's filesystem; both external parents must already exist and be operator-controlled.
-Recovery resumes an interrupted publication by default.
-`--rollback` explicitly restores the original only while the protected target is unchanged, retaining both copies for operator inspection.
-See [Moving Existing Local State](../start/project.md#moving-existing-local-state) for storage and recovery requirements.
+`migrate` moves local `.heartwood/` state to the manifest's `state_root` and requires stopped project activity, a new target and backup, and verified source records.
+The backup parent must be on the research directory's filesystem, and both external parents must already exist and be operator-controlled.
+`recover-migration` resumes an interrupted publication; `--rollback` restores the original only while the protected target is unchanged and keeps both copies.
+Each command prints the path of its migration evidence.
+See [Moving Existing Local State](../start/project.md#moving-existing-local-state).
+
+## Repository Scripts
+
+These run from a repository checkout, not an installed release.
+[Testing and Evidence](../architecture/testing.md) describes when each is used.
+
+| Command | Purpose |
+|---|---|
+| `uv run --no-project --python 3.12.15 deploy/build-worker-candidate.py --bootstrap` | Build or verify the maintained runtime wheels in `vendor/runtime-wheels/` |
+| `… deploy/build-worker-candidate.py --output DIR` | Build the maintained SDK wheels into a new directory |
+| `… deploy/build-worker-candidate.py --application --output DIR` | Build the committed Heartwood application wheels |
+| `… deploy/build-worker-candidate.py --gateway --cache DIR --output DIR [--gateway-tests]` | Build the pinned qualification-only sandbox gateway; `--gateway-tests` runs its deletion regressions and needs 12 GiB of container memory |
+| `python3 deploy/qualify-native-worker.py --worker-image IMAGE --runtime-image IMAGE --gateway-artifacts DIR --records-artifacts DIR --output DIR [--model-profile PATH]` | Run native worker qualification; `--model-profile` adds a capable-model case whose credential is read from standard input |
+| `python3 deploy/qualification_evidence.py [--commit SHA] DIR` | List every reason an evidence directory does not establish a qualification pass |
+| `uv run python packages/gateway/scripts/export_platform_contract.py DIR` | Export the platform contract bundle to a new directory |
+
+`build-worker-candidate.py` requires uv 0.13.7; pass another executable with `--uv PATH`.
 
 ## Exit Status
 
-`0` indicates that the requested command completed successfully or an interactive cancellation changed no files.
-Configuration, readiness, model, policy, or runtime failures return a nonzero status and print a recovery message.
-Argument errors use standard command-line usage output.
+`0` means the command completed, or an interactive cancellation changed no files.
+Argument errors exit `2` with usage output.
+Other failures print a recovery message and exit nonzero: `64` for unavailable project files, project state, or migration input, `65` for audit and checkpoint failures, `75` when another process owns the session or project, and `130` on interruption.

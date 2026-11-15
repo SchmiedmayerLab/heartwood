@@ -6,9 +6,9 @@ SPDX-License-Identifier: MIT
 
 # Run a Research Workflow
 
-A research workflow organizes an analysis into stages with named inputs, output files, checks, and review points.
-The agent uses its normal coding tools; you review proposed actions through the same conversation interface.
-Start in a new session with a configured model and project-local input files.
+A research workflow runs an analysis in stages with named inputs, output files, maintained checks, and points where you accept each stage.
+The agent uses its normal coding tools, and you review its actions in the conversation as usual.
+Start in a new session with a configured model and input files inside the project.
 
 ## Choose a Workflow
 
@@ -52,7 +52,6 @@ Choose the partition and analysis question before asking the agent to fit a mode
 The dictionary describes your intended analysis; it does not establish that the study design is valid.
 
 Readiness counts describe the original input without dropping rows: row and arm counts include duplicates and repeated observations, while the subject count uses distinct grouping-key values.
-The report explains leakage concerns separately from the exact column names in the structured result.
 
 ## Start and Review
 
@@ -166,8 +165,7 @@ Heartwood records the declared evidence and asks the selected specialists to rev
 This uses the stage's remaining work budget; it does not grant permission to change files.
 
 Heartwood checks the findings automatically when the review finishes.
-In plain terminal mode, inspect `/workflow` and use `/workflow request-review` when offered.
-The notebook receives the same controls and review state.
+In the plain terminal, use `/workflow request-review` when `/workflow` offers it.
 
 The assessment distinguishes verified observations, rejected claims, unsupported conditions, stale evidence, and unavailable evidence.
 Checks cover analysis plans that conflict with the baseline's predictor, outcome, grouping, or split requirements; invalid Python syntax; supported baseline result inconsistencies; and artifact byte mismatches.
@@ -188,10 +186,8 @@ The preview shows the worker count and work limits without starting the model.
 Choose the displayed parallel-review action to authorize that exact plan, or choose **Review Analysis** to keep the review sequential.
 The terminal, browser, and notebook use the same plan and controls.
 
-Plan authorization does not approve tool actions.
-Review the complete proposed specialist action set in the conversation before allowing it.
-The status distinguishes a preview, an authorized plan, and admitted work; admission alone does not establish that every reviewer finished or that the findings are correct.
-Work limits apply to the stage's remaining budget and are not guaranteed provider billing caps.
+Plan authorization does not approve tool actions; review the proposed specialist action set in the conversation before allowing it.
+The status distinguishes a preview, an authorized plan, and admitted work; admission does not mean every reviewer finished or that the findings are correct.
 
 If the files, model route, workflow, or qualification evidence change, refresh the preview before deciding.
 Expired or changed authorization cannot start parallel work.
@@ -208,9 +204,8 @@ In the terminal, use the displayed `/workflow correct` command or the workflow f
 This authorizes a bounded correction task, not its tool actions: review each proposed action set in the conversation as usual.
 
 Heartwood gives the agent fresh output paths and rechecks the result independently after each attempt.
-If the defect remains, it can make a second attempt within the same stage's remaining work limits.
-Original evidence, accepted earlier stages, and previous attempts remain preserved.
-The browser, terminal, and notebook show the attempts and their checks from the same session state.
+If the defect remains, it can make a second attempt within the stage's remaining work limits.
+Original evidence, accepted earlier stages, and previous attempts are preserved.
 
 For a reproduction discrepancy, the agent receives the unchanged program's rerun command and a fresh output location.
 It may first propose creating the parent folder, then request approval for the rerun separately.
@@ -227,21 +222,17 @@ Pause active work before cancelling the workflow.
 
 ### Verify and Accept Results
 
-**Checking results** reads the bound inputs and expected artifacts and compares them using maintained checks.
+**Check Results** reads the bound inputs and expected artifacts and compares them using maintained checks.
 For reproduction, the workflow also requires a separately approved execution of the unchanged analysis in a fresh process and output directory.
 An agent's claim that it reran the analysis is not sufficient.
 
-**Accepting a stage** records your review of its current evidence.
+Accepting a stage records your review of its current evidence.
 It does not grant approval for later tool actions or certify a scientific conclusion.
 If inputs or reviewed artifacts change, the gateway refuses to continue using stale evidence.
 
-**Experiment records** connect each accepted stage's outputs to its declared inputs, code, and recorded actions.
-Open **Experiment Records** in the browser's Research tab or enter `/experiments` in the terminal to inspect them.
-The notebook exposes the same records through `view.experiments` and its Experiment Records widget section.
+Experiment records connect each accepted stage's outputs to its declared inputs, code, and recorded actions.
+Open **Experiment Records** in the browser's Research tab, enter `/experiments` in the terminal, or read `view.experiments` in a notebook.
 See [Experiment Records](../architecture/experiments.md) for evidence boundaries and project-wide export.
-
-**Work limits** bound work at observed execution boundaries.
-They are not a guaranteed provider billing cap: an in-flight request can finish before its usage is reported, and some providers do not report every usage field.
 
 ## Recover or Stop
 
@@ -253,5 +244,5 @@ They are not a guaranteed provider billing cap: an in-flight request can finish 
 | Inputs changed or the workflow cannot proceed | Cancel the run and start a new session with corrected inputs |
 | You need to stop active work | Pause the agent first; after it settles and pending actions are resolved, cancel the workflow |
 
-Cancellation retains files and history; it does not undo tool actions.
-Use [Files and Changes](browser.md) to inspect outputs and [audit export](actions-audit.md) to retain the session's scrubbed action history.
+Cancellation keeps files and history; it does not undo tool actions.
+Inspect outputs in [Files and Changes](browser.md#inspect-the-project) and keep the session's scrubbed action history with an [audit export](actions-audit.md#audit-export).

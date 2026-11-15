@@ -6,67 +6,63 @@ SPDX-License-Identifier: MIT
 
 # Run a Model With Heartwood
 
-Heartwood images and the generic Linux package include managed inference software but no model weights.
-After a supported model is selected and downloaded or imported, the normal `heartwood` command verifies the files, plans context against available memory, starts the runtime, waits for readiness, and then opens the requested interface.
-Downloading and verification are separate costs: a cached model avoids network transfer but Heartwood still verifies its immutable source and file hashes before use.
-
-## Runtime Connection and Lifetime
-
-The launcher gives llama.cpp or vLLM a private Unix socket in an owner-only temporary directory outside the project.
-Readiness checks, model discovery and inference use that socket; no managed TCP listener is opened.
-The loopback URL retained in model settings is a logical route used by the SDK's private transport, not an address for direct HTTP clients.
-An altered managed route or missing socket prevents inference rather than selecting another listener.
-The launcher stops the interaction if the runtime exits and removes its temporary socket directory after shutdown.
-A replacement runtime requires a fresh interaction process; an active client's transport binding cannot switch to another socket or listener.
-Processes sharing the same operating-system identity retain that identity's access; use the managed worker deployment for an independently enforced execution boundary.
+Heartwood images and the native packages include inference software but no model weights.
+Once a supported model is downloaded or imported, `heartwood` verifies its files, plans the context against available memory, starts the runtime, waits until it is ready, and opens the requested interface.
+A cached model avoids the download, but Heartwood still verifies its source revision and file hashes before every start.
+Heartwood-managed models run for local launches; an isolated worker uses the HTTPS model endpoint set in its deployment manifest.
 
 ## Download and Start
-
-The guided path is:
 
 ```bash
 heartwood
 ```
 
 Choose **Run with Heartwood**, inspect the plan, and confirm the download.
-The terminal displays transferred bytes and status; the browser shows a progress bar from the same gateway download state.
+The terminal shows transferred bytes and status; the browser shows a progress bar from the same gateway download state.
 
-In the terminal, Heartwood continues automatically after the verified download and starts the model runtime.
-In the browser setup flow, stop the process and repeat `heartwood --interface web` when the page reports that the model is ready.
-The restarted browser process verifies the stored model, starts its local server, and keeps that server supervised for the session.
+In the terminal, Heartwood continues automatically after the verified download and starts the runtime.
+In the browser setup flow, stop the process and run `heartwood --interface web` again when the page reports that the model is ready; the new process verifies the model, starts the runtime and supervises it for the session.
 
-Stopping the gateway also requests cancellation of unfinished model downloads and waits for their workers.
-A shutdown timeout means work is still active; wait for it to finish and retry shutdown before moving project state.
-Verified cached model files remain available for the next launch.
+Stopping the gateway cancels unfinished downloads and waits for their workers.
+A shutdown timeout means work is still running; wait for it and retry the shutdown before moving project state.
+Verified model files remain available for the next launch.
+
+## Runtime Connection and Lifetime
+
+The launcher gives llama.cpp or vLLM a private Unix socket in an owner-only temporary directory outside the project.
+Readiness checks, model discovery and inference use that socket, and no managed TCP listener is opened; the `http://127.0.0.1:8765/v1` address in model settings is a logical route for the SDK's private transport, not a port to connect to.
+A missing socket or altered route stops inference instead of falling back to another listener.
+If the runtime exits, the launcher stops the interaction, and it removes the socket directory on shutdown; a new runtime needs a new Heartwood process.
+Other processes running as the same user keep that user's access; the isolated worker deployment is the boundary that separates agent code from the runtime.
 
 ## Hardware
 
 | Runtime | Model Shape | Typical Environment |
 |---|---|---|
-| llama.cpp | One GGUF file | CPU workstation or portable container |
-| vLLM | Standard safetensors snapshot | NVIDIA-enabled container, Terra GPU runtime, or Carina Slurm GPU allocation |
+| llama.cpp | One GGUF file | CPU workstation, standard container or native Linux |
+| vLLM | Standard safetensors snapshot | NVIDIA GPU container, Terra GPU image or a Carina Slurm GPU allocation |
 
-Heartwood reports model-specific minimum and recommended guidance before download.
-The estimates reserve space for runtime overhead and context, but no static estimate can account for every model architecture, driver, concurrent workload, or platform limit.
-For GPU configurations, Heartwood also checks the catalog GPU count, per-device memory, driver, precision, tool parser, tensor-parallel layout, and qualification status against the [GPU compatibility matrix](../reference/gpu-compatibility.md).
+Heartwood reports model-specific minimum and recommended resources before download.
+For GPU configurations it also checks the catalog GPU count, per-device memory, driver, precision, tool parser, tensor-parallel layout and qualification status against the [GPU compatibility matrix](../reference/gpu-compatibility.md).
+No static estimate covers every architecture, driver, concurrent workload or platform limit.
 
 ## Context Window
 
-Heartwood records the model's declared limit and chooses from conservative operating tiers when memory information permits.
-The smallest agent-capable runtime tier is 18,432 tokens: 16,384 tokens of OpenHands input capacity plus 2,048 tokens reserved for the model response.
-When model-size or memory information is unavailable, Heartwood uses that minimum tier rather than assuming that 32,768 tokens will fit.
-A 32,768-token plan provides 28,672 input tokens plus 4,096 response tokens when the model and available memory support it.
-Larger supported tiers range from 65,536 to the model and Heartwood maximum of 1,048,576 tokens.
+Heartwood records the model's declared limit and chooses a conservative operating tier that fits the available memory.
 
-The planner reserves memory for model weights, runtime overhead, and context, and retains headroom instead of always selecting the model maximum.
-The OpenHands SDK backend uses a rolling-history condenser before history exceeds the configured input budget, preserving recent events and a structured summary for long sessions.
+| Tier | OpenHands Input | Reserved for the Response |
+|---:|---:|---:|
+| 18,432 | 16,384 | 2,048 |
+| 32,768 | 28,672 | 4,096 |
 
-Larger context is useful for broad repositories and long analyses but increases key/value-cache memory and latency.
-Prefer the largest window that fits with conservative headroom rather than the largest value printed on a model card.
+18,432 tokens is the smallest agent-capable tier, and Heartwood uses it whenever model-size or memory information is unavailable.
+Larger tiers range from 65,536 up to the model limit and Heartwood's maximum of 1,048,576 tokens.
+Before history exceeds the input budget, OpenHands condenses it, keeping recent events and a summary.
+A larger window helps with broad repositories and long analyses but increases key/value-cache memory and latency, so prefer the largest window that fits with headroom over the value on a model card.
 
 ## Advanced Runtime Control
 
-Normal users should start with `heartwood`.
+Start with `heartwood`.
 Operators can inspect or control runtime allocation separately:
 
 ```bash
@@ -74,13 +70,11 @@ heartwood runtime start --dry-run
 heartwood runtime start --task-profile powerful --partition dev --time 01:00:00
 ```
 
-On Carina, Heartwood prints the complete Slurm request and asks before allocating a GPU.
-On provisioned Terra compute, it uses the attached resources without submitting a scheduler request.
-Model download and scheduler allocation require separate confirmation.
-An advanced `runtime start --dry-run` may show a compatible recommendation when the project has no selected model, but it never persists that recommendation.
-Complete the normal `heartwood` setup flow before starting or allocating the runtime.
+On Carina, Heartwood prints the complete Slurm request and asks before allocating GPUs; on Terra it uses the attached resources without a scheduler request.
+Download and allocation are confirmed separately.
+`--dry-run` can show a recommendation when no model is selected, but never saves it; complete setup before starting or allocating the runtime.
 
 ## Stop the Runtime
 
-Exit the Heartwood process to stop the supervised model runtime.
+Exit Heartwood to stop the supervised runtime.
 Downloaded model files remain in `.heartwood/models/` and are verified again on the next start.

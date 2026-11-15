@@ -6,105 +6,128 @@ SPDX-License-Identifier: MIT
 
 # Deploy Heartwood
 
-This section is for platform operators and security reviewers.
-
-Read [Support and Compatibility](support.md) before selecting a release for a maintained deployment.
-For a group of researchers, [record a standard environment](#record-a-standard-environment) and [run a pilot evaluation](#run-a-pilot-evaluation) before a wider rollout.
-A Heartwood deployment combines a versioned application artifact with platform storage, identity, network, secret, compute, model-route, logging, and data-governance controls.
+A Heartwood deployment combines a pinned release artifact with the platform's storage, identity, network, secret, compute, model-route, logging and data-governance controls.
+Read [Support and Compatibility](support.md) before selecting a release, and [Security and Controlled Data](security.md) before choosing an execution shape.
 
 ## Deployment Responsibilities
 
-| Layer | Heartwood Provides | Platform or Institution Provides |
+| Layer | Heartwood provides | Platform or institution provides |
 |---|---|---|
-| Application | CLI, browser, notebook bridge, gateway, OpenHands adapter, Skills, policy, audit | Artifact approval and release selection |
-| Project | Research-file boundary and private state; managed launch binds state outside research files | Durable storage, permissions, backup, retention, and deletion |
-| Identity | Launch capability on every gateway API request, event stream, and WebSocket, credential-binding interfaces, content-safe status, and credential-boundary enforcement | User authentication, authorization, launch capability delivery, managed identity, secret delivery, and isolated model identities |
-| Models | Provider catalogs, Heartwood-managed inference planning, route-policy evaluation | Approved endpoints, agreements, accounts, quotas, and data eligibility |
-| Compute | llama.cpp/vLLM launch contracts and Slurm/provisioned adapters | CPU/GPU capacity, drivers, scheduler, isolation, and cost controls |
-| Network | Deny-by-default model-route policy and strict declared ingress validation | Enforced egress, ingress authentication and authorization, proxy header sanitation, TLS, DNS, and segmentation |
-| Evidence | Session events, tamper-evident audit chain, scrubbed export, signed checkpoints and deployment-bound evidence gates | Independent signer authorization and key custody, authoritative storage, retention enforcement, central monitoring, incident response, and compliance evidence |
+| Application | Gateway, terminal, browser and notebook interfaces, OpenHands adapter, Skills, policy, action review, audit | Artifact approval and release selection |
+| Project | Research-file boundary; local `.heartwood/` state, or protected state bound by the deployment manifest | Durable storage, permissions, backup, retention and deletion |
+| Execution | Local execution, or an isolated OpenShell worker with gateway-side admission, fencing and revocation | Docker engine, sandbox gateway, mandatory filesystem and network enforcement |
+| Identity | Launch capability on every gateway request, credential bindings, credential-boundary checks | User authentication and authorization, capability delivery, secret delivery, managed identities |
+| Models | Provider catalogs, route-policy evaluation, Heartwood-managed inference planning | Approved endpoints, agreements, accounts, quotas and data eligibility |
+| Network | Deny-by-default model-route policy and declared ingress validation | Enforced egress, authenticated ingress, proxy header sanitation, TLS and segmentation |
+| Evidence | Session events, hash-chained audit, scrubbed export, signed checkpoints, deployment-bound evidence gates | Signer authorization and key custody, records storage and retention, monitoring, incident response |
 
-Heartwood policy is defense in depth and does not replace network enforcement.
-The [Platform Contract](platform-contract.md) defines this boundary and each capability a platform supplies in detail.
-Use [Platform API and Access Requirements](platform-requirements.md) when requesting an integration from a platform operator.
-Use the [Gateway API reference](../reference/gateway-api.md) and its generated OpenAPI contract when implementing a client or proxy.
-The browser service must remain on loopback or behind an authenticated platform proxy configured through the trusted ingress contract.
+The [Platform Contract](platform-contract.md) defines this boundary for platform partners, and [Platform API and Access Requirements](platform-requirements.md) lists what to request from a platform operator.
 
 ## Select an Artifact
 
-- Use the multi-platform standard image for generic AMD64/ARM64 deployments.
-- Use the NVIDIA image for AMD64 vLLM deployments and verify the selected configuration against the [GPU compatibility matrix](../reference/gpu-compatibility.md).
-- Use a Terra-specific single-platform image for Terra Leonardo.
-- Use the release native installer where containers are not the platform's normal execution mechanism.
+- The standard image (`ghcr.io/schmiedmayerlab/heartwood`) is published for `linux/amd64` and `linux/arm64`.
+- The NVIDIA image (`-gpu-nvidia` tags) is `linux/amd64` only; match its configuration against the [GPU compatibility matrix](../reference/gpu-compatibility.md).
+- The Terra images (`-terra` and `-terra-gpu-nvidia` tags) are single-platform `linux/amd64` images for Terra Leonardo.
+- The native installer and archive are for platforms where containers are not the normal execution mechanism.
 
-Pin a release tag or digest.
-Do not deploy moving `edge` tags for reproducible or controlled work.
+Pin a release tag or digest; do not deploy the moving `edge` tags.
+Releases do not publish a worker image or a sandbox gateway.
+For an isolated worker, build the `worker` target of `docker-bake.hcl` from the release commit, record its image identifier, and qualify it with the sandbox gateway you deploy.
+
+## Deployment Manifest
+
+The deployment manifest is an operator-owned TOML file that binds one research directory to protected state, a policy ceiling and, optionally, an isolated worker and managed evidence.
+[Configuration and State](../reference/configuration.md#deployment-manifest) specifies every key, with a complete example.
+It is read only by `heartwood gateway serve --deployment PATH`, `heartwood project migrate --deployment PATH --backup PATH` and `heartwood project recover-migration --deployment PATH`:
+
+```bash
+heartwood gateway serve --deployment /etc/heartwood/projects/research.toml
+```
+
+Start the command from the exact research directory the manifest names.
+The standalone terminal, `NotebookSession()` and `heartwood audit` commands never read a manifest, so researchers reach a bound project through the gateway's browser interface or a client of its [API](../reference/gateway-api.md).
+Keep the manifest and every file it names outside the research directory and the state directory, owned by root or the gateway user and not writable by group or others; any violation, unknown key or invalid value stops startup before a store is opened.
+Existing local `.heartwood/` state is never adopted silently; move it with `heartwood project migrate`, as described in [Operator-Bound External State](../start/project.md#operator-bound-external-state).
+
+### Policy Ceiling
+
+The `[policy]` table replaces the platform adapter's built-in policy as the ceiling for the project, and project settings can only narrow it.
+`platform_id` must equal the detected platform adapter, and `deny_egress_by_default` must stay `true`.
+When `allowed_action_review_modes` is omitted, all three modes are permitted, and a session in an isolated worker with no researcher selection uses `review-outside-effects`.
+Set the list explicitly; [Action Review](security.md#action-review) describes each mode and the evidence required before listing it.
+
+### Isolated Worker
+
+A `[worker]` table runs each session's agent in an OpenShell sandbox on a local Docker engine.
+Without it, the agent runs in the gateway process even though state is protected.
+Take `sandbox_policy_sha256` and `image_digest` from qualification, not from the worker whose admission they decide.
+Membership in the Docker socket's group grants control-plane authority; never add a worker identity to it.
+
+`gateway_versions` lists every version string the registered sandbox gateway may report and that your qualification evidence covers.
+Before serving, and before each worker launch or reconciliation, Heartwood reads the gateway's version through its `Health` API and stops with [`HW-WORKER-001`](../reference/troubleshooting.md#managed-workers) when it is missing or not listed.
+The qualification build reports `0.1.8+heartwood.2`.
+The check compares your declaration with the gateway's own report; it does not establish that the gateway has the [behavior native qualification depends on](platform-requirements.md#gateway-behavior-behind-native-qualification).
+
+### Evidence
+
+An `[evidence]` table binds automatic signed checkpoints to an independently authorized signer and records service.
+It requires a `[worker]` table; see [Configure Managed Evidence](audit-checkpoints.md#configure-managed-evidence) for its keys.
 
 ## Persist the Right Data
 
-Mount or assign one dedicated project directory as the process current directory.
+Assign one dedicated project directory as the process current directory.
 Persist research files and canonical state separately from installation files, temporary runtime files and job scratch.
-Local launches use project-local `.heartwood/`; managed launches use the operator-bound external state directory.
-Back up both the research files and the matching state, preserving their project identity.
-Workers receive selected input and Skill projections, never the canonical state mount.
+Local launches use `.heartwood/` in the project; manifest launches use `state_root`.
+Back up the research files and their matching state together, and preserve the project identity on restore.
+Never mount the state directory or the manifest into a worker.
 
-Do not pre-create `.heartwood/` with an incompatible layout.
-Opening the browser and running `heartwood doctor` are read-only; explicit project confirmation or the first mutating operation initializes state.
+Do not pre-create `.heartwood/` with another layout.
+Opening the browser and running `heartwood doctor` are read-only; project confirmation or the first mutating operation initializes state.
 
 ## Provide Model Connections
 
-A platform adapter can advertise managed connections and credential backends.
-The model-manifest parser defines non-secret connection metadata but is not wired into deployment startup.
-Built-in connections and operator-configured compatible routes use platform policy for allowed endpoints, credential references, capability tiers and action-review modes.
-
-Never add raw tokens to container layers, image labels, project configuration, command arguments, examples, or CI logs.
-The built-in Terra, Carina and generic policies permit **Review Every Action** and, as a researcher opt-in, **Review Changes**.
-**Review Outside Effects** applies only to sessions in an admitted isolated worker under a deployment manifest.
-Credential isolation does not authorize automatic tool execution; see [Action Review](security.md#action-review).
-See [Security and Controlled Data](security.md#model-credential-isolation) for the distinction between application scrubbing and platform isolation.
+Built-in connections and operator-configured compatible routes are checked against the active policy's endpoints, credential references and capability tiers.
+The model-connection manifest schema exists, but startup does not load it.
+Never place raw tokens in container layers, image labels, project configuration, command arguments, examples or CI logs.
+An isolated worker uses only the `[worker]` model route, and its real credential stays in the OpenShell provider.
 
 ## Validate the Deployment
 
-Concurrent advisory reviews are optional and require retained quality and performance evidence for the configured route.
-See [Qualify Parallel Reviews](parallel-reviews.md); deployments without evidence retain sequential review.
-
 Before real data, use a synthetic project to verify:
 
-1. exact artifact digest and platform capability response;
+1. the artifact digest and the `GET /project/capabilities` response;
 2. project persistence across process or compute restart;
-3. model discovery and a real agent response;
-4. an OpenHands-compatible structured tool proposal;
-5. grouped allow and reject behavior;
-6. the advertised execution boundary, including outside denial of protected state, control-plane access and unapproved egress for sandboxed workers;
-7. terminal, browser, and notebook parity where advertised;
-8. replay and scrubbed audit export;
-9. no secret values in configuration, events, logs, or exports;
-10. ingress host, origin, forwarding, prefix, and source rejection behavior;
-11. the declared model-credential boundary and action-policy restriction;
-12. enforced network behavior, including a no-network Heartwood-managed inference test when offline operation is claimed;
-13. signed checkpoint creation, external retention, independent verification, and synthetic restore; and
-14. worker admission, restart, lost-response reconciliation and independently observed revocation before releasing writer ownership.
+3. model discovery and a real agent response with a structured tool proposal;
+4. grouped approve and reject behavior, and that only the intended review modes are offered;
+5. for an isolated worker, outside denial of protected state, control-plane access and unapproved egress, and revocation before writer release;
+6. terminal, browser and notebook parity where advertised;
+7. replay and scrubbed audit export with no secret values in configuration, events, logs or exports;
+8. ingress host, origin, forwarding, prefix and source rejection;
+9. the reported model-credential boundary;
+10. enforced network behavior, including a no-network Heartwood-managed inference test when offline operation is claimed; and
+11. signed checkpoint creation, external retention, independent verification and synthetic restore.
 
-Record live validation evidence outside public user documentation and never include protected data in a fixture or transcript.
+Concurrent advisory reviews require their own evidence; see [Qualify Parallel Reviews](parallel-reviews.md).
+Keep validation records with the deployment's operating documentation and never include protected data in a fixture or transcript.
 
 ## Record a Standard Environment
 
-When several researchers share one setup, keep one record of it with the deployment's operating documentation, outside every research project.
-Verify each researcher's environment against the record with the checks above before project data is added.
+When several researchers share one setup, keep one record of it outside every research project and verify each researcher's environment against it before project data is added.
 
 | Record | Source |
 |---|---|
 | Release tag and verified digest | [Select an Artifact](#select-an-artifact) |
-| Platform image, compute shape, and storage | The platform guide, such as [Terra](../platforms/terra.md) |
+| Deployment manifest and its digest | [Deployment Manifest](#deployment-manifest) |
+| Platform image, compute shape and storage | The platform guide, such as [Terra](../platforms/terra.md) |
 | Approved model routes | [Choose Where Models Run](../models/index.md#data-and-compliance-boundary) |
-| Action-review mode | [Actions and Audit History](../use/actions-audit.md) |
+| Permitted review modes | [Action Review](security.md#action-review) |
 | Signer profile and checkpoint retention | [Audit Checkpoints and Retention](audit-checkpoints.md) |
 | Analysis dependency lock | [Verify an Existing Analysis](../use/research-workflows.md#verify-an-existing-analysis) |
 | Owner and next update review | [Support and Compatibility](support.md#update-cadence) |
 
 ## Run a Pilot Evaluation
 
-A pilot shows whether a small group of researchers can install, use, and trust one standard environment before a wider rollout.
+A pilot shows whether a small group can install, use and trust one standard environment before a wider rollout.
 Use synthetic or approved non-sensitive data, keep the release pinned, and name a support contact.
 
 1. Agree on exit criteria before the first participant starts.
@@ -120,5 +143,5 @@ Use synthetic or approved non-sensitive data, keep the release pinned, and name 
 | What did support require? | Requests and time to resolution |
 | Would participants use it? | Structured feedback |
 
-Collect counts and outcomes, not prompts, project files, or session history.
-Report the results as live validation in that environment; see [Testing and Evidence](../architecture/testing.md#claims).
+Collect counts and outcomes, not prompts, project files or session history.
+Report the results as live synthetic validation of that environment; see [Testing and Evidence](../architecture/testing.md#claims).

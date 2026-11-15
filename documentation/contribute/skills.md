@@ -83,7 +83,7 @@ Curated Skills add Heartwood policy fields under the standard `metadata` map in 
 Declare the narrowest accurate permissions.
 Repository review cannot approve a Skill for controlled data, grant a tool, or broaden model and network policy.
 
-Heartwood currently rejects automatic dynamic shell context and embedded Model Context Protocol servers in curated Skills because no corresponding deployment policy is defined.
+Heartwood rejects automatic dynamic shell context and embedded Model Context Protocol servers in curated Skills because no corresponding deployment policy is defined.
 Propose the policy and runtime contract in Heartwood before relying on either feature.
 
 ## Test the Workflow

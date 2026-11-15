@@ -6,292 +6,234 @@ SPDX-License-Identifier: MIT
 
 # Security and Controlled Data
 
-Heartwood is designed to run inside a research environment with explicit project, model, action, Skill, and audit controls.
-It is not a security boundary on its own and does not confer institutional approval, HIPAA compliance, or authorization to process protected health information.
+Heartwood controls what an agent may do inside a research environment; the environment's identity, network, storage and data-governance controls remain the authoritative boundary.
+No Heartwood configuration establishes institutional approval, HIPAA compliance, or readiness to process protected health information or other sensitive data.
+
+## Threat Model
+
+Heartwood treats the following as untrusted input: model output, tool output, research files, Skill content, external service responses, and, in an isolated deployment, everything the worker reports.
+It trusts the operator who writes the [deployment manifest](index.md#deployment-manifest), the platform proxy that authenticates researchers, the gateway process and the host it runs on.
+The threats it addresses are an agent that proposes harmful actions, content that injects instructions, other operating-system users and network clients reaching the gateway, and a worker that tries to claim authority it was not given.
+A compromised host, platform proxy, model provider or sandbox control plane is outside what Heartwood can detect.
+
+There are two execution shapes.
+State placement is a separate choice: a deployment manifest without a `[worker]` table moves canonical state outside the research directory but keeps local execution.
+
+### Local Execution
+
+OpenHands tools run in the gateway process, as the operating-system user who started Heartwood.
+The file editor rejects paths outside the project and inside `.heartwood/`.
+Terminal commands are not confined: an approved command can read anything that user can read, including `.heartwood/` settings, installed Skills, session records, audit files and browser profiles, and can inspect same-user processes.
+
+Local execution protects against other operating-system users and against callers without the [launch capability](#launch-capability).
+It does not protect against the agent's own approved commands, other processes running as the same user, or a privileged administrator.
+For that reason no review mode allows a terminal command automatically in local execution, and every reduced mode also requires the [credential gate](#model-credential-isolation).
+
+### Isolated Worker
+
+A deployment manifest with a `[worker]` table runs the complete OpenHands agent server, model client, tools and subprocesses as a worker inside an OpenShell sandbox on a local Docker engine.
+The gateway, canonical state, deployment authority, provider credentials, signer material and management sockets stay outside the worker's mounts and process identity.
+The worker receives only the inputs selected in the manifest and verified Skills, both read-only, plus a private writable workspace, home and temporary directory.
+
+The isolated worker shape is implemented and passes native qualification against the qualification-only sandbox gateway build; see [Testing and Evidence](../architecture/testing.md#installed-native-integration).
+A deployment's sandbox gateway is checked only by its declared version, as described in [Gateway Behavior Behind Native Qualification](platform-requirements.md#gateway-behavior-behind-native-qualification).
+
+## What the Sandbox Enforces
+
+The sandbox and the surrounding infrastructure enforce everything that constrains code running inside the worker:
+
+- filesystem access limited to the projected volumes, with inputs and Skills mounted read-only;
+- a non-root process identity with `no-new-privileges` and no added Linux capabilities;
+- Docker `network=none` for the worker container, with network access only through the sandbox's deny-by-default policy and inference transport;
+- CPU and memory limits from the manifest;
+- substitution of the real provider credential outside the worker, which holds only an `openshell:resolve:env:` placeholder; and
+- deletion of the sandbox when the gateway revokes the attempt.
+
+Heartwood sets no expiry on the provider credential behind that placeholder.
+Credential lifetime, rotation and detachment are the operator's OpenShell provider configuration; native qualification checks only that its own fixture's expired credential is refused.
+
+Heartwood does not inspect commands the worker runs.
+In [`review-outside-effects`](#action-review), these controls are the only limit on what an automatically allowed command can do inside the worker.
+
+## What the Gateway Enforces
+
+The gateway enforces everything that decides authority, independently of anything the worker reports:
+
+- the deployment manifest's paths, ownership, policy ceiling and qualified gateway versions, before any store opens;
+- the sandbox's reported version against `gateway_versions`, and stops with `HW-WORKER-001` otherwise;
+- outside inspection of the worker container, which rejects an unexpected image, a network other than `none`, privileged mode, added capabilities, a shared host or container namespace, mounts that expose withheld host paths, and any security option other than `no-new-privileges`, AppArmor `docker-default`, or an SELinux `container_t` or `svirt_lxc_net_t` type with individual categories;
+- admission of the sandbox's accepted policy hash and process generation against `sandbox_policy_sha256`;
+- worker attempts bound to project, session, image, policy and input-manifest identity, journaled and fenced so that only one attempt can write a session;
+- worker responses admitted only when every conversation setting equals what the gateway sent, so a worker cannot select the agent, model client, security analyzer or secret source the gateway constructs;
+- a 120-second deadline per worker request and fixed size limits per response, with a fenced attempt on violation;
+- action review, outside authorization and audit records, which a worker message cannot create or settle; and
+- revocation of a fenced attempt and removal of its volumes, and of attempts left by an earlier gateway process at the next `gateway serve --deployment` start.
+
+An uncertain revocation keeps the attempt fenced and the session's writer ownership retained until outside reconciliation observes that its resources are gone.
+After a recorded revocation, the next task can start a replacement worker in a new sandbox; it shares no credential, placeholder, conversation memory or workspace file with the revoked worker.
+The system architecture describes [attempt ownership](../architecture/system.md#worker-attempt-ownership) and the [response limits](../architecture/system.md#budgets-and-deadlines).
 
 ## Action Review
 
-The agent loop pauses before every registered action set, whatever mode is selected.
-The session service in the gateway then either waits for the researcher or records its own decision as the actor `gateway` under one named rule.
-The modes, rules, and records are described in [Actions, Sessions, and Audit History](../use/actions-audit.md#review-modes).
+The agent loop pauses before every registered action set.
+The gateway then either waits for the researcher or records its own decision under the actor `gateway` and one named rule.
+Model risk ratings and model-written summaries are not inputs to that decision.
+
+| Mode | Allowed automatically | Applies when | Residual exposure |
+|---|---|---|---|
+| `review-all` | Nothing | Always | None beyond the researcher's own decisions |
+| `review-changes` | A set containing only file views of paths the gateway resolved inside the project (rule `read.file-view`), or only task-tracker updates (rule `plan.task-tracker`) | The model route is credential-free or platform-isolated, or the session runs in an isolated worker | Viewed file content reaches the model route without a per-file decision |
+| `review-outside-effects` | A set containing only file views, task-tracker updates, file edits and terminal commands (rule `sandbox.contained`) | The session runs in an admitted, active worker attempt with a live lease | Code runs unreviewed on mounted inputs, can alter or delete the worker workspace, and can send content to the admitted model endpoint |
+
+An action set with any other tool, or with an action that the deterministic OpenHands policy-rail and pattern analyzers rate high or cannot assess, waits for the researcher in every mode.
+Outside operations and result releases are never allowed automatically; see [Outside Authorization](#outside-authorization).
+[Actions and Audit History](../use/actions-audit.md#review-modes) describes how researchers select a mode and read automatic decisions.
 
 ### Deployment Ceiling
 
-`allowed_action_review_modes` in the deployment manifest's `[policy]` section lists every mode the deployment permits.
-It must include `review-all`.
-A manifest that omits the list permits all three modes, so a deployment with a `[worker]` section then starts sessions in `review-outside-effects` and in-worker commands run without a researcher decision.
-List the modes explicitly to require an operator decision for that behavior, and list only `review-all` until the deployment has qualified the others.
+`allowed_action_review_modes` in the manifest's `[policy]` table lists every mode the deployment permits and must include `review-all`.
+When it is omitted, all three modes are permitted.
+A session in an isolated worker with no selection then uses `review-outside-effects`, so in-worker commands run without a researcher decision.
+List the modes explicitly, and list only `review-all` until a mode has passed the [action-review evaluation](../architecture/testing.md#action-review-evaluation) for the deployment.
 
-```toml
-[policy]
-policy_id = "site-policy"
-platform_id = "generic"
-allowed_action_review_modes = ["review-all", "review-changes"]
-```
+The gateway reads the ceiling from the manifest each time it loads the project.
+A project policy can list fewer modes; the modes in force are those both lists permit.
+A stored selection that the ceiling no longer permits stops the project from loading until the selection is reset or the manifest permits it.
+At decision time the ceiling is applied again, and any mode outside it, unknown, or not applicable to the session resolves to `review-all`.
 
-The gateway reads this ceiling from the manifest every time it loads the project, so a change to the manifest applies at the next start and stored project state never keeps an older or wider list.
-A project policy that lists fewer modes narrows the ceiling for that project: the modes in force are those both lists permit, and never more than the manifest's.
-A stored selection that the manifest no longer permits stops the gateway from loading the project until the selection is reset or the manifest permits it.
-At decision time the session service applies the ceiling again, so a mode outside it resolves to `review-all`.
-`review-outside-effects` additionally requires an admitted, active worker attempt with a live lease for that session and resolves to `review-all` whenever the attempt is missing, fenced, revoked, or being replaced.
-A session whose worker was revoked accepts a command only on a gateway that launches workers, where the command starts a replacement; any other gateway refuses it and never runs the session on its own backend.
-A manifest without a `[worker]` section therefore never applies it.
-
-Without a manifest, the built-in workstation/container, Terra, and Carina policies permit `review-all` and `review-changes`.
-Project state is then inside the research directory, so the gateway keeps the researcher's selection in process memory and ignores any review mode in `.heartwood/config.toml`.
-A file in the research directory can narrow the permitted modes; it cannot select one or make `review-outside-effects` applicable.
-`--review-mode` on a launch or `gateway serve` command is the same selection made at start: it passes through the ceiling, worker, and credential checks, and the command stops with the reason when they refuse it.
-
-### What Each Mode Relies On
-
-| Mode | Automatic actions are bounded by | Residual exposure |
-|---|---|---|
-| `review-changes` | The gateway resolves the viewed path inside the project before the decision, and the file editor resolves it again when the view runs. The task tracker has no workspace or network effect. | Viewed file content reaches the selected model route without a per-file decision. The mode is unavailable while the model credential is application-scrubbed. |
-| `review-outside-effects` | The sandbox policy, non-root identity, read-only inputs and Skills, and deny-by-default egress of the admitted worker. Command content is not inspected. | Code runs unreviewed on mounted inputs, can alter or delete the worker workspace, and can send content to the admitted model endpoint. |
-
-Review is not the security boundary for a sandboxed worker: a compromised worker does not need an approval to act inside its sandbox.
-Outside operations and release of outside results stay on their separate, digest-bound approval paths in every mode.
+Without a deployment manifest, the built-in workstation and container, Terra and Carina policies permit `review-all` and `review-changes`.
+State is then inside the research directory, so the gateway keeps the researcher's selection in process memory and ignores any review mode in `.heartwood/config.toml`.
+`--review-mode` on `heartwood` or `heartwood gateway serve` makes the same selection at start and stops with the reason when the ceiling, worker or credential gate refuses it.
 
 ### Failure Behavior
 
-The researcher is asked whenever the session is paused or not waiting for a review, the researcher's last command paused, denied, or was refused, the selection or the credential boundary cannot be read or the model route is not configured, the model credential is not isolated from a local session's tools, the mode is unknown or outside the ceiling, the worker attempt is not admitted, the action set is not fully journaled, an action has no rule, the fixed threat checks flag or cannot assess an action, or the session has an unresolved or unknown outcome.
-The decision is computed again on the pending action set that it binds, and a set whose identity changed is not executed.
-A pending set is considered once, when its review request is journaled; a set whose request was already journaled before a restart or a mode change waits for the researcher.
-An automatic decision that fails after it was recorded, for example because checkpoint evidence is unavailable, is withdrawn: the journal records once that it was not applied, the recorded approval authorizes nothing, and the action set waits for the researcher.
-The command or status read that triggered it completes normally.
-An interrupted automatic decision is recovered only if its rule still allows the action set under the mode and state then in force; otherwise it is withdrawn in the same way.
+The gateway asks the researcher whenever it cannot establish that a rule applies: the session is paused or the researcher's last command paused, denied or was refused; the selection, ceiling or credential boundary cannot be read; the worker attempt is missing, fenced, revoked or being replaced; the action set is not fully journaled; or the session has an unresolved outcome.
+A decision is computed once, when the review request is journaled, and bound to the pending set's identity.
+A set whose request was journaled before a restart or a mode change waits for the researcher.
+An automatic decision that cannot be completed, for example because required checkpoint evidence is unavailable, is withdrawn: the journal records that it was not applied, and the set waits for the researcher.
 
-Qualify a mode for a deployment with the action-review benchmark described in [Testing and Evidence](../architecture/testing.md), which requires zero automatic decisions on actions labelled as requiring review.
+## Outside Authorization
 
-## Threat Boundaries
+An outside operation is a request to a platform service prepared through a trusted embedding's adapter; a result release discloses that operation's result to the worker and its model route.
+No outside-service adapter ships with Heartwood, and `heartwood gateway serve` installs none, so a deployment offers outside operations only through an embedding launcher that supplies one, as the native qualification fixture does.
+Each needs its own researcher decision bound to the exact proposal digest, including the request, input digests, destination, worker identity, policy revision and a five-minute validity interval.
+No review mode decides either one.
 
-### Project Files
+Before submission or delivery, the gateway rechecks the live worker attempt, current policy, validity interval and input contents.
+The decision and dispatch intent are journaled before the service is contacted, and with managed evidence, retained outside the gateway first.
+An approved operation is sent only by an exact retry of its own approval command; reads, reconciliation and restarts never send it.
+A Heartwood approval is necessary, never sufficient: the destination service authenticates the caller and enforces its own authorization.
+The [Platform Contract](platform-contract.md#outside-operation-admission) defines the embedding interface.
 
-In local execution, OpenHands tools execute with the permissions of the Heartwood process.
-Heartwood supplies the project directory as the local agent workspace, and the file editor rejects paths outside the project and inside `.heartwood/`.
-Local terminal commands are not confined: an approved command can read anything the user can read and can change `.heartwood/` state, including project settings, installed Skills, and session and audit files.
-For that reason no review mode allows a local terminal command automatically.
-Review commands that touch local `.heartwood/` as changes to Heartwood's own controls.
+## Credentials
 
-Managed native execution requires an explicit operator-owned deployment binding and qualified worker dependencies.
-The complete worker runs behind the sandbox boundary, receives selected read-only input and verified Skill projections, and keeps its writable workspace, home and temporary files inside the sandbox.
-Canonical state, deployment authority, provider credentials, management sockets and signing material remain outside its mounts and process identity.
-The gateway independently checks attempt identity, admits untrusted responses and retains approval authority; the sandbox and outside services enforce filesystem, process and network restrictions.
-A worker response can report status, usage and events, but every conversation setting it returns must equal what the gateway sent, so it cannot make the gateway construct an agent, model client, analyzer or secret source of its choosing.
-Each worker request has a 120-second deadline and each history read a fixed size, and a worker that exceeds either is fenced; [the system architecture](../architecture/system.md) lists the limits.
-An uncertain revocation fences the attempt and retains writer ownership until reconciliation establishes that its resources are gone.
-The launcher deletes a worker that fails launch admission without waiting for the session to close.
-A worker whose attempt is fenced later is revoked as soon as the fence is raised: after any session command already in progress, its sandbox and provider attachment are removed within the control-plane timeouts of about three minutes.
-If that revocation fails, the worker keeps its sandbox policy and provider attachment until the session closes, the gateway stops or the next managed gateway start, which also deletes workers that an ended gateway process left running.
-After revocation is recorded, a session can continue with a replacement worker in a new sandbox; it shares no credential, placeholder, conversation memory or workspace file with the revoked worker, and the session shows where the replacement began.
-Outside inspection rejects a worker container that is privileged, has added Linux capabilities, shares the host's or another container's process, IPC or user namespace, or reports a security option other than `no-new-privileges`, the default AppArmor profile, or an SELinux label.
-A custom seccomp or AppArmor profile is refused because the inspection cannot establish that it confines the worker.
-Recorded worker absence relies on the sandbox gateway completing deletion as the qualified gateway does.
-Heartwood requires the registered gateway to report a version that the operator declared in the deployment manifest, and refuses to launch or reconcile workers otherwise.
-That check compares a declaration with the gateway's self-report and does not verify its behavior, so the operator must still confirm the [gateway behavior behind native qualification](platform-requirements.md#gateway-behavior-behind-native-qualification).
-This path does not silently replace local execution and does not establish sensitive-data readiness merely by starting a worker.
-See the [platform isolation requirements](platform-contract.md#agent-isolation) and [native qualification limits](../architecture/testing.md#installed-native-integration).
+Provider credentials are excluded from project configuration, browser storage, command arguments, durable session events, logs and audit exports.
+Heartwood resolves process values, operator bindings, optional system-keyring entries or platform identity only for named provider calls.
+Provider failures are reduced to a typed category before persistence, so raw provider exception text is not retained.
+Custom compatible-service tokens remain process-only; project-scoped keyring persistence is explicit and requires a working system credential store.
+For **Sign in with ChatGPT**, OpenHands owns the user-level OAuth credential and transport, and Heartwood stores only a non-secret subscription reference.
 
-Use a dedicated project directory and least-privilege mounts.
-Do not run Heartwood as a privileged container or from a broad shared root.
+### Model Credential Isolation
 
-### Model Content
+The credential gate reports one boundary for the active model route:
 
-Prompts, selected project content, tool results, and summaries may be sent to the active model route.
-The platform policy can deny unlisted endpoints, but infrastructure egress controls and provider agreements remain authoritative.
-
-The browser treats agent responses as untrusted GitHub-Flavored Markdown.
-It removes raw HTML and unsafe link protocols, does not fetch model-provided images, makes invisible control characters explicit, normalizes response headings beneath the page heading, bounds displayed content, and escapes plain technical fields.
-External links require an explicit user action and omit referrer information.
-
-Confirm data eligibility for the exact endpoint, account, model, and deployment before use.
-
-### Runtime Caches
-
-The supported GPU runtime does not depend on `diskcache`; its optional outlines cache uses typed SQLite records and remains disabled by default.
-Other runtime and model caches are private to the runtime user and separate from the agent workspace.
-
-Do not enable the unbounded outlines disk cache, share runtime caches between users or trust domains, or place cache directories inside an agent-writable project without a deployment-specific review.
-
-### Credentials
-
-Provider credentials are excluded from project configuration, browser storage, command arguments, durable session events, logs, and audit exports by design.
-Heartwood resolves process values, operator bindings, optional system-keyring entries, or platform identity only for named provider calls.
-Provider failures are reduced to OpenHands' typed failure category while the exception is still in process.
-Raw provider exception text is replaced before OpenHands runtime persistence and is not retained in Heartwood retry logs, session events, or audit data.
-
-Project-scoped keyring persistence is explicit and available only where a functional system credential store exists.
-Custom compatible-service tokens remain process-only.
-For **Sign in with ChatGPT**, OpenHands owns the user-level OAuth credential, refresh, and Codex transport; Heartwood stores only a non-secret subscription reference in project policy.
-Signing in does not make a ChatGPT account suitable for controlled data.
-
-#### Model Credential Isolation
-
-Heartwood reports one of three effective boundaries for the active model route:
-
-| Boundary | Guarantee | Action Review |
+| Boundary | Meaning | Reduced review outside an isolated worker |
 |---|---|---|
-| Credential-free | No model credential is placed in the Heartwood process, as with an unauthenticated local model server | `review-changes` may be selected |
-| Application-scrubbed | Heartwood excludes the credential from tool inputs, project state, terminal subprocess environments, interfaces, events, logs, and audits | `review-all` is required outside an isolated worker |
-| Platform-isolated | A separately authorized model transport keeps the credential outside the operating-system identity that runs agent tools, with live synthetic qualification for that platform | `review-changes` may be selected |
+| Credential-free | No model credential is placed in the Heartwood process, as with an unauthenticated local model server | Permitted |
+| Application-scrubbed | The credential is in the Heartwood process but excluded from tool inputs, project state, terminal environments, interfaces, events, logs and audits | Refused; `review-all` applies |
+| Platform-isolated | A separately authorized transport keeps the credential outside the identity that runs agent tools, with live synthetic qualification for that platform and model source | Permitted |
 
-Application scrubbing is not process isolation.
-OpenHands' local model client and coding tools run under the same Heartwood operating-system identity, so environment filtering cannot prevent every same-identity memory, process, or inherited-resource access path.
-The built-in workstation/container, Terra, and Carina adapters therefore do not claim platform-isolated model credentials.
-Local terminals receive an explicit environment containing executable and virtual-environment paths, locale and terminal settings, selected CUDA and Slurm settings, thread limits, and public certificate paths.
-The exact names are defined by `TERMINAL_ENVIRONMENT_NAMES` in the gateway; deployments can add comma-separated names with `HEARTWOOD_TERMINAL_ENV_ALLOWLIST` in the trusted launch environment.
-Configured provider credential names and the gateway capability remain excluded even when listed there.
-Proxy settings are excluded by default; a deployment that explicitly admits them must ensure they contain no credentials and cannot bypass its egress policy.
-The SDK adds the small set of variables required by its terminal backend.
-Environment selection does not prevent an agent from reading same-identity process memory, credential files or keyrings, contacting cloud metadata services, or loading secrets from shell startup files.
-It does not turn local workstation, Terra, or Carina execution into a full worker sandbox.
-The native worker instead starts with an explicit environment allowlist and receives only the outside provider transport's placeholder; ordinary remote execution without that transport does not separate model credentials from agent tools.
+Application scrubbing is not process isolation: the local model client and tools share one operating-system identity.
+No built-in adapter claims a platform-isolated model source.
+An isolated worker never holds the provider credential, so `review-outside-effects` does not depend on this gate.
 
-| Local Terminal Settings | Default Variable Names |
-|---|---|
-| Executables and research environment | `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `VIRTUAL_ENV`, `CONDA_PREFIX`, `CONDA_DEFAULT_ENV`, `PYTHONPATH`, `HEARTWOOD_RUNTIME_ROOT`, `LD_LIBRARY_PATH`, `DYLD_LIBRARY_PATH` |
-| Locale, terminal, and temporary files | `LANG`, `LC_ALL`, `LC_CTYPE`, `TERM`, `COLORTERM`, `TZ`, `TMPDIR`, `TEMP`, `TMP` |
-| Accelerator selection | `CUDA_HOME`, `CUDA_PATH`, `CUDA_VISIBLE_DEVICES`, `NVIDIA_VISIBLE_DEVICES`, `NVIDIA_DRIVER_CAPABILITIES` |
-| Scheduler allocation | `SLURM_JOB_ID`, `SLURM_JOB_NAME`, `SLURM_SUBMIT_DIR`, `SLURM_CPUS_PER_TASK`, `SLURM_NTASKS`, `SLURM_PROCID`, `SLURM_LOCALID` |
-| Thread limits | `OMP_NUM_THREADS`, `MKL_NUM_THREADS`, `OPENBLAS_NUM_THREADS` |
-| Public trust material | `SSL_CERT_FILE`, `SSL_CERT_DIR`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, `GIT_SSL_CAINFO`, `NODE_EXTRA_CA_CERTS` |
+Local terminals receive an explicit environment instead of the gateway's: executable and virtual-environment paths, locale and terminal settings, temporary directories, selected CUDA and Slurm variables, thread limits and public certificate paths.
+`TERMINAL_ENVIRONMENT_NAMES` in the gateway defines the exact names, and `HEARTWOOD_TERMINAL_ENV_ALLOWLIST` in the trusted launch environment adds comma-separated names.
+Configured provider credential names and the gateway capability stay excluded even when listed; proxy variables are excluded unless explicitly listed.
+The allowlist does not stop a local command from reading same-user process memory, credential files, keyrings or cloud metadata services.
 
-A Heartwood-managed local model server uses a private Unix socket in an owner-only temporary directory outside the research project.
-The launcher and model clients validate directory ancestry, ownership, permissions and socket identity; managed requests have no TCP fallback.
-The logical model URL in policy and configuration identifies the private transport, not a listening TCP port.
-The launcher stops the interaction if its runtime exits, and llama.cpp slot inspection is disabled.
-These controls separate operating-system users; they do not isolate processes sharing the launcher's identity or protect against a privileged host administrator.
-Sandboxed workers cannot use this local socket: they require an independently authorized outside inference route, with no socket or credential mount into the worker.
+A Heartwood-managed local model server listens on an owner-only Unix socket in an owner-only directory outside the project, with no TCP fallback.
+That protects it from other operating-system users, not from same-user processes; an isolated worker cannot reach it.
 
-[OpenHands Agent Server](https://docs.openhands.dev/sdk/guides/agent-server/overview) and its [remote workspace](https://docs.openhands.dev/sdk/guides/agent-server/cloud-workspace) move the conversation, model client, and tools into a remote agent environment.
-That boundary isolates the caller from the agent workspace, but it does not by itself separate model authentication from tools running inside that agent environment.
-Heartwood uses the upstream OpenHands credential and model transports without treating a remote workspace as model-only credential isolation.
+Removing a credential from Heartwood settings does not revoke it at its issuer or in running processes.
+Rotating a sandbox provider credential is not revocation: confirm acknowledged detachment or worker revocation, neither of which recalls requests already forwarded.
+OpenShell's `stable_placeholder` provider capability allows value-only rotation without replacing the worker; qualify it against the deployed gateway before relying on it.
 
-An application-scrubbed credential shares an operating-system identity with the agent tools, so a session outside an isolated worker then reviews every action: no reduced review mode can be selected or applied.
-A sandboxed worker never holds the provider credential, so `review-outside-effects` does not depend on this boundary.
-A model's risk rating never authorizes execution.
-Removing a credential from Heartwood's saved settings does not invalidate copies held by running processes or revoke the key at its issuer.
-For sandbox provider access, require acknowledged outside detachment or verified worker revocation; neither undoes requests already forwarded upstream.
-Changing the review mode never broadens model authorization.
+## Gateway Ingress
 
-Credential rotation is separate from revocation.
-After an ordinary static provider update, a running process can retain a reference to the previous value; launch a new process to receive the updated reference.
-For deployments that need value-only rotation without replacing the worker, the provider profile can explicitly enable OpenShell's `stable_placeholder` capability before launch.
-Qualify that mode against the deployed gateway and supervisor, wait for the update's readiness receipt, and independently verify that acknowledged detachment prevents retained references from reaching the provider.
-Updating a stored value alone does not establish that the previous upstream key is safe to retire.
+The gateway accepts traffic through one configured ingress mode:
 
-Platform isolation is distinct from institutional approval.
-A separate service identity or platform proxy can enforce a technical credential boundary, while data eligibility still depends on the provider agreement, institutional controls, and reviewed deployment.
+- `direct-loopback` binds to loopback and rejects forwarding headers;
+- `jupyter-proxy` binds to loopback, requires the exact external origin and stripped prefix, and validates the route metadata of `jupyter-server-proxy`; and
+- `trusted-proxy` accepts only configured source ranges with one complete forwarded client, host, protocol and prefix set, and can require an exact non-secret identity assertion header.
 
-### Gateway Ingress
+Every mode validates host, origin, WebSocket origin, path, query encoding and base path, and rejects duplicated security headers, undeclared forwarding metadata, encoded or traversing paths and wildcard origins.
+Request bodies are limited to 1 MiB of UTF-8.
+Browser responses set a restrictive content security policy, same-origin framing, no referrer, MIME-sniffing protection, and a permissions policy that disables camera, geolocation and microphone.
+Heartwood does not authenticate end users or terminate public TLS; the platform proxy must do both and strip client-supplied forwarding and identity headers.
 
-Heartwood accepts browser and API traffic through one configured ingress mode:
+## Launch Capability
 
-- **Direct loopback** binds to a loopback address by default and rejects forwarding headers.
-- **Jupyter proxy** binds to loopback, requires the exact external origin and stripped proxy prefix, and validates the bounded route metadata emitted by `jupyter-server-proxy`.
-- **Trusted proxy** accepts traffic only from configured source ranges, requires one complete forwarded client, host, protocol, and prefix set, and can require an exact non-secret proxy identity assertion.
+Every API request, server-sent event stream and WebSocket requires a process-lifetime capability.
+`heartwood gateway serve` prints one launch link after it owns a listening socket; the browser removes the fragment token and exchanges it once through `POST /launch` for a capability kept in tab-scoped `sessionStorage` under the gateway base path.
+The browser sends it in `X-Heartwood-Capability`, or in the first WebSocket frame within five seconds and 8192 bytes; no cookie is set and redirects are rejected.
+Automation supplies the capability through `--capability-fd`, at most 4096 bytes, which the gateway reads and closes; environment delivery is rejected.
+Access logging is disabled, and a request without the capability receives `HW-INGRESS-003`.
 
-All modes validate the request host, browser origin, WebSocket origin, path, query encoding, and external base path before routing.
-Heartwood rejects duplicated security headers, forwarded metadata outside the declared Jupyter or trusted-proxy contract, encoded or traversing paths, wildcard origins, and contradictory prefixes.
-HTTP request bodies are bounded to 1 MiB and must be UTF-8.
-Static browser responses set a restrictive content security policy, same-origin frame policy, no-referrer policy, MIME-sniffing protection, and a permissions policy that disables camera, geolocation, and microphone access.
-The content security policy permits live updates only through the validated browser origin and its corresponding WebSocket origin.
+The capability separates the researcher's browser from other operating-system users and from requests that lack it.
+It does not separate the researcher from same-user processes, from scripts on the same origin, or from another person sharing the account.
+Every accepted command records the launching principal as its actor; a command cannot claim another actor, and the actor `gateway` is reserved for automatic review decisions.
+Use separate authenticated origins for mutually untrusted projects; in Jupyter proxy mode, notebook content on the same origin is trusted.
 
-Heartwood does not authenticate end users or terminate public TLS.
-The platform proxy must authenticate users, authorize project access, remove untrusted forwarding and identity headers, set the validated values, and restrict network reachability to the configured gateway bind.
-A trusted identity assertion is an additional route marker, not a bearer secret or replacement for user authentication.
+## Model Content
 
-### Launch Capability
+Prompts, selected project content, tool results and summaries go to the active model route.
+Policy denies unlisted endpoints, but infrastructure egress controls and provider agreements are authoritative; confirm data eligibility for the exact endpoint, account, model and deployment.
 
-Ingress validation confirms the route, not the caller.
-A loopback bind alone does not authenticate a caller; local same-identity tools can reach it.
-The gateway requires a process-lifetime launch capability on every API request, server-sent event stream and WebSocket, including deployments that also deny direct worker access through network isolation.
-`heartwood gateway serve` generates the secret at startup and prints one launch link only after owning a listening socket.
-Gateway request access logging is disabled so launch tokens do not enter access logs.
-The launch token is carried in a URL fragment, which the browser removes before exchanging it through `POST /launch`; it is never sent in an HTTP URL.
-The response supplies a gateway-only capability, stored in tab-scoped `sessionStorage` under the gateway base path.
-The browser sends it explicitly in `X-Heartwood-Capability` for API and server-sent event requests, and in the first WebSocket authentication frame.
-Requests stay within the configured origin and base path and reject redirects; the gateway sets no capability cookie.
-The launch token works once; reloads retain access in the same tab while the gateway runs.
-An unauthenticated WebSocket receives no project events and must authenticate within five seconds using a text frame of at most 8192 bytes.
-Automation supplies the same secret through `--capability-fd` and presents it in the `X-Heartwood-Capability` header.
-The gateway consumes and closes that inherited file or pipe descriptor before serving requests; environment delivery is rejected.
-Keep any source file outside worker access, and hand off the descriptor exclusively with no other readers.
-The descriptor payload is limited to 4096 bytes and pipes must reach EOF within five seconds.
-A request without the capability receives `HW-INGRESS-003`; static browser assets need no capability because they contain no project data.
+The browser renders agent responses as untrusted GitHub-Flavored Markdown: it removes raw HTML and unsafe link protocols, does not fetch model-provided images, shows invisible control characters, and opens external links only on explicit action without a referrer.
 
-Every command accepted through the gateway records the launching principal as its actor.
-A caller cannot claim another actor in the command body, and `approval.recorded` carries the actor that approved or denied the action set.
-The actor `gateway` is reserved for automatic review decisions and is rejected in any submitted command.
+The GPU runtime's optional outlines cache is disabled by default and does not use `diskcache`.
+Do not enable unbounded runtime caches, share them between users, or place them inside an agent-writable project.
 
-The capability separates the researcher's browser from other operating-system users and from requests that do not carry it.
-It is not a boundary against processes running as the same user, including approved agent commands, which can read the browser profile and project settings or inspect same-user processes.
-A server on another port cannot read the tab’s origin-scoped storage or receive the capability through an automatically attached cookie.
-Scripts executing on the same origin can read browser storage; a base-path storage key is routing separation, not a security boundary against same-origin code.
-In Jupyter proxy mode, notebook content served from the same origin remains trusted, as it is for the Jupyter server itself.
-Use separate authenticated origins for mutually untrusted projects and keep untrusted scripts outside the gateway origin.
-The capability does not separate two people who share one operating-system account and does not replace the platform's user authentication.
+## Skills and Instructions
 
-### Skills and Instructions
+Reviewed external Skill packages install only from deployment-approved TUF roots, after verification of signatures, expiry, rollback state, target hashes, the complete file manifest, declared policy and OpenHands compatibility.
+Approval binds the exact tree digest, installation is atomic, and a signed revocation prevents later activation.
+Only the deployment-owned system Skill registry can approve a digest for controlled data.
+Verification establishes source and integrity, not that instructions are safe for a dataset; see [Skill Trust and Distribution](../architecture/skills.md).
 
-A Skill can influence agent behavior and tool selection.
-Heartwood therefore accepts reviewed external packages only through deployment-approved TUF roots and verifies current signatures, expiry, rollback state, target hashes, the complete file manifest, declared policy, and OpenHands compatibility before installation.
-Approval is bound to the exact complete-tree digest shown to the researcher, installation is atomic, and a signed revocation prevents later activation.
-The advanced local-install route accepts source directories only inside the current project and outside reserved `.heartwood` state.
+## Audit Data
 
-These controls establish source authenticity and package integrity; they do not prove that instructions are safe for every dataset or task.
-Review the description, tools, network and data-access requirements, dataset types, source, and permission summary before installation, and treat instructions embedded in project files or other external content as potentially untrusted.
-
-Repository review, project installation, and controlled-data approval are independent decisions.
-Only the deployment-owned system Skill registry can approve an exact verified digest for controlled data.
-Catalog metadata and local unreviewed packages cannot grant that status.
-
-See [Skill Trust and Distribution](../architecture/skills.md).
-
-### Audit Data
-
-The audit log is hash-chained and export is scrubbed, but operational metadata can still be sensitive.
-Store, retain, share, and delete audit artifacts under the same reviewed records policy as the surrounding project.
-Normal project exports remain replaceable by the project owner.
-Where authoritative evidence is required, create a signed checkpoint outside the project and verify it against a public key obtained through a separate trusted channel.
-The signature authenticates the supplied checkpoint statement and audit content; it does not enforce retention, establish institutional approval, or prove that no events were removed before checkpoint creation.
-
-Managed evidence additionally compares each checkpoint with the complete independently retained history and rejects changes to an already retained audit prefix.
-The gateway can stage candidate records but must not have permission to publish checkpoint ordinals; that authority belongs to the independently authorized signer.
-The records system must enforce scoped identities, create-only publication and retention outside the application.
-Required mode stops dispatch while that evidence is unavailable; buffering ordinary work must not bypass evidence required for outside effects or result disclosure.
-Neither mode proves the completeness of activity after the last retained checkpoint or turns worker-reported results into independently observed facts.
-
-Managed deployments keep the checkpoint signer registry, trusted public keys, service credentials, and private signing keys outside every agent project.
-Project state can select only a profile already approved by that registry.
-Heartwood verifies a remote signature and its pinned signer identity before publishing a checkpoint.
-A production signing service must independently authorize the requested deployment and retention claims, use a principal unavailable to agent tools, and keep KMS/HSM credentials outside the Heartwood process.
-An owner-only bearer-token file remains accessible to other processes running as that owner unless the platform supplies a stronger sandbox.
-The bundled local signer is a development and offline fallback using an owner-only Unix socket and bearer authentication.
-The client validates socket ownership, permissions and its protected directory before transmitting the token.
-These controls protect against other operating-system users, but not compromise of the same user account.
+The audit log is hash-chained and its export is scrubbed, but operational metadata can still be sensitive; store and delete it under the project's records policy.
+A signed checkpoint authenticates one export against a key obtained through a separate channel.
+It does not enforce retention or prove that no events were removed before it was created.
+Managed evidence additionally verifies each checkpoint against independently retained history, and the signer, not the gateway, publishes checkpoint ordinals.
 See [Audit Checkpoints and Retention](audit-checkpoints.md).
+
+## What Heartwood Does Not Claim
+
+- No deployment is claimed ready for sensitive or regulated data; native qualification uses synthetic and benign workloads.
+- Synthetic qualification, CI validation and a running sandbox are not institutional approval.
+- Heartwood distributes no production sandbox gateway; the patched gateway exists only in the qualification build, and a deployment's gateway is checked by declared version, not behavior.
+- Local execution is not a sandbox and does not isolate model credentials from tools.
+- Review modes are not a security boundary for an isolated worker; a compromised worker does not need an approval to act inside its sandbox.
+- Released outside results reach the model as a user-role message; the envelope that labels them is not an instruction boundary.
+- Heartwood does not verify individual identities, attribute commands to individual people behind one gateway, or replace platform authorization.
+- Heartwood does not provide quarantine, steward-approved output release, encrypted execution storage or records-system retention enforcement.
 
 ## Deployment Security Checklist
 
 Confirm each control before researchers add project data, and again after each update:
 
-- authenticate every user before they reach the execution environment;
-- isolate projects and users with platform permissions or containers;
-- keep the gateway on loopback or behind one configured authenticated proxy boundary;
+- authenticate every user before they reach the execution environment, and isolate projects and users with platform permissions;
+- keep the gateway on loopback or behind one configured authenticated proxy, and keep the launch link and capability private to the researcher;
 - deny network egress except reviewed model and package endpoints;
-- mount controlled inputs read-only when feasible;
-- keep provider secrets in a keyring, mounted secret, or managed identity;
-- keep production checkpoint keys in an independently authorized KMS/HSM-backed signer service;
-- limit `allowed_action_review_modes` to the modes qualified for the deployment, and to `review-all` where no automatic decision is acceptable;
-- keep the launch link and any supplied gateway capability private to the researcher who started Heartwood;
-- pin release artifacts, images, model revisions, and Skill versions;
-- for managed native execution, confirm that the deployed sandbox gateway provides the [deletion behavior that native qualification depends on](platform-requirements.md#gateway-behavior-behind-native-qualification);
+- keep provider secrets in a keyring, mounted secret or managed identity, and production checkpoint keys in an independently authorized signer;
+- list `allowed_action_review_modes` explicitly, with only the modes evaluated for the deployment;
+- for an isolated worker, confirm that the sandbox gateway provides the [behavior native qualification depends on](platform-requirements.md#gateway-behavior-behind-native-qualification) before declaring its version;
+- pin release artifacts, images, model revisions and Skill versions;
 - collect content-minimized operational logs outside project outputs;
-- validate backup, retention, deletion, and incident-response procedures; and
-- perform synthetic end-to-end validation before controlled-data enablement.
+- validate backup, retention, deletion and incident-response procedures; and
+- complete synthetic end-to-end validation before any controlled-data decision.
 
-## Claims and Evidence
-
-Describe a deployment as suitable for a data class only when the institution can point to the relevant platform controls, agreements, security review, and validation evidence.
-An implemented or CI-tested Heartwood route is not equivalent to live deployment approval.
+Describe a deployment as suitable for a data class only when the institution can point to the platform controls, agreements, security review and validation evidence for it.

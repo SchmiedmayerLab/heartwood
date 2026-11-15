@@ -4,154 +4,182 @@ SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CO
 SPDX-License-Identifier: MIT
 -->
 
-# Actions, Sessions, and Audit History
+# Actions and Audit History
 
-Heartwood separates a model suggestion from an executed action.
-OpenHands proposes tools, the gateway decides whether each proposal needs your review, and the session records the decision and result.
+The agent proposes commands and file operations; the gateway decides whether each proposal needs your decision, and the session records every decision and result.
+
+## Review an Action Set
+
+OpenHands groups related tool calls into one action set and pauses before running it.
+When a set needs you, every interface lists all of its members: the exact command or file operation, the arguments, a risk label, and a summary.
+
+1. Read the exact command or file operation first.
+   The summary below it is labelled **Model-provided summary** because the model wrote it.
+2. Allow or reject the whole set.
+   Allowing runs every member once; rejecting runs none of them.
+   - Terminal: arrow keys and Enter, or `/allow` and `/reject` in the plain interface.
+   - Browser: **Allow All Once** or **Reject All** in the review panel.
+   - Notebook: `session.approve(group_id=pending.group_id)` or `session.deny(group_id=pending.group_id)`.
+3. Check the outcome under **Agent actions**, which shows each action's state, exit status, bounded output, and the project paths a typed file operation changed.
+
+Each interface applies your decision to the set it displayed, so a set you have not seen is never decided.
+The risk label comes from fixed threat checks on the action itself, not from the model.
+An interrupted action whose result cannot be established is marked **Outcome Unknown** rather than treated as safe to repeat.
 
 ## Review Modes
 
-The agent pauses before every registered OpenHands action set in every mode.
-The review mode selects which paused sets the gateway allows on your behalf and which wait for you.
-The gateway decides from the typed action alone: the tool, its validated arguments, and where the session runs.
-Model-written summaries and risk ratings never influence whether you are asked.
+The review mode decides which action sets the gateway allows on your behalf.
+The gateway decides from the typed action alone: the tool, its validated arguments, and whether the session runs in an isolated worker.
+Model-written summaries and risk ratings never cause an action to run without you.
 
-| Mode | Heartwood allows automatically | You decide |
+| Mode | Heartwood allows without asking | Heartwood asks you about |
 |---|---|---|
-| `review-all` · **Review Every Action** | Nothing | Every action set |
-| `review-changes` · **Review Changes** | Viewing a file inside the project, and plan updates in the task tracker | Every terminal command, every file change, specialist tasks, and anything else |
-| `review-outside-effects` · **Review Outside Effects** | Terminal commands, file operations, and plan updates that run inside the isolated worker | Anything that leaves the worker, specialist tasks, flagged actions, and anything else |
+| **Review Every Action** (`review-all`) | Nothing | Every action set |
+| **Review Changes** (`review-changes`) | Viewing a file inside the project, and plan updates in the task tracker | Every terminal command, every file change, specialist tasks, and anything else |
+| **Review Outside Effects** (`review-outside-effects`) | Terminal commands, file operations, and plan updates inside the isolated worker | Specialist tasks, anything bound to an outside service, and anything else |
 
-**Review Every Action** is the default when a session runs on your own machine without an isolated worker.
-**Review Changes** is available there as an opt-in when a model route is selected and it is credential-free or platform-isolated.
-With any other model credential, a session outside an isolated worker reviews every action, and each interface lists **Review Changes** as unavailable with that reason.
-**Review Outside Effects** is the default when sessions run in an isolated worker, and it cannot be selected or applied anywhere else.
+A lone thinking note with no effect is the only proposal OpenHands runs without pausing.
 
-Each automatic decision applies one named rule to the complete action set.
+![Heartwood Action Review settings listing the review modes and the reason one is unavailable](../assets/screenshots/browser-action-settings-light.png#gh-light-mode-only){ .theme-screenshot-light }
+![Heartwood Action Review settings listing the review modes and the reason one is unavailable](../assets/screenshots/browser-action-settings-dark.png#gh-dark-mode-only){ .theme-screenshot-dark }
 
-| Rule | Applies when |
-|---|---|
-| `read.file-view` | The file editor views a path that the gateway resolved, through symbolic links, to an entry inside the project and outside `.heartwood/` and `.git/`. |
-| `plan.task-tracker` | The task tracker reads or updates the plan. |
-| `sandbox.contained` | A terminal, file-editor, or task-tracker action runs in a session whose worker attempt is admitted and active. |
+### Which Mode Applies
 
-Heartwood never treats a terminal command as read-only from its text.
-A persistent shell can change what the same command does, so outside an isolated worker every command waits for you.
-A file view of the project root, of a path the gateway cannot resolve, or of a path whose reviewed arguments differ from the typed action also waits for you.
-An action set with members under different rules, or with any member under no rule, waits for you as a whole.
-In every mode, an action that the fixed threat checks flag as high risk or cannot assess waits for you.
-Those checks read the action itself; they can send an action to you but never allow one.
+When you run `heartwood`, `heartwood --interface web`, or a notebook, the session runs on your own machine without an isolated worker:
 
-Outside operations, release of an outside result to the worker, Skill installation, model changes, and workflow stage review use their own approvals and are never automatic.
-See the [Platform Contract](../operate/platform-contract.md#outside-operation-admission).
+- **Review Every Action** is the default.
+- **Review Changes** can be selected when the selected model route needs no credential, such as a Heartwood-managed model; a platform-isolated route would also qualify, but no built-in platform declares one.
+  With an API key or a sign-in token, the mode is listed as unavailable with that reason, because the credential is not isolated from commands the agent runs.
+- **Review Outside Effects** is never available.
 
-The risk badge next to a pending action is the result of the fixed threat checks.
-Review the exact command or file operation first, then the separately labelled model-provided summary.
+When an operator starts the gateway with a deployment manifest that defines an isolated worker, **Review Outside Effects** is the default if the manifest permits it, and **Review Every Action** otherwise.
+A manifest without an isolated worker follows the rules above.
+The operator's manifest sets which modes a deployment permits, as described in [Security](../operate/security.md#action-review); a project can narrow that list, never widen it.
 
-### Select a Mode
+Each interface shows the mode in use, the default, and every unavailable mode with its reason.
 
-In the full-screen terminal, enter `/permissions` or press `Ctrl-P` and choose **Action Review**.
-In the browser, open **Action Review** settings.
-Each interface shows the mode in use, the default, every mode the deployment does not permit, and why.
+### What Always Needs You
 
-With a deployment manifest, the selection is stored in protected project state and shared by every interface:
+No review mode decides these on your behalf:
 
-```bash
-heartwood actions
-heartwood actions set review-changes
-```
+- an action that the fixed threat checks rate as high risk or cannot classify;
+- an action set that mixes members under different rules, or contains any member no rule covers;
+- a file view of the project root, of `.heartwood/` or `.git/`, of a path the gateway cannot resolve inside the project, or whose reviewed arguments differ from the typed action;
+- every terminal command outside an isolated worker, because a persistent shell can change what the same command text does;
+- [outside operations and outside result releases](#outside-operations-and-result-releases);
+- Skill installation, model changes, and workflow stage review.
 
-Without a deployment manifest, project state is inside the research directory, so Heartwood never stores or reads a review mode there.
-A selection made in the terminal or browser lasts until that Heartwood process exits, and the next launch starts with **Review Every Action**.
-To select a mode when starting, pass `--review-mode`:
+Automatic decisions also stop when you pause the session, reject an action set, or send a message that Heartwood refuses: whatever the agent proposes next waits for you.
+
+### Change the Mode
+
+=== "Terminal"
+
+    Enter `/permissions` to see the modes, or `/permissions review-changes` to select one.
+    In the full-screen interface, `Ctrl-P` and **Action Review** open the same choice.
+
+=== "Browser"
+
+    Select the current mode in the session header, or open **Settings** and then **Action Review**.
+
+=== "Notebook"
+
+    ```python
+    session.action_settings()
+    session.select_action_review_mode("review-changes")
+    ```
+
+To start with a mode selected, pass it when you launch:
 
 ```bash
 heartwood --review-mode review-changes
 ```
 
-The flag is the same selection made at start, so the deployment ceiling, the isolated-worker requirement, and the credential check still apply.
-Heartwood stops with the reason instead of starting in a different mode when they do not permit the value.
+The same permission checks apply as for a selection made later; when they do not allow the mode, Heartwood stops with the reason instead of starting in another mode.
+`heartwood actions` prints the modes the current project offers without starting a session.
 
-A stricter mode can be selected at any time and applies to the next action set.
-A looser mode can be selected only while no session is running, paused, or waiting for review.
-Changing the mode never decides an action set that is already waiting for you.
-Pausing a session, rejecting an action set, or sending a message that Heartwood refuses also stops automatic decisions: whatever is proposed next waits for you.
-If Heartwood cannot apply an automatic decision, for example because required audit evidence is unavailable, the action set returns to you with a note that automatic review was not applied.
+Without a deployment manifest, project state lives inside the research directory, so Heartwood does not store a review mode there.
+A selection lasts until that Heartwood process or notebook gateway exits, and the next launch starts at the default.
+With a deployment manifest, the selection is stored in protected project state and shared by every browser session of that project.
 
-An operator limits the available modes for a deployment, as described in [Security](../operate/security.md#action-review).
-A project or researcher can select a stricter mode than the deployment permits, never a looser one.
+A stricter mode applies to the next action set at any time.
+A less strict mode can be selected only while no session is running, paused, or waiting for review.
+Changing the mode never decides a set that is already waiting for you.
 
 ### What an Automatic Decision Means
 
-Under **Review Changes**, file content that the agent views goes to the selected model route without a per-file decision.
-The first step that could change a file or move data anywhere else is a command or file change, and it waits for you.
+Under **Review Changes**, file content the agent views goes to the selected model route without a per-file decision.
+The first step that could change a file or send data anywhere else is a command or a file change, and it waits for you.
 
-Under **Review Outside Effects**, the sandbox, not review, confines commands: they can change or delete files in the worker workspace and send content to the admitted model endpoint without asking.
-Review controls apply to registered tool proposals; they do not intercept every operation of code already running inside the sandbox.
+Under **Review Outside Effects**, the sandbox confines commands, not review: they can change or delete files in the worker workspace and send content to the admitted model endpoint without asking.
+Review applies to proposed tool calls; it does not intercept every operation of code already running inside the sandbox.
 
 ## Automatic Decisions in the Record
 
-Every automatic decision is an ordinary recorded decision made by the actor `gateway`.
-The session journal contains a `command.received` event and an `approval.recorded` event with `actor_id` `gateway`, the decision, the content-bound action-set identifier, and `review` with the `mode` and `rule` that applied.
-The audit export keeps the actor, mode, rule, identifier, and action count.
-The decision binds the exact action set: if the pending set differs when the decision is applied, nothing runs.
-Checkpoint evidence, model-route authorization, and workflow limits apply to automatic decisions exactly as they do to yours.
+The gateway records an automatic decision exactly like yours, under the actor `gateway`.
+The session journal holds a `command.received` event and an `approval.recorded` event with `actor_id` `gateway`, the decision, the content-bound action-set identifier, and `review` naming the `mode` and the `rule`:
 
-Terminal, browser, and notebook clients show these actions as allowed automatically, with the rule, and never as approved by you.
+| Rule | Applies when |
+|---|---|
+| `read.file-view` | The file editor views a project file under **Review Changes** |
+| `plan.task-tracker` | The task tracker reads or updates the plan under **Review Changes** |
+| `sandbox.contained` | A terminal, file-editor, or task-tracker action runs in an admitted, active worker under **Review Outside Effects** |
+
+The audit export keeps the actor, mode, rule, action-set identifier, and action count.
+The decision binds the exact set: if the pending set differs when the decision is applied, nothing runs.
+Checkpoint evidence, model-route authorization, and workflow limits apply as they do to your decisions.
+If Heartwood cannot apply an automatic decision, for example because required audit evidence is unavailable, the set returns to you with a note that automatic review was not applied.
+
+Every interface shows these actions as allowed automatically, with the rule, and never as approved by you.
 No interface command can record a decision as `gateway`.
-An executed action without a recorded decision is shown without a decision, and a worker that reports one is fenced.
 
 ## Outside Operations and Result Releases
 
-Where a deployment enables outside operations, their reviews are separate from the review of the tool call that proposed them.
-Every interface titles the review **Outside Operation** or **Outside Result Release** and marks it as leaving the sandbox or leaving Heartwood for the model route.
-Without expanding anything, the review states the service, destination, and operation, or the model route, together with the size and SHA-256 digest of the canonical JSON that would be sent and the time until which the review is valid.
+An outside operation sends a request from the worker to a deployment service; an outside result release passes that service's result to the worker and its model.
+Heartwood ships no outside-service adapter, and `heartwood gateway serve` installs none; outside operations exist only where a trusted launcher that embeds the gateway supplies one.
+See the [Platform Contract](../operate/platform-contract.md#outside-operation-admission).
+
+Where a deployment provides outside operations, each one is reviewed separately from the tool call that proposed it, under the title **Outside Operation** or **Outside Result Release**.
+Without expanding anything, the review shows:
+
+- that the content leaves the sandbox, or leaves Heartwood for the model route;
+- the service, destination, and operation, or the model route;
+- the size and SHA-256 digest of the canonical JSON that would be sent;
+- each submitted input by reference, size, and digest, without its bytes;
+- the time until which the review is valid.
+
 The browser shows the request or result content directly.
-When that content is longer than the 2,000-character preview, the browser says that the preview is truncated and offers all of it under **Complete reviewed proposal**; the terminal and notebook print the complete proposal.
-Inputs submitted with an operation are listed by reference, size, and digest; their bytes are not displayed.
-The summary of these reviews comes from the trusted service adapter or the gateway and is labelled **Gateway-provided summary**, while summaries written by the model keep the **Model-provided summary** label.
+When it is longer than the 2,000-character preview, the browser marks the preview as truncated and offers all of it under **Complete reviewed proposal**; the terminal and notebook print the complete proposal.
+The summary of these reviews comes from the outside-service adapter or the gateway and is labelled **Gateway-provided summary**.
+A released result reaches the model as message content; it is data from the service, not instructions Heartwood has checked.
 
 If an approval is recorded but cannot be sent, for example while the records service is unavailable, nothing is sent until you choose.
-In the browser, **Retry request** resends that same approval and sends it; a new approval from any interface is refused while it waits.
-Reject the review to withdraw it; opening or refreshing the session, other commands, and automatic decisions never send it.
-An approval that is not sent before the review's validity ends is recorded as expired.
-
-## Grouped Decisions
-
-OpenHands may propose several related tool calls as one action set.
-Heartwood displays those calls as one action set and resolves them together instead of presenting misleading per-item controls.
-
-A set runs only after a recorded decision allows it: yours, or the gateway's under a review rule.
-Allowing the set runs every member once.
-Rejecting the set prevents all of its members from executing.
+In the browser, **Retry request** resends that same approval; a new approval from any interface is refused while it waits, so in the terminal and notebook you can only reject it or let it expire.
+Opening or refreshing the session, other commands, and automatic decisions never send it.
+An approval not sent before the review's validity ends is recorded as expired.
 
 ## Session History
 
-Session events include user requests, model-route decisions, final assistant responses, proposed tools, confirmation decisions, tool outcomes, lifecycle, task status, model usage, specialist lineage, and stable errors.
-The gateway turns that stream into one projection for terminal, browser, and notebook clients.
-Incremental response tokens are visible while the model works but are not persisted.
+The session records your requests, model-route decisions, final responses, proposed tools, decisions, tool outcomes, task status, model usage, specialist lineage, and stable errors.
+Every interface reads the same gateway projection of that history.
+Response tokens are shown while the model works but are not persisted.
 
-Each proposed tool has one versioned action record.
-It correlates the OpenHands action and tool-call identifiers, grouped decision, typed terminal, file-editor, Task, outside-operation, outside-result, or other arguments, execution state, bounded outcome, and explicitly supported affected paths.
-States distinguish proposed, awaiting review, approved, rejected, running, succeeded, failed, and outcome unknown.
-A record also names the review rule when the gateway allowed the action.
-Heartwood does not infer authoritative file changes from shell command text.
+Each proposed tool has one action record with its OpenHands identifiers, decision, typed arguments, state, bounded outcome, and affected paths where a typed file operation reported them.
+States are proposed, awaiting review, approved, rejected, running, succeeded, failed, and outcome unknown.
+Heartwood does not infer file changes from shell command text.
 
-Use `/replay` in the terminal or the browser activity view to inspect it.
-Replay verifies the audit chain and the one-to-one hash binding between each audit record and the complete session event before returning persisted history.
+Use `/replay` in the terminal or **Activity & audit** in the browser to inspect the history.
+Replay verifies the audit chain and its hash binding to each session event before returning anything.
 
 ## Audit Export
 
-Use `/audit-export` or the browser export control to create a JSON Lines file for review.
-The export is scrubbed and content-minimized.
-It records task counts and statuses instead of task titles or notes, usage totals instead of completion content, and stable error codes instead of provider details.
-Specialist delegation instructions and returned review prose remain out of the audit export; only minimized lifecycle, action, and usage evidence is retained there.
-Exact action arguments, commands, affected paths, file content, diffs, tool output, and failure text remain in private session state and are not copied into the audit export.
-Operational identifiers, decisions, classifications, counts, and timestamps may still be sensitive in context.
+Use `/audit-export`, **Export audit** in the browser, or `session.audit_export()` in a notebook to create a JSON Lines file for review.
+The export is scrubbed and content-minimized: task counts instead of task text, usage totals instead of completions, and stable error codes instead of provider messages.
+Commands, arguments, paths, file content, diffs, tool output, and specialist instructions and results stay in private session state.
+Identifiers, decisions, counts, and timestamps remain and may still be sensitive in context.
 
-Run `heartwood audit verify` to fully verify the paired session and audit history without creating a new export.
-Use `heartwood audit export --output PATH` when a reviewed copy is needed outside private project state.
+From the command line, `heartwood audit verify` fully verifies the session and audit history, and `heartwood audit export --output PATH` writes an export.
 
-An audit record supports review and reproducibility; it is not proof that a scientific result is correct or that a deployment meets a regulatory requirement.
-A normal export is not an authoritative records artifact because the project owner can replace or delete it.
-Platform operators can create an externally retained, signed artifact by following [Audit Checkpoints and Retention](../operate/audit-checkpoints.md).
+An audit record supports review and reproducibility; it does not show that a scientific result is correct or that a deployment meets a regulatory requirement.
+A normal export is not an authoritative record, because the project owner can replace or delete it.
+Operators can create an externally retained, signed record by following [Audit Checkpoints and Retention](../operate/audit-checkpoints.md).

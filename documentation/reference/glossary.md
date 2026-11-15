@@ -7,10 +7,7 @@ SPDX-License-Identifier: MIT
 # Glossary
 
 **Action set**
-: One or more tool calls supplied through a single OpenHands confirmation callback and resolved together by Heartwood.
-
-**Air-gapped environment**
-: A compute environment whose deployment boundary prevents outbound and external network access; moving artifacts into it requires a separately approved process.
+: One or more tool calls from a single OpenHands confirmation callback, decided together; an approval binds the complete ordered set and its arguments.
 
 **Agent**
 : Software that uses a model and tools iteratively to pursue a task rather than returning only one text response.
@@ -18,17 +15,29 @@ SPDX-License-Identifier: MIT
 **Agent Skills**
 : An open directory format for agent instructions and optional scripts, references, assets, and tool declarations; Heartwood loads it through OpenHands.
 
+**Air-gapped environment**
+: A compute environment whose deployment boundary prevents outbound and external network access; moving artifacts into it requires a separately approved process.
+
+**AppArmor**
+: A Linux security module that confines programs with per-program profiles; worker container inspection refuses a custom AppArmor profile.
+
 **Application programming interface (API)**
 : A structured way for software components to communicate.
 
-**Authorization Domain**
-: A Terra access restriction that limits a workspace and its data to members of named groups.
+**Attestation**
+: A signed statement, here a GitHub artifact attestation, that binds an artifact digest to the repository, workflow, and commit that produced it.
 
 **Audit checkpoint**
 : A canonical audit export whose metadata and signer identity are authenticated by a deployment-approved public-key signature and bound to its deployment identifier, session, creation time, and retention declaration.
 
 **Audit export**
 : A scrubbed JSON Lines representation of the tamper-evident session audit chain.
+
+**Authorization Domain**
+: A Terra access restriction that limits a workspace and its data to members of named groups.
+
+**Candidate build**
+: A reproducible build of worker, application, or sandbox gateway artifacts from pinned upstream sources and reviewed patches, used for native qualification.
 
 **Carina**
 : Stanford's research-computing platform using project storage and Slurm-managed compute.
@@ -45,8 +54,14 @@ SPDX-License-Identifier: MIT
 **Context window**
 : The token budget available to a model for instructions, conversation history, project content, tool results, and output.
 
+**Contract bundle**
+: The versioned platform contract export: OpenAPI, JSON Schemas, and `contract.json` with artifact digests.
+
 **Credential binding**
 : A non-secret identifier that tells Heartwood where an authorized process or platform supplies a provider credential.
+
+**Credential placeholder**
+: A stand-in value the sandbox's inference transport substitutes for the real provider credential, so the worker never holds that credential.
 
 **CUDA**
 : NVIDIA's software platform and application binary interface for GPU computing.
@@ -54,20 +69,32 @@ SPDX-License-Identifier: MIT
 **Dependency lock**
 : A file recording exact dependency versions and artifact hashes; Heartwood uses `pylock.toml` to reconstruct Python analysis environments.
 
+**Deployment manifest**
+: An operator-owned TOML file outside the research directory that binds one project to protected external state, a policy ceiling, and optionally a managed worker and checkpoint evidence.
+
 **Device-code sign-in**
 : An OAuth flow in which one interface displays a short-lived code that the user enters on a separate provider sign-in page.
+
+**Docker**
+: Container software; the managed worker's reference driver launches sandboxes through a local Docker socket.
 
 **Ed25519**
 : A public-key signature algorithm supported by Heartwood checkpoint signers and used by the explicit local fallback.
 
+**Embedding launcher**
+: A trusted Python program that constructs the gateway itself and can supply dependencies that `heartwood gateway serve` does not, such as an outside-service adapter; the native qualification fixture is one.
+
+**Fencing**
+: Closing a worker attempt's authority in the gateway so its responses and requests are no longer admitted; a fenced attempt stays recorded until revocation is observed.
+
 **FinOps Open Cost and Usage Specification (FOCUS)**
 : A vendor-neutral specification for technology cost and usage data; its pricing and cost definitions inform the platform contract without replacing platform estimation, authorization, or spending controls.
 
-**Global Alliance for Genomics and Health (GA4GH)**
-: A standards organization whose interfaces include the Task Execution Service, Workflow Execution Service, and Data Repository Service used by research platforms.
-
 **GGUF**
 : A single-file model format commonly used with llama.cpp and quantized CPU inference.
+
+**Global Alliance for Genomics and Health (GA4GH)**
+: A standards organization whose interfaces include the Task Execution Service, Workflow Execution Service, and Data Repository Service used by research platforms.
 
 **Graphics processing unit (GPU)**
 : Specialized compute hardware used to accelerate model inference.
@@ -84,23 +111,35 @@ SPDX-License-Identifier: MIT
 **Ingress**
 : The validated network route through which a browser or API client reaches the Heartwood gateway, such as direct loopback, a Jupyter proxy, or an explicitly trusted platform proxy.
 
+**Isolated worker**
+: The researcher-facing name for a managed worker; sessions that run in one can use `review-outside-effects`.
+
 **JSON Lines**
 : A text format that stores one JSON value on each line so records can be appended and processed incrementally.
 
 **Key management service (KMS)**
 : A managed service that controls cryptographic keys and performs authorized operations such as checkpoint signing without exposing private key material to Heartwood.
 
-**Launch capability**
-: The process-lifetime secret required for protected Heartwood gateway API requests, event streams, and WebSockets, obtained through a one-time launch exchange or supplied by an authenticated platform proxy.
+**Landlock**
+: A Linux security module that lets an unprivileged process restrict its own filesystem access.
 
 **Large language model (LLM)**
 : The model used by the agent to interpret requests, reason, produce text, and propose tools.
 
-**Model Context Protocol (MCP)**
-: An open protocol through which an agent discovers and calls tools that an external service provides.
+**Launch capability**
+: The process-lifetime secret required for protected Heartwood gateway API requests, event streams, and WebSockets, obtained through a one-time launch exchange or supplied by an authenticated platform proxy.
+
+**Local launch**
+: Running `heartwood`, `heartwood gateway serve` without `--deployment`, or a notebook in a project folder: state lives in `.heartwood/` and agent tools run with the user's own permissions.
+
+**Managed worker**
+: An OpenHands agent server running as a non-root worker inside an OpenShell sandbox, launched and controlled by the gateway from a deployment manifest.
 
 **MCP Tasks**
 : An optional MCP extension for retrieving a delayed tool result through a task identifier. Its status is separate from the backend job and incurred spending.
+
+**Model Context Protocol (MCP)**
+: An open protocol through which an agent discovers and calls tools that an external service provides.
 
 **Model credential boundary**
 : The technical separation, or documented lack of separation, between provider authentication used for model calls and the operating-system identity that runs agent tools.
@@ -117,29 +156,35 @@ SPDX-License-Identifier: MIT
 **One-time code**
 : The short-lived code displayed during device-code sign-in and entered on the provider's verification page.
 
-**OpenAI-compatible service**
-: A model endpoint implementing the relevant OpenAI API request and response shapes; compatibility does not imply operation by OpenAI.
-
 **Open Cybersecurity Schema Framework (OCSF)**
 : A shared schema for security events, used by the reference sandbox infrastructure to describe observed activity.
 
-**OpenID Connect (OIDC)**
-: An identity protocol built on OAuth that supplies authenticated user claims; a gateway capability is not an OpenID Connect identity.
+**OpenAI-compatible service**
+: A model endpoint implementing the relevant OpenAI API request and response shapes; compatibility does not imply operation by OpenAI.
+
+**OpenAPI**
+: A machine-readable description format for HTTP APIs; Heartwood exports its gateway routes as OpenAPI 3.1.
 
 **OpenHands**
 : The upstream agent SDK and coding-tool platform used by Heartwood for conversations and tool execution.
 
+**OpenID Connect (OIDC)**
+: An identity protocol built on OAuth that supplies authenticated user claims; a gateway capability is not an OpenID Connect identity.
+
 **OpenShell**
-: The sandbox infrastructure used by Heartwood's native reference adapter for externally enforced worker restrictions and inference credential transport.
+: The sandbox infrastructure that runs managed workers, enforces their filesystem and network policy outside the worker, and substitutes inference credentials.
 
 **OpenTelemetry Protocol (OTLP)**
 : A standard protocol for exporting telemetry such as logs, metrics and traces to a collector.
 
+**Operator-bound deployment**
+: A project started with `heartwood gateway serve --deployment` and an operator's deployment manifest, with protected state outside the research directory and optionally an isolated worker.
+
+**Outside operation**
+: A gateway-issued request from a session to a deployment service outside the sandbox, authorized by the researcher against its exact content; no review mode allows it automatically.
+
 **Pilot evaluation**
 : A bounded trial in which a small group of researchers uses one standard research environment so the deployment can record installation, workflow, reproducibility, and support evidence before a wider rollout.
-
-**Protected health information (PHI)**
-: Individually identifiable health information protected under applicable policy or law.
 
 **Project**
 : The process current directory and its descendants that define the research-file boundary. Managed workers receive selected projections rather than the complete directory.
@@ -147,8 +192,20 @@ SPDX-License-Identifier: MIT
 **Project state**
 : Private configuration, sessions, models, Skills, logs, caches, runtime files and audit artifacts in local `.heartwood/` or an operator-bound external directory; raw provider credentials are excluded.
 
+**Protected health information (PHI)**
+: Individually identifiable health information protected under applicable policy or law.
+
+**Qualification evidence**
+: The commit-bound record of a qualification run: `qualification.json`, test results, per-case evidence files, and `SHA256SUMS`, checked by `deploy/qualification_evidence.py`.
+
 **Quantization**
 : A lower-precision model representation, such as AWQ, GPTQ, or FP8, used to reduce memory and storage requirements.
+
+**Reconciliation**
+: Settling a worker attempt whose outcome is uncertain, such as after a gateway stop, by observing the sandbox outside the worker and recording revocation or keeping the attempt fenced.
+
+**Records service**
+: The deployment-owned storage service that retains signed audit checkpoints outside the project.
 
 **Research Skill**
 : A versioned instruction package with declared tools, metadata, and workflow guidance available to the OpenHands agent.
@@ -156,14 +213,26 @@ SPDX-License-Identifier: MIT
 **Research specialist**
 : A bounded OpenHands child agent that performs one focused planning or review task for the parent agent within inherited or narrower project, credential, model, network, policy, and confirmation boundaries.
 
-**Review mode**
-: The setting that selects which paused action sets the gateway allows under a named rule and which wait for the researcher: `review-all`, `review-changes`, or `review-outside-effects`.
-
 **Responses API**
 : OpenAI's current API shape for model responses, tool calls, and related agent interactions.
 
+**Result release**
+: A separate researcher decision that discloses an outside operation's result, by exact content, to the worker and its model route.
+
+**Review mode**
+: The gateway setting that decides which paused action sets it allows under a named rule and which wait for the researcher: `review-all`, `review-changes`, or `review-outside-effects`, limited by the deployment's `allowed_action_review_modes` ceiling.
+
+**Revocation**
+: Removing a worker attempt's sandbox and credentials; revocation evidence is the outside observation, retained by the gateway, that the sandbox is gone.
+
 **safetensors**
 : A tensor-storage format designed to load model weights without executing serialized code.
+
+**Sandbox gateway**
+: The OpenShell control-plane service that creates, inspects, and deletes sandboxes; Heartwood checks its reported version against the manifest's `gateway_versions`.
+
+**SELinux**
+: A Linux mandatory access control system; worker container inspection accepts only the runtime's standard confined container label.
 
 **Semantic Versioning (SemVer)**
 : A major.minor.patch version scheme that communicates public-contract compatibility. Heartwood defines its pre-1.0 conventions in the support policy and platform contract.
@@ -183,11 +252,11 @@ SPDX-License-Identifier: MIT
 **Tensor parallelism**
 : A runtime layout that divides one model across a fixed number of GPUs.
 
-**The Update Framework (TUF)**
-: A signed metadata system that protects software distribution against repository compromise, rollback, freeze, and artifact-substitution attacks.
-
 **Terra**
 : A cloud platform for biomedical research workspaces, data, workflows, and interactive Jupyter compute.
+
+**The Update Framework (TUF)**
+: A signed metadata system that protects software distribution against repository compromise, rollback, freeze, and artifact-substitution attacks.
 
 **uv**
 : A Python package and environment manager used by Heartwood to install locked analysis dependencies in a separate environment.
@@ -198,8 +267,14 @@ SPDX-License-Identifier: MIT
 **Wheel**
 : A prebuilt Python package file (`.whl`) that can be installed without running a source-build backend.
 
+**Worker attempt**
+: One gateway-issued launch of a managed worker, journaled with its identity, image, and policy before the sandbox is created and moved through `prepared`, `active`, `fenced`, and `revoked`.
+
 **Workflow Description Language (WDL)**
 : A workflow language used by Terra to describe analysis tasks and their inputs, outputs and dependencies.
+
+**Writer lease**
+: The operating-system lock that gives one process write ownership of a session.
 
 **ZIP64**
 : An extension of the ZIP archive format that supports files and archives larger than the original ZIP size limits.

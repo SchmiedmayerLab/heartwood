@@ -6,29 +6,25 @@ SPDX-License-Identifier: MIT
 
 # Install Natively on Linux
 
-Use the native release installer on a compatible Linux host when containers are unavailable or conflict with the platform's normal execution model.
-The container remains the simpler workstation path because it fixes the operating-system dependencies as part of the image.
+Use the native installer on a Linux host when containers are unavailable or conflict with the platform's normal execution model.
+The container is the simpler workstation route because the image fixes the operating-system dependencies.
 
 ## Before You Begin
 
-You need a writable installation directory and a recent 64-bit Linux system using an AMD or Arm processor.
-Keep the installation outside the research project so application files and project state have independent lifecycles.
-Release CI installs and exercises the package from an empty Ubuntu 24.04 AMD64 container and tests the portable ARM64 inference runtime in an ARM64 container.
-Other glibc-based distributions may work when they provide compatible system libraries, but they are not release-validated native hosts.
+You need a 64-bit Linux system on an AMD64 or ARM64 processor and a writable installation directory outside the research project, so that the application and project state have independent lifecycles.
+Release CI installs the release assets in an empty Ubuntu 24.04 AMD64 container and exercises the installed command.
+Other glibc-based distributions with compatible system libraries can work but are not release-tested.
 
-On Debian or Ubuntu, install the operating-system prerequisites with:
+On Debian or Ubuntu, install the prerequisites:
 
 ```bash
 sudo apt-get update
 sudo apt-get install ca-certificates coreutils curl git libgomp1 tar tmux
 ```
 
-If the shell is already running as `root`, omit `sudo` from both commands.
-
-On another compatible distribution, install packages that provide the same commands and libraries, then confirm the runtime can start before relying on the installation.
-Then install [uv](https://docs.astral.sh/uv/) by following its official installation instructions.
-
-Confirm the required commands before downloading Heartwood:
+Omit `sudo` when the shell already runs as `root`.
+On another distribution, install packages that provide the same commands and libraries.
+Then install [uv](https://docs.astral.sh/uv/) by following its official instructions, and confirm the commands:
 
 ```bash
 curl --version
@@ -39,7 +35,7 @@ tmux -V
 uv --version
 ```
 
-Open a new terminal if the `uv` installer requests it, then rerun `uv --version`.
+Open a new terminal if the `uv` installer asks you to, then rerun `uv --version`.
 
 ## Install a Release
 
@@ -54,14 +50,12 @@ chmod 700 heartwood-installer
 export PATH="$PWD/bin:$PATH"
 ```
 
-Where the GitHub CLI is available, `gh attestation verify heartwood-installer --repo SchmiedmayerLab/heartwood` confirms that the Heartwood release workflow built the installer.
-The version-stamped installer downloads the matching native archive and checksum, verifies both, checks available storage, installs the locked Heartwood environment and CPU inference runtime, and publishes the `heartwood` command.
+Where the GitHub CLI is available, `gh attestation verify heartwood-installer --repo SchmiedmayerLab/heartwood` confirms that the release workflow built the installer.
+The installer downloads the matching native archive and checksums, verifies them, checks available storage, installs the locked Heartwood environment and the llama.cpp CPU runtime, and publishes the `heartwood` and `heartwood-jupyter` commands.
 It reports seven named stages; dependency installation can take several minutes.
 No model weights are included.
 
 ## Open a Project
-
-Create or enter a separate project directory, then start Heartwood there:
 
 ```bash
 mkdir ../heartwood-project
@@ -70,23 +64,25 @@ heartwood doctor
 heartwood
 ```
 
-The current directory is the project and `.heartwood/` inside it holds private configuration, sessions, downloaded models, and audit data.
-Run `heartwood --interface web` for the browser interface.
-The first setup flow can download a recommended model or another compatible model from Hugging Face and run it with the installed CPU inference runtime.
-For GPU inference, use the NVIDIA container image or a supported managed platform instead of this generic native package.
+The current directory is the project, and `.heartwood/` inside it holds configuration, sessions, downloaded models and audit records.
+Run `heartwood --interface web` for the browser interface on `http://127.0.0.1:8767/`.
+Setup can download a recommended model or another compatible Hugging Face model and run it on the CPU runtime.
+For GPU inference, use the NVIDIA container image or the Carina installer; the generic native package has no GPU runtime.
 
-The native package also provides a Jupyter launcher that uses the same locked environment:
+The installation also provides a Jupyter launcher in the same locked environment:
 
 ```bash
 heartwood-jupyter
 ```
 
-Start it from the project directory, open the URL it prints, and use the **Python 3 (ipykernel)** kernel.
-In a disposable container that runs only as `root`, add `--allow-root`; do not use that exception for a normal user installation.
-Then follow [notebook interaction](../use/notebooks.md).
+Start it from the project directory, open the URL it prints, and select the **Python 3 (ipykernel)** kernel.
+In a disposable container that runs only as `root`, add `--allow-root`; do not use it for a normal user installation.
+Then follow [Use Heartwood From a Notebook](../use/notebooks.md).
+
+A native launch is a local launch: agent tools run with your user's permissions, as described in [Projects and Private State](../start/project.md#heartwood-project-state).
 
 ## Update
 
-Download the installer from the new release and run it from the same installation directory.
-The installer serializes updates to one installation root, assembles each source-and-runtime generation separately, and updates the `current` link only after the new installation passes its startup checks.
-Project files and `.heartwood/` are not stored in the installation directory and remain unchanged.
+Download the installer from the new release and run it in the same installation directory.
+The installer serializes updates to one installation root, assembles each release in a separate generation, and moves the `current` link only after the new generation passes its startup checks.
+Project files and `.heartwood/` are outside the installation directory and remain unchanged.

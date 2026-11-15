@@ -7,15 +7,13 @@ SPDX-License-Identifier: MIT
 # Run Heartwood in a Container
 
 The Heartwood container is the recommended first installation on a macOS or Linux workstation.
-It packages the CLI, browser interface, OpenHands SDK and tools, repository-verified Skills, audit stack, and managed inference software without installing those components on the host.
-The standard image does not provide Jupyter; use the terminal or browser, or choose a platform image such as Terra that supplies a shared Jupyter environment.
-
-The image contains no model weights and no credentials.
+It packages the `heartwood` command, the browser interface, OpenHands, repository-verified Skills and managed inference software.
+It contains no model weights, no credentials and no Jupyter; use the terminal or browser, or a Terra image for notebooks.
 
 ## Before You Begin
 
-Install Docker Desktop or Docker Engine and make sure `docker version` succeeds.
-Create a dedicated host folder for the project; the bind mount makes that folder available as `/workspace` inside the container.
+Install Docker Desktop or Docker Engine and confirm that `docker version` succeeds.
+Create a dedicated host folder for the project; the bind mount makes it `/workspace` inside the container.
 
 ## Start the Terminal
 
@@ -31,15 +29,15 @@ docker run --rm -it \
   heartwood
 ```
 
-The user mapping keeps files created in the project owned by the host user.
-The container is temporary, but the mounted project and `.heartwood/` persist on the host.
-The terminal flow continues automatically after a Heartwood-managed model finishes downloading.
-If the container was interrupted during setup, repeat the same `docker run` command; the project state and verified download are reused.
+The user mapping keeps files created in the project owned by your host user.
+The container is temporary; the mounted folder and its `.heartwood/` state persist on the host.
+After a Heartwood-managed model finishes downloading, the terminal continues into the session.
+If the container stops during setup, repeat the same command; project state and verified downloads are reused.
 
 ### Keep a ChatGPT Sign-In
 
-The basic command uses a temporary home directory, so a ChatGPT sign-in lasts only until that container stops.
-To reuse the sign-in without placing credentials in the project, create a private host directory and mount only OpenHands' credential directory:
+With `HOME=/tmp`, a ChatGPT sign-in lasts only until the container stops.
+To reuse it without placing credentials in the project, mount a private host directory as OpenHands' credential directory:
 
 ```bash
 mkdir -p "$HOME/.local/share/heartwood/openhands-auth"
@@ -54,8 +52,7 @@ docker run --rm -it \
   heartwood
 ```
 
-OpenHands applies owner-only permissions to the credential directory and token file.
-Treat the mounted directory as a secret and do not place it in a repository, shared project folder, or container image.
+Treat that directory as a secret: keep it out of repositories, shared project folders and images.
 
 ## Start the Browser
 
@@ -69,17 +66,15 @@ docker run --rm -it \
   heartwood --interface web --host 0.0.0.0 --host-loopback-publication
 ```
 
-Open the launch link printed by the container and keep it running; the page continues at `http://127.0.0.1:8767/`.
-The host publication is loopback-only even though the process must listen on the container interface.
-`--host-loopback-publication` is the operator's explicit assertion that the wildcard container bind is published only through the host loopback mapping shown above.
-Heartwood still validates the external loopback origin and accepts only loopback or private bridge sources.
-Do not change the host publication to a shared-network address or place an unauthenticated proxy in front of it.
-When the setup page reports that a managed model is downloaded, stop the container with `Ctrl-C` and repeat this command to load the model and return to the browser.
+Open the launch link the container prints and keep the container running; the page continues at `http://127.0.0.1:8767/`.
+The process listens on the container interface, but `-p 127.0.0.1:8767:8767` publishes it only on host loopback.
+`--host-loopback-publication` is your assertion that this is the case; Heartwood refuses a wildcard bind without it and still accepts only loopback or private bridge sources.
+Do not publish the port on a shared network address or put an unauthenticated proxy in front of it.
+When the setup page reports that a managed model is downloaded, stop the container with `Ctrl-C` and run the command again to load the model.
 
 ## Use an NVIDIA GPU
 
-Install the NVIDIA Container Toolkit and verify that Docker can expose the GPU.
-Then use the GPU image:
+Install the NVIDIA Container Toolkit and confirm that Docker can expose the GPU, then use the GPU image:
 
 ```bash
 docker run --rm -it \
@@ -92,24 +87,26 @@ docker run --rm -it \
 ```
 
 Choose **Run with Heartwood** and a vLLM-compatible model.
-Heartwood inspects the GPU model, memory, driver, and catalog qualification, selects a conservative context tier, and starts the isolated CUDA 12.9 vLLM runtime after the model is ready.
-Review the [GPU compatibility matrix](../reference/gpu-compatibility.md) before explicitly evaluating a configuration that has not completed qualification.
+Heartwood inspects the GPU model, memory and driver, selects a conservative context size, and starts the CUDA 12.9 vLLM runtime once the model is ready.
+No GPU model configuration is qualified for a generic workstation; the [GPU compatibility matrix](../reference/gpu-compatibility.md) lists the qualified Terra and Carina configurations.
 
 ## Image Tags
 
 Use immutable release tags for research work:
 
-- `ghcr.io/schmiedmayerlab/heartwood:0.4.0` — standard AMD64/ARM64 image;
-- `ghcr.io/schmiedmayerlab/heartwood:0.4.0-gpu-nvidia` — NVIDIA GPU image;
-- `ghcr.io/schmiedmayerlab/heartwood:0.4.0-terra` — Terra CPU image; and
-- `ghcr.io/schmiedmayerlab/heartwood:0.4.0-terra-gpu-nvidia` — Terra NVIDIA image.
+| Tag | Image | Architectures |
+|---|---|---|
+| `ghcr.io/schmiedmayerlab/heartwood:0.4.0` | Standard | AMD64, ARM64 |
+| `ghcr.io/schmiedmayerlab/heartwood:0.4.0-gpu-nvidia` | NVIDIA GPU | AMD64 |
+| `ghcr.io/schmiedmayerlab/heartwood:0.4.0-terra` | Terra | AMD64 |
+| `ghcr.io/schmiedmayerlab/heartwood:0.4.0-terra-gpu-nvidia` | Terra NVIDIA GPU | AMD64 |
 
-The moving `edge` tags represent current `main` and are intended for development, not reproducible analyses.
-Release publication verifies candidate digests and manifest shape before creating version tags.
+The moving `edge` tags follow `main` and are for development, not reproducible analyses.
+Release publication promotes only the candidate digests it verified for the release commit.
 
-## Controlled Deployments
+## What the Container Does Not Isolate
 
-Use platform secrets, mounted credential files, or an approved identity mechanism rather than baking tokens into an image or command.
-Add read-only mounts, network controls, user isolation, and resource limits according to the deployment threat model.
-
-The container is packaging, not an authorization or compliance boundary by itself.
+A container launch is a local launch.
+Agent tools run as the container user with full access to the mounted folder, including `.heartwood/`, and to the container's network.
+The container is packaging, not an authorization boundary: add read-only mounts, network controls and resource limits according to the deployment's threat model, and use platform secrets or mounted credential files rather than tokens in an image or command.
+The isolated worker is a separate [operator-bound deployment](../start/project.md#operator-bound-external-state).

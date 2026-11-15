@@ -6,25 +6,25 @@ SPDX-License-Identifier: MIT
 
 # Qualify Parallel Reviews
 
-Parallel review lets independent advisory specialists examine the same analysis concurrently.
+Parallel review runs independent advisory specialists on the same analysis concurrently.
 It does not authorize file changes, replace the parent agent, or relax action review.
-Use it only when retained trials demonstrate useful speed improvement without lower review quality or excessive resource use.
+A deployment offers it only for a route whose retained trials show a speed improvement without lower review quality or excessive resource use; without that evidence, review stays sequential.
 
 ## Establish Evidence
 
 Use the [research evaluation harness](../architecture/testing.md) in dedicated synthetic projects.
 Run matched sequential and parallel trials against the maintained planning-review suite, with the same model revision, runtime, Skills, fixtures, seed, and work budget.
 Retain complete `EvaluationRun` records, including failed and interrupted trials.
-The default gate requires three matching repetitions per case, fresh evidence, all required checks, known usage and cost, at least a 10% latency improvement, and no more than 25% additional tokens or reported cost.
+The default gate requires three matching repetitions per case, evidence no older than 30 days, all required checks, known usage and cost, at least a 10% latency improvement, no more than 25% additional tokens or reported cost, and at most eight workers.
 Deterministic tests cannot qualify a real provider.
 
 The typed `ReviewQualification` contract contains the suite, covered case, sequential and parallel configurations, policy, and retained records.
 `ReviewQualifications` groups approved route entries in one JSON document.
 Construct these models from the existing harness records; do not manufacture successful checks or set an eligibility flag.
-Two entries matching the same runtime and stage are ambiguous and will be rejected.
+Two entries matching the same runtime and stage are ambiguous and rejected.
 
 The gateway verifies the observed SDK version, model options, policy, context limits, scoped tool behavior, and specialist catalog against the retained runtime fingerprint.
-Remote model revision, hardware, precision, Skill-tree and harness revision declarations still require operator verification.
+The operator verifies the remote model revision, hardware, precision, Skill tree and harness revision.
 Changing the deployed build or a remote service behind an unchanged model name requires reassessment; the fingerprint is not remote-server or binary attestation.
 
 ## Configure the Gateway

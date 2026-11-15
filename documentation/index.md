@@ -10,78 +10,68 @@ SPDX-License-Identifier: MIT
 
 # Heartwood
 
-Heartwood is an open-source, auditable coding agent for biomedical research environments.
-Describe the work you need in ordinary language, inspect the files and commands the agent proposes, and keep a verifiable history of the session where the project already resides.
-
-Heartwood is designed for workstations, containers, Terra, Stanford Carina, and operator-managed research platforms.
-It can use models provided by a research environment, hosted model services, another compatible service, or a model managed by Heartwood in the same compute environment.
+Heartwood is an open-source research agent system for biomedical research environments.
+You describe work on a project folder in ordinary language; an OpenHands agent proposes commands and file changes; the Heartwood gateway decides which proposals need you, records every decision, and keeps a verifiable audit history.
 
 [Start Your First Project](start/index.md){ .md-button .md-button--primary }
 [Choose a Platform](platforms/index.md){ .md-button }
 
-## What You Can Do
+## The Parts
 
-### Work Through a Research Task
+- The gateway owns project state, policy, action review, authorization of operations outside the agent, session records and audit.
+- The agent loop and coding tools come from OpenHands and run either in the Heartwood process or as a complete worker inside an OpenShell sandbox.
+- The terminal, browser and notebook interfaces present the same gateway contract, so a session, its settings and its review decisions look the same in each.
+- Research Skills, bounded research specialists and staged research workflows run inside the same session, review and records.
 
-Ask Heartwood to inspect code, prepare an analysis, explain a result, or update project files.
-Heartwood treats the folder from which you start it as the project, so begin in a dedicated folder that contains only the material intended for the session.
+## Who Runs What
 
-### Review Actions Before They Run
-
-Heartwood presents related proposed actions together before execution under the default **Review Every Action** setting; other [review modes](use/actions-audit.md#review-modes) let the gateway allow narrowly defined actions and record each decision.
-You can allow or reject the complete set after inspecting every proposed command and file operation.
-
-### Reuse Research Skills
-
-Repository-verified Skills provide reusable instructions and tools for supported research workflows.
-Projects can add explicitly reviewed Skills for additional workflows.
-
-### Request Focused Research Review
-
-The parent agent can delegate one bounded task at a time to advisory specialists for research planning, data quality, cohort and feature definitions, statistical methods, or reproducibility.
-These [research specialists](use/specialists.md) use the active model and return their review to the same conversation without receiving project tools.
-
-### Continue Across Interfaces
-
-The terminal, browser, and notebook bridge use the same project configuration, model selection, sessions, action decisions, and audit history when the platform supports those interfaces.
-
-### Preserve a Verifiable Record
-
-Resume a persisted session, replay its durable events, or create a scrubbed audit export for review.
-Managed deployments can publish a signed checkpoint through a deployment-controlled signer without placing signing keys in the project.
-
-## Start With Your Environment
-
-| Where You Work | Recommended Starting Point | Available Interfaces |
+| Role | Decides | Starts with |
 |---|---|---|
-| macOS or Linux workstation | [Heartwood container](platforms/containers.md) | Terminal and browser; Jupyter not included |
-| Existing Python development environment | [Native development install](start/install.md#development-installation) | Terminal, browser, notebook |
-| Terra workspace | [Heartwood for Terra](platforms/terra.md) | Terminal and notebook |
-| Stanford Carina | [Heartwood for Carina](platforms/carina.md) | Terminal |
-| Managed research platform | [Deployment guidance](operate/index.md) | Defined by the platform deployment |
+| Researcher | The task, the model where a choice is offered, and every proposal that waits for review | [Your First Project](start/index.md) |
+| Operator | How Heartwood runs: the deployment manifest, protected state, review-mode ceiling, worker profile, credentials and checkpoint signer | [Deploy Heartwood](operate/index.md) |
+| Platform | Identity, storage, network controls, compute and inference, under its own authority | [Platform Contract](operate/platform-contract.md) |
 
-## Choose Where the Model Runs
+## Two Deployment Shapes
 
-Heartwood does not include model weights or credentials in its images or installers.
-During setup, choose the Stanford AI API Gateway, sign in with an eligible ChatGPT account, provide an OpenAI or Anthropic API key, connect another authorized OpenAI-compatible service, or select a [model that Heartwood manages in the current environment](models/choose-managed.md).
+### Local Launch
 
-The platform remains authoritative for identity, network access, data permissions, and which model routes may receive project content.
+Run `heartwood` in a project folder.
+The current directory is the project, and Heartwood keeps configuration, sessions, models and audit records in `.heartwood/` inside it.
+Every action set waits for you; **Review Changes** can be selected for the running process when the model route allows it, as described in [Review Modes](use/actions-audit.md#review-modes).
 
-## Understand the Boundary
+Agent tools run with your operating-system permissions.
+An allowed terminal command can read anything you can read and can change `.heartwood/`, including session and audit files, so a local launch is a reviewed assistant rather than an isolation boundary.
+This is the shape used on workstations, in containers, on Terra and on Stanford Carina.
 
-Heartwood can operate inside a reviewed environment, but installing it does not authorize access to protected health information, approve a model provider, or make a deployment compliant.
-Your institution remains responsible for the research platform, agreements, access controls, storage, networking, and data handling rules.
+### Operator-Bound Deployment
 
-Begin with synthetic or non-sensitive files until the complete deployment has been reviewed for the intended data.
-See [Security and Controlled Data](operate/security.md) before using restricted data.
+An operator starts the gateway with `heartwood gateway serve --deployment` and a manifest that binds the project to protected state outside the research folder and sets the policy and review-mode ceiling.
+With a `[worker]` section, each session runs in a sandboxed OpenShell worker on an operator-controlled Linux Docker host.
+The worker receives selected read-only inputs and verified Skills; protected state, provider credentials, the Docker socket and signing keys stay outside it.
+Operations outside the worker, and the release of their results to it, are authorized only by a researcher decision bound to the exact content reviewed, in every review mode.
+No production outside-service adapter ships and `gateway serve` installs none; these operations are available only through an embedding launcher.
+See [Projects and Private State](start/project.md#operator-bound-external-state) and [Security and Controlled Data](operate/security.md).
+
+## What Is Qualified
+
+| Claim | Evidence level |
+|---|---|
+| Container, GPU container, Terra images and native installers | Built and tested in CI for each release commit |
+| Isolated worker on Linux Docker | Native qualification in CI with synthetic workloads, against a qualification-only sandbox gateway build; evidence is bound to the commit |
+| Heartwood-managed model configurations | Per platform, as listed in [GPU Compatibility](reference/gpu-compatibility.md) and the model catalog |
+| Terra and Carina adapters | CI; the managed GPU model configurations were qualified live on each platform, see the [platform pages](platforms/index.md) |
+
+Heartwood does not claim sensitive-data readiness for any deployment.
+Heartwood ships no production sandbox gateway: the patched gateway used by native qualification exists only in the qualification build, and a deployment's gateway is checked only by the version it reports.
+Synthetic qualification is evidence for an institutional review, not an institutional approval.
+Begin with synthetic or non-sensitive files, and read [Security and Controlled Data](operate/security.md) before any restricted data.
 
 ## Find an Answer
 
-- [Your First Project](start/index.md) provides the shortest complete path from installation to a reviewed action.
-- [Work With Heartwood](use/index.md) explains the normal conversation, action, replay, and audit workflow.
-- [Research Specialists](use/specialists.md) explains focused planning and review through OpenHands.
-- [Actions and Audit History](use/actions-audit.md) explains grouped decisions, replay, exports, and signed checkpoints.
-- [Models](models/index.md) compares institution-managed, hosted, compatible-service, and Heartwood-managed routes.
-- [Platforms](platforms/index.md) covers containers, Terra, and Stanford Carina.
-- [Diagnostics and Troubleshooting](reference/troubleshooting.md) maps stable `HW-*` codes to recovery steps.
-- [How Heartwood Works](architecture/index.md) explains the architecture and security boundaries.
+- [Your First Project](start/index.md) goes from an empty folder to a reviewed action.
+- [Work With Heartwood](use/index.md) covers conversations, the interfaces, Skills, specialists and research workflows.
+- [Actions and Audit History](use/actions-audit.md) explains review modes, outside operations, replay, exports and signed checkpoints.
+- [Models](models/index.md) compares institution-managed, hosted, compatible-service and Heartwood-managed routes.
+- [Platforms](platforms/index.md) covers containers, native Linux, Terra and Stanford Carina.
+- [Diagnostics and Troubleshooting](reference/troubleshooting.md) maps `HW-*` codes to recovery steps.
+- [How Heartwood Works](architecture/index.md) explains the architecture and its boundaries.

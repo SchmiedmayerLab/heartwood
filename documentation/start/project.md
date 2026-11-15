@@ -7,25 +7,26 @@ SPDX-License-Identifier: MIT
 # Projects and Private State
 
 A Heartwood project is the directory from which you run `heartwood`.
-The agent may work with files in that directory and its descendants; it does not search for a Git root or use a separately configured workspace path.
+The agent works with files in that directory and its descendants; Heartwood does not search for a Git root or read a separately configured workspace path.
 
 ## Choose the Project Boundary
 
-Create a dedicated folder containing only the code, allowed inputs, and outputs needed for the task.
-Starting Heartwood from a nested analysis folder limits the project to that exact folder, even when a parent directory contains a Git repository.
+Create a dedicated folder that contains only the code, permitted inputs and outputs the task needs.
+Starting Heartwood from a nested analysis folder limits the project to that folder, even when a parent directory is a Git repository.
 
-Heartwood refuses obviously broad roots such as a user home directory or the Terra persistent-storage root.
+Heartwood refuses obviously broad roots such as a home directory or the Terra persistent-storage root.
 Operating-system permissions and the surrounding platform remain the authoritative filesystem boundary.
 
 ## Heartwood Project State
 
-For a local launch, confirming the project creates `.heartwood/`:
+In a local launch, confirming the project creates `.heartwood/`:
 
 ```text
 project/
 ├── analysis files and folders
 └── .heartwood/
     ├── config.toml
+    ├── state.json
     ├── sessions/
     ├── models/
     ├── skills/
@@ -35,92 +36,78 @@ project/
     └── cache/
 ```
 
-The folder has restrictive filesystem permissions and contains an internal `.gitignore` that ignores everything below it.
-It stores non-secret configuration, sessions, downloaded or imported model files, installed Skills, runtime state, logs, caches, and audit artifacts.
+The directory and its contents are owner-only, and an internal `.gitignore` ignores everything below it.
+It holds non-secret configuration, sessions, downloaded or imported model files, installed Skills, runtime records, logs, caches and audit records.
 
-Raw provider API keys and subscription tokens are not written to `config.toml`, session events, logs, browser storage, or audit exports.
-On supported workstations, Heartwood can store an API key in the operating-system credential store after explicit confirmation; otherwise it keeps an entered key only for the running process or uses a deployment-provided secret binding.
-ChatGPT account credentials remain in OpenHands' private user-level credential store rather than project state.
+Provider API keys and subscription tokens are not written to `config.toml`, session events, logs, browser storage or audit exports.
+On workstations with a system credential store, Heartwood can save an API key there after explicit confirmation; otherwise an entered key lasts only for the running process, or the deployment supplies a secret binding.
+ChatGPT sign-in credentials stay in OpenHands' user-level credential store, outside the project.
+
+!!! warning "Local state is not protected from the agent"
+    In a local launch, agent tools run with your permissions.
+    An allowed terminal command can read and change `.heartwood/`, including settings, installed Skills, and session and audit files.
+    Review any command that touches `.heartwood/` as a change to Heartwood's own controls.
 
 ### Operator-Bound External State
 
-An operator can launch the gateway with an external project deployment manifest using `heartwood gateway serve --deployment /absolute/path/project.toml`.
-This mode keeps configuration, canonical sessions, audit records, installed Skills, models, runtime records, logs, and caches in the manifest's external state directory.
-It does not create `.heartwood/` in the research directory or read project-local identity hints as authority.
-A copied research directory needs its own authorized deployment binding.
+An operator can bind a project to protected state outside the research directory:
 
-`heartwood gateway serve` and the explicit project migration commands accept `--deployment`; standalone terminal, notebook and other maintenance commands do not automatically discover this binding.
-Use the explicitly bound gateway and trusted operator integration for managed state.
-Do not run local project initialization or point an ordinary command at the state directory to imitate a managed launch.
+```bash
+heartwood gateway serve --deployment /etc/heartwood/projects/research.toml
+```
 
-The manifest must bind the exact canonical launch directory and contain a deny-by-default model-policy ceiling.
-Its project identifier is a canonical UUID, and its external state directory must have that identifier as its final path component.
-Both the manifest and the state directory must remain outside the research tree, with operator-owned parent directories that other users cannot replace.
-The state parent must already exist.
-Missing, malformed, mismatched, writable, or symlinked deployment configuration stops launch instead of falling back to local state.
+The deployment manifest binds the exact canonical research directory, a project identifier, an external state directory, a deny-by-default model policy and the review-mode ceiling.
+Configuration, sessions, audit records, Skills, models, runtime records, logs and caches then live in the external state directory, and no `.heartwood/` is created in the research directory.
+Project content is never read as deployment authority, and a copied research directory needs its own binding.
 
-Existing `.heartwood/state.json` prevents this mode from starting until an explicit state migration has preserved and verified the old records.
-Do not remove that marker to bypass the check or point a new binding at an unverified copy.
-External placement alone does not restrict same-identity terminal access; the execution environment still needs an independently enforced filesystem and process boundary.
+The launch stops instead of falling back to local state when the manifest or state directory is missing, malformed, mismatched, writable by others or a symbolic link.
+The project identifier is a canonical UUID and is the final path component of the state directory.
+Manifest and state directory both stay outside the research tree, under operator-owned parents that other users cannot replace; the state parent must already exist.
+An existing `.heartwood/state.json` stops the launch until its records are migrated as described below.
+
+Only `heartwood gateway serve` and the `heartwood project` migration commands accept `--deployment`.
+Standalone terminal, notebook and maintenance commands do not discover the binding, so researchers use the bound gateway or the operator's integration.
+External placement alone does not stop a process with the same operating-system identity from reaching the state; the [isolated worker](../operate/security.md#isolated-worker) is the deployment that keeps agent code away from it.
+[Configuration and State](../reference/configuration.md#deployment-manifest) lists the manifest keys, including the `[worker]` table.
 
 #### Moving Existing Local State
 
-Stop the project's gateways, inference runtimes and recorded experiments, then run the migration from the research directory with an operator-owned manifest and a new protected backup path:
+Stop the project's gateways, model runtimes and recorded experiments, then run the migration from the research directory with the operator manifest and a new backup path:
 
-```sh
+```bash
 heartwood project migrate --deployment /etc/heartwood/project.toml --backup /srv/heartwood/backups/project-original
 ```
 
-The backup parent and external state parent must already exist and satisfy the deployment ownership checks.
-The backup must share the research directory's filesystem so the original state can be retired atomically.
-The destination can reside on another filesystem; its staged copy is published atomically on that destination volume.
-Allocate space for an independent copy of the state and its model artifacts.
-No model download is performed.
+The backup must be on the research directory's filesystem so that the original state can be retired atomically; the destination can be on another filesystem.
+Allocate space for a complete copy of the state, including model files.
+Migration verifies the session and audit chains, command receipts, preferences, experiment journal and installed Skill content before it activates the protected state, and stops on symbolic links, multiply linked files and special files.
+The complete original directory is retained as the backup, and relocation does not change the assurance of historical records.
 
-Migration verifies the session and audit chains, command receipts, preferences, experiment journal and installed Skill content before activating the protected state.
-Symbolic links, multiply linked files and special files stop migration rather than allowing another path to modify retained records.
-It retains the complete original directory as the protected backup, including recovery records that are not promoted into active state.
-Local model references are adjusted to the protected model directory; provider profiles retain their configuration.
-Historical records retain their existing assurance and are not retroactively authenticated by relocation.
+After retirement, a `.heartwood-migration.json` file in the research directory prevents local startup; do not delete it to reinitialize the project.
+If retirement or activation is interrupted, both startup paths stay closed until an operator inspects the retained evidence and resumes:
 
-A `.heartwood-migration.json` file prevents local startup after retirement; it grants no deployment authority.
-Do not delete it to reinitialize a migrated project.
-An interruption during retirement or activation leaves both startup paths closed until an operator inspects the retained migration evidence and resumes:
-
-```sh
+```bash
 heartwood project recover-migration --deployment /etc/heartwood/project.toml
 ```
 
-To restore the original local state before the protected project has changed, use the same command with `--rollback`.
-Rollback requires exclusive access, verifies both copies, and retains the protected original and retired target.
-It refuses restoration over existing local state or after any canonical target change.
-Backups and failed staging directories require separate, explicit operator cleanup.
-
-A qualified deployment can add an explicit native worker selection to the same operator manifest.
-The worker receives selected input snapshots and verified Skills through read-only volumes and keeps its writable work inside the sandbox.
-It receives no research-directory bind mount, protected state directory, signing key or native control-plane credential.
-The native execution path requires compatible admission APIs and a separately qualified provider route; it does not establish sensitive-data readiness merely by starting successfully.
-See the [gateway reference](../reference/cli.md) for the manifest format.
+Add `--rollback` to restore the original local state, which is refused once the protected project has changed or when local state already exists.
+Backups and failed staging directories are removed only by explicit operator cleanup.
 
 ## Persistence by Environment
 
 | Environment | Durable Project Location |
 |---|---|
-| Workstation | The host folder mounted or used as the project |
+| Workstation | The folder used as the project |
 | Container | The host folder mounted at `/workspace` |
 | Terra | A dedicated directory below `/home/jupyter` on the persistent disk |
 | Stanford Carina | A dedicated writable directory in approved project storage |
+| Operator-bound deployment | The research directory, plus the manifest's external state directory |
 
-Job scratch, temporary container filesystems, and `/tmp` are not durable project locations.
-Canonical state storage must support native process-shared advisory file locks so an interrupted process releases session ownership automatically.
-Use an attached persistent disk or qualified native project filesystem rather than an object-store mount for local `.heartwood/` or managed external state.
-Managed research and state storage must preserve their authorized project binding across restarts.
+Job scratch space, temporary container filesystems and `/tmp` are not durable project locations.
+Project state requires native process-shared advisory file locks, so use a persistent disk or native project filesystem rather than an object-store mount.
 
 ## Back Up and Share Carefully
 
-Back up research files according to institutional policy.
-Back up matching canonical state and preserve its project identity: local `.heartwood/` or the operator-bound external directory.
-Treat this directory as private operational state: it can contain prompts, paths, model metadata, tool summaries, and session history even though raw credentials are excluded.
-
-Do not commit canonical state to source control or copy it into a public artifact.
-Use an audit export when a reviewed, content-minimized record is needed.
+Back up research files according to institutional policy, together with the matching state: `.heartwood/` or the operator-bound state directory.
+That state can contain prompts, paths, model metadata, tool summaries and session history even though credentials are excluded.
+Do not commit it to source control or copy it into a public artifact; use an [audit export](../use/actions-audit.md#audit-export) when a reviewed, content-minimized record is needed.
