@@ -58,8 +58,9 @@ The model-manifest parser defines non-secret connection metadata but is not wire
 Built-in connections and operator-configured compatible routes use platform policy for allowed endpoints, credential references, capability tiers and action-confirmation modes.
 
 Never add raw tokens to container layers, image labels, project configuration, command arguments, examples, or CI logs.
-The built-in Terra, Carina, and generic policies permit both action-review modes; a deployment that must forbid **Low-Risk Automation** needs a platform policy that omits it.
-Secret-backed routes require **Review Every Action** unless the active platform reports a live-qualified platform-isolated model credential boundary for that exact source.
+The built-in Terra, Carina and generic policies require **Review Every Action**.
+**Low-Risk Automation** is unavailable until a deterministic read-only action allowlist is qualified.
+Credential isolation does not authorize automatic tool execution.
 See [Security and Controlled Data](security.md#model-credential-isolation) for the distinction between application scrubbing and platform isolation.
 
 ## Validate the Deployment

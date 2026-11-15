@@ -65,9 +65,9 @@ Heartwood reports one of three effective boundaries for the active model route:
 
 | Boundary | Guarantee | Action Policy |
 |---|---|---|
-| Credential-free | No model credential is placed in the Heartwood process, as with an unauthenticated local model server | Platform policy may permit Low-Risk Automation |
+| Credential-free | No model credential is placed in the Heartwood process, as with an unauthenticated local model server | Review Every Action is required |
 | Application-scrubbed | Heartwood excludes the credential from tool inputs, project state, terminal subprocess environments, interfaces, events, logs, and audits | Review Every Action is required |
-| Platform-isolated | A separately authorized model transport keeps the credential outside the operating-system identity that runs agent tools, with live synthetic qualification for that platform | Platform policy may permit Low-Risk Automation |
+| Platform-isolated | A separately authorized model transport keeps the credential outside the operating-system identity that runs agent tools, with live synthetic qualification for that platform | Review Every Action is required |
 
 Application scrubbing is not process isolation.
 OpenHands' local model client and coding tools run under the same Heartwood operating-system identity, so environment filtering cannot prevent every same-identity memory, process, or inherited-resource access path.
@@ -101,9 +101,9 @@ Sandboxed workers cannot use this local socket: they require an independently au
 That boundary isolates the caller from the agent workspace, but it does not by itself separate model authentication from tools running inside that agent environment.
 Heartwood uses the upstream OpenHands credential and model transports without treating a remote workspace as model-only credential isolation.
 
-Use **Review Every Action** for an API key, ChatGPT subscription, mounted secret, or managed identity unless the active platform explicitly reports a qualified platform-isolated boundary.
-**Low-Risk Automation** classifies actions from the model's own risk label and a small set of fixed command patterns, so a model that follows injected instructions can label an unsafe command low risk.
-Use it only when every file, dataset, and page the agent reads is trusted.
+Use **Review Every Action** for every model route, including isolated and credential-free inference.
+Risk hints and fixed threat checks are advisory; neither authorizes tool execution.
+**Low-Risk Automation** is unavailable, and every registered action set requires review even when a model labels it low risk.
 Removing a credential from Heartwood's saved settings does not invalidate copies held by running processes or revoke the key at its issuer.
 For sandbox provider access, require acknowledged outside detachment or verified worker revocation; neither undoes requests already forwarded upstream.
 Changing the action policy never broadens model authorization.
@@ -217,7 +217,7 @@ Confirm each control before researchers add project data, and again after each u
 - mount controlled inputs read-only when feasible;
 - keep provider secrets in a keyring, mounted secret, or managed identity;
 - keep production checkpoint keys in an independently authorized KMS/HSM-backed signer service;
-- use **Review Every Action** until a deployment-specific risk policy is reviewed;
+- require **Review Every Action** for registered tool proposals;
 - keep the launch link and any supplied gateway capability private to the researcher who started Heartwood;
 - pin release artifacts, images, model revisions, and Skill versions;
 - collect content-minimized operational logs outside project outputs;

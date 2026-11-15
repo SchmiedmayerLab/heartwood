@@ -432,7 +432,7 @@ An application-scrubbed route excludes provider material from supported tool inp
 A platform-isolated route requires a separately authorized model transport plus live synthetic qualification.
 
 The classification is part of the shared model-settings and readiness projections.
-The gateway disables Low-Risk Automation for a secret-backed application-scrubbed route and rejects stale persisted combinations before an agent starts.
+The gateway disables Low-Risk Automation for every route and interprets retained automation preferences as Review Every Action before an agent starts.
 Terminal, browser, and notebook clients render that decision rather than implementing credential rules.
 
 OpenHands Agent Server and RemoteWorkspace are retained as upstream deployment options, but they place the model client and tools in the same remote agent environment.

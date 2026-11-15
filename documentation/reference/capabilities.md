@@ -30,7 +30,7 @@ Terra and Carina continue to advertise only the interfaces in the **Interfaces**
 
 Application-scrubbed routes exclude provider credentials from supported tools and persisted or interface state, but they do not isolate an in-process OpenHands tool from the model client.
 Secret-backed model routes therefore require **Review Every Action** on all built-in platforms.
-Credential-free Heartwood-managed inference does not place a model credential in Heartwood and may use Low-Risk Automation when platform policy permits it.
+Credential-free Heartwood-managed inference does not place a model credential in Heartwood; registered action sets still require review.
 
 ## Startup Projection
 

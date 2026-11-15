@@ -34,7 +34,7 @@ heartwood [--session-id ID] [--interface terminal|web] [--plain] [--prompt TEXT]
 | `heartwood setup` | Run model and action-policy setup without opening a conversation |
 | `heartwood actions` | Show action-review modes |
 | `heartwood actions set ask-every-time` | Require confirmation for every OpenHands action set |
-| `heartwood actions set auto-approve-low-risk` | Auto-approve sets made entirely of low-risk actions when platform policy permits |
+| `heartwood actions set auto-approve-low-risk` | Unavailable; the gateway requires Review Every Action |
 
 For unattended setup, use `heartwood setup --non-interactive --yes` with explicit model-source and model identifiers.
 Use `--model-source heartwood` when Heartwood should download or import the model and supervise its runtime in the current environment.

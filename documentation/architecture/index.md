@@ -18,7 +18,7 @@ Heartwood does not fork the OpenHands agent loop or maintain a parallel coding-t
 - OpenHands SDK conversations and tool execution, locally or through the explicitly selected native sandbox adapter;
 - OpenHands task tracking and bounded sequential research specialists;
 - [reviewed research stages](../use/research-workflows.md) with independent artifact checks and [experiment records](experiments.md);
-- grouped action review and deployment-constrained auto-approval;
+- grouped action review independent of model risk hints;
 - repository-verified and explicitly installed Skills;
 - persistent sessions, replay, and tamper-evident audit export;
 - generic, Terra, and Stanford Carina platform adapters; and

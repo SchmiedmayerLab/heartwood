@@ -53,6 +53,7 @@ from heartwood.gateway._action_presentation import action_presentation
 from heartwood.gateway._action_settings import (
     ACTION_MODE_OPTIONS,
     ACTION_MODE_SCOPE_DESCRIPTION,
+    AUTOMATION_UNAVAILABLE_REASON,
     ActionSettings,
     ActionSettingsError,
 )
@@ -1748,10 +1749,14 @@ class SessionGateway:
                     {
                         **option.safe_dict(),
                         "allowed": (
-                            option.mode in policy_allowed and isolation.allows(option.mode)
+                            option.mode == "always-confirm"
+                            and option.mode in policy_allowed
+                            and isolation.allows(option.mode)
                         ),
                         "unavailable_reason": (
-                            None
+                            AUTOMATION_UNAVAILABLE_REASON
+                            if option.mode == "confirm-risky"
+                            else None
                             if (option.mode in policy_allowed and isolation.allows(option.mode))
                             else (
                                 "Unavailable under the active platform policy."

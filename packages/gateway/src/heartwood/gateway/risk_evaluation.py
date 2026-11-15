@@ -68,7 +68,7 @@ def evaluate_action_risk(
         analyzer_fingerprint=digest,
         evaluated_at=datetime.now(UTC),
         openhands_version=version("openhands-sdk"),
-        confirmation_mode=mode,
+        confirmation_mode="always-confirm",
         measurements=tuple(measurements),
     )
 

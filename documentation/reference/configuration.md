@@ -14,7 +14,8 @@ Normal users do not set a Heartwood home, workspace, state root, model root, or 
 The paths below describe local launches.
 With an [operator deployment](../start/project.md#operator-bound-external-state), replace the `.heartwood/` prefix with the external state directory bound by the manifest.
 The layout and owning stores remain the same; the research directory does not select that binding.
-Only `heartwood gateway serve --deployment` consumes this manifest; ordinary local commands do not automatically select managed state.
+`heartwood gateway serve --deployment` and the explicit `heartwood project migrate` and `recover-migration` commands consume this manifest.
+Ordinary local commands do not automatically select managed state.
 Canonical state is accessible to the trusted gateway and must not be mounted into a sandboxed worker.
 
 | Path | Contents |

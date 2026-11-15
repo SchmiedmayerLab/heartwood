@@ -9,41 +9,35 @@ SPDX-License-Identifier: MIT
 Heartwood separates a model suggestion from an executed action.
 OpenHands proposes tools, Heartwood applies the selected confirmation policy, and the session records the decision and result.
 
-## Choose When Heartwood Pauses
+## Review Every Action
 
-| Mode | Behavior |
-|---|---|
-| **Review Every Action** | Pause before every OpenHands action set so you can inspect it before anything runs |
-| **Low-Risk Automation** | Continue only action sets made entirely of low-risk actions; pause the complete set when any action is medium risk, high risk, or unclassified |
+Heartwood pauses before every registered OpenHands action set.
+Risk labels combine model-provided hints and fixed threat checks; they are advisory and cannot authorize execution.
+Review the exact command or file operation first, then the separately labelled model-provided summary.
+A low-risk hint never skips confirmation, including for credential-free inference.
 
-Risk levels come from the model's own assessment, checked only against a small set of fixed command patterns; they are not an independent analysis.
-Use **Low-Risk Automation** only when the files, datasets, and pages the agent reads are trusted, since injected instructions can make a model label an unsafe command low risk.
-
-The detected platform policy determines which modes are available.
-**Review Every Action** is the default and the recommended mode while learning the system or working with sensitive projects.
-It is required when the selected model uses a credential that the platform does not isolate from the OpenHands tool runtime.
-Low-Risk Automation remains available for credential-free routes and live-qualified platform-isolated routes when platform policy permits it.
-The selected mode applies to future action sets in the project and is shared by the terminal, browser, and notebook bridge.
+**Low-Risk Automation** is unavailable because no deterministic read-only action allowlist is qualified.
+The built-in workstation/container, Terra and Carina policies permit **Review Every Action** only.
+Previously saved automation preferences are read conservatively as **Review Every Action** without changing the stored file.
+Selecting automation is rejected by the gateway, consistently across terminal, browser and notebook clients.
 
 In the full-screen terminal, enter `/permissions` or press `Ctrl-P` and choose **Action Review**.
-In the browser, select the current **Action review** value in the session header or open the **Action Review** settings tab.
-
+In the browser, open **Action Review** settings.
 For scripts and the plain terminal, use:
 
 ```bash
 heartwood actions set ask-every-time
-heartwood actions set auto-approve-low-risk
 ```
 
-![Heartwood action-review settings showing the project-wide modes](../assets/screenshots/browser-action-settings-light.png#gh-light-mode-only){ .theme-screenshot-light }
-![Heartwood action-review settings showing the project-wide modes](../assets/screenshots/browser-action-settings-dark.png#gh-dark-mode-only){ .theme-screenshot-dark }
+Review controls apply to registered tool proposals; they do not intercept every operation of arbitrary code already running inside a permitted sandbox.
+Privileged outside effects require the independent authorization boundary described in the [Platform Contract](../operate/platform-contract.md#outside-operation-admission).
 
 ## Grouped Decisions
 
 OpenHands may propose several related tool calls as one action set.
 Heartwood displays those calls as one action set and resolves them together instead of presenting misleading per-item controls.
 
-A set is allowed only after the user or policy resolves the pending review.
+A set is allowed only after the researcher resolves the pending review.
 Allowing the set runs every member once.
 Rejecting the set prevents all of its members from executing.
 
