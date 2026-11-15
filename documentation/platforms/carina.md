@@ -44,7 +44,7 @@ Replace `APPROVED_PATH` with your group's path, and do not use a shared project 
 ```bash
 cd heartwood-installation
 curl --proto '=https' --tlsv1.2 --fail --location --remote-name \
-  https://github.com/SchmiedmayerLab/heartwood/releases/download/0.4.0/heartwood-installer
+  https://github.com/SchmiedmayerLab/heartwood/releases/download/0.5.0/heartwood-installer
 chmod 700 heartwood-installer
 ./heartwood-installer --platform carina
 export PATH="$PWD/bin:$PATH"

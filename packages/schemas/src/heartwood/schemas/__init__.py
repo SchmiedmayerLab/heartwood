@@ -250,4 +250,4 @@ __all__ = [
     "verify_reviewed_operation_set",
 ]
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
