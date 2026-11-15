@@ -53,8 +53,16 @@ from heartwood.gateway.worker_volumes import (
 )
 
 # The pinned sandbox gateway returns these statuses for a creation request only before it
-# records or requests the sandbox; any other failure may still leave one created.
+# records or requests the sandbox; any other failure may still leave one created. They were
+# checked against this gateway source revision and patch digests; recheck on any change.
 _CREATION_REJECTED = ("INVALID_ARGUMENT", "PERMISSION_DENIED", "UNAUTHENTICATED")
+_CREATION_REJECTED_GATEWAY = (
+    "f3d976590d3eb1379690a2abaf0f0e26c21d487d",
+    (
+        "4dc6079ce4c131175dd8056a9bf0934cf51d9b4c0e04ef430e0b7465f7e8025e",
+        "f708cdf3e00e57b6bbda7dfcdbca46b47efc72aed20fc63c3aa767223debe493",
+    ),
+)
 
 
 def native_worker_plan_factory(

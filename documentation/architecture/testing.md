@@ -284,6 +284,8 @@ A drill's version changes whenever its scenario or expected outcome changes, so 
 | `native-cancellation.v1` | `test_native_cancellation_settles_without_repeating_the_effect` | A pause during an approved command leaves the conversation paused, the recorded execution agrees with the observed effect, and neither the cancelled step nor the resumed turn repeats it |
 | `native-image-change-and-rotation.v1` | `test_native_new_worker_image_and_rotated_credential_after_restart` | A restart with a new worker image admits a replacement that runs that image; rotating the provider credential fails the attached worker closed without running a command, and the next start attaches the rotated credential to a replacement |
 | `native-advisory-specialist.v1` | `test_native_advisory_specialist_runs_inside_the_parent_worker` | An advisory specialist runs once through its parent worker's model route, in the parent's sandbox, and the worker is revoked at stop |
+| `native-revoked-worker-replacement.v1` | `test_native_revoked_worker_is_replaced_for_the_next_command` | After the active worker is fenced and revoked, the next command admits a replacement worker for the same conversation without a gateway restart, and the revoked worker's sandbox is absent |
+| `native-forwarder-lifetime.v1` | `test_native_forwarder_ends_with_the_gateway_process` | When the gateway process is killed, its forwarder's process group ends with it, and a later gateway revokes the worker the killed process left |
 
 Two prompt-injection drills run outside native qualification:
 

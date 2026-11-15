@@ -1229,6 +1229,20 @@ def test_only_a_creation_rejected_before_any_record_resolves_from_absence(
     assert native.sandboxes.deleted == []
 
 
+def test_creation_rejection_statuses_were_checked_against_the_pinned_gateway() -> None:
+    root = Path(__file__).resolve().parents[3]
+    manifest = json.loads((root / "images/worker/candidate/gateway.json").read_text())
+    pinned = (
+        manifest["source"]["revision"],
+        tuple(patch["sha256"] for patch in manifest["patches"]),
+    )
+    assert pinned == worker_native._CREATION_REJECTED_GATEWAY, (
+        "the pinned sandbox gateway changed: recheck in its creation path that "
+        f"{worker_native._CREATION_REJECTED} are returned only before a sandbox is recorded "
+        "or requested, then update _CREATION_REJECTED and _CREATION_REJECTED_GATEWAY"
+    )
+
+
 _GATEWAY_PROCESS = """import sys, time
 from pathlib import Path
 from types import SimpleNamespace

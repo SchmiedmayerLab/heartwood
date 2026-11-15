@@ -967,6 +967,7 @@ def test_native_revoked_worker_is_replaced_for_the_next_command(
         (fixture.output / "evidence.json").write_text(
             json.dumps(
                 {
+                    "drill_id": "native-revoked-worker-replacement.v1",
                     "worker_image": fixture.worker,
                     "gateway_image": fixture.gateway_image,
                     "revoked_attempt_id": str(first.intent.attempt_id),
@@ -1069,6 +1070,7 @@ def test_native_forwarder_ends_with_the_gateway_process(infrastructure: NativeFi
         (fixture.output / "evidence.json").write_text(
             json.dumps(
                 {
+                    "drill_id": "native-forwarder-lifetime.v1",
                     "worker_image": fixture.worker,
                     "gateway_image": fixture.gateway_image,
                     "forwarder_survived_gateway": False,
