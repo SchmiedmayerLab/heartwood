@@ -33,9 +33,10 @@ import pytest
 def test_substituted_native_artifacts_are_rejected_before_docker(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, changed: str
 ) -> None:
+    deploy = Path(__file__).resolve().parents[3] / "deploy"
+    monkeypatch.syspath_prepend(str(deploy))
     spec = importlib.util.spec_from_file_location(
-        "native_qualification",
-        Path(__file__).resolve().parents[3] / "deploy/qualify-native-worker.py",
+        "native_qualification", deploy / "qualify-native-worker.py"
     )
     assert spec is not None
     assert spec.loader is not None
