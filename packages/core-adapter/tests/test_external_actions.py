@@ -34,6 +34,7 @@ from heartwood.core_adapter import (
     CommandConflictError,
     DeterministicAgentBackend,
     ProposedToolCall,
+    SessionResult,
     SessionService,
     TokenDeltaSink,
     ToolExecution,
@@ -1288,14 +1289,26 @@ def test_denial_withdraws_an_undispatched_authorization(
     service.audit_log.verify()
 
 
+@pytest.mark.parametrize("gateway_order", [False, True])
 @pytest.mark.parametrize("release", [False, True])
 def test_only_the_original_approval_dispatches_a_retained_authorization(
-    setup: Setup, evidence: tuple[SessionCheckpointEvidence, MemoryS3], release: bool
+    setup: Setup,
+    evidence: tuple[SessionCheckpointEvidence, MemoryS3],
+    release: bool,
+    gateway_order: bool,
 ) -> None:
     service, worker, platform = setup
     _, client = evidence
     record, approved, before = interrupted_authorization(setup, client, release)
     client.unavailable = False
+
+    def send(request: SessionCommand) -> SessionResult:
+        if not gateway_order:
+            return service.handle(request)
+        # The gateway reads the session first, then handles without a second read.
+        service.reconcile()
+        return service.handle(request, reconcile_before_command=False)
+
     unrelated = SessionCommand(
         session_id=service.store.session_id,
         command_id=str(uuid4()),
@@ -1305,9 +1318,9 @@ def test_only_the_original_approval_dispatches_a_retained_authorization(
     )
     for other in (unrelated, command(service, record)):
         with pytest.raises(SessionRecoveryError, match="not been dispatched"):
-            service.handle(other)
+            send(other)
     with pytest.raises(CommandConflictError):
-        service.handle(approved.model_copy(update={"actor_id": "other"}))
+        send(approved.model_copy(update={"actor_id": "other"}))
     # Reads and status checks never send a retained authorization.
     observations = len(platform.observations)
     assert service.reconcile() == ()
@@ -1317,8 +1330,10 @@ def test_only_the_original_approval_dispatches_a_retained_authorization(
     assert len(platform.submissions) == before
     assert len(platform.observations) == observations
     assert worker.contexts == []
-    assert service.handle(approved).replayed
+    assert send(approved).replayed
     assert phase_of(service, release) == ("submitted" if release else "observed")
+    assert service.store.unresolved_command_ids() == ()
+    assert send(approved).replayed
     assert len(platform.submissions) == before + (0 if release else 1)
     assert len(worker.contexts) == int(release)
 

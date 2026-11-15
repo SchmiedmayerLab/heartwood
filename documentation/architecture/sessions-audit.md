@@ -107,7 +107,7 @@ Outside decisions distinguish authorization from attempted dispatch.
 An authorized record proves that the native call has not started; a submitting record means its outcome may be uncertain.
 A configured required-evidence gate must observe the authorization checkpoint before recording submission and calling the adapter.
 An approved outside operation or result release that could not be sent is sent only by an exact retry of its own approval command, never by another command, a status or projection read, reconciliation, or an automatic decision.
-That retry carries the same command identifier and content, and it still requires a live matching worker and renewed input, policy and expiry checks.
+That retry carries the same command identifier and content, resumes the authorization whether or not the caller reconciled the session first, and still requires a live matching worker and renewed input, policy and expiry checks.
 Any other command is refused without dispatching.
 Denying the same review withdraws the undispatched authorization without requiring an admitted worker, and one that outlives its validity interval is recorded as expired.
 Both closures are terminal journal and audit records that complete the original approval command, so the session can continue.

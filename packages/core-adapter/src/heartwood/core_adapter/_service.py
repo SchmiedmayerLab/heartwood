@@ -302,9 +302,17 @@ class SessionService:
         command_kind = _kind_value(command.kind)
         reconciling = command_kind != CommandKind.AUDIT_EXPORT.value and reconcile_before_command
         with self._backend_reconciled(lambda: reconciling) as observed:
-            reconciled = (
-                (*observed, *self._recover_approval_commands_locked(command)) if reconciling else ()
-            )
+            if reconciling:
+                reconciled = (*observed, *self._recover_approval_commands_locked(command))
+            elif (
+                command_kind == CommandKind.APPROVE.value
+                and command.command_id in self.store.unresolved_command_ids()
+            ):
+                # An exact retry resumes its retained outside authorization even when the
+                # caller has already reconciled, because reads never dispatch it.
+                reconciled = self._recover_external_approvals_locked(command)
+            else:
+                reconciled = ()
             if reconciled:
                 self._event_sink(reconciled)
             persisted = self.replay_events()
