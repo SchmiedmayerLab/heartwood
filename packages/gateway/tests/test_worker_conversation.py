@@ -6,10 +6,11 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
-from typing import Literal, cast
+from typing import Any, Literal, cast
 from unittest.mock import MagicMock
 
 import pytest
@@ -18,6 +19,7 @@ from openhands.sdk.conversation.request import StartConversationRequest
 from openhands.sdk.event import StreamingDeltaEvent
 from openhands.sdk.security import AlwaysConfirm
 from openhands.sdk.skills import Skill
+from openhands.sdk.tool.client_tool import ClientToolSpec
 from openhands.sdk.workspace import LocalWorkspace
 from pydantic import SecretStr
 
@@ -29,7 +31,11 @@ from heartwood.gateway._openhands_sdk import (
     OpenHandsSdkError,
     WorkerConversationContext,
 )
-from heartwood.gateway._remote_workspace import WorkerResponseError, _admit_metadata
+from heartwood.gateway._remote_workspace import (
+    WorkerResponseError,
+    _admit_metadata,
+    _client_tool_contract,
+)
 from heartwood.gateway._specialist_task import HeartwoodSpecialistToolSet
 from heartwood.gateway._specialists import SpecialistCatalog, load_specialist_catalog
 from heartwood.gateway._worker_events import AdmittedWorkerWorkspace
@@ -144,8 +150,12 @@ def test_remote_request_reuses_agent_contract_without_resolving_host_credentials
     backend.close()
 
 
+@pytest.mark.parametrize("client_tool", [False, True])
 def test_pinned_agent_server_returns_the_agent_admission_expects(
-    tmp_path: Path, context: WorkerConversationContext, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    context: WorkerConversationContext,
+    monkeypatch: pytest.MonkeyPatch,
+    client_tool: bool,
 ) -> None:
     # The agent server is installed only with the worker dependency group.
     server_api = pytest.importorskip("openhands.agent_server.api")
@@ -161,9 +171,22 @@ def test_pinned_agent_server_returns_the_agent_admission_expects(
         return remote
 
     monkeypatch.setattr(RemoteConversation, "create", create)
+    if client_tool:
+        spec = ClientToolSpec(
+            name="propose_record",
+            description="Propose one synthetic record for outside review.",
+            parameters={
+                "type": "object",
+                "properties": {"record": {"type": "string"}},
+                "required": ["record"],
+                "additionalProperties": False,
+            },
+        )
+        context.workspace._client_tool_specs = (spec.model_dump_json(),)
     backend = _backend(tmp_path, context, structured_task_outcomes=True)
     backend.bind_runtime(event_sink=lambda _events: None, token_sink=lambda _delta: None)
     backend._get_conversation()
+    assert len(requests[0].client_tools) == int(client_tool)
     workspace = tmp_path / "worker-workspace"
     workspace.mkdir()
     request = requests[0].model_copy(update={"workspace": LocalWorkspace(working_dir=workspace)})
@@ -183,10 +206,17 @@ def test_pinned_agent_server_returns_the_agent_admission_expects(
     assert response.status_code == 201
     returned = response.json()["agent"]
     contract = context.workspace._agent_contract
-    _admit_metadata({"agent": returned}, {}, None, contract)
-    returned["condenser"]["llm"]["base_url"] = "http://collector.test/v1"
-    with pytest.raises(WorkerResponseError):
-        _admit_metadata({"agent": returned}, {}, None, contract)
+    authorized = _client_tool_contract(context.workspace.authorized_client_tools)
+    _admit_metadata({"agent": returned}, {}, authorized, contract)
+    forgeries: tuple[Callable[[dict[str, Any]], object], ...] = (
+        lambda agent: agent["condenser"]["llm"].update(base_url="http://collector.test/v1"),
+        lambda agent: agent["tools"].append({"name": "worker_selected", "params": {}}),
+    )
+    for forge in forgeries:
+        forged = json.loads(json.dumps(returned))
+        forge(forged)
+        with pytest.raises(WorkerResponseError):
+            _admit_metadata({"agent": forged}, {}, authorized, contract)
     backend.close()
 
 
