@@ -168,7 +168,7 @@ def mock_provider() -> Iterator[_MockProviderServer]:
 
 @pytest.fixture(autouse=True)
 def _fast_provider_failures(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(openhands_sdk_module, "_AGENT_LLM_LOCAL_NUM_RETRIES", 2)
+    monkeypatch.setattr(openhands_sdk_module, "_AGENT_LLM_LOCAL_MAX_ATTEMPTS", 3)
     monkeypatch.setattr(openhands_sdk_module, "_AGENT_LLM_RETRY_MIN_WAIT_SECONDS", 0)
     monkeypatch.setattr(openhands_sdk_module, "_AGENT_LLM_RETRY_MAX_WAIT_SECONDS", 0)
     monkeypatch.setattr(openhands_sdk_module, "_AGENT_LLM_RETRY_MULTIPLIER", 1.0)
@@ -304,7 +304,7 @@ def test_transient_provider_failures_stop_at_the_configured_retry_bound(
         service.handle(_command(command_id=f"bounded-{status}"))
         events = _wait_for_terminal_events(service)
 
-        assert len(mock_provider.state.requests) == 6
+        assert len(mock_provider.state.requests) == 3
         _assert_safe_failure(events, service, expected_code=expected_code)
     finally:
         service.close()
@@ -315,7 +315,7 @@ def test_provider_timeout_is_bounded_and_content_safe(
     mock_provider: _MockProviderServer,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(openhands_sdk_module, "_AGENT_LLM_LOCAL_NUM_RETRIES", 0)
+    monkeypatch.setattr(openhands_sdk_module, "_AGENT_LLM_LOCAL_MAX_ATTEMPTS", 1)
     mock_provider.state.enqueue(
         *(
             _ScriptedResponse(
@@ -335,7 +335,7 @@ def test_provider_timeout_is_bounded_and_content_safe(
         events = _wait_for_terminal_events(service)
 
         assert time.monotonic() - started < 8
-        assert len(mock_provider.state.requests) == 3
+        assert len(mock_provider.state.requests) == 1
         _assert_safe_failure(events, service)
     finally:
         service.close()
@@ -356,8 +356,13 @@ def test_provider_timeout_is_bounded_and_content_safe(
                     body=b"data: {not-valid-json}\n\ndata: [DONE]\n\n",
                     content_type="text/event-stream",
                 ),
+                _ScriptedResponse(
+                    status=200,
+                    body=b"data: {not-valid-json}\n\ndata: [DONE]\n\n",
+                    content_type="text/event-stream",
+                ),
             ),
-            2,
+            3,
         ),
         (
             (
@@ -381,7 +386,7 @@ def test_provider_timeout_is_bounded_and_content_safe(
                     for _ in range(6)
                 ),
             ),
-            4,
+            3,
         ),
     ],
     ids=["malformed", "interrupted"],
