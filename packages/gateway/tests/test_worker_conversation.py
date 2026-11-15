@@ -13,9 +13,6 @@ from typing import Literal, cast
 from unittest.mock import MagicMock
 
 import pytest
-from fastapi.testclient import TestClient
-from openhands.agent_server.api import create_app
-from openhands.agent_server.config import Config
 from openhands.sdk.conversation import RemoteConversation
 from openhands.sdk.conversation.request import StartConversationRequest
 from openhands.sdk.event import StreamingDeltaEvent
@@ -150,6 +147,10 @@ def test_remote_request_reuses_agent_contract_without_resolving_host_credentials
 def test_pinned_agent_server_returns_the_agent_admission_expects(
     tmp_path: Path, context: WorkerConversationContext, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # The agent server is installed only with the worker dependency group.
+    server_api = pytest.importorskip("openhands.agent_server.api")
+    server_config = pytest.importorskip("openhands.agent_server.config")
+    testclient = pytest.importorskip("fastapi.testclient")
     requests: list[StartConversationRequest] = []
     remote = cast(RemoteConversation, MagicMock(spec=RemoteConversation))
 
@@ -166,14 +167,14 @@ def test_pinned_agent_server_returns_the_agent_admission_expects(
     workspace = tmp_path / "worker-workspace"
     workspace.mkdir()
     request = requests[0].model_copy(update={"workspace": LocalWorkspace(working_dir=workspace)})
-    server = create_app(
-        Config(
+    server = server_api.create_app(
+        server_config.Config(
             session_api_keys=[],
             conversations_path=tmp_path / "worker-conversations",
             workspace_path=workspace,
         )
     )
-    with TestClient(server) as client:
+    with testclient.TestClient(server) as client:
         response = client.post(
             "/api/conversations",
             content=request.model_dump_json(context={"expose_secrets": True}, exclude_none=True),
