@@ -214,7 +214,7 @@ class WorkerVolumes:
         ]
 
     def inspect_worker(self, name: str) -> None:
-        """Observe the actual Docker image, network, privilege and mounts outside the worker."""
+        """Observe the actual Docker image, network, confinement and mounts outside the worker."""
         if not name.startswith(self._worker_prefix) or not name.removeprefix(self._worker_prefix):
             raise WorkerAttemptError("native worker name does not match the retained attempt")
         observed = self._inspect("container", name)
@@ -231,6 +231,27 @@ class WorkerVolumes:
             raise WorkerAttemptError(
                 "native worker image, network or privilege does not match admission"
             )
+        # Every field must be reported; an absent observation is never read as confinement.
+        if any(
+            name not in host
+            for name in ("CapAdd", "SecurityOpt", "PidMode", "IpcMode", "UsernsMode")
+        ):
+            raise WorkerAttemptError("native worker confinement was not observed")
+        options = host["SecurityOpt"] or []
+        if (
+            host["CapAdd"] not in (None, [])
+            or not isinstance(options, list)
+            or any(
+                not isinstance(option, str)
+                or option.replace(":", "=", 1).endswith(("=unconfined", "=disable"))
+                for option in options
+            )
+            or any(
+                not isinstance(host[name], str) or host[name] == "host"
+                for name in ("PidMode", "IpcMode", "UsernsMode")
+            )
+        ):
+            raise WorkerAttemptError("native worker confinement does not match admission")
         mounts = observed.get("Mounts")
         if not isinstance(mounts, list) or any(not isinstance(m, dict) for m in mounts):
             raise WorkerAttemptError("native worker projection mounts were not observed")

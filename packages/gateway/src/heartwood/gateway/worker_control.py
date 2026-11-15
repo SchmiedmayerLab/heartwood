@@ -27,6 +27,10 @@ from heartwood.gateway.worker_deployment import OpenShellWorkerDeployment
 from heartwood.persistence import read_private_text
 
 
+class WorkerGatewayVersionError(WorkerAttemptError):
+    """The registered gateway did not report a version the operator declared as qualified."""
+
+
 class NativeWorkerControl:
     """Retain native connection material without selecting ambient gateway credentials."""
 
@@ -91,7 +95,10 @@ class NativeWorkerControl:
             raise WorkerAttemptError("native gateway identity changed during the worker attempt")
 
     def connect(self) -> None:
-        """Create the maintained SDK client only after the session retains launch intent."""
+        """Create the maintained SDK client and require a declared gateway version.
+
+        Called only after the session retains launch intent or a fenced attempt to reconcile.
+        """
         self.verify_configuration()
         if self.client is not None:
             raise WorkerAttemptError("native control client is already connected")
@@ -105,6 +112,15 @@ class NativeWorkerControl:
             ),
             timeout=15,
         )
+        try:
+            reported = self.client.health().version
+        except Exception:
+            reported = None
+        if reported not in self.settings.gateway_versions:
+            self.close()
+            raise WorkerGatewayVersionError(
+                "registered sandbox gateway did not report a declared qualified version"
+            )
 
     def policy(self) -> object:
         """Parse the operator's native policy without introducing a second policy compiler."""

@@ -225,6 +225,12 @@ _DIAGNOSTICS: dict[str, DiagnosticDefinition] = {
         "Open Heartwood through the launch link printed by the terminal that started it.",
         "/reference/troubleshooting/#hw-ingress-003-gateway-request-is-missing-the-launch-capability",
     ),
+    "worker-gateway-version": DiagnosticDefinition(
+        "HW-WORKER-001",
+        "Sandbox gateway version is not declared as qualified",
+        "Register the qualified sandbox gateway or declare the version it reports.",
+        "/reference/troubleshooting/#hw-worker-001-sandbox-gateway-version-is-not-declared-as-qualified",
+    ),
 }
 
 _FALLBACK_DIAGNOSTIC = DiagnosticDefinition(

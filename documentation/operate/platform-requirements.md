@@ -264,7 +264,10 @@ Its revocation and cleanup evidence depends on two behaviors of that build which
   Without it, a failed deletion that the gateway could not roll back stays marked as deleting, later requests are acknowledged without cleanup, and revocation times out without evidence of absence.
 
 An operator's gateway must provide both behaviors before qualification results for revocation or cleanup are applied to that deployment.
-Heartwood does not check the version or deletion behavior of the registered gateway when it launches or revokes a worker.
+The operator declares each gateway version covered by such evidence in the deployment manifest's `gateway_versions`; managed workers cannot be configured without it.
+Before it serves, launches a worker or reconciles a retained attempt, Heartwood reads the registered gateway's reported version through the `Health` API and stops with `HW-WORKER-001` unless it equals a declared value.
+This detects a gateway that was replaced or misregistered.
+It is not proof of behavior: the value is an operator declaration compared with the gateway's own report, and Heartwood does not test the deletion behavior of the registered gateway.
 The qualified build reports the `version` recorded in `gateway.json`, a local version that no upstream release uses, from `openshell-gateway --version` and from the gateway `Health` API.
 The `gateway_build` entry of the [qualification evidence](../architecture/testing.md#native-qualification-evidence) records the same version, source revision and binary digests.
 Compare the deployed gateway with that record, or repeat the native qualification against the deployed gateway and retain its evidence.

@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import cast
@@ -33,6 +34,17 @@ def native(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
     monkeypatch.syspath_prepend(str(_ROOT / "deploy/tests"))
     spec = importlib.util.spec_from_file_location(
         "worker_native_fixture", _ROOT / "deploy/tests/worker_native_fixture.py"
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def native_evidence() -> ModuleType:
+    spec = importlib.util.spec_from_file_location(
+        "qualification_evidence", _ROOT / "deploy/qualification_evidence.py"
     )
     assert spec is not None
     assert spec.loader is not None
@@ -102,3 +114,84 @@ def test_unobserved_create_retains_reconciliation_state(native: ModuleType) -> N
     owner.control.delete.assert_not_called()
     owner.control.wait_deleted.assert_not_called()
     assert owner.probes == {"probe": None}
+
+
+def test_worker_container_record_is_retained_before_admission_decides(
+    native: ModuleType, tmp_path: Path
+) -> None:
+    from heartwood.core_adapter.worker_attempts import WorkerAttemptError
+    from heartwood.gateway.worker_volumes import WorkerVolumes
+
+    observed = {
+        "Id": "native-id",
+        "Name": "/openshell-default--hw-synthetic-native-id",
+        "Image": "sha256:" + "a" * 64,
+        "Config": {"Labels": {"heartwood.project": "withheld-project"}, "Env": ["KEY=withheld"]},
+        "HostConfig": {
+            "Privileged": False,
+            "CapAdd": ["SYS_ADMIN"],
+            "CapDrop": None,
+            "SecurityOpt": ["apparmor=unconfined"],
+            "NetworkMode": "none",
+            "PidMode": "",
+            "IpcMode": "private",
+            "Binds": ["/home/operator/withheld:/mnt"],
+        },
+        "Mounts": [
+            {
+                "Type": "bind",
+                "Source": "/home/operator/withheld",
+                "Destination": "/mnt",
+                "RW": True,
+            }
+        ],
+    }
+    volumes = SimpleNamespace(_inspect=MagicMock(return_value=observed))
+    decided: list[str] = []
+
+    def reject(_volumes: object, name: str) -> None:
+        decided.append((tmp_path / native.WORKER_CONTAINERS).read_text())
+        raise WorkerAttemptError(name)
+
+    with patch.object(WorkerVolumes, "inspect_worker", reject):
+        with native.retain_worker_containers(tmp_path), pytest.raises(WorkerAttemptError):
+            WorkerVolumes.inspect_worker(cast(WorkerVolumes, volumes), "worker")
+        assert WorkerVolumes.inspect_worker is reject
+    retained = (tmp_path / native.WORKER_CONTAINERS).read_text()
+    assert decided == [retained]
+    assert "withheld" not in retained
+    assert json.loads(retained) == [
+        {
+            "image": "sha256:" + "a" * 64,
+            "host_config": {
+                "Privileged": False,
+                "CapAdd": ["SYS_ADMIN"],
+                "CapDrop": None,
+                "SecurityOpt": ["apparmor=unconfined"],
+                "NetworkMode": "none",
+                "PidMode": "",
+                "IpcMode": "private",
+                "UsernsMode": "<absent>",
+            },
+            "mounts": [{"type": "bind", "destination": "/mnt", "read_write": True}],
+        }
+    ]
+    assert native.WORKER_CONTAINERS in {
+        pattern.removeprefix("*/") for pattern in native_evidence().RETAINED
+    }
+
+
+def test_unavailable_container_observation_leaves_the_admission_decision_unchanged(
+    native: ModuleType, tmp_path: Path
+) -> None:
+    from heartwood.gateway.worker_volumes import WorkerVolumes
+
+    volumes = SimpleNamespace(_inspect=MagicMock(side_effect=RuntimeError("synthetic outage")))
+    decided: list[str] = []
+    with (
+        patch.object(WorkerVolumes, "inspect_worker", lambda _volumes, name: decided.append(name)),
+        native.retain_worker_containers(tmp_path),
+    ):
+        WorkerVolumes.inspect_worker(cast(WorkerVolumes, volumes), "worker")
+    assert decided == ["worker"]
+    assert not (tmp_path / native.WORKER_CONTAINERS).exists()

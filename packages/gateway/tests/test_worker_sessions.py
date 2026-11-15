@@ -16,6 +16,7 @@ from uuid import uuid4
 import pytest
 from pydantic import AnyHttpUrl, SecretStr
 
+from heartwood.core_adapter import FileSessionStore
 from heartwood.core_adapter.external_actions import ExternalActionAdapter
 from heartwood.core_adapter.worker_attempts import (
     WorkerAttemptError,
@@ -24,10 +25,12 @@ from heartwood.core_adapter.worker_attempts import (
     WorkerAttemptRecord,
     WorkerRevocationEvidence,
     WorkerRuntimeBinding,
+    current_worker_attempt,
 )
 from heartwood.gateway import ProjectContext, SessionGateway
 from heartwood.gateway._model_settings import ModelProfile, ModelSettings
 from heartwood.gateway._openhands_sdk import OpenHandsSdkBackend, WorkerConversationContext
+from heartwood.gateway._session_projection import project_session
 from heartwood.gateway._worker_events import AdmittedWorkerWorkspace
 from heartwood.gateway.worker_sessions import WorkerSessionPlan, WorkerSessionRequest
 from heartwood.schemas import PolicyProfile
@@ -461,13 +464,25 @@ def _end_without_revocation(gateway: SessionGateway) -> None:
     gateway._project_activity.close()
 
 
-def _successor(gateway: SessionGateway, reconciler: Reconciler | None) -> SessionGateway:
-    return SessionGateway(
+def _successor(
+    gateway: SessionGateway, reconciler: Reconciler | None, platform: Platform | None = None
+) -> SessionGateway:
+    platform = platform or Platform()
+    platform.gateway = SessionGateway(
         project=gateway.project,
-        worker_plan_factory=Platform().prepare,
+        worker_plan_factory=platform.prepare,
         worker_reconciler=reconciler,
         env={},
     )
+    return platform.gateway
+
+
+def _retained(gateway: SessionGateway) -> WorkerAttemptRecord:
+    record = current_worker_attempt(
+        FileSessionStore(gateway.sessions_root, "session-worker").replay_events()
+    )
+    assert record is not None
+    return record
 
 
 @pytest.mark.parametrize("left", ["active", "fenced"])
@@ -493,30 +508,49 @@ def test_new_gateway_reconciles_attempt_left_by_an_ended_process(
     assert "revoke" not in platform.calls
 
     reconciler = Reconciler()
-    successor = _successor(gateway, reconciler)
+    relaunch = Platform()
+    successor = _successor(gateway, reconciler, relaunch)
     try:
         assert successor.reconcile_workers() == ()
         assert [record.phase for record in reconciler.records] == ["fenced"]
         assert reconciler.records[0].intent == orphan.intent
         assert reconciler.records[0].runtime == orphan.runtime
-        restored = successor._services["session-worker"]
-        revoked = restored.worker_attempt()
-        assert revoked is not None
+        assert successor._services == {}
+        revoked = _retained(successor)
         assert revoked.phase == "revoked"
         assert revoked.revocation is not None
         assert revoked.revocation.attempt_id == orphan.intent.attempt_id
-        restored.audit_log.verify()
         assert successor.reconcile_workers() == ()
         assert len(reconciler.records) == 1
-        replacement = restored.prepare_worker_attempt(
-            image_digest=orphan.intent.image_digest,
-            sandbox_policy_sha256=orphan.intent.sandbox_policy_sha256,
-            input_manifest_sha256=orphan.intent.input_manifest_sha256,
+        assert relaunch.calls == []
+
+        restored = successor._service("session-worker")
+        restored.audit_log.verify()
+        restored_backend = restored.backend
+        assert isinstance(restored_backend, OpenHandsSdkBackend)
+        assert restored_backend._worker_context is not None
+        context = restored_backend._worker_context()
+        assert relaunch.calls == ["prepare", "launch", "connect"]
+        replacement = context.workspace.attempt
+        assert replacement.active
+        assert replacement.intent.attempt_id != orphan.intent.attempt_id
+        assert replacement.intent.conversation_id == orphan.intent.conversation_id
+        assert restored.worker_attempt() == WorkerAttemptRecord(
+            phase="active", intent=replacement.intent, runtime=replacement.runtime
         )
-        assert replacement.attempt_id != orphan.intent.attempt_id
-        assert replacement.conversation_id == orphan.intent.conversation_id
+        notices = [
+            message
+            for message in project_session(
+                restored.replay_events(), session_id="session-worker"
+            ).conversation
+            if "new worker" in message.content
+        ]
+        assert (len(notices), notices[0].role) == (1, "trace")
+        assert "does not remember" in (notices[0].detail or "")
     finally:
         successor.stop()
+    assert relaunch.calls == ["prepare", "launch", "connect", "revoke"]
+    assert _retained(successor).phase == "revoked"
 
 
 def test_unobserved_reconciliation_keeps_the_attempt_fenced_until_retry(tmp_path: Path) -> None:
@@ -532,20 +566,60 @@ def test_unobserved_reconciliation_keeps_the_attempt_fenced_until_retry(tmp_path
     successor = _successor(gateway, reconciler)
     try:
         assert successor.reconcile_workers() == ("session-worker",)
-        fenced = successor._services["session-worker"].worker_attempt()
-        assert fenced is not None
-        assert fenced.phase == "fenced"
+        assert _retained(successor).phase == "fenced"
+        blocked = Platform()
+        blocked.gateway = successor
+        successor._worker_plan_factory = blocked.prepare
+        backend = successor._service("session-worker").backend
+        assert isinstance(backend, OpenHandsSdkBackend)
+        assert backend._worker_context is not None
+        with pytest.raises(WorkerAttemptError, match="has not been revoked"):
+            backend._worker_context()
+        assert blocked.calls == ["prepare"]
         reconciler.fail = False
     finally:
         successor.stop()
+    assert _retained(successor).phase == "fenced"
     retry = _successor(gateway, reconciler)
     try:
         assert retry.reconcile_workers() == ()
-        revoked = retry._services["session-worker"].worker_attempt()
-        assert revoked is not None
-        assert revoked.phase == "revoked"
+        assert _retained(retry).phase == "revoked"
     finally:
         retry.stop()
+
+
+def test_cleanly_stopped_session_launches_a_replacement_in_the_next_gateway(
+    tmp_path: Path,
+) -> None:
+    platform = Platform()
+    gateway = configured_gateway(tmp_path, platform)
+    backend = gateway._service("session-worker").backend
+    assert isinstance(backend, OpenHandsSdkBackend)
+    assert backend._worker_context is not None
+    first = backend._worker_context().workspace.attempt
+    assert (
+        project_session(
+            gateway._service("session-worker").replay_events(), session_id="session-worker"
+        ).conversation
+        == ()
+    )
+    gateway.stop()
+    relaunch = Platform()
+    successor = _successor(gateway, None, relaunch)
+    try:
+        assert successor.session_projection(session_id="session-worker").conversation == ()
+        assert successor._services == {}
+        assert relaunch.calls == []
+        restored_backend = successor._service("session-worker").backend
+        assert isinstance(restored_backend, OpenHandsSdkBackend)
+        assert restored_backend._worker_context is not None
+        second = restored_backend._worker_context().workspace.attempt
+        assert not first.active
+        assert second.active
+        assert second.intent.attempt_id != first.intent.attempt_id
+        assert relaunch.calls == ["prepare", "launch", "connect"]
+    finally:
+        successor.stop()
 
 
 def test_reconciliation_leaves_this_gateways_own_worker_running(tmp_path: Path) -> None:

@@ -72,9 +72,13 @@ A managed gateway can receive a second operator-owned callback that revokes such
 `SessionGateway.reconcile_workers` fences every attempt that an earlier process left unrevoked, records the callback's evidence through the same session lifecycle and returns the sessions whose revocation was not observed.
 It skips sessions the current process already serves, and a session whose writer another live process still owns stays unresolved.
 `heartwood gateway serve --deployment` runs this reconciliation before serving and reports unresolved sessions; their attempts remain fenced until a later start observes revocation.
+Reconciliation releases each session again, so a later read does not start a worker.
 The platform callback remains responsible for native worker and service cleanup, including attempt-owned storage.
 An operator-owned deployment manifest can explicitly select the native Docker sandbox adapter.
 The launcher validates native tools, the local daemon socket, registered mutual TLS identity and the exact policy file outside research files and protected project state.
+Every control connection first reads the registered gateway's reported version through the SDK health call and requires one of the versions the manifest declares in `gateway_versions`.
+A different or unreadable version stops serving at start with `HW-WORKER-001`, and stops a later launch or reconciliation before any sandbox, volume or deletion request.
+The comparison checks an operator declaration against the gateway's own report; it does not establish how that gateway behaves.
 Unsupported SDK admission or transport hooks stop launch without a local fallback.
 The adapter reuses native sandbox creation, configuration admission, provider attachments and service forwarding; it does not implement another agent loop, scheduler, inference router or tunnel.
 Input, Skill and specialist identities are bound before launch; the worker is admitted only after its image, effective policy, runtime generation, projected bytes, non-root identity and authenticated API match the outside observations.
@@ -88,7 +92,9 @@ It uses an explicit local daemon and an empty client configuration, with no inhe
 A short-lived preparation container receives only those named volumes and runs only the qualified image's permission utility; its root filesystem is read-only, its network is disabled, and its sole added capability is `FOWNER` to set permissions on copied files.
 The worker receives `/inputs` and `/skills` as read-only mounts; outside inspection checks the image, network and exact volume identities and rejects overlapping mounts.
 Inspection also rejects a privileged container and any mount whose host source overlaps the research directory, protected state, native configuration home or Docker socket.
-It compares the reported source paths lexically and does not restrict other supervisor-owned mounts or added capabilities.
+It compares the reported source paths lexically and does not restrict other supervisor-owned mounts.
+Inspection rejects any added Linux capability, a security option that leaves seccomp, AppArmor or SELinux labeling unconfined, and a host process, IPC or user namespace.
+Each of these fields must be present in the runtime's report; an absent field fails admission.
 Transfer is attempted once, and uncertainty requires reconciliation instead of repeating the copy.
 Cleanup checks both ownership labels and attempt-specific container names before removing projections, and refuses to remove resources whose ownership changed.
 The storage adapter supplies only storage observations; the native launcher combines these with control-plane admission and revocation evidence.
@@ -361,6 +367,12 @@ Managed worker launch intent and observed runtime bindings use the existing pair
 The gateway issues a fresh attempt identity before dispatch, retaining the project, session, native conversation, image digest, deployment policy, sandbox policy, and input-manifest digest.
 Replacement preserves the native conversation identity and requires the previous attempt to be fenced with independently observed service-revocation evidence retained by the trusted launcher.
 Replaying a record does not grant a live capability or permit a local execution fallback.
+Once revocation of the previous attempt is recorded, the next owner of the session can launch one replacement attempt with a new identity, credentials, placeholder and response budget in a new sandbox.
+The replacement starts a new worker conversation and an empty sandbox workspace: the revoked worker's conversation state and files existed only inside its sandbox and are not restored.
+The session journal and audit record are retained, and the session projection adds a notice at the point where a replacement became active so no interface presents the new worker as a continuation.
+Replacement is refused when the journal shows work that only the revoked worker's conversation could finish: a run that did not reach an idle, finished or error state, a pause, an action still awaiting review, or an outside operation or result release that is not terminal.
+Such a session stays readable and work continues in a new session.
+A fenced attempt blocks replacement until revocation is recorded, and a service that already launched an attempt never launches a second one.
 
 Each process-local admission capability belongs to one retained binding and session writer.
 The native launcher binds one outside runtime observer before connection; subsequent admission checks reject a changed sandbox, process generation, configuration or forwarding process and permanently fence the lease.
@@ -387,7 +399,7 @@ Reconciliation at gateway start resolves the sandbox by the attempt's unique nam
 It observes the control plane and Docker daemon named by the current deployment manifest.
 An operator who points the manifest at different infrastructure must first remove the earlier worker there, because absence on the new infrastructure would otherwise be recorded as revocation.
 Reconciliation cannot signal the ended process's forwarder; that process loses its target when the sandbox is deleted.
-A reconciled session has the same retained state as one whose gateway stopped normally.
+A reconciled session has the same retained state as one whose gateway stopped normally, including eligibility for a replacement attempt.
 
 ### Remote Response Admission
 

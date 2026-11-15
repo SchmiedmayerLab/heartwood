@@ -34,6 +34,7 @@ RETAINED = (
     "*/credential-expiry.json",
     "*/provider-profile.json",
     "*/model-qualification.json",
+    "*/worker-container.json",
 )
 _NATIVE = "test_worker_native_integration::"
 _EXTERNAL = "test_worker_external_integration::"

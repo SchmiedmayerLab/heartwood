@@ -86,14 +86,18 @@ def test_gateway_launch_uses_external_binding_or_fails_closed(
     assert (state / "config.toml").exists() is not missing
 
 
-@pytest.mark.parametrize("available", [True, False])
+@pytest.mark.parametrize("outcome", ["serving", "unsupported", "undeclared-gateway"])
 def test_explicit_worker_selection_reaches_native_factory_without_local_fallback(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
-    available: bool,
+    outcome: str,
 ) -> None:
     from unittest.mock import Mock
+
+    from heartwood.gateway.worker_control import WorkerGatewayVersionError
+
+    available = outcome == "serving"
 
     from heartwood.gateway import ProjectContext, ProjectStateError
     from heartwood.gateway._deployment import ProjectDeployment
@@ -110,6 +114,7 @@ def test_explicit_worker_selection_reaches_native_factory_without_local_fallback
         {
             "driver": "openshell-docker",
             "gateway": "synthetic",
+            "gateway_versions": ["0.0.1+synthetic"],
             "native_config_home": str(tmp_path / "native"),
             "openshell_cli": str(tmp_path / "openshell"),
             "docker_cli": str(tmp_path / "docker"),
@@ -134,8 +139,12 @@ def test_explicit_worker_selection_reaches_native_factory_without_local_fallback
     )
     plan_factory = Mock(side_effect=AssertionError("No task was submitted"))
     native_factory = Mock(return_value=plan_factory)
-    if not available:
+    if outcome == "unsupported":
         native_factory.side_effect = ProjectStateError("native runtime unsupported")
+    gateway_check = Mock()
+    if outcome == "undeclared-gateway":
+        gateway_check.side_effect = WorkerGatewayVersionError("synthetic undeclared version")
+    monkeypatch.setattr("heartwood.gateway.worker_native.require_declared_gateway", gateway_check)
     monkeypatch.setattr(
         "heartwood.gateway.worker_native.native_worker_plan_factory", native_factory
     )
@@ -167,20 +176,24 @@ def test_explicit_worker_selection_reaches_native_factory_without_local_fallback
         "heartwood.cli.uvicorn.Config.bind_socket",
         lambda _config: socket.create_server(("127.0.0.1", 0)),
     )
-    result = main(
-        [
-            "gateway",
-            "serve",
-            "--deployment",
-            str(tmp_path / "deployment.toml"),
-            "--web-root",
-            str(web),
-            "--ingress-mode",
-            "direct-loopback",
-        ]
-    )
-    assert result == (0 if available else 64)
+    arguments = [
+        "gateway",
+        "serve",
+        "--deployment",
+        str(tmp_path / "deployment.toml"),
+        "--web-root",
+        str(web),
+        "--ingress-mode",
+        "direct-loopback",
+    ]
+    if outcome == "undeclared-gateway":
+        with pytest.raises(SystemExit, match=r"^HW-WORKER-001: "):
+            main(arguments)
+    else:
+        assert main(arguments) == (0 if available else 64)
     native_factory.assert_called_once_with(settings, project)
+    if outcome != "unsupported":
+        gateway_check.assert_called_once_with(settings, project)
     plan_factory.assert_not_called()
     if available:
         native_reconciler.assert_called_once_with(settings, project)
