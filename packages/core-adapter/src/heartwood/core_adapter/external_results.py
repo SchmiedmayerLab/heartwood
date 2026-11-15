@@ -23,6 +23,7 @@ from heartwood.core_adapter.external_actions import (
     ExternalActionRecord,
     canonical_request,
     external_action_records,
+    validate_withdrawal,
 )
 from heartwood.core_adapter.worker_attempts import WorkerAttemptIntent
 from heartwood.schemas import JsonValue
@@ -118,15 +119,26 @@ class ExternalResultRecord(BaseModel):
     model_config = ConfigDict(
         extra="forbid", frozen=True, revalidate_instances="always", hide_input_in_errors=True
     )
-    phase: Literal["proposed", "authorized", "denied", "submitting", "unknown", "submitted"]
+    phase: Literal[
+        "proposed",
+        "authorized",
+        "denied",
+        "expired",
+        "withdrawn",
+        "submitting",
+        "unknown",
+        "submitted",
+    ]
     proposal: ExternalResultProposal
     decision: ExternalActionDecision | None = None
+    withdrawal: ExternalActionDecision | None = None
 
     @model_validator(mode="after")
     def _decision(self) -> Self:
-        if self.phase == "proposed":
+        validate_withdrawal(self.phase, self.proposal.sha256, self.decision, self.withdrawal)
+        if self.phase == "proposed" or (self.phase == "expired" and self.decision is None):
             if self.decision is not None:
-                raise ValueError("proposed release already has a decision")
+                raise ValueError("undecided release already has a decision")
         elif (
             self.decision is None
             or self.decision.proposal_sha256 != self.proposal.sha256
@@ -151,11 +163,16 @@ def validate_result_transition(
         return
     if current.proposal != previous.proposal:
         raise ExternalActionError("result release content or destination changed")
-    if previous.phase == "proposed" and current.phase in {"authorized", "denied", "submitting"}:
+    if previous.phase == "proposed" and current.phase in {
+        "authorized",
+        "denied",
+        "expired",
+        "submitting",
+    }:
         return
     if (
         previous.phase == "authorized"
-        and current.phase == "submitting"
+        and current.phase in {"submitting", "expired", "withdrawn"}
         and current.decision == previous.decision
     ):
         return
@@ -173,9 +190,12 @@ def external_result_records(events: Sequence[SessionEvent]) -> dict[UUID, Extern
     outside = external_action_records(events)
     sources = {event.event_id: event for event in events}
     records: dict[UUID, ExternalResultRecord] = {}
-    operations: set[UUID] = set()
+    operations: dict[UUID, UUID] = {}
     decisions = {
-        record.decision.command_id for record in outside.values() if record.decision is not None
+        decision.command_id
+        for record in outside.values()
+        for decision in (record.decision, record.withdrawal)
+        if decision is not None
     }
     for event in events:
         if event.kind != EventKind.EXTERNAL_RESULT_RECORDED:
@@ -203,16 +223,24 @@ def external_result_records(events: Sequence[SessionEvent]) -> dict[UUID, Extern
                 or observed.proposal.sha256 != proposal.operation_sha256
                 or observed.proposal.worker != proposal.worker
                 or proposal.operation_id not in outside
-                or proposal.operation_id in operations
+                # Only an expired review releases its operation for a fresh one.
+                or (
+                    proposal.operation_id in operations
+                    and records[operations[proposal.operation_id]].phase != "expired"
+                )
             ):
                 raise ExternalActionError(
                     "result release has no unique matching outside observation"
                 )
-            operations.add(proposal.operation_id)
-        if current.decision is not None and (previous is None or previous.decision is None):
-            if current.decision.command_id in decisions:
-                raise ExternalActionError("result release reuses another decision")
-            decisions.add(current.decision.command_id)
+            operations[proposal.operation_id] = proposal.release_id
+        for decision, retained in (
+            (current.decision, previous and previous.decision),
+            (current.withdrawal, previous and previous.withdrawal),
+        ):
+            if decision is not None and retained is None:
+                if decision.command_id in decisions:
+                    raise ExternalActionError("result release reuses another decision")
+                decisions.add(decision.command_id)
         validate_result_transition(previous, current)
         records[proposal.release_id] = current
     return records

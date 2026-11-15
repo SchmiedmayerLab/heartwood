@@ -36,6 +36,8 @@ from heartwood.gateway import (
     ProjectionLifecycleState,
     ProjectionMessage,
     ProjectionOtherActionDetails,
+    ProjectionOutsideContent,
+    ProjectionOutsideResultActionDetails,
     ProjectionResearcherNotice,
     ProjectionSubagent,
     ProjectionSuggestion,
@@ -1227,3 +1229,45 @@ def _wait_for_model_transfer(
         status = session.model_transfer_status(transfer_id)
     assert status["status"] not in {"running", "cancelling"}, "transfer did not settle in time"
     return status
+
+
+def test_notebook_review_distinguishes_an_outside_result_release() -> None:
+    action = _approval_action(
+        "outside-result-synthetic",
+        tool_name="release_outside_result",
+        summary="Send reviewed outside result to the worker and its model",
+        arguments={"content": {"aggregate": 7}},
+    ).model_copy(
+        update={
+            "summary_source": "gateway",
+            "details": ProjectionOutsideResultActionDetails(
+                model_route={"endpoint": "https://model.invalid"},
+                content=ProjectionOutsideContent(
+                    preview='{\n  "aggregate": 7\n}',
+                    size_bytes=15,
+                    sha256="b" * 64,
+                ),
+                expires_at="2026-01-01T00:05:00+00:00",
+            ),
+        }
+    )
+    projection = SessionProjection(
+        session_id="outside-result-review",
+        event_count=4,
+        revision=3,
+        pending_approval=ProjectionApprovalGroup(
+            group_id="action-set-synthetic", actions=(action,)
+        ),
+    )
+    review = next(
+        section
+        for section in build_widget_spec(build_view_model(projection))
+        if section.title == "Action Review"
+    )
+    rendered = "\n".join(review.items)
+    assert "1. Outside Result Release" in rendered
+    assert "Leaves Heartwood for the model route" in rendered
+    assert 'Model route: {"endpoint": "https://model.invalid"}' in rendered
+    assert "Gateway-provided summary: Send reviewed outside result" in rendered
+    assert "Model-provided summary:" not in rendered
+    assert '"aggregate": 7' in rendered

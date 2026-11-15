@@ -19,8 +19,11 @@ from heartwood.gateway import (
     ProjectionSubagent,
     action_risk_label,
     action_state_label,
+    action_summary_label,
     action_tool_label,
     display_safe_text,
+    outside_review_lines,
+    outside_review_title,
 )
 from heartwood.notebook._view_model import NotebookViewModel
 
@@ -202,14 +205,15 @@ def _approval_items(view_model: NotebookViewModel) -> tuple[str, ...]:
             if details.kind == "terminal"
             else f"{details.operation} {details.path or 'path unavailable'}"
             if details.kind == "file-editor"
-            else action_tool_label(action.tool_name)
+            else outside_review_title(action) or action_tool_label(action.tool_name)
         )
         lines = [
             f"{index}. {heading}",
             f"{action_tool_label(action.tool_name)} · {action_risk_label(action.risk)}",
+            *outside_review_lines(action),
         ]
         if action.summary:
-            lines.append(f"Model-provided summary: {action.summary}")
+            lines.append(f"{action_summary_label(action)}: {action.summary}")
         if action.details.kind == "task":
             role = action.details.role_label or action.details.subagent_type
             if role:

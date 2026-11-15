@@ -1292,7 +1292,8 @@ summary:focus-visible {
 }
 
 .trace-details pre,
-.approval-details pre {
+.approval-details pre,
+.approval-outside pre {
   max-height: 12rem;
   margin: 6px 0 0;
   padding: 8px 10px;
@@ -1810,6 +1811,61 @@ summary:focus-visible {
   line-height: 1.5;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.approval-outside {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+  margin-top: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-warning-border);
+  border-left-width: 3px;
+  border-radius: 8px;
+}
+
+.approval-copy .approval-outside-effect {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--color-warning-foreground);
+  font-weight: 600;
+}
+
+.approval-outside-effect svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+}
+
+.approval-outside dl {
+  display: grid;
+  margin: 0;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 2px 12px;
+  font-size: 0.78rem;
+}
+
+.approval-outside dt {
+  color: var(--color-muted-foreground);
+}
+
+.approval-outside dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--color-foreground);
+  overflow-wrap: anywhere;
+}
+
+.approval-outside ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.approval-batch-list .approval-outside li {
+  padding: 0;
+  border: 0;
 }
 
 .approval-action-objective {

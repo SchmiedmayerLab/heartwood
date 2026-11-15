@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from enum import StrEnum
 from typing import Annotated, ClassVar, Literal, cast
@@ -15,8 +16,12 @@ from typing import Annotated, ClassVar, Literal, cast
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 from heartwood.core_adapter import backend_error_is_fatal
-from heartwood.core_adapter.external_actions import ExternalActionRecord
-from heartwood.core_adapter.external_results import ExternalResultRecord, external_result_records
+from heartwood.core_adapter.external_actions import ExternalActionProposal, ExternalActionRecord
+from heartwood.core_adapter.external_results import (
+    ExternalResultProposal,
+    ExternalResultRecord,
+    external_result_records,
+)
 from heartwood.core_adapter.workflow_provenance import workflow_experiment_events
 from heartwood.core_adapter.workflow_runtime import workflow_controls, workflow_run
 from heartwood.schemas.execution import ExecutionBudget, ExecutionUsage, NativeTaskExecution
@@ -25,6 +30,8 @@ from heartwood.schemas.project_paths import ProjectPathError, project_relative_p
 from heartwood.schemas.review import ReviewProposals
 from heartwood.schemas.workflows import WorkflowControl, WorkflowRun
 from heartwood.session import CommandKind, EventKind, JsonValue, SessionEvent
+
+_OUTSIDE_PREVIEW_CHARACTERS = 2_000
 
 
 class SessionLifecycle(StrEnum):
@@ -101,10 +108,53 @@ class ProjectionOtherActionDetails(_ProjectionRecord):
     kind: Literal["other"] = "other"
 
 
+class ProjectionOutsideContent(_ProjectionRecord):
+    """Exact JSON that leaves the session: its identity and a bounded leading preview.
+
+    The size and digest describe the canonical UTF-8 JSON bound by the review.
+    The complete content remains in the action record's exact arguments.
+    """
+
+    preview: str
+    truncated: bool = False
+    size_bytes: int = Field(ge=0, serialization_alias="sizeBytes")
+    sha256: str
+
+
+class ProjectionOutsideInput(_ProjectionRecord):
+    """One immutable input submitted with an outside operation by reference and digest."""
+
+    reference: str
+    sha256: str
+    size_bytes: int = Field(ge=0, serialization_alias="sizeBytes")
+
+
+class ProjectionOutsideOperationActionDetails(_ProjectionRecord):
+    """A gateway-issued operation that leaves the sandbox for a deployment service."""
+
+    kind: Literal["outside-operation"] = "outside-operation"
+    service_id: str = Field(serialization_alias="serviceId")
+    destination: str
+    request: ProjectionOutsideContent
+    inputs: tuple[ProjectionOutsideInput, ...] = ()
+    expires_at: str = Field(serialization_alias="expiresAt")
+
+
+class ProjectionOutsideResultActionDetails(_ProjectionRecord):
+    """A gateway-issued release of an outside result to the worker and its model route."""
+
+    kind: Literal["outside-result"] = "outside-result"
+    model_route: dict[str, JsonValue] = Field(serialization_alias="modelRoute")
+    content: ProjectionOutsideContent
+    expires_at: str = Field(serialization_alias="expiresAt")
+
+
 type ProjectionActionDetails = Annotated[
     ProjectionTerminalActionDetails
     | ProjectionFileEditorActionDetails
     | ProjectionTaskActionDetails
+    | ProjectionOutsideOperationActionDetails
+    | ProjectionOutsideResultActionDetails
     | ProjectionOtherActionDetails,
     Field(discriminator="kind"),
 ]
@@ -137,6 +187,10 @@ class ProjectionActionRecord(_ProjectionRecord):
     tool_name: str = Field(serialization_alias="toolName")
     risk: Literal["high", "low", "medium", "unknown"]
     summary: str
+    summary_source: Literal["model", "gateway"] = Field(
+        default="model",
+        serialization_alias="summarySource",
+    )
     arguments: dict[str, JsonValue] = Field(default_factory=dict)
     details: ProjectionActionDetails
     affected_paths: tuple[ProjectionAffectedPath, ...] = Field(
@@ -511,6 +565,19 @@ def project_session(
                 approval_group_decisions[outside_proposal.group_id] = None
             if outside.phase == "authorized":
                 state = "approved"
+            if outside.phase in {"expired", "withdrawn"}:
+                # Closed before dispatch: neither awaiting review nor an uncertain effect.
+                approval_group_decisions[outside_proposal.group_id] = "denied"
+                state = "failed"
+                outcome = ProjectionActionOutcome(
+                    exit_code=1,
+                    summary=(
+                        "Review expired before dispatch"
+                        if outside.phase == "expired"
+                        else "Approval withdrawn before dispatch"
+                    ),
+                    result="Nothing was sent.",
+                )
             if isinstance(outside, ExternalResultRecord) and outside.phase == "submitted":
                 state = "succeeded"
                 outcome = ProjectionActionOutcome(
@@ -538,6 +605,8 @@ def project_session(
                     )
             actions[outside_proposal.action_id] = outside_action.model_copy(
                 update={
+                    "summary_source": "gateway",
+                    "details": _outside_details(outside_proposal),
                     "group_id": outside_proposal.group_id,
                     "state": state,
                     "decision": decision,
@@ -1081,6 +1150,44 @@ def _action_details(
             resume=_string(arguments.get("resume")) or None,
         )
     return ProjectionOtherActionDetails()
+
+
+def _outside_content(canonical_json: str) -> ProjectionOutsideContent:
+    text = json.dumps(json.loads(canonical_json), indent=2, sort_keys=True, ensure_ascii=False)
+    encoded = canonical_json.encode()
+    return ProjectionOutsideContent(
+        preview=text[:_OUTSIDE_PREVIEW_CHARACTERS],
+        truncated=len(text) > _OUTSIDE_PREVIEW_CHARACTERS,
+        size_bytes=len(encoded),
+        sha256=hashlib.sha256(encoded).hexdigest(),
+    )
+
+
+def _outside_details(
+    proposal: ExternalActionProposal | ExternalResultProposal,
+) -> ProjectionOutsideOperationActionDetails | ProjectionOutsideResultActionDetails:
+    expires_at = proposal.expires_at.isoformat()
+    if isinstance(proposal, ExternalResultProposal):
+        return ProjectionOutsideResultActionDetails(
+            model_route=json.loads(proposal.model_route_json),
+            content=_outside_content(proposal.content_json),
+            expires_at=expires_at,
+        )
+    request = proposal.request
+    return ProjectionOutsideOperationActionDetails(
+        service_id=request.service_id,
+        destination=request.destination,
+        request=_outside_content(request.request_json),
+        inputs=tuple(
+            ProjectionOutsideInput(
+                reference=item.reference,
+                sha256=item.sha256,
+                size_bytes=item.size_bytes,
+            )
+            for item in request.inputs
+        ),
+        expires_at=expires_at,
+    )
 
 
 def _affected_paths(
@@ -1790,6 +1897,10 @@ __all__ = [
     "ProjectionMessage",
     "ProjectionModelContext",
     "ProjectionOtherActionDetails",
+    "ProjectionOutsideContent",
+    "ProjectionOutsideInput",
+    "ProjectionOutsideOperationActionDetails",
+    "ProjectionOutsideResultActionDetails",
     "ProjectionResearcherNotice",
     "ProjectionResearcherStatus",
     "ProjectionSubagent",

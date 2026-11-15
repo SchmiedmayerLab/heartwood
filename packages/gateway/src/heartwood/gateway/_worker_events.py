@@ -9,14 +9,13 @@
 from __future__ import annotations
 
 import ssl
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from uuid import UUID
 
 import certifi
 import httpx
 from openhands.sdk.event import Event
-from openhands.sdk.event.conversation_state import FULL_STATE_KEY, ConversationStateUpdateEvent
 from openhands.sdk.tool.client_tool import ClientToolSpec
 from openhands.sdk.workspace import RemoteWorkspace
 from pydantic import Field, PrivateAttr, model_validator
@@ -33,10 +32,11 @@ from heartwood.core_adapter.worker_attempts import WorkerAttemptLease
 from heartwood.gateway._remote_workspace import (
     _MAX_RESPONSE_BYTES,
     AdmittedRemoteWorkspace,
+    AgentContract,
     WorkerResponseBudget,
     WorkerResponseError,
+    _admit_event,
     _admit_json,
-    _admit_metadata,
     _client_tool_contract,
     _worker_origin,
 )
@@ -59,9 +59,11 @@ class WorkerEventAdmission:
         tool_modules: Mapping[str, str],
         budget: WorkerResponseBudget,
         client_tools: Sequence[ClientToolSpec] = (),
+        agent: Callable[[], AgentContract | None] = lambda: None,
     ) -> None:
         self._origin = _worker_origin(host)
         self._budget = budget
+        self._agent = agent
         self._tool_modules = dict(tool_modules)
         self._client_tools = _client_tool_contract(client_tools)
         if budget.attempt is not None and self._origin != _worker_origin(
@@ -142,25 +144,16 @@ class WorkerEventAdmission:
             if not isinstance(message, str) or len(message) > _MAX_RESPONSE_BYTES:
                 raise ValueError
             content = message.encode("utf-8")
-            self._budget.charge(len(content), new_response=True)
+            # Streamed deltas arrive far faster than requests, so events are bounded by size.
+            self._budget.charge(len(content))
             if len(content) > _MAX_RESPONSE_BYTES:
                 raise ValueError
-            value = _admit_json(content, self._tool_modules, self._client_tools)
-            if not isinstance(value, dict) or value.get("kind") == "LLMCompletionLogEvent":
+            agent = self._agent()
+            value = _admit_json(content, self._tool_modules, self._client_tools, agent)
+            if not isinstance(value, dict):
                 raise ValueError
-            event = Event.model_validate(value)
-            if isinstance(event, ConversationStateUpdateEvent):
-                metadata = event.value if event.key == FULL_STATE_KEY else {event.key: event.value}
-                if not isinstance(metadata, dict):
-                    raise ValueError
-                _admit_metadata(metadata, self._tool_modules, self._client_tools)
-                attempt = self._budget.attempt
-                if (
-                    attempt is not None
-                    and (event.key == FULL_STATE_KEY or "id" in metadata)
-                    and metadata.get("id") != str(attempt.intent.conversation_id)
-                ):
-                    raise ValueError
+            _admit_event(value, self._tool_modules, self._client_tools, agent, self._budget.attempt)
+            Event.model_validate(value)
             self._budget.charge(0)
         except Exception:
             self._budget.close()
@@ -197,6 +190,7 @@ class AdmittedWorkerWorkspace(AdmittedRemoteWorkspace):
                 tool_modules=dict(self.tool_modules),
                 budget=self._response_budget,
                 client_tools=self.authorized_client_tools,
+                agent=lambda: self._agent_contract,
             )
         return self._event_admission
 
@@ -207,5 +201,5 @@ class AdmittedWorkerWorkspace(AdmittedRemoteWorkspace):
         return self._events.connect(url, max_size=max_size)
 
     def validate_websocket_message(self, message: str | bytes) -> None:
-        """Apply the lifetime response budget and event schema before callbacks."""
+        """Apply the response budget and event schema before callbacks."""
         self._events.validate_message(message)

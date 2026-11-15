@@ -441,7 +441,12 @@ class AgentBackend(Protocol):
         """Return the atomic unmatched action group directly from backend state."""
 
     def submit_context(self, *, session_id: str, content: str) -> tuple[BackendEvent, ...]:
-        """Submit reviewed external data through the native conversation, without a user claim."""
+        """Submit reviewed external data through the native conversation.
+
+        The native message API accepts only user-role messages, so the sender label and
+        the content's provenance envelope describe its origin; neither is an authority
+        boundary for the model.
+        """
 
     def submit_turn(self, *, session_id: str, prompt: str) -> tuple[BackendEvent, ...]:
         """Submit a user task and start or steer execution."""

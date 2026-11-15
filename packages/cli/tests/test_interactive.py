@@ -46,6 +46,8 @@ from heartwood.gateway import (
     ProjectionLifecycleState,
     ProjectionMessage,
     ProjectionOtherActionDetails,
+    ProjectionOutsideContent,
+    ProjectionOutsideOperationActionDetails,
     ProjectionResearcherNotice,
     ProjectionResearcherStatus,
     ProjectionSubagent,
@@ -1631,6 +1633,80 @@ def test_terminal_review_shows_commands_and_paths_without_model_summaries() -> N
             assert f"$ {command}" in rendered
             assert f"create {path}" in rendered
             assert "Model-provided summary:" not in rendered
+
+    asyncio.run(exercise())
+
+
+def test_terminal_review_distinguishes_an_outside_operation() -> None:
+    action = _approval_action(
+        "outside-operation-synthetic",
+        tool_name="synthetic-analysis",
+        summary="Submit synthetic analysis",
+        arguments={"request": {"arguments": {"cohort": "aggregate"}}},
+    ).model_copy(
+        update={
+            "summary_source": "gateway",
+            "details": ProjectionOutsideOperationActionDetails(
+                service_id="synthetic-service",
+                destination="synthetic-results",
+                request=ProjectionOutsideContent(
+                    preview='{\n  "cohort": "aggregate"\n}',
+                    size_bytes=22,
+                    sha256="a" * 64,
+                ),
+                expires_at="2026-01-01T00:05:00+00:00",
+            ),
+        }
+    )
+    projection = SessionProjection(
+        session_id="outside-review",
+        event_count=4,
+        revision=3,
+        pending_approval=ProjectionApprovalGroup(
+            group_id="action-set-synthetic", actions=(action,)
+        ),
+    )
+    expected = (
+        "Leaves the sandbox",
+        "Destination: synthetic-results",
+        "Gateway-provided summary: Submit synthetic analysis",
+        '"cohort": "aggregate"',
+    )
+    lines = "\n".join(format_projection_lines(projection))
+    assert "Review Outside Operation:" in lines
+    assert "OpenHands action set" not in lines
+    assert "Model-provided summary:" not in lines
+    assert all(item in lines for item in expected)
+
+    class ReviewSession(InteractiveSession):
+        def __init__(self) -> None:
+            self.session_id = projection.session_id
+
+        def replay(self) -> SessionProjection:
+            return projection
+
+        def action_settings(self) -> ActionSettingsResponse:
+            return _test_action_settings()
+
+    async def exercise() -> None:
+        app = HeartwoodTerminalApp(ReviewSession())
+        async with app.run_test(size=(120, 40)) as pilot:
+            await _wait_for_tui(
+                pilot,
+                lambda: (
+                    app.query_one("#approval", Vertical).display
+                    and len(app.query_one("#approval-actions", RichLog).lines) > 0
+                ),
+                description="the outside operation review",
+            )
+            assert str(app.query_one("#approval-title", Static).render()) == (
+                "Review Outside Operation"
+            )
+            rendered = "\n".join(
+                line.text for line in app.query_one("#approval-actions", RichLog).lines
+            )
+            assert "Model-provided summary:" not in rendered
+            assert all(item in rendered for item in expected)
 
     asyncio.run(exercise())
 

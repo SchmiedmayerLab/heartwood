@@ -259,6 +259,19 @@ For containers, verify the NVIDIA Container Toolkit and `--gpus all`; for Terra,
 The CUDA 12.9 runtime requires compute capability 7.5 or newer, so P4, P100, and V100 GPUs are rejected before model startup.
 Compare the detected environment with [GPU Compatibility](gpu-compatibility.md).
 
+### Managed Inference Outcome Is Unresolved
+
+Heartwood reports `managed inference outcome is unresolved` when an earlier Heartwood-managed launch did not observe its inference process exit.
+The launcher stops the process and clears its record on normal exit, `Ctrl+C`, `SIGTERM`, and `SIGHUP`.
+A launcher that was killed outright, lost its host, or could not start or stop the process leaves `runtime/managed-inference.pending.json` in the project state directory, `.heartwood/` for a local project.
+New managed launches, project migration, and migration recovery stay blocked while that record exists, because an absent launcher does not prove that inference stopped.
+
+1. Read the record for the launcher process identifier and research directory, and confirm on the host or allocation that started it that the launcher is no longer running.
+2. Confirm with the platform supervisor, for example `squeue` and `nvidia-smi` or the process list, that no vLLM or llama.cpp process started for this project remains, and stop any that does.
+3. Remove `runtime/managed-inference.pending.json` and start Heartwood again.
+
+Do not remove the record while the process outcome is unknown; a surviving runtime can keep reading model files that a migration or a second launch is about to change.
+
 ## Terra
 
 ### `HW-TERRA-001` — Choose a Dedicated Terra Project Directory

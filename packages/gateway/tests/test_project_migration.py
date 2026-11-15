@@ -321,10 +321,10 @@ def test_retained_stage_recovers_when_external_journal_publication_was_interrupt
     write = write_private_json_atomic
     journal = target.with_name(f".{target.name}.migration.json")
 
-    def interrupt(path: Path, value: Mapping[str, object]) -> None:
+    def interrupt(path: Path, value: Mapping[str, object], **options: bool) -> None:
         if path == journal:
             raise OSError("synthetic journal interruption")
-        write(path, value)
+        write(path, value, **options)
 
     with monkeypatch.context() as patch:
         patch.setattr(migration, "write_private_json_atomic", interrupt)
@@ -383,6 +383,31 @@ def test_retry_preserves_partial_restore_and_copies_to_a_fresh_directory(
     assert source.state_exists()
     assert partial.read_bytes() == b"partial"
     assert migration._snapshot(source.state_root) == migration._snapshot(backup)
+
+
+@pytest.mark.parametrize("kind", ["file", "symlink", "dangling", "linked-content"])
+def test_rollback_preserves_an_unusable_restore_path_and_copies_to_a_fresh_directory(
+    tmp_path: Path, kind: str
+) -> None:
+    source, manifest, _target, backup = _fixture(tmp_path)
+    migration.migrate_project_state(deployment=manifest, workspace=source.root, backup=backup)
+    occupied = source.root / ".heartwood-restore"
+    if kind == "file":
+        occupied.write_text("research content")
+    elif kind == "symlink":
+        occupied.symlink_to(backup, target_is_directory=True)
+    elif kind == "dangling":
+        occupied.symlink_to(source.root / "absent")
+    else:
+        occupied.mkdir()
+        (occupied / "link").symlink_to(source.root / "analysis.py")
+    migration.recover_project_migration(deployment=manifest, workspace=source.root, rollback=True)
+    assert source.state_exists()
+    assert not source.state_root.is_symlink()
+    assert migration._snapshot(source.state_root) == migration._snapshot(backup)
+    assert occupied.is_symlink() == (kind in {"symlink", "dangling"})
+    if kind == "file":
+        assert occupied.read_text() == "research content"
 
 
 @pytest.mark.parametrize("damage", ["changed", "removed"])
@@ -600,3 +625,23 @@ def test_cross_filesystem_retirement_is_rejected_before_copying(
         migration.migrate_project_state(deployment=manifest, workspace=source.root, backup=backup)
     assert source.state_exists()
     assert not target.exists()
+
+
+def test_migration_and_recovery_preserve_directory_modes_heartwood_does_not_own(
+    tmp_path: Path,
+) -> None:
+    source, manifest, target, backup = _fixture(tmp_path)
+    source.root.chmod(0o775)
+    target.parent.chmod(0o755)
+
+    def modes() -> tuple[int, int]:
+        return source.root.stat().st_mode & 0o7777, target.parent.stat().st_mode & 0o7777
+
+    migration.migrate_project_state(deployment=manifest, workspace=source.root, backup=backup)
+    assert modes() == (0o775, 0o755)
+    assert target.stat().st_mode & 0o777 == 0o700
+    migration.recover_project_migration(deployment=manifest, workspace=source.root)
+    assert modes() == (0o775, 0o755)
+    migration.recover_project_migration(deployment=manifest, workspace=source.root, rollback=True)
+    assert modes() == (0o775, 0o755)
+    assert source.state_root.stat().st_mode & 0o777 == 0o700

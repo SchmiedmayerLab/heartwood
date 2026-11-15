@@ -66,6 +66,7 @@ One project-scoped native lock serializes source refresh, download, activation, 
 Heartwood revalidates the signed source, installed tree, and matching activation event in the verified audit chain before exposing an active catalog Skill to OpenHands.
 Runtime selection rereads the installation index after refreshing signed sources, so a newly observed revocation excludes the package from that same selection.
 It also reevaluates tool, network, and platform compatibility for the current deployment, so project state moved between environments cannot activate an incompatible Skill.
+The projection likewise reports controlled-data approval for an installed Skill from the current deployment registry, not from the retained installation record.
 
 ## Worker Projection
 

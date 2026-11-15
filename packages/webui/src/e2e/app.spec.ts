@@ -14,6 +14,7 @@ import {
   event,
   genericCapabilities,
   syntheticEvents,
+  syntheticOutsideOperation,
   syntheticProjection,
 } from "../test/fixtures";
 import type {
@@ -394,6 +395,31 @@ test("supports keyboard review, reduced motion, and high-zoom reflow", async ({
   await expectNoAccessibilityViolations(page);
 });
 
+test("shows an outside operation review without expansion at high zoom", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 320, height: 800 });
+  await page.goto("/?configured-model=1&outside-review=1");
+  await page.keyboard.press("Escape");
+
+  const approval = page.getByRole("region", {
+    name: "Review outside operation",
+  });
+  await expect(
+    approval.getByRole("heading", { name: "Review outside operation" }),
+  ).toBeFocused();
+  await expect(approval.getByText("Leaves the sandbox")).toBeVisible();
+  await expect(
+    approval.getByText("synthetic-results", { exact: true }),
+  ).toBeVisible();
+  await expect(approval.getByLabel("Request sent to the service")).toHaveText(
+    /"cohort": "aggregate"/u,
+  );
+  await expect(approval.getByText(/Model-provided summary/u)).toHaveCount(0);
+  await expect(page.locator("body")).toHaveJSProperty("scrollWidth", 320);
+  await expectNoAccessibilityViolations(page);
+});
+
 test("confirms a new project before creating private state", async ({
   page,
 }) => {
@@ -428,6 +454,16 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
   let projectInitialized: boolean | null = null;
   let sessionEvents = syntheticEvents();
   let sessionProjection = syntheticProjection();
+  const outsideOperation = syntheticOutsideOperation();
+  const outsideProjection = syntheticProjection({
+    actions: [outsideOperation],
+    pendingApproval: {
+      groupId: "action-set-session-test",
+      actions: [outsideOperation],
+      decision: null,
+      decisionScope: "all",
+    },
+  });
   let sessions: SessionSummary[] = [
     summary("session-test", "Synthetic cohort analysis", 7),
   ];
@@ -692,9 +728,10 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
       await json(route, {
         events: sessionId === "session-test" ? sessionEvents : [],
         projection:
-          sessionId === "session-test" ? sessionProjection : (
-            emptyProjection(sessionId)
-          ),
+          sessionId !== "session-test" ? emptyProjection(sessionId)
+          : new URL(page.url()).searchParams.has("outside-review") ?
+            outsideProjection
+          : sessionProjection,
       });
       return;
     }

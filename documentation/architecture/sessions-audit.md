@@ -60,6 +60,7 @@ The launcher must use the retained identity with the native sandbox lifecycle an
 Missing generation, failed admission, interruption, or an uncertain create response leaves the attempt fenced for outside reconciliation; Heartwood does not retry creation or infer that no worker exists.
 `revoke_worker` closes local admission before invoking the platform's revocation observer and records only returned evidence matching the retained attempt and runtime.
 A failed or uncertain revocation does not permit replacement.
+An attempt retained by an ended process can be fenced and revoked by a later owner of the session writer through the same `revoke_worker` contract.
 Launch, revocation, and service shutdown are serialized independently of command and event handling, so shutdown cannot release writer ownership while a launch may still return.
 Platform callbacks must bound their control-plane operations and must not wait for session shutdown or recursively start another worker lifecycle operation.
 These coordination methods do not install a platform launcher, terminate workers themselves, or infer infrastructure enforcement from a worker acknowledgement.
@@ -100,8 +101,13 @@ Outside decisions distinguish authorization from attempted dispatch.
 An authorized record proves that the native call has not started; a submitting record means its outcome may be uncertain.
 A configured required-evidence gate must observe the authorization checkpoint before recording submission and calling the adapter.
 An interrupted authorization can resume only with the original decision, a live matching worker and renewed input, policy and expiry checks.
+While a command is handled, only an exact retry of the original approval resumes it; any other command is refused without dispatching.
+Denying the same review withdraws the undispatched authorization, and one that outlives its validity interval is recorded as expired.
+Both closures are terminal journal and audit records that complete the original approval command, so the session can continue.
 Read-only reconciliation skips undispatched authorizations; it never converts observation into submission authority.
 Otherwise, the session rejects further mutation so a second approval or task cannot repeat an uncertain side effect.
+An action is recorded as approved only when the session holds a recorded decision for its action set.
+If a backend reports execution of an action without one, the session records an error instead of an approval and fences the worker attempt.
 After replaying and verifying the available evidence, continue in a new session.
 
 Each session event and its corresponding audit record are committed through a private recovery journal.
@@ -146,6 +152,8 @@ An approval identifier without the complete action-content binding is invalid; p
 Each OpenHands proposal becomes one `heartwood.action-record.v1` projection correlated by stable action and tool-call identifiers.
 The same record accumulates its group, decision, execution state, bounded result, and typed affected-path evidence across replay.
 Terminal, file-editor, Task, and other actions use typed variants, while the exact OpenHands arguments remain available for review.
+Gateway-issued outside operations and result releases use their own typed variants, which carry the destination or model route and the size, digest, and bounded preview of the content being sent.
+Each record states whether its summary was written by the model or issued by the gateway.
 Unknown outcomes fail closed and are never converted into a successful result by an interface.
 
 ## Audit Integrity

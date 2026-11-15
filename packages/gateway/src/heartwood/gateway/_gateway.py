@@ -49,6 +49,7 @@ from heartwood.core_adapter import (
 )
 from heartwood.core_adapter.checkpoint_evidence import SessionCheckpointEvidence
 from heartwood.core_adapter.external_actions import ExternalActionAdapter
+from heartwood.core_adapter.worker_attempts import current_worker_attempt
 from heartwood.gateway._action_presentation import action_presentation
 from heartwood.gateway._action_settings import (
     ACTION_MODE_OPTIONS,
@@ -172,6 +173,7 @@ from heartwood.gateway._workspace import WorkspaceInspector
 from heartwood.gateway.worker_sessions import (
     ManagedWorkerSession,
     WorkerPlanFactory,
+    WorkerReconciler,
     WorkerSessionRequest,
 )
 from heartwood.model_policy import ModelPolicyEngine
@@ -462,6 +464,7 @@ class SessionGateway:
         parallel_review_preparer: ParallelReviewPreparer | None = None,
         deployment_policy: PolicyProfile | None = None,
         worker_plan_factory: WorkerPlanFactory | None = None,
+        worker_reconciler: WorkerReconciler | None = None,
         backend_id: str = "auto",
     ) -> None:
         prepare_openhands_import()
@@ -487,8 +490,11 @@ class SessionGateway:
             or service_factory is not None
         ):
             raise ValueError("Outside services require protected state and owned native workers")
+        if worker_reconciler is not None and worker_plan_factory is None:
+            raise ValueError("Worker reconciliation requires managed workers")
         self._external_actions_factory = external_actions_factory
         self._worker_plan_factory = worker_plan_factory
+        self._worker_reconciler = worker_reconciler
         self._worker_sessions: dict[int, ManagedWorkerSession] = {}
         self._project_activity = ProjectActivity(self.project)
         self._operations = GatewayOperations(on_enter=self._project_activity.acquire_existing)
@@ -666,6 +672,34 @@ class SessionGateway:
         if errors:
             raise ExceptionGroup("unable to stop all gateway workers", errors)
         self._project_activity.close()
+
+    @gateway_operation
+    def reconcile_workers(self) -> tuple[str, ...]:
+        """Revoke worker attempts that an ended gateway process left unrevoked.
+
+        Returns the sessions whose attempt remains fenced because revocation was not observed.
+        """
+        return self._reconcile_workers()
+
+    @_serialized_state
+    def _reconcile_workers(self) -> tuple[str, ...]:
+        if self._worker_reconciler is None:
+            return ()
+        unresolved: list[str] = []
+        for summary in self.session_catalog.list():
+            session_id = summary.session_id
+            # A session this process already serves revokes its own attempt when it closes.
+            if session_id in self._services:
+                continue
+            try:
+                retained = current_worker_attempt(
+                    FileSessionStore(self.sessions_root, session_id).replay_events()
+                )
+                if retained is not None and retained.phase != "revoked":
+                    self._service(session_id).revoke_worker(self._worker_reconciler)
+            except Exception:
+                unresolved.append(session_id)
+        return tuple(unresolved)
 
     @gateway_operation
     def handle(self, command: SessionCommand) -> SessionResult:

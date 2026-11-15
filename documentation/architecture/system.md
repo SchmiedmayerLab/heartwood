@@ -49,7 +49,7 @@ Creation is attempted once; an uncertain response fences the worker lease and re
 Native streaming-delta events feed transient interface text, while durable translation continues through admitted native state.
 During remote execution, admitted event callbacks coalesce progress reads; token deltas do not request conversation snapshots.
 A five-second fallback refresh and final reconciliation preserve progress and settled state without repeatedly fetching an unchanged branch.
-These reads remain subject to the worker attempt's unchanged lifetime response budget.
+These reads remain subject to the worker attempt's response budget.
 Gateway-local parallel-review executors are not installed on remote agent copies; sequential advisory specialists remain available, and remote parallel review requires separate qualification.
 This embedding contract does not provision a sandbox or enable remote execution in the default gateway launch path.
 
@@ -67,12 +67,19 @@ Preparation, launch and connection are attempted once per service; uncertainty r
 
 Before replacing or closing a managed session, the gateway fences its lease and records the platform callback's revocation evidence through the existing session lifecycle.
 Failed revocation retains the service and writer ownership for recovery; closing an HTTP client is not revocation evidence.
+A gateway process that ends without revoking leaves its attempt retained in the session journal.
+A managed gateway can receive a second operator-owned callback that revokes such an attempt without the ended process's launch state.
+`SessionGateway.reconcile_workers` fences every attempt that an earlier process left unrevoked, records the callback's evidence through the same session lifecycle and returns the sessions whose revocation was not observed.
+It skips sessions the current process already serves, and a session whose writer another live process still owns stays unresolved.
+`heartwood gateway serve --deployment` runs this reconciliation before serving and reports unresolved sessions; their attempts remain fenced until a later start observes revocation.
 The platform callback remains responsible for native worker and service cleanup, including attempt-owned storage.
 An operator-owned deployment manifest can explicitly select the native Docker sandbox adapter.
 The launcher validates native tools, the local daemon socket, registered mutual TLS identity and the exact policy file outside research files and protected project state.
 Unsupported SDK admission or transport hooks stop launch without a local fallback.
 The adapter reuses native sandbox creation, configuration admission, provider attachments and service forwarding; it does not implement another agent loop, scheduler, inference router or tunnel.
 Input, Skill and specialist identities are bound before launch; the worker is admitted only after its image, effective policy, runtime generation, projected bytes, non-root identity and authenticated API match the outside observations.
+When launch or the first runtime observation fails, the launcher deletes the sandbox that carries the attempt's identity and stops its forwarder without waiting for the session to close.
+The attempt still remains fenced until revocation observes worker absence and removes its projections.
 Native provider credentials remain in the sandbox control plane; the gateway receives an opaque placeholder from the worker environment.
 Model and tenant restrictions must be enforced by the qualified provider endpoint or existing institutional inference service; the selected model name and a provider attachment alone do not enforce them against a compromised worker.
 
@@ -80,6 +87,8 @@ The Docker reference adapter can transfer verified private input and Skill snaps
 It uses an explicit local daemon and an empty client configuration, with no inherited Docker context, credential helpers or proxy settings.
 A short-lived preparation container receives only those named volumes and runs only the qualified image's permission utility; its root filesystem is read-only, its network is disabled, and its sole added capability is `FOWNER` to set permissions on copied files.
 The worker receives `/inputs` and `/skills` as read-only mounts; outside inspection checks the image, network and exact volume identities and rejects overlapping mounts.
+Inspection also rejects a privileged container and any mount whose host source overlaps the research directory, protected state, native configuration home or Docker socket.
+It compares the reported source paths lexically and does not restrict other supervisor-owned mounts or added capabilities.
 Transfer is attempted once, and uncertainty requires reconciliation instead of repeating the copy.
 Cleanup checks both ownership labels and attempt-specific container names before removing projections, and refuses to remove resources whose ownership changed.
 The storage adapter supplies only storage observations; the native launcher combines these with control-plane admission and revocation evidence.
@@ -255,8 +264,9 @@ If model work remains active after the shutdown deadline, the gateway reports fa
 This does not stop a separately supervised inference runtime or establish project-wide migration exclusion.
 The native inference launcher holds project ownership while reading the selected model, staging files, supervising inference, and cleaning up.
 It writes a durable launch intent before spawning its inference child and removes that intent only after observing the child's exit.
-Interrupted launch or failed termination leaves the intent in place and prevents another native launch or migration staging, even if the launcher's process lease has disappeared.
-An unresolved intent requires operator reconciliation against the platform supervisor; a stale PID or absent launcher is not proof that inference has stopped.
+The launcher unwinds through the same cleanup on `SIGTERM` and `SIGHUP`, so a closed terminal or an ordinary termination request stops the child and retires the intent.
+An abruptly killed launcher, a failed spawn, or failed termination leaves the intent in place and prevents another native launch or migration staging, even if the launcher's process lease has disappeared.
+An unresolved intent requires operator reconciliation against the platform supervisor, described in [Troubleshooting](../reference/troubleshooting.md#managed-inference-outcome-is-unresolved); a stale PID or absent launcher is not proof that inference has stopped.
 These controls cover the supervised child, not arbitrary descendants or independently launched inference services; complete runtime termination still requires platform qualification.
 An explicit license decision is required before import, and the request is bound to the SHA-256 identity of the exact manifest shown during review.
 Bundle integrity is not treated as source authorization or platform qualification: exact catalog identities are rehydrated from trusted local catalog metadata, while every other transferred model is marked unvalidated.
@@ -365,11 +375,19 @@ Attempt records and ordinary session/audit correlation contain no worker credent
 These internal launcher contracts do not launch sandboxes, verify an observer's evidence, or revoke service access themselves.
 Native worker selection is explicit and requires qualified runtime dependencies; ordinary launch does not silently switch execution modes.
 After an uncertain creation response, revocation may resolve the uniquely named sandbox only when its full project and attempt ownership match this process's retained intent.
+Revocation deletes the sandbox through the control client connected at launch before it stops the forwarder, rechecks the native configuration or removes projections.
+A failure in those later steps therefore leaves the attempt fenced for retry but does not leave the worker running.
 Cleanup verifies native worker absence and removes only owned staging resources before releasing the session writer.
 If provisioning is still unresolved, deletion can require retry while the attempt remains fenced and the writer remains owned.
 A control-plane absence response alone is insufficient when the container runtime still retains attempt resources; never release ownership or repeat creation to bypass that discrepancy.
 The native deletion API is name-scoped rather than an atomic expected-generation deletion; unique attempt names and outside identity checks do not replace control-plane authorization.
-A prior process's attempt or changed native connection identity requires explicit outside reconciliation rather than automatic deletion against potentially different infrastructure.
+A changed native connection identity blocks projection cleanup and revocation evidence in the owning process until the identity is restored or a later gateway start reconciles the attempt.
+A prior process's attempt is never revoked by another session's launch state.
+Reconciliation at gateway start resolves the sandbox by the attempt's unique name, deletes it only when its project and attempt labels and any retained sandbox identity match, verifies that the container runtime retains no attempt-owned worker, and removes owned projections before recording evidence.
+It observes the control plane and Docker daemon named by the current deployment manifest.
+An operator who points the manifest at different infrastructure must first remove the earlier worker there, because absence on the new infrastructure would otherwise be recorded as revocation.
+Reconciliation cannot signal the ended process's forwarder; that process loses its target when the sandbox is deleted.
+A reconciled session has the same retained state as one whose gateway stopped normally.
 
 ### Remote Response Admission
 
@@ -391,7 +409,8 @@ Admission captures those specifications independently of mutable caller objects 
 Client reset and model revalidation do not replace that captured contract.
 The SDK owns client-tool registration and execution semantics: its acknowledgement means a proposal was dispatched to the client, not that an external effect was authorized or completed.
 Outside authorization and independently observed service results remain separate requirements; worker claims cannot grant either.
-Remote agent metadata cannot select another agent implementation or enable the SDK’s client-side completion-log file writer.
+Remote agent metadata is admitted only when it equals the agent the gateway sent, apart from redacted or omitted secret values.
+A worker therefore cannot select another agent implementation, model route, tokenizer or completion-log setting for the gateway to construct.
 Errors expose a stable admission failure rather than worker response content.
 Resetting the workspace client retains the same admission policy.
 
@@ -400,7 +419,10 @@ It rejects an installed SDK without those hooks, including the pinned applicatio
 The event connection permits only the configured origin's canonical conversation endpoint, without credentials in the URL, query parameters, fragments, redirects, ambient proxies, or compression.
 TLS uses the bundled certificate authorities with certificate and hostname verification; ambient certificate variables cannot replace that trust.
 The library bounds each message to 4 MiB and its receive queue to four frames.
-Connection attempts and received events share the workspace's 1,024-response and 32 MiB lifetime budget with HTTP traffic.
+HTTP responses, connection attempts and received events share one response budget for the worker attempt.
+It admits bursts of 1,024 responses and 32 MiB and refills at four responses and 1 MiB per second, which covers status polling and progress reads for a run of any length.
+Received events are charged by size only.
+A worker that exceeds the budget, keeps a response open beyond 120 seconds, or stalls a read for that long is fenced.
 Individual and full-state updates receive the same metadata checks as HTTP responses.
 Raw text passes the JSON admission rules and native event schema before callback delivery; binary messages, completion-log events, and rejected data cannot authorize local file writing or appear in admission errors.
 

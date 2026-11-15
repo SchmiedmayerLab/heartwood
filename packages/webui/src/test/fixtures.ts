@@ -112,6 +112,7 @@ export const syntheticAction = (
   toolName: "terminal",
   risk: "low",
   summary: "build the aggregate synthetic target-condition cohort",
+  summarySource: "model",
   arguments: {
     command: "python run.py --output /project/cohort-summary.json",
   },
@@ -130,6 +131,43 @@ export const syntheticAction = (
   updatedSequence: 5,
   ...overrides,
 });
+
+export const syntheticOutsideOperation =
+  (): SessionProjection["actions"][number] =>
+    syntheticAction({
+      toolCallId: "outside-operation-synthetic",
+      actionId: "outside-operation-synthetic",
+      toolName: "synthetic-analysis",
+      risk: "unknown",
+      summary: "Submit synthetic analysis",
+      summarySource: "gateway",
+      arguments: {
+        request: {
+          service_id: "synthetic-service",
+          destination: "synthetic-results",
+          arguments: { cohort: "aggregate" },
+        },
+      },
+      details: {
+        kind: "outside-operation",
+        serviceId: "synthetic-service",
+        destination: "synthetic-results",
+        expiresAt: "2026-01-01T00:05:00+00:00",
+        inputs: [
+          {
+            reference: "synthetic-input",
+            sha256: "f".repeat(64),
+            sizeBytes: 42,
+          },
+        ],
+        request: {
+          preview: '{\n  "cohort": "aggregate"\n}',
+          truncated: false,
+          sizeBytes: 22,
+          sha256: "a".repeat(64),
+        },
+      },
+    });
 
 export const emptyProjection = (
   sessionId = "session-test",

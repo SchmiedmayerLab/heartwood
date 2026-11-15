@@ -3018,3 +3018,38 @@ def _command(
         created_at="2026-01-01T00:00:00Z",
         payload=payload,
     )
+
+
+def test_execution_without_a_recorded_decision_is_not_recorded_as_approved(
+    tmp_path: Path,
+) -> None:
+    action = ProposedToolCall(
+        tool_call_id="call-1",
+        action_id="action-1",
+        tool_name="terminal",
+        kind="terminal",
+        risk="medium",
+        summary="Synthetic command",
+        arguments={"command": "true"},
+    )
+    group = pending_action_group((action,))
+    assert group is not None
+    unreviewed = BackendConfirmationResolutionEvent(
+        tool_call=action,
+        action_group_id=group.group_id,
+        approved=True,
+        source_event_id="recording:call-1:confirmation-resolution",
+    )
+    backend = _RecordingBackend(
+        endpoint="https://model.local.invalid/v1/chat/completions", reconciled=(unreviewed,)
+    )
+    service = SessionService.local_default(tmp_path, backend=backend)
+    try:
+        service.reconcile()
+        service.reconcile()
+        events = service.replay_events()
+        assert not any(event.kind == EventKind.CONFIRMATION_RESOLVED for event in events)
+        errors = [event for event in events if event.kind == EventKind.ERROR_RECORDED]
+        assert [error.payload["group_id"] for error in errors] == [group.group_id]
+    finally:
+        service.close()
