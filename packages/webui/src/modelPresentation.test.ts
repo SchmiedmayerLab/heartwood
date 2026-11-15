@@ -54,6 +54,8 @@ const settings: ModelSettings = {
       description: "",
       static_models: [],
       subscription_vendor: null,
+      data_handling: null,
+      data_handling_summary: "Data handling is not declared for this route.",
       group: "heartwood-managed",
       group_label: "Run with Heartwood",
       accepts_token: false,
@@ -79,6 +81,8 @@ const settings: ModelSettings = {
       description: "",
       static_models: [],
       subscription_vendor: null,
+      data_handling: null,
+      data_handling_summary: "Data handling is not declared for this route.",
       group: "research-environment",
       group_label: "Institution-managed providers",
       accepts_token: false,
@@ -108,6 +112,8 @@ const settings: ModelSettings = {
   },
   credential_bindings: [],
   credential_isolation: credentialIsolation(),
+  data_handling: null,
+  data_handling_summary: "Data handling is not declared for this route.",
 };
 
 describe("modelProfileLabel", () => {

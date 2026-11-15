@@ -629,6 +629,13 @@ const SettingsContent = (props: UtilitySheetProps) => {
                 <span>Model credentials</span>
                 <small>{settings.credential_isolation.summary}</small>
               </div>
+              <div className="validation-status">
+                <Badge variant="outline">
+                  {settings.data_handling ? "Declared" : "Not declared"}
+                </Badge>
+                <span>Data handling</span>
+                <small>{settings.data_handling_summary}</small>
+              </div>
               {validation ?
                 <div className="validation-status">
                   <Badge
@@ -2120,6 +2127,7 @@ const ModelConnectionForm = ({
     <div>
       <strong>{connection.label}</strong>
       <span>{connection.description}</span>
+      <span>{connection.data_handling_summary}</span>
     </div>
     {connection.connection_id === "custom-api" ?
       <label>

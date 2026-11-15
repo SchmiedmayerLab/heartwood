@@ -91,10 +91,11 @@ Outside operations and result releases always wait for the researcher, in every 
 | `allowed_action_review_modes` | all three modes | Review-mode ceiling; must list `review-all` exactly once |
 | `credential_allowlist` | `[]` | Credential binding names the policy permits |
 | `aggregate_count_floor` | `20` | Minimum aggregate count; at least `20` |
+| `allowed_data_destinations` | none | Optional list of permitted [declared data destinations](../models/index.md#data-and-compliance-boundary); a route without a declaration is then refused at selection and before each model call |
 | `notes` | none | Free text |
 
 The built-in platform policies for local launches permit `review-all` and `review-changes`.
-Under a deployment manifest the project policy can only narrow the manifest's: endpoints, tiers, review modes, and credential names must be subsets, and the aggregate floor cannot be lower.
+Under a deployment manifest the project policy can only narrow the manifest's: endpoints, tiers, review modes, credential names, and data destinations must be subsets, a deployment's data-destination list cannot be removed, and the aggregate floor cannot be lower.
 The effective review ceiling is the intersection of the two lists; a project list equal to the manifest's is not stored, so a later manifest change applies.
 
 ## Deployment Manifest
@@ -117,6 +118,7 @@ allowed_model_catalog_endpoints = ["https://models.example.invalid/v1/models"]
 allowed_capability_tiers = ["supervised"]
 allowed_action_review_modes = ["review-all"]
 credential_allowlist = ["HEARTWOOD_CUSTOM_MODEL_API_KEY"]
+allowed_data_destinations = ["same-compute", "institution-managed"]
 aggregate_count_floor = 20
 ```
 

@@ -78,6 +78,10 @@ export type ToolCallParser =
 export type CredentialKind =
   "environment" | "file" | "managed-identity" | "none";
 export type CredentialStatus = "available" | "configured" | "missing";
+export type DataDestination =
+  "same-compute" | "institution-managed" | "provider" | "operator-defined";
+export type RetentionAuthority =
+  "deployment" | "institution" | "provider" | "service-operator";
 export type CredentialIsolationBoundary =
   "none" | "credential-free" | "application-scrubbed" | "platform-isolated";
 export type CredentialIsolationStatus =
@@ -395,6 +399,8 @@ export interface ModelConnectionResponse {
   connection_id: string;
   credential_kind: CredentialKind;
   credential_status: CredentialStatus;
+  data_handling: ModelDataHandlingResponse | null;
+  data_handling_summary: string;
   description: string;
   group:
     | "compatible-service"
@@ -411,6 +417,14 @@ export interface ModelConnectionResponse {
   static_models: string[];
   subscription_vendor: string | null;
   supports_login: boolean;
+}
+/**
+ * Declared content destination and retention authority of one model route.
+ */
+export interface ModelDataHandlingResponse {
+  destination: DataDestination;
+  retention_authority: RetentionAuthority;
+  route: string;
 }
 /**
  * One normalized provider model.
@@ -440,6 +454,8 @@ export interface ModelSettingsResponse {
   credential_bindings: CredentialBindingStatusResponse[];
   credential_isolation: CredentialIsolationResponse;
   credential_store: CredentialStoreAvailabilityResponse;
+  data_handling: ModelDataHandlingResponse | null;
+  data_handling_summary: string;
   model_source: string | null;
   presets: ModelPresetResponse[];
   profiles: ModelProfileResponse[];
@@ -518,6 +534,8 @@ export interface ModelValidationResponse {
   action_review_mode: ActionReviewMode;
   credential_isolation: CredentialIsolationResponse;
   credential_status: CredentialStatus;
+  data_handling: ModelDataHandlingResponse | null;
+  data_handling_summary: string;
   policy_decision: PolicyDecisionResponse;
   profile: ModelProfileResponse;
 }

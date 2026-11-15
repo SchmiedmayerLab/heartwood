@@ -13,8 +13,36 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 _NonEmptyString = Annotated[str, Field(min_length=1)]
+type DataDestination = Literal[
+    "same-compute", "institution-managed", "provider", "operator-defined"
+]
+type RetentionAuthority = Literal["deployment", "institution", "provider", "service-operator"]
 # Rust's $ is an absolute end anchor. JSON Schema engines may also match it before
 # a trailing newline; the emitted patterns use an absolute-end lookahead instead.
+
+
+class ModelDataHandling(BaseModel):
+    """Declared recipient and retention authority for project content sent through one route.
+
+    The descriptor is a declaration by the connection's owner, not verified provider
+    behavior or data eligibility. It describes the complete inference route; an outside
+    transport proxy that substitutes credentials does not change the declared recipient.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True, hide_input_in_errors=True)
+
+    destination: DataDestination = Field(
+        description="Where model requests, including prompts, files and tool results, are sent."
+    )
+    retention_authority: RetentionAuthority = Field(
+        description="Who governs retention of content received through this route."
+    )
+    route: str = Field(
+        min_length=1,
+        max_length=240,
+        pattern=r"\S",
+        description="Complete declared route, including any gateway and the ultimate recipient.",
+    )
 
 
 class ModelConnectionManifest(BaseModel):
@@ -75,6 +103,13 @@ class ModelConnectionManifest(BaseModel):
     subscription_vendor: _NonEmptyString | None = Field(
         default=None,
         description="Subscription provider; validated by the gateway for this protocol.",
+    )
+    data_handling: ModelDataHandling | None = Field(
+        default=None,
+        description=(
+            "Declared data handling; a route without one cannot be selected under a "
+            "policy that restricts data destinations."
+        ),
     )
 
 

@@ -710,7 +710,8 @@ def _config_mapping(config: ProjectConfig) -> dict[str, object]:
             ],
         },
         "connections": [
-            _without_none(asdict(connection)) for connection in config.additional_connections
+            _without_none(connection.manifest_dict())
+            for connection in config.additional_connections
         ],
         "policy": config.policy.model_dump(mode="python", exclude_none=True),
     }

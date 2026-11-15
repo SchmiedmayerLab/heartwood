@@ -21,6 +21,7 @@ from pydantic import (
     with_config,
 )
 
+from heartwood.schemas._connections import DataDestination, RetentionAuthority
 from heartwood.schemas._records import ActionReviewMode, CapabilityTier
 from heartwood.schemas.experiments import ExperimentCollection, ExperimentExport
 from heartwood.schemas.python_environment import PythonEnvironmentSnapshot
@@ -50,6 +51,7 @@ __all__ = [
     "ModelCatalogResponse",
     "ModelConnectRequest",
     "ModelConnectionResponse",
+    "ModelDataHandlingResponse",
     "ModelDownloadRequest",
     "ModelDownloadResponse",
     "ModelPresetResponse",
@@ -561,6 +563,14 @@ class ModelProfileResponse(_ApiResponse):
     credential_status: NotRequired[CredentialStatus]
 
 
+class ModelDataHandlingResponse(_ApiResponse):
+    """Declared content destination and retention authority of one model route."""
+
+    destination: DataDestination
+    retention_authority: RetentionAuthority
+    route: str
+
+
 class ModelConnectionResponse(_ApiResponse):
     """API-safe model connection metadata."""
 
@@ -581,6 +591,8 @@ class ModelConnectionResponse(_ApiResponse):
     description: str
     static_models: list[str]
     subscription_vendor: str | None
+    data_handling: ModelDataHandlingResponse | None
+    data_handling_summary: str
     group: Literal[
         "compatible-service",
         "heartwood-managed",
@@ -696,6 +708,8 @@ class ModelSettingsResponse(_ApiResponse):
     credential_store: CredentialStoreAvailabilityResponse
     credential_bindings: list[CredentialBindingStatusResponse]
     credential_isolation: CredentialIsolationResponse
+    data_handling: ModelDataHandlingResponse | None
+    data_handling_summary: str
 
 
 class PolicyDecisionResponse(_ApiResponse):
@@ -716,6 +730,8 @@ class ModelValidationResponse(_ApiResponse):
     profile: ModelProfileResponse
     credential_status: CredentialStatus
     credential_isolation: CredentialIsolationResponse
+    data_handling: ModelDataHandlingResponse | None
+    data_handling_summary: str
     action_review_mode: ActionReviewMode
     policy_decision: PolicyDecisionResponse
 

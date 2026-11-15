@@ -101,6 +101,7 @@ class ManagedWorkerSession:
             endpoint=profile.policy_endpoint,
             capability_tier=profile.capability_tier,
             credential_reference=profile.credential_reference,
+            data_handling=self._service.model_data_handling,
             decision_id="worker-launch",
             purpose="worker launch",
         )

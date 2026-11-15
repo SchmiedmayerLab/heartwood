@@ -18,7 +18,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 
-from heartwood.schemas._connections import ModelConnectionsManifest
+from heartwood.schemas._connections import DataDestination, ModelConnectionsManifest
 
 _SAFE_IDENTIFIER_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
 
@@ -77,6 +77,14 @@ class PolicyProfile(_HeartwoodRecord):
         min_length=1,
     )
     credential_allowlist: tuple[str, ...] = ()
+    allowed_data_destinations: tuple[DataDestination, ...] | None = Field(
+        default=None,
+        min_length=1,
+        description=(
+            "Declared data destinations a model route may have; when set, a route "
+            "without a data-handling descriptor is denied."
+        ),
+    )
     aggregate_count_floor: int = Field(default=20, ge=20)
     notes: str | None = None
 
@@ -88,6 +96,16 @@ class PolicyProfile(_HeartwoodRecord):
         """Keep the mode every fail-closed path falls back to."""
         if "review-all" not in value or len(set(value)) != len(value):
             raise ValueError("allowed_action_review_modes must list review-all once")
+        return value
+
+    @field_validator("allowed_data_destinations")
+    @classmethod
+    def _unique_destinations(
+        cls, value: tuple[DataDestination, ...] | None
+    ) -> tuple[DataDestination, ...] | None:
+        """Keep each permitted destination unambiguous."""
+        if value is not None and len(set(value)) != len(value):
+            raise ValueError("allowed_data_destinations must not repeat a destination")
         return value
 
 

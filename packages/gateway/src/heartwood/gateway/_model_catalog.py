@@ -35,7 +35,7 @@ from heartwood.gateway._subscriptions import (
     OpenHandsOpenAISubscription,
 )
 from heartwood.model_policy import PolicyInputError, normalize_endpoint
-from heartwood.schemas import ModelConnectionManifest, ModelConnectionsManifest
+from heartwood.schemas import ModelConnectionManifest, ModelConnectionsManifest, ModelDataHandling
 
 type ConnectionProtocol = Literal[
     "anthropic", "openai", "openai-compatible", "static", "subscription"
@@ -99,6 +99,7 @@ class ModelConnection:
     description: str = ""
     static_models: tuple[str, ...] = ()
     subscription_vendor: str | None = None
+    data_handling: ModelDataHandling | None = None
 
     def validate(self, *, configurable: bool = False) -> None:
         """Validate connection identity, routes, and credential references."""
@@ -298,10 +299,20 @@ class ModelConnection:
             raise ModelCatalogError("model connection credential file is empty")
         return value
 
+    def manifest_dict(self) -> dict[str, object]:
+        """Return the non-secret manifest representation of this connection."""
+        return {
+            **asdict(self),
+            "data_handling": (
+                None if self.data_handling is None else self.data_handling.model_dump(mode="json")
+            ),
+        }
+
     def safe_dict(self, env: Mapping[str, str]) -> dict[str, object]:
         """Return API-safe connection metadata."""
         return {
-            **asdict(self),
+            **self.manifest_dict(),
+            "data_handling_summary": data_handling_summary(self.data_handling),
             "group": self.group,
             "group_label": _CONNECTION_GROUP_LABELS[self.group],
             "accepts_token": self.credential_kind == "environment",
@@ -319,6 +330,40 @@ def matching_model_connection(
     return next(
         (connection for connection in connections if connection.matches_profile(profile)),
         None,
+    )
+
+
+def route_data_handling(
+    profile: ModelProfile,
+    connections: Iterable[ModelConnection],
+) -> ModelDataHandling | None:
+    """Return the declared handling of the connection that owns a profile's route."""
+    connection = matching_model_connection(profile, connections)
+    return None if connection is None else connection.data_handling
+
+
+_DESTINATION_TEXT = {
+    "same-compute": "Content stays on the compute running this project",
+    "institution-managed": "Content goes to an institution-managed service",
+    "provider": "Content goes to the model provider",
+    "operator-defined": "Content goes to a service defined by its operator",
+}
+_RETENTION_TEXT = {
+    "deployment": "the deployment",
+    "institution": "the institution's agreements",
+    "provider": "the provider's terms",
+    "service-operator": "the service operator",
+}
+
+
+def data_handling_summary(data_handling: ModelDataHandling | None) -> str:
+    """Return the shared researcher-facing statement of a route's declared handling."""
+    if data_handling is None:
+        return "Data handling is not declared for this route."
+    return (
+        f"{_DESTINATION_TEXT[data_handling.destination]} ({data_handling.route}); "
+        f"retention is governed by {_RETENTION_TEXT[data_handling.retention_authority]}. "
+        "This is a declaration, not verified provider behavior."
     )
 
 
@@ -545,6 +590,11 @@ BUILT_IN_MODEL_CONNECTIONS: tuple[ModelConnection, ...] = (
         catalog_endpoint="http://127.0.0.1:8765/v1/models",
         policy_endpoint="http://127.0.0.1:8765/v1/chat/completions",
         description="Models served by the runtime Heartwood manages for this project.",
+        data_handling=ModelDataHandling(
+            destination="same-compute",
+            retention_authority="deployment",
+            route="Heartwood-managed inference server in this compute environment",
+        ),
     ),
     ModelConnection(
         connection_id=OPENAI_SUBSCRIPTION_CONNECTION_ID,
@@ -557,6 +607,11 @@ BUILT_IN_MODEL_CONNECTIONS: tuple[ModelConnection, ...] = (
         catalog_endpoint=None,
         description="Codex models available through a ChatGPT Plus or Pro subscription.",
         subscription_vendor="openai",
+        data_handling=ModelDataHandling(
+            destination="provider",
+            retention_authority="provider",
+            route="OpenAI through the signed-in ChatGPT subscription",
+        ),
     ),
     ModelConnection(
         connection_id="openai",
@@ -569,6 +624,9 @@ BUILT_IN_MODEL_CONNECTIONS: tuple[ModelConnection, ...] = (
         catalog_endpoint="https://api.openai.com/v1/models",
         policy_endpoint="https://api.openai.com/v1/chat/completions",
         description="Models available to the supplied OpenAI credential.",
+        data_handling=ModelDataHandling(
+            destination="provider", retention_authority="provider", route="OpenAI API"
+        ),
     ),
     ModelConnection(
         connection_id="anthropic",
@@ -581,6 +639,9 @@ BUILT_IN_MODEL_CONNECTIONS: tuple[ModelConnection, ...] = (
         catalog_endpoint="https://api.anthropic.com/v1/models",
         policy_endpoint="https://api.anthropic.com/v1/messages",
         description="Models available to the supplied Anthropic credential.",
+        data_handling=ModelDataHandling(
+            destination="provider", retention_authority="provider", route="Anthropic API"
+        ),
     ),
     ModelConnection(
         connection_id="custom-api",
@@ -686,6 +747,7 @@ def _connection_from_manifest(value: ModelConnectionManifest) -> ModelConnection
         description=value.description,
         static_models=tuple(value.static_models),
         subscription_vendor=value.subscription_vendor,
+        data_handling=value.data_handling,
     )
     connection.validate()
     return connection

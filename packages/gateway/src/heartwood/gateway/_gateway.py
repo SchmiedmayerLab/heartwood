@@ -89,8 +89,10 @@ from heartwood.gateway._model_catalog import (
     ModelConnection,
     active_model_connections,
     custom_model_connection,
+    data_handling_summary,
     load_model_connections,
     matching_model_connection,
+    route_data_handling,
 )
 from heartwood.gateway._model_settings import (
     MODEL_PRESETS,
@@ -159,6 +161,7 @@ from heartwood.schemas import (
     LocalModelImportResponse,
     ModelArtifactsResponse,
     ModelCatalogResponse,
+    ModelDataHandling,
     ModelDownloadResponse,
     ModelRepositoryPlanResponse,
     ModelSettingsResponse,
@@ -290,6 +293,7 @@ class _ServiceConfiguration:
     policy_profile: PolicyProfile
     local_model: LocalModelSelection | None
     managed_inference: bool
+    data_handling: ModelDataHandling | None
 
 
 class _UnconfiguredAgentBackend:
@@ -1378,6 +1382,7 @@ class SessionGateway:
             settings,
             model_source=config.model_source,
         )
+        data_handling = self._route_data_handling(settings)
         return api_response(
             ModelSettingsResponse,
             {
@@ -1401,6 +1406,7 @@ class SessionGateway:
                     for binding in credential_bindings
                 ],
                 "credential_isolation": credential_isolation.safe_dict(),
+                **_data_handling_fields(data_handling),
             },
         )
 
@@ -1824,6 +1830,7 @@ class SessionGateway:
     ) -> ModelValidationResponse:
         """Validate credential availability and platform route authorization."""
         profile = self.settings_store.load().profile(profile_id)
+        data_handling = route_data_handling(profile, self._model_connections.values())
         policy_profile = self._policy_profile()
         purpose = (
             "selected Heartwood-managed model"
@@ -1834,6 +1841,7 @@ class SessionGateway:
             endpoint=profile.policy_endpoint,
             capability_tier=profile.capability_tier,
             credential_reference=profile.credential_reference,
+            data_handling=data_handling,
             decision_id=f"model-profile-{profile.profile_id}",
             purpose=purpose,
         )
@@ -1852,6 +1860,7 @@ class SessionGateway:
                     model_source=self._model_source_for_profile(profile),
                     model_connections=self._model_connections.values(),
                 ).safe_dict(),
+                **_data_handling_fields(data_handling),
                 "action_review_mode": self.action_settings()["review_mode"],
                 "policy_decision": decision.model_dump(mode="json"),
             },
@@ -2134,6 +2143,7 @@ class SessionGateway:
             policy_profile=config.policy,
             local_model=config.local_model,
             managed_inference=config.model_source == "heartwood",
+            data_handling=self._route_data_handling(model_settings),
         )
 
     def _default_service(
@@ -2172,6 +2182,7 @@ class SessionGateway:
             session_id=session_id,
             backend=backend,
             policy_profile=configuration.policy_profile,
+            model_data_handling=configuration.data_handling,
             env=self.env,
             worker_project_id=self.project.project_id,
             checkpoint_evidence=checkpoint_evidence,
@@ -2645,8 +2656,12 @@ class SessionGateway:
         if connection.catalog_endpoint is None:
             raise ModelCatalogError("model connection does not define a catalog endpoint")
         policy = self._policy_profile()
+        # Discovery sends no project content, so data-destination restrictions do not apply.
         catalog_policy = policy.model_copy(
-            update={"allowed_model_endpoints": policy.allowed_model_catalog_endpoints}
+            update={
+                "allowed_model_endpoints": policy.allowed_model_catalog_endpoints,
+                "allowed_data_destinations": None,
+            }
         )
         decision = ModelPolicyEngine(catalog_policy).evaluate(
             endpoint=connection.catalog_endpoint,
@@ -2763,11 +2778,34 @@ class SessionGateway:
 
     @_serialized_state
     def _save_model_selection(self, source: str | None, settings: ModelSettings) -> None:
+        self._require_permitted_data_destination(settings)
         if isinstance(self.settings_store, ProjectModelSettingsStore):
             self.settings_store.save_selection(source, settings)
             return
         self.settings_store.save(settings)
         self.config_store.select_model_source(source, settings)
+
+    def _route_data_handling(self, settings: ModelSettings) -> ModelDataHandling | None:
+        try:
+            profile = settings.profile()
+        except ModelSettingsError:
+            return None
+        return route_data_handling(profile, self._model_connections.values())
+
+    def _require_permitted_data_destination(self, settings: ModelSettings) -> None:
+        """Refuse to select a route the policy's data-destination restriction excludes."""
+        allowed = self._policy_profile().allowed_data_destinations
+        if allowed is None or settings.active_profile is None:
+            return
+        data_handling = self._route_data_handling(settings)
+        if data_handling is None:
+            raise ModelSettingsError(
+                "this deployment requires declared data handling; the selected route has none"
+            )
+        if data_handling.destination not in allowed:
+            raise ModelSettingsError(
+                f"this deployment does not permit the {data_handling.destination} data destination"
+            )
 
     def _credentials_isolated(self, settings: ModelSettings, *, model_source: str | None) -> bool:
         """Return whether a model route keeps its credential from the agent tool runtime."""
@@ -2824,6 +2862,13 @@ class SessionGateway:
         if connection is not None:
             return self._model_source_for_connection(connection)
         return "custom"
+
+
+def _data_handling_fields(data_handling: ModelDataHandling | None) -> dict[str, object]:
+    return {
+        "data_handling": None if data_handling is None else data_handling.model_dump(mode="json"),
+        "data_handling_summary": data_handling_summary(data_handling),
+    }
 
 
 def _runtime_resource_root() -> Path:

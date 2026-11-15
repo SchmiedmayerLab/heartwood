@@ -51,6 +51,8 @@ For a compatible inference service, provide the API base URL, the authenticated 
 The model list returns only the caller's authorized models.
 The minimum profile is Chat Completions with streaming and native tool calls; declare Responses support separately.
 State context and output limits, tool support, rate limits, quota behavior, permitted data classes, retention terms and region restrictions where known; missing declarations stay unknown.
+Declare each connection's [data handling](platform-contract.md#route-data-handling): the destination class of the complete route, including any gateway and its ultimate providers, and the authority that governs retention.
+A deployment that must keep content within a boundary lists the permitted destinations in its policy's `allowed_data_destinations`; a profile without external egress lists only `same-compute`.
 
 For isolated workers, the outside inference transport holds the real credential and gives the worker only a placeholder.
 The reference adapter uses the OpenShell inference transport; an institutional gateway can remain the provider endpoint behind it.
@@ -185,7 +187,7 @@ A successful synthetic sandbox run is not sensitive-data approval.
 | Environment | Deployment, cloud, region, synthetic project identifier and technical contact |
 | Identity | Principal type, audience and scopes, project permissions, token lifetime, secret reference and revocation mechanism |
 | APIs | Base URLs, specification versions, selected operations, request limits, pagination, retry and error semantics |
-| Inference | Model identifiers and protocols, permitted model set, data eligibility, quota and retention terms |
+| Inference | Model identifiers and protocols, permitted model set, data eligibility, declared data handling per connection, permitted data destinations, quota and retention terms |
 | Storage | Research and state locations, project identity binding, locking, backup and restore, input and output controls |
 | Network | Proxy origin and base path, gateway access restrictions, approved egress and its enforcement |
 | Compute | Worker architecture, isolation mechanism, sandbox gateway version, image policy and resource limits |

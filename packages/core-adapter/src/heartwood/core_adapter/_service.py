@@ -107,7 +107,13 @@ from heartwood.core_adapter.workflow_runtime import (
     workflow_run,
 )
 from heartwood.model_policy import ModelPolicyEngine
-from heartwood.schemas import ActionReviewMode, ConfirmationRequest, JsonValue, PolicyProfile
+from heartwood.schemas import (
+    ActionReviewMode,
+    ConfirmationRequest,
+    JsonValue,
+    ModelDataHandling,
+    PolicyProfile,
+)
 from heartwood.schemas.experiments import ExperimentExportBinding
 from heartwood.schemas.parallel_reviews import ReviewDispatchAction, ReviewExecutionPlan
 from heartwood.schemas.workflows import WorkflowRun
@@ -228,6 +234,7 @@ class SessionService:
         platform_adapter: PlatformAdapter,
         backend: AgentBackend,
         policy_profile: PolicyProfile | None = None,
+        model_data_handling: ModelDataHandling | None = None,
         env: Mapping[str, str] | None = None,
         clock: Callable[[], str] | None = None,
         event_sink: Callable[[tuple[SessionEvent, ...]], None] | None = None,
@@ -245,6 +252,8 @@ class SessionService:
         self.backend = backend
         self.policy_profile = policy_profile or platform_adapter.default_policy_profile()
         self.policy = ModelPolicyEngine(self.policy_profile)
+        # The declared handling of the route this service's backend was built with.
+        self.model_data_handling = model_data_handling
         self.env = os.environ if env is None else env
         self.clock: Callable[[], str] = _utc_now if clock is None else clock
         # Lock order, outermost first: the gateway state lock, the worker control lock,
@@ -317,6 +326,7 @@ class SessionService:
         session_id: str = "session-main",
         backend: AgentBackend | None = None,
         policy_profile: PolicyProfile | None = None,
+        model_data_handling: ModelDataHandling | None = None,
         env: Mapping[str, str] | None = None,
         clock: Callable[[], str] | None = None,
         event_sink: Callable[[tuple[SessionEvent, ...]], None] | None = None,
@@ -343,6 +353,7 @@ class SessionService:
                 else backend
             ),
             policy_profile=policy_profile,
+            model_data_handling=model_data_handling,
             env=active_env,
             clock=clock,
             event_sink=event_sink,
@@ -1322,6 +1333,7 @@ class SessionService:
             endpoint=self.backend.model_endpoint,
             capability_tier=self.backend.capability_tier,
             credential_reference=self.backend.credential_reference,
+            data_handling=self.model_data_handling,
             decision_id=f"{command.command_id}-model-route",
             purpose=purpose,
         )
@@ -1342,6 +1354,13 @@ class SessionService:
                     "capability_tier": self.backend.capability_tier,
                     "action_review_mode": self._review_mode_locked(
                         sandboxed=self._sandboxed_locked()
+                    ),
+                    "data_handling": (
+                        None
+                        if self.model_data_handling is None
+                        else cast(
+                            dict[str, JsonValue], self.model_data_handling.model_dump(mode="json")
+                        )
                     ),
                 },
             },

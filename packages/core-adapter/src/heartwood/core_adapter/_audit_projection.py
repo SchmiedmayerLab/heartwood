@@ -111,13 +111,16 @@ def project_audit_payload(kind: EventKind, payload: dict[str, JsonValue]) -> dic
                 else {}
             ),
             "model_profile": (
-                _selected_audit_fields(
-                    model_profile,
-                    "backend_id",
-                    "profile_id",
-                    "capability_tier",
-                    "action_review_mode",
-                )
+                {
+                    **_selected_audit_fields(
+                        model_profile,
+                        "backend_id",
+                        "profile_id",
+                        "capability_tier",
+                        "action_review_mode",
+                    ),
+                    **_data_handling_audit_fields(model_profile),
+                }
                 if isinstance(model_profile, dict)
                 else {}
             ),
@@ -276,3 +279,17 @@ def _selected_audit_fields(
     *names: str,
 ) -> dict[str, JsonValue]:
     return {name: payload[name] for name in names if name in payload}
+
+
+def _data_handling_audit_fields(model_profile: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
+    """Keep the declared route handling, which contains no credential or content."""
+    if "data_handling" not in model_profile:
+        return {}
+    data_handling = model_profile["data_handling"]
+    return {
+        "data_handling": (
+            _selected_audit_fields(data_handling, "destination", "retention_authority", "route")
+            if isinstance(data_handling, dict)
+            else None
+        )
+    }

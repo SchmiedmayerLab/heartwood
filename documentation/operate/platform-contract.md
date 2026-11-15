@@ -148,7 +148,7 @@ Optional:
 
 - Publish approved Skill sources through the deployment-owned registry at `/etc/heartwood/skill-sources.toml`; only that registry can approve a Skill for controlled data.
 
-Project settings can narrow the ceiling but cannot widen endpoints, credentials, capability tiers or review modes, lower the aggregate-count floor, disable default-deny egress or change the platform identifier.
+Project settings can narrow the ceiling but cannot widen endpoints, credentials, capability tiers, review modes or permitted data destinations, remove a deployment's data-destination list, lower the aggregate-count floor, disable default-deny egress or change the platform identifier.
 Without a manifest, the platform adapter's built-in policy applies and state stays in the research directory.
 
 ### Inference
@@ -159,6 +159,7 @@ Required:
 - A model list endpoint that returns only the models the authenticated identity may use.
 - Platform-held credentials, through a managed identity, a process-only variable or a mounted file outside the project.
 - A statement of which data classes each route may receive; compatibility does not establish eligibility.
+- A declaration of each connection's [data handling](#route-data-handling): where the complete route sends model requests and who governs retention of the content it receives.
 - Distinguishable failures for rejected credentials, exhausted quota, rate limits, invalid model configuration and temporary unavailability.
 
 Required for isolated workers:
@@ -185,6 +186,27 @@ The draft model-metadata supplement declares, per model identity:
 | Tool calling | Whether native tool calls are supported | Required |
 | Data classes | Classes the route may receive under the platform's agreements | Required |
 | Deprecation | Whether the model is being withdrawn, so no model is silently substituted | Recommended |
+
+#### Route Data Handling
+
+A connection's `data_handling` descriptor declares the `destination` of model requests, its `retention_authority` and a `route` description, such as an institution's gateway followed by the providers it routes to.
+
+| Destination | Meaning |
+|---|---|
+| `same-compute` | The inference service runs in the compute environment that runs the Heartwood project |
+| `institution-managed` | An institution-operated service, such as an inference gateway, receives the requests |
+| `provider` | The model provider's service receives the requests directly |
+| `operator-defined` | A service whose handling its operator defines outside these classes |
+
+Retention authority is `deployment`, `institution`, `provider` or `service-operator`.
+Built-in connections supply descriptors; a platform supplies one for each connection through the `data_handling` field of the `heartwood.model-connections.v1` manifest, and a connection without one is undeclared.
+The descriptor is a declaration by the connection's owner; Heartwood does not verify provider behavior, retention or data eligibility from it, and does not infer it from endpoint URLs.
+Describe the complete route: an outside credential-substituting transport such as an OpenShell proxy does not change the declared recipient.
+
+Setup responses expose the descriptor and a shared summary for every connection and for the active route.
+Each `model_call.decision.recorded` event, which precedes the model work it authorizes, records the descriptor of the route the session uses, and the scrubbed audit export retains it without credentials.
+A policy's `allowed_data_destinations` restricts routes to the listed destinations: selection and each model call fail closed when a route's descriptor is missing or names another destination.
+A project policy can narrow the list but cannot remove or widen a deployment's list.
 
 ### Agent Isolation
 
@@ -456,7 +478,7 @@ Both sides must preserve these properties:
 
 ## Versioning
 
-The contract bundle follows [Semantic Versioning 2.0.0](https://semver.org/) independently of the application; this release's bundle is `0.1.0`, recorded as `contract_version` in `contract.json`.
+The contract bundle follows [Semantic Versioning 2.0.0](https://semver.org/) independently of the application; this release's bundle is `0.2.0`, recorded as `contract_version` in `contract.json`.
 
 - Compatibility covers message structure, validation rules and documented behavior.
 - Before `1.0.0`, a minor version may break compatibility and a patch preserves it; from `1.0.0`, incompatible changes increment the major version.
@@ -485,8 +507,8 @@ The classes are not an ordered permission hierarchy, an allowance for one class 
 | `contract.json` | Bundle version, compatibility rules, artifact digests, pinned design sources | Index |
 | `gateway.openapi.json` | Gateway routes, bodies, streams and the capability security scheme | Current |
 | `capabilities.schema.json` | The platform capability manifest served at `GET /project/capabilities` | Current |
-| `policy-profile.schema.json` | `heartwood.policy-profile.v1`, the policy in the deployment manifest | Current |
-| `model-connections.schema.json` | `heartwood.model-connections.v1`; startup does not load it | Current |
+| `policy-profile.schema.json` | `heartwood.policy-profile.v1`, the policy in the deployment manifest, including permitted data destinations | Current |
+| `model-connections.schema.json` | `heartwood.model-connections.v1`, including data-handling descriptors; startup does not load it | Current |
 | `model-metadata.schema.json` | Model protocol, capability and eligibility declarations | Draft |
 | `data-classification.schema.json` | The data-class vocabulary | Draft |
 | `mcp-service.schema.json`, `mcp-tool-annotations.schema.json` | Deployment service references and required tool annotations | Draft |

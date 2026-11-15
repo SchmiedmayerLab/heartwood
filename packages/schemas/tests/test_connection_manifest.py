@@ -46,6 +46,11 @@ def test_manifest_round_trip_preserves_supported_fields() -> None:
         "aws_profile_name": "research",
         "description": "Authorized research models.",
         "subscription_vendor": None,
+        "data_handling": {
+            "destination": "institution-managed",
+            "retention_authority": "institution",
+            "route": "Institution gateway and its contracted providers",
+        },
     }
     parsed = ModelConnectionsManifest.model_validate(manifest(item))
     assert parsed.model_dump() == manifest(item)
@@ -74,6 +79,29 @@ def test_manifest_round_trip_preserves_supported_fields() -> None:
         {"static_models": [1]},
         {"subscription_vendor": ["openai"]},
         {"unknown": "synthetic-secret-value"},
+        {"data_handling": {"destination": "provider", "retention_authority": "provider"}},
+        {
+            "data_handling": {
+                "destination": "public",
+                "retention_authority": "provider",
+                "route": "Provider",
+            }
+        },
+        {
+            "data_handling": {
+                "destination": "provider",
+                "retention_authority": "provider",
+                "route": "  ",
+            }
+        },
+        {
+            "data_handling": {
+                "destination": "provider",
+                "retention_authority": "provider",
+                "route": "Provider",
+                "api_key": "synthetic-secret-value",
+            }
+        },
     ],
 )
 def test_manifest_rejects_invalid_fields_without_coercion(update: dict[str, object]) -> None:
