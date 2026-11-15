@@ -7,13 +7,16 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Event
 from uuid import UUID, uuid4
 
 import pytest
 from pydantic import ValidationError
 
 import heartwood.core_adapter._state as state_module
+import heartwood.core_adapter.worker_attempts as worker_attempts
 from heartwood.core_adapter import (
     BackendAgentMessageEvent,
     BackendConfirmationRequestEvent,
@@ -373,7 +376,10 @@ def test_restored_backend_cannot_emit_unbound_tokens(
         restored.close()
 
 
-def test_outside_runtime_observation_fences_changed_generation(service: SessionService) -> None:
+def test_outside_runtime_observation_fences_changed_generation(
+    service: SessionService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(worker_attempts, "_RUNTIME_OBSERVATION_SECONDS", 0.0)
     lease = _activate(service)
     generation = lease.runtime.generation
     observations: list[WorkerRuntimeBinding] = []
@@ -418,6 +424,54 @@ def test_fencing_during_outside_observation_prevents_callback(service: SessionSe
     with pytest.raises(WorkerAttemptError, match="closed"):
         lease.require_runtime_observation(lambda _runtime: lease.fence())
     assert not lease.active
+
+
+def test_passing_runtime_observation_is_reused_while_fencing_stays_immediate(
+    service: SessionService,
+) -> None:
+    lease = _activate(service)
+    observations: list[WorkerRuntimeBinding] = []
+    lease.require_runtime_observation(observations.append)
+    lease.ensure_active()
+    with lease.admit_callback():
+        pass
+    assert observations == [lease.runtime]
+    lease.fence()
+    with pytest.raises(WorkerAttemptError, match="closed"):
+        lease.ensure_active()
+    with pytest.raises(WorkerAttemptError, match="closed"), lease.admit_callback():
+        pytest.fail("Fenced attempt reached the callback")
+    assert observations == [lease.runtime]
+
+
+def test_fencing_does_not_wait_for_a_runtime_observation(
+    service: SessionService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(worker_attempts, "_RUNTIME_OBSERVATION_SECONDS", 0.0)
+    lease = _activate(service)
+    observing, release = Event(), Event()
+    stall = False
+
+    def observe(_runtime: WorkerRuntimeBinding) -> None:
+        if stall:
+            observing.set()
+            assert release.wait(10)
+
+    def callback() -> None:
+        with lease.admit_callback():
+            pytest.fail("Fenced attempt reached the callback")
+
+    lease.require_runtime_observation(observe)
+    stall = True
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        admitted = executor.submit(callback)
+        assert observing.wait(10)
+        try:
+            executor.submit(lease.fence).result(timeout=5)
+        finally:
+            release.set()
+        with pytest.raises(WorkerAttemptError, match="closed"):
+            admitted.result(timeout=10)
 
 
 def _task(service: SessionService) -> None:

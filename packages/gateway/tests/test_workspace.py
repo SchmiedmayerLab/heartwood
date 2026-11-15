@@ -93,6 +93,8 @@ class _BoundedDirectoryScan:
 
 @dataclass
 class _ReconcilingWorkspaceService:
+    backend_opened = False
+
     events: list[SessionEvent] = field(default_factory=list)
     started: bool = False
     reconciled: bool = False

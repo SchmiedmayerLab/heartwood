@@ -386,6 +386,7 @@ A fenced attempt blocks replacement until revocation is recorded, and a service 
 
 Each process-local admission capability belongs to one retained binding and session writer.
 The native launcher binds one outside runtime observer before connection; subsequent admission checks reject a changed sandbox, process generation, configuration or forwarding process and permanently fence the lease.
+A passing observation is reused for one second, so a changed runtime is rejected at the first admission check after that interval, while fencing and writer ownership are checked at every admission.
 The native forwarder does not itself pin process generation, so its continued liveness is insufficient evidence.
 The full worker workspace requires that capability and restricts requests and event connections to its observed origin and native conversation.
 Creation supplies the retained conversation identity; gateway-initiated forks require a separately authorized lifecycle and are rejected by this binding.
@@ -455,6 +456,8 @@ Each snapshot read is charged its full size, so a 16 MiB branch can be read twic
 The refill bounds the rate of received data, not the events the SDK retains for a long session.
 A worker that exceeds the budget or the request deadline, or returns a history that does not end, is fenced.
 The event connection has no deadline of its own: an idle connection is the normal state while a session waits for its researcher, no gateway lock is held while it is read, its handshake is limited to ten seconds, and the library's keepalive closes a connection whose peer stops answering.
+After a session's first backend read, which can launch its worker, reconciliation reads the worker without holding the session command lock or the gateway state lock, so a slow response delays neither the fencing and revocation of its own attempt nor other sessions and settings.
+A command's own request to the worker still runs under both locks within the request deadline; fencing closes the attempt's admission at once and records the transition when that command returns.
 Individual and full-state updates receive the same metadata checks as HTTP responses.
 Raw text passes the JSON admission rules and native event schema before callback delivery; binary messages, completion-log events, and rejected data cannot authorize local file writing or appear in admission errors.
 

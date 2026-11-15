@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from threading import RLock
@@ -21,6 +22,9 @@ from heartwood.schemas.experiments import Digest, Reference
 from heartwood.session import EventKind, SessionEvent, validate_session_id
 
 ImageDigest = Annotated[str, Field(pattern=r"^sha256:[0-9a-f]{64}$")]
+
+# A passing outside runtime observation admits work for this long before the next one.
+_RUNTIME_OBSERVATION_SECONDS = 1.0
 
 
 class WorkerAttemptError(ValueError):
@@ -187,6 +191,7 @@ class WorkerAttemptLease:
         self._fenced = False
         self._on_fenced: Callable[[], None] | None = None
         self._runtime_observer: Callable[[WorkerRuntimeBinding], None] | None = None
+        self._runtime_observed: float | None = None
         self._lock = RLock()
 
     @property
@@ -206,28 +211,40 @@ class WorkerAttemptLease:
             return not self._fenced and self._owns_writer()
 
     def ensure_active(self) -> None:
-        """Reject stale work before dispatch and again before admitting its result."""
-        if not self.active:
-            raise WorkerAttemptError("worker attempt admission is closed")
-        if self._runtime_observer is not None:
-            try:
-                self._runtime_observer(self._runtime)
-            except Exception:
-                self.fence()
-                raise WorkerAttemptError(
-                    "native runtime observation closed worker admission"
-                ) from None
+        """Reject stale work before dispatch and again before admitting its result.
+
+        Local fencing and writer ownership are checked on every call. The outside
+        runtime observer is a control-plane request, so it runs without the lease lock,
+        which fencing needs, and its passing result is reused for a short interval.
+        """
+        with self._lock:
             if not self.active:
                 raise WorkerAttemptError("worker attempt admission is closed")
+            observer, observed = self._runtime_observer, self._runtime_observed
+        started = time.monotonic()
+        if observer is None or (
+            observed is not None and started - observed < _RUNTIME_OBSERVATION_SECONDS
+        ):
+            return
+        try:
+            observer(self._runtime)
+        except Exception:
+            self.fence()
+            raise WorkerAttemptError("native runtime observation closed worker admission") from None
+        with self._lock:
+            if not self.active:
+                raise WorkerAttemptError("worker attempt admission is closed")
+            self._runtime_observed = started
 
     def require_runtime_observation(self, observer: Callable[[WorkerRuntimeBinding], None]) -> None:
         """Bind one outside runtime observer before admitting the worker connection."""
         with self._lock:
             if self._runtime_observer is not None:
                 raise WorkerAttemptError("worker runtime observer cannot be replaced")
-            self.ensure_active()
+            if not self.active:
+                raise WorkerAttemptError("worker attempt admission is closed")
             self._runtime_observer = observer
-            self.ensure_active()
+        self.ensure_active()
 
     def fence(self) -> None:
         """Permanently close this capability without claiming infrastructure revocation."""
@@ -240,8 +257,10 @@ class WorkerAttemptLease:
     def on_fenced(self, notify: Callable[[], None]) -> None:
         """Tell the trusted launcher once that this capability closed.
 
-        Fencing runs under session locks and on transport threads, so the callback must
-        return without waiting for the control plane or for session state.
+        Fencing can run with or without session locks held, including before a fence is
+        journaled, and on transport threads, but never under this lease's lock. The
+        callback runs once, on the first fence, and must return without waiting for the
+        control plane or for session state.
         """
         with self._lock:
             if self._on_fenced is not None:
@@ -254,6 +273,8 @@ class WorkerAttemptLease:
     @contextmanager
     def admit_callback(self) -> Iterator[None]:
         """Serialize a bounded callback with fencing; never hold across worker I/O."""
+        self.ensure_active()
         with self._lock:
-            self.ensure_active()
+            if not self.active:
+                raise WorkerAttemptError("worker attempt admission is closed")
             yield

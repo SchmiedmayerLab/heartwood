@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
 from uuid import uuid4
 
 import httpx
@@ -16,6 +18,7 @@ from openhands.sdk.event.conversation_state import FULL_STATE_KEY, ConversationS
 from pydantic import ValidationError
 from websockets.asyncio.server import ServerConnection, serve
 
+from heartwood.core_adapter import worker_attempts
 from heartwood.core_adapter.worker_attempts import WorkerAttemptLease
 from heartwood.gateway._remote_workspace import (
     AdmittedRemoteWorkspace,
@@ -151,6 +154,46 @@ def test_budget_exhaustion_also_fences_callbacks(attempt: WorkerAttemptLease) ->
     with pytest.raises(WorkerResponseError, match="exhausted"):
         budget.charge(0, new_response=True)
     assert not attempt.active
+
+
+def test_budget_and_lease_are_free_while_the_runtime_is_observed(
+    attempt: WorkerAttemptLease, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(worker_attempts, "_RUNTIME_OBSERVATION_SECONDS", 0.0)
+    observing, release = Event(), Event()
+    stall = False
+
+    def observe(_runtime: object) -> None:
+        if stall:
+            observing.set()
+            assert release.wait(10)
+
+    attempt.require_runtime_observation(observe)
+    budget = WorkerResponseBudget(attempt=attempt)
+    stall = True
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        charged = executor.submit(budget.charge, 1)
+        assert observing.wait(10)
+        try:
+            executor.submit(budget.close).result(timeout=5)
+        finally:
+            release.set()
+        with pytest.raises(WorkerResponseError, match="closed"):
+            charged.result(timeout=10)
+    assert not attempt.active
+
+
+def test_budget_reuses_a_passing_runtime_observation(attempt: WorkerAttemptLease) -> None:
+    observations: list[object] = []
+    attempt.require_runtime_observation(observations.append)
+    budget = WorkerResponseBudget(attempt=attempt)
+    budget.charge(0, new_response=True)
+    for _ in range(8):
+        budget.charge(64)
+    assert len(observations) == 1
+    attempt.fence()
+    with pytest.raises(WorkerResponseError, match="closed"):
+        budget.charge(0)
 
 
 def test_transports_require_observed_runtime_origin(attempt: WorkerAttemptLease) -> None:

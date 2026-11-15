@@ -26,6 +26,7 @@ import pytest
 from openhands.sdk.tool.client_tool import ClientToolSpec
 from pydantic import ValidationError
 
+from heartwood.core_adapter import worker_attempts
 from heartwood.core_adapter.worker_attempts import (
     WorkerAttemptError,
     WorkerAttemptIntent,
@@ -799,7 +800,10 @@ def test_worker_api_that_answers_without_authentication_is_stopped(
 
 
 @pytest.mark.parametrize("change", ["generation", "policy", "replaced", "forward"])
-def test_runtime_observation_fences_a_changed_worker(native: _Native, change: str) -> None:
+def test_runtime_observation_fences_a_changed_worker(
+    native: _Native, change: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(worker_attempts, "_RUNTIME_OBSERVATION_SECONDS", 0.0)
     runtime = native.attempt.launch(native.intent)
     lease = WorkerAttemptLease(native.record("active", runtime), owns_writer=lambda: True)
     native.attempt.connect(lease)

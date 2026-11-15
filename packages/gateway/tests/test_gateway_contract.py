@@ -713,6 +713,8 @@ def test_deterministic_gateway_does_not_load_openhands(
 
 @dataclass
 class _BlockingSessionService:
+    backend_opened = False
+
     entered: Event
     release: Event
     closed: Event
@@ -743,6 +745,8 @@ class _BlockingSessionService:
 
 @dataclass
 class _FailingSessionService:
+    backend_opened = False
+
     publish_token: Callable[[str], None]
     events: tuple[SessionEvent, ...] = ()
 
@@ -770,6 +774,8 @@ class _FailingSessionService:
 
 @dataclass
 class _ClosingSessionService:
+    backend_opened = False
+
     closed: Event
     fail: bool = False
 
@@ -798,6 +804,8 @@ class _ClosingSessionService:
 
 @dataclass
 class _PublishingCloseSessionService:
+    backend_opened = False
+
     publish: Callable[[], None]
     closed: Event
 
@@ -829,6 +837,8 @@ class _PublishingCloseSessionService:
 
 @dataclass
 class _RacingFinalSessionService:
+    backend_opened = False
+
     publish: Callable[[tuple[SessionEvent, ...]], None]
     worker_started: Event
     worker_finished: Event

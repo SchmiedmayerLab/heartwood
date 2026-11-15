@@ -125,12 +125,14 @@ class WorkerResponseBudget:
         """Charge received bytes or reserve a request before contacting the worker."""
         if size < 0:
             raise ValueError("worker response size must not be negative")
-        with self._lock:
-            if self._attempt is not None:
-                try:
-                    self._attempt.ensure_active()
-                except WorkerAttemptError:
+        if self._attempt is not None:
+            # Observing the runtime is a control-plane request, so it precedes the lock.
+            try:
+                self._attempt.ensure_active()
+            except WorkerAttemptError:
+                with self._lock:
                     self._closed = True
+        with self._lock:
             if self._closed:
                 raise WorkerResponseError("worker response admission is closed")
             now = self._clock()

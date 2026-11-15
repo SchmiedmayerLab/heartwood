@@ -41,6 +41,7 @@ The gateway incrementally translates persisted OpenHands messages, actions, obse
 While a native run is executing or publishing its final events, its live publisher owns event delivery.
 Read-side reconciliation waits for that publisher to finish so it cannot consume an observation before live reproduction evidence is recorded.
 After the publisher exits, reconciliation can recover persisted events without claiming that replay observed their execution.
+Except for a service's first read, reconciliation reads the backend without holding the session command lock and journals what it read only if no event was appended and the worker attempt was neither fenced nor replaced meanwhile; otherwise it reads again or discards the observation.
 Incremental token deltas remain in process memory and disappear after the run reaches a stable boundary or the process stops.
 Each REST, WebSocket, and server-sent-events response pairs an event batch with the projection produced from the same serialized snapshot.
 A transient revision orders token-only updates that share a durable event revision.
@@ -60,6 +61,7 @@ The launcher must use the retained identity with the native sandbox lifecycle an
 Missing generation, failed admission, interruption, or an uncertain create response leaves the attempt fenced; Heartwood does not retry creation or infer that no worker exists.
 The managed session then revokes the fenced attempt without waiting for the session to close, and records `revoked` only with the platform's evidence; when that revocation fails, the attempt remains fenced for session close or start-up reconciliation.
 `revoke_worker` closes local admission before invoking the platform's revocation observer and records only returned evidence matching the retained attempt and runtime.
+Closing admission waits for no worker response: it takes effect during a reconciliation read or a command in flight, and the fenced transition is recorded once the journal is free.
 A failed or uncertain revocation does not permit replacement.
 An attempt retained by an ended process can be fenced and revoked by a later owner of the session writer through the same `revoke_worker` contract.
 After recorded revocation, `prepare_worker_attempt` issues a new attempt identity for the same session and native conversation identity, unless the journal still holds an unsettled run, a pause, an unreviewed action, or a non-terminal outside operation or result release of the revoked worker.

@@ -145,6 +145,10 @@ class CommandConflictError(ValueError):
     """Raised when a command identifier is reused with different content."""
 
 
+# Reads repeated because the journal advanced under them before the observation is dropped.
+_BACKEND_READ_ATTEMPTS = 3
+
+
 class SessionService:
     """Core session service shared by every interaction surface."""
 
@@ -174,10 +178,17 @@ class SessionService:
         self.policy = ModelPolicyEngine(self.policy_profile)
         self.env = os.environ if env is None else env
         self.clock: Callable[[], str] = _utc_now if clock is None else clock
+        # Lock order, outermost first: the gateway state lock, the worker control lock,
+        # the command lock, the worker lease lock, then the stream lock an event or token
+        # sink takes. A worker response budget takes its own lock and then the lease lock.
+        # A backend read after the first holds none of them, and fencing a lease needs
+        # only the lease lock.
         self._command_lock = RLock()
         self._worker_control_lock = RLock()
         self._worker_control_active = False
         self._closed = False
+        self._closing = False
+        self._backend_opened = False
         self._event_sink = event_sink or (lambda _events: None)
         self._token_sink = token_sink or (lambda _delta: None)
         self._known_source_event_ids: set[str] | None = None
@@ -287,19 +298,11 @@ class SessionService:
             raise CommandConflictError("Checkpoint bindings must be computed by the session owner")
         if command.actor_id == AUTOMATIC_REVIEW_ACTOR:
             raise CommandConflictError("The gateway actor is reserved for automatic review")
-        with self._command_lock:
-            if self._closed:
-                raise RuntimeError("Session service is closed")
-            self.store.acquire_writer()
-            self._recover_pending_commit_locked()
-            command_kind = _kind_value(command.kind)
+        command_kind = _kind_value(command.kind)
+        reconciling = command_kind != CommandKind.AUDIT_EXPORT.value and reconcile_before_command
+        with self._backend_reconciled(lambda: reconciling) as observed:
             reconciled = (
-                ()
-                if command_kind == CommandKind.AUDIT_EXPORT.value or not reconcile_before_command
-                else (
-                    *self._reconcile_locked(),
-                    *self._recover_approval_commands_locked(command),
-                )
+                (*observed, *self._recover_approval_commands_locked(command)) if reconciling else ()
             )
             if reconciled:
                 self._event_sink(reconciled)
@@ -650,23 +653,79 @@ class SessionService:
 
     def reconcile(self) -> tuple[SessionEvent, ...]:
         """Commit OpenHands state not yet represented in the durable session."""
-        with self._command_lock:
-            if self._closed:
-                raise RuntimeError("Session service is closed")
-            self.store.acquire_writer()
-            self._recover_pending_commit_locked()
-            if self._has_failed_approval_recovery_locked():
-                events = self._recover_approval_commands_locked()
-            else:
-                events = (
-                    *self._reconcile_locked(),
-                    *self._recover_approval_commands_locked(),
-                )
+        recovery_failed = False
+
+        def readable() -> bool:
+            nonlocal recovery_failed
+            recovery_failed = self._has_failed_approval_recovery_locked()
+            return not recovery_failed
+
+        with self._backend_reconciled(readable) as observed:
+            events = (*observed, *self._recover_approval_commands_locked())
+            if not recovery_failed:
                 # A status read can journal a request before the backend's own callback does.
                 events = (*events, *self._review_automatically_locked(events))
         if events:
             self._event_sink(events)
         return events
+
+    @property
+    def backend_opened(self) -> bool:
+        """Return whether the first backend read, which may launch a worker, has finished."""
+        return self._backend_opened
+
+    @contextmanager
+    def _backend_reconciled(
+        self, readable: Callable[[], bool]
+    ) -> Iterator[tuple[SessionEvent, ...]]:
+        """Hold the command lock with the backend's unjournaled state committed.
+
+        A remote worker answers a backend read, so the read runs before the lock is
+        taken and no command, fencing or revocation waits for it. Its observation is
+        journaled only if the journal head and the worker lease are still those it was
+        read against, because an interleaved command, callback or lifecycle change can
+        make observed state stale; source-event identities deduplicate the rest. The
+        first read opens the backend, which can launch a worker and journal its attempt
+        through this service, so that read alone runs under the lock.
+        """
+        observed: tuple[BackendEvent, ...] = ()
+        observed_head: int | None = None
+        observed_lease: WorkerAttemptLease | None = None
+        attempts = _BACKEND_READ_ATTEMPTS
+        while True:
+            with self._command_lock:
+                if self._closed:
+                    raise RuntimeError("Session service is closed")
+                self.store.acquire_writer()
+                self._recover_pending_commit_locked()
+                head, lease = self.store.next_sequence(), self._worker_lease
+                current = head == observed_head and lease is observed_lease
+                if (
+                    self._closing  # A closing backend is not read, and what it answered is dropped.
+                    or not (current or readable())
+                    or self._worker_admission_error_locked() is not None
+                ):
+                    yield ()
+                    return
+                if not current:
+                    if self._backend_opened and not attempts:
+                        # The writers that keep advancing the journal own what they recorded.
+                        yield ()
+                        return
+                    known = frozenset(self._known_source_event_ids_locked())
+                    if not self._backend_opened:
+                        observed = self.backend.reconcile(
+                            session_id=self.store.session_id, known_source_event_ids=known
+                        )
+                        self._backend_opened = current = True
+                if current:
+                    yield tuple(self._translate_backend_events(observed, live=False))
+                    return
+            attempts -= 1
+            observed = self.backend.reconcile(
+                session_id=self.store.session_id, known_source_event_ids=known
+            )
+            observed_head, observed_lease = head, lease
 
     def close(self) -> None:
         """Release backend resources."""
@@ -674,7 +733,12 @@ class SessionService:
             with self._command_lock:
                 if self._closed:
                     return
-            self.backend.close()
+                self._closing = True
+            try:
+                self.backend.close()
+            except BaseException:
+                self._closing = False
+                raise
             with self._command_lock:
                 try:
                     if self._checkpoint_evidence is not None and self.replay_events():
@@ -1300,6 +1364,8 @@ class SessionService:
     ) -> WorkerRevocationEvidence:
         """Fence before outside revocation and retain only matching observer evidence."""
         with self._control_worker():
+            if self._worker_lease is not None:
+                self._worker_lease.fence()
             current = self.worker_attempt()
             if current is None:
                 raise WorkerAttemptError("no worker attempt exists")
@@ -1391,6 +1457,10 @@ class SessionService:
 
     def fence_worker_attempt(self, *, attempt_id: UUID) -> None:
         """Close local admission before recording the required outside revocation."""
+        lease = self._worker_lease
+        if lease is not None and lease.intent.attempt_id == attempt_id:
+            # Admission closes at once; only its journal record waits for a command in flight.
+            lease.fence()
         with self._command_lock:
             self._require_worker_owner_locked()
             current = self._require_worker_attempt_locked(attempt_id)
@@ -2149,20 +2219,6 @@ class SessionService:
             events = (*translated, *self._review_automatically_locked(translated))
         if events:
             self._event_sink(events)
-
-    def _reconcile_locked(self) -> tuple[SessionEvent, ...]:
-        if self._worker_admission_error_locked() is not None:
-            return ()
-        known_source_event_ids = self._known_source_event_ids_locked()
-        return tuple(
-            self._translate_backend_events(
-                self.backend.reconcile(
-                    session_id=self.store.session_id,
-                    known_source_event_ids=frozenset(known_source_event_ids),
-                ),
-                live=False,
-            )
-        )
 
     def _approval_recorded(self, group_id: str) -> bool:
         events = self.replay_events()
