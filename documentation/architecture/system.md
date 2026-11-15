@@ -159,17 +159,25 @@ The lease reobserves the sandbox through OpenShell before admission, reusing a p
 Fencing closes HTTP, event, and callback admission at once, including responses already in flight.
 
 The gateway fences an attempt when it observes an exhausted response budget, a missed request deadline, a failed admission or runtime observation, execution reported without a recorded decision, or session close.
-Fencing starts revocation on its own short-lived thread, so no control-plane call runs under a session lock or on a transport thread.
+Fencing starts revocation on its own thread, so no control-plane call runs under a session lock or on a transport thread.
 Revocation does not wait for a session command whose worker request is in progress; it waits only for a control-plane launch of the same attempt to return, and is then bounded by the control-plane timeouts: 15 seconds to observe the sandbox, 90 seconds for the delete request, and 90 seconds to observe its absence.
 It deletes the sandbox through the control client connected at launch, stops the forwarder, rechecks the native configuration, requires Docker to report no attempt-owned worker container, and removes the attempt's volumes before the session records `revoked` with its evidence.
-Revocation is attempted once.
-If it fails, the attempt stays fenced and the writer stays owned, and the worker can keep running until the session closes, the gateway stops, or the next gateway start reconciles it.
+If revocation fails, the attempt stays fenced and the writer stays owned, and the worker can keep running until a retry succeeds: the managed session retries it while the session is open, first after 15 seconds and then with the wait doubling up to 10 minutes, and session close and the next gateway start retry it too.
 A fence is raised only when the gateway observes the condition, so a worker the gateway is not exchanging data with is not detected by this path.
 
 A gateway that ends without revoking leaves its attempt in the journal.
 `heartwood gateway serve --deployment` calls `SessionGateway.reconcile_workers` before serving: it fences each unrevoked attempt, deletes the sandbox only when its name, labels, and any retained sandbox identity match, verifies absence, removes owned volumes, and records the evidence.
-Sessions whose revocation was not observed are reported and stay fenced until a later start.
-Reconciliation uses the control plane and Docker daemon named by the current manifest; an operator who points the manifest at other infrastructure must first remove the earlier worker, because absence on the new infrastructure would otherwise be recorded as revocation.
+It runs without the gateway state lock, so other sessions and settings do not wait for the control plane; a command to the session being reconciled is refused until it finishes, and reconciliation never caches the session's service, so a later read does not start a worker.
+Sessions whose attempt remains fenced are reported, each with a stable diagnostic.
+A session whose revocation was not observed (`HW-WORKER-003`) is retried while the gateway runs, first after 30 seconds and then with the wait doubling up to 10 minutes, and its attempt remains fenced until revocation is observed.
+
+Each attempt's launch intent records stable identities of the sandbox control plane and the container runtime it uses: the registered gateway's name, endpoint, and certificate authority, and the identity the Docker daemon behind the configured socket reports.
+Launch refuses to proceed when either identity changed after preparation.
+Reconciliation observes the infrastructure named by the current deployment manifest only when both identities match the attempt's record; otherwise the attempt stays fenced with `HW-WORKER-002` and nothing is observed or removed, because absence on other infrastructure is not evidence of revocation.
+Attempt records are versioned: records written before launches retained these identities remain readable, name no infrastructure, and are never reconciled against the current one.
+After a creation request whose outcome is unknown, absence counts only once it has persisted for 60 seconds, so a sandbox the control plane creates late is still found and deleted, and the attempt is not recorded as `not-created`; reconciliation treats an attempt without a recorded runtime the same way.
+This bounds, but does not remove, the reliance on the control plane not completing a creation after that interval.
+The native forwarder runs under a small supervisor in its own process group, which ends the whole group when the gateway's end of a pipe closes, so no forwarder outlives the gateway process, however that process ends.
 OpenShell deletion is name-scoped rather than conditional on a generation; unique attempt names and identity checks do not replace control-plane authorization.
 
 After a recorded revocation, a gateway configured to launch workers can start one replacement attempt with a new identity, key, placeholder, and response budget in a new sandbox.

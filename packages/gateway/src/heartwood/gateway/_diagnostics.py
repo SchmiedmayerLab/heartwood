@@ -275,6 +275,18 @@ _DIAGNOSTICS: dict[str, DiagnosticDefinition] = {
         "Register the qualified sandbox gateway or declare the version it reports.",
         "/reference/troubleshooting/#hw-worker-001-sandbox-gateway-version-is-not-declared-as-qualified",
     ),
+    "worker-control-plane": DiagnosticDefinition(
+        "HW-WORKER-002",
+        "Worker attempt ran on other sandbox infrastructure",
+        "Revoke the worker on the infrastructure it ran on, then continue in a new session.",
+        "/reference/troubleshooting/#hw-worker-002-worker-attempt-ran-on-other-sandbox-infrastructure",
+    ),
+    "worker-revocation": DiagnosticDefinition(
+        "HW-WORKER-003",
+        "Worker revocation was not observed",
+        "Restore the sandbox control plane; the gateway retries revocation while it runs.",
+        "/reference/troubleshooting/#hw-worker-003-worker-revocation-was-not-observed",
+    ),
 }
 
 _FALLBACK_DIAGNOSTIC = DiagnosticDefinition(

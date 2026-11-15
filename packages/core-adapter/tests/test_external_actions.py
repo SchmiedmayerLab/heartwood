@@ -59,6 +59,7 @@ from heartwood.core_adapter.external_actions import (
 from heartwood.core_adapter.external_results import ExternalResultRecord, external_result_records
 from heartwood.core_adapter.worker_attempts import (
     WorkerAttemptError,
+    WorkerControlPlane,
     WorkerRevocationEvidence,
     WorkerRuntimeBinding,
 )
@@ -66,6 +67,9 @@ from heartwood.schemas import AuditEvent, AuditRetention, JsonValue, PlatformOpe
 from heartwood.session import CommandKind, EventKind, SessionCommand, SessionEvent
 from packages.audit.tests.records_fixtures import MemoryS3
 
+_CONTROL_PLANE = WorkerControlPlane(
+    control_plane_sha256="1" * 64, container_runtime_sha256="2" * 64
+)
 _NOW = datetime(2026, 1, 1, tzinfo=UTC)
 _PROJECT = uuid4()
 _IMAGE = "sha256:" + "a" * 64
@@ -197,6 +201,7 @@ def setup(tmp_path: Path) -> Iterator[tuple[SessionService, Worker, Platform]]:
         image_digest=_IMAGE,
         sandbox_policy_sha256="b" * 64,
         input_manifest_sha256="c" * 64,
+        control_plane=_CONTROL_PLANE,
     )
     service.bind_worker_runtime(
         attempt_id=intent.attempt_id,
@@ -317,7 +322,10 @@ def test_unresolved_outside_review_is_not_handed_to_a_replacement_worker(
     try:
         if settled:
             replacement = restored.prepare_worker_attempt(
-                image_digest=_IMAGE, sandbox_policy_sha256="b" * 64, input_manifest_sha256="c" * 64
+                image_digest=_IMAGE,
+                sandbox_policy_sha256="b" * 64,
+                input_manifest_sha256="c" * 64,
+                control_plane=_CONTROL_PLANE,
             )
             assert replacement.attempt_id != attempt.intent.attempt_id
         else:
@@ -326,6 +334,7 @@ def test_unresolved_outside_review_is_not_handed_to_a_replacement_worker(
                     image_digest=_IMAGE,
                     sandbox_policy_sha256="b" * 64,
                     input_manifest_sha256="c" * 64,
+                    control_plane=_CONTROL_PLANE,
                 )
             assert latest(restored).phase == "proposed"
         assert platform.submissions == []
@@ -1325,7 +1334,10 @@ def test_retained_authorization_is_not_handed_to_a_replacement_worker(
         restored.admit_worker_replacement()
         with pytest.raises(WorkerAttemptError, match="outside operation"):
             restored.prepare_worker_attempt(
-                image_digest=_IMAGE, sandbox_policy_sha256="b" * 64, input_manifest_sha256="c" * 64
+                image_digest=_IMAGE,
+                sandbox_policy_sha256="b" * 64,
+                input_manifest_sha256="c" * 64,
+                control_plane=_CONTROL_PLANE,
             )
         assert phase_of(restored, release) == "authorized"
         assert len(platform.submissions) == before

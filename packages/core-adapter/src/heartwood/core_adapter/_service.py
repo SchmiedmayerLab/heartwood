@@ -90,6 +90,8 @@ from heartwood.core_adapter.worker_attempts import (
     WorkerAttemptIntent,
     WorkerAttemptLease,
     WorkerAttemptRecord,
+    WorkerControlPlane,
+    WorkerControlPlaneError,
     WorkerRevocationEvidence,
     WorkerRuntimeBinding,
     current_worker_attempt,
@@ -1067,6 +1069,7 @@ class SessionService:
         image_digest: str,
         sandbox_policy_sha256: str,
         input_manifest_sha256: str,
+        control_plane: WorkerControlPlane,
     ) -> WorkerAttemptLease:
         """Retain intent before one trusted launch; leave uncertain outcomes fenced."""
         with self._control_worker():
@@ -1074,6 +1077,7 @@ class SessionService:
                 image_digest=image_digest,
                 sandbox_policy_sha256=sandbox_policy_sha256,
                 input_manifest_sha256=input_manifest_sha256,
+                control_plane=control_plane,
             )
             try:
                 runtime = launch(intent)
@@ -1106,6 +1110,9 @@ class SessionService:
             try:
                 evidence = revoke(current)
                 self.record_worker_revocation(evidence)
+            except WorkerControlPlaneError:
+                # Its diagnostic names why no observation of this infrastructure can count.
+                raise
             except Exception:
                 raise WorkerAttemptError(
                     "worker revocation requires outside reconciliation"
@@ -1113,7 +1120,12 @@ class SessionService:
             return evidence
 
     def prepare_worker_attempt(
-        self, *, image_digest: str, sandbox_policy_sha256: str, input_manifest_sha256: str
+        self,
+        *,
+        image_digest: str,
+        sandbox_policy_sha256: str,
+        input_manifest_sha256: str,
+        control_plane: WorkerControlPlane,
     ) -> WorkerAttemptIntent:
         """Retain a fresh gateway-issued attempt before trusted sandbox launch."""
         with self._command_lock:
@@ -1146,6 +1158,7 @@ class SessionService:
                 sandbox_policy_sha256=sandbox_policy_sha256,
                 input_manifest_sha256=input_manifest_sha256,
                 model_data_handling=self.model_data_handling,
+                control_plane=control_plane,
             )
             self._worker_attempt_created = True
             self._record_worker_transition_locked(
@@ -1162,7 +1175,12 @@ class SessionService:
             current = self._require_worker_attempt_locked(attempt_id)
             if not self._worker_attempt_created or self._worker_lease is not None:
                 raise WorkerAttemptError("replayed worker intent requires launcher reconciliation")
-            record = WorkerAttemptRecord(phase="active", intent=current.intent, runtime=runtime)
+            record = WorkerAttemptRecord(
+                schema_version=current.schema_version,
+                phase="active",
+                intent=current.intent,
+                runtime=runtime,
+            )
             self._record_worker_transition_locked(record)
             writer_identity = self.store.writer_identity
             lease = WorkerAttemptLease(
@@ -1196,7 +1214,12 @@ class SessionService:
             if self._worker_lease is not None:
                 self._worker_lease.fence()
             self._record_worker_transition_locked(
-                WorkerAttemptRecord(phase="fenced", intent=current.intent, runtime=current.runtime)
+                WorkerAttemptRecord(
+                    schema_version=current.schema_version,
+                    phase="fenced",
+                    intent=current.intent,
+                    runtime=current.runtime,
+                )
             )
 
     def record_worker_revocation(self, evidence: WorkerRevocationEvidence) -> None:
@@ -1205,7 +1228,11 @@ class SessionService:
             self._require_worker_owner_locked()
             current = self._require_worker_attempt_locked(evidence.attempt_id)
             record = WorkerAttemptRecord(
-                phase="revoked", intent=current.intent, runtime=current.runtime, revocation=evidence
+                schema_version=current.schema_version,
+                phase="revoked",
+                intent=current.intent,
+                runtime=current.runtime,
+                revocation=evidence,
             )
             if record != current:
                 self._record_worker_transition_locked(record)

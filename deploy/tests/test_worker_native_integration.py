@@ -16,7 +16,7 @@ from collections.abc import Callable, Iterator, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Never
+from typing import Any, Never, cast
 from uuid import uuid4
 
 import pytest
@@ -972,6 +972,58 @@ def test_native_revoked_worker_is_replaced_for_the_next_command(
                     "replacement_attempt_id": str(second.intent.attempt_id),
                     "replaced_without_restart": True,
                     "revoked_resources_absent": True,
+                    "sensitive_data_ready": False,
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+    finally:
+        _stop(application)
+
+
+def test_native_forwarder_ends_with_the_gateway_process(infrastructure: NativeFixture) -> None:
+    fixture = infrastructure
+    application = _application(fixture)
+    service = application._service("composition")
+    try:
+        _submit(application, CommandKind.CHAT, {"prompt": "Synthetic forwarder lifetime check."})
+        backend = service.backend
+        assert isinstance(backend, OpenHandsSdkBackend)
+        assert backend.wait_for_idle(60)
+        plan = application._worker_sessions[id(service)]._plan
+        assert plan is not None
+        attempt = cast(_NativeWorkerAttempt, cast(Any, plan.launch).__self__)
+        forward = attempt._forward
+        assert forward is not None
+        process = forward._process
+        assert process is not None
+        assert process.stdin is not None
+
+        def group_alive() -> bool:
+            # The forwarder runs in the supervisor's process group and nowhere else.
+            try:
+                os.killpg(process.pid, 0)
+            except ProcessLookupError:
+                return False
+            return True
+
+        assert group_alive()
+        # Ending the gateway process closes its end of the pipe; nothing else is signalled.
+        process.stdin.close()
+        deadline = time.monotonic() + 15
+        while group_alive() and time.monotonic() < deadline:
+            time.sleep(0.2)
+        assert not group_alive()
+        assert not forward.active
+        _stop(application)
+        _assert_revoked(service)
+        (fixture.output / "evidence.json").write_text(
+            json.dumps(
+                {
+                    "worker_image": fixture.worker,
+                    "gateway_image": fixture.gateway_image,
+                    "forwarder_survived_gateway": False,
                     "sensitive_data_ready": False,
                 },
                 indent=2,

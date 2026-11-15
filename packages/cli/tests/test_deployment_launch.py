@@ -162,7 +162,11 @@ def test_explicit_worker_selection_reaches_native_factory_without_local_fallback
     )
     monkeypatch.setattr("heartwood.cli.load_project_deployment", Mock(return_value=deployment))
     monkeypatch.setattr(
-        "heartwood.cli.SessionGateway.reconcile_workers", lambda _gateway: ("session-unobserved",)
+        "heartwood.cli.SessionGateway.reconcile_workers",
+        lambda _gateway: {
+            "session-unobserved": "worker-revocation",
+            "session-elsewhere": "worker-control-plane",
+        },
     )
     monkeypatch.chdir(research)
     monkeypatch.setenv("HEARTWOOD_PLATFORM", "generic")
@@ -205,7 +209,13 @@ def test_explicit_worker_selection_reaches_native_factory_without_local_fallback
     if available:
         native_reconciler.assert_called_once_with(settings, project)
     reconciler.assert_not_called()
-    assert ("session-unobserved" in capsys.readouterr().err) is available
+    reported = capsys.readouterr().err
+    assert ("HW-WORKER-003: the worker attempt of session session-unobserved" in reported) is (
+        available
+    )
+    assert ("HW-WORKER-002: the worker attempt of session session-elsewhere" in reported) is (
+        available
+    )
     assert started == ([True] if available else [])
     assert not (research / ".heartwood").exists()
 

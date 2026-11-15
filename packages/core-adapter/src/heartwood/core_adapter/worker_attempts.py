@@ -33,10 +33,21 @@ class WorkerAttemptError(ValueError):
     """Worker identity or lifecycle cannot authorize the requested operation."""
 
 
+class WorkerControlPlaneError(WorkerAttemptError):
+    """An attempt cannot be reconciled against the infrastructure configured now."""
+
+
 class _WorkerRecord(BaseModel):
     model_config = ConfigDict(
         extra="forbid", frozen=True, revalidate_instances="always", hide_input_in_errors=True
     )
+
+
+class WorkerControlPlane(_WorkerRecord):
+    """Stable identities of the sandbox control plane and container runtime of one launch."""
+
+    control_plane_sha256: Digest
+    container_runtime_sha256: Digest
 
 
 class WorkerAttemptIntent(_WorkerRecord):
@@ -52,6 +63,8 @@ class WorkerAttemptIntent(_WorkerRecord):
     input_manifest_sha256: Digest
     # The declared handling of the model route the attempt was launched for.
     model_data_handling: ModelDataHandling | None = None
+    # Absent only in attempts recorded before launches retained it; never inferred later.
+    control_plane: WorkerControlPlane | None = None
 
     @model_validator(mode="after")
     def _session_identity(self) -> Self:
@@ -97,7 +110,11 @@ class WorkerRevocationEvidence(_WorkerRecord):
 class WorkerAttemptRecord(_WorkerRecord):
     """One complete lifecycle observation, containing no worker credential."""
 
-    schema_version: Literal["heartwood.worker-attempt.v1"] = "heartwood.worker-attempt.v1"
+    # Version 2 names the control plane and container runtime in the intent; version 1
+    # records remain readable but cannot be reconciled against any infrastructure.
+    schema_version: Literal["heartwood.worker-attempt.v1", "heartwood.worker-attempt.v2"] = (
+        "heartwood.worker-attempt.v2"
+    )
     phase: Literal["prepared", "active", "fenced", "revoked"]
     intent: WorkerAttemptIntent
     runtime: WorkerRuntimeBinding | None = None
@@ -105,6 +122,10 @@ class WorkerAttemptRecord(_WorkerRecord):
 
     @model_validator(mode="after")
     def _binding(self) -> Self:
+        if (self.schema_version == "heartwood.worker-attempt.v2") != (
+            self.intent.control_plane is not None
+        ):
+            raise ValueError("only version 2 attempts identify their control plane")
         if self.phase == "prepared" and self.runtime is not None:
             raise ValueError("prepared attempts cannot claim an observed runtime")
         if self.phase == "active" and self.runtime is None:
@@ -142,7 +163,11 @@ def validate_worker_transition(
         ):
             raise WorkerAttemptError("replacement changed the project, session, or conversation")
         return
-    if previous is None or current.intent != previous.intent:
+    if (
+        previous is None
+        or current.intent != previous.intent
+        or current.schema_version != previous.schema_version
+    ):
         raise WorkerAttemptError("worker attempt identity changed")
     allowed = {"prepared": {"active", "fenced"}, "active": {"fenced"}, "fenced": {"revoked"}}
     if current.phase not in allowed.get(previous.phase, set()):

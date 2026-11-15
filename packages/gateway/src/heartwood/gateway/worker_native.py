@@ -27,6 +27,8 @@ from heartwood.core_adapter.worker_attempts import (
     WorkerAttemptIntent,
     WorkerAttemptLease,
     WorkerAttemptRecord,
+    WorkerControlPlane,
+    WorkerControlPlaneError,
     WorkerRevocationEvidence,
     WorkerRuntimeBinding,
 )
@@ -44,7 +46,16 @@ from heartwood.gateway.worker_sessions import (
     WorkerSessionPlan,
     WorkerSessionRequest,
 )
-from heartwood.gateway.worker_volumes import WorkerVolumes, WorkerVolumeSettings
+from heartwood.gateway.worker_volumes import (
+    WorkerVolumes,
+    WorkerVolumeSettings,
+    container_runtime_sha256,
+)
+
+# After a creation whose outcome is unknown, absence counts only once it has persisted this
+# long, so a creation the control plane completes late is still observed and deleted.
+_CREATION_SETTLE_SECONDS = 60.0
+_CREATION_OBSERVATION_INTERVAL_SECONDS = 2.0
 
 
 def native_worker_plan_factory(
@@ -85,19 +96,28 @@ def require_declared_gateway(settings: OpenShellWorkerDeployment, project: Proje
 def native_worker_reconciler(
     settings: OpenShellWorkerDeployment, project: ProjectContext
 ) -> WorkerReconciler:
-    """Revoke attempts whose gateway process ended, through the operator's current deployment."""
+    """Revoke attempts whose gateway process ended, only on the infrastructure that ran them."""
 
     def reconcile(record: WorkerAttemptRecord) -> WorkerRevocationEvidence:
         if record.phase != "fenced" or record.intent.project_id != project.project_id:
             raise WorkerAttemptError("native reconciliation requires this project's fenced attempt")
         control = NativeWorkerControl(settings, project)
+        volume_settings = _volume_settings(settings, project, record.intent.image_digest)
+        # Absence is evidence only on the infrastructure that ran the attempt.
+        if record.intent.control_plane is None:
+            raise WorkerControlPlaneError(
+                "worker attempt does not record the control plane and runtime it ran on"
+            )
+        if record.intent.control_plane != _control_plane(control, volume_settings):
+            raise WorkerControlPlaneError(
+                "worker attempt ran on another sandbox control plane or container runtime"
+            )
         control.connect()
         try:
-            volumes = WorkerVolumes(
-                _volume_settings(settings, project, record.intent.image_digest), record.intent
-            )
+            volumes = WorkerVolumes(volume_settings, record.intent)
             retained = record.runtime.sandbox_id if record.runtime else None
-            sandbox_id = _owned_sandbox(control, volumes, retained)
+            # Without a recorded runtime, an ended process may have left creation unresolved.
+            sandbox_id = _owned_sandbox(control, volumes, retained, settle=record.runtime is None)
             if sandbox_id is not None:
                 _delete_sandbox(control, volumes, sandbox_id)
             volumes.remove_after_revocation()
@@ -122,16 +142,38 @@ def _volume_settings(
     )
 
 
+def _control_plane(
+    control: NativeWorkerControl, volume_settings: WorkerVolumeSettings
+) -> WorkerControlPlane:
+    return WorkerControlPlane(
+        control_plane_sha256=control.control_plane_sha256(),
+        container_runtime_sha256=container_runtime_sha256(volume_settings),
+    )
+
+
 def _owned_sandbox(
-    control: NativeWorkerControl, volumes: WorkerVolumes, sandbox_id: str | None
+    control: NativeWorkerControl,
+    volumes: WorkerVolumes,
+    sandbox_id: str | None,
+    *,
+    settle: bool = False,
 ) -> str | None:
-    """Resolve the uniquely named sandbox only while it carries the complete attempt identity."""
-    try:
-        observed = control.client.get(volumes.worker_name, workspace=control.settings.workspace)
-    except control.grpc.RpcError as error:
-        if error.code() != control.grpc.StatusCode.NOT_FOUND:
-            raise WorkerAttemptError("native worker absence was not observed") from None
-        return None
+    """Resolve the uniquely named sandbox only while it carries the complete attempt identity.
+
+    With `settle`, a creation may still be completing, so absence is observed repeatedly
+    until it has persisted for the settle interval.
+    """
+    deadline = monotonic() + _CREATION_SETTLE_SECONDS
+    while True:
+        try:
+            observed = control.client.get(volumes.worker_name, workspace=control.settings.workspace)
+            break
+        except control.grpc.RpcError as error:
+            if error.code() != control.grpc.StatusCode.NOT_FOUND:
+                raise WorkerAttemptError("native worker absence was not observed") from None
+        if not settle or monotonic() >= deadline:
+            return None
+        sleep(_CREATION_OBSERVATION_INTERVAL_SECONDS)
     if dict(observed.labels) != volumes.labels or (
         sandbox_id is not None and observed.id != sandbox_id
     ):
@@ -192,6 +234,10 @@ class _NativeWorkerAttempt:
             )
         self.control = NativeWorkerControl(settings, request.project)
         self._policy = self.control.policy()
+        self._control_plane = _control_plane(
+            self.control, _volume_settings(settings, request.project, settings.image_digest)
+        )
+        self._creation_uncertain = False
         self._preparation = ExitStack()
         self._intent: WorkerAttemptIntent | None = None
         self._volumes: WorkerVolumes | None = None
@@ -257,6 +303,7 @@ class _NativeWorkerAttempt:
             launch=self.launch,
             connect=self.connect,
             revoke=self.revoke,
+            control_plane=self._control_plane,
             release_preparation=self._preparation.close,
         )
 
@@ -270,13 +317,18 @@ class _NativeWorkerAttempt:
                 or intent.session_id != self.request.session_id
                 or intent.input_manifest_sha256 != self._input_identity
                 or intent.sandbox_policy_sha256 != self.settings.sandbox_policy_sha256
+                or intent.control_plane != self._control_plane
             ):
                 raise WorkerAttemptError("native worker intent does not match preparation")
             self.control.connect()
-            volumes = self._volumes = WorkerVolumes(
-                _volume_settings(self.settings, self.request.project, self.settings.image_digest),
-                intent,
+            volume_settings = _volume_settings(
+                self.settings, self.request.project, self.settings.image_digest
             )
+            if _control_plane(self.control, volume_settings) != self._control_plane:
+                raise WorkerControlPlaneError(
+                    "sandbox control plane or container runtime changed after preparation"
+                )
+            volumes = self._volumes = WorkerVolumes(volume_settings, intent)
             try:
                 volumes.stage(self._sources)
             finally:
@@ -303,6 +355,8 @@ class _NativeWorkerAttempt:
                     "/opt/heartwood/images/worker/launch.py",
                 ],
             )
+            # Until the control plane answers, the creation may complete later.
+            self._creation_uncertain = True
             created = self.control.client.create(
                 workspace=self.settings.workspace,
                 name=volumes.worker_name,
@@ -310,6 +364,7 @@ class _NativeWorkerAttempt:
                 labels=volumes.labels,
             )
             self._sandbox_id = created.id
+            self._creation_uncertain = False
             ready = self.control.client.wait_ready(
                 volumes.worker_name,
                 workspace=self.settings.workspace,
@@ -341,9 +396,14 @@ class _NativeWorkerAttempt:
                 "native worker launch requires outside reconciliation"
             ) from None
 
-    def _stop_sandbox(self) -> None:
+    def _stop_sandbox(self, *, settle: bool = False) -> None:
         assert self._volumes is not None
-        observed = _owned_sandbox(self.control, self._volumes, self._sandbox_id)
+        observed = _owned_sandbox(
+            self.control,
+            self._volumes,
+            self._sandbox_id,
+            settle=settle and self._creation_uncertain and self._sandbox_id is None,
+        )
         if observed is not None:
             # Retained before deletion so an interrupted deletion is still recorded as revoked.
             self._sandbox_id = observed
@@ -511,7 +571,7 @@ print(json.dumps({'files':files,'uid':os.getuid(),
             # The connected client keeps the identity admitted at launch, so stopping the
             # worker does not wait for local cleanup or a repeated configuration check.
             try:
-                self._stop_sandbox()
+                self._stop_sandbox(settle=True)
             except Exception:
                 # A forwarder to a sandbox that is being stopped is never useful.
                 if self._forward is not None:

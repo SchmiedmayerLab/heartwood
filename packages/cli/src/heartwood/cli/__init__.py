@@ -1083,10 +1083,15 @@ def _handle_serve(
             else SessionGateway(project=project)
         )
         _select_launch_review_mode(gateway, review_mode)
-        for session_id in gateway.reconcile_workers():
+        for session_id, check in gateway.reconcile_workers().items():
             print(
-                f"Worker revocation was not observed for session {session_id}; "
-                "its attempt remains fenced until the next gateway start.",
+                f"{diagnostic_for(check).code}: the worker attempt of session {session_id} "
+                "remains fenced; "
+                + (
+                    "it ran on another sandbox control plane or container runtime."
+                    if check == "worker-control-plane"
+                    else "revocation is retried while the gateway runs."
+                ),
                 file=sys.stderr,
             )
         app = GatewayAsgiApp(gateway, static_dir=web_root, ingress=ingress, access=access)

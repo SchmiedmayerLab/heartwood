@@ -19,7 +19,11 @@ from pydantic import AnyHttpUrl
 
 from heartwood.compliance.review_benchmarks import planning_review_suite
 from heartwood.core_adapter import SessionService
-from heartwood.core_adapter.worker_attempts import WorkerAttemptLease, WorkerRuntimeBinding
+from heartwood.core_adapter.worker_attempts import (
+    WorkerAttemptLease,
+    WorkerControlPlane,
+    WorkerRuntimeBinding,
+)
 from heartwood.schemas.evaluation import (
     EvaluationCheck,
     EvaluationConfiguration,
@@ -34,6 +38,10 @@ from heartwood.schemas.parallel_reviews import (
     ReviewQualification,
     ReviewQualificationEvidence,
     ReviewQualifications,
+)
+
+_CONTROL_PLANE = WorkerControlPlane(
+    control_plane_sha256="1" * 64, container_runtime_sha256="2" * 64
 )
 
 
@@ -196,6 +204,7 @@ def worker_attempt(tmp_path: Path) -> Iterator[Callable[[str], WorkerAttemptLeas
             image_digest="sha256:" + "a" * 64,
             sandbox_policy_sha256="b" * 64,
             input_manifest_sha256="c" * 64,
+            control_plane=_CONTROL_PLANE,
         )
         return service.bind_worker_runtime(
             attempt_id=intent.attempt_id,

@@ -20,6 +20,7 @@ from heartwood.core_adapter.worker_attempts import (
     WorkerAttemptIntent,
     WorkerAttemptLease,
     WorkerAttemptRecord,
+    WorkerControlPlane,
     WorkerRevocationEvidence,
     WorkerRuntimeBinding,
 )
@@ -55,12 +56,17 @@ class WorkerSessionPlan:
     launch: Callable[[WorkerAttemptIntent], WorkerRuntimeBinding]
     connect: Callable[[WorkerAttemptLease], WorkerConversationContext]
     revoke: Callable[[WorkerAttemptRecord], WorkerRevocationEvidence]
+    # The infrastructure the launch will use, retained in the intent before any request.
+    control_plane: WorkerControlPlane
     release_preparation: Callable[[], None] | None = None
 
 
 WorkerPlanFactory = Callable[[WorkerSessionRequest], WorkerSessionPlan]
 # How long a caller waits for a close deferred to a launch or prompt revocation in progress.
 _CLOSE_WAIT_SECONDS = 30.0
+# A failed prompt revocation is retried after these waits, doubling up to the maximum.
+_REVOCATION_RETRY_SECONDS = 15.0
+_REVOCATION_RETRY_MAX_SECONDS = 600.0
 # Revokes an attempt whose owning gateway process ended, without that process's launch state.
 WorkerReconciler = Callable[[WorkerAttemptRecord], WorkerRevocationEvidence]
 
@@ -95,6 +101,7 @@ class ManagedWorkerSession:
         self._closer: Thread | None = None
         self._closed = Event()
         self._released = False
+        self._close_requested = Event()
         self._revoked = False
         self._context: WorkerConversationContext | None = None
         # This owner reaches a worker only through `context`, so it may replace a revoked one.
@@ -142,6 +149,7 @@ class ManagedWorkerSession:
                 image_digest=plan.image_digest,
                 sandbox_policy_sha256=plan.sandbox_policy_sha256,
                 input_manifest_sha256=plan.input_manifest_sha256,
+                control_plane=plan.control_plane,
             )
         except BaseException:
             if self._launched is not None:
@@ -196,12 +204,19 @@ class ManagedWorkerSession:
             self._revocation.start()
 
     def _revoke_fenced(self) -> None:
-        # A failure leaves the attempt fenced for session close or start-up reconciliation.
+        # Until revocation is observed the attempt stays fenced; the attempt is retried while
+        # the session is open, and session close or start-up reconciliation retries it too.
         try:
-            with suppress(Exception):
-                assert self._plan is not None
-                self._service.revoke_worker(self._plan.revoke)
-                self._revoked = True
+            assert self._plan is not None
+            delay = _REVOCATION_RETRY_SECONDS
+            while True:
+                with suppress(Exception):
+                    self._service.revoke_worker(self._plan.revoke)
+                    self._revoked = True
+                    return
+                if self._close_requested.wait(delay):
+                    return
+                delay = min(delay * 2, _REVOCATION_RETRY_MAX_SECONDS)
         finally:
             with self._revocation_lock:
                 self._revoking = False
@@ -220,6 +235,8 @@ class ManagedWorkerSession:
             if self._closed.is_set():
                 return True
             self._closing = True
+            # A prompt revocation waiting to retry stops, and this close revokes instead.
+            self._close_requested.set()
             if (
                 not self._launch_settled.is_set()
                 or self._revoking

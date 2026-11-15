@@ -52,12 +52,16 @@ from heartwood.core_adapter.external_results import RESULT_PREFIX
 from heartwood.core_adapter.session_activity import session_activity
 from heartwood.core_adapter.worker_attempts import (
     WorkerAttemptIntent,
+    WorkerControlPlane,
     WorkerRevocationEvidence,
     WorkerRuntimeBinding,
 )
 from heartwood.schemas import ActionReviewMode, PolicyProfile
 from heartwood.session import CommandKind, EventKind, JsonValue, SessionCommand, SessionEvent
 
+_CONTROL_PLANE = WorkerControlPlane(
+    control_plane_sha256="1" * 64, container_runtime_sha256="2" * 64
+)
 _SESSION = "session-review"
 _IMAGE = "sha256:" + "a" * 64
 _SANDBOX_POLICY = "b" * 64
@@ -186,6 +190,7 @@ def _service(
             image_digest=_IMAGE,
             sandbox_policy_sha256=_SANDBOX_POLICY,
             input_manifest_sha256="c" * 64,
+            control_plane=_CONTROL_PLANE,
         )
     return service
 
@@ -1439,6 +1444,7 @@ def test_an_isolated_worker_session_never_reads_its_worker_for_the_check(tmp_pat
         image_digest=_IMAGE,
         sandbox_policy_sha256=_SANDBOX_POLICY,
         input_manifest_sha256="c" * 64,
+        control_plane=_CONTROL_PLANE,
     )
     restored.reconcile()
     restored.reconcile()

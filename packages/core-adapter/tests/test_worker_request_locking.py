@@ -27,6 +27,7 @@ from heartwood.core_adapter import (
 )
 from heartwood.core_adapter.worker_attempts import (
     WorkerAttemptLease,
+    WorkerControlPlane,
     WorkerRevocationEvidence,
     WorkerRuntimeBinding,
 )
@@ -34,6 +35,9 @@ from heartwood.session import CommandKind, EventKind, SessionCommand
 
 _PROJECT = UUID("6f9d1a4e-0b9c-4f7e-9d43-2b7c1e5a8f10")
 _IMAGE = "sha256:" + "a" * 64
+_CONTROL_PLANE = WorkerControlPlane(
+    control_plane_sha256="1" * 64, container_runtime_sha256="2" * 64
+)
 _WAIT = 10.0
 
 
@@ -107,7 +111,10 @@ def service(tmp_path: Path, backend: BlockingBackend) -> Iterator[SessionService
 
 def _bind(service: SessionService) -> WorkerAttemptLease:
     intent = service.prepare_worker_attempt(
-        image_digest=_IMAGE, sandbox_policy_sha256="b" * 64, input_manifest_sha256="c" * 64
+        image_digest=_IMAGE,
+        sandbox_policy_sha256="b" * 64,
+        input_manifest_sha256="c" * 64,
+        control_plane=_CONTROL_PLANE,
     )
     return service.bind_worker_runtime(
         attempt_id=intent.attempt_id,

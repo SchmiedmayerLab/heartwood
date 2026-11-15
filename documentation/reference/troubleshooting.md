@@ -310,11 +310,18 @@ The same condition after start stops that worker launch or reconciliation and le
 `deployment manifest is unavailable or invalid` and the other `deployment …` messages name the [manifest requirement](configuration.md#deployment-manifest) that failed, such as ownership, write protection, a symbolic link, a path inside the project, or a changed policy file digest.
 Correct the operator files; do not loosen their permissions or move them into the project.
 
-### Worker Revocation Was Not Observed
+### `HW-WORKER-002`: Worker Attempt Ran on Other Sandbox Infrastructure
 
-At start, `gateway serve` reports `Worker revocation was not observed for session ID; its attempt remains fenced until the next gateway start.`
-The earlier worker may still be running.
-Confirm through OpenShell and Docker that its sandbox is gone or stop it there, then restart the gateway so reconciliation records the revocation.
+`heartwood gateway serve --deployment` found a session whose worker attempt was left unrevoked, but the attempt ran on a different sandbox control plane or container runtime than the deployment manifest names now, or its record predates the recording of that infrastructure.
+Heartwood leaves the attempt fenced and does not record revocation, because a worker missing from the current infrastructure may still be running on the earlier one.
+Stop the worker on the infrastructure it ran on, using that control plane's own tools, and continue the work in a new session.
+Pointing the manifest back at the original control plane and Docker daemon lets the next gateway start reconcile the attempt normally.
+
+### `HW-WORKER-003`: Worker Revocation Was Not Observed
+
+The gateway could not observe that a worker attempt an earlier gateway process left running was stopped, typically because the sandbox control plane or the Docker daemon was unavailable.
+The attempt remains fenced, and the session refuses work until revocation is observed.
+The gateway retries while it runs, with a growing interval of up to 10 minutes, so restoring the control plane is usually enough; restarting the gateway retries at once.
 Do not delete the session's records or writer files to release it.
 
 ### A Replacement Worker Started
