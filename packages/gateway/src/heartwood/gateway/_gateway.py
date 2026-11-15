@@ -66,6 +66,7 @@ from heartwood.gateway._gpu_environment import (
     inspect_gpu_environment,
     minimum_compute_capability_for_model,
 )
+from heartwood.gateway._lifecycle import GatewayOperations, gateway_operation
 from heartwood.gateway._local_import import import_local_model
 from heartwood.gateway._local_model_contract import (
     MINIMUM_AGENT_RUNTIME_CONTEXT_WINDOW,
@@ -128,6 +129,7 @@ from heartwood.gateway._model_transfer import (
 )
 from heartwood.gateway._openhands_models import prepare_openhands_import
 from heartwood.gateway._project import ProjectContext, ProjectStateError
+from heartwood.gateway._project_activity import ProjectActivity
 from heartwood.gateway._project_config import (
     LocalModelSelection,
     ProjectActionSettingsStore,
@@ -442,6 +444,8 @@ class SessionGateway:
     ) -> None:
         prepare_openhands_import()
         self.project = ProjectContext.current() if project is None else project
+        self._project_activity = ProjectActivity(self.project)
+        self._operations = GatewayOperations(on_enter=self._project_activity.acquire_existing)
         self.sessions_root = self.project.sessions_dir
         self.env = dict(os.environ if env is None else env)
         self.backend_id = backend_id
@@ -471,6 +475,7 @@ class SessionGateway:
                 policy=deployment_policy or adapter.default_policy_profile(),
             ),
             deployment_policy=deployment_policy,
+            initialize_project=self._project_activity.initialize,
         )
         self.settings_store = settings_store or ProjectModelSettingsStore(self.config_store)
         self.action_settings_store = action_settings_store or ProjectActionSettingsStore(
@@ -578,26 +583,47 @@ class SessionGateway:
         self._published_stream_sequences: dict[str, int] = {}
         self._pending_stream_events: dict[str, dict[int, SessionEvent]] = {}
 
+    @gateway_operation
     def start(self) -> None:
         """Initialize SDK modules before concurrent requests enter its import graph."""
         from importlib import import_module
 
         import_module("openhands.sdk")
 
+    @gateway_operation
     @_serialized_state
     def initialize_project(self, *, interface: InterfaceKind = "web") -> StartupPlanResponse:
         """Confirm the current directory as the project and create private state."""
-        self.project.initialize()
+        self._project_activity.initialize()
         return self.startup_plan(interface=interface)
 
-    @_serialized_state
     def stop(self) -> None:
-        """Close active OpenHands conversations."""
+        """Close admission, drain accepted calls, and stop owned background workers."""
+        self._operations.close_admission()
+        self.local_model_manager.request_stop()
+        self.model_transfer_manager.request_stop()
+        self._operations.wait_for_idle(timeout=5)
+        self._streams.close_all()
+        errors: list[Exception] = []
         try:
-            self._reset_services()
+            for close in (
+                self.local_model_manager.close,
+                self.model_transfer_manager.close,
+                self._reset_services,
+            ):
+                try:
+                    close()
+                except Exception as error:
+                    errors.append(error)
         finally:
             self.credential_store.clear_process_values()
+        if len(errors) == 1:
+            raise errors[0]
+        if errors:
+            raise ExceptionGroup("unable to stop all gateway workers", errors)
+        self._project_activity.close()
 
+    @gateway_operation
     def handle(self, command: SessionCommand) -> SessionResult:
         """Handle one command and publish emitted events."""
         if "experiment_export" in command.payload:
@@ -609,7 +635,7 @@ class SessionGateway:
     @_serialized_state
     def _handle_command(self, command: SessionCommand) -> SessionResult:
         with self.config_store.locked():
-            self.project.initialize()
+            self._project_activity.initialize()
             if command.session_id == DEFAULT_SESSION_ID:
                 self.session_catalog.default()
             else:
@@ -721,6 +747,7 @@ class SessionGateway:
                 if close_service:
                     service.close()
 
+    @gateway_operation
     def sessions(self) -> SessionListResponse:
         """Return persisted sessions ordered by recent activity."""
         return api_response(
@@ -728,16 +755,19 @@ class SessionGateway:
             {"sessions": [summary.safe_dict() for summary in self.session_catalog.list()]},
         )
 
+    @gateway_operation
     def create_session(self, title: str | None = None) -> SessionSummaryResponse:
         """Create and return one empty session."""
-        self.project.initialize()
+        self._project_activity.initialize()
         return api_response(SessionSummaryResponse, self.session_catalog.create(title).safe_dict())
 
+    @gateway_operation
     def default_session(self) -> SessionSummaryResponse:
         """Return the shared first session, creating it when needed."""
-        self.project.initialize()
+        self._project_activity.initialize()
         return api_response(SessionSummaryResponse, self.session_catalog.default().safe_dict())
 
+    @gateway_operation
     def session(self, session_id: str) -> SessionSummaryResponse:
         """Return one persisted session summary."""
         return api_response(
@@ -745,6 +775,7 @@ class SessionGateway:
             self.session_catalog.get(session_id).safe_dict(),
         )
 
+    @gateway_operation
     def rename_session(self, session_id: str, title: str) -> SessionSummaryResponse:
         """Rename one persisted session."""
         return api_response(
@@ -752,6 +783,7 @@ class SessionGateway:
             self.session_catalog.rename(session_id, title).safe_dict(),
         )
 
+    @gateway_operation
     def audit_export(self, session_id: str) -> AuditExportResponse:
         """Return a generated scrubbed audit export for browser delivery."""
         self.session_catalog.get(session_id)
@@ -769,6 +801,7 @@ class SessionGateway:
             },
         )
 
+    @gateway_operation
     def verify_audit(self, session_id: str) -> AuditVerification:
         """Fully verify the paired session and audit history."""
         self.session_catalog.get(session_id)
@@ -778,6 +811,7 @@ class SessionGateway:
         ).verified_audit_export()
         return verification
 
+    @gateway_operation
     def copy_audit_export(self, session_id: str, output: Path) -> Path:
         """Write a generated export to a caller-selected non-state path safely."""
         resolved = self._resolve_audit_path(output, label="copy destination")
@@ -790,6 +824,7 @@ class SessionGateway:
             raise ProjectStateError("unable to write the audit copy safely") from error
         return resolved
 
+    @gateway_operation
     @_serialized_state
     def create_audit_checkpoint(
         self,
@@ -842,19 +877,23 @@ class SessionGateway:
             experiment_content=snapshot,
         )
 
+    @gateway_operation
     def checkpoint_signers(self) -> tuple[CheckpointSignerProfile, ...]:
         """Return deployment-approved signer profiles without resolving credentials."""
         return self._checkpoint_signer_registry().profiles
 
+    @gateway_operation
     def default_checkpoint_signer(self) -> CheckpointSignerProfile:
         """Return the deployment-owned default without changing project selection."""
         return self._checkpoint_signer_registry().profile()
 
+    @gateway_operation
     def active_checkpoint_signer(self) -> CheckpointSignerProfile:
         """Resolve the project selection or deployment-owned default profile."""
         selected = self.config_store.load().audit_settings.signer_profile
         return self._checkpoint_signer_registry().profile(selected)
 
+    @gateway_operation
     def select_checkpoint_signer(self, profile_id: str | None) -> CheckpointSignerProfile:
         """Persist a project selection after deployment-registry validation."""
         registry = self._checkpoint_signer_registry()
@@ -862,6 +901,7 @@ class SessionGateway:
         self.config_store.select_checkpoint_signer(profile_id)
         return profile
 
+    @gateway_operation
     def verify_audit_checkpoint(
         self,
         *,
@@ -922,6 +962,7 @@ class SessionGateway:
             raise ProjectStateError(f"audit {label} is unavailable") from error
         return resolved
 
+    @gateway_operation
     def workspace_tree(
         self,
         *,
@@ -929,19 +970,22 @@ class SessionGateway:
         depth: int | None = None,
     ) -> WorkspaceTreeResponse:
         """Return the bounded project tree shared by every interface."""
-        self.project.initialize()
+        self._project_activity.initialize()
         return self.workspace_inspector.tree(path, depth=depth)
 
+    @gateway_operation
     def workspace_file(self, *, path: str) -> WorkspaceFileResponse:
         """Return one bounded read-only project file."""
-        self.project.initialize()
+        self._project_activity.initialize()
         return self.workspace_inspector.file(path)
 
+    @gateway_operation
     def workspace_changes(self, *, session_id: str) -> WorkspaceChangesResponse:
         """Return Git or structured session-derived project changes."""
         projection = self.session_projection(session_id=session_id)
         return self.workspace_inspector.changes(projection)
 
+    @gateway_operation
     def workspace_diff(
         self,
         *,
@@ -952,6 +996,7 @@ class SessionGateway:
         projection = self.session_projection(session_id=session_id)
         return self.workspace_inspector.diff(projection, path)
 
+    @gateway_operation
     @_serialized_state
     def replay_events(
         self,
@@ -960,7 +1005,7 @@ class SessionGateway:
         after_sequence: int | None = None,
     ) -> tuple[SessionEvent, ...]:
         """Replay persisted events for a session."""
-        self.project.initialize()
+        self._project_activity.initialize()
         events = FileSessionStore(self.sessions_root, session_id).replay_events()
         return (
             events
@@ -968,11 +1013,13 @@ class SessionGateway:
             else tuple(event for event in events if event.sequence > after_sequence)
         )
 
+    @gateway_operation
     @_serialized_state
     def session_projection(self, *, session_id: str) -> SessionProjection:
         """Return the sole interface projection for one session."""
         return self._session_snapshot_locked(session_id=session_id).projection
 
+    @gateway_operation
     def wait_for_session_idle(self, *, session_id: str, timeout: float = 0) -> bool:
         """Observe a settled session before evaluating it or admitting a new stage.
 
@@ -989,11 +1036,13 @@ class SessionGateway:
             service.reconcile()
             return True
 
+    @gateway_operation
     @_serialized_state
     def evaluation_observation(self, *, session_id: str) -> EvaluationRuntimeObservation:
         """Capture the session's client runtime, distinct from declared server metadata."""
         return self._evaluation_observation(self._service(session_id))
 
+    @gateway_operation
     @_serialized_state
     def bind_evaluation_observer(
         self, *, session_id: str
@@ -1088,12 +1137,14 @@ class SessionGateway:
             action_confirmation=cast(ActionConfirmationMode, backend.action_confirmation_mode),
         )
 
+    @gateway_operation
     def research_workflows(self) -> WorkflowCatalog:
         """Return maintained workflow choices and runtime support without starting work."""
         from heartwood.gateway._research_evaluation import ResearchStageEvaluator
 
         return ResearchStageEvaluator.catalog()
 
+    @gateway_operation
     def verification_environment(self, *, python: str | None = None) -> PythonEnvironmentSnapshot:
         """Inspect server Python or an explicitly selected interpreter, without project writes."""
         from heartwood.gateway.python_environment import inspect_verification_environment
@@ -1105,6 +1156,7 @@ class SessionGateway:
             executable = self.project.root / executable
         return inspect_verification_environment(executable)
 
+    @gateway_operation
     @_serialized_state
     def prepare_research_review(self, artifacts: Mapping[str, str]) -> ReviewSnapshot:
         """Capture explicitly selected review context without model work or state mutation."""
@@ -1112,6 +1164,7 @@ class SessionGateway:
 
         return ResearchReviewEvaluator(self.workspace_inspector).prepare(artifacts)
 
+    @gateway_operation
     @_serialized_state
     def assess_research_review(
         self, snapshot: ReviewSnapshot, submissions: Sequence[ReviewSubmission]
@@ -1121,6 +1174,7 @@ class SessionGateway:
 
         return ResearchReviewEvaluator(self.workspace_inspector).assess(snapshot, submissions)
 
+    @gateway_operation
     @_serialized_state
     def prepare_research_correction(
         self, review: ResearchReviewRun, *, output_directory: str
@@ -1132,6 +1186,7 @@ class SessionGateway:
             review, output_directory=output_directory
         )
 
+    @gateway_operation
     @_serialized_state
     def assess_research_correction(
         self, review: ResearchReviewRun, plan: ReviewCorrectionPlan
@@ -1141,6 +1196,7 @@ class SessionGateway:
 
         return ResearchReviewEvaluator(self.workspace_inspector).assess_correction(review, plan)
 
+    @gateway_operation
     @_serialized_state
     def experiment_records(self) -> ExperimentCollection:
         """Synchronize committed stage records and query the shared project provenance store."""
@@ -1149,6 +1205,7 @@ class SessionGateway:
             return ExperimentCollection()
         return ExperimentCollection(runs=store.runs())
 
+    @gateway_operation
     @_serialized_state
     def export_experiments(self) -> ExperimentExport:
         """Return a verified scientific export without model work or new observations."""
@@ -1161,7 +1218,7 @@ class SessionGateway:
 
         if not self.project.state_exists():
             return None
-        self.project.initialize()
+        self._project_activity.initialize()
         store = ExperimentStore(self.project.state_root / "experiments.jsonl")
         store.synchronize(
             record
@@ -1172,6 +1229,7 @@ class SessionGateway:
         )
         return store
 
+    @gateway_operation
     @_serialized_state
     def prepare_research_workflow(
         self, workflow_id: str, *, inputs: Mapping[str, str], output_directory: str
@@ -1183,6 +1241,7 @@ class SessionGateway:
             workflow_id, inputs=inputs, output_directory=output_directory
         )
 
+    @gateway_operation
     @_serialized_state
     def evaluate_research_stage(
         self,
@@ -1198,11 +1257,12 @@ class SessionGateway:
             binding, stage_id, model_status=model_status
         )
 
+    @gateway_operation
     @_serialized_state
     def persisted_session_projection(self, *, session_id: str) -> SessionProjection:
         """Project committed Heartwood events without reconciling OpenHands state."""
         with self._stream_lock:
-            self.project.initialize()
+            self._project_activity.initialize()
             events = FileSessionStore(self.sessions_root, session_id).replay_events()
             return project_session(
                 events,
@@ -1213,6 +1273,7 @@ class SessionGateway:
                 parallel_reviews_available=self._parallel_review_preparer is not None,
             )
 
+    @gateway_operation
     @_serialized_state
     def session_snapshot(
         self,
@@ -1226,6 +1287,7 @@ class SessionGateway:
             after_sequence=after_sequence,
         )
 
+    @gateway_operation
     @_serialized_state
     def websocket(
         self,
@@ -1246,6 +1308,7 @@ class SessionGateway:
                 replay_events=snapshot.events,
             )
 
+    @gateway_operation
     @_serialized_state
     def open_event_stream(
         self,
@@ -1267,6 +1330,7 @@ class SessionGateway:
             )
             return stream, snapshot
 
+    @gateway_operation
     def model_settings(self) -> ModelSettingsResponse:
         """Return API-safe settings, connections, and advanced presets."""
         settings = self.settings_store.load()
@@ -1321,6 +1385,7 @@ class SessionGateway:
             },
         )
 
+    @gateway_operation
     def credential_settings(self) -> CredentialSettingsResponse:
         """Return non-secret credential storage and binding state."""
         bindings = sorted(self._credential_binding_ids())
@@ -1334,6 +1399,7 @@ class SessionGateway:
             },
         )
 
+    @gateway_operation
     @_serialized_state
     def forget_credential(self, connection_id: str) -> CredentialSettingsResponse:
         """Forget the process and persisted token for one model connection."""
@@ -1352,6 +1418,7 @@ class SessionGateway:
         self.credential_store.forget(connection.api_key_env)
         return self.credential_settings()
 
+    @gateway_operation
     def login_subscription(
         self,
         connection_id: str,
@@ -1376,6 +1443,7 @@ class SessionGateway:
             raise ModelCatalogError(str(error)) from error
         return self.model_settings()
 
+    @gateway_operation
     @_serialized_state
     def start_subscription_device_login(
         self,
@@ -1391,6 +1459,7 @@ class SessionGateway:
         except SubscriptionError as error:
             raise ModelCatalogError(str(error)) from error
 
+    @gateway_operation
     @_serialized_state
     def poll_subscription_device_login(
         self,
@@ -1407,6 +1476,7 @@ class SessionGateway:
         except SubscriptionError as error:
             raise ModelCatalogError(str(error)) from error
 
+    @gateway_operation
     def deployment_readiness(self) -> DeploymentReadiness:
         """Inspect the project with every resolvable credential binding."""
         return inspect_deployment(
@@ -1414,10 +1484,12 @@ class SessionGateway:
             self._credential_environment(strict=False),
         )
 
+    @gateway_operation
     def project_readiness(self) -> ProjectReadinessResponse:
         """Return content-free project diagnostics for presentation adapters."""
         return api_response(ProjectReadinessResponse, self.deployment_readiness().safe_dict())
 
+    @gateway_operation
     def platform_capabilities(self) -> PlatformCapabilitiesResponse:
         """Return capabilities owned by the detected platform adapter."""
         return api_response(
@@ -1425,6 +1497,7 @@ class SessionGateway:
             self._platform_capabilities.safe_dict(),
         )
 
+    @gateway_operation
     def startup(
         self,
         *,
@@ -1439,6 +1512,7 @@ class SessionGateway:
             env=self._credential_environment(strict=False),
         )
 
+    @gateway_operation
     def startup_plan(
         self,
         *,
@@ -1451,6 +1525,7 @@ class SessionGateway:
             self.startup(interface=interface, port=port).safe_dict(),
         )
 
+    @gateway_operation
     @_serialized_state
     def configure_model_source(self, model_source: str) -> ModelSettingsResponse:
         """Prepare one shared model source and its deployment policy."""
@@ -1473,6 +1548,7 @@ class SessionGateway:
         self._reset_services()
         return self.model_settings()
 
+    @gateway_operation
     def discover_models(
         self,
         connection_id: str,
@@ -1514,6 +1590,7 @@ class SessionGateway:
                 safe_connection["credential_status"] = self._subscription_credential_status()
         return api_response(ModelCatalogResponse, payload)
 
+    @gateway_operation
     def connect_model(
         self,
         connection_id: str,
@@ -1587,6 +1664,7 @@ class SessionGateway:
             self._reset_services()
             return self.model_settings()
 
+    @gateway_operation
     def action_settings(self) -> ActionSettingsResponse:
         """Return the selected and deployment-allowed confirmation modes."""
         try:
@@ -1646,6 +1724,7 @@ class SessionGateway:
             },
         )
 
+    @gateway_operation
     @_serialized_state
     def select_action_confirmation_mode(self, mode: str) -> ActionSettingsResponse:
         """Select a deployment-allowed OpenHands confirmation mode."""
@@ -1684,6 +1763,7 @@ class SessionGateway:
         self._reset_services()
         return self.action_settings()
 
+    @gateway_operation
     @_serialized_state
     def save_model_profile(self, profile: ModelProfile) -> ModelSettingsResponse:
         """Add or replace a non-secret profile and reset active services."""
@@ -1707,6 +1787,7 @@ class SessionGateway:
         self._reset_services()
         return self.model_settings()
 
+    @gateway_operation
     @_serialized_state
     def select_model_profile(self, profile_id: str) -> ModelSettingsResponse:
         """Select a profile and reset active services."""
@@ -1715,6 +1796,7 @@ class SessionGateway:
         self._reset_services()
         return self.model_settings()
 
+    @gateway_operation
     @_serialized_state
     def remove_model_profile(self, profile_id: str) -> ModelSettingsResponse:
         """Remove a profile and reset active services."""
@@ -1726,6 +1808,7 @@ class SessionGateway:
         self._reset_services()
         return self.model_settings()
 
+    @gateway_operation
     def validate_model_profile(
         self,
         profile_id: str | None = None,
@@ -1767,6 +1850,7 @@ class SessionGateway:
             },
         )
 
+    @gateway_operation
     def model_artifacts(self) -> ModelArtifactsResponse:
         """Return normalized local choices, source metadata, and download status."""
         snapshot_catalog = self.snapshot_catalog.safe_dict()
@@ -1875,6 +1959,7 @@ class SessionGateway:
             },
         )
 
+    @gateway_operation
     def gpu_environment(self, *, refresh: bool = False) -> GpuEnvironment:
         """Return the shared GPU and scheduler inventory for this deployment."""
         if refresh or self._gpu_environment is None:
@@ -1884,6 +1969,7 @@ class SessionGateway:
             )
         return self._gpu_environment
 
+    @gateway_operation
     def recommend_managed_model(
         self,
         *,
@@ -1928,6 +2014,7 @@ class SessionGateway:
         )
         self._verified_local_artifacts = {cache_key}
 
+    @gateway_operation
     def inspect_model_repository(
         self,
         repository: str,
@@ -1953,15 +2040,17 @@ class SessionGateway:
             },
         )
 
+    @gateway_operation
     def download_local_model(self, model_id: str) -> ModelDownloadResponse:
         """Start a known local-model download into project storage."""
-        self.project.initialize()
+        self._project_activity.initialize()
         choice = self._require_downloadable_local_model(model_id)
         return api_response(
             ModelDownloadResponse,
             self.local_model_manager.start_model(choice.download_model()).safe_dict(),
         )
 
+    @gateway_operation
     def download_custom_local_model(
         self,
         repository: str,
@@ -1969,7 +2058,7 @@ class SessionGateway:
         revision: str | None = None,
     ) -> ModelDownloadResponse:
         """Resolve and start one user-selected Hugging Face model download."""
-        self.project.initialize()
+        self._project_activity.initialize()
         choice = self._custom_local_model_choice(
             repository,
             revision=revision,
@@ -1979,6 +2068,7 @@ class SessionGateway:
             self.local_model_manager.start_model(choice.download_model()).safe_dict(),
         )
 
+    @gateway_operation
     def download_local_model_now(
         self,
         model_id: str,
@@ -1986,7 +2076,7 @@ class SessionGateway:
         progress_callback: Callable[[int, int], None] | None = None,
     ) -> Path:
         """Download and verify a known model, selecting it when agent-compatible."""
-        self.project.initialize()
+        self._project_activity.initialize()
         model = self._require_downloadable_local_model(model_id).download_model()
         if isinstance(model, ModelArtifact):
             path = download_artifact(
@@ -2004,6 +2094,7 @@ class SessionGateway:
         self._select_downloaded_local_model(model_id, path, runtime_profile)
         return path
 
+    @gateway_operation
     def download_custom_local_model_now(
         self,
         repository: str,
@@ -2012,7 +2103,7 @@ class SessionGateway:
         progress_callback: Callable[[int, int], None] | None = None,
     ) -> Path:
         """Resolve, download, verify, and select one user-selected model."""
-        self.project.initialize()
+        self._project_activity.initialize()
         choice = self._custom_local_model_choice(
             repository,
             revision=revision,
@@ -2033,6 +2124,7 @@ class SessionGateway:
         self._select_downloaded_local_model(choice.model_id, path, model.runtime_profile)
         return path
 
+    @gateway_operation
     @_serialized_state
     def import_local_model(
         self,
@@ -2044,7 +2136,7 @@ class SessionGateway:
         context_window: int,
     ) -> LocalModelImportResponse:
         """Import and select a reviewed local GGUF file or vLLM snapshot."""
-        self.project.initialize()
+        self._project_activity.initialize()
         imported = import_local_model(
             source,
             models_dir=self.model_cache_dir,
@@ -2086,6 +2178,7 @@ class SessionGateway:
             },
         )
 
+    @gateway_operation
     def inspect_local_model_bundle(self, path: Path) -> ModelTransferPlanResponse:
         """Inspect one portable model bundle without changing project state."""
         plan = inspect_model_bundle(path)
@@ -2104,9 +2197,10 @@ class SessionGateway:
             },
         )
 
+    @gateway_operation
     def export_local_model(self, path: Path) -> ModelTransferResponse:
         """Start a verified export of the selected Heartwood-managed model."""
-        self.project.initialize()
+        self._project_activity.initialize()
         selected = self.config_store.load().local_model
         if selected is None:
             raise ModelTransferError(
@@ -2123,6 +2217,7 @@ class SessionGateway:
         )
         return api_response(ModelTransferResponse, transfer.safe_dict())
 
+    @gateway_operation
     def import_local_model_bundle(
         self,
         path: Path,
@@ -2131,7 +2226,7 @@ class SessionGateway:
         manifest_sha256: str,
     ) -> ModelTransferResponse:
         """Start an atomic model-bundle import after explicit review."""
-        self.project.initialize()
+        self._project_activity.initialize()
         plan = inspect_model_bundle(path)
         if plan.manifest_sha256 != manifest_sha256:
             raise ModelTransferError(
@@ -2145,6 +2240,7 @@ class SessionGateway:
         )
         return api_response(ModelTransferResponse, transfer.safe_dict())
 
+    @gateway_operation
     def cancel_model_transfer(self, transfer_id: str) -> ModelTransferResponse:
         """Request cancellation of one active model transfer."""
         return api_response(
@@ -2152,6 +2248,7 @@ class SessionGateway:
             self.model_transfer_manager.cancel(transfer_id).safe_dict(),
         )
 
+    @gateway_operation
     def model_transfer_status(self, transfer_id: str) -> ModelTransferResponse:
         """Return one shared model-transfer status snapshot."""
         return api_response(
@@ -2159,6 +2256,7 @@ class SessionGateway:
             self.model_transfer_manager.status(transfer_id).safe_dict(),
         )
 
+    @gateway_operation
     def skill_settings(self) -> SkillSettingsResponse:
         """Return the shared bundled, installed, and signed-catalog projection."""
         return api_response(
@@ -2166,14 +2264,16 @@ class SessionGateway:
             {"skills": [summary.safe_dict() for summary in self.skill_manager.summaries()]},
         )
 
+    @gateway_operation
     @_serialized_state
     def refresh_skills(self, source_id: str | None = None) -> SkillSettingsResponse:
         """Refresh signed Skill sources and apply their current revocation state."""
-        self.project.initialize()
+        self._project_activity.initialize()
         self.skill_manager.refresh(source_id)
         self._reset_services()
         return self.skill_settings()
 
+    @gateway_operation
     def specialist_settings(self) -> SpecialistSettingsResponse:
         """Return the validated research-specialist catalog."""
         return api_response(
@@ -2181,11 +2281,13 @@ class SessionGateway:
             self._specialist_catalog().safe_dict(),
         )
 
+    @gateway_operation
     def inspect_skill(self, name: str, *, source_id: str | None = None) -> SkillSummaryResponse:
         """Verify one signed catalog entry without installing its archive."""
         summary = self.skill_manager.inspect_catalog(name, source_id=source_id)
         return api_response(SkillSummaryResponse, summary.safe_dict())
 
+    @gateway_operation
     @_serialized_state
     def install_skill(
         self,
@@ -2196,7 +2298,7 @@ class SessionGateway:
         approved: bool,
     ) -> SkillSettingsResponse:
         """Install one signed, digest-pinned Skill after explicit approval."""
-        self.project.initialize()
+        self._project_activity.initialize()
         self.skill_manager.install_catalog(
             name,
             source_id=source_id,
@@ -2206,11 +2308,13 @@ class SessionGateway:
         self._reset_services()
         return self.skill_settings()
 
+    @gateway_operation
     def inspect_local_skill(self, source: Path) -> SkillSummaryResponse:
         """Verify one advanced local Skill without assigning repository review."""
         summary = self.skill_manager.inspect_local(self._project_skill_source(source))
         return api_response(SkillSummaryResponse, summary.safe_dict())
 
+    @gateway_operation
     @_serialized_state
     def install_local_skill(
         self,
@@ -2220,7 +2324,7 @@ class SessionGateway:
         approved: bool,
     ) -> SkillSettingsResponse:
         """Install one digest-pinned local, unreviewed Skill after approval."""
-        self.project.initialize()
+        self._project_activity.initialize()
         self.skill_manager.install_local(
             self._project_skill_source(source),
             expected_tree_sha256=expected_tree_sha256,
@@ -2235,6 +2339,7 @@ class SessionGateway:
         except ProjectStateError as error:
             raise SkillSettingsError(str(error)) from error
 
+    @gateway_operation
     @_serialized_state
     def remove_skill(self, name: str) -> SkillSettingsResponse:
         """Remove one installed extension and reset active conversations."""
@@ -2466,7 +2571,7 @@ class SessionGateway:
         service: SessionService | None = None,
     ) -> tuple[SessionEvent, ...]:
         """Resolve the service and reconcile durable state without holding the stream lock."""
-        self.project.initialize()
+        self._project_activity.initialize()
         if service is None:
             store = FileSessionStore(
                 self.sessions_root,

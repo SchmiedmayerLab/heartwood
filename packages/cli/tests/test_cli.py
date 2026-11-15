@@ -80,6 +80,7 @@ from heartwood.gateway import (
 from heartwood.gateway import (
     SessionGateway as RealSessionGateway,
 )
+from heartwood.gateway._project_activity import project_gateway_maintenance
 from heartwood.schemas import (
     ModelRepositoryPlanResponse,
     ModelTransferResponse,
@@ -2514,6 +2515,22 @@ def test_cli_reports_unsupported_session_storage_without_traceback(
     captured = capsys.readouterr()
     assert captured.out == ""
     assert "Session unavailable: storage does not support the required native lock" in captured.err
+
+
+def test_cli_reports_project_maintenance_without_traceback(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = ProjectContext(tmp_path)
+    project.initialize()
+    _install_deterministic_gateway(monkeypatch)
+    with project_gateway_maintenance(project):
+        assert _run(tmp_path, monkeypatch, ["--session-id", "review", "pause"]) == 75
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "Project unavailable: gateway admission is busy" in captured.err
+    assert not (project.sessions_dir / "review").exists()
 
 
 def test_serve_requires_built_assets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

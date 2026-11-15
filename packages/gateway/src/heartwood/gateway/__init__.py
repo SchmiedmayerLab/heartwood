@@ -84,6 +84,7 @@ from heartwood.gateway._ingress import (
     IngressRequest,
     IngressRequestError,
 )
+from heartwood.gateway._lifecycle import GatewayClosedError
 from heartwood.gateway._local_import import LocalModelImport, import_local_model
 from heartwood.gateway._local_model_contract import (
     LocalContextPlan,
@@ -164,6 +165,7 @@ from heartwood.gateway._model_transfer import (
     inspect_model_bundle,
 )
 from heartwood.gateway._project import ProjectContext, ProjectStateError
+from heartwood.gateway._project_activity import ProjectOwnershipError
 from heartwood.gateway._project_config import (
     AuditCheckpointSettings,
     LocalModelSelection,
@@ -181,6 +183,7 @@ from heartwood.gateway._readiness import (
     persist_deployment_profile,
 )
 from heartwood.gateway._rest import RestGateway, RestRequest, RestResponse
+from heartwood.gateway._runtime_activity import ManagedRuntimeActivity, managed_runtime_activity
 from heartwood.gateway._session_catalog import (
     DEFAULT_SESSION_ID,
     SessionCatalog,
@@ -262,6 +265,7 @@ __all__ = [
     "DeploymentReadiness",
     "DiagnosticDefinition",
     "GatewayAsgiApp",
+    "GatewayClosedError",
     "GatewayEventStream",
     "GpuCapacity",
     "GpuDevice",
@@ -283,6 +287,7 @@ __all__ = [
     "LocalModelImport",
     "LocalModelRuntime",
     "LocalModelSelection",
+    "ManagedRuntimeActivity",
     "ModelArtifact",
     "ModelArtifactCatalog",
     "ModelArtifactError",
@@ -320,6 +325,7 @@ __all__ = [
     "ProjectConfigStore",
     "ProjectContext",
     "ProjectDeployment",
+    "ProjectOwnershipError",
     "ProjectStateError",
     "ProjectionActionOutcome",
     "ProjectionActionRecord",
@@ -406,6 +412,7 @@ __all__ = [
     "managed_model_reasoning_parser",
     "managed_model_request_body",
     "managed_model_token_budgets",
+    "managed_runtime_activity",
     "minimum_compute_capability_for_model",
     "model_connections_from_mapping",
     "model_profile_from_mapping",

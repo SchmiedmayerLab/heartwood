@@ -126,6 +126,11 @@ class ProjectContext:
         return self.state_root / "logs"
 
     @property
+    def managed_runtime_intent_path(self) -> Path:
+        """Return the unresolved native inference launch record."""
+        return self.runtime_dir / "managed-inference.pending.json"
+
+    @property
     def cache_dir(self) -> Path:
         """Return the project-local cache directory."""
         return self.state_root / "cache"

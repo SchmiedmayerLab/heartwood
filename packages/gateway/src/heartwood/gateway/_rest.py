@@ -24,6 +24,7 @@ from heartwood.core_adapter import (
 from heartwood.gateway._action_settings import ActionSettingsError
 from heartwood.gateway._credentials import CredentialStoreError
 from heartwood.gateway._gateway import SessionGateway
+from heartwood.gateway._lifecycle import GatewayClosedError
 from heartwood.gateway._local_model_contract import DEFAULT_LOCAL_CONTEXT_WINDOW
 from heartwood.gateway._local_models import ModelRepositoryError
 from heartwood.gateway._model_artifacts import ModelArtifactError
@@ -33,6 +34,7 @@ from heartwood.gateway._model_settings import (
     model_profile_from_mapping,
 )
 from heartwood.gateway._model_transfer import ModelTransferError
+from heartwood.gateway._project_activity import ProjectOwnershipError
 from heartwood.gateway._project_config import ProjectConfigError
 from heartwood.gateway._session_catalog import SessionCatalogError, SessionNotFoundError
 from heartwood.gateway._skill_settings import SkillSettingsError
@@ -96,6 +98,10 @@ class RestGateway:
         """Handle a REST-style request."""
         try:
             return self._handle(request)
+        except GatewayClosedError as error:
+            return _error(503, error)
+        except ProjectOwnershipError as error:
+            return _error(409, error)
         except NativeLockUnavailableError:
             return _error(409, "project storage does not support required process locks")
 

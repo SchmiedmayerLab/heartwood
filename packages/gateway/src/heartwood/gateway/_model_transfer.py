@@ -17,6 +17,7 @@ import threading
 from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path, PurePosixPath
+from time import monotonic
 from typing import ClassVar, Literal, Self
 from zipfile import ZIP_STORED, BadZipFile, ZipFile, ZipInfo
 
@@ -231,6 +232,8 @@ class ModelTransferManager:
         self._cancellations: dict[str, threading.Event] = {}
         self._lock = threading.Lock()
         self._next_sequence = 0
+        self._threads: list[threading.Thread] = []
+        self._closed = False
 
     def start_export(
         self,
@@ -303,6 +306,29 @@ class ModelTransferManager:
         with self._lock:
             return tuple(sorted(self._transfers.values(), key=lambda transfer: transfer.sequence))
 
+    def request_stop(self) -> None:
+        """Prevent new transfers and request cancellation of all active operations."""
+        with self._lock:
+            self._closed = True
+            for transfer_id, cancel in self._cancellations.items():
+                cancel.set()
+                current = self._transfers[transfer_id]
+                if current.status == "running":
+                    self._transfers[transfer_id] = replace(current, status="cancelling")
+
+    def close(self, *, timeout: float = 5) -> None:
+        """Wait for owned workers and callbacks, retaining them if shutdown times out."""
+        self.request_stop()
+        with self._lock:
+            workers = tuple(self._threads)
+        deadline = monotonic() + max(0, timeout)
+        for worker in workers:
+            worker.join(timeout=max(0, deadline - monotonic()))
+        if any(worker.is_alive() for worker in workers):
+            raise TimeoutError("model transfer workers did not stop")
+        with self._lock:
+            self._threads.clear()
+
     def status(self, transfer_id: str) -> ModelTransfer:
         """Return one transfer or reject an unknown identifier."""
         with self._lock:
@@ -331,6 +357,8 @@ class ModelTransferManager:
         operation: Callable[[threading.Event], None],
     ) -> ModelTransfer:
         with self._lock:
+            if self._closed:
+                raise ModelTransferError("model transfer manager is closed")
             current = self._transfers.get(transfer.transfer_id)
             if current is not None and current.status in {"running", "cancelling"}:
                 return current
@@ -339,13 +367,21 @@ class ModelTransferManager:
             cancel = threading.Event()
             self._transfers[transfer.transfer_id] = transfer
             self._cancellations[transfer.transfer_id] = cancel
-        thread = threading.Thread(
-            target=operation,
-            args=(cancel,),
-            daemon=True,
-            name=f"heartwood-model-transfer-{transfer.transfer_id}",
-        )
-        thread.start()
+            thread = threading.Thread(
+                target=operation,
+                args=(cancel,),
+                daemon=True,
+                name=f"heartwood-model-transfer-{transfer.transfer_id}",
+            )
+            try:
+                thread.start()
+            except Exception:
+                self._transfers[transfer.transfer_id] = replace(
+                    transfer, status="error", error="Unable to start the model transfer worker."
+                )
+                raise
+            self._threads = [worker for worker in self._threads if worker.is_alive()]
+            self._threads.append(thread)
         return transfer
 
     def _export_worker(
@@ -383,7 +419,7 @@ class ModelTransferManager:
     ) -> None:
         try:
             self._phase(transfer_id, "importing")
-            choice, path, runtime_profile, created = import_model_bundle(
+            choice, path, runtime_profile, _created = import_model_bundle(
                 plan,
                 models_dir=self.models_dir,
                 progress_callback=lambda processed, total: self._progress(
@@ -392,14 +428,8 @@ class ModelTransferManager:
                 cancel=cancel,
             )
             self._phase(transfer_id, "selecting")
-            try:
-                _raise_if_cancelled(cancel)
-                self.on_import_ready(choice, path, runtime_profile)
-            except Exception:
-                if created:
-                    shutil.rmtree(self.models_dir / choice.model_id, ignore_errors=True)
-                    fsync_directory(self.models_dir)
-                raise
+            _raise_if_cancelled(cancel)
+            self.on_import_ready(choice, path, runtime_profile)
             self._ready(transfer_id, path)
         except ModelTransferCancelledError:
             self._cancelled(transfer_id)

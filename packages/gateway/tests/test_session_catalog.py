@@ -22,7 +22,12 @@ import pytest
 import heartwood.core_adapter._state as session_state
 import heartwood.persistence._files as persistence_files
 from heartwood.audit import AuditLog
-from heartwood.core_adapter import FileSessionStore, SessionService
+from heartwood.core_adapter import (
+    FileSessionStore,
+    SessionOwnershipError,
+    SessionService,
+    session_maintenance,
+)
 from heartwood.gateway import (
     ProjectContext,
     RestGateway,
@@ -41,6 +46,21 @@ from heartwood.session import (
     SessionEvent,
     compute_session_event_hash,
 )
+
+
+def test_maintenance_blocks_catalog_creation_and_rename(tmp_path: Path) -> None:
+    catalog = SessionCatalog(tmp_path)
+    existing = catalog.ensure("session-existing", title="Original title")
+    metadata_path = tmp_path / existing.session_id / "metadata.json"
+    before = metadata_path.read_bytes()
+    with session_maintenance(tmp_path):
+        with pytest.raises(SessionOwnershipError, match="maintenance"):
+            catalog.ensure("session-new")
+        with pytest.raises(SessionOwnershipError, match="maintenance"):
+            catalog.rename(existing.session_id, "Changed title")
+        assert not (tmp_path / "session-new").exists()
+        assert metadata_path.read_bytes() == before
+    assert catalog.rename(existing.session_id, "Changed title").title == "Changed title"
 
 
 def _event(sequence: int, kind: EventKind, **payload: JsonValue) -> SessionEvent:
@@ -357,7 +377,7 @@ def test_catalog_recovers_after_interrupted_metadata_write(
     with pytest.raises(OSError, match="synthetic write failure"):
         SessionCatalog(tmp_path).create()
 
-    session_dir = next(tmp_path.iterdir())
+    (session_dir,) = (path for path in tmp_path.iterdir() if path.is_dir())
     assert not (session_dir / "metadata.json").exists()
     assert not tuple(session_dir.glob(".metadata.json-*"))
 
