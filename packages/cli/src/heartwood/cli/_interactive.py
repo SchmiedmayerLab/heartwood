@@ -23,6 +23,7 @@ from heartwood.cli._workspace_presentation import (
 )
 from heartwood.gateway import (
     RETAINED_APPROVAL_NOTICE,
+    SPECIALIST_TASK_LABEL,
     ActionSettingsError,
     ModelSettingsError,
     ProjectionActionRecord,
@@ -752,7 +753,9 @@ def format_runtime_lines(projection: SessionProjection) -> tuple[str, ...]:
                 f"  {terminal_safe_text(item.role_label)}: {terminal_safe_text(item.status_label)}"
             )
             if item.task_summary is not None:
-                lines.append(f"    Task: {terminal_safe_text(item.task_summary)}")
+                lines.append(
+                    f"    {SPECIALIST_TASK_LABEL}: {terminal_safe_text(item.task_summary)}"
+                )
             if item.result_summary is not None:
                 lines.append(f"    Result: {terminal_safe_text(item.result_summary)}")
             if item.review_proposals is not None:
@@ -781,7 +784,7 @@ def format_action_record_lines(action: ProjectionActionRecord) -> tuple[str, ...
         lines.append(f"    decision {action.decision or 'pending'} (complete action set)")
     if action.arguments:
         lines.append(
-            "    arguments: "
+            f"    {action_arguments_label(action)}: "
             + terminal_safe_text(
                 json.dumps(action.arguments, sort_keys=True, separators=(",", ":"))
             )

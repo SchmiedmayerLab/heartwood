@@ -1673,8 +1673,8 @@ def _subagent(value: dict[str, JsonValue]) -> ProjectionSubagent:
         invocation_id=_string(value.get("invocation_id")),
         task_id=_string(value.get("task_id")) or None,
         agent_name=agent_name,
-        role_label=_string(value.get("role_label"))
-        or _display_identifier(agent_name, fallback="Specialist"),
+        # Completed from the task action's catalog role, if any, once actions are reduced.
+        role_label=_string(value.get("role_label")),
         status=status,
         status_label={
             "completed": "Complete",
@@ -1715,7 +1715,7 @@ def _enrich_subagent(
         None,
     )
     if action is None or action.details.kind != "task":
-        return subagent
+        return subagent.model_copy(update={"role_label": _subagent_role_label(subagent, None)})
     task_summary = _bounded_summary(
         action.details.description or action.details.prompt,
     )
@@ -1728,12 +1728,22 @@ def _enrich_subagent(
     status_label = "Not Run" if status == "rejected" else subagent.status_label
     return subagent.model_copy(
         update={
+            "role_label": _subagent_role_label(subagent, action.details.role_label),
             "task_summary": task_summary,
             "result_summary": result_summary,
             "status": status,
             "status_label": status_label,
         }
     )
+
+
+def _subagent_role_label(subagent: ProjectionSubagent, catalog_label: str | None) -> str:
+    """Name a specialist by its catalog role; a name the model chose says it is the model's."""
+    if label := subagent.role_label or catalog_label:
+        return label
+    if subagent.agent_name:
+        return f"Specialist (model-provided name: {subagent.agent_name})"
+    return "Specialist"
 
 
 def _usage_purpose_label(value: str) -> str:

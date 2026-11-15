@@ -218,6 +218,9 @@ def outside_review_lines(action: ProjectionActionRecord) -> tuple[str, ...]:
     return tuple(display_safe_text(line) for line in lines)
 
 
+# Labels a specialist's task as the model wrote it, wherever its runtime summary is shown.
+SPECIALIST_TASK_LABEL = "Model-provided task"
+
 RETAINED_APPROVAL_NOTICE = (
     "Your approval is recorded but was not sent. Nothing is sent until that same approval "
     "is retried, and rejecting the review withdraws it."
@@ -298,6 +301,7 @@ __all__ = [
     "ACTION_TOOL_LABELS",
     "OTHER_ACTION_TOOL_LABEL_TEMPLATE",
     "RETAINED_APPROVAL_NOTICE",
+    "SPECIALIST_TASK_LABEL",
     "UNKNOWN_ACTION_RISK_LABEL",
     "UNKNOWN_ACTION_TOOL_LABEL",
     "action_heading",

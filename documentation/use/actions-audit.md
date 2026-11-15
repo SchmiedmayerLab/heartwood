@@ -30,6 +30,7 @@ If it appears to wait for review again after a restart, it may already have run:
 
 The command, file operation and path, and the exact arguments are shown exactly as the model proposed them and are labelled **Model-proposed command**, **Model-proposed file operation**, and **Exact arguments proposed by the model** in the terminal, browser, and notebook; the gateway does not verify that they do what the summary says.
 A specialist task review is headed by the role from the specialist catalog; its task description, task prompt, and any specialist name that is not in the catalog were written by the model and are labelled **Model-provided**, and its exact arguments repeat them under the arguments label.
+The specialists panel labels the same task text **Model-provided task** and names a specialist without a catalog role by its model-provided name.
 An action heading that falls back to model-written text carries the same label.
 
 Your approval never overrides deployment policy.

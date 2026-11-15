@@ -35,6 +35,7 @@ import {
   modelProposedOperation,
   retainedApprovalSendable,
   specialistModelFields,
+  specialistTaskLabel,
   summarySourceLabel,
 } from "../actionPresentation";
 import type { RequestActivity as RequestActivityState } from "../requestActivity";
@@ -799,7 +800,8 @@ const RuntimeStatus = ({
                     </span>
                     {subagent.taskSummary ?
                       <small>
-                        Task: {displaySafeText(subagent.taskSummary)}
+                        {specialistTaskLabel}:{" "}
+                        {displaySafeText(subagent.taskSummary)}
                       </small>
                     : null}
                     {subagent.resultSummary ?

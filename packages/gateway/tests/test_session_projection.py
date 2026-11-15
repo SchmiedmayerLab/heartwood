@@ -115,7 +115,10 @@ def test_projection_replays_lifecycle_tasks_usage_and_subagent_lineage() -> None
         "condenser",
     ]
     assert projection.subagents[0].status == "completed"
-    assert projection.subagents[0].role_label == "Research Planner"
+    # Without a catalog role, the name the model chose is shown as the model's.
+    assert projection.subagents[0].role_label == (
+        "Specialist (model-provided name: research-planner)"
+    )
     assert projection.subagents[0].status_label == "Complete"
     assert projection.subagents[0].parent_session_id == "session-1"
     native_subagent = events[7].payload["subagent"]

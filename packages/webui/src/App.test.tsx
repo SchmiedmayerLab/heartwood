@@ -2211,7 +2211,9 @@ describe("App", () => {
     expect(status).toHaveTextContent("2 calls");
     expect(status).toHaveTextContent("Primary Agent");
     expect(status).toHaveTextContent("Research Planner (Working)");
-    expect(status).toHaveTextContent("Task: Plan the synthetic analysis");
+    expect(status).toHaveTextContent(
+      "Model-provided task: Plan the synthetic analysis",
+    );
     expect(status).not.toHaveTextContent("Parent session session-test");
     expect(screen.getByLabelText("Task")).toBeEnabled();
     expect(screen.getByLabelText("Send guidance")).toBeInTheDocument();

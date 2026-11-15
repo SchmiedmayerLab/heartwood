@@ -39,6 +39,7 @@ from heartwood.core_adapter import (
 from heartwood.gateway._access import LaunchCapability
 from heartwood.gateway._action_presentation import (
     RETAINED_APPROVAL_NOTICE,
+    SPECIALIST_TASK_LABEL,
     action_arguments_label,
     action_heading,
     action_mode_label,
@@ -269,6 +270,7 @@ __all__ = [
     "MODEL_PRESETS",
     "MODEL_SOURCE_OPTIONS",
     "RETAINED_APPROVAL_NOTICE",
+    "SPECIALIST_TASK_LABEL",
     "ActionModeOption",
     "ActionSettings",
     "ActionSettingsError",

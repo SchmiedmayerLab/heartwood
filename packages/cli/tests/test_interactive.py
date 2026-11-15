@@ -387,6 +387,7 @@ def test_plain_terminal_renders_every_typed_action_and_automatic_decision() -> N
         "other-1",
         tool_name="synthetic_tool",
         summary="Run a custom action",
+        arguments={"target": "results"},
     )
 
     rendered = "\n".join(
@@ -400,6 +401,8 @@ def test_plain_terminal_renders_every_typed_action_and_automatic_decision() -> N
     # A heading without a catalog role names the model as the author of its text.
     assert "[Awaiting Review] Model-provided specialist name: research-planner" in rendered
     assert "Model-provided summary: Run a custom action" in rendered
+    assert '    Exact arguments proposed by the model: {"target":"results"}' in rendered
+    assert "arguments: " not in rendered
 
 
 def test_terminal_projection_renders_control_sequences_visibly() -> None:
@@ -1208,7 +1211,7 @@ def test_line_formatter_renders_the_gateway_owned_atomic_action_set() -> None:
     assert "[x] Inspect the synthetic cohort (Complete)" in rendered
     assert "[ ] Write the aggregate result (In Progress)" in rendered
     assert "Research Planner: Complete" in rendered
-    assert "Task: Review the synthetic analysis plan" in rendered
+    assert "Model-provided task: Review the synthetic analysis plan" in rendered
     assert "Result: Plan review completed" in rendered
     assert "Unverified review proposal: Inspect source\\u202e" in rendered
     assert "\u202e" not in rendered

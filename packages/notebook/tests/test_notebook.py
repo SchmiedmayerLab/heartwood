@@ -924,7 +924,7 @@ def test_notebook_view_model_preserves_the_complete_gateway_projection() -> None
     assert sections["Tasks"] == ("In Progress: Validate the synthetic cohort",)
     assert sections["Specialists"] == (
         "Research Planner: Working\n"
-        "Task: Review the synthetic analysis plan\n"
+        "Model-provided task: Review the synthetic analysis plan\n"
         "Result: Plan review is in progress\nUnverified review proposal: Inspect supplied source",
     )
     assert sections["Runtime"][-1] == (
