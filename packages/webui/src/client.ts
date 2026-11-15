@@ -6,6 +6,14 @@
  * SPDX-License-Identifier: MIT
  */
 
+import { EventSource } from "eventsource";
+import {
+  authenticatedFetch,
+  gatewayBasePath,
+  gatewayCapability,
+  gatewayRequestUrl,
+  joinPath,
+} from "./gatewayAccess";
 import { sessionProjectionResponseSchema } from "./projectionSchema";
 import type {
   ActionConfirmationRequest,
@@ -190,36 +198,45 @@ export class GatewayClient implements HeartwoodClient {
 
   async getProjectReadiness(): Promise<ProjectReadiness> {
     return parseJsonResponse<ProjectReadiness>(
-      await fetch(this.url("/project/readiness")),
+      await authenticatedFetch(this.basePath, this.url("/project/readiness")),
     );
   }
 
   async getStartupPlan(): Promise<StartupPlan> {
     return parseJsonResponse<StartupPlan>(
-      await fetch(this.url("/project/startup?interface=web")),
+      await authenticatedFetch(
+        this.basePath,
+        this.url("/project/startup?interface=web"),
+      ),
     );
   }
 
   async initializeProject(): Promise<StartupPlan> {
     return parseJsonResponse<StartupPlan>(
-      await fetch(this.url("/project/initialize"), { method: "POST" }),
+      await authenticatedFetch(this.basePath, this.url("/project/initialize"), {
+        method: "POST",
+      }),
     );
   }
 
   async listSessions(): Promise<SessionList> {
-    return parseJsonResponse<SessionList>(await fetch(this.url("/sessions")));
+    return parseJsonResponse<SessionList>(
+      await authenticatedFetch(this.basePath, this.url("/sessions")),
+    );
   }
 
   async ensureDefaultSession(): Promise<SessionSummary> {
     return parseJsonResponse<SessionSummary>(
-      await fetch(this.url("/sessions/default"), { method: "POST" }),
+      await authenticatedFetch(this.basePath, this.url("/sessions/default"), {
+        method: "POST",
+      }),
     );
   }
 
   async createSession(title?: string): Promise<SessionSummary> {
     const request: SessionCreateRequest = title === undefined ? {} : { title };
     return parseJsonResponse<SessionSummary>(
-      await fetch(this.url("/sessions"), {
+      await authenticatedFetch(this.basePath, this.url("/sessions"), {
         body: JSON.stringify(request),
         headers: { "Content-Type": "application/json" },
         method: "POST",
@@ -229,7 +246,10 @@ export class GatewayClient implements HeartwoodClient {
 
   async getSession(sessionId: string): Promise<SessionSummary> {
     return parseJsonResponse<SessionSummary>(
-      await fetch(this.url(`/sessions/${encodeURIComponent(sessionId)}`)),
+      await authenticatedFetch(
+        this.basePath,
+        this.url(`/sessions/${encodeURIComponent(sessionId)}`),
+      ),
     );
   }
 
@@ -239,17 +259,22 @@ export class GatewayClient implements HeartwoodClient {
   ): Promise<SessionSummary> {
     const request: SessionRenameRequest = { title };
     return parseJsonResponse<SessionSummary>(
-      await fetch(this.url(`/sessions/${encodeURIComponent(sessionId)}`), {
-        body: JSON.stringify(request),
-        headers: { "Content-Type": "application/json" },
-        method: "PATCH",
-      }),
+      await authenticatedFetch(
+        this.basePath,
+        this.url(`/sessions/${encodeURIComponent(sessionId)}`),
+        {
+          body: JSON.stringify(request),
+          headers: { "Content-Type": "application/json" },
+          method: "PATCH",
+        },
+      ),
     );
   }
 
   async getAuditExport(sessionId: string): Promise<AuditExport> {
     return parseJsonResponse<AuditExport>(
-      await fetch(
+      await authenticatedFetch(
+        this.basePath,
         this.url(`/sessions/${encodeURIComponent(sessionId)}/audit-export`),
       ),
     );
@@ -263,7 +288,8 @@ export class GatewayClient implements HeartwoodClient {
     const query = new URLSearchParams({ path });
     if (depth !== undefined) query.set("depth", String(depth));
     return parseJsonResponse<WorkspaceTree>(
-      await fetch(
+      await authenticatedFetch(
+        this.basePath,
         this.url(
           `/sessions/${encodeURIComponent(sessionId)}/workspace/tree?${query.toString()}`,
         ),
@@ -277,7 +303,8 @@ export class GatewayClient implements HeartwoodClient {
   ): Promise<WorkspaceFile> {
     const query = new URLSearchParams({ path });
     return parseJsonResponse<WorkspaceFile>(
-      await fetch(
+      await authenticatedFetch(
+        this.basePath,
         this.url(
           `/sessions/${encodeURIComponent(sessionId)}/workspace/file?${query.toString()}`,
         ),
@@ -287,7 +314,8 @@ export class GatewayClient implements HeartwoodClient {
 
   async getWorkspaceChanges(sessionId: string): Promise<WorkspaceChanges> {
     return parseJsonResponse<WorkspaceChanges>(
-      await fetch(
+      await authenticatedFetch(
+        this.basePath,
         this.url(
           `/sessions/${encodeURIComponent(sessionId)}/workspace/changes`,
         ),
@@ -301,7 +329,8 @@ export class GatewayClient implements HeartwoodClient {
   ): Promise<WorkspaceDiff> {
     const query = new URLSearchParams({ path });
     return parseJsonResponse<WorkspaceDiff>(
-      await fetch(
+      await authenticatedFetch(
+        this.basePath,
         this.url(
           `/sessions/${encodeURIComponent(sessionId)}/workspace/diff?${query.toString()}`,
         ),
@@ -312,7 +341,8 @@ export class GatewayClient implements HeartwoodClient {
   async postCommand(
     command: SessionCommand,
   ): Promise<SessionProjectionResponse> {
-    const response = await fetch(
+    const response = await authenticatedFetch(
+      this.basePath,
       this.url(`/sessions/${command.session_id}/commands`),
       {
         body: JSON.stringify(command),
@@ -328,15 +358,16 @@ export class GatewayClient implements HeartwoodClient {
     afterSequence?: number,
   ): Promise<SessionProjectionResponse> {
     const query = afterSequence === undefined ? "" : `?after=${afterSequence}`;
-    const response = await fetch(
-      this.url(`/sessions/${sessionId}/events${query}`),
+    const response = await authenticatedFetch(
+      this.basePath,
+      this.url(`/sessions/${encodeURIComponent(sessionId)}/events${query}`),
     );
     return parseResponse(response);
   }
 
   async getActionSettings(): Promise<ActionSettings> {
     return parseJsonResponse<ActionSettings>(
-      await fetch(this.url("/settings/actions")),
+      await authenticatedFetch(this.basePath, this.url("/settings/actions")),
     );
   }
 
@@ -345,23 +376,28 @@ export class GatewayClient implements HeartwoodClient {
   ): Promise<ActionSettings> {
     const request: ActionConfirmationRequest = { mode };
     return parseJsonResponse<ActionSettings>(
-      await fetch(this.url("/settings/actions/confirmation"), {
-        body: JSON.stringify(request),
-        headers: { "Content-Type": "application/json" },
-        method: "PUT",
-      }),
+      await authenticatedFetch(
+        this.basePath,
+        this.url("/settings/actions/confirmation"),
+        {
+          body: JSON.stringify(request),
+          headers: { "Content-Type": "application/json" },
+          method: "PUT",
+        },
+      ),
     );
   }
 
   async getModelSettings(): Promise<ModelSettings> {
     return parseJsonResponse<ModelSettings>(
-      await fetch(this.url("/settings/models")),
+      await authenticatedFetch(this.basePath, this.url("/settings/models")),
     );
   }
 
   async forgetCredential(connectionId: string): Promise<CredentialSettings> {
     return parseJsonResponse<CredentialSettings>(
-      await fetch(
+      await authenticatedFetch(
+        this.basePath,
         this.url(`/settings/credentials/${encodeURIComponent(connectionId)}`),
         { method: "DELETE" },
       ),
@@ -376,11 +412,15 @@ export class GatewayClient implements HeartwoodClient {
       terms_accepted: true,
     };
     return parseJsonResponse<SubscriptionDeviceLogin>(
-      await fetch(this.url("/settings/models/subscription/device"), {
-        body: JSON.stringify(request),
-        headers: { "Content-Type": "application/json" },
-        method: "POST",
-      }),
+      await authenticatedFetch(
+        this.basePath,
+        this.url("/settings/models/subscription/device"),
+        {
+          body: JSON.stringify(request),
+          headers: { "Content-Type": "application/json" },
+          method: "POST",
+        },
+      ),
     );
   }
 
@@ -393,69 +433,94 @@ export class GatewayClient implements HeartwoodClient {
       login_id: loginId,
     };
     return parseJsonResponse<SubscriptionDeviceLogin>(
-      await fetch(this.url("/settings/models/subscription/device/poll"), {
-        body: JSON.stringify(request),
-        headers: { "Content-Type": "application/json" },
-        method: "POST",
-      }),
+      await authenticatedFetch(
+        this.basePath,
+        this.url("/settings/models/subscription/device/poll"),
+        {
+          body: JSON.stringify(request),
+          headers: { "Content-Type": "application/json" },
+          method: "POST",
+        },
+      ),
     );
   }
 
   async configureModelSource(sourceId: ModelSource): Promise<ModelSettings> {
     const request: ModelSourceRequest = { source_id: sourceId };
     return parseJsonResponse<ModelSettings>(
-      await fetch(this.url("/settings/models/source"), {
-        body: JSON.stringify(request),
-        headers: { "Content-Type": "application/json" },
-        method: "PUT",
-      }),
+      await authenticatedFetch(
+        this.basePath,
+        this.url("/settings/models/source"),
+        {
+          body: JSON.stringify(request),
+          headers: { "Content-Type": "application/json" },
+          method: "PUT",
+        },
+      ),
     );
   }
 
   async discoverModels(request: ModelCatalogRequest): Promise<ModelCatalog> {
     return parseJsonResponse<ModelCatalog>(
-      await fetch(this.url("/settings/models/catalog"), {
-        body: JSON.stringify(request),
-        headers: { "Content-Type": "application/json" },
-        method: "POST",
-      }),
+      await authenticatedFetch(
+        this.basePath,
+        this.url("/settings/models/catalog"),
+        {
+          body: JSON.stringify(request),
+          headers: { "Content-Type": "application/json" },
+          method: "POST",
+        },
+      ),
     );
   }
 
   async connectModel(request: ModelConnectRequest): Promise<ModelSettings> {
     return parseJsonResponse<ModelSettings>(
-      await fetch(this.url("/settings/models/connect"), {
-        body: JSON.stringify(request),
-        headers: { "Content-Type": "application/json" },
-        method: "POST",
-      }),
+      await authenticatedFetch(
+        this.basePath,
+        this.url("/settings/models/connect"),
+        {
+          body: JSON.stringify(request),
+          headers: { "Content-Type": "application/json" },
+          method: "POST",
+        },
+      ),
     );
   }
 
   async saveModelProfile(profile: ModelProfileDraft): Promise<ModelSettings> {
     return parseJsonResponse<ModelSettings>(
-      await fetch(this.url("/settings/models/profiles"), {
-        body: JSON.stringify(profile),
-        headers: { "Content-Type": "application/json" },
-        method: "POST",
-      }),
+      await authenticatedFetch(
+        this.basePath,
+        this.url("/settings/models/profiles"),
+        {
+          body: JSON.stringify(profile),
+          headers: { "Content-Type": "application/json" },
+          method: "POST",
+        },
+      ),
     );
   }
 
   async selectModelProfile(profileId: string): Promise<ModelSettings> {
     const request: ModelSelectionRequest = { profile_id: profileId };
     return parseJsonResponse<ModelSettings>(
-      await fetch(this.url("/settings/models/active"), {
-        body: JSON.stringify(request),
-        headers: { "Content-Type": "application/json" },
-        method: "PUT",
-      }),
+      await authenticatedFetch(
+        this.basePath,
+        this.url("/settings/models/active"),
+        {
+          body: JSON.stringify(request),
+          headers: { "Content-Type": "application/json" },
+          method: "PUT",
+        },
+      ),
     );
   }
 
   async removeModelProfile(profileId: string): Promise<ModelSettings> {
     return parseJsonResponse<ModelSettings>(
-      await fetch(
+      await authenticatedFetch(
+        this.basePath,
         this.url(`/settings/models/profiles/${encodeURIComponent(profileId)}`),
         { method: "DELETE" },
       ),
@@ -468,13 +533,19 @@ export class GatewayClient implements HeartwoodClient {
         `?profile_id=${encodeURIComponent(profileId)}`
       );
     return parseJsonResponse<ModelValidation>(
-      await fetch(this.url(`/settings/models/validation${query}`)),
+      await authenticatedFetch(
+        this.basePath,
+        this.url(`/settings/models/validation${query}`),
+      ),
     );
   }
 
   async getModelArtifacts(): Promise<ModelArtifacts> {
     return parseJsonResponse<ModelArtifacts>(
-      await fetch(this.url("/settings/models/artifacts")),
+      await authenticatedFetch(
+        this.basePath,
+        this.url("/settings/models/artifacts"),
+      ),
     );
   }
 
@@ -482,22 +553,30 @@ export class GatewayClient implements HeartwoodClient {
     request: ModelRepositoryRequest,
   ): Promise<ModelRepositoryPlan> {
     return parseJsonResponse<ModelRepositoryPlan>(
-      await fetch(this.url("/settings/models/repository"), {
-        body: JSON.stringify(request),
-        headers: { "Content-Type": "application/json" },
-        method: "POST",
-      }),
+      await authenticatedFetch(
+        this.basePath,
+        this.url("/settings/models/repository"),
+        {
+          body: JSON.stringify(request),
+          headers: { "Content-Type": "application/json" },
+          method: "POST",
+        },
+      ),
     );
   }
 
   async downloadLocalModel(modelId: string): Promise<ModelDownload> {
     const request: ModelDownloadRequest = { model_id: modelId };
     return parseJsonResponse<ModelDownload>(
-      await fetch(this.url("/settings/models/downloads"), {
-        body: JSON.stringify(request),
-        headers: { "Content-Type": "application/json" },
-        method: "POST",
-      }),
+      await authenticatedFetch(
+        this.basePath,
+        this.url("/settings/models/downloads"),
+        {
+          body: JSON.stringify(request),
+          headers: { "Content-Type": "application/json" },
+          method: "POST",
+        },
+      ),
     );
   }
 
@@ -505,11 +584,15 @@ export class GatewayClient implements HeartwoodClient {
     request: CustomLocalModelDownloadRequest,
   ): Promise<ModelDownload> {
     return parseJsonResponse<ModelDownload>(
-      await fetch(this.url("/settings/models/downloads/custom"), {
-        body: JSON.stringify(request),
-        headers: { "Content-Type": "application/json" },
-        method: "POST",
-      }),
+      await authenticatedFetch(
+        this.basePath,
+        this.url("/settings/models/downloads/custom"),
+        {
+          body: JSON.stringify(request),
+          headers: { "Content-Type": "application/json" },
+          method: "POST",
+        },
+      ),
     );
   }
 
@@ -517,11 +600,15 @@ export class GatewayClient implements HeartwoodClient {
     request: LocalModelImportRequest,
   ): Promise<LocalModelImportResult> {
     return parseJsonResponse<LocalModelImportResult>(
-      await fetch(this.url("/settings/models/imports"), {
-        body: JSON.stringify(request),
-        headers: { "Content-Type": "application/json" },
-        method: "POST",
-      }),
+      await authenticatedFetch(
+        this.basePath,
+        this.url("/settings/models/imports"),
+        {
+          body: JSON.stringify(request),
+          headers: { "Content-Type": "application/json" },
+          method: "POST",
+        },
+      ),
     );
   }
 
@@ -529,11 +616,15 @@ export class GatewayClient implements HeartwoodClient {
     request: ModelTransferInspectRequest,
   ): Promise<ModelTransferPlan> {
     return parseJsonResponse<ModelTransferPlan>(
-      await fetch(this.url("/settings/models/transfers/inspect"), {
-        body: JSON.stringify(request),
-        headers: { "Content-Type": "application/json" },
-        method: "POST",
-      }),
+      await authenticatedFetch(
+        this.basePath,
+        this.url("/settings/models/transfers/inspect"),
+        {
+          body: JSON.stringify(request),
+          headers: { "Content-Type": "application/json" },
+          method: "POST",
+        },
+      ),
     );
   }
 
@@ -541,11 +632,15 @@ export class GatewayClient implements HeartwoodClient {
     request: ModelTransferExportRequest,
   ): Promise<ModelTransfer> {
     return parseJsonResponse<ModelTransfer>(
-      await fetch(this.url("/settings/models/transfers/exports"), {
-        body: JSON.stringify(request),
-        headers: { "Content-Type": "application/json" },
-        method: "POST",
-      }),
+      await authenticatedFetch(
+        this.basePath,
+        this.url("/settings/models/transfers/exports"),
+        {
+          body: JSON.stringify(request),
+          headers: { "Content-Type": "application/json" },
+          method: "POST",
+        },
+      ),
     );
   }
 
@@ -553,17 +648,22 @@ export class GatewayClient implements HeartwoodClient {
     request: ModelTransferImportRequest,
   ): Promise<ModelTransfer> {
     return parseJsonResponse<ModelTransfer>(
-      await fetch(this.url("/settings/models/transfers/imports"), {
-        body: JSON.stringify(request),
-        headers: { "Content-Type": "application/json" },
-        method: "POST",
-      }),
+      await authenticatedFetch(
+        this.basePath,
+        this.url("/settings/models/transfers/imports"),
+        {
+          body: JSON.stringify(request),
+          headers: { "Content-Type": "application/json" },
+          method: "POST",
+        },
+      ),
     );
   }
 
   async cancelModelTransfer(transferId: string): Promise<ModelTransfer> {
     return parseJsonResponse<ModelTransfer>(
-      await fetch(
+      await authenticatedFetch(
+        this.basePath,
         this.url(
           `/settings/models/transfers/${encodeURIComponent(transferId)}`,
         ),
@@ -574,48 +674,64 @@ export class GatewayClient implements HeartwoodClient {
 
   async getSkillSettings(): Promise<SkillSettings> {
     return parseJsonResponse<SkillSettings>(
-      await fetch(this.url("/settings/skills")),
+      await authenticatedFetch(this.basePath, this.url("/settings/skills")),
     );
   }
 
   async getSpecialistSettings(): Promise<SpecialistSettings> {
     return parseJsonResponse<SpecialistSettings>(
-      await fetch(this.url("/settings/specialists")),
+      await authenticatedFetch(
+        this.basePath,
+        this.url("/settings/specialists"),
+      ),
     );
   }
 
   async getResearchWorkflows(): Promise<WorkflowCatalog> {
     return parseJsonResponse<WorkflowCatalog>(
-      await fetch(this.url("/research/workflows")),
+      await authenticatedFetch(this.basePath, this.url("/research/workflows")),
     );
   }
 
   async getVerificationEnvironment(): Promise<PythonEnvironmentSnapshot> {
     return parseJsonResponse<PythonEnvironmentSnapshot>(
-      await fetch(this.url("/research/environment")),
+      await authenticatedFetch(
+        this.basePath,
+        this.url("/research/environment"),
+      ),
     );
   }
 
   async getExperimentRecords(): Promise<ExperimentCollection> {
     return parseJsonResponse<ExperimentCollection>(
-      await fetch(this.url("/research/experiments")),
+      await authenticatedFetch(
+        this.basePath,
+        this.url("/research/experiments"),
+      ),
     );
   }
 
   async getExperimentExport(): Promise<ExperimentExport> {
     return parseJsonResponse<ExperimentExport>(
-      await fetch(this.url("/research/experiments/export")),
+      await authenticatedFetch(
+        this.basePath,
+        this.url("/research/experiments/export"),
+      ),
     );
   }
 
   async refreshSkills(sourceId?: string): Promise<SkillSettings> {
     const request: SkillRefreshRequest = { source_id: sourceId ?? null };
     return parseJsonResponse<SkillSettings>(
-      await fetch(this.url("/settings/skills/refresh"), {
-        body: JSON.stringify(request),
-        headers: { "Content-Type": "application/json" },
-        method: "POST",
-      }),
+      await authenticatedFetch(
+        this.basePath,
+        this.url("/settings/skills/refresh"),
+        {
+          body: JSON.stringify(request),
+          headers: { "Content-Type": "application/json" },
+          method: "POST",
+        },
+      ),
     );
   }
 
@@ -625,11 +741,15 @@ export class GatewayClient implements HeartwoodClient {
       source_id: sourceId ?? null,
     };
     return parseJsonResponse<SkillSummary>(
-      await fetch(this.url("/settings/skills/inspect"), {
-        body: JSON.stringify(request),
-        headers: { "Content-Type": "application/json" },
-        method: "POST",
-      }),
+      await authenticatedFetch(
+        this.basePath,
+        this.url("/settings/skills/inspect"),
+        {
+          body: JSON.stringify(request),
+          headers: { "Content-Type": "application/json" },
+          method: "POST",
+        },
+      ),
     );
   }
 
@@ -645,22 +765,30 @@ export class GatewayClient implements HeartwoodClient {
       source_id: sourceId,
     };
     return parseJsonResponse<SkillSettings>(
-      await fetch(this.url("/settings/skills/install"), {
-        body: JSON.stringify(request),
-        headers: { "Content-Type": "application/json" },
-        method: "POST",
-      }),
+      await authenticatedFetch(
+        this.basePath,
+        this.url("/settings/skills/install"),
+        {
+          body: JSON.stringify(request),
+          headers: { "Content-Type": "application/json" },
+          method: "POST",
+        },
+      ),
     );
   }
 
   async inspectLocalSkill(source: string): Promise<SkillSummary> {
     const request: SkillLocalInspectRequest = { source };
     return parseJsonResponse<SkillSummary>(
-      await fetch(this.url("/settings/skills/local/inspect"), {
-        body: JSON.stringify(request),
-        headers: { "Content-Type": "application/json" },
-        method: "POST",
-      }),
+      await authenticatedFetch(
+        this.basePath,
+        this.url("/settings/skills/local/inspect"),
+        {
+          body: JSON.stringify(request),
+          headers: { "Content-Type": "application/json" },
+          method: "POST",
+        },
+      ),
     );
   }
 
@@ -674,19 +802,27 @@ export class GatewayClient implements HeartwoodClient {
       source,
     };
     return parseJsonResponse<SkillSettings>(
-      await fetch(this.url("/settings/skills/local/install"), {
-        body: JSON.stringify(request),
-        headers: { "Content-Type": "application/json" },
-        method: "POST",
-      }),
+      await authenticatedFetch(
+        this.basePath,
+        this.url("/settings/skills/local/install"),
+        {
+          body: JSON.stringify(request),
+          headers: { "Content-Type": "application/json" },
+          method: "POST",
+        },
+      ),
     );
   }
 
   async removeSkill(name: string): Promise<SkillSettings> {
     return parseJsonResponse<SkillSettings>(
-      await fetch(this.url(`/settings/skills/${encodeURIComponent(name)}`), {
-        method: "DELETE",
-      }),
+      await authenticatedFetch(
+        this.basePath,
+        this.url(`/settings/skills/${encodeURIComponent(name)}`),
+        {
+          method: "DELETE",
+        },
+      ),
     );
   }
 
@@ -698,7 +834,7 @@ export class GatewayClient implements HeartwoodClient {
     const onError = observer.onError ?? noopCleanup;
     const onState = observer.onState ?? noopCleanup;
     const query = afterSequence === undefined ? "" : `?after=${afterSequence}`;
-    const path = `/sessions/${sessionId}/events${query}`;
+    const path = `/sessions/${encodeURIComponent(sessionId)}/events${query}`;
     let closed = false;
     let cleanup = (): void => {
       closed = true;
@@ -715,7 +851,12 @@ export class GatewayClient implements HeartwoodClient {
         onState("reconnecting");
         cleanup = this.openSse(sessionId, afterSequence, observer);
       };
-      socket.onopen = (): void => onState("connected");
+      socket.onopen = (): void => {
+        const capability = gatewayCapability(this.basePath);
+        if (capability !== null) {
+          socket.send(JSON.stringify({ type: "authenticate", capability }));
+        }
+      };
       socket.onmessage = (message): void => {
         let payload: SessionProjectionResponse;
         try {
@@ -757,7 +898,7 @@ export class GatewayClient implements HeartwoodClient {
   ): () => void {
     const onError = observer.onError ?? noopCleanup;
     const onState = observer.onState ?? noopCleanup;
-    if (!("EventSource" in window)) {
+    if (!("fetch" in window)) {
       onState("degraded");
       onError(
         new Error(
@@ -768,7 +909,13 @@ export class GatewayClient implements HeartwoodClient {
     }
     const query = afterSequence === undefined ? "" : `?after=${afterSequence}`;
     const source = new EventSource(
-      this.url(`/sessions/${sessionId}/events/stream${query}`),
+      this.url(
+        `/sessions/${encodeURIComponent(sessionId)}/events/stream${query}`,
+      ),
+      {
+        maxBufferSize: 4 * 1024 * 1024,
+        fetch: (input, init) => authenticatedFetch(this.basePath, input, init),
+      },
     );
     source.onopen = (): void => onState("connected");
     source.onerror = (): void => {
@@ -808,7 +955,7 @@ export class GatewayClient implements HeartwoodClient {
   }
 
   private websocketUrl(path: string): string {
-    const url = new URL(this.url(path), window.location.href);
+    const url = gatewayRequestUrl(this.basePath, this.url(path));
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     return url.toString();
   }
@@ -861,35 +1008,4 @@ const parseProjectionPayload = (payload: string): SessionProjectionResponse => {
     throw new Error("Gateway response included an invalid session projection");
   }
   return parsed.data;
-};
-
-const gatewayBasePath = (): string => {
-  const env = import.meta.env as unknown;
-  if (typeof env !== "object" || env === null) {
-    return gatewayBaseFromDocument();
-  }
-  const value = (env as { VITE_HEARTWOOD_GATEWAY_BASE?: unknown })
-    .VITE_HEARTWOOD_GATEWAY_BASE;
-  if (typeof value === "string" && value !== "") {
-    return value;
-  }
-  return gatewayBaseFromDocument();
-};
-
-const gatewayBaseFromDocument = (): string => {
-  if (typeof document === "undefined") {
-    return "";
-  }
-  const value = document
-    .querySelector<HTMLMetaElement>('meta[name="heartwood-gateway-base"]')
-    ?.content.trim();
-  if (value === undefined || value === "" || value === "/") {
-    return "";
-  }
-  return value.startsWith("/") && !value.endsWith("/") ? value : "";
-};
-
-const joinPath = (basePath: string, path: string): string => {
-  const base = basePath.endsWith("/") ? basePath.slice(0, -1) : basePath;
-  return `${base}${path}`;
 };
