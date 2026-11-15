@@ -2422,6 +2422,7 @@ class SessionGateway:
             backend=backend,
             policy_profile=configuration.policy_profile,
             env=self.env,
+            worker_project_id=self.project.project_id,
             workflow_evaluator=ResearchStageEvaluator(
                 self.workspace_inspector,
                 parallel_review_preparer=self._parallel_review_preparer,
@@ -2454,6 +2455,7 @@ class SessionGateway:
             backend=_UnconfiguredAgentBackend(configuration.action_settings.confirmation_mode),
             policy_profile=configuration.policy_profile,
             env=self.env,
+            worker_project_id=self.project.project_id,
             workflow_evaluator=ResearchStageEvaluator(
                 self.workspace_inspector,
                 parallel_review_preparer=self._parallel_review_preparer,

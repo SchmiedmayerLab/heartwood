@@ -7,16 +7,19 @@
 """Synthetic authorization supplied by tests, never deployment qualification evidence."""
 
 import hashlib
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from uuid import NAMESPACE_URL, uuid5
+from uuid import NAMESPACE_URL, uuid4, uuid5
 from zipfile import ZipFile
 
 import pytest
 import tomli_w
+from pydantic import AnyHttpUrl
 
 from heartwood.compliance.review_benchmarks import planning_review_suite
+from heartwood.core_adapter import SessionService
+from heartwood.core_adapter.worker_attempts import WorkerAttemptLease, WorkerRuntimeBinding
 from heartwood.schemas.evaluation import (
     EvaluationCheck,
     EvaluationConfiguration,
@@ -177,3 +180,35 @@ def parallel_review_plan() -> ParallelReviewPlan:
         ),
         valid_until=datetime.now(UTC) + timedelta(days=1),
     )
+
+
+@pytest.fixture
+def worker_attempt(tmp_path: Path) -> Iterator[Callable[[str], WorkerAttemptLease]]:
+    """Journal-issued identity with fabricated runtime observation; no sandbox qualification."""
+    services: list[SessionService] = []
+
+    def create(host: str) -> WorkerAttemptLease:
+        service = SessionService.local_default(
+            tmp_path, session_id=f"worker-{len(services)}", worker_project_id=uuid4()
+        )
+        services.append(service)
+        intent = service.prepare_worker_attempt(
+            image_digest="sha256:" + "a" * 64,
+            sandbox_policy_sha256="b" * 64,
+            input_manifest_sha256="c" * 64,
+        )
+        return service.bind_worker_runtime(
+            attempt_id=intent.attempt_id,
+            runtime=WorkerRuntimeBinding(
+                sandbox_id="synthetic-worker",
+                endpoint=AnyHttpUrl(host),
+                image_digest=intent.image_digest,
+                sandbox_policy_sha256=intent.sandbox_policy_sha256,
+            ),
+        )
+
+    try:
+        yield create
+    finally:
+        for service in services:
+            service.close()
