@@ -27,7 +27,12 @@ import pytest
 import tomli_w
 from cryptography.hazmat.primitives import serialization
 
-from deploy.tests.checkpoint_records_integration import ObjectStore, QualificationClient, signer
+from deploy.tests.checkpoint_records_integration import (
+    ObjectStore,
+    QualificationClient,
+    conditional_write_policy,
+    signer,
+)
 from heartwood.audit import (
     AuditCheckpointError,
     CheckpointSignerError,
@@ -171,7 +176,7 @@ def records_transport(
     output.mkdir(mode=0o700)
     owned: list[ObjectStore] = []
     authority_process: subprocess.Popen[bytes] | None = None
-    report: dict[str, Any] = {"image": image, "checks": [], "passed": False}
+    report: dict[str, Any] = {"image": image, "store": binary.name, "checks": [], "passed": False}
     checks = report["checks"]
     try:
         ca = server_certificates(output / "tls")
@@ -181,29 +186,7 @@ def records_transport(
         root = server.client()
         bucket, prefix = "synthetic-evidence", "audit"
         root.create_bucket(Bucket=bucket, ObjectLockEnabledForBucket=True)
-        conditional_policy = {
-            "Version": "2012-10-17",
-            "Statement": [
-                {
-                    "Effect": "Deny",
-                    "Principal": "*",
-                    "Action": "s3:PutObject",
-                    "Resource": f"arn:aws:s3:::{bucket}/{prefix}/*",
-                    "Condition": {"Null": {"s3:if-none-match": "true"}},
-                }
-            ],
-        }
-        (output / "conditional-bucket-policy.json").write_text(json.dumps(conditional_policy))
-        conditional_enforcement = True
-        try:
-            root.put_bucket_policy(Bucket=bucket, Policy=json.dumps(conditional_policy))
-        except Exception as error:
-            response = getattr(error, "response", {}).get("Error", {})
-            if "invalid condition key 's3:if-none-match'" not in response.get("Message", ""):
-                raise
-            conditional_enforcement = False
-            report["conditional_policy_rejection"] = response
-        report["conditional_write_enforcement"] = conditional_enforcement
+        conditional_write_policy(root, bucket, prefix + "/", report)
         report["records_policy_qualified"] = False
         admin_home = output / "admin"
         admin_home.mkdir(mode=0o700)

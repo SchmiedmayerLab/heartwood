@@ -34,6 +34,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from heartwood.audit import CheckpointSignerError, LocalEd25519CheckpointSigner
 from heartwood.audit._anchored_signer import AnchoredCheckpointSigner
+from heartwood.audit._checkpoint import _canonical_checkpoint
 from heartwood.audit._continuity import RetainedCheckpoint, checkpoint_context
 from heartwood.audit._log import canonical_audit_jsonl, prepare_audit_event, verify_audit_jsonl
 from heartwood.audit._records_s3 import (
@@ -184,6 +185,44 @@ class ObjectStore:
                 ),
             ),
         )
+
+
+def conditional_write_policy(
+    client: QualificationClient, bucket: str, prefix: str, report: dict[str, Any]
+) -> bool:
+    """Deny unconditional writes in the bucket policy and record whether the store enforces it."""
+    policy = {
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Effect": "Deny",
+                "Principal": "*",
+                "Action": "s3:PutObject",
+                "Resource": f"arn:aws:s3:::{bucket}/{prefix}*",
+                "Condition": {"Null": {"s3:if-none-match": "true"}},
+            }
+        ],
+    }
+    report["conditional_bucket_policy"] = policy
+    try:
+        client.put_bucket_policy(Bucket=bucket, Policy=json.dumps(policy))
+    except Exception as error:
+        response = getattr(error, "response", {}).get("Error", {})
+        if "invalid condition key 's3:if-none-match'" not in response.get("Message", ""):
+            raise
+        report["conditional_policy_rejection"] = response
+        report["conditional_write_enforcement"] = False
+    else:
+        report["conditional_write_enforcement"] = True
+    return bool(report["conditional_write_enforcement"])
+
+
+def refused(operation: Any, code: str, **kwargs: object) -> None:  # noqa: ANN401
+    """Require the store itself to refuse a write with the expected error code."""
+    with pytest.raises(Exception, match=code) as failure:
+        operation(**kwargs)
+    response = getattr(failure.value, "response", {})
+    assert response.get("Error", {}).get("Code") == code, str(failure.value)
 
 
 def signer(output: Path, version: str) -> LocalEd25519CheckpointSigner:
@@ -374,12 +413,14 @@ def run(binary: Path, image: str, output: Path) -> None:
     output.mkdir(mode=0o700, parents=True, exist_ok=False)
     owned: list[ObjectStore] = []
     checks: list[str] = []
-    report: dict[str, object] = {"image": image, "checks": checks, "passed": False}
+    report: dict[str, Any] = {"image": image, "store": binary.name, "checks": checks}
+    report["passed"] = False
     try:
         server = ObjectStore(binary, output / "server-original", owned)
         client = server.client()
         bucket = "synthetic-records-" + uuid4().hex
         client.create_bucket(Bucket=bucket, ObjectLockEnabledForBucket=True)
+        enforced = conditional_write_policy(client, bucket, "", report)
         scope = CheckpointAuthorityScope(
             "synthetic-deployment",
             uuid4(),
@@ -460,6 +501,22 @@ def run(binary: Path, image: str, output: Path) -> None:
         assert records.history() == (first,)
         checks.append("server-enforced compliance deletion and retention-shortening denial")
 
+        published = {
+            "Bucket": bucket,
+            "Key": version["Key"],
+            "Body": _canonical_checkpoint(first.checkpoint).encode(),
+            "ChecksumAlgorithm": "SHA256",
+            "ObjectLockMode": "COMPLIANCE",
+            "ObjectLockRetainUntilDate": scope.retention_deadline,
+        }
+        refused(client.put_object, "PreconditionFailed", **published, IfNoneMatch="*")
+        if enforced:
+            refused(client.put_object, "AccessDenied", **published)
+            checks.append("store refuses conditional and unconditional checkpoint overwrites")
+        else:
+            checks.append("store refuses a conditional checkpoint overwrite")
+        assert records.history() == (first,)
+
         rotated = signer(output, "2")
         trusted[checkpoint_public_key_fingerprint(rotated.public_key)] = rotated.public_key
         fault = LostReplyClient(client)
@@ -527,6 +584,7 @@ def run(binary: Path, image: str, output: Path) -> None:
         replacement = ObjectStore(binary, output / "server-restored", owned)
         restored_client = replacement.client()
         restored_client.create_bucket(Bucket=bucket, ObjectLockEnabledForBucket=True)
+        assert conditional_write_policy(restored_client, bucket, "", {}) == enforced
         for item in json.loads((output / "backup.json").read_text()):
             restored_client.put_object(
                 Bucket=bucket,
@@ -575,23 +633,43 @@ def run(binary: Path, image: str, output: Path) -> None:
             if "/candidates/" in item["Key"]
             and first.checkpoint.statement.audit_content_sha256[7:] in item["Key"]
         )
-        restored_client.put_object(
-            Bucket=bucket,
-            Key=candidate_version["Key"],
-            Body=first.audit_content.encode(),
-            ChecksumAlgorithm="SHA256",
-            ObjectLockMode="COMPLIANCE",
-            ObjectLockRetainUntilDate=scope.retention_deadline,
-        )
-        with pytest.raises(CheckpointSignerError):
+        replacement_write = {
+            "Bucket": bucket,
+            "Key": candidate_version["Key"],
+            "Body": first.audit_content.encode(),
+            "ChecksumAlgorithm": "SHA256",
+            "ObjectLockMode": "COMPLIANCE",
+            "ObjectLockRetainUntilDate": scope.retention_deadline,
+        }
+        if enforced:
+            refused(restored_client.put_object, "AccessDenied", **replacement_write)
             restored_authority.sign(next_statement)
-        checks.append("unconditional new object version is detected even when bytes are identical")
+            checks.append("restored store refuses an unconditional candidate overwrite")
+        else:
+            restored_client.put_object(**replacement_write)
+            with pytest.raises(CheckpointSignerError):
+                restored_authority.sign(next_statement)
+            checks.append(
+                "unconditional new object version is detected even when bytes are identical"
+            )
+        report["records_policy_qualified"] = enforced
         report["passed"] = True
     finally:
         for server in owned:
             server.stop()
-        report["cleanup"] = {"server_processes_stopped": [server.process.pid for server in owned]}
+        report["cleanup"] = {
+            "server_processes_stopped": [server.process.pid for server in owned],
+            "records_stopped": all(server.process.poll() is not None for server in owned),
+        }
         report["limitations"] = [
+            *(
+                []
+                if report.get("conditional_write_enforcement")
+                else [
+                    "Records server rejects the conditional-write bucket policy; create-only "
+                    "publication relies on client conditions and duplicate-version detection"
+                ]
+            ),
             "Synthetic object-store implementation, not institutional S3 qualification",
             "Synthetic signing key, not a KMS/HSM deployment",
             "No native worker or independently deployed gateway/signing-service integration",

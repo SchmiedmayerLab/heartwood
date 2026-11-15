@@ -162,6 +162,7 @@ When an outside client on the workers' bridge network reaches a metadata service
 Otherwise, as on a local Docker host, a listener at that address on a separate disposable network is the positive control; it shows that an outside client reaches the address, not that the workers' route leads to a metadata service, which only a run on a cloud host with that service establishes.
 
 With checkpoint evidence, a records outage must block the approved action until its authorization is retained, and command replay must not repeat the effect.
+The records-service suite separately qualifies publication and exact retry, rehashed-history rejection, retention denial, key rotation with a lost publication reply, concurrent publication, a records outage between proposal and decision, backup and restore into a fresh server, and delete-marker and replacement-version detection; any failed check fails its case.
 The pinned synthetic records server rejects the conditional-write bucket policy, so replacement versions are detected and rejected without claiming full storage-policy qualification.
 Test failure or failed cleanup fails qualification; if revocation cannot settle, the fixture retains its control state for reconciliation.
 

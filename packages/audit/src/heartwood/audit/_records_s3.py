@@ -11,7 +11,7 @@ import json
 import re
 from collections.abc import Callable, Mapping
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, time, timedelta
 from typing import Any, Protocol
 from uuid import UUID
@@ -21,13 +21,26 @@ from heartwood.audit._checkpoint import (
     _canonical_checkpoint,
     _verify_experiment_content,
 )
-from heartwood.audit._continuity import RetainedCheckpoint, checkpoint_context
+from heartwood.audit._continuity import (
+    RetainedCheckpoint,
+    checkpoint_context,
+    verify_checkpoint_extension,
+)
 from heartwood.audit._log import verify_audit_jsonl
-from heartwood.schemas import AuditCheckpoint, AuditCheckpointStatement, AuditRetention
+from heartwood.audit._signer import CheckpointPublicKey, verify_checkpoint_signature
+from heartwood.schemas import (
+    AuditCheckpoint,
+    AuditCheckpointContext,
+    AuditCheckpointStatement,
+    AuditRetention,
+)
 from heartwood.schemas.experiments import ExperimentExportBinding
 
 _MAXIMUM_AUDIT_BYTES = 64 * 1024 * 1024
 _MAXIMUM_CHECKPOINT_BYTES = 64 * 1024
+
+# The version identifier and entity tag that a version listing reports for an object.
+type _Observed = tuple[str, str]
 
 
 class RecordsUnavailableError(RuntimeError):
@@ -86,6 +99,20 @@ class CheckpointAuthorityScope:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class VerifiedHistory:
+    """Retained checkpoints already verified against independently trusted keys.
+
+    ``objects`` holds the observed version of every retained object read for them.
+    Extending the history rereads none of those objects and rejects any change to them.
+    """
+
+    checkpoints: tuple[AuditCheckpoint, ...] = ()
+    contexts: tuple[AuditCheckpointContext, ...] = ()
+    head: RetainedCheckpoint | None = None
+    objects: Mapping[str, _Observed] = field(default_factory=dict)
+
+
 class S3CheckpointRecords:
     """Use versioned objects, compliance retention and conditional publication.
 
@@ -140,43 +167,61 @@ class S3CheckpointRecords:
     def audit_content(self, statement: AuditCheckpointStatement) -> str:
         """Fetch exact bytes by digest from the fixed records namespace."""
         self.scope.authorize(statement)
-        content = self._read_unique(self._audit_key(statement), _MAXIMUM_AUDIT_BYTES)
-        if "sha256:" + hashlib.sha256(content).hexdigest() != statement.audit_content_sha256:
-            raise AuditCheckpointError("retained audit bytes do not match their digest")
-        decoded = content.decode("utf-8")
-        events, _ = verify_audit_jsonl(decoded)
-        checkpoint_context(statement, decoded)
-        raw = events[-1].payload.get("experiment_export")
-        experiment_content = None
-        if raw is not None:
-            binding = ExperimentExportBinding.model_validate(raw)
-            experiment_content = self._read_unique(
-                self._experiment_key(binding), _MAXIMUM_AUDIT_BYTES
-            ).decode("utf-8")
-        _verify_experiment_content(events, experiment_content)
-        return decoded
+        return self._audit_content(statement, None)[0]
 
     def history(self) -> tuple[RetainedCheckpoint, ...]:
         """Read every retained ordinal, rejecting gaps, hidden versions and delete markers."""
-        prefix = f"{self._prefix}/checkpoints/"
-        versions = self._versions(prefix)
-        history: list[RetainedCheckpoint] = []
-        for ordinal, key in enumerate(sorted(versions), start=1):
-            if key != self._checkpoint_key(ordinal):
-                raise AuditCheckpointError(
-                    "retained checkpoint history has a gap or unknown object"
+        listing = self._versions(f"{self._prefix}/")
+        return tuple(
+            self._retained(ordinal, listing)[0] for ordinal in range(1, self._length(listing) + 1)
+        )
+
+    def verified_history(
+        self,
+        trusted_keys: Mapping[str, CheckpointPublicKey],
+        since: VerifiedHistory | None = None,
+    ) -> VerifiedHistory:
+        """Verify the complete retained history, or extend a history verified earlier.
+
+        An extension reads only the checkpoints published after ``since`` and relies
+        on the signed hash chain for their predecessors. Its single version listing
+        rejects a changed, missing or additional version of any object ``since``
+        verified, and any delete marker. Only a complete verification rereads
+        retained bytes, so it alone detects a store that changes bytes in place
+        without changing their version identifier or entity tag.
+        """
+        listing = self._versions(f"{self._prefix}/")
+        verified = since or VerifiedHistory()
+        if any(listing.get(key) != observed for key, observed in verified.objects.items()):
+            raise AuditCheckpointError("verified checkpoint history changed in the records system")
+        for ordinal in range(len(verified.checkpoints) + 1, self._length(listing) + 1):
+            retained, objects = self._retained(ordinal, listing)
+            checkpoint = retained.checkpoint
+            key = trusted_keys.get(checkpoint.signature.public_key_sha256)
+            if key is None:
+                raise AuditCheckpointError("retained checkpoint signing key is not trusted")
+            try:
+                verify_checkpoint_signature(
+                    statement=checkpoint.statement, signature=checkpoint.signature, public_key=key
                 )
-            content = self._read_version(key, versions[key], _MAXIMUM_CHECKPOINT_BYTES)
-            checkpoint = AuditCheckpoint.model_validate_json(content)
-            if content != _canonical_checkpoint(checkpoint).encode("utf-8"):
-                raise AuditCheckpointError("retained checkpoint is not canonical")
-            self.scope.authorize(checkpoint.statement)
-            audit_content = self.audit_content(checkpoint.statement)
-            context = checkpoint_context(checkpoint.statement, audit_content)
-            if context.sequence != ordinal or context.project_id != self.scope.project_id:
-                raise AuditCheckpointError("retained checkpoint scope or ordinal is invalid")
-            history.append(RetainedCheckpoint(checkpoint, audit_content))
-        return tuple(history)
+            except ValueError as error:
+                raise AuditCheckpointError("retained checkpoint signature is invalid") from error
+            context = verify_checkpoint_extension(
+                statement=checkpoint.statement,
+                audit_content=retained.audit_content,
+                project_id=self.scope.project_id,
+                predecessor=verified.head,
+                trusted_keys=trusted_keys,
+            )
+            if any(item.publication_id == context.publication_id for item in verified.contexts):
+                raise AuditCheckpointError("retained publication identity was reused")
+            verified = VerifiedHistory(
+                checkpoints=(*verified.checkpoints, checkpoint),
+                contexts=(*verified.contexts, context),
+                head=retained,
+                objects={**verified.objects, **objects},
+            )
+        return verified
 
     def publish(self, checkpoint: AuditCheckpoint) -> RetainedCheckpoint:
         """Publish one ordinal atomically, then independently read back its retained bytes.
@@ -198,6 +243,51 @@ class S3CheckpointRecords:
             raise AuditCheckpointError("checkpoint publication conflicts with retained history")
         return RetainedCheckpoint(retained, audit_content)
 
+    def _length(self, listing: Mapping[str, _Observed]) -> int:
+        prefix = f"{self._prefix}/checkpoints/"
+        keys = sorted(key for key in listing if key.startswith(prefix))
+        if keys != [self._checkpoint_key(ordinal) for ordinal in range(1, len(keys) + 1)]:
+            raise AuditCheckpointError("retained checkpoint history has a gap or unknown object")
+        return len(keys)
+
+    def _retained(
+        self, ordinal: int, listing: Mapping[str, _Observed]
+    ) -> tuple[RetainedCheckpoint, dict[str, _Observed]]:
+        """Read one listed ordinal and the observed versions of every object it binds."""
+        key = self._checkpoint_key(ordinal)
+        content = self._read_version(key, listing[key][0], _MAXIMUM_CHECKPOINT_BYTES)
+        checkpoint = AuditCheckpoint.model_validate_json(content)
+        if content != _canonical_checkpoint(checkpoint).encode("utf-8"):
+            raise AuditCheckpointError("retained checkpoint is not canonical")
+        self.scope.authorize(checkpoint.statement)
+        audit_content, objects = self._audit_content(checkpoint.statement, listing)
+        context = checkpoint_context(checkpoint.statement, audit_content)
+        if context.sequence != ordinal or context.project_id != self.scope.project_id:
+            raise AuditCheckpointError("retained checkpoint scope or ordinal is invalid")
+        return RetainedCheckpoint(checkpoint, audit_content), {key: listing[key], **objects}
+
+    def _audit_content(
+        self, statement: AuditCheckpointStatement, listing: Mapping[str, _Observed] | None
+    ) -> tuple[str, dict[str, _Observed]]:
+        key = self._audit_key(statement)
+        objects = {key: self._locate(key, listing)}
+        content = self._read_version(key, objects[key][0], _MAXIMUM_AUDIT_BYTES)
+        if "sha256:" + hashlib.sha256(content).hexdigest() != statement.audit_content_sha256:
+            raise AuditCheckpointError("retained audit bytes do not match their digest")
+        decoded = content.decode("utf-8")
+        events, _ = verify_audit_jsonl(decoded)
+        checkpoint_context(statement, decoded)
+        raw = events[-1].payload.get("experiment_export")
+        experiment_content = None
+        if raw is not None:
+            experiment = self._experiment_key(ExperimentExportBinding.model_validate(raw))
+            objects[experiment] = self._locate(experiment, listing)
+            experiment_content = self._read_version(
+                experiment, objects[experiment][0], _MAXIMUM_AUDIT_BYTES
+            ).decode("utf-8")
+        _verify_experiment_content(events, experiment_content)
+        return decoded, objects
+
     def _checkpoint_key(self, sequence: int) -> str:
         return f"{self._prefix}/checkpoints/{sequence:020d}.json"
 
@@ -208,8 +298,8 @@ class S3CheckpointRecords:
     def _experiment_key(self, binding: ExperimentExportBinding) -> str:
         return f"{self._prefix}/experiments/{binding.sha256}.jsonl"
 
-    def _versions(self, prefix: str) -> dict[str, str]:
-        versions: dict[str, str] = {}
+    def _versions(self, prefix: str) -> dict[str, _Observed]:
+        versions: dict[str, _Observed] = {}
         request: dict[str, object] = {"Bucket": self._bucket, "Prefix": prefix}
         seen_markers: set[tuple[str, str]] = set()
         while True:
@@ -217,7 +307,7 @@ class S3CheckpointRecords:
             if response.get("DeleteMarkers"):
                 raise AuditCheckpointError("records namespace contains a delete marker")
             for item in response.get("Versions", []):
-                key, version = item.get("Key"), item.get("VersionId")
+                key, version, tag = item.get("Key"), item.get("VersionId"), item.get("ETag")
                 if (
                     not isinstance(key, str)
                     or not key.startswith(prefix)
@@ -225,10 +315,12 @@ class S3CheckpointRecords:
                     or not isinstance(version, str)
                     or not version
                     or version == "null"
+                    or not isinstance(tag, str)
+                    or not tag
                     or item.get("IsLatest") is not True
                 ):
                     raise AuditCheckpointError("records namespace has ambiguous object versions")
-                versions[key] = version
+                versions[key] = (version, tag)
             if response.get("IsTruncated") is False:
                 return versions
             key_marker = response.get("NextKeyMarker")
@@ -244,13 +336,19 @@ class S3CheckpointRecords:
             seen_markers.add((key_marker, version_marker))
             request.update(KeyMarker=key_marker, VersionIdMarker=version_marker)
 
-    def _read_unique(self, key: str, maximum_bytes: int) -> bytes:
-        versions = self._versions(key)
+    def _locate(self, key: str, listing: Mapping[str, _Observed] | None) -> _Observed:
+        """Find the one retained version of a key, listing it alone when no listing is given."""
+        versions = self._versions(key) if listing is None else {}
+        if listing is not None and key in listing:
+            versions[key] = listing[key]
         if not versions:
             raise _MissingObjectError("required retained object is unavailable")
         if set(versions) != {key}:
             raise AuditCheckpointError("required retained object is unavailable or ambiguous")
-        return self._read_version(key, versions[key], maximum_bytes)
+        return versions[key]
+
+    def _read_unique(self, key: str, maximum_bytes: int) -> bytes:
+        return self._read_version(key, self._locate(key, None)[0], maximum_bytes)
 
     def _read_version(self, key: str, version: str, maximum_bytes: int) -> bytes:
         response = _request(

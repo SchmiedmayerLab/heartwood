@@ -6,16 +6,13 @@
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, timedelta
 
 from heartwood.audit._checkpoint import AuditCheckpointError
-from heartwood.audit._continuity import (
-    RetainedCheckpoint,
-    checkpoint_context,
-    verify_checkpoint_extension,
-)
-from heartwood.audit._records_s3 import S3CheckpointRecords
+from heartwood.audit._continuity import checkpoint_context, verify_checkpoint_extension
+from heartwood.audit._records_s3 import S3CheckpointRecords, VerifiedHistory
 from heartwood.audit._signer import (
     CheckpointPublicKey,
     CheckpointSigner,
@@ -32,6 +29,9 @@ class AnchoredCheckpointSigner:
     are accepted. The fixed records scope must come from operator authorization.
     A gateway must not instantiate this authority with credentials available to
     its worker or treat a plain signature response as proof of this deployment.
+
+    The first request verifies the complete retained history. Later requests extend
+    that verification and reject any change to it; a failed request discards it.
     """
 
     def __init__(
@@ -46,6 +46,8 @@ class AnchoredCheckpointSigner:
         self._signer = signer
         self._trusted_keys = dict(trusted_keys)
         self._clock = clock
+        self._verified: VerifiedHistory | None = None
+        self._lock = threading.Lock()
 
     def sign(self, statement: AuditCheckpointStatement) -> AuditCheckpointSignature:
         """Return a verified signature only after observing immutable publication."""
@@ -67,30 +69,15 @@ class AnchoredCheckpointSigner:
         if context.project_id != scope.project_id:
             raise AuditCheckpointError("checkpoint candidate belongs to another project")
 
-        previous: RetainedCheckpoint | None = None
-        replay: AuditCheckpointSignature | None = None
-        publications: set[str] = set()
-        for retained in self._records.history():
-            self._verify_signature(retained.checkpoint)
-            binding = verify_checkpoint_extension(
-                statement=retained.checkpoint.statement,
-                audit_content=retained.audit_content,
-                project_id=scope.project_id,
-                predecessor=previous,
-                trusted_keys=self._trusted_keys,
-            )
-            if binding.publication_id in publications:
-                raise AuditCheckpointError("retained publication identity was reused")
-            publications.add(binding.publication_id)
+        history = self._history()
+        for previous, binding in zip(history.checkpoints, history.contexts, strict=True):
             if binding.publication_id == context.publication_id:
-                if retained.checkpoint.statement != statement or retained.audit_content != content:
+                # The statement binds the digest of the exact audit bytes.
+                if previous.statement != statement:
                     raise AuditCheckpointError(
                         "publication identity conflicts with retained history"
                     )
-                replay = retained.checkpoint.signature
-            previous = retained
-        if replay is not None:
-            return replay
+                return previous.signature
 
         created = datetime.fromisoformat(statement.created_at.replace("Z", "+00:00"))
         # The timestamp identifies the prepared snapshot, not publication time.
@@ -101,7 +88,7 @@ class AnchoredCheckpointSigner:
             statement=statement,
             audit_content=content,
             project_id=scope.project_id,
-            predecessor=previous,
+            predecessor=history.head,
             trusted_keys=self._trusted_keys,
         )
         checkpoint = AuditCheckpoint(statement=statement, signature=self._signer.sign(statement))
@@ -109,6 +96,22 @@ class AnchoredCheckpointSigner:
         retained = self._records.publish(checkpoint)
         self._verify_signature(retained.checkpoint)
         return retained.checkpoint.signature
+
+    def _history(self) -> VerifiedHistory:
+        since = self._verified
+        try:
+            history = self._records.verified_history(self._trusted_keys, since)
+        except Exception:
+            with self._lock:
+                self._verified = None
+            raise
+        with self._lock:
+            # Concurrent requests may finish in any order; keep the longest verified history.
+            if self._verified is None or len(history.checkpoints) >= len(
+                self._verified.checkpoints
+            ):
+                self._verified = history
+        return history
 
     def _verify_signature(self, checkpoint: AuditCheckpoint) -> None:
         key = self._trusted_keys.get(checkpoint.signature.public_key_sha256)

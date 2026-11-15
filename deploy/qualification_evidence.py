@@ -48,6 +48,7 @@ EXPECTED_CASES = {
         {
             _NATIVE + "test_failed_gateway_retains_logs_until_verified_cleanup",
             _NATIVE + "test_records_transport_authorization",
+            _NATIVE + "test_records_service_qualification",
             _NATIVE + "test_native_expired_provider_denies_retained_placeholder[infrastructure0]",
             _NATIVE + "test_native_rejects_symlink_workspace",
             _NATIVE + "test_native_workflow_and_protected_state_restore[local-audit-workflow]",

@@ -6,10 +6,14 @@
 
 from __future__ import annotations
 
+import base64
 import io
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 from uuid import UUID
 
@@ -19,12 +23,13 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from heartwood.audit import CheckpointSignerError, LocalEd25519CheckpointSigner
 from heartwood.audit._anchored_signer import AnchoredCheckpointSigner
-from heartwood.audit._checkpoint import AuditCheckpointError
+from heartwood.audit._checkpoint import AuditCheckpointError, _canonical_checkpoint
 from heartwood.audit._continuity import RetainedCheckpoint, checkpoint_context
 from heartwood.audit._log import canonical_audit_jsonl, prepare_audit_event, verify_audit_jsonl
 from heartwood.audit._records_s3 import CheckpointAuthorityScope, S3CheckpointRecords
 from heartwood.audit._signer import checkpoint_public_key_fingerprint
 from heartwood.schemas import (
+    AuditCheckpoint,
     AuditCheckpointContext,
     AuditCheckpointSignature,
     AuditCheckpointStatement,
@@ -459,3 +464,146 @@ def test_paginated_retained_history_can_extend_without_omitting_a_predecessor(
     assert history[-1].checkpoint.signature == signature
     assert any("KeyMarker" in request for request in requests)
     assert environment.signer.calls == 4
+
+
+def _extend(environment: Environment, previous: RetainedCheckpoint, count: int) -> list[int]:
+    """Publish further checkpoints and return the record reads of each signature."""
+    reads = []
+    for index in range(count):
+        statement, content = candidate(previous, publication_id=f"boundary-{index}")
+        environment.records.stage_audit(statement, content)
+        before = environment.client.reads
+        signature = environment.authority.sign(statement)
+        reads.append(environment.client.reads - before)
+        previous = RetainedCheckpoint(
+            AuditCheckpoint(statement=statement, signature=signature), content
+        )
+    return reads
+
+
+def test_signature_reads_a_bounded_number_of_records(environment: Environment) -> None:
+    reads = _extend(environment, anchor(environment), 12)
+    # The candidate, the previous ordinal and its candidate, and three publication reads,
+    # whatever the length of the retained history.
+    assert reads == [6] * 12
+    assert len(environment.records.history()) == 13
+
+
+def _checkpoint_key(environment: Environment, ordinal: int) -> str:
+    return next(key for key in environment.client.objects if key.endswith(f"/{ordinal:020d}.json"))
+
+
+def _candidate_key(environment: Environment, ordinal: int) -> str:
+    statement = environment.records.history()[ordinal - 1].checkpoint.statement
+    digest = statement.audit_content_sha256.removeprefix("sha256:")
+    return next(key for key in environment.client.objects if key.endswith(f"/{digest}.jsonl"))
+
+
+@pytest.mark.parametrize("ordinal", [1, 2, 3], ids=["genesis", "middle", "head"])
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "modified",
+        "modified-audit",
+        "replacement-version",
+        "different-version",
+        "missing",
+        "delete-marker",
+        "reordered",
+    ],
+)
+def test_extension_rejects_any_change_to_verified_history(
+    environment: Environment, ordinal: int, fault: str
+) -> None:
+    _extend(environment, anchor(environment), 2)
+    head = environment.records.history()[-1]
+    # An exact retry verifies the complete retained history, including the head.
+    assert environment.authority.sign(head.checkpoint.statement) == head.checkpoint.signature
+    signatures = environment.signer.calls
+    objects = environment.client.objects
+    key = _checkpoint_key(environment, ordinal)
+    stored = objects[key][0]
+    if fault == "modified":
+        stored.content += b"\n"
+    elif fault == "modified-audit":
+        objects[_candidate_key(environment, ordinal)][0].content += b"\n"
+    elif fault == "replacement-version":
+        objects[key].append(StoredObject(stored.content, stored.deadline, "replacement"))
+    elif fault == "different-version":
+        objects[key] = [StoredObject(stored.content, stored.deadline, "different")]
+    elif fault == "missing":
+        del objects[key]
+    elif fault == "delete-marker":
+        environment.client.delete_markers.append(key)
+    else:
+        neighbour = _checkpoint_key(environment, 2 if ordinal != 2 else 3)
+        objects[key], objects[neighbour] = objects[neighbour], objects[key]
+    statement, content = candidate(head, publication_id="after-change")
+    environment.records.stage_audit(statement, content)
+    with pytest.raises(CheckpointSignerError):
+        environment.authority.sign(statement)
+    assert environment.signer.calls == signatures
+
+
+def test_complete_verification_rereads_bytes_behind_unchanged_version_metadata(
+    environment: Environment,
+) -> None:
+    _extend(environment, anchor(environment), 2)
+    head = environment.records.history()[-1]
+    stored = environment.client.objects[_checkpoint_key(environment, 1)][0]
+    checkpoint = AuditCheckpoint.model_validate_json(stored.content)
+    # Only a store that violates version immutability can change bytes without
+    # changing their version identifier or entity tag; a complete pass still rereads them.
+    stored.etag = stored.entity_tag
+    stored.content = _canonical_checkpoint(
+        checkpoint.model_copy(
+            update={
+                "signature": checkpoint.signature.model_copy(
+                    update={"value": base64.b64encode(bytes(64)).decode("ascii")}
+                )
+            }
+        )
+    ).encode()
+    key = environment.signer.delegate.public_key
+    restarted = AnchoredCheckpointSigner(
+        records=environment.records,
+        signer=environment.signer,
+        trusted_keys={checkpoint_public_key_fingerprint(key): key},
+        clock=lambda: _NOW,
+    )
+    statement, content = candidate(head, publication_id="after-restart")
+    environment.records.stage_audit(statement, content)
+    signatures = environment.signer.calls
+    with pytest.raises(CheckpointSignerError):
+        restarted.sign(statement)
+    assert environment.signer.calls == signatures
+
+
+def test_concurrent_requests_keep_one_ordinal_and_a_usable_verification(
+    environment: Environment,
+) -> None:
+    first = anchor(environment)
+    proposals = [candidate(first, publication_id=name) for name in ("left", "right")]
+    for statement, content in proposals:
+        environment.records.stage_audit(statement, content)
+    barrier = threading.Barrier(2)
+    sign = environment.signer.delegate.sign
+
+    def racing(statement: AuditCheckpointStatement) -> AuditCheckpointSignature:
+        barrier.wait(timeout=10)
+        return sign(statement)
+
+    environment.signer.delegate = cast(Any, SimpleNamespace(sign=racing))
+    outcomes = []
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        for future in [executor.submit(environment.authority.sign, s) for s, _ in proposals]:
+            try:
+                future.result(timeout=20)
+                outcomes.append("retained")
+            except CheckpointSignerError:
+                outcomes.append("rejected")
+    assert sorted(outcomes) == ["rejected", "retained"]
+    head = environment.records.history()[-1]
+    assert len(environment.records.history()) == 2
+    environment.signer.delegate = cast(Any, SimpleNamespace(sign=sign))
+    assert _extend(environment, head, 1) == [6]

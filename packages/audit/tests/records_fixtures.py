@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -19,6 +20,12 @@ class StoredObject:
     deadline: datetime
     version: str
     mode: str = "COMPLIANCE"
+    # A listing reports the content's entity tag unless a fault fixes another one.
+    etag: str | None = None
+
+    @property
+    def entity_tag(self) -> str:
+        return self.etag or '"' + hashlib.md5(self.content, usedforsecurity=False).hexdigest() + '"'
 
 
 @dataclass
@@ -31,6 +38,7 @@ class MemoryS3:
     fail_before_write: bool = False
     writes: int = 0
     calls: int = 0
+    reads: int = 0
     unavailable: bool = False
 
     def list_object_versions(self, **kwargs: object) -> Mapping[str, Any]:
@@ -40,7 +48,12 @@ class MemoryS3:
         prefix = str(kwargs["Prefix"])
         return {
             "Versions": [
-                {"Key": key, "VersionId": value.version, "IsLatest": index == len(values) - 1}
+                {
+                    "Key": key,
+                    "VersionId": value.version,
+                    "ETag": value.entity_tag,
+                    "IsLatest": index == len(values) - 1,
+                }
                 for key, values in self.objects.items()
                 if key.startswith(prefix)
                 for index, value in enumerate(values)
@@ -51,6 +64,7 @@ class MemoryS3:
 
     def get_object(self, **kwargs: object) -> Mapping[str, Any]:
         self.calls += 1
+        self.reads += 1
         if self.unavailable:
             raise OSError("synthetic records outage")
         value = next(

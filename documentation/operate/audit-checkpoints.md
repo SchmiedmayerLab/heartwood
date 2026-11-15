@@ -39,7 +39,7 @@ Signed retention dates do not prove that the records system enforced immutabilit
 
 Managed evidence checkpoints every approval and rejection decision and the closure of a session owner.
 Closing an owner releases its writer lease; it does not delete the session.
-Each checkpoint binds the previous checkpoint's digest and extends its exact audit prefix, and the signer validates project, session, deployment, retention policy and complete retained history before publishing it.
+Each checkpoint binds the previous checkpoint's digest and extends its exact audit prefix, and the signer validates project, session, deployment, retention policy and retained history before publishing it.
 The records adapter uses conditional writes, version-aware reads and COMPLIANCE retention observations, and rejects hidden versions, delete markers, missing ordinals and changed retained bytes.
 
 In `required` mode, a decision stays pending until its checkpoint has been read back and verified from retained storage.
@@ -53,6 +53,20 @@ Once submission may have occurred, Heartwood observes the native operation inste
 
 Managed evidence does not checkpoint every model request, prove a worker's claims, or qualify the signing service or storage.
 `AnchoredCheckpointSigner` in `heartwood.audit` composes the signer and records interfaces for an independent signing authority, but it is a library, not a deployed service: the operator supplies authenticated hosting, caller-to-scope authorization, key custody and storage policy.
+
+### Verification at a Boundary
+
+The gateway and the signing authority each keep the history they have verified and the observed version identifier and entity tag of every retained object it covers.
+The first boundary after the gateway starts, and the first request the signing authority serves, verify the complete retained history: every checkpoint, its signature, its audit candidate and its link to its predecessor.
+A later boundary, and a later signing request, extend that verification instead.
+They list the session's records versions once and read only the checkpoints published since, with their candidates; the signed hash chain covers the earlier checkpoints.
+The number of records read at a boundary does not depend on the session's length; the version listing still grows with it, one request for each thousand retained objects.
+Before a new checkpoint is published, the gateway and the signing authority each reject a modified, missing, reordered or replaced checkpoint, candidate or experiment export they have already verified, and any delete marker in the session's records.
+A failed boundary or request discards the kept history, so the next one verifies the complete history again.
+
+Only a complete verification rereads retained bytes.
+A store that changes an object's bytes without changing its version identifier or entity tag violates S3 versioning; the next complete verification detects such a change, after a gateway or authority restart or through the controller's explicit `verify` method.
+The `heartwood audit verify` command and checkpoint creation still verify the complete local session and audit streams.
 
 ## Configure Managed Evidence
 
@@ -118,6 +132,14 @@ Scope list permissions with prefix conditions and object permissions with exact 
 Neither identity needs bucket administration, object deletion, governance bypass, ACL changes or access to another prefix.
 Enforce `If-None-Match` writes in the bucket policy as well, because versioning and retention alone do not prevent a new version from hiding an older one. See [S3 conditional-write enforcement](https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-writes-enforce.html).
 Qualify equivalent behavior for any other S3-compatible store.
+
+Native qualification runs the records-service and transport suites against a synthetic MinIO server built from the revision pinned in `images/worker/candidate/records.json`, with versioning, Object Lock in COMPLIANCE mode and the conditional-write bucket policy above.
+Each suite records the store, the policy and `conditional_write_enforcement` in its `records-result.json`.
+That server rejects the `s3:if-none-match` condition key, so its results record `conditional_write_enforcement: false` and `records_policy_qualified: false`.
+It refuses a conditional overwrite of a published checkpoint but accepts an unconditional write as a new version.
+Heartwood rejects such a version wherever it reads the affected history, yet create-only publication is not enforced by that store.
+The records-service suite checks retention denial, lost-reply reconciliation, concurrent publication, outage recovery, backup and restore into a fresh server, and delete-marker and replacement-version detection against that same configuration.
+Create-only publication still needs qualification against a store that enforces the conditional-write policy, together with institutional retention approval and a production KMS or HSM signer.
 
 A working manifest does not prove that the signer authorizes requests, that the storage identities are restricted, or that the institution approves the deployment.
 Verify authorized and denied operations, key rotation, interrupted publication, retention, backup and restore, and network boundaries with synthetic records before admitting sensitive data.
