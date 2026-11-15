@@ -36,7 +36,7 @@ The gateway, canonical state, deployment authority, provider credentials, signer
 The worker receives only the inputs selected in the manifest and verified Skills, both read-only, plus a private writable workspace, home and temporary directory.
 
 The isolated worker passes native qualification against a patched OpenShell gateway that exists only in the qualification build; see [Testing and Evidence](../architecture/testing.md#installed-native-integration).
-Heartwood distributes no production sandbox gateway, and checks a deployment's sandbox gateway only by its declared version, as described in [Gateway Behavior Behind Native Qualification](platform-requirements.md#gateway-behavior-behind-native-qualification).
+Heartwood distributes no production sandbox gateway, and checks a deployment's sandbox gateway only by the deletion capabilities it reports, as described in [Gateway Behavior Behind Native Qualification](platform-requirements.md#gateway-behavior-behind-native-qualification).
 
 ## Sandbox Enforcement
 
@@ -63,8 +63,8 @@ In [`review-outside-effects`](#action-review), these controls are the only limit
 
 The gateway enforces everything that decides authority, independently of anything the worker reports:
 
-- the deployment manifest's paths, ownership, policy ceiling and qualified gateway versions, before any store opens;
-- the sandbox's reported version against `gateway_versions`, and stops with `HW-WORKER-001` otherwise;
+- the deployment manifest's paths, ownership and policy ceiling, before any store opens;
+- both deletion capabilities reported for the sandbox gateway's Docker compute driver, and stops with `HW-WORKER-001` otherwise; this relies on the gateway's self-report and does not verify its behavior, so the operator must still confirm the [gateway behavior behind native qualification](platform-requirements.md#gateway-behavior-behind-native-qualification);
 - outside inspection of the worker container, which rejects an unexpected image, a network other than `none`, privileged mode, any retained capability, a missing `no-new-privileges`, a shared host or container process, IPC, user or cgroup namespace, a device, a bind mount, mounts that expose withheld host paths, missing CPU and memory limits or process limit, and any security option other than `no-new-privileges`, AppArmor `docker-default`, or an SELinux `container_t` type with individual categories;
 - admission of the sandbox's accepted policy hash and process generation against `sandbox_policy_sha256`;
 - worker attempts bound to project, session, image, policy and input-manifest identity, journaled and fenced so that only one attempt can write a session;

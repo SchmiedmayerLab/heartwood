@@ -23,15 +23,25 @@ from time import monotonic
 from typing import Any
 from urllib.parse import urlsplit
 
-from heartwood.core_adapter.worker_attempts import WorkerAttemptError
+from heartwood.core_adapter.worker_attempts import WorkerAttemptError, WorkerGatewayReport
 from heartwood.gateway._deployment import validate_worker_deployment
 from heartwood.gateway._project import ProjectContext
 from heartwood.gateway.worker_deployment import OpenShellWorkerDeployment
 from heartwood.persistence import read_private_text
 
+# Revocation and cleanup evidence depends on these deletion behaviors of the gateway and its
+# Docker driver: deletion waits for provisioning to settle, and an explicit delete of a sandbox
+# already marked deleting calls the driver again.
+REQUIRED_GATEWAY_CAPABILITIES = frozenset(
+    {
+        "openshell.compute.delete-awaits-provisioning",
+        "openshell.compute.delete-retries-deleting",
+    }
+)
 
-class WorkerGatewayVersionError(WorkerAttemptError):
-    """The registered gateway did not report a version the operator declared as qualified."""
+
+class WorkerGatewayCapabilityError(WorkerAttemptError):
+    """The registered gateway did not report every deletion behavior worker evidence needs."""
 
 
 class NativeWorkerControl:
@@ -84,6 +94,7 @@ class NativeWorkerControl:
                 "installed sandbox SDK lacks required admission observations"
             ) from None
         self.client: Any = None
+        self.gateway: WorkerGatewayReport | None = None
 
     def _snapshot(self) -> tuple[str, ...]:
         return tuple(
@@ -110,7 +121,7 @@ class NativeWorkerControl:
         return hashlib.sha256(identity.encode()).hexdigest()
 
     def connect(self) -> None:
-        """Create the maintained SDK client and require a declared gateway version.
+        """Create the maintained SDK client and require the gateway's deletion capabilities.
 
         Called only after the session retains launch intent or a fenced attempt to reconcile.
         """
@@ -128,14 +139,40 @@ class NativeWorkerControl:
             timeout=15,
         )
         try:
-            reported = self.client.health().version
+            reported = self._gateway_report()
         except Exception:
             reported = None
-        if reported not in self.settings.gateway_versions:
+        missing = REQUIRED_GATEWAY_CAPABILITIES.difference(
+            reported.capabilities if reported else ()
+        )
+        if reported is None or missing:
             self.close()
-            raise WorkerGatewayVersionError(
-                "registered sandbox gateway did not report a declared qualified version"
+            detail = (
+                f": version {reported.version} lacks {', '.join(sorted(missing))}"
+                if reported is not None
+                else ""
             )
+            raise WorkerGatewayCapabilityError(
+                "registered sandbox gateway did not report the required deletion capabilities"
+                + detail
+            )
+        self.gateway = reported
+
+    def _gateway_report(self) -> WorkerGatewayReport | None:
+        """Read the one Docker compute driver's negotiated capabilities from the gateway."""
+        info = self.client.gateway_info()
+        drivers = [
+            extension
+            for extension in info.extensions
+            if extension.kind == self.pb.EXTENSION_KIND_COMPUTE_DRIVER
+        ]
+        if len(drivers) != 1 or drivers[0].implementation_name != "openshell/docker":
+            return None
+        return WorkerGatewayReport(
+            version=info.gateway_version,
+            driver=drivers[0].implementation_name,
+            capabilities=tuple(drivers[0].supported_capabilities),
+        )
 
     def policy(self) -> object:
         """Parse the operator's native policy without introducing a second policy compiler."""

@@ -229,7 +229,7 @@ SPDX-License-Identifier: MIT
 : A tensor-storage format designed to load model weights without executing serialized code.
 
 **Sandbox gateway**
-: The OpenShell control-plane service that creates, inspects, and deletes sandboxes; Heartwood checks its reported version against the manifest's `gateway_versions`.
+: The OpenShell control-plane service that creates, inspects, and deletes sandboxes; Heartwood requires it to report the deletion capabilities native revocation depends on.
 
 **SELinux**
 : A Linux mandatory access control system; worker container inspection accepts only the runtime's standard confined container label.

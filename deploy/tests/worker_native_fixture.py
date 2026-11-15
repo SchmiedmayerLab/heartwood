@@ -388,7 +388,6 @@ class NativeFixture:
         self.gateway_image = os.environ["HW_GATEWAY_IMAGE"]
         gateway = json.loads(Path("/opt/qualification/gateway.json").read_text())
         self.images = gateway["images"]
-        self.gateway_version: str = gateway["version"]
         self.env = {
             key: value
             for key, value in os.environ.items()
@@ -1195,7 +1194,6 @@ print(json.dumps(result))
         return OpenShellWorkerDeployment(
             driver="openshell-docker",
             gateway=self.identity,
-            gateway_versions=(self.gateway_version,),
             native_config_home=self.private / "config",
             openshell_cli=self.cli,
             docker_cli=docker,

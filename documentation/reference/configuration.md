@@ -161,7 +161,6 @@ Replace the example identities and digests with independently qualified values; 
 [worker]
 driver = "openshell-docker"
 gateway = "research-workers"
-gateway_versions = ["0.0.0+replace.with.qualified.version"]
 native_config_home = "/etc/heartwood/native"
 openshell_cli = "/opt/heartwood/bin/openshell"
 docker_cli = "/opt/heartwood/bin/docker"
@@ -188,7 +187,6 @@ files = []
 |---|---|
 | `driver` | `openshell-docker` |
 | `gateway` | Name of the registered sandbox gateway |
-| `gateway_versions` | One to eight version strings the sandbox gateway may report and that qualification evidence covers |
 | `native_config_home` | Contains `openshell/gateways/<gateway>/metadata.json` and `mtls/ca.crt`, `mtls/tls.crt`, and an owner-only `mtls/tls.key` |
 | `openshell_cli`, `docker_cli` | Absolute executable paths |
 | `docker_host` | `unix://` path of the local Docker socket; no TCP endpoint is accepted |
@@ -207,7 +205,7 @@ files = []
 Every path is absolute and canonical, outside the research directory and state root, and every native tool, configuration, policy file, and certificate is owned by root or the gateway user, not group- or world-writable, and singly linked.
 The socket must be owned by root or the gateway user and not world-writable; a group-writable socket needs `docker_socket_group`, and when that is set the socket's group must match it.
 Membership in the socket's group grants Docker control-plane authority; never add a worker identity to it.
-`gateway_versions` is a declaration checked against the sandbox gateway's own report, not evidence of how that gateway behaves; see [Gateway Behavior Behind Native Qualification](../operate/platform-requirements.md#gateway-behavior-behind-native-qualification).
+The registered sandbox gateway must report the two [deletion capabilities](../operate/platform-requirements.md#gateway-behavior-behind-native-qualification) native revocation depends on; the gateway version is not configured and does not satisfy the check.
 The inference endpoint must enforce approved models and tenant scope itself; the manifest adds no model router.
 
 ## Credential Binding Names

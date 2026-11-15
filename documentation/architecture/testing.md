@@ -65,7 +65,7 @@ The protected self-hosted GPU workflow runs the same acceptance contract with ex
 
 The default lock installs the patched SDK wheels from `vendor/runtime-wheels/`, which is not committed.
 `deploy/build-worker-candidate.py` builds them from immutable upstream archives and the patches in `images/worker/candidate/`, verifying source, patch, and build-tool hashes and using a fixed source timestamp.
-The patches add bounded remote-event admission and outside client-tool control (conversation), explicit environment replacement for terminal backends (terminal), the configuration-admission record that binds a sandbox to its policy and process generation (sandbox), and a security-fixed file-lock requirement (dependency).
+The patches add bounded remote-event admission and outside client-tool control (conversation), explicit environment replacement for terminal backends (terminal), the configuration-admission record that binds a sandbox to its policy and process generation and the gateway's negotiated driver capabilities that show its deletion behavior (sandbox), and a security-fixed file-lock requirement (dependency).
 A local version suffix such as `+heartwood.3` marks a patched build; the recorded upstream source revision, not the version number, identifies the upstream code.
 
 ```bash
@@ -81,7 +81,8 @@ The worker candidate workflow builds each twice and requires identical build rec
 The worker and runtime images use the shared `images/Dockerfile` with `HEARTWOOD_DEPENDENCY_PROFILE=candidate` and a `worker-qualification-artifacts` build context holding the SDK wheels under `sdk/` and the application build under `application/`.
 The image retains both build records in `/opt/heartwood/qualification/`, and its revision label must name the application commit.
 
-The OpenShell gateway is built from the pinned source and the two deletion patches recorded in `images/worker/candidate/gateway.json`, whose purpose is `qualification-only`:
+The OpenShell gateway is built from the pinned source and the two deletion patches recorded in `images/worker/candidate/gateway.json`, whose purpose is `qualification-only`.
+Each patch also makes the gateway report its behavior as a compute driver capability, which the managed-worker launcher requires:
 
 ```bash
 uv run --no-project --python 3.12.15 deploy/build-worker-candidate.py \

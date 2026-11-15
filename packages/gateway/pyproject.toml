@@ -30,7 +30,7 @@ dependencies = [
     "keyring==25.7.0",
     "openhands-sdk==1.62.0+heartwood.3",
     "openhands-tools==1.62.0+heartwood.3",
-    "openshell==0.1.8+heartwood.1",
+    "openshell==0.1.8+heartwood.2",
     "openai==2.53.0",
     "packaging==26.3",
     "pydantic>=2.12",

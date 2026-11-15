@@ -80,6 +80,19 @@ def gateway_policy_sha256(policy_profile: PolicyProfile) -> str:
     return hashlib.sha256(policy.encode()).hexdigest()
 
 
+_GatewayCapability = Annotated[
+    str, Field(max_length=128, pattern=r"^openshell(?:\.[a-z0-9-]+){2,}$")
+]
+
+
+class WorkerGatewayReport(_WorkerRecord):
+    """Sandbox gateway behavior reported to a trusted launcher that required it."""
+
+    version: str = Field(min_length=1, max_length=128)
+    driver: str = Field(min_length=1, max_length=128)
+    capabilities: tuple[_GatewayCapability, ...] = Field(max_length=128)
+
+
 class WorkerRuntimeBinding(_WorkerRecord):
     """Runtime identity observed by the trusted launcher, never by the worker."""
 
@@ -88,6 +101,7 @@ class WorkerRuntimeBinding(_WorkerRecord):
     endpoint: AnyHttpUrl
     image_digest: ImageDigest
     sandbox_policy_sha256: Digest
+    gateway: WorkerGatewayReport | None = None
 
     @model_validator(mode="after")
     def _origin(self) -> Self:
@@ -105,6 +119,7 @@ class WorkerRevocationEvidence(_WorkerRecord):
     observer_id: Reference
     evidence_sha256: Digest
     outcome: Literal["revoked", "not-created"]
+    gateway: WorkerGatewayReport | None = None
 
 
 class WorkerAttemptRecord(_WorkerRecord):

@@ -19,7 +19,6 @@ from heartwood.gateway.worker_inputs import WorkerInputManifest
 from heartwood.schemas.experiments import Digest
 
 _Name = Annotated[str, Field(pattern=r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")]
-_GatewayVersion = Annotated[str, Field(pattern=r"^[0-9A-Za-z][0-9A-Za-z.+-]{0,63}$")]
 
 
 class OpenShellWorkerDeployment(BaseModel):
@@ -29,8 +28,6 @@ class OpenShellWorkerDeployment(BaseModel):
 
     driver: Literal["openshell-docker"]
     gateway: _Name
-    # Operator declaration compared with the gateway's own report; it is not proof of behavior.
-    gateway_versions: tuple[_GatewayVersion, ...] = Field(min_length=1, max_length=8)
     native_config_home: Path
     openshell_cli: Path
     docker_cli: Path

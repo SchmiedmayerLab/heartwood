@@ -1,6 +1,16 @@
+diff --git a/crates/openshell-server/src/compute/mod.rs b/crates/openshell-server/src/compute/mod.rs
+index cd14dc2..746d929 100644
 --- a/crates/openshell-server/src/compute/mod.rs
 +++ b/crates/openshell-server/src/compute/mod.rs
-@@ -374,8 +374,9 @@
+@@ -369,13 +369,17 @@ struct DeleteTransition {
+     deleting: Sandbox,
+ }
+ 
++/// An explicit delete of a sandbox already marked deleting calls the driver again.
++pub(crate) const DELETE_RETRIES_DELETING: &str = "openshell.compute.delete-retries-deleting";
++
+ /// Result of trying to claim ownership of a sandbox's delete operation.
+ #[derive(Debug)]
  enum BeginDelete {
      /// This request persisted `Deleting` and owns the driver call and recovery.
      Started(Box<DeleteTransition>),
@@ -12,7 +22,29 @@
  }
  
  /// Explicit lifecycle operations that quiesce a running sandbox: an ordinary
-@@ -1942,7 +1943,7 @@
+@@ -1016,13 +1020,20 @@ impl ComputeRuntime {
+                 compute_error_from_status(status)
+             })?
+             .into_inner();
+-        let negotiated_extension = negotiate(
++        let mut negotiated_extension = negotiate(
+             ExtensionFamily::Compute,
+             &driver_name,
+             &gateway,
+             capabilities.extension.clone(),
+         )
+         .map_err(|error| ComputeError::Message(error.to_string()))?;
++        // The gateway, not the driver, retries deletion. Gateway info exposes
++        // only negotiated driver capabilities, so report it with them.
++        let supported = &mut negotiated_extension.supported_capabilities;
++        if !supported.iter().any(|capability| capability == DELETE_RETRIES_DELETING) {
++            supported.push(DELETE_RETRIES_DELETING.to_string());
++            supported.sort();
++        }
+         info!(
+             configured_driver = %driver_name,
+             advertised_driver = %capabilities.driver_name,
+@@ -1942,7 +1953,7 @@ impl ComputeRuntime {
              .await
          {
              Ok(BeginDelete::Started(transition)) => *transition,
@@ -21,7 +53,7 @@
                  return Status::new(
                      original.code(),
                      format!(
-@@ -3474,17 +3475,22 @@
+@@ -3474,17 +3485,22 @@ impl ComputeRuntime {
          // `Started` carries both sides of the CAS transition: the durable
          // `Deleting` row used to fence recovery, and the prior row used only
          // for exact-version rollback after an ambiguous driver failure.
@@ -52,7 +84,7 @@
          };
  
          self.sandbox_index.update_from_sandbox(&transition.deleting);
-@@ -3541,7 +3547,11 @@
+@@ -3541,7 +3557,11 @@ impl ComputeRuntime {
                  })
              }
              Err(err) => {
@@ -65,7 +97,7 @@
                  Err(Status::internal(format!(
                      "delete sandbox failed: {}",
                      err.message()
-@@ -3593,12 +3603,16 @@
+@@ -3593,12 +3613,16 @@ impl ComputeRuntime {
                  provisioning_operation::ensure_current_result(&sandbox, created)?;
              }
  
@@ -86,20 +118,21 @@
              let previous = sandbox.clone();
  
              match self
-@@ -3611,6 +3625,9 @@
-                             sandbox_id,
+@@ -3612,6 +3636,9 @@ impl ComputeRuntime {
                              attempt, "Retried sandbox delete phase transition after CAS conflict"
                          );
-+                    }
+                     }
 +                    if already_deleting {
 +                        return Ok(BeginDelete::AlreadyDeleting(Box::new(deleting)));
-                     }
++                    }
                      return Ok(BeginDelete::Started(Box::new(DeleteTransition {
                          previous,
-@@ -14692,6 +14709,140 @@
+                         deleting,
+@@ -14691,6 +14718,140 @@ mod tests {
+         assert_eq!(stored.current_policy_version(), 7);
      }
  
-     #[tokio::test]
++    #[tokio::test]
 +    async fn explicit_delete_retry_retains_the_current_snapshot_after_cas_conflict() {
 +        let runtime = test_runtime(Arc::new(TestDriver::default())).await;
 +        let sandbox = sandbox_record("sb-1", "sandbox-a", SandboxPhase::Ready);
@@ -233,11 +266,10 @@
 +        );
 +    }
 +
-+    #[tokio::test]
+     #[tokio::test]
      async fn apply_sandbox_update_is_noop_while_deleting() {
          let runtime = test_runtime(Arc::new(TestDriver::default())).await;
-         let sandbox = sandbox_record("sb-1", "sandbox-a", SandboxPhase::Deleting);
-@@ -14931,7 +15082,7 @@
+@@ -14931,7 +15092,7 @@ mod tests {
      }
  
      #[tokio::test]
@@ -246,15 +278,15 @@
          let driver = ControlledDriver::new();
          driver.block_delete();
          let runtime = test_runtime(driver.clone()).await;
-@@ -14950,6 +15101,7 @@
-             tokio::spawn(
+@@ -14951,6 +15112,7 @@ mod tests {
                  async move { second_runtime.delete_sandbox("default", "sandbox-a").await },
              );
-+        driver.release_delete();
          driver.release_delete();
++        driver.release_delete();
  
          assert!(
-@@ -14968,7 +15120,7 @@
+             tokio::time::timeout(Duration::from_secs(1), first)
+@@ -14968,7 +15130,7 @@ mod tests {
                  .unwrap()
                  .acknowledged()
          );
@@ -263,7 +295,7 @@
      }
  
      #[tokio::test]
-@@ -15487,7 +15639,7 @@
+@@ -15487,7 +15649,7 @@ mod tests {
          let session = seed_sandbox_owned_records(&runtime, &sandbox).await;
          let mut watch_rx = runtime.sandbox_watch_bus.subscribe("sb-1");
  
@@ -272,12 +304,10 @@
              let result = runtime
                  .delete_sandbox("default", "sandbox-a")
                  .await
-@@ -15497,8 +15649,14 @@
+@@ -15497,8 +15659,14 @@ mod tests {
                  openshell_core::proto::DeletionOutcome::Accepted
              );
              assert_eq!(result.sandbox_id, "sb-1");
--        }
--        assert_eq!(driver.delete_calls(), 1);
 +            // Each explicit retry refreshes the deletion fence and driver call.
 +            assert_eq!(driver.delete_calls(), expected_calls);
 +            assert!(watch_rx.try_recv().is_ok());
@@ -285,11 +315,12 @@
 +                watch_rx.try_recv(),
 +                Err(tokio::sync::broadcast::error::TryRecvError::Empty)
 +            ));
-+        }
+         }
+-        assert_eq!(driver.delete_calls(), 1);
  
          let stored = runtime
              .store
-@@ -15511,11 +15669,6 @@
+@@ -15511,11 +15679,6 @@ mod tests {
              SandboxPhase::Deleting
          );
          assert_sandbox_owned_records(&runtime, &sandbox, &session, true).await;
@@ -301,7 +332,7 @@
  
          runtime.apply_deleted("sb-1").await.unwrap();
          assert_sandbox_owned_records(&runtime, &sandbox, &session, false).await;
-@@ -16117,6 +16270,43 @@
+@@ -16117,6 +16280,43 @@ mod tests {
              SandboxPhase::Deleting
          );
          assert_eq!(stored.current_policy_version(), 9);
@@ -345,3 +376,33 @@
      }
  
      #[tokio::test]
+@@ -18135,6 +18335,29 @@ mod tests {
+         test_exporter::assert_is_root(&initialization);
+     }
+ 
++    #[tokio::test]
++    async fn compute_driver_info_reports_explicit_delete_retry() {
++        let store = Arc::new(Store::connect("sqlite::memory:").await.unwrap());
++        let runtime = ComputeRuntime::from_driver(
++            "test-driver".to_string(),
++            Arc::new(TestDriver::default()),
++            None,
++            store,
++            SandboxIndex::new(),
++            SandboxWatchBus::new(),
++            TracingLogBus::new(),
++            Arc::new(SupervisorSessionRegistry::new()),
++        )
++        .await
++        .unwrap();
++
++        let supported = &runtime.driver_info_snapshots()[0]
++            .negotiated_extension
++            .supported_capabilities;
++        assert!(supported.iter().any(|c| c == DELETE_RETRIES_DELETING));
++        assert!(supported.is_sorted());
++    }
++
+     #[tokio::test]
+     async fn compute_driver_initialization_rejects_missing_protocol_metadata() {
+         let store = Arc::new(Store::connect("sqlite::memory:").await.unwrap());
