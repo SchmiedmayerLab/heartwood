@@ -58,6 +58,7 @@ from heartwood.schemas import (
 )
 from heartwood.schemas.experiments import ExperimentCollection, ExperimentExport, ExperimentRun
 from heartwood.schemas.python_environment import PythonEnvironmentSnapshot
+from heartwood.schemas.usage import ProjectUsageSummary
 from heartwood.schemas.workflows import (
     WorkflowCatalog,
     WorkflowControl,
@@ -228,6 +229,10 @@ class NotebookSession:
     def export_experiments(self) -> ExperimentExport:
         """Return the gateway's verified canonical scientific export and its digest."""
         return self.gateway.export_experiments()
+
+    def usage_summary(self) -> ProjectUsageSummary:
+        """Return content-free project usage counts after verifying every session's history."""
+        return self.gateway.usage_summary()
 
     def workflow(self, request: WorkflowRequest) -> NotebookViewModel:
         """Submit a typed request, retaining the revision and evidence the researcher saw."""

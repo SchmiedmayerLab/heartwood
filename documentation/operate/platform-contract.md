@@ -510,6 +510,7 @@ The classes are not an ordered permission hierarchy, an allowance for one class 
 | `capabilities.schema.json` | The platform capability manifest served at `GET /project/capabilities` | Current |
 | `policy-profile.schema.json` | `heartwood.policy-profile.v1`, the policy in the deployment manifest, including permitted data destinations | Current |
 | `model-connections.schema.json` | `heartwood.model-connections.v1`, including data-handling descriptors; startup does not load it | Current |
+| `usage-summary.schema.json` | `heartwood.project-usage-summary.v1`, content-free project counts and outcomes served at `GET /project/usage-summary` | Current |
 | `model-metadata.schema.json` | Model protocol, capability and eligibility declarations | Draft |
 | `data-classification.schema.json` | The data-class vocabulary | Draft |
 | `mcp-service.schema.json`, `mcp-tool-annotations.schema.json` | Deployment service references and required tool annotations | Draft |

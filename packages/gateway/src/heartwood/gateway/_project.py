@@ -8,9 +8,10 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from heartwood.persistence import (
     PERSISTENCE_MIGRATIONS,
@@ -27,6 +28,7 @@ from heartwood.persistence import (
 )
 
 _STATE_DIRECTORIES = ("sessions", "models", "skills", "audit", "runtime", "logs", "cache")
+_USAGE_SUMMARY_ID = re.compile(r"[0-9a-f]{32}\n")
 
 
 class ProjectStateError(ValueError):
@@ -89,6 +91,24 @@ class ProjectContext:
     def state_path(self) -> Path:
         """Return the internal state-schema marker path."""
         return self.state_root / "state.json"
+
+    @property
+    def usage_summary_id_path(self) -> Path:
+        """Return the random identifier that links this project's usage summaries."""
+        return self.state_root / "usage-summary-id"
+
+    def usage_summary_id(self) -> str:
+        """Read the identifier created with the project state, without creating one."""
+        try:
+            value = read_private_text(self.usage_summary_id_path, max_bytes=64)
+        except (OSError, ValueError) as error:
+            raise ProjectStateError(
+                "project state has no usage summary identifier; open the project once "
+                "with this release to create it"
+            ) from error
+        if _USAGE_SUMMARY_ID.fullmatch(value) is None:
+            raise ProjectStateError("the project usage summary identifier is invalid")
+        return value.strip()
 
     @property
     def state_lock_path(self) -> Path:
@@ -158,6 +178,8 @@ class ProjectContext:
                     write_private_json_atomic(self.state_path, _current_state_payload())
                 else:
                     self._migrate_state_marker()
+                if not self.usage_summary_id_path.exists():
+                    write_private_text_atomic(self.usage_summary_id_path, f"{uuid4().hex}\n")
                 self._validate_existing_state()
                 ignore_path.chmod(0o600)
                 self.state_path.chmod(0o600)
@@ -250,6 +272,10 @@ class ProjectContext:
             self.config_path.is_symlink() or not self.config_path.is_file()
         ):
             raise ProjectStateError(".heartwood/config.toml must be a regular file")
+        if self.usage_summary_id_path.exists() and (
+            self.usage_summary_id_path.is_symlink() or not self.usage_summary_id_path.is_file()
+        ):
+            raise ProjectStateError(".heartwood/usage-summary-id must be a regular file")
         if self.config_lock_path.is_symlink() or (
             self.config_lock_path.exists() and not self.config_lock_path.is_file()
         ):

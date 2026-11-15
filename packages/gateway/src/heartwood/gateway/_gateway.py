@@ -200,6 +200,7 @@ from heartwood.schemas.review import (
     ReviewSnapshot,
     ReviewSubmission,
 )
+from heartwood.schemas.usage import ProjectUsageSummary
 from heartwood.schemas.workflows import (
     WorkflowCatalog,
     WorkflowOutcomeStatus,
@@ -1224,6 +1225,15 @@ class SessionGateway:
         from heartwood.gateway._research_review import ResearchReviewEvaluator
 
         return ResearchReviewEvaluator(self.workspace_inspector).assess_correction(review, plan)
+
+    @gateway_operation
+    def usage_summary(self) -> ProjectUsageSummary:
+        """Return content-free usage counts after verifying every session's history."""
+        from heartwood.gateway._usage_summary import project_usage_summary
+
+        return project_usage_summary(
+            self.project, platform_id=self._platform_capabilities.platform_id
+        )
 
     @gateway_operation
     @_serialized_state
