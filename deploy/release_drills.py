@@ -8,11 +8,28 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
+import tomllib
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
 from qualification_evidence import DRILLS, integrity, verify
+
+ROUTES = Path(__file__).with_name("release-model-routes.toml")
+_ROUTE = re.compile(r"openai/[A-Za-z0-9_./:-]{2,248}@[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?")
+
+
+def supported_routes(path: Path) -> tuple[str, ...]:
+    """Read the checked-in capable-model routes a release states drill results for."""
+    routes = tomllib.loads(path.read_text()).get("routes")
+    if (
+        not isinstance(routes, list)
+        or any(not isinstance(route, str) or not _ROUTE.fullmatch(route) for route in routes)
+        or len(set(routes)) != len(routes)
+    ):
+        raise ValueError(f"{path} must list unique routes named MODEL@HOST")
+    return tuple(routes)
 
 
 def release_drills(
@@ -28,6 +45,8 @@ def release_drills(
     it must be the complete record of a run of the same release and commit, and its
     outcome is reported whether or not it passed.
     """
+    if not synthetic.is_dir():
+        raise ValueError(f"no qualification evidence exists at {synthetic}")
     if problems := verify(synthetic, commit):
         raise ValueError(
             "synthetic qualification does not qualify the commit: " + "; ".join(problems)
@@ -63,20 +82,31 @@ def release_drills(
     }
 
 
-if __name__ == "__main__":
+def main() -> None:
+    """Write the drill statement of one release, or exit with the reason it cannot exist."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--version", required=True)
     parser.add_argument("--commit", required=True)
     parser.add_argument("--synthetic", required=True, type=Path)
     parser.add_argument("--capable", action="append", default=[], type=Path)
-    parser.add_argument(
-        "--route", action="append", default=[], help="A supported route as MODEL@HOST"
-    )
+    parser.add_argument("--routes", default=ROUTES, type=Path, help="The supported routes file")
+    parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
     try:
         statement = release_drills(
-            args.version, args.commit, args.synthetic, args.capable, args.route
+            args.version,
+            args.commit,
+            args.synthetic,
+            args.capable,
+            supported_routes(args.routes),
         )
     except ValueError as error:
         raise SystemExit(str(error)) from None
-    print(json.dumps(statement, indent=2))
+    # The statement appears only once complete, so a failed run never leaves a release asset.
+    partial = args.output.with_name(args.output.name + ".partial")
+    partial.write_text(json.dumps(statement, indent=2) + "\n")
+    partial.replace(args.output)
+
+
+if __name__ == "__main__":
+    main()

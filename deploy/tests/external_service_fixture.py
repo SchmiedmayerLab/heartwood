@@ -300,6 +300,8 @@ class RecordsAdapter:
         self.client = client
         self.input = _INPUT
         self.before_submit: Callable[[], None] = lambda: None
+        # The deployment's ceiling for this service: the destinations dispatch may reach.
+        self.allowed_destinations = frozenset({"synthetic-results"})
 
     def prepare_result(self, record: ExternalActionRecord) -> str:
         return canonical_request(self.observe(record.proposal).model_dump_json())
@@ -342,7 +344,11 @@ class RecordsAdapter:
         )
 
     def check_policy(self, proposal: ExternalActionProposal, actor_id: str, now: datetime) -> None:
-        if actor_id != "researcher" or not proposal.created_at <= now < proposal.expires_at:
+        if (
+            actor_id != "researcher"
+            or proposal.request.destination not in self.allowed_destinations
+            or not proposal.created_at <= now < proposal.expires_at
+        ):
             raise ExternalActionError("synthetic authorization denied")
 
     def read_input(self, reference: ExternalInputReference) -> bytes:

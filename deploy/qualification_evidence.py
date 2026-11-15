@@ -60,6 +60,7 @@ EXPECTED_CASES = {
             _EXTERNAL + "test_native_outside_effect_requires_retained_authorization[denied]",
             _EXTERNAL + "test_native_outside_effect_requires_retained_authorization[pending]",
             _EXTERNAL + "test_native_outside_effect_requires_retained_authorization[lost-reply]",
+            _EXTERNAL + "test_native_outside_effect_requires_retained_authorization[forbidden]",
             _EXTERNAL + "test_native_contained_action_is_automatic_and_outside_effect_waits",
             _EXTERNAL + "test_native_contained_action_is_refused_after_revocation",
             "test_worker_pair_integration::"
@@ -158,13 +159,13 @@ def drill_results(directory: Path) -> dict[str, Any]:
         records = directory / _CASE_DIRECTORIES.get(name, name)
         identifiers: set[str] = set()
         result: dict[str, Any] = {"case": case["id"], "outcome": case["outcome"]}
-        for name in ("evidence.json", "model-qualification.json"):
-            path = records / name
+        for record_name in ("evidence.json", "model-qualification.json"):
+            path = records / record_name
             if not path.is_file() or path.is_symlink():
                 continue
             record = json.loads(path.read_text())
             identifiers.update(_drill_ids(record))
-            if name == "model-qualification.json" and isinstance(record, dict):
+            if record_name == "model-qualification.json" and isinstance(record, dict):
                 # Counts compare how a model route responded to the injected instructions.
                 for field in ("accepted_actions", "rejected_actions"):
                     value = record.get(field)

@@ -32,6 +32,7 @@ The workflow stops unless all of the following hold for the commit:
 `Release Candidate Ready` requires every Main Validation job, including capable-model acceptance.
 On `main`, the separate **Native Qualification** workflow qualifies and attests every commit without cancelling earlier runs; see [Native Qualification Evidence](../architecture/testing.md#native-qualification-evidence).
 Release creation downloads that run's evidence and attestation, verifies them with `gh attestation verify` bound to this repository, the Native Qualification workflow, `refs/heads/main`, and the commit, and with `deploy/qualification_evidence.py`, and fails when either is missing or does not verify.
+It then writes `agent-safety-drills.json` from that evidence for the routes in `deploy/release-model-routes.toml`.
 Pull-request runs are not attested.
 
 The workflow then builds the native assets from the commit, tests the installer layout and an installation from an empty Ubuntu container, attests every asset, and creates a draft release with GitHub-generated notes.
@@ -53,6 +54,7 @@ Administrators may recover an interrupted workflow, which replaces an unpublishe
 | vLLM wheel | The CUDA 12.9 wheel pinned in `images/gpu/compatibility.toml`, for restricted environments such as Carina |
 | `SHA256SUMS` | Checksums of the native archive and the vLLM wheel |
 | Qualification evidence | `native-qualification-evidence.tar.gz`, the commit's native qualification evidence with its `SHA256SUMS`, and `native-qualification-evidence.sigstore.jsonl`, its attestation bundle, verified as described in [Native Qualification Evidence](../architecture/testing.md#native-qualification-evidence) |
+| `agent-safety-drills.json` | The [agent safety drill](../architecture/testing.md#agent-safety-drills) results of that evidence for every supported model route |
 | Image tags | `VERSION`, `VERSION-gpu-nvidia`, `VERSION-terra`, and `VERSION-terra-gpu-nvidia`, promoted from the commit's candidate images |
 | Documentation | The `VERSION` path of the versioned site |
 

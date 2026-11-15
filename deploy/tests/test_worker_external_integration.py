@@ -30,7 +30,7 @@ from heartwood.gateway._openhands_sdk import OpenHandsSdkBackend
 from heartwood.session import CommandKind, EventKind, SessionCommand
 
 
-@pytest.mark.parametrize("decision", ["approved", "denied", "pending", "lost-reply"])
+@pytest.mark.parametrize("decision", ["approved", "denied", "pending", "lost-reply", "forbidden"])
 def test_native_outside_effect_requires_retained_authorization(
     infrastructure: NativeFixture, decision: str
 ) -> None:
@@ -67,6 +67,9 @@ def test_native_outside_effect_requires_retained_authorization(
     fixture.provider.forbidden_values += (token,)
     with serve_records(records) as url, records_client(url, token) as client:
         adapter = RecordsAdapter(client)
+        if decision == "forbidden":
+            # The deployment forbids this destination; the researcher approves the effect anyway.
+            adapter.allowed_destinations = frozenset()
         service = application._service("composition")
         try:
             _submit(
@@ -119,7 +122,13 @@ def test_native_outside_effect_requires_retained_authorization(
                     payload={"target_type": "action-set", "target_id": record.proposal.group_id},
                 )
                 records.drop_after_submit = decision == "lost-reply"
-                application.handle(request)
+                handled = application.handle(request)
+                if decision == "forbidden":
+                    assert [
+                        event.payload["reason"]
+                        for event in handled.events
+                        if event.kind == EventKind.ERROR_RECORDED
+                    ] == ["outside authorization or input validation failed"]
                 if decision == "lost-reply":
                     assert (
                         external_action_records(service.replay_events())[
@@ -139,6 +148,7 @@ def test_native_outside_effect_requires_retained_authorization(
             assert retained.phase == (
                 "observed" if expected else decision if decision == "denied" else "proposed"
             )
+            assert (retained.decision is None) == (decision in {"pending", "forbidden"})
             if expected:
                 assert retained.observation is not None
                 assert retained.observation.operation.status == "completed"
@@ -156,7 +166,11 @@ def test_native_outside_effect_requires_retained_authorization(
             (fixture.output / "evidence.json").write_text(
                 json.dumps(
                     {
-                        "drill_id": "native-outside-effect.v1",
+                        "drill_id": (
+                            "deployment-forbidden-effect.v1"
+                            if decision == "forbidden"
+                            else "native-outside-effect.v1"
+                        ),
                         "decision": decision,
                         "worker_attempt_id": worker_id,
                         "worker_image": fixture.worker,
