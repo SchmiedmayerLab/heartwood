@@ -949,8 +949,12 @@ def test_only_the_researcher_ends_a_pause() -> None:
     resumed: _Entry = (EventKind.SESSION_RESUMED, {})
     assert not session_activity(events(paused, resumed)).paused
     assert not session_activity(events(paused, researcher("resume"), resumed)).paused
-    for kind in ("chat", "approve", "workflow"):
+    for kind in ("chat", "approve"):
         assert not session_activity(events(paused, researcher(kind), running)).paused
+    # A workflow command continues the agent only through an allowed model route.
+    assert session_activity(events(paused, researcher("workflow"), running)).paused
+    allowed: _Entry = (EventKind.MODEL_CALL_DECISION_RECORDED, {"decision": {"decision": "allow"}})
+    assert not session_activity(events(paused, researcher("workflow"), allowed)).paused
 
 
 def test_a_refused_command_never_ends_a_pause() -> None:
@@ -999,6 +1003,9 @@ def test_a_refused_command_never_ends_a_pause() -> None:
         (received("resume"), refused("resume")),
         (received("resume"), route("allow"), backend_failed),
         (received("chat"), received("pause")),
+        # A workflow command that continues no work, such as a cancel or a declined stage.
+        (received("workflow"), (EventKind.WORKFLOW_UPDATED, {})),
+        (received("workflow"), (EventKind.WORKFLOW_UPDATED, {}), prompt, route("deny")),
     )
     for entries in refusals:
         state = activity(*entries)
@@ -1011,7 +1018,7 @@ def test_a_refused_command_never_ends_a_pause() -> None:
     acceptances: tuple[tuple[_Entry, ...], ...] = (
         (received("chat"), prompt, route("allow")),
         (received("approve"), (EventKind.APPROVAL_RECORDED, {"group_id": "group-1"})),
-        (received("workflow"), (EventKind.WORKFLOW_UPDATED, {})),
+        (received("workflow"), (EventKind.WORKFLOW_UPDATED, {}), prompt, route("allow")),
         (received("resume"), route("allow"), (EventKind.SESSION_RESUMED, {})),
     )
     for entries in acceptances:

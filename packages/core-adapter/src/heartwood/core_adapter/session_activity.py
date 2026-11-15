@@ -20,8 +20,10 @@ from heartwood.core_adapter.external_results import external_result_records
 from heartwood.session import CommandKind, EventKind, SessionEvent
 
 # Researcher commands that continue the agent and so end a pause once the service accepts
-# them; a resume ends it when it is recorded. The gateway's own decisions, a refused
-# command and anything the backend reports never do.
+# them; a resume ends it when it is recorded. A workflow command continues the agent only
+# through an allowed model route, so one that changes only the workflow, such as a cancel,
+# leaves the pause. The gateway's own decisions, a refused command and anything the
+# backend reports never end it.
 _CONTINUING_COMMANDS = frozenset(
     {
         CommandKind.CHAT.value,
@@ -88,8 +90,9 @@ class SessionActivityReducer:
     review_decisions: dict[str, ReviewDecision | None] = field(default_factory=dict)
     review_resolutions: dict[str, dict[str, ReviewDecision]] = field(default_factory=dict)
     retained_groups: set[str] = field(default_factory=set)
-    continuing: bool = False
-    """A researcher command received during a pause whose acceptance is not yet recorded."""
+    continuing: str | None = None
+    """The kind of a researcher command received during a pause whose acceptance is not yet
+    recorded."""
 
     def review_group(self, tool_call_id: str) -> str:
         """Return the action set that reviewed a tool call, or an empty identifier."""
@@ -111,10 +114,13 @@ class SessionActivityReducer:
         if kind == EventKind.AGENT_LIFECYCLE_UPDATED.value:
             self.status, self.stopped_by = str(payload.get("status")), None
         elif kind == EventKind.COMMAND_RECEIVED.value:
+            command_kind = payload.get("command_kind")
             self.continuing = (
-                self.paused
-                and payload.get("command_kind") in _CONTINUING_COMMANDS
+                str(command_kind)
+                if self.paused
+                and command_kind in _CONTINUING_COMMANDS
                 and payload.get("actor_id") != AUTOMATIC_REVIEW_ACTOR
+                else None
             )
         elif kind == EventKind.SESSION_PAUSED.value:
             self.status, self.paused, self.stopped_by = "paused", True, None
@@ -164,17 +170,25 @@ class SessionActivityReducer:
         """End the pause at the first record that the service accepted the command.
 
         The service records a refusal as an error before any effect: after the prompt,
-        and after a model-route decision that did not allow the turn.
+        and after a model-route decision that did not allow the turn. A workflow command is
+        accepted as continuing the agent only at an allowed model route.
         """
+        if kind in {EventKind.ERROR_RECORDED.value, EventKind.COMMAND_RECEIVED.value}:
+            self.continuing = None
+            return
         decision = payload.get("decision")
-        if kind == EventKind.USER_MESSAGE_RECORDED.value or (
+        allowed = (
             kind == EventKind.MODEL_CALL_DECISION_RECORDED.value
-            and not (isinstance(decision, dict) and decision.get("decision") == "allow")
+            and isinstance(decision, dict)
+            and decision.get("decision") == "allow"
+        )
+        if not allowed and (
+            self.continuing == CommandKind.WORKFLOW.value
+            or kind
+            in {EventKind.USER_MESSAGE_RECORDED.value, EventKind.MODEL_CALL_DECISION_RECORDED.value}
         ):
             return
-        self.continuing = False
-        if kind in {EventKind.ERROR_RECORDED.value, EventKind.COMMAND_RECEIVED.value}:
-            return
+        self.continuing = None
         self.paused = False
         if self.status == "paused":
             # The researcher continued the agent; neither state is settled.

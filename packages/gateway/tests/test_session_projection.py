@@ -1869,7 +1869,7 @@ def test_a_review_requested_during_a_pause_is_decided_first_and_a_rejection_keep
     ("kind", "accepted", "payload"),
     [
         ("chat", EventKind.MODEL_CALL_DECISION_RECORDED, {"decision": {"decision": "allow"}}),
-        ("workflow", EventKind.AGENT_LIFECYCLE_UPDATED, {"status": "running"}),
+        ("workflow", EventKind.MODEL_CALL_DECISION_RECORDED, {"decision": {"decision": "allow"}}),
         ("resume", EventKind.SESSION_RESUMED, {}),
     ],
 )
@@ -1890,12 +1890,15 @@ def test_a_researcher_command_ends_the_projected_pause_when_the_service_accepts_
             {"command": kind, "reason": "synthetic refusal", "affects_lifecycle": False},
         ),
     )
+    # A workflow command continues the agent only through an allowed model route, so a
+    # backend report after one that sent no turn, such as a cancel, leaves the pause.
+    unperformed = ((*paused, _event(4, EventKind.AGENT_LIFECYCLE_UPDATED, {"status": "running"})),)
     events = (
         *paused,
         _event(4, accepted, payload),
     )
 
-    for still_paused in (paused, refused):
+    for still_paused in (paused, refused, *(unperformed if kind == "workflow" else ())):
         assert session_activity(still_paused).paused
         assert project_session(still_paused, session_id="session-1").available_commands == (
             "chat",

@@ -47,6 +47,7 @@ from heartwood.core_adapter import (
 )
 from heartwood.core_adapter._state import SessionRecoveryError
 from heartwood.core_adapter.research_workflows import research_workflow
+from heartwood.core_adapter.session_activity import session_activity
 from heartwood.gateway import ModelProfile, OpenHandsSdkBackend, ProjectContext, SessionGateway
 from heartwood.gateway import _openhands_sdk as sdk_module
 from heartwood.gateway._research_evaluation import ParallelReviewPreparer, ResearchStageEvaluator
@@ -92,6 +93,51 @@ def test_stage_controls_keep_review_bound_to_displayed_evidence(tmp_path: Path) 
         assert _state(gateway).phase == "blocked"
         gateway.handle(_projected_command(gateway, "cancel"))
         assert gateway.session_projection(session_id="research").workflow_controls == ()
+    finally:
+        gateway.stop()
+
+
+@pytest.mark.parametrize("phase", ["running", "review"])
+def test_a_workflow_command_that_continues_no_work_leaves_the_pause(
+    tmp_path: Path, phase: str
+) -> None:
+    backend = FinishedBackend()
+    gateway = _gateway(tmp_path, backend)
+    try:
+        _start(gateway, _inputs(tmp_path))
+        gateway.handle(_projected_command(gateway, "run"))
+        if phase == "review":
+            _readiness(tmp_path)
+            gateway.handle(_projected_command(gateway, "evaluate"))
+            gateway.handle(_projected_command(gateway, "run"))
+            (tmp_path / "results/readiness.md").write_text("# Synthetic findings\n")
+            gateway.handle(_projected_command(gateway, "evaluate"))
+        assert _state(gateway).phase == phase
+        backend._event_sink((BackendLifecycleEvent(lifecycle=BackendLifecycle.RUNNING),))
+        pause = SessionCommand(
+            command_id="pause",
+            session_id="research",
+            kind=CommandKind.PAUSE,
+            created_at="2026-09-11T00:00:00Z",
+            payload={},
+        )
+        gateway.handle(pause)
+        prompts = len(backend.prompts)
+
+        # Cancelling is accepted but sends nothing to the model, so the agent stays paused.
+        result = gateway.handle(_projected_command(gateway, "cancel"))
+
+        assert not any(event.kind == EventKind.ERROR_RECORDED for event in result.events)
+        assert _state(gateway).phase == "cancelled"
+        assert len(backend.prompts) == prompts
+        projection = gateway.session_projection(session_id="research")
+        assert projection.paused
+        assert projection.available_commands == ("chat", "resume")
+        assert session_activity(gateway._services["research"].replay_events()).paused
+        resume = pause.model_copy(update={"command_id": "resume", "kind": CommandKind.RESUME})
+        resumed = gateway.handle(resume)
+        assert any(event.kind == EventKind.SESSION_RESUMED for event in resumed.events)
+        assert not gateway.session_projection(session_id="research").paused
     finally:
         gateway.stop()
 

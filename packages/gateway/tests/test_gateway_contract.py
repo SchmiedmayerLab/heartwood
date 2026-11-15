@@ -278,7 +278,9 @@ def test_a_refused_command_leaves_the_pause_and_resume_in_effect(tmp_path: Path)
         gateway.stop()
 
 
-def test_a_command_refused_in_an_unrecoverable_session_leaves_its_pause(tmp_path: Path) -> None:
+def test_the_cached_service_records_a_refusal_in_an_unrecoverable_session_and_keeps_its_pause(
+    tmp_path: Path,
+) -> None:
     gateway = _gateway(tmp_path)
     try:
         with gateway._state_lock:
