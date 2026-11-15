@@ -10,7 +10,13 @@ from __future__ import annotations
 
 import pytest
 
-from heartwood.gateway import SessionLifecycle, project_session
+from heartwood.gateway import (
+    ProjectionTaskActionDetails,
+    SessionLifecycle,
+    action_heading,
+    project_session,
+    specialist_review_lines,
+)
 from heartwood.schemas.execution import NativeTaskExecution
 from heartwood.session import EventKind, JsonValue, SessionEvent
 
@@ -1637,6 +1643,59 @@ def test_projection_normalizes_malformed_action_enums_without_raising() -> None:
     assert action.risk == "unknown"
     assert action.state == "awaiting-review"
     assert projection.pending_approval is not None
+
+
+def test_specialist_review_labels_every_model_written_field() -> None:
+    arguments: dict[str, JsonValue] = {
+        "description": "Check the plan",
+        "prompt": "Review the synthetic plan.\nReport gaps.",
+        "subagent_type": "research-planner",
+    }
+    proposed: dict[str, JsonValue] = {
+        "tool_call_id": "task-1",
+        "tool_name": "task",
+        "kind": "task",
+        "summary": "Delegate the review",
+        "arguments": arguments,
+    }
+    uncatalogued = project_session(
+        (_event(0, EventKind.TOOL_CALL_PROPOSED, proposed),), session_id="session-1"
+    ).actions[0]
+    catalogued = project_session(
+        (
+            _event(
+                0,
+                EventKind.TOOL_CALL_PROPOSED,
+                {
+                    **proposed,
+                    "specialist_label": "Research Planner",
+                    "specialist_capability": "advisory",
+                },
+            ),
+        ),
+        session_id="session-1",
+    ).actions[0]
+
+    assert specialist_review_lines(catalogued) == (
+        "Specialist: Research Planner",
+        "Capability: Advisory",
+        "Model-provided task description: Check the plan",
+        "Model-provided task prompt: Review the synthetic plan.\nReport gaps.",
+    )
+    assert specialist_review_lines(uncatalogued)[0] == (
+        "Model-provided specialist name: research-planner"
+    )
+    # Only the catalog role heads an action unlabelled; every fallback names the model.
+    assert action_heading(catalogued) == "Research Planner"
+    assert action_heading(uncatalogued) == "Model-provided task description: Check the plan"
+    without_description = uncatalogued.model_copy(
+        update={"details": uncatalogued.details.model_copy(update={"description": None})}
+    )
+    assert action_heading(without_description) == (
+        "Model-provided specialist name: research-planner"
+    )
+    bare = uncatalogued.model_copy(update={"details": ProjectionTaskActionDetails()})
+    assert action_heading(bare) == "Model-provided summary: Delegate the review"
 
 
 def _event(

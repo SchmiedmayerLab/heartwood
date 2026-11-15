@@ -397,8 +397,9 @@ def test_plain_terminal_renders_every_typed_action_and_automatic_decision() -> N
 
     assert "[Succeeded] unknown path unavailable" in rendered
     assert "created results/summary.txt (file-editor-action)" in rendered
-    assert "specialist research-planner" in rendered
-    assert "Run a custom action" in rendered
+    # A heading without a catalog role names the model as the author of its text.
+    assert "[Awaiting Review] Model-provided specialist name: research-planner" in rendered
+    assert "Model-provided summary: Run a custom action" in rendered
 
 
 def test_terminal_projection_renders_control_sequences_visibly() -> None:
@@ -1254,7 +1255,8 @@ def test_line_formatter_renders_catalog_specialist_approval_details() -> None:
 
     assert "Specialist: Research Planner" in rendered
     assert "Capability: Advisory" in rendered
-    assert "Objective: Review the supplied synthetic analysis plan." in rendered
+    assert "Model-provided task description: Review the analysis plan" in rendered
+    assert "Model-provided task prompt: Review the supplied synthetic analysis plan." in rendered
 
 
 def test_line_formatter_renders_gateway_owned_suggestions_without_internal_ids() -> None:

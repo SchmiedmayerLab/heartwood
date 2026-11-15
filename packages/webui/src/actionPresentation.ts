@@ -66,3 +66,56 @@ export const selectedActionMode = (
 ): ActionModeOption | null =>
   settings?.modes.find((option) => option.mode === settings.review_mode) ??
   null;
+
+export const summarySourceLabel = (action: ProjectionActionRecord): string =>
+  action.summarySource === "gateway" ?
+    "Gateway-provided summary"
+  : "Model-provided summary";
+
+/** Model-written fields of a specialist task review, each named as model-provided. */
+export const specialistModelFields = (
+  action: ProjectionActionRecord,
+): Array<{ label: string; value: string }> => {
+  const details = action.details;
+  if (details.kind !== "task") return [];
+  return [
+    ...(details.roleLabel === null && details.subagentType !== null ?
+      [{ label: "Model-provided specialist name", value: details.subagentType }]
+    : []),
+    ...(details.description !== null ?
+      [{ label: "Model-provided task description", value: details.description }]
+    : []),
+    ...(details.prompt !== null ?
+      [{ label: "Model-provided task prompt", value: details.prompt }]
+    : []),
+  ];
+};
+
+/** Head an action with its command, path or trusted name; any model-written fallback is labelled. */
+export const actionHeading = (action: ProjectionActionRecord): string => {
+  const details = action.details;
+  if (details.kind === "terminal") return `$ ${details.command}`;
+  if (details.kind === "file-editor") {
+    return `${details.operation.replace("_", " ")} ${
+      details.path ?? "path unavailable"
+    }`;
+  }
+  if (details.kind === "task") {
+    if (details.roleLabel !== null) return details.roleLabel;
+    if (details.description !== null) {
+      return `Model-provided task description: ${details.description}`;
+    }
+    if (details.subagentType !== null) {
+      return `Model-provided specialist name: ${details.subagentType}`;
+    }
+  }
+  if (details.kind === "outside-operation") {
+    return `Outside operation to ${details.destination}: ${action.summary}`;
+  }
+  if (details.kind === "outside-result") {
+    return `Outside result release: ${action.summary}`;
+  }
+  return action.summary ?
+      `${summarySourceLabel(action)}: ${action.summary}`
+    : "";
+};

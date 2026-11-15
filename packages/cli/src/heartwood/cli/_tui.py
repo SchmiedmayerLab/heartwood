@@ -62,6 +62,7 @@ from heartwood.gateway import (
     action_tool_label,
     outside_review_lines,
     outside_review_title,
+    specialist_review_lines,
 )
 from heartwood.gateway import (
     display_safe_text as terminal_safe_text,
@@ -692,6 +693,7 @@ class HeartwoodTerminalApp(App[None]):
                 rendered.append(
                     f"   {action_summary_label(action)}: " + terminal_safe_text(action.summary)
                 )
+            rendered.extend(f"   {line}" for line in specialist_review_lines(action))
             if action.arguments:
                 rendered.extend(
                     (

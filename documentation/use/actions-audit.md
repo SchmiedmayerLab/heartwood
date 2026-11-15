@@ -28,6 +28,12 @@ An interrupted action whose result cannot be established is marked **Outcome Unk
 An allowed set is sent to run at most once.
 If it appears to wait for review again after a restart, it may already have run: Heartwood marks it **Outcome Unknown** and refuses to allow or reject it again.
 
+A specialist task review is headed by the role from the specialist catalog; its task description, task prompt, and any specialist name that is not in the catalog were written by the model and are labelled **Model-provided** in the terminal, browser, and notebook.
+An action heading that falls back to model-written text carries the same label.
+
+Your approval never overrides deployment policy.
+The sandbox policy, the deployment's model-route and egress rules, and an outside service's policy check apply to an action you allowed exactly as to any other, and an action they refuse does not run.
+
 ## Review Modes
 
 The review mode decides which action sets the gateway allows on your behalf.
@@ -115,6 +121,8 @@ The first step that could change a file or send data anywhere else is a command 
 
 Under **Review Outside Effects**, the sandbox confines commands, not review: they can change or delete files in the worker workspace and send content to the admitted model endpoint without asking.
 Review applies to proposed tool calls; it does not intercept every operation of code already running inside the sandbox.
+Commands and file operations inside a worker run in the worker itself, so no review mode requires an outside, digest-bound approval before every local operation.
+Such a profile is unavailable until an executor that mediates each operation separately from the worker is qualified.
 
 ## Automatic Decisions in the Record
 

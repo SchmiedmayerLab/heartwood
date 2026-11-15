@@ -475,7 +475,8 @@ def test_notebook_renders_catalog_specialist_approval_details() -> None:
 
     assert "Specialist: Research Planner" in rendered
     assert "Capability: Advisory" in rendered
-    assert "Objective: Review the supplied synthetic analysis plan." in rendered
+    assert "Model-provided task description: Review the analysis plan" in rendered
+    assert "Model-provided task prompt: Review the supplied synthetic analysis plan." in rendered
 
 
 def test_notebook_session_configures_non_secret_model_profiles(tmp_path: Path) -> None:
@@ -1076,8 +1077,10 @@ def test_notebook_renders_every_typed_action_and_automatic_decision() -> None:
         for item in section.items
     )
     assert "Paths: created results/summary.txt (file-editor-action)" in rendered
-    assert "research-planner" in rendered
-    assert "Use the fallback task summary" in rendered
+    # Each heading without a catalog role names the model as the author of its text.
+    assert "Model-provided specialist name: research-planner" in rendered
+    assert "Model-provided summary: Use the fallback task summary" in rendered
+    assert "Model-provided summary: Run a custom action" in rendered
     assert "Run a custom action" in rendered
 
 

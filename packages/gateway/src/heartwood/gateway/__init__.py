@@ -38,6 +38,7 @@ from heartwood.core_adapter import (
 )
 from heartwood.gateway._access import LaunchCapability
 from heartwood.gateway._action_presentation import (
+    action_heading,
     action_mode_label,
     action_risk_label,
     action_state_label,
@@ -46,6 +47,7 @@ from heartwood.gateway._action_presentation import (
     display_safe_text,
     outside_review_lines,
     outside_review_title,
+    specialist_review_lines,
 )
 from heartwood.gateway._action_settings import (
     ACTION_MODE_OPTIONS,
@@ -394,6 +396,7 @@ __all__ = [
     "WorkspaceInspectionError",
     "WorkspaceInspector",
     "WorkspaceLimits",
+    "action_heading",
     "action_mode_label",
     "action_risk_label",
     "action_settings_from_mapping",
@@ -449,6 +452,7 @@ __all__ = [
     "plan_local_context_window",
     "plan_startup",
     "project_session",
+    "specialist_review_lines",
     "user_checkpoint_signer_registry_path",
     "verify_model_artifact",
     "verify_model_snapshot",

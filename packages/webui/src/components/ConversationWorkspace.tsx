@@ -27,9 +27,12 @@ import {
 import { useEffect, useRef, useState, type RefObject } from "react";
 import {
   actionCountLabel,
+  actionHeading,
   actionRiskPresentation,
   actionStateLabel,
   actionToolLabel,
+  specialistModelFields,
+  summarySourceLabel,
 } from "../actionPresentation";
 import type { RequestActivity as RequestActivityState } from "../requestActivity";
 import type {
@@ -561,37 +564,6 @@ const ActionTechnicalDetails = ({
   );
 };
 
-const actionHeading = (action: ProjectionActionRecord) => {
-  if (action.details.kind === "terminal") {
-    return `$ ${action.details.command}`;
-  }
-  if (action.details.kind === "file-editor") {
-    return `${action.details.operation.replace("_", " ")} ${
-      action.details.path ?? "path unavailable"
-    }`;
-  }
-  if (action.details.kind === "task") {
-    return (
-      action.details.roleLabel ??
-      action.details.description ??
-      action.details.subagentType ??
-      action.summary
-    );
-  }
-  if (action.details.kind === "outside-operation") {
-    return `Outside operation to ${action.details.destination}: ${action.summary}`;
-  }
-  if (action.details.kind === "outside-result") {
-    return `Outside result release: ${action.summary}`;
-  }
-  return action.summary;
-};
-
-const summarySourceLabel = (action: ProjectionActionRecord) =>
-  action.summarySource === "gateway" ?
-    "Gateway-provided summary"
-  : "Model-provided summary";
-
 const outsideReviewCopy = {
   "outside-operation": {
     title: "Outside operation",
@@ -941,11 +913,11 @@ const ApprovalRequest = ({
                     : null}
                   </div>
                 : <OutsideReview action={control} />}
-                {specialist?.prompt ?
-                  <p className="approval-action-objective">
-                    {displaySafeText(specialist.prompt)}
+                {specialistModelFields(control).map((field) => (
+                  <p className="approval-action-objective" key={field.label}>
+                    {field.label}: {displaySafeText(field.value)}
                   </p>
-                : null}
+                ))}
                 {(
                   control.details.kind === "terminal" ||
                   control.details.kind === "file-editor"

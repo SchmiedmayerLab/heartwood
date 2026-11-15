@@ -29,6 +29,7 @@ from heartwood.gateway import (
     SessionGateway,
     SessionProjection,
     WorkspaceInspectionError,
+    action_heading,
     action_mode_label,
     action_risk_label,
     action_state_label,
@@ -36,6 +37,7 @@ from heartwood.gateway import (
     action_tool_label,
     outside_review_lines,
     outside_review_title,
+    specialist_review_lines,
 )
 from heartwood.gateway import (
     display_safe_text as terminal_safe_text,
@@ -525,20 +527,7 @@ def format_projection_lines(
                 lines.append(
                     f"     {action_summary_label(action)}: {terminal_safe_text(action.summary)}"
                 )
-            if action.details.kind == "task":
-                role = action.details.role_label or action.details.subagent_type
-                if role:
-                    lines.append(f"     Specialist: {terminal_safe_text(role)}")
-                if action.details.capability:
-                    lines.append(
-                        "     Capability: "
-                        + terminal_safe_text(action.details.capability.replace("-", " ").title())
-                    )
-                if action.details.prompt:
-                    lines.append(
-                        "     Objective: "
-                        + terminal_safe_text(action.details.prompt, preserve_newlines=True)
-                    )
+            lines.extend(f"     {line}" for line in specialist_review_lines(action))
             if argument_lines := format_action_arguments(action.arguments):
                 lines.append("     Arguments:")
                 lines.extend(f"       {line}" for line in argument_lines)
@@ -716,21 +705,7 @@ def format_runtime_lines(projection: SessionProjection) -> tuple[str, ...]:
 
 def format_action_record_lines(action: ProjectionActionRecord) -> tuple[str, ...]:
     """Render one correlated action record without reconstructing its state."""
-    state = action_state_label(action.state)
-    details = action.details
-    if details.kind == "terminal":
-        heading = f"  [{state}] $ {terminal_safe_text(details.command)}"
-    elif details.kind == "file-editor":
-        path = terminal_safe_text(details.path or "path unavailable")
-        heading = f"  [{state}] {details.operation} {path}"
-    elif details.kind == "task":
-        specialist = (
-            details.role_label or details.subagent_type or details.description or action.tool_name
-        )
-        heading = f"  [{state}] specialist {terminal_safe_text(specialist)}"
-    else:
-        heading = f"  [{state}] {terminal_safe_text(action.summary)}"
-    lines = [heading]
+    lines = [f"  [{action_state_label(action.state)}] {action_heading(action)}"]
     if action.automatic_rule is not None:
         lines.append(
             "    allowed automatically (rule " + terminal_safe_text(action.automatic_rule) + ")"

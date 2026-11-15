@@ -115,6 +115,47 @@ def outside_review_title(action: ProjectionActionRecord) -> str | None:
     return OUTSIDE_REVIEW_TITLES.get(action.details.kind)
 
 
+def action_heading(action: ProjectionActionRecord) -> str:
+    """Head an action with its command, path or trusted name, labelling any model-written text."""
+    details = action.details
+    if details.kind == "terminal":
+        heading = f"$ {details.command}"
+    elif details.kind == "file-editor":
+        heading = f"{details.operation} {details.path or 'path unavailable'}"
+    elif details.kind == "task" and details.role_label:
+        heading = details.role_label
+    elif details.kind == "task" and details.description:
+        heading = f"Model-provided task description: {details.description}"
+    elif details.kind == "task" and details.subagent_type:
+        heading = f"Model-provided specialist name: {details.subagent_type}"
+    elif title := outside_review_title(action):
+        heading = f"{title}: {action.summary}"
+    elif action.summary:
+        heading = f"{action_summary_label(action)}: {action.summary}"
+    else:
+        heading = action_tool_label(action.tool_name)
+    return display_safe_text(heading)
+
+
+def specialist_review_lines(action: ProjectionActionRecord) -> tuple[str, ...]:
+    """Name a specialist task's catalog role and label each field the model wrote."""
+    details = action.details
+    if details.kind != "task":
+        return ()
+    lines: list[str] = []
+    if details.role_label:
+        lines.append(f"Specialist: {details.role_label}")
+    elif details.subagent_type:
+        lines.append(f"Model-provided specialist name: {details.subagent_type}")
+    if details.capability:
+        lines.append("Capability: " + details.capability.replace("-", " ").title())
+    if details.description:
+        lines.append(f"Model-provided task description: {details.description}")
+    if details.prompt:
+        lines.append(f"Model-provided task prompt: {details.prompt}")
+    return tuple(display_safe_text(line, preserve_newlines=True) for line in lines)
+
+
 def _outside_content_identity(content: ProjectionOutsideContent) -> str:
     return f"{content.size_bytes:,} bytes of canonical JSON · SHA-256 {content.sha256}"
 
@@ -166,6 +207,7 @@ __all__ = [
     "OTHER_ACTION_TOOL_LABEL_TEMPLATE",
     "UNKNOWN_ACTION_RISK_LABEL",
     "UNKNOWN_ACTION_TOOL_LABEL",
+    "action_heading",
     "action_mode_label",
     "action_presentation",
     "action_risk_label",
@@ -175,4 +217,5 @@ __all__ = [
     "display_safe_text",
     "outside_review_lines",
     "outside_review_title",
+    "specialist_review_lines",
 ]

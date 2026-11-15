@@ -8,10 +8,13 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  actionHeading,
   actionRiskPresentation,
   actionStateLabel,
   actionToolLabel,
+  specialistModelFields,
 } from "./actionPresentation";
+import { syntheticAction } from "./test/fixtures";
 import type { ActionPresentation } from "./types";
 
 const presentation: ActionPresentation = {
@@ -44,5 +47,58 @@ describe("action presentation", () => {
       className: "risk-unknown",
       label: "Not Classified",
     });
+  });
+
+  it("labels every model-written specialist field and heading fallback", () => {
+    const task = (
+      roleLabel: string | null,
+      description: string | null,
+      subagentType: string | null,
+    ) =>
+      syntheticAction({
+        toolName: "task",
+        summary: "Delegate the review",
+        details: {
+          kind: "task",
+          capability: "advisory",
+          description,
+          prompt: "Review the synthetic plan.",
+          roleLabel,
+          subagentType,
+          resume: null,
+        },
+      });
+
+    expect(actionHeading(task("Research Planner", "Check", "planner"))).toBe(
+      "Research Planner",
+    );
+    expect(actionHeading(task(null, "Check the plan", "planner"))).toBe(
+      "Model-provided task description: Check the plan",
+    );
+    expect(actionHeading(task(null, null, "planner"))).toBe(
+      "Model-provided specialist name: planner",
+    );
+    expect(actionHeading(task(null, null, null))).toBe(
+      "Model-provided summary: Delegate the review",
+    );
+    expect(actionHeading(syntheticAction({ details: { kind: "other" } }))).toBe(
+      "Model-provided summary: build the aggregate synthetic target-condition cohort",
+    );
+    expect(specialistModelFields(task(null, "Check", "planner"))).toEqual([
+      { label: "Model-provided specialist name", value: "planner" },
+      { label: "Model-provided task description", value: "Check" },
+      {
+        label: "Model-provided task prompt",
+        value: "Review the synthetic plan.",
+      },
+    ]);
+    expect(
+      specialistModelFields(task("Research Planner", null, "planner")),
+    ).toEqual([
+      {
+        label: "Model-provided task prompt",
+        value: "Review the synthetic plan.",
+      },
+    ]);
   });
 });

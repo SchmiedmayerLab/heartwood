@@ -2395,7 +2395,7 @@ describe("App", () => {
     });
   });
 
-  it("shows catalog-owned specialist identity and objective during approval", async () => {
+  it("shows catalog-owned specialist identity and labels the model-written task", async () => {
     render(
       <App
         client={new SpecialistPendingClient()}
@@ -2406,7 +2406,17 @@ describe("App", () => {
     expect(await screen.findByText("Research Planner")).toBeVisible();
     expect(screen.getByText("Advisory review")).toBeVisible();
     expect(
-      screen.getByText("Review the supplied synthetic analysis plan."),
+      screen.getByText("Model-provided summary: Review the analysis plan"),
+    ).toBeVisible();
+    expect(
+      screen.getByText(
+        "Model-provided task description: Review the analysis plan",
+      ),
+    ).toBeVisible();
+    expect(
+      screen.getByText(
+        "Model-provided task prompt: Review the supplied synthetic analysis plan.",
+      ),
     ).toBeVisible();
   });
 

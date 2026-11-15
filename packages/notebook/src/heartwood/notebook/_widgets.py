@@ -17,6 +17,7 @@ from typing import Protocol, cast
 
 from heartwood.gateway import (
     ProjectionSubagent,
+    action_heading,
     action_risk_label,
     action_state_label,
     action_summary_label,
@@ -24,6 +25,7 @@ from heartwood.gateway import (
     display_safe_text,
     outside_review_lines,
     outside_review_title,
+    specialist_review_lines,
 )
 from heartwood.notebook._view_model import NotebookViewModel
 from heartwood.schemas import ProjectReadinessResponse
@@ -215,14 +217,7 @@ def _approval_items(view_model: NotebookViewModel) -> tuple[str, ...]:
         ]
         if action.summary:
             lines.append(f"{action_summary_label(action)}: {action.summary}")
-        if action.details.kind == "task":
-            role = action.details.role_label or action.details.subagent_type
-            if role:
-                lines.append(f"Specialist: {role}")
-            if action.details.capability:
-                lines.append(f"Capability: {action.details.capability.replace('-', ' ').title()}")
-            if action.details.prompt:
-                lines.append(f"Objective: {action.details.prompt}")
+        lines.extend(specialist_review_lines(action))
         if action.arguments:
             lines.append(f"Arguments:\n{json.dumps(action.arguments, indent=2, sort_keys=True)}")
         items.append("\n".join(lines))
@@ -232,17 +227,7 @@ def _approval_items(view_model: NotebookViewModel) -> tuple[str, ...]:
 def _action_items(view_model: NotebookViewModel) -> tuple[str, ...]:
     items: list[str] = []
     for action in view_model.actions:
-        details = action.details
-        if details.kind == "terminal":
-            label = f"$ {details.command}"
-        elif details.kind == "file-editor":
-            label = f"{details.operation} {details.path or 'path unavailable'}"
-        elif details.kind == "task":
-            label = (
-                details.role_label or details.description or details.subagent_type or action.summary
-            )
-        else:
-            label = action.summary
+        label = action_heading(action)
         outcome = (
             ""
             if action.outcome is None
