@@ -3679,6 +3679,38 @@ describe("App", () => {
     await waitFor(() => expect(client.installedSkill).toBe("cohort-review"));
   });
 
+  it("reports unverified content beside an installed Skill", async () => {
+    const planted =
+      "/project/.heartwood/skills/artifacts/sha256/abc/planted-context";
+    class UnverifiedContentClient extends FakeClient {
+      override getSkillSettings(): Promise<SkillSettings> {
+        return Promise.resolve({
+          skills: [
+            {
+              ...bundledSkill(),
+              name: "community-summary",
+              source: "installed",
+              unexpected_content: [planted],
+            },
+          ],
+        });
+      }
+    }
+    render(
+      <App
+        client={new UnverifiedContentClient()}
+        initialSessionId="session-test"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Skills" }));
+
+    expect(
+      await screen.findByText("Unverified content is not loaded; remove it:"),
+    ).toBeVisible();
+    expect(screen.getByText(planted)).toBeVisible();
+  });
+
   it("presents the shared bounded specialist catalog", async () => {
     render(<App client={new FakeClient()} initialSessionId="session-test" />);
 
@@ -4218,6 +4250,7 @@ const bundledSkill = (): SkillSummary => ({
   archive_size: null,
   revocation_reason: null,
   compatibility_reason: null,
+  unexpected_content: [],
   installable: false,
 });
 

@@ -232,16 +232,23 @@ class SkillArtifactStore:
                 self._verified_manifest(record) for record in records if record.status == "active"
             )
 
-    def unexpected_artifact_entries(self, record: InstalledSkillRecord) -> tuple[str, ...]:
-        """Return names beside one record's Skill directory in its content-addressed slot."""
+    def unexpected_artifact_entries(self, record: InstalledSkillRecord) -> tuple[Path, ...]:
+        """Return entries beside one record's Skill directory in its content-addressed slot."""
         path = self._artifact_path(record)
+        entries: list[Path] = []
         try:
-            entries = sorted(entry.name for entry in path.parent.iterdir())
+            skill = path.lstat()
+            for entry in sorted(path.parent.iterdir()):
+                # Compare identities, not names: a case-insensitive file system can store
+                # the Skill directory under a different spelling of the same name.
+                metadata = entry.lstat()
+                if (metadata.st_dev, metadata.st_ino) != (skill.st_dev, skill.st_ino):
+                    entries.append(entry)
         except OSError as error:
             raise SkillStoreError(
                 f"Installed Skill artifact is unreadable: {record.name}"
             ) from error
-        return tuple(name for name in entries if name != path.name)
+        return tuple(entries)
 
     def artifact_path(self, record: InstalledSkillRecord) -> Path:
         """Return the confined content-addressed directory for one record."""

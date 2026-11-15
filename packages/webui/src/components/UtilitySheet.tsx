@@ -305,6 +305,14 @@ const SkillsContent = ({
                   {skill.compatibility_reason}
                 </small>
               : null}
+              {skill.unexpected_content.length > 0 ?
+                <small className="skill-revocation">
+                  Unverified content is not loaded; remove it:
+                  {skill.unexpected_content.map((path) => (
+                    <code key={path}>{path}</code>
+                  ))}
+                </small>
+              : null}
             </div>
             {skill.source === "installed" ?
               <Tooltip tooltip={`Remove ${skill.name}`}>

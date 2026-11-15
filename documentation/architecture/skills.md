@@ -77,8 +77,11 @@ A selected directory that fails to load stops conversation setup rather than bei
 
 Each content-addressed slot `artifacts/sha256/<tree-digest>/` holds exactly one Skill directory.
 Anything else in that slot, such as a directory written beside the Skill or a staging directory left by an interrupted installation, has neither a verified digest nor an activation record.
-Heartwood does not load or project that content and logs a gateway warning naming each unexpected entry whenever it selects the Skill.
-Removing the unexpected entry clears the warning; the verified Skill remains available meanwhile.
+Heartwood does not load or project that content.
+The installed Skill's summary lists each unexpected path: the CLI and browser Skill lists show it, the notebook bridge returns it, and `heartwood doctor` reports it as `HW-SKILL-001`.
+The gateway also logs an error naming the entries whenever it selects the Skill.
+Removing the unexpected entries clears the report; the verified Skill remains available meanwhile.
+Entries are compared by file identity, so a case-insensitive file system that stores the Skill directory under another spelling of its name reports nothing.
 
 ## Worker Projection
 

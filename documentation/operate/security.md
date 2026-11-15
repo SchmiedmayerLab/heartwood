@@ -201,7 +201,7 @@ Reviewed external Skill packages install only from deployment-approved TUF roots
 Approval binds the exact tree digest, installation is atomic, and a signed revocation prevents later activation.
 Only the deployment-owned system Skill registry can approve a digest for controlled data.
 The agent receives each verified active Skill directory individually, never a parent directory that OpenHands would scan for more Skills.
-Content placed beside an installed Skill in the project store, including another Skill directory or an interrupted installation, is not loaded, and the gateway logs a warning naming it.
+Content placed beside an installed Skill in the project store, including another Skill directory or an interrupted installation, is not loaded; Heartwood names it in the Skill list, in `heartwood doctor` and in the gateway log.
 Verification establishes source and integrity, not that instructions are safe for a dataset; see [Skill Trust and Distribution](../architecture/skills.md).
 
 ## Audit Data

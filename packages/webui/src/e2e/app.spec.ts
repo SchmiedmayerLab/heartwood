@@ -1152,6 +1152,7 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
           archive_size: null,
           revocation_reason: null,
           compatibility_reason: null,
+          unexpected_content: [],
           installable: false,
         },
         {
@@ -1176,6 +1177,7 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
           archive_size: null,
           revocation_reason: null,
           compatibility_reason: null,
+          unexpected_content: [],
           installable: false,
         },
         {
@@ -1199,6 +1201,7 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
           archive_size: null,
           revocation_reason: null,
           compatibility_reason: null,
+          unexpected_content: [],
           installable: false,
         },
       ],

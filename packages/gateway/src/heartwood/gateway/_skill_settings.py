@@ -84,6 +84,7 @@ class SkillSummary:
     archive_size: int | None = None
     revocation_reason: str | None = None
     compatibility_reason: str | None = None
+    unexpected_content: tuple[str, ...] = ()
 
     @property
     def installable(self) -> bool:
@@ -175,6 +176,7 @@ class SkillSummary:
         manifest: SkillManifest,
         *,
         compatibility_reason: str | None = None,
+        unexpected_content: tuple[str, ...] = (),
     ) -> SkillSummary:
         """Build a projection from an activated content-addressed artifact."""
         status: Literal["active", "revoked", "unsupported"]
@@ -204,6 +206,7 @@ class SkillSummary:
             source_revision=record.source_revision,
             revocation_reason=record.revocation_reason,
             compatibility_reason=compatibility_reason,
+            unexpected_content=unexpected_content,
         )
 
     def safe_dict(self) -> dict[str, object]:
@@ -229,6 +232,7 @@ class SkillSummary:
             "archive_size": self.archive_size,
             "revocation_reason": self.revocation_reason,
             "compatibility_reason": self.compatibility_reason,
+            "unexpected_content": list(self.unexpected_content),
             "installable": self.installable,
         }
 
@@ -516,10 +520,12 @@ class SkillManager:
                     continue
                 manifest = self.store.manifest(record)
                 if unexpected := self.store.unexpected_artifact_entries(record):
-                    _LOGGER.warning(
-                        "Ignoring unverified content beside installed Skill %s: %s",
+                    # Unverified content in the trusted store is an integrity fault, and the
+                    # gateway runs OpenHands with LOG_LEVEL=ERROR, so report it at that level.
+                    _LOGGER.error(
+                        "Unverified content beside installed Skill %s is not loaded; remove: %s",
                         record.name,
-                        ", ".join(repr(name) for name in unexpected),
+                        ", ".join(repr(str(path)) for path in unexpected),
                     )
                 if self._compatibility_reason(manifest) is None:
                     manifests.append(manifest)
@@ -630,6 +636,9 @@ class SkillManager:
                             record,
                             manifest,
                             compatibility_reason=self._compatibility_reason(manifest),
+                            unexpected_content=tuple(
+                                str(path) for path in self.store.unexpected_artifact_entries(record)
+                            ),
                         ),
                         # The retained record describes the deployment that installed
                         # the Skill; only the current registry decides this status.

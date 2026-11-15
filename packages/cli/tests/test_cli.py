@@ -2084,6 +2084,7 @@ def test_skills_refresh_inspect_and_install_share_the_signed_catalog_projection(
         "archive_size": 1_024,
         "revocation_reason": None,
         "compatibility_reason": None,
+        "unexpected_content": [],
         "installable": True,
     }
     calls: list[tuple[object, ...]] = []
@@ -2165,6 +2166,41 @@ def test_skills_refresh_inspect_and_install_share_the_signed_catalog_projection(
     assert "Skill: synthetic-summary 1.0.0" in captured.out
     assert "Download: 1.0 KiB" in captured.out
     assert "interactive approval is unavailable" in captured.err
+
+
+def test_skills_list_reports_unverified_content_beside_an_installed_skill(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    planted = str(tmp_path / "skills/artifacts/sha256" / ("a" * 64) / "planted-context")
+    summary: dict[str, object] = {
+        "name": "community-summary",
+        "version": "1.0.0",
+        "description": "Summarize one synthetic dataset.",
+        "source": "installed",
+        "source_id": "local",
+        "status": "active",
+        "compatibility_reason": None,
+        "unexpected_content": [planted],
+    }
+
+    class SkillGateway:
+        def start(self) -> None:
+            return None
+
+        def stop(self) -> None:
+            return None
+
+        def skill_settings(self) -> dict[str, object]:
+            return {"skills": [summary]}
+
+    monkeypatch.setattr("heartwood.cli.SessionGateway", lambda **_kwargs: SkillGateway())
+
+    assert _run(tmp_path / "analysis", monkeypatch, ["skills", "list"]) == 0
+    output = capsys.readouterr().out
+    assert "Unverified content is not loaded; remove it:" in output
+    assert planted in output
 
 
 def test_skill_commands_report_shared_gateway_failures_as_argument_errors(

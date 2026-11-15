@@ -639,6 +639,7 @@ export interface SkillSummaryResponse {
   source_revision: string | null;
   status: "available" | "active" | "revoked" | "unsupported";
   tree_sha256: string;
+  unexpected_content: string[];
   version: string;
 }
 /**

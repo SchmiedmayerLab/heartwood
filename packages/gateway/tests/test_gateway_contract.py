@@ -273,6 +273,50 @@ def test_gateway_prepares_openhands_before_skill_loading(
     assert gateway.skill_settings()["skills"]
 
 
+def test_unexpected_skill_content_is_reported_in_settings_and_diagnostics(
+    tmp_path: Path,
+) -> None:
+    gateway = _gateway(tmp_path)
+    source = tmp_path / "skills" / "community-summary"
+    bundled = Path(__file__).resolve().parents[3] / "vendor/heartwood-skills/skills"
+    shutil.copytree(bundled / "aggregate-export", source)
+    skill_file = source / "SKILL.md"
+    skill_file.write_text(
+        skill_file.read_text(encoding="utf-8")
+        .replace("name: aggregate-export", "name: community-summary")
+        .replace(
+            'heartwood.id: "heartwood.research.aggregate-export"',
+            'heartwood.id: "example.community-summary"',
+        ),
+        encoding="utf-8",
+    )
+    inspected = gateway.inspect_local_skill(source)
+    gateway.install_local_skill(
+        source, expected_tree_sha256=inspected["tree_sha256"], approved=True
+    )
+    store = gateway.skill_manager.store
+    planted = store.artifact_path(store.records()[0]).parent / "planted-context"
+    planted.mkdir()
+
+    installed = next(
+        skill for skill in gateway.skill_settings()["skills"] if skill["source"] == "installed"
+    )
+    checks = cast(list[dict[str, object]], gateway.project_readiness()["checks"])
+    skill_check = next(check for check in checks if check["check_id"] == "installed-skills")
+
+    assert installed["status"] == "active"
+    assert installed["unexpected_content"] == [str(planted)]
+    assert skill_check["status"] == "warning"
+    assert skill_check["code"] == "HW-SKILL-001"
+    assert str(planted) in cast(str, skill_check["summary"])
+    planted.rmdir()
+    checks = cast(list[dict[str, object]], gateway.project_readiness()["checks"])
+    assert (
+        next(check for check in checks if check["check_id"] == "installed-skills")["status"]
+        == "pass"
+    )
+
+
 def test_gateway_removal_resets_sessions_despite_unexpected_skill_content(
     tmp_path: Path,
 ) -> None:

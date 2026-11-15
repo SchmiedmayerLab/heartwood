@@ -624,8 +624,8 @@ def test_store_reports_unexpected_entries_beside_an_installed_skill(tmp_path: Pa
     (slot / "planted-context").mkdir()
     (slot / ".aggregate-export-interrupted").mkdir()
     assert store.unexpected_artifact_entries(record) == (
-        ".aggregate-export-interrupted",
-        "planted-context",
+        slot / ".aggregate-export-interrupted",
+        slot / "planted-context",
     )
 
     shutil.rmtree(slot)

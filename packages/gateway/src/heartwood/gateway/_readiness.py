@@ -46,7 +46,9 @@ from heartwood.gateway._subscriptions import (
     SubscriptionError,
 )
 from heartwood.model_policy import ModelPolicyEngine
+from heartwood.persistence import NativeLockUnavailableError
 from heartwood.schemas import PolicyProfile
+from heartwood.skills import SkillArtifactStore, SkillStoreError
 
 ReadinessState = Literal["ready", "setup-required", "compute-required", "recovery-required"]
 ModelSource = Literal[
@@ -283,6 +285,9 @@ def inspect_deployment(
             )
         )
 
+    if state_valid:
+        checks.append(_installed_skill_check(project))
+
     if adapter.adapter_id == "terra":
         checks.extend(_terra_environment_checks(project=project, env=active_env))
 
@@ -451,6 +456,30 @@ def inspect_deployment(
         state_root=str(project.state_root),
         evidence=detection.evidence,
         checks=tuple(checks),
+    )
+
+
+def _installed_skill_check(project: ProjectContext) -> ReadinessCheck:
+    """Report content that is stored beside an active installed Skill but never loaded."""
+    store = SkillArtifactStore(project.skills_dir)
+    try:
+        unexpected = tuple(
+            str(path)
+            for record in store.records()
+            if record.status == "active"
+            for path in store.unexpected_artifact_entries(record)
+        )
+    except (NativeLockUnavailableError, SkillStoreError) as error:
+        return ReadinessCheck("installed-skills", "warning", str(error))
+    if unexpected:
+        return ReadinessCheck(
+            "installed-skills",
+            "warning",
+            "Unverified content beside installed Skills is not loaded; remove: "
+            + ", ".join(unexpected),
+        )
+    return ReadinessCheck(
+        "installed-skills", "pass", "Installed Skill storage holds only verified content"
     )
 
 

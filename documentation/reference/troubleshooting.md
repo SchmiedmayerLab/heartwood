@@ -239,6 +239,16 @@ Use a regular project file, not a symbolic link, and wait for any process writin
 The file must fit within the capture operation's byte limit.
 Retry capture before relying on its digest as execution evidence.
 
+## Skills
+
+### `HW-SKILL-001`: Installed Skill Storage Needs Attention
+
+Each installed Skill is stored alone in its content-addressed directory under the project's Skill store.
+Something else in that directory, such as a directory written beside the Skill or a staging directory left by an interrupted installation, has no verified digest or activation record.
+Heartwood never loads it, and the verified Skill stays active.
+Remove each path named in the check summary, or under **Unverified content** in the Skill list, with an account that owns the Skill store.
+The same check reports an installation index that cannot be read; repair or restore the project state before you install or remove Skills.
+
 ## Managed Workers
 
 ### `HW-WORKER-001`: Sandbox Gateway Version Is Not Declared as Qualified

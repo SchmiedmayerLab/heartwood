@@ -2351,6 +2351,11 @@ summary:focus-visible {
   color: var(--color-destructive-foreground) !important;
 }
 
+.skill-revocation code {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
 .specialist-row {
   align-items: start;
   grid-template-columns: minmax(0, 1fr);
