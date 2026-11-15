@@ -420,9 +420,12 @@ The complete returned registration set must match before any import can execute,
 The adapter uses the public workspace client property and HTTPX transport interface without changing SDK code or conversation orchestration.
 
 Responses are bounded, uncompressed UTF-8 JSON with unique object keys and finite numbers.
-Each workspace additionally permits at most 1,024 HTTP requests and 32 MiB of cumulative response bodies, including repeated history pages and requests that fail admission.
-Concurrent requests share that budget; resetting the HTTP client does not replenish it.
-Exhaustion or invalid response admission permanently closes the workspace's HTTP admission, including responses still in flight.
+A response body is limited to 4 MiB, except a branch snapshot, which carries the whole active branch and is limited to 16 MiB.
+Measured on serialized SDK events, 16 MiB holds about 4,500 tool steps with 2 KB of output each, about 1,400 with 10 KB each, and about 320 when every output reaches the SDK's 50,000-character limit.
+One wall-clock deadline of 120 seconds covers each request from connection to the last body byte, so a worker cannot extend it by sending status lines, headers, interim responses or chunk framing slowly.
+A walk through paged history ends when a page identifier repeats or after 1,024 pages or 32 MiB, whichever comes first; a later walk starts again from the first page.
+Concurrent requests share one response budget, described below; resetting the HTTP client does not replenish it.
+Exhaustion, a missed deadline, an unbounded history or invalid response admission permanently closes the workspace's HTTP admission, including responses still in flight.
 Starting another workspace requires a new trusted execution decision; reconnecting is not a budget renewal.
 These limits bound received data and request count, not the SDK's exact memory consumption or execution inside the worker.
 Admission failure does not stop worker execution; the trusted launcher must revoke access and stop the worker through the independent sandbox control plane.
@@ -432,8 +435,11 @@ Admission captures those specifications independently of mutable caller objects 
 Client reset and model revalidation do not replace that captured contract.
 The SDK owns client-tool registration and execution semantics: its acknowledgement means a proposal was dispatched to the client, not that an external effect was authorized or completed.
 Outside authorization and independently observed service results remain separate requirements; worker claims cannot grant either.
-Remote agent metadata is admitted only when it equals the agent the gateway sent, apart from redacted or omitted secret values.
-A worker therefore cannot select another agent implementation, model route, tokenizer or completion-log setting for the gateway to construct.
+Conversation metadata is admitted field by field against the creation request the gateway sent.
+A field the request sets, such as the agent, security analyzer, confirmation policy, hook configuration, workspace, iteration limit or secret registry, is admitted only when it equals the sent value, apart from redacted or omitted secret values.
+A fixed list of reported fields, such as execution status, usage, identifiers and timestamps, is admitted as plain data, and any other field is rejected, including one introduced by a later SDK.
+The rule applies to the created and retained conversation, to full-state updates and to single-field updates.
+A worker therefore cannot select another agent implementation, model route, tokenizer, analyzer, secret source or completion-log setting for the gateway to construct.
 Errors expose a stable admission failure rather than worker response content.
 Resetting the workspace client retains the same admission policy.
 
@@ -445,7 +451,10 @@ The library bounds each message to 4 MiB and its receive queue to four frames.
 HTTP responses, connection attempts and received events share one response budget for the worker attempt.
 It admits bursts of 1,024 responses and 32 MiB and refills at four responses and 1 MiB per second, which covers status polling and progress reads for a run of any length.
 Received events are charged by size only.
-A worker that exceeds the budget, keeps a response open beyond 120 seconds, or stalls a read for that long is fenced.
+Each snapshot read is charged its full size, so a 16 MiB branch can be read twice from a full allowance and then once every 16 seconds.
+The refill bounds the rate of received data, not the events the SDK retains for a long session.
+A worker that exceeds the budget or the request deadline, or returns a history that does not end, is fenced.
+The event connection has no deadline of its own: an idle connection is the normal state while a session waits for its researcher, no gateway lock is held while it is read, its handshake is limited to ten seconds, and the library's keepalive closes a connection whose peer stops answering.
 Individual and full-state updates receive the same metadata checks as HTTP responses.
 Raw text passes the JSON admission rules and native event schema before callback delivery; binary messages, completion-log events, and rejected data cannot authorize local file writing or appear in admission errors.
 

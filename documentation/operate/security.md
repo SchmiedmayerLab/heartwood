@@ -77,6 +77,8 @@ Managed native execution requires an explicit operator-owned deployment binding 
 The complete worker runs behind the sandbox boundary, receives selected read-only input and verified Skill projections, and keeps its writable workspace, home and temporary files inside the sandbox.
 Canonical state, deployment authority, provider credentials, management sockets and signing material remain outside its mounts and process identity.
 The gateway independently checks attempt identity, admits untrusted responses and retains approval authority; the sandbox and outside services enforce filesystem, process and network restrictions.
+A worker response can report status, usage and events, but every conversation setting it returns must equal what the gateway sent, so it cannot make the gateway construct an agent, model client, analyzer or secret source of its choosing.
+Each worker request has a 120-second deadline and each history read a fixed size, and a worker that exceeds either is fenced; [the system architecture](../architecture/system.md) lists the limits.
 An uncertain revocation fences the attempt and retains writer ownership until reconciliation establishes that its resources are gone.
 The launcher deletes a worker that fails launch admission without waiting for the session to close.
 A worker whose attempt is fenced later is revoked as soon as the fence is raised: after any session command already in progress, its sandbox and provider attachment are removed within the control-plane timeouts of about three minutes.

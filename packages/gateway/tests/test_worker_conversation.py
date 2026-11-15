@@ -20,6 +20,7 @@ from openhands.sdk.event import StreamingDeltaEvent
 from openhands.sdk.security import AlwaysConfirm
 from openhands.sdk.skills import Skill
 from openhands.sdk.tool.client_tool import ClientToolSpec
+from openhands.sdk.tool.registry import get_tool_module_qualnames
 from openhands.sdk.workspace import LocalWorkspace
 from pydantic import SecretStr
 
@@ -33,6 +34,7 @@ from heartwood.gateway._openhands_sdk import (
 )
 from heartwood.gateway._remote_workspace import (
     WorkerResponseError,
+    _admit_event,
     _admit_metadata,
     _client_tool_contract,
 )
@@ -147,7 +149,7 @@ def test_remote_request_reuses_agent_contract_without_resolving_host_credentials
 
 
 @pytest.mark.parametrize("client_tool", [False, True])
-def test_pinned_agent_server_returns_the_agent_admission_expects(
+def test_pinned_agent_server_returns_the_conversation_admission_expects(
     tmp_path: Path,
     context: WorkerConversationContext,
     monkeypatch: pytest.MonkeyPatch,
@@ -183,9 +185,13 @@ def test_pinned_agent_server_returns_the_agent_admission_expects(
     backend.bind_runtime(event_sink=lambda _events: None, token_sink=lambda _delta: None)
     backend._get_conversation()
     assert len(requests[0].client_tools) == int(client_tool)
+    assert requests[0].security_analyzer is not None
+    assert requests[0].confirmation_policy == AlwaysConfirm()
     workspace = tmp_path / "worker-workspace"
     workspace.mkdir()
+    # Only the directory differs from the request Heartwood sends: the server requires it to exist.
     request = requests[0].model_copy(update={"workspace": LocalWorkspace(working_dir=workspace)})
+    context.workspace.authorize_request(request)
     server = server_api.create_app(
         server_config.Config(
             session_api_keys=[],
@@ -199,20 +205,44 @@ def test_pinned_agent_server_returns_the_agent_admission_expects(
             content=request.model_dump_json(context={"expose_secrets": True}, exclude_none=True),
             headers={"Content-Type": "application/json"},
         )
-    assert response.status_code == 201
-    returned = response.json()["agent"]
-    contract = context.workspace._agent_contract
+        assert response.status_code == 201
+        created = response.json()
+        retained = client.get(f"/api/conversations/{created['id']}").json()
+        with client.websocket_connect(f"/sockets/events/{created['id']}") as events:
+            first = json.loads(events.receive_text())
+    contract = context.workspace._request_contract
+    modules = get_tool_module_qualnames()
     authorized = _client_tool_contract(context.workspace.authorized_client_tools)
-    _admit_metadata({"agent": returned}, {}, authorized, contract)
+    attempt = context.workspace.attempt
+    assert first["key"] == "full_state"
+    # The server appends one entry per registered client tool to the agent it returns.
+    assert len(created["agent"]["tools"]) == len(request.agent.tools) + int(client_tool)
+
+    def admit(metadata: dict[str, Any]) -> None:
+        _admit_metadata(metadata, modules, authorized, contract)
+        for key, value in (("full_state", metadata), ("agent", metadata["agent"])):
+            _admit_event(
+                {**first, "key": key, "value": value}, modules, authorized, contract, attempt
+            )
+
+    for metadata in (created, retained, first["value"]):
+        admit(metadata)
     forgeries: tuple[Callable[[dict[str, Any]], object], ...] = (
-        lambda agent: agent["condenser"]["llm"].update(base_url="http://collector.test/v1"),
-        lambda agent: agent["tools"].append({"name": "worker_selected", "params": {}}),
+        lambda state: state.update(security_analyzer={"kind": "LLMSecurityAnalyzer"}),
+        lambda state: state.update(confirmation_policy={"kind": "NeverConfirm"}),
+        lambda state: state.update(field_of_a_later_sdk="value"),
+        lambda state: state["agent"]["condenser"]["llm"].update(
+            base_url="http://collector.test/v1"
+        ),
+        lambda state: state["agent"]["tools"].append({"name": "worker_selected", "params": {}}),
+        lambda state: state["agent"]["tools"].append(state["agent"]["tools"][-1]),
+        lambda state: state["agent"]["tools"][-1]["params"].update(spec={"name": "changed"}),
     )
     for forge in forgeries:
-        forged = json.loads(json.dumps(returned))
+        forged = json.loads(json.dumps(first["value"]))
         forge(forged)
         with pytest.raises(WorkerResponseError):
-            _admit_metadata({"agent": forged}, {}, authorized, contract)
+            admit(forged)
     backend.close()
 
 

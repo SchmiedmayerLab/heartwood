@@ -1001,7 +1001,7 @@ class OpenHandsSdkBackend:
             callback(event)
 
         lease.ensure_active()
-        context.workspace.authorize_agent(agent)
+        context.workspace.authorize_request(request)
         self._worker_creation_attempted = True
         conversation: RemoteConversation | None = None
         try:

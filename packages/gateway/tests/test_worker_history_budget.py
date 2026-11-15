@@ -13,7 +13,9 @@ from uuid import uuid4
 
 import pytest
 from openhands.sdk import Agent, RemoteConversation
+from openhands.sdk.conversation.request import StartConversationRequest
 from openhands.sdk.testing import TestLLM
+from openhands.sdk.workspace import LocalWorkspace
 
 from heartwood.gateway._remote_workspace import AdmittedRemoteWorkspace, WorkerResponseError
 
@@ -54,13 +56,18 @@ def test_native_attach_bounds_repeating_history_pages(monkeypatch: pytest.Monkey
     workspace = AdmittedRemoteWorkspace(
         host=f"http://127.0.0.1:{server.server_port}", working_dir="/workspace"
     )
-    workspace.authorize_agent(agent)
+    workspace.authorize_request(
+        StartConversationRequest(
+            agent=agent, workspace=LocalWorkspace(working_dir="/workspace"), max_iterations=10
+        )
+    )
     conversation = None
     try:
-        with pytest.raises(WorkerResponseError, match="budget exhausted"):
+        with pytest.raises(WorkerResponseError, match="history"):
             conversation = RemoteConversation.attach(workspace, identity, visualizer=None)
         admitted = len(requests)
-        assert 1024 <= admitted < 1200
+        # The conversation, its first page, and the page whose successor repeats.
+        assert admitted == 3
         assert any("page_id=repeated" in path for path in requests)
         workspace.reset_client()
         with pytest.raises(WorkerResponseError, match="closed"):

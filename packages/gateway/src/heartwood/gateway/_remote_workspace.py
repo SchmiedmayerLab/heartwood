@@ -13,11 +13,11 @@ import math
 import time
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
-from threading import Lock
+from threading import Lock, Thread, local
 from typing import Any
 
 import httpx
-from openhands.sdk.agent.base import AgentBase
+from openhands.sdk.conversation.request import StartConversationRequest
 from openhands.sdk.event.conversation_state import FULL_STATE_KEY
 from openhands.sdk.tool.client_tool import ClientToolSpec
 from openhands.sdk.workspace import RemoteWorkspace
@@ -26,11 +26,57 @@ from pydantic import ConfigDict, Field, PrivateAttr, model_validator
 from heartwood.core_adapter.worker_attempts import WorkerAttemptError, WorkerAttemptLease
 
 _MAX_RESPONSE_BYTES = 4 * 1024 * 1024
+# A snapshot carries the whole active branch in one response, so it alone may be larger.
+_MAX_SNAPSHOT_BYTES = 16 * 1024 * 1024
 _MAX_RESPONSE_SECONDS = 120.0
 _MAX_JSON_DEPTH = 64
+# One walk through paged history may use the burst allowance but none of its refill,
+# so a worker cannot extend a walk by answering slowly.
+_MAX_HISTORY_PAGES = 1024
+_MAX_HISTORY_BYTES = 32 * 1024 * 1024
 
-# The gateway's agent as sent to the worker and as serialized without secrets.
-AgentContract = tuple[dict[str, Any], dict[str, Any]]
+# The gateway's conversation request as sent to the worker and as serialized without secrets.
+RequestContract = tuple[dict[str, Any], dict[str, Any]]
+
+# Conversation fields the worker reports that are plain data to the SDK and the gateway.
+# Every other field must be one the gateway's request set, with the value it sent.
+_REPORTED_FIELDS = frozenset(
+    {
+        "activated_knowledge_skills",
+        "activated_path_rules",
+        "agent_state",
+        "ambient_plugin_mcp_servers",
+        "ambient_plugin_skills",
+        "available_efforts",
+        "available_models",
+        "blocked_actions",
+        "blocked_messages",
+        "created_at",
+        "current_effort",
+        "current_model_id",
+        "execution_status",
+        "forked_from_conversation_id",
+        "forked_from_event_id",
+        "head_is_empty",
+        "id",
+        "invoked_skills",
+        "last_user_message_id",
+        "launched_agent_profile",
+        "leaf_event_id",
+        "metrics",
+        "persistence_dir",
+        "runtime_info",
+        "stats",
+        "sub_conversation_ids",
+        "supports_runtime_model_switch",
+        "title",
+        "updated_at",
+    }
+)
+# Fields admitted against the launch's registered tools instead of the request.
+_REGISTRATION_FIELDS = ("tool_module_qualnames", "client_tools")
+# The fields checked in the gateway's own creation request before it is sent.
+_SENT_FIELDS = ("agent", "confirmation_policy", "security_analyzer", *_REGISTRATION_FIELDS)
 
 
 class WorkerResponseError(ValueError):
@@ -139,15 +185,14 @@ class WorkerResponseTransport(httpx.BaseTransport):
         transport: httpx.BaseTransport,
         budget: WorkerResponseBudget | None = None,
         client_tools: Sequence[ClientToolSpec] = (),
-        agent: Callable[[], AgentContract | None] = lambda: None,
-        clock: Callable[[], float] = time.monotonic,
+        request: Callable[[], RequestContract | None] = lambda: None,
     ) -> None:
         self._origin = _worker_origin(host)
-        self._clock = clock
         self._tool_modules = dict(tool_modules)
         self._client_tools = _client_tool_contract(client_tools)
-        self._agent = agent
+        self._request = request
         self._transport = transport
+        self._history = local()
         self._budget = budget if budget is not None else WorkerResponseBudget()
         if self._budget.attempt is not None and self._origin != _worker_origin(
             str(self._budget.attempt.runtime.endpoint)
@@ -171,41 +216,32 @@ class WorkerResponseTransport(httpx.BaseTransport):
             self._budget.close()
             raise
         request.headers["Accept-Encoding"] = "identity"
-        # Callers hold session and gateway locks while they wait, so a worker may not
-        # keep one response open: each read and the whole body are bounded.
-        deadline = self._clock() + _MAX_RESPONSE_SECONDS
         timeout = dict(request.extensions.get("timeout") or {})
         read = timeout.get("read")
         timeout["read"] = (
             _MAX_RESPONSE_SECONDS if read is None else min(read, _MAX_RESPONSE_SECONDS)
         )
         request.extensions["timeout"] = timeout
-        response = self._transport.handle_request(request)
+        path = request.url.path
         try:
-            if response.is_redirect:
-                raise WorkerResponseError("worker redirects are not permitted")
-            if not response.is_success:
-                raise WorkerResponseError("worker request did not succeed")
-            if response.headers.get("content-encoding", "identity").lower() != "identity":
-                raise WorkerResponseError("encoded worker responses are not permitted")
-            body = bytearray()
-            stream = response.stream
-            assert isinstance(stream, httpx.SyncByteStream)
-            for chunk in stream:
-                if self._clock() > deadline:
-                    raise WorkerResponseError("worker response exceeded its deadline")
-                self._budget.charge(len(chunk))
-                if len(body) + len(chunk) > _MAX_RESPONSE_BYTES:
-                    raise WorkerResponseError("worker response exceeds the byte limit")
-                body.extend(chunk)
-            content = bytes(body)
+            status, headers, content = self._exchange(request)
             if content:
-                media_type = response.headers.get("content-type", "").split(";", 1)[0]
+                media_type = headers.get("content-type", "").split(";", 1)[0]
                 if media_type.strip().lower() != "application/json":
                     raise WorkerResponseError("worker response must be JSON")
-                value = _admit_json(content, self._tool_modules, self._client_tools, self._agent())
+                value = _admit_json(content)
                 attempt = self._budget.attempt
                 if isinstance(value, dict):
+                    # The SDK reads these two responses as the conversation itself.
+                    if (request.method, "/api/conversations") in {
+                        ("POST", path),
+                        ("GET", path.rpartition("/")[0]),
+                    }:
+                        _admit_metadata(
+                            value, self._tool_modules, self._client_tools, self._request()
+                        )
+                    else:
+                        _admit_registrations(value, self._tool_modules, self._client_tools)
                     # Event pages and snapshots are replayed to the same callbacks as
                     # socket messages, so their events pass the same admission.
                     for events in (value.get("items"), value.get("events")):
@@ -215,12 +251,14 @@ class WorkerResponseTransport(httpx.BaseTransport):
                                     event,
                                     self._tool_modules,
                                     self._client_tools,
-                                    self._agent(),
+                                    self._request(),
                                     attempt,
                                 )
+                    if path.endswith("/events/search"):
+                        self._admit_history_page(request, value, len(content))
                 if (
                     attempt is not None
-                    and (request.method, request.url.path)
+                    and (request.method, path)
                     in {
                         ("POST", "/api/conversations"),
                         ("GET", f"/api/conversations/{attempt.intent.conversation_id}"),
@@ -235,15 +273,86 @@ class WorkerResponseTransport(httpx.BaseTransport):
                     )
                 ):
                     raise WorkerResponseError("worker returned another conversation identity")
-            elif response.status_code != 204:
+            elif status != 204:
                 raise WorkerResponseError("worker response is empty")
             self._budget.charge(0)
-            return httpx.Response(response.status_code, headers=response.headers, content=content)
+            return httpx.Response(status, headers=headers, content=content)
         except WorkerResponseError:
             self._budget.close()
             raise
+
+    def _exchange(self, request: httpx.Request) -> tuple[int, httpx.Headers, bytes]:
+        """Bound one exchange, from connection to the last body byte, by the wall clock.
+
+        Transport timeouts restart with every byte received, so a worker sending status
+        lines, headers or chunk framing slowly would otherwise hold the caller, and the
+        locks it holds, without limit.
+        """
+        outcome: list[tuple[int, httpx.Headers, bytes] | BaseException] = []
+
+        def read() -> None:
+            try:
+                outcome.append(self._read(request))
+            except BaseException as error:
+                outcome.append(error)
+
+        reader = Thread(target=read, name="heartwood-worker-response", daemon=True)
+        reader.start()
+        reader.join(_MAX_RESPONSE_SECONDS)
+        if not outcome:
+            # Closing the connection ends the abandoned read at its next byte or timeout.
+            self._transport.close()
+            raise WorkerResponseError("worker response exceeded its deadline")
+        if isinstance(outcome[0], BaseException):
+            raise outcome[0]
+        return outcome[0]
+
+    def _read(self, request: httpx.Request) -> tuple[int, httpx.Headers, bytes]:
+        limit = (
+            _MAX_SNAPSHOT_BYTES
+            if request.url.path.endswith("/events/snapshot")
+            else _MAX_RESPONSE_BYTES
+        )
+        response = self._transport.handle_request(request)
+        try:
+            if response.is_redirect:
+                raise WorkerResponseError("worker redirects are not permitted")
+            if not response.is_success:
+                raise WorkerResponseError("worker request did not succeed")
+            if response.headers.get("content-encoding", "identity").lower() != "identity":
+                raise WorkerResponseError("encoded worker responses are not permitted")
+            body = bytearray()
+            stream = response.stream
+            assert isinstance(stream, httpx.SyncByteStream)
+            for chunk in stream:
+                self._budget.charge(len(chunk))
+                if len(body) + len(chunk) > limit:
+                    raise WorkerResponseError("worker response exceeds the byte limit")
+                body.extend(chunk)
+            return response.status_code, response.headers, bytes(body)
         finally:
             response.close()
+
+    def _admit_history_page(self, request: httpx.Request, page: dict[str, Any], size: int) -> None:
+        """End a history walk that repeats a page or outgrows what one read may retain."""
+        requested = request.url.params.get("page_id")
+        walk: dict[str, Any] | None = getattr(self._history, "walk", None)
+        if requested is None or walk is None:
+            # The SDK reads each history from its first page on the calling thread.
+            walk = self._history.walk = {"pages": 0, "bytes": 0, "seen": {requested}}
+        walk["pages"] += 1
+        walk["bytes"] += size
+        following = page.get("next_page_id")
+        if (
+            walk["pages"] > _MAX_HISTORY_PAGES
+            or walk["bytes"] > _MAX_HISTORY_BYTES
+            or (
+                following is not None
+                and (not isinstance(following, str) or following in walk["seen"])
+            )
+        ):
+            raise WorkerResponseError("worker history does not end within its bounds")
+        walk["seen"].add(following)
 
     def _admit_request(self, request: httpx.Request) -> None:
         attempt = self._budget.attempt
@@ -253,10 +362,11 @@ class WorkerResponseTransport(httpx.BaseTransport):
         path = request.url.path
         canonical = request.url.raw_path.split(b"?", 1)[0] == path.encode("utf-8")
         if path == "/api/conversations" and request.method == "POST" and canonical:
-            value = _admit_json(
-                request.content, self._tool_modules, self._client_tools, self._agent()
-            )
+            value = _admit_json(request.content)
             if isinstance(value, dict) and value.get("conversation_id") == identity:
+                # The gateway's own request may carry only what this workspace was bound to.
+                sent = {key: value[key] for key in _SENT_FIELDS if key in value}
+                _admit_metadata(sent, self._tool_modules, self._client_tools, self._request())
                 return
         prefix = f"/api/conversations/{identity}"
         if (
@@ -284,12 +394,7 @@ def _reject_constant(_value: str) -> None:
     raise WorkerResponseError("worker JSON contains a nonfinite number")
 
 
-def _admit_json(
-    content: bytes,
-    tool_modules: Mapping[str, str],
-    client_tools: Mapping[str, str] | None = None,
-    agent: AgentContract | None = None,
-) -> object:
+def _admit_json(content: bytes) -> object:
     try:
         value: object = json.loads(
             content.decode("utf-8"),
@@ -309,9 +414,6 @@ def _admit_json(
             pending.extend((entry, depth + 1) for entry in item)
         elif isinstance(item, float) and not math.isfinite(item):
             raise WorkerResponseError("worker JSON contains a nonfinite number")
-    if not isinstance(value, dict):
-        return value
-    _admit_metadata(value, tool_modules, client_tools, agent)
     return value
 
 
@@ -350,12 +452,12 @@ def _admit_client_tools(value: object, expected: Mapping[str, str]) -> None:
         seen.add(spec.name)
 
 
-def _same_agent(returned: object, sent: object, redacted: object) -> bool:
+def _same(returned: object, sent: object, redacted: object) -> bool:
     # Requests omit unset fields that responses carry as null, so the two are equivalent.
     if isinstance(sent, dict):
         redacted = redacted if isinstance(redacted, dict) else sent
         return isinstance(returned, dict) and all(
-            _same_agent(returned.get(key), sent.get(key), redacted.get(key))
+            _same(returned.get(key), sent.get(key), redacted.get(key))
             for key in returned.keys() | sent.keys()
         )
     if isinstance(sent, list):
@@ -363,7 +465,7 @@ def _same_agent(returned: object, sent: object, redacted: object) -> bool:
         return (
             isinstance(returned, list)
             and len(returned) == len(sent) == len(redacted)
-            and all(map(_same_agent, returned, sent, redacted))
+            and all(map(_same, returned, sent, redacted))
         )
     if type(returned) is type(sent) and returned == sent:
         return True
@@ -374,23 +476,27 @@ def _same_agent(returned: object, sent: object, redacted: object) -> bool:
 
 
 def _with_server_context(
-    returned: object, agent: AgentContract, client_tools: Mapping[str, str]
-) -> AgentContract:
+    returned: object, agent: tuple[Any, Any], client_tools: Mapping[str, str]
+) -> tuple[Any, Any]:
     """Accept what the agent server adds to the gateway's agent in its responses.
 
     It appends one tool entry per authorized client tool, carrying its exact
     specification, and replaces two prompt-context values.
     """
-    if not isinstance(returned, dict):
+    if not isinstance(returned, dict) or not all(isinstance(side, dict) for side in agent):
         return agent
     registered = [
         {"name": name, "params": {"spec": json.loads(spec)}} for name, spec in client_tools.items()
     ]
-    tools = returned.get("tools")
-    if registered and isinstance(tools, list) and tools[len(agent[0]["tools"]) :] == registered:
-        agent = tuple(  # type: ignore[assignment]
-            {**side, "tools": [*side["tools"], *registered]} for side in agent
-        )
+    tools, sent_tools = returned.get("tools"), agent[0].get("tools")
+    if (
+        registered
+        and isinstance(tools, list)
+        and isinstance(sent_tools, list)
+        and tools[len(sent_tools) :] == registered
+    ):
+        sent, redacted = ({**side, "tools": [*side["tools"], *registered]} for side in agent)
+        agent = sent, redacted
     context = returned.get("agent_context")
     if not isinstance(context, dict) or not isinstance(agent[0].get("agent_context"), dict):
         return agent
@@ -411,11 +517,8 @@ def _with_server_context(
     return sent, redacted
 
 
-def _admit_metadata(
-    value: dict[str, Any],
-    tool_modules: Mapping[str, str],
-    client_tools: Mapping[str, str] | None = None,
-    agent: AgentContract | None = None,
+def _admit_registrations(
+    value: dict[str, Any], tool_modules: Mapping[str, str], client_tools: Mapping[str, str]
 ) -> None:
     registrations = value.get("tool_module_qualnames", {})
     if not isinstance(registrations, dict) or any(
@@ -423,22 +526,45 @@ def _admit_metadata(
         for name, module in registrations.items()
     ):
         raise WorkerResponseError("worker tool registrations are not authorized")
-    _admit_client_tools(value.get("client_tools"), client_tools or {})
-    # The SDK deserializes a returned agent, and constructing its models can contact
-    # the configured model route, so only the gateway's own agent is admitted.
-    returned = value.get("agent")
-    if returned is not None and (
-        agent is None
-        or not _same_agent(returned, *_with_server_context(returned, agent, client_tools or {}))
-    ):
-        raise WorkerResponseError("worker agent is not authorized")
+    _admit_client_tools(value.get("client_tools"), client_tools)
+
+
+def _admit_metadata(
+    value: dict[str, Any],
+    tool_modules: Mapping[str, str],
+    client_tools: Mapping[str, str] | None = None,
+    request: RequestContract | None = None,
+) -> None:
+    """Admit conversation fields: reported data, or exactly what the gateway's request set.
+
+    The SDK deserializes returned fields, and constructing an agent, an analyzer or a
+    secret source can contact a route the field names. A field outside both groups is
+    rejected, so a field added by a later SDK is not trusted before it is reviewed.
+    """
+    _admit_registrations(value, tool_modules, client_tools or {})
+    sent, redacted = request or ({}, {})
+    for key, returned in value.items():
+        if key in _REGISTRATION_FIELDS or key in _REPORTED_FIELDS:
+            continue
+        if key not in sent and returned is not None:
+            raise WorkerResponseError("worker conversation field is not authorized")
+        sides = sent.get(key), redacted.get(key)
+        if not _same(
+            returned,
+            *(
+                _with_server_context(returned, sides, client_tools or {})
+                if key == "agent"
+                else sides
+            ),
+        ):
+            raise WorkerResponseError(f"worker {key.replace('_', ' ')} is not authorized")
 
 
 def _admit_event(
     value: dict[str, Any],
     tool_modules: Mapping[str, str],
     client_tools: Mapping[str, str],
-    agent: AgentContract | None,
+    request: RequestContract | None,
     attempt: WorkerAttemptLease | None,
 ) -> None:
     """Reject events that would write completion logs or replace admitted state."""
@@ -451,7 +577,7 @@ def _admit_event(
     metadata = state if key == FULL_STATE_KEY else {key: state}
     if not isinstance(metadata, dict):
         raise WorkerResponseError("worker state update is not authorized")
-    _admit_metadata(metadata, tool_modules, client_tools, agent)
+    _admit_metadata(metadata, tool_modules, client_tools, request)
     if (
         attempt is not None
         and (key == FULL_STATE_KEY or "id" in metadata)
@@ -471,7 +597,7 @@ class AdmittedRemoteWorkspace(RemoteWorkspace):
     _admitted_client: httpx.Client | None = PrivateAttr(default=None)
     _response_budget: WorkerResponseBudget = PrivateAttr(default_factory=WorkerResponseBudget)
     _client_tool_specs: tuple[str, ...] | None = PrivateAttr(default=None)
-    _agent_contract: AgentContract | None = PrivateAttr(default=None)
+    _request_contract: RequestContract | None = PrivateAttr(default=None)
 
     @model_validator(mode="after")
     def _bind_attempt_budget(self) -> AdmittedRemoteWorkspace:
@@ -490,12 +616,14 @@ class AdmittedRemoteWorkspace(RemoteWorkspace):
         """Copy the captured native specifications without sharing mutable schemas."""
         return [ClientToolSpec.model_validate_json(spec) for spec in self._client_tool_specs or ()]
 
-    def authorize_agent(self, agent: AgentBase) -> None:
-        """Bind the agent this workspace sends; worker metadata may return no other."""
-        self._agent_contract = (
-            agent.model_dump(mode="json", context={"expose_secrets": True}),
-            agent.model_dump(mode="json"),
-        )
+    def authorize_request(self, request: StartConversationRequest) -> None:
+        """Bind the request this workspace sends; worker metadata may return no other values."""
+        sent = request.model_dump(mode="json", context={"expose_secrets": True})
+        redacted = request.model_dump(mode="json")
+        for side in (sent, redacted):
+            # The server reports the request's secrets as the conversation's registry.
+            side["secret_registry"] = {"secret_sources": side["secrets"]}
+        self._request_contract = sent, redacted
 
     @property
     def client(self) -> httpx.Client:
@@ -513,7 +641,7 @@ class AdmittedRemoteWorkspace(RemoteWorkspace):
                 host=self.host,
                 tool_modules=modules,
                 client_tools=self.authorized_client_tools,
-                agent=lambda: self._agent_contract,
+                request=lambda: self._request_contract,
                 budget=self._response_budget,
                 transport=httpx.HTTPTransport(
                     trust_env=False, limits=httpx.Limits(max_connections=4)

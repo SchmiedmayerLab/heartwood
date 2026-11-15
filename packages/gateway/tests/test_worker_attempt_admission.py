@@ -271,6 +271,6 @@ def test_native_metadata_acknowledgement_does_not_require_conversation_payload(
             f"/api/conversations/{attempt.intent.conversation_id}", json={"title": "Synthetic"}
         )
         assert response.status_code == 200
-        with pytest.raises(WorkerResponseError, match="another conversation"):
+        with pytest.raises(WorkerResponseError, match="not authorized"):
             client.get(f"/api/conversations/{attempt.intent.conversation_id}")
     assert calls == ["PATCH", "GET"]
