@@ -18,7 +18,7 @@ Versions use strict Semantic Versioning without a `v` prefix, such as `0.5.0` or
 5. Review the draft release: generated notes, assets, checksums, qualification evidence, and target commit.
 6. Approve the `release` environment to publish.
 
-## What the Workflow Checks
+## Release Workflow Checks
 
 The workflow stops unless all of the following hold for the commit:
 

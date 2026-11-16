@@ -119,7 +119,7 @@ When several researchers share one setup, keep one record of it outside every re
 | Release tag and verified digest | [Select an Artifact](#select-an-artifact) |
 | Deployment manifest and its digest | [Deployment Manifest](#deployment-manifest) |
 | Platform image, compute shape and storage | The platform guide, such as [Terra](../platforms/terra.md) |
-| Approved model routes | [Choose Where Models Run](../models/index.md#data-and-compliance-boundary) |
+| Approved model routes | [Choose a Model Route](../models/index.md#data-and-compliance-boundary) |
 | Permitted review modes | [Action Review](security.md#action-review) |
 | Signer profile and checkpoint retention | [Audit Checkpoints and Retention](audit-checkpoints.md) |
 | Analysis dependency lock | [Verify an Existing Analysis](../use/research-workflows.md#verify-an-existing-analysis) |

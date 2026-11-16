@@ -76,7 +76,7 @@ If a transfer stops, rerun the same command from the project directory; Heartwoo
 The planner stops with a message that Heartwood does not yet support the repository when a repository requires executable remote code, has an unsupported weight layout or architecture, lacks a resolvable revision, or cannot fit the available runtime.
 Report a compatible-looking rejection through the [Heartwood issue form](https://github.com/SchmiedmayerLab/heartwood/issues/new/choose) instead of bypassing the check.
 
-## Before You Approve a Download
+## Download Approval
 
 Check these items in the displayed plan:
 

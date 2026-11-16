@@ -4,7 +4,7 @@ SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CO
 SPDX-License-Identifier: MIT
 -->
 
-# Choose Where Models Run
+# Choose a Model Route
 
 The model reasons about the project; OpenHands runs the agent loop and tools around it.
 The model route decides where project content is sent, which credential is needed, and whether Heartwood starts and supervises inference itself.

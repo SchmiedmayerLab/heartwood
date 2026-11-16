@@ -43,7 +43,7 @@ A lone thinking note with no effect is the only proposal OpenHands runs without 
 ![Heartwood Action Review settings listing the review modes and the reason one is unavailable](../assets/screenshots/browser-action-settings-light.png#gh-light-mode-only){ .theme-screenshot-light }
 ![Heartwood Action Review settings listing the review modes and the reason one is unavailable](../assets/screenshots/browser-action-settings-dark.png#gh-dark-mode-only){ .theme-screenshot-dark }
 
-### Which Mode Applies
+### Default and Available Modes
 
 When you run `heartwood`, `heartwood --interface web`, or a notebook, the session runs on your own machine without an isolated worker:
 
@@ -58,7 +58,7 @@ The operator's manifest sets which modes a deployment permits, as described in [
 
 Each interface shows the mode in use, the default, and every unavailable mode with its reason.
 
-### What Always Needs You
+### Actions That Always Require Review
 
 No review mode decides these on your behalf:
 
@@ -106,7 +106,7 @@ A stricter mode applies to the next action set at any time.
 A less strict mode can be selected only while no session is running, paused, or waiting for review.
 Changing the mode never decides a set that is already waiting for you.
 
-### What an Automatic Decision Means
+### Exposure Under Reduced Review
 
 Under **Review Changes**, file content the agent views goes to the selected model route without a per-file decision.
 The first step that could change a file or send data anywhere else is a command or a file change, and it waits for you.

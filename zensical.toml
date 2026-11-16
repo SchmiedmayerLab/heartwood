@@ -32,7 +32,7 @@ nav = [
         { "Research Specialists" = "use/specialists.md" },
     ] },
     { "Models" = [
-        { "Choose Where Models Run" = "models/index.md" },
+        { "Choose a Model Route" = "models/index.md" },
         { "Hosted and Managed Models" = "models/connections.md" },
         { "Choose a Heartwood-Managed Model" = "models/choose-managed.md" },
         { "Run a Model With Heartwood" = "models/run-with-heartwood.md" },
@@ -55,7 +55,7 @@ nav = [
         { "Security and Controlled Data" = "operate/security.md" },
         { "Add a Platform" = "operate/platform-integration.md" },
     ] },
-    { "How Heartwood Works" = [
+    { "Architecture" = [
         { "Product Boundaries" = "architecture/index.md" },
         { "System Architecture" = "architecture/system.md" },
         { "Skill Trust and Distribution" = "architecture/skills.md" },

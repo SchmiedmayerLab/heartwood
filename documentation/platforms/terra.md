@@ -21,7 +21,7 @@ The two-T4 Qwen3 Coder 30B AWQ configuration completed Heartwood's coding-agent 
 A Terra launch is a local launch with `.heartwood/` state on the persistent disk; the isolated worker deployment is not qualified on Terra.
 Operators preparing Terra for a group should also [record a standard environment](../operate/index.md#record-a-standard-environment).
 
-## Before You Begin
+## Prerequisites
 
 You need a Terra workspace and permission to create or replace its Jupyter Cloud Environment.
 Terra accepts custom images derived from a Terra base image; see Terra's [custom Jupyter environment guide](https://support.terra.bio/hc/en-us/articles/360037143432-Docker-tutorial-Custom-Cloud-Environments-for-Jupyter-Notebooks).

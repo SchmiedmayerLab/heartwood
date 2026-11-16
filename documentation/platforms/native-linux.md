@@ -9,7 +9,7 @@ SPDX-License-Identifier: MIT
 Use the native installer on a Linux host when containers are unavailable or conflict with the platform's normal execution model.
 The container is the simpler workstation route because the image fixes the operating-system dependencies.
 
-## Before You Begin
+## Prerequisites
 
 You need a 64-bit Linux system on an AMD64 or ARM64 processor and a writable installation directory outside the research project, so that the application and project state have independent lifecycles.
 Release CI installs the release assets in an empty Ubuntu 24.04 AMD64 container and exercises the installed command.

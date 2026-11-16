@@ -13,7 +13,7 @@ It imports into a local launch's `.heartwood/models/`.
 The bundle does not authorize the transfer or approve the model for a dataset.
 Use an institution-approved transfer channel and review the displayed license and warnings before import.
 
-## Before You Begin
+## Prerequisites
 
 You need:
 

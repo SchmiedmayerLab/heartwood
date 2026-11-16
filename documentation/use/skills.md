@@ -9,7 +9,7 @@ SPDX-License-Identifier: MIT
 A Skill gives the agent reusable instructions, scripts, and reference files for a research task, in the Agent Skills format that OpenHands supports.
 Every release includes a small set of reviewed Skills; a deployment can offer more from a signed catalog, and anything you install is active only in the current project.
 
-## See What Is Available
+## List Available Skills
 
 ```bash
 heartwood skills list
@@ -79,7 +79,7 @@ heartwood skills remove SKILL_NAME
 Removal deactivates the Skill, records the change, and resets open sessions so they no longer use it.
 If unexpected files sit beside an installed Skill, Heartwood stops listing Skills and starting sessions until they are removed, and the error names the directory to clean up.
 
-## What Approval Means
+## Scope of Skill Approval
 
 Installing a Skill grants no file, network, credential, model, or platform permission.
 Action review, the project boundary, process permissions, and deployment policy still apply to everything the agent does with it.

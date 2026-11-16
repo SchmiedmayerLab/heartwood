@@ -18,7 +18,7 @@ The two-L40S Muse Glimmer 30B BF16 configuration completed Heartwood's coding-ag
 A Carina launch is a local launch: `.heartwood/` state lives in the project directory and agent tools run with your account's permissions.
 The isolated worker deployment is not qualified on Carina.
 
-## Before You Begin
+## Prerequisites
 
 You need Carina access, the Stanford full-tunnel VPN, an authorized project directory, and enough project storage for the installation and any Heartwood-managed model.
 Follow Carina's [connection guide](https://docs.carina.stanford.edu/connect).

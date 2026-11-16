@@ -20,56 +20,101 @@ SPDX-License-Identifier: MIT
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE.md)
 [![Release](https://img.shields.io/github/v/release/SchmiedmayerLab/heartwood?display_name=tag&include_prereleases&sort=semver)](https://github.com/SchmiedmayerLab/heartwood/releases)
 
-[Stable Documentation](https://schmiedmayerlab.github.io/heartwood/) · [Prerelease Documentation](https://schmiedmayerlab.github.io/heartwood/preview/)
-
 Heartwood is an open-source research agent system for biomedical research environments.
-A researcher describes work on a project folder in ordinary language; an OpenHands agent proposes commands and file changes; a Heartwood gateway decides which proposals need the researcher, records every decision, and keeps a verifiable audit history.
+A researcher describes work on a project folder in ordinary language, and an OpenHands agent proposes commands and file changes.
+The Heartwood gateway decides which proposals wait for the researcher, records every request, decision and result, and keeps a hash-chained audit history that can be exported and signed.
 
-The gateway owns project state, policy, action review, authorization of operations outside the agent, records and audit.
-The terminal, browser and notebook interfaces are views over the same gateway contract.
-An operator can run the agent as a complete worker inside an OpenShell sandbox, with protected state, credentials and approval authority kept outside it.
+## Research Sessions
 
+<table>
+<tr>
+<td width="50%" valign="top">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="documentation/assets/screenshots/browser-conversation-dark.png">
+  <img alt="Heartwood browser interface showing a project conversation" src="documentation/assets/screenshots/browser-conversation-light.png">
+</picture>
+<b>Conversation.</b> The researcher works with the agent in ordinary language on one project folder, in the browser, the terminal or a notebook.
+</td>
+<td width="50%" valign="top">
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="documentation/assets/screenshots/browser-action-review-dark.png">
   <img alt="Heartwood browser interface showing a grouped action review" src="documentation/assets/screenshots/browser-action-review-light.png">
 </picture>
+<b>Action review.</b> Proposed commands and file changes are shown as one complete action set, and one decision allows or rejects it.
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="documentation/assets/screenshots/browser-changes-dark.png">
+  <img alt="Heartwood browser interface showing a read-only change view" src="documentation/assets/screenshots/browser-changes-light.png">
+</picture>
+<b>Changes.</b> Every file the agent created or changed is listed with a read-only view of its content or diff.
+</td>
+<td width="50%" valign="top">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="documentation/assets/screenshots/browser-specialists-dark.png">
+  <img alt="Heartwood browser interface showing the available research specialists" src="documentation/assets/screenshots/browser-specialists-light.png">
+</picture>
+<b>Research specialists.</b> Bounded planning, data-quality, cohort, statistical and reproducibility specialists review evidence and report back to the conversation.
+</td>
+</tr>
+</table>
 
-## Who Runs What
+## Operator Deployment
 
-- The researcher works in one project folder, chooses an authorized model where the deployment allows a choice, and allows or rejects what the agent proposes.
-- The operator decides how Heartwood runs: the deployment manifest, protected state location, review-mode ceiling, isolated worker profile, credentials and checkpoint signer.
-- The platform provides identity, storage, network controls, compute and inference, and keeps its own authority over them under the [platform contract](https://schmiedmayerlab.github.io/heartwood/operate/platform-contract/).
+```mermaid
+flowchart TB
+    subgraph Interfaces
+        direction LR
+        CLI["Terminal"]
+        Web["Browser"]
+        Notebook["Notebook"]
+    end
+    subgraph Host["Gateway host"]
+        direction LR
+        Manifest["Deployment manifest"]
+        Gateway["Heartwood gateway<br/>review, policy, records"]
+        State["Protected project state"]
+    end
+    subgraph Sandbox["OpenShell sandbox"]
+        direction LR
+        Worker["OpenHands worker"]
+        Inputs["Read-only inputs and Skills"]
+    end
+    subgraph Platform["Platform services"]
+        direction LR
+        Model["Model endpoint"]
+        Service["Outside service"]
+        Records["Records service and signer"]
+    end
+    Interfaces --> Gateway
+    Manifest --> Gateway
+    Gateway --> State
+    Gateway -- "admitted requests and events" --> Worker
+    Worker --> Inputs
+    Worker -- "inference" --> Model
+    Gateway -- "approved outside operations" --> Service
+    Gateway -- "signed checkpoints" --> Records
+    classDef heartwood fill:#0b694d26,stroke:#2b8268
+    classDef platform fill:#3f5b7426,stroke:#6f8fae
+    class CLI,Web,Notebook,Gateway,State,Worker,Inputs heartwood
+    class Manifest,Model,Service,Records platform
+```
 
-## Two Ways to Run It
+Green components belong to Heartwood; blue ones are provided by the operator's platform.
 
-### Local Launch
+- The operator's [deployment manifest](https://schmiedmayerlab.github.io/heartwood/stable/reference/configuration/) binds a project to protected state outside the research folder and sets the policy, the permitted review modes and the worker profile.
+- Each session's agent runs as an OpenHands worker in an OpenShell sandbox with read-only inputs and a private workspace; credentials, the Docker socket and signing keys stay on the gateway host.
+- The gateway admits each worker attempt, checks every response against what it sent, and deletes the sandbox when it revokes the attempt.
+- Under **Review Outside Effects**, commands and file edits inside the sandbox run without a per-action decision and can send content to the admitted model endpoint; operations through the gateway's outside services wait for a researcher decision bound to their exact content.
+- Every request, decision and result is journaled; with checkpoint evidence configured, each approval and rejection is retained as a signed checkpoint in a separate records service.
 
-Run `heartwood` in a project folder on a workstation, in a container, on Terra or on Stanford Carina.
-Heartwood keeps its state in `.heartwood/` inside that folder and reviews every action by default.
-Agent tools run with your own permissions: an allowed command can read anything you can read and can change `.heartwood/`, including session and audit files.
-Treat a local launch as a reviewed assistant, not as an isolation boundary.
+[Deploy Heartwood](https://schmiedmayerlab.github.io/heartwood/stable/operate/) describes the setup, and [Security Limits](https://schmiedmayerlab.github.io/heartwood/stable/operate/security/#security-limits) lists what these controls do not cover.
 
-### Operator-Bound Deployment
+## Local Evaluation
 
-An operator starts `heartwood gateway serve --deployment /absolute/path/project.toml` with a manifest that binds the project to protected state outside the research folder.
-With a `[worker]` section, each session runs in a sandboxed OpenShell worker on an operator-controlled Linux Docker host; the worker receives selected read-only inputs and verified Skills, and never the protected state, provider credentials, Docker socket or signing keys.
-Operations outside the worker, and the release of their results back to it, are authorized only by a researcher decision bound to the exact content reviewed.
-No production outside-service adapter ships and `gateway serve` installs none, so these operations are available only through an embedding launcher.
-
-## What Is Qualified
-
-- Container images, native installers and the Terra images are built and tested in CI for each release commit.
-- The isolated worker passes native qualification in CI with synthetic workloads on Linux x86_64, producing evidence bound to the commit.
-- Heartwood-managed model configurations are qualified per platform as listed in the [GPU compatibility matrix](https://schmiedmayerlab.github.io/heartwood/reference/gpu-compatibility/).
-
-Not established:
-
-- Sensitive-data readiness: no deployment of Heartwood is approved for protected health information or other controlled data.
-- A production sandbox gateway: the patched OpenShell gateway that native qualification uses exists only in the qualification build, and a deployment's gateway is checked only by the version it reports.
-- Institutional approval: synthetic qualification is evidence for review, not an approval.
-
-## First Session
-
+To try Heartwood on a workstation, run it in a project folder; every action then waits for your review, and agent tools run with your permissions.
 With Docker on macOS or Linux:
 
 ```bash
@@ -86,13 +131,17 @@ docker run --rm -it \
 ```
 
 Open the launch link the container prints; the page continues at [http://127.0.0.1:8767/](http://127.0.0.1:8767/).
-Confirm the project, choose a model connection, and ask for a small task.
-For the terminal, replace the last line with `heartwood`.
+Choose a model connection and ask for a small task with synthetic files.
 The image contains no model weights or credentials.
 
-Use synthetic or non-sensitive files.
-[Your First Project](https://schmiedmayerlab.github.io/heartwood/start/) walks through the first reviewed action, and [Choose a Platform](https://schmiedmayerlab.github.io/heartwood/platforms/) covers Terra, Carina and native Linux.
-Operators start with [Deploy Heartwood](https://schmiedmayerlab.github.io/heartwood/operate/) and [Security and Controlled Data](https://schmiedmayerlab.github.io/heartwood/operate/security/).
+## Documentation
+
+- [Your First Project](https://schmiedmayerlab.github.io/heartwood/stable/start/) walks through the first reviewed action.
+- [Work With Heartwood](https://schmiedmayerlab.github.io/heartwood/stable/use/) covers the interfaces, review modes, Skills, specialists and research workflows.
+- [Choose a Platform](https://schmiedmayerlab.github.io/heartwood/stable/platforms/) covers containers, native Linux, Terra and Stanford Carina.
+- [Deploy Heartwood](https://schmiedmayerlab.github.io/heartwood/stable/operate/) covers the deployment manifest, the isolated worker and deployment validation.
+- [Security and Controlled Data](https://schmiedmayerlab.github.io/heartwood/stable/operate/security/) describes the threat model and what the sandbox and the gateway enforce.
+- [Architecture](https://schmiedmayerlab.github.io/heartwood/stable/architecture/) explains the components, boundaries and data flow.
 
 ## Contributing
 

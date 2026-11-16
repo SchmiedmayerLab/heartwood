@@ -41,7 +41,7 @@ If a task must not use the network, parent directories, or particular files, say
 | Interface | Use For | Start With |
 |---|---|---|
 | [Full-screen terminal](terminal.md) | Daily work and SSH sessions | `heartwood` |
-| [Plain terminal](terminal.md#choose-how-heartwood-starts) | Logs, basic terminals, and accessibility tools | `heartwood --plain` |
+| [Plain terminal](terminal.md#launch-options) | Logs, basic terminals, and accessibility tools | `heartwood --plain` |
 | [Browser](browser.md) | Visual history, setup, review, Skills, and audit export | `heartwood --interface web` |
 | [Notebook bridge](notebooks.md) | Driving a session beside exploratory analysis | `NotebookSession()` |
 
