@@ -752,12 +752,13 @@ class WorkerBranch:
     def read(self) -> WorkerBranchRead:
         """Read the worker's status and usage, then the events after the admitted leaf.
 
-        The agent server reports the status it last saved, which it saves only when a
-        step releases the conversation, so during a step that status can be older than
-        the events. It logs every status change as a state update when the change is
-        made, so the latest logged status describes the events read with it and replaces
-        the reported one. An empty branch is read as one snapshot, which carries its own
-        status.
+        The agent server reports the status it last saved, and a change made during a
+        step is saved only when the step releases the conversation, so that status can
+        be older than the events. It logs every status change as a state update when the
+        change is made, so the latest logged status replaces the reported one. A status
+        is returned only with the events it describes: when a concurrent read has already
+        retained a later status, this read returns the longer retained branch. An empty
+        branch is read as one snapshot, which carries its own status.
         """
         try:
             with self._lock:
@@ -776,6 +777,9 @@ class WorkerBranch:
                     self._logged = logged
                 if self._logged is not None:
                     execution_status = self._logged.status
+                    if self._logged.position[0] > len(events):
+                        # The reader that logged it retained the branch it describes first.
+                        events = self._events
             return WorkerBranchRead(events, execution_status, stats)
         except WorkerResponseError:
             self._workspace._response_budget.close()

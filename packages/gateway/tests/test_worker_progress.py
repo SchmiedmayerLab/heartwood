@@ -505,6 +505,42 @@ def test_an_invalid_logged_status_fences_the_attempt() -> None:
         worker.budget.charge(0)
 
 
+def test_a_read_never_pairs_a_later_status_with_its_own_older_events() -> None:
+    worker = _Worker()
+    worker.append(_message("Start."))
+    branch = worker.branch()
+    branch.read()
+    answered, later_read = Event(), Event()
+    first = True
+
+    def hold_first_answer() -> None:
+        nonlocal first
+        if first:
+            first = False
+            answered.set()
+            assert later_read.wait(5)
+
+    worker.after_read = hold_first_answer
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        earlier = executor.submit(branch.read)
+        assert answered.wait(5)
+        # The worker proposes an action and logs that it waits for confirmation, which only
+        # the later read receives; the earlier read was answered before both.
+        worker.append(_action("action-1", "call-1"))
+        worker.append_update(ConversationExecutionStatus.WAITING_FOR_CONFIRMATION)
+        later = branch.read()
+        later_read.set()
+        result = earlier.result(timeout=5)
+    worker.after_read = None
+    assert later.execution_status == ConversationExecutionStatus.WAITING_FOR_CONFIRMATION
+    assert result.execution_status == ConversationExecutionStatus.WAITING_FOR_CONFIRMATION
+    # The status is returned with the events it describes, so the action awaits review.
+    assert result.events == later.events
+    assert [event.id for event in ConversationState.get_unmatched_actions(result.events)] == [
+        "action-1"
+    ]
+
+
 def test_concurrent_reads_share_one_consistent_branch() -> None:
     worker = _Worker()
     worker.append(_message("Start."))
