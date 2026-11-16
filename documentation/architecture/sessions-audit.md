@@ -23,10 +23,14 @@ sequenceDiagram
     Gateway->>OpenHands: Continue conversation
     OpenHands-->>Gateway: Typed state and transient tokens
     Gateway-->>Interface: Shared session projection
-    Interface-->>User: Review complete action set
-    User->>Interface: Allow the complete set once or reject it
-    Interface->>Gateway: Confirmation command
-    Gateway->>Gateway: Persist complete-set decision
+    alt Review mode allows the complete set
+        Gateway->>Gateway: Persist gateway decision with mode and rule
+    else Researcher decides
+        Interface-->>User: Review complete action set
+        User->>Interface: Allow the complete set once or reject it
+        Interface->>Gateway: Confirmation command
+        Gateway->>Gateway: Persist complete-set decision
+    end
     Gateway->>OpenHands: Resolve callback
     OpenHands->>Tool: Execute only when allowed
     Tool-->>Gateway: Result
@@ -36,93 +40,65 @@ sequenceDiagram
 ## Persistence
 
 Session directories contain metadata, event records, audit records, exports, and OpenHands persistence for that conversation.
-Session identifiers are validated before any state path is created.
+Session identifiers are validated before any state path is created, and read-only replay of a new session creates no project state; the first mutating command registers the session.
 The gateway incrementally translates persisted OpenHands messages, actions, observations, lifecycle, task, usage, specialist, and error state into Heartwood events.
-While a native run is executing or publishing its final events, its live publisher owns event delivery.
-Read-side reconciliation waits for that publisher to finish so it cannot consume an observation before live reproduction evidence is recorded.
+While a run is executing or publishing its final events, its live publisher owns event delivery, and read-side reconciliation waits for it so it cannot consume an observation before live reproduction evidence is recorded.
 After the publisher exits, reconciliation can recover persisted events without claiming that replay observed their execution.
-Except for a service's first read, reconciliation reads the backend without holding the session command lock and journals what it read only if no event was appended and the worker attempt was neither fenced nor replaced meanwhile; otherwise it reads again or discards the observation.
-Incremental token deltas remain in process memory and disappear after the run reaches a stable boundary or the process stops.
-Each REST, WebSocket, and server-sent-events response pairs an event batch with the projection produced from the same serialized snapshot.
-A transient revision orders token-only updates that share a durable event revision.
+Except for a service's first read, reconciliation reads the backend without the session command lock and journals what it read only if no event was appended and the worker attempt was neither fenced nor replaced meanwhile.
+Token deltas stay in process memory.
 
-Read-only replay returns no events for a new session without initializing the project.
-The first mutating command registers the session and creates private state.
+### Writer Ownership
 
-The gateway acquires an interprocess writer lease before mutating a session and retains it until that gateway closes the session service.
-If an OpenHands worker does not stop during shutdown, Heartwood keeps the lease instead of allowing another writer to mutate the session.
-After shutdown succeeds, the closed session service rejects further commands and reconciliation and discards later backend event callbacks before acquiring a writer lease.
-Final events delivered during shutdown remain durable; this lifecycle fence does not establish remote worker identity or terminate an independently running worker.
-A second process cannot reconcile or mutate that session until the owner releases the lease or exits.
-Replay and live updates remain available through the interface connected to the owning gateway.
-Distinct sessions have independent leases.
-Trusted worker launch uses `SessionService.launch_worker` to retain an attempt before invoking the platform launcher and bind the observed runtime only after that call succeeds.
-The launcher must use the retained identity with the native sandbox lifecycle and verify the authorized image, effective policy, active configuration, and process generation before returning a binding.
-Missing generation, failed admission, interruption, or an uncertain create response leaves the attempt fenced; Heartwood does not retry creation or infer that no worker exists.
-The managed session then revokes the fenced attempt without waiting for the session to close, and records `revoked` only with the platform's evidence; when that revocation fails, the attempt remains fenced for session close or start-up reconciliation.
-`revoke_worker` closes local admission before invoking the platform's revocation observer and records only returned evidence matching the retained attempt and runtime.
-Closing admission waits for no worker response: it takes effect during a reconciliation read or a command in flight, and the fenced transition is recorded once the journal is free.
-A failed or uncertain revocation does not permit replacement.
-An attempt retained by an ended process can be fenced and revoked by a later owner of the session writer through the same `revoke_worker` contract.
-After recorded revocation, `prepare_worker_attempt` issues a new attempt identity for the same session and native conversation identity, unless the journal still holds an unsettled run, a pause, an unreviewed action, or a non-terminal outside operation or result release of the revoked worker.
-Commands to a session in that unsettled state are refused with the reason, and the session remains readable.
-A replacement worker receives none of the revoked worker's conversation state; events and tokens from the revoked attempt's callbacks are discarded because they do not hold the current lease.
-Launch, revocation, and service shutdown are serialized independently of command and event handling, so shutdown cannot release writer ownership while a launch may still return.
-Platform callbacks must bound their control-plane operations and must not wait for session shutdown or recursively start another worker lifecycle operation.
-These coordination methods do not install a platform launcher, terminate workers themselves, or infer infrastructure enforcement from a worker acknowledgement.
-Writer admission and session-catalog changes briefly hold one admission lock for the session root.
-An internal maintenance context holds that gate while acquiring every existing session writer lock; an active writer prevents maintenance from starting.
-The context leaves writer metadata and historical records unchanged and releases its locks after failure or process exit.
-Gateway versions that do not use the admission lock must be stopped before maintenance.
-This excludes session writes only; project configuration, runtime activity, and model transfers require separate exclusion before a complete state migration.
-Internal migration staging first excludes gateway startup and acquires every registered gateway lifetime lease; any active gateway prevents staging.
-The native inference supervisor shares this ownership protocol, and an unresolved inference launch intent also prevents staging after a launcher crash.
-It then verifies paired session and audit histories and command receipts under the configuration and session locks and copies their original bytes into a private directory on the destination volume.
-The copy is verified again before a receipt records its file hashes and session heads.
-Pending append recovery, unresolved commands, corrupt records, symbolic links, and existing destinations prevent staging.
-Worker recovery state, writer metadata, and derived exports remain in the source; they are not promoted into canonical records.
-The staged copy is temporary and cannot be opened as a project; leaving the staging context removes it and leaves the original records in place.
-An abrupt process exit can leave an inert staging directory; a retry uses a fresh directory and never adopts an earlier partial copy.
-This staging primitive does not switch a deployment binding or authenticate historical records.
-The explicit `heartwood project migrate` operation builds on its leases and verified copy, validates configuration, experiment history and installed Skill content, and stages the remaining canonical state and model artifacts.
-Recorded Python experiments hold the same project lifetime lease as gateways and inference runtimes.
-Migration refuses unresolved or active work instead of terminating it or interpreting uncertain outcomes as completion.
-After verifying the staged bytes, it records protected recovery evidence, fences local startup, atomically retires the original directory into a protected backup, and publishes the verified external state.
-Managed startup requires the exact operator binding and a matching completion receipt; the workspace fence can deny local startup but cannot authorize external state.
-Explicit recovery can resume an interrupted publication or restore the preserved original while the target remains unchanged.
-Neither recovery nor normal activation removes the protected backup.
-Mutation acquires the writer lease before the paired-snapshot lock; recovery and replay never hold the snapshot lock while waiting for a writer lease.
-This fixed ordering prevents deadlock as new gateway workers and presentation adapters reuse the store.
+The gateway acquires an interprocess writer lease before mutating a session and keeps it until it closes that session service.
+A second process cannot reconcile or mutate the session until the owner releases the lease or exits; distinct sessions have independent leases.
+If a worker does not stop during shutdown, the gateway keeps the lease rather than let another writer continue.
+A closed session service rejects further commands and discards later backend callbacks; this fence does not terminate an independently running worker.
+Mutation acquires the writer lease before the paired-snapshot lock, and recovery and replay never wait for a writer lease while holding that lock.
+
+Managed worker attempts use the same lease and journal; their launch, fencing, revocation, reconciliation, and replacement are described in [Worker Attempt Ownership](system.md#worker-attempt-ownership).
+Launch, revocation, and service shutdown are serialized apart from command and event handling, so shutdown cannot release writer ownership while a launch may still return.
+Events and tokens from a revoked attempt's callbacks are discarded because they do not hold the current lease.
+
+### Maintenance and Migration
+
+An internal maintenance context holds the session-root admission lock and every existing session writer lock; an active writer prevents it from starting.
+Migration staging additionally excludes gateway startup and requires every registered gateway lifetime lease, and an unresolved inference launch intent also blocks it.
+Staging verifies paired session and audit histories and command receipts, copies their original bytes into a private directory on the destination volume, verifies the copy again, and records file hashes and session heads in a receipt.
+Pending append recovery, unresolved commands, corrupt records, symbolic links, and existing destinations prevent staging, and worker recovery state, writer metadata, and derived exports are not promoted.
+A retry uses a fresh staging directory and never adopts an earlier partial copy.
+
+`heartwood project migrate --deployment MANIFEST` builds on that copy, validates configuration, experiment history, and installed Skill content, and stages the remaining canonical state and model artifacts.
+It refuses active or unresolved work, including recorded Python experiments, which hold the same project lifetime lease as gateways and inference runtimes.
+After verifying the staged bytes it records recovery evidence, fences local startup, retires the original directory into a protected backup, and publishes the external state.
+Managed startup then requires the exact operator binding and a matching completion receipt; the local fence can deny local startup but cannot authorize external state.
+`heartwood project recover-migration --deployment MANIFEST` resumes an interrupted publication or restores the preserved original while the target is unchanged; neither path removes the backup.
+Gateway versions that do not use these locks must be stopped before maintenance.
+
+### Storage Requirements
 
 Session state must reside on storage that implements process-shared native advisory locks.
 Heartwood disables existence-lock fallback because it cannot provide the same automatic release after process termination.
 Local disks, attached persistent disks, and qualified project filesystems are the intended locations; object-store and file-transfer mounts are not session stores unless their native-lock behavior has been qualified.
 
-Every command has an opaque identifier and a durable receipt.
-An exact retry of a completed command returns its original event range without repeating a model call, confirmation callback, or tool action.
-Reusing the identifier with different command content is rejected.
-If a process stops after command acceptance but before completion is recorded, Heartwood refuses to execute that identifier again unless its exact outcome can be derived from durable state.
-An interrupted approval is completed automatically only when its recorded intent and OpenHands state unambiguously prove whether the complete action set was resolved.
-Outside decisions distinguish authorization from attempted dispatch.
-An authorized record proves that the native call has not started; a submitting record means its outcome may be uncertain.
-A configured required-evidence gate must observe the authorization checkpoint before recording submission and calling the adapter.
-An approved outside operation or result release that could not be sent is sent only by an exact retry of its own approval command, never by another command, a status or projection read, reconciliation, or an automatic decision.
-That retry carries the same command identifier and content, resumes the authorization whether or not the caller reconciled the session first, and still requires a live matching worker and renewed input, policy and expiry checks.
-Any other command is refused without dispatching.
-Denying the same review withdraws the undispatched authorization without requiring an admitted worker, and one that outlives its validity interval is recorded as expired.
-Both closures are terminal journal and audit records that complete the original approval command, so the session can continue.
-Reconciliation skips undispatched authorizations except to record their expiry; it never converts observation into submission authority.
-Otherwise, the session rejects further mutation so a second approval or task cannot repeat an uncertain side effect.
-An action is recorded as approved only when the session holds a recorded decision for its action set.
-A decision the gateway makes under a review mode is such a record: an accepted command and an `approval.recorded` event with the actor `gateway` and the applied mode and rule, followed by the same checkpoint boundary, digest check, and resolution events as a researcher decision.
-The session projection labels an action as decided only from these records, and names the rule for a gateway decision.
-If a backend reports execution of an action without one, the session records an error instead of an approval and fences the worker attempt.
-After replaying and verifying the available evidence, continue in a new session.
+### Command Receipts
 
-Each session event and its corresponding audit record are committed through a private recovery journal.
-After an interrupted append, the next writer verifies the journal, hash links, and existing records before completing only the missing write.
-Malformed or inconsistent recovery state fails closed.
-After process loss, a persisted OpenHands `RUNNING` state is reported as an unknown outcome and cannot be resumed or repeated automatically.
+Every command has an opaque identifier and a durable receipt.
+An exact retry of a completed command returns its original event range without repeating a model call, confirmation callback, or tool action, and reusing the identifier with different content is rejected.
+If a process stops after accepting a command but before recording its completion, Heartwood refuses to execute that identifier again unless durable state establishes its exact outcome.
+An interrupted approval is completed automatically only when its recorded intent and OpenHands state prove whether the complete action set was resolved.
+Otherwise the session rejects further mutation, so a second approval or task cannot repeat an uncertain side effect; verify the evidence and continue in a new session.
+
+Outside decisions distinguish authorization from dispatch: an `authorized` record proves the native call has not started, and a `submitting` record means its outcome may be uncertain.
+When checkpoint evidence is configured, in either mode, the authorization checkpoint must be retained before submission is recorded.
+An authorization that could not be sent is dispatched only by an exact retry of its own approval command, with the same identifier and content, a live matching worker, and renewed input, policy, and expiry checks.
+Denying the same review withdraws it, and an authorization that outlives its validity interval is recorded as expired; both close the original approval command so the session can continue.
+Reconciliation records only such expiry and never turns an observation into submission authority.
+
+### Append Recovery
+
+Each session event and its audit record are committed through a private recovery journal.
+After an interrupted append, the next writer verifies the journal, hash links, and existing records before completing only the missing write; malformed or inconsistent recovery state fails closed.
+After process loss, a persisted OpenHands `RUNNING` state is reported as an unknown outcome and is never resumed or repeated automatically.
 
 ## Persisted Schema Compatibility
 
@@ -158,6 +134,11 @@ The gateway and backend both compare the current binding before resolving a deci
 This binds the proposed action content; it does not freeze files referenced by a command or establish an outside security boundary for local tool execution.
 An approval identifier without the complete action-content binding is invalid; preserved history does not authorize new execution.
 
+An action is recorded as approved only when the session holds a recorded decision for its action set.
+A gateway decision under a [review mode](system.md#action-review-and-review-modes) is such a record: an accepted command and an `approval.recorded` event with the actor `gateway` and the applied mode and rule, followed by the same checkpoint boundary, digest check, and resolution events as a researcher decision.
+The projection labels an action as decided only from these records and names the rule for a gateway decision.
+If a backend reports executing an action without one, the session records an error and fences the worker attempt.
+
 Each OpenHands proposal becomes one `heartwood.action-record.v1` projection correlated by stable action and tool-call identifiers.
 The same record accumulates its group, decision, execution state, bounded result, and typed affected-path evidence across replay.
 Terminal, file-editor, Task, and other actions use typed variants, while the exact OpenHands arguments remain available for review.
@@ -169,7 +150,7 @@ Unknown outcomes fail closed and are never converted into a successful result by
 
 Audit records are chained so replay and export detect corruption, and any modification, reordering, or removal made without recomputing the chain.
 The chain uses no key, so a process that can write canonical state can rewrite records and recompute it.
-In local mode, an approved same-identity agent command can reach `.heartwood/`; managed workers must be denied access to external state by the surrounding sandbox.
+With the local backend, an approved command runs with the gateway's identity and can reach `.heartwood/`; a managed worker is admitted only without mounts that overlap the external state.
 The trusted gateway can still write its state, so external placement does not replace independently retained checkpoints.
 Only a signed checkpoint binds the history, and only as it stood when the checkpoint was signed.
 Each content-minimized audit record also authenticates the corresponding complete session event by hash; replay requires matching counts, sequence, type, time, chain link, and event hash.

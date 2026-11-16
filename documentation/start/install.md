@@ -6,9 +6,9 @@ SPDX-License-Identifier: MIT
 
 # Install Heartwood
 
-Choose one installation route for the environment where your project files already reside.
-Containers are the easiest workstation route because they package Heartwood, the browser interface, and managed inference software without adding those dependencies to the host.
-The native installer is intended for compatible Linux hosts and research systems such as Stanford Carina when containers are not the normal execution mechanism.
+Install Heartwood where your project files already reside.
+Each route below produces a local launch: the `heartwood` command, with project state in `.heartwood/` inside the folder where you run it.
+An isolated-worker deployment is set up by an operator; see [Deploy Heartwood](../operate/index.md).
 
 ## Choose an Installation
 
@@ -16,16 +16,13 @@ The native installer is intended for compatible Linux hosts and research systems
 |---|---|---|
 | You have Docker Desktop or Docker Engine | [Container](../platforms/containers.md) | One versioned Heartwood image |
 | You use Terra | [Terra image](../platforms/terra.md) | A versioned image selected in Terra |
-| You use Stanford Carina | [Native release installer](../platforms/carina.md) | A release-scoped installation in project storage |
-| You use Linux without Docker | [Generic native installer](../platforms/native-linux.md) | A release-scoped installation using `uv` |
-| You contribute to Heartwood | [Development installation](#development-installation) | The repository and locked development dependencies |
-| You operate another platform | [Platform integration](../operate/platform-integration.md) | A platform-specific image or native installation |
+| You use Stanford Carina | [Native installer for Carina](../platforms/carina.md) | A release-scoped installation in project storage |
+| You use Linux without Docker | [Native installer for Linux](../platforms/native-linux.md) | A release-scoped installation using `uv` |
+| You change Heartwood itself | [Development installation](#development-installation) | The repository and locked development dependencies |
 
-Heartwood images and installers contain no provider credentials and no model weights.
+Images and installers contain inference software but no model weights and no credentials.
 
 ## Confirm the Installation
-
-After installing, run:
 
 ```bash
 heartwood --version
@@ -33,12 +30,12 @@ heartwood doctor
 ```
 
 The first command prints the installed release.
-The second inspects the current directory and environment without changing either one.
+The second inspects the current directory and environment without changing either.
 
 ## Development Installation
 
-Use this route only when changing Heartwood itself.
-It requires Git, [uv](https://docs.astral.sh/uv/), and Node.js for browser-interface work.
+Use this route only to change Heartwood.
+It requires Git, [uv](https://docs.astral.sh/uv/) 0.13.7, and Node.js for browser-interface work.
 
 ```bash
 git clone --recurse-submodules https://github.com/SchmiedmayerLab/heartwood.git
@@ -48,15 +45,13 @@ uv sync --locked --all-groups --all-extras
 uv run heartwood --version
 ```
 
-The project uses the locked workspace rather than installing packages individually.
-Use uv 0.13.7 for the dependency bootstrap.
-The native archive and container include Heartwood's reviewed SDK builds; a registry-only installation cannot resolve those locally versioned dependencies.
+The bootstrap builds the patched OpenHands and OpenShell wheels that the lock references under `vendor/runtime-wheels/`; a registry-only installation cannot resolve those local versions.
 See the [Development Guide](../contribute/development.md) for tests and repository structure.
 
 ## Update or Remove Heartwood
 
-Container users select a new versioned image tag and remove old images with their normal Docker maintenance process.
-Native release installations are version-scoped, so install the new release beside the previous one, verify it, and then update the executable path.
+Container users select a new versioned image tag and remove old images through normal Docker maintenance.
+Native installations are release-scoped: run the new release's installer in the same installation directory, and it switches the `current` link only after the new installation passes its startup checks.
 
-Do not copy `.heartwood/` into an installation directory.
-That folder belongs to each research project and persists independently of the executable.
+`.heartwood/` belongs to each project, not to the installation.
+Do not copy it into an installation directory.

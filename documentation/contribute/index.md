@@ -6,8 +6,8 @@ SPDX-License-Identifier: MIT
 
 # Contribute to Heartwood
 
-Heartwood welcomes contributions to its application, platform integrations, research Skills, tests, and documentation.
-Changes should preserve the shared project, gateway, OpenHands, interface, platform, and evidence contracts rather than introducing parallel workflows.
+Heartwood accepts contributions to its gateway, managed worker, interfaces, platform integrations, research Skills, tests, and documentation.
+A change extends the shared project, gateway, OpenHands, interface, platform, and evidence contracts instead of adding a parallel workflow.
 
 ## Before You Start
 
@@ -16,14 +16,14 @@ Check [GitHub Issues](https://github.com/SchmiedmayerLab/heartwood/issues) and t
 
 ## Contribution Areas
 
-- core project, session, policy, audit, and schema contracts;
-- OpenHands adapter and agent-tool integration;
-- terminal, browser, and notebook presentations;
-- Heartwood-managed and hosted model planning;
-- platform adapters and deployment artifacts;
-- repository-verified research Skills;
-- deterministic, capable-model, container, and platform testing; and
-- user-facing and technical documentation.
+- project, session, policy, action review, audit, and schema contracts;
+- the OpenHands adapter, the managed worker, and its OpenShell deployment adapter;
+- terminal, browser, and notebook interfaces;
+- Heartwood-managed and hosted model connections;
+- platform adapters, images, and the platform contract;
+- curated research Skills;
+- deterministic, capable-model, container, native worker, and platform qualification; and
+- documentation.
 
 Use synthetic data in every public example, test, screenshot, and issue reproduction.
 

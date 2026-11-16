@@ -6,51 +6,62 @@ SPDX-License-Identifier: MIT
 
 # Support and Compatibility
 
-Heartwood uses [Semantic Versioning 2.0.0](https://semver.org/) and is under active pre-1.0 development.
+Heartwood uses [Semantic Versioning 2.0.0](https://semver.org/) and has not reached `1.0.0`.
 This policy describes project maintenance; it is not a service-level agreement or an institutional support commitment.
 
 ## Supported Releases
 
 The latest stable release is the maintained release line.
-The project may issue a patch for that line when a confirmed security, data-integrity, installation, or release defect affects a supported configuration.
-Older stable releases, prereleases, development branches, and moving `edge` image tags do not receive a maintenance window.
+A patch for that line is issued when a confirmed security, data-integrity, installation or release defect affects a supported configuration.
+Older stable releases, prereleases, development branches and the moving `edge` image tags receive no maintenance.
 
-Before `1.0.0`, minor releases may change commands, configuration, persisted state, interfaces, platform requirements, and deployment artifacts.
-Patch releases preserve compatibility, including validation rules and documented behavior.
-From `1.0.0`, incompatible public-contract changes increment the major version, compatible additions increment the minor version, and compatible fixes increment the patch version.
-Published release contents are immutable.
-Release notes and versioned documentation describe the supported behavior for each published version.
-The [platform contract bundle](platform-contract.md#contract-artifacts) has its own SemVer release independent of the application; upstream protocol versions retain their original schemes.
+A release is published only from a protected `main` commit whose `Release Candidate Ready` check passed, which includes the native worker qualification and the attestation of its evidence.
+Published release contents are immutable, and the release notes and versioned documentation describe the supported behavior of each version.
+
+## Versioning Rules
+
+- Before `1.0.0`, a minor release may change commands, configuration, persisted state, interfaces, platform requirements and deployment artifacts.
+- A patch release preserves compatibility, including validation rules and documented behavior.
+- From `1.0.0`, incompatible public-contract changes increment the major version, compatible additions the minor version, and compatible fixes the patch version.
+- The [platform contract bundle](platform-contract.md#versioning) has its own SemVer version, independent of the application; upstream protocols keep their own versions.
 
 ## Compatibility
 
-A configuration is supported only when it appears in the versioned documentation for the selected release.
-GPU deployments must also match the release's [GPU compatibility matrix](../reference/gpu-compatibility.md), including the platform, driver, CUDA runtime, model revision, precision, context size, tensor parallelism, and tool parser.
+A configuration is supported only when the versioned documentation of the selected release describes it.
+GPU deployments must also match that release's [GPU compatibility matrix](../reference/gpu-compatibility.md), including platform, driver, CUDA runtime, model revision, precision, context size, tensor parallelism and tool parser.
 
-Heartwood validates the published native assets and container candidates for the exact release commit.
-Live-platform qualification is stated separately from continuous-integration validation and expires when a material platform, driver, runtime, model, or policy component changes.
+Support levels follow [Testing and Evidence](../architecture/testing.md#claims), and each claim names its level:
+
+| Configuration | Support level |
+|---|---|
+| Workstation, container and native installation with local execution | CI validated |
+| Terra terminal and notebook, Stanford Carina terminal | CI validated |
+| Isolated worker on a dedicated Linux Docker engine with OpenShell | Native qualification against the qualification-only sandbox gateway build, with synthetic and benign workloads |
+| Sensitive or regulated data | Not supported in any configuration |
+
+Releases do not include a worker image or a production sandbox gateway.
+Native qualification evidence binds one commit, one set of image contents and one host, and does not transfer to a rebuilt image, another architecture or another sandbox gateway; see [Gateway Behavior Behind Native Qualification](platform-requirements.md#gateway-behavior-behind-native-qualification).
+Live-platform qualification is stated separately from CI validation and expires when a material platform, driver, runtime, model, sandbox or policy component changes.
 
 ## Update Cadence
 
-Maintained deployments should review the latest stable release at least once per quarter and apply a published security patch promptly.
-Before each update, read the release notes, back up the research files and matching canonical state when a rollback may be needed, and record the new artifact digest in the [standard environment record](index.md#record-a-standard-environment).
-After the update, repeat the synthetic checks in [Validate the Deployment](index.md#validate-the-deployment).
+Review the latest stable release at least once per quarter and apply a published security patch promptly.
+Before each update, read the release notes, back up the research files with their matching state, and record the new artifact digest in the [standard environment record](index.md#record-a-standard-environment).
+After the update, review the deployment manifest against the release's [manifest reference](../reference/configuration.md#deployment-manifest) and repeat [Validate the Deployment](index.md#validate-the-deployment).
 
-Project state migrates forward only, so an older release does not open state that a newer release has migrated.
+Project state migrates forward only: an older release does not open state that a newer release has migrated.
 
 ## Changes and Deprecation
 
-Before `1.0.0`, the project favors a coherent interface over preserving unreleased or superseded behavior.
-User-visible breaking changes must update the implementation, tests, release notes, and versioned documentation together.
-A security or data-integrity concern may require immediate removal without a deprecation period.
-
+Before `1.0.0`, the project favors one coherent interface over preserving superseded behavior, and removes superseded commands, settings and schemas without a deprecation period.
+A user-visible breaking change updates the implementation, tests, release notes and versioned documentation together.
+A security or data-integrity concern can require immediate removal at any version.
 After `1.0.0`, any change to the support window or deprecation policy requires a documented release decision before the affected release is published.
 
-## Ownership
+## Ownership and Reporting
 
-Repository `CODEOWNERS` identifies the current maintainer responsible for code, bundled Skill, and release review.
-Only protected `main` commits that pass the release gate can be published, and the configured `release` environment requires explicit maintainer approval.
-Repository administrators retain recovery authority for interrupted workflows, compromised credentials, and protected tags.
+Repository `CODEOWNERS` identifies the current maintainer responsible for code, bundled Skill and release review.
+The configured `release` environment requires explicit maintainer approval to publish, and repository administrators retain recovery authority for interrupted workflows, compromised credentials and protected tags.
 
 Report security concerns through the repository [security policy](https://github.com/SchmiedmayerLab/heartwood/security/policy).
-Use [GitHub Issues](https://github.com/SchmiedmayerLab/heartwood/issues) for reproducible defects and compatibility requests that do not contain sensitive information.
+Use [GitHub Issues](https://github.com/SchmiedmayerLab/heartwood/issues) for reproducible defects and compatibility requests that contain no sensitive information.

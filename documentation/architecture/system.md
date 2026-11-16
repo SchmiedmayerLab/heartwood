@@ -6,537 +6,365 @@ SPDX-License-Identifier: MIT
 
 # System Architecture
 
-The session gateway is the application boundary shared by every interaction surface.
-It is the only path from Heartwood interfaces to the OpenHands SDK backend.
-The adapter supplies an explicit tool list to the pinned SDK settings contract; it does not inherit the SDK's default execution or model-switching tools.
-Specialist tools enter that list only through the gateway's scoped specialist catalog, and automatic model routing remains disabled.
-OpenHands owns provider retries, with at most two total attempts for a local model call and three for a remote call.
-Timeouts and maximum retry waits remain bounded; the adapter does not add another retry loop around the SDK.
+Heartwood has three parts: a gateway that owns project state and every decision, an OpenHands agent worker that proposes and runs actions, and terminal, browser, and notebook interfaces that render the gateway's projections.
+The worker runs either in the gateway process (the local backend) or as a managed native worker in an OpenShell sandbox.
+Everything the worker returns crosses a trust boundary at the gateway before it can change a session, reach an outside service, or reach the model.
 
 ```mermaid
 flowchart LR
-    CLI["Terminal interface"] --> Gateway["Session gateway"]
-    Web["Browser interface"] --> Ingress["Validated gateway ingress"]
-    Ingress --> Gateway
-    Notebook["Notebook bridge"] --> Gateway
-    Gateway --> Project["Research project and bound private state"]
-    Gateway --> Policy["Platform, model, and action policy"]
-    Gateway --> Skills["Verified and project Skills"]
-    Gateway --> Adapter["OpenHands SDK adapter"]
-    Adapter --> Model["Research-environment, hosted, compatible-service, or Heartwood-managed model"]
-    Adapter --> Tools["OpenHands coding tools"]
-    Gateway --> Audit["Session events and audit chain"]
+    subgraph Interfaces
+        CLI["Terminal"]
+        Web["Browser"]
+        Notebook["Notebook bridge"]
+    end
+    subgraph Host["Gateway host"]
+        Ingress["Ingress policy and launch capability"]
+        Gateway["Session gateway"]
+        State["Project state: configuration, sessions, audit, Skills, models"]
+        Manifest["Operator deployment manifest"]
+    end
+    subgraph Sandbox["OpenShell sandbox"]
+        Worker["OpenHands agent server"]
+        Projections["Read-only /inputs and /skills"]
+    end
+    Web --> Ingress --> Gateway
+    CLI --> Gateway
+    Notebook --> Gateway
+    Manifest --> Gateway
+    Gateway --> State
+    Gateway -- "admitted requests and events" --> Worker
+    Worker --> Projections
+    Worker --> Model["Model endpoint"]
+    Gateway -- "authorized outside operations" --> Service["Outside service"]
+    Gateway -- "checkpoints" --> Records["Records service and signer"]
     classDef heartwood fill:#0b694d26,stroke:#2b8268
     classDef platform fill:#3f5b7426,stroke:#6f8fae
-    class CLI,Web,Ingress,Notebook,Gateway,Project,Policy,Skills,Adapter,Tools,Audit heartwood
-    class Model platform
+    class CLI,Web,Notebook,Ingress,Gateway,State,Worker,Projections heartwood
+    class Manifest,Model,Service,Records platform
 ```
 
-Green marks what Heartwood owns and blue marks what the research environment or model provider supplies, as in the [Platform Contract](../operate/platform-contract.md).
+Green marks what Heartwood supplies and blue marks what the operator, research environment, or provider supplies, as in the [Platform Contract](../operate/platform-contract.md).
+The local backend has no sandbox: the agent's tools run in the gateway process with the researcher's operating-system identity.
 
-## Shared Contracts
+## Gateway
 
-### Remote Worker Construction
+`SessionGateway` is the only path from an interface to an agent.
+It owns:
 
-The SDK backend accepts a trusted `worker_context` provider for an already admitted worker attempt.
-The provider supplies the admitted workspace, an inference placeholder, explicitly projected native Skills, and the operator-qualified specialist catalog digest.
-Local and remote conversations share Heartwood's agent settings and tool construction; remote tools use `/workspace`, and projected Skills use `/skills`.
-The worker bootstrap registers the image's verified advisory specialist factories before invoking the native agent server.
-Subscription authentication and provider-managed identity are unavailable through this factory; it never resolves gateway provider credentials for serialization.
+- the project context, persisted configuration, and the effective policy profile;
+- one `SessionService` per session, with its command receipts, paired event and audit journal, and writer lease;
+- action review decisions and the [review modes](#action-review-and-review-modes);
+- [authorization of outside operations and result releases](#outside-operations-and-result-releases);
+- worker attempts, their admission, and revocation;
+- audit export and checkpoint evidence;
+- the Skill, specialist, workflow, model, and workspace services described under [Gateway Services](#gateway-services); and
+- the session projection and researcher-facing labels that every interface renders.
 
-Remote creation uses the retained conversation identity and the SDK's public creation request, with automatic title generation disabled and the established iteration and confirmation settings.
-Creation is attempted once; an uncertain response fences the worker lease and requires outside reconciliation.
-Native streaming-delta events feed transient interface text, while durable translation continues through admitted native state.
-During remote execution, admitted event callbacks coalesce progress reads; token deltas do not request conversation snapshots.
-A five-second fallback refresh and final reconciliation preserve progress and settled state without repeatedly fetching an unchanged branch.
-These reads remain subject to the worker attempt's response budget.
-Gateway-local parallel-review executors are not installed on remote agent copies; sequential advisory specialists remain available, and remote parallel review requires separate qualification.
-This embedding contract does not provision a sandbox or enable remote execution in the default gateway launch path.
-
-A managed `SessionGateway` can receive an operator-owned worker-plan factory when its project uses protected external state.
-The factory receives the selected profile and effective session policy, and prepares image, effective sandbox policy and input identities plus native launch, connection and outside-revocation callbacks.
-Before calling the factory, the gateway validates the worker inference route and evaluates the endpoint, credential reference and capability tier through the existing model policy engine.
-A denied or unsupported route reaches no platform callback and creates no worker attempt.
-This launch gate precedes any platform preparation; normal per-command model authorization remains required, and the platform must enforce the admitted restrictions outside the worker.
-Preparation must not create a worker or grant service access; launch occurs only after the session retains its attempt.
-The gateway uses its normal model, action, session and interface contracts, but constructs the admitted-worker backend instead of a local conversation.
-Injected session factories and deterministic local backends cannot bypass this selection.
-Model preflight preserves endpoint and credential-reference checks without resolving a gateway credential; the admitted worker receives only its inference placeholder.
-The returned workspace must carry the exact lease issued by that session, and its specialist catalog must match the selected image contract.
-Preparation, launch and connection are attempted once per service; uncertainty requires outside reconciliation.
-
-Before replacing or closing a managed session, the gateway fences its lease and records the platform callback's revocation evidence through the existing session lifecycle.
-Failed revocation retains the service and writer ownership for recovery; closing an HTTP client is not revocation evidence.
-A gateway process that ends without revoking leaves its attempt retained in the session journal.
-A managed gateway can receive a second operator-owned callback that revokes such an attempt without the ended process's launch state.
-`SessionGateway.reconcile_workers` fences every attempt that an earlier process left unrevoked, records the callback's evidence through the same session lifecycle and returns the sessions whose revocation was not observed.
-It skips sessions the current process already serves, and a session whose writer another live process still owns stays unresolved.
-`heartwood gateway serve --deployment` runs this reconciliation before serving and reports unresolved sessions; their attempts remain fenced until a later start observes revocation.
-Reconciliation releases each session again, so a later read does not start a worker.
-The platform callback remains responsible for native worker and service cleanup, including attempt-owned storage.
-An operator-owned deployment manifest can explicitly select the native Docker sandbox adapter.
-The launcher validates native tools, the local daemon socket, registered mutual TLS identity and the exact policy file outside research files and protected project state.
-Every control connection first reads the registered gateway's reported version through the SDK health call and requires one of the versions the manifest declares in `gateway_versions`.
-A different or unreadable version stops serving at start with `HW-WORKER-001`, and stops a later launch or reconciliation before any sandbox, volume or deletion request.
-The comparison checks an operator declaration against the gateway's own report; it does not establish how that gateway behaves.
-Unsupported SDK admission or transport hooks stop launch without a local fallback.
-The adapter reuses native sandbox creation, configuration admission, provider attachments and service forwarding; it does not implement another agent loop, scheduler, inference router or tunnel.
-Input, Skill and specialist identities are bound before launch; the worker is admitted only after its image, effective policy, runtime generation, projected bytes, non-root identity and authenticated API match the outside observations.
-When launch or the first runtime observation fails, the launcher deletes the sandbox that carries the attempt's identity and stops its forwarder without waiting for the session to close.
-The attempt still remains fenced until revocation observes worker absence and removes its projections.
-Fencing an attempt at any later point, including an exhausted response budget, a failed admission or runtime observation, a missed deadline or execution reported without a decision, starts that revocation at once.
-The component that fenced only signals the managed session, which revokes on one short-lived thread, so no control-plane call runs under a session lock or on a transport thread.
-Revocation waits for a session command already in progress and is then bounded by the control-plane timeouts: 15 seconds to observe the sandbox, 90 seconds for the delete request and 90 seconds to observe its absence.
-It is attempted once; if it fails, the attempt stays fenced and the worker can keep running until the session closes, the gateway stops or the next gateway start reconciles it.
-A fence is raised only when the gateway observes the condition, so a worker the gateway is not exchanging data with is not detected by this path.
-Native provider credentials remain in the sandbox control plane; the gateway receives an opaque placeholder from the worker environment.
-Model and tenant restrictions must be enforced by the qualified provider endpoint or existing institutional inference service; the selected model name and a provider attachment alone do not enforce them against a compromised worker.
-
-The Docker reference adapter can transfer verified private input and Skill snapshots into attempt-owned named volumes using the native Docker CLI.
-It uses an explicit local daemon and an empty client configuration, with no inherited Docker context, credential helpers or proxy settings.
-A short-lived preparation container receives only those named volumes and runs only the qualified image's permission utility; its root filesystem is read-only, its network is disabled, and its sole added capability is `FOWNER` to set permissions on copied files.
-The worker receives `/inputs` and `/skills` as read-only mounts; outside inspection checks the image, network and exact volume identities and rejects overlapping mounts.
-Inspection also rejects a privileged container and any mount whose host source overlaps the research directory, protected state, native configuration home or Docker socket.
-It compares each reported source and each withheld location both as written, after lexical normalization, and as resolved on the gateway host, so a symbolic link or platform path alias on either side does not hide an overlap.
-The resolved forms describe the gateway host's filesystem; a container runtime that reports paths from another filesystem namespace is covered only by the forms as written.
-Inspection does not restrict other supervisor-owned mounts.
-Inspection rejects any added Linux capability and accepts only listed confinement values: the container's own process and user namespace, a private or absent IPC namespace, and security options that keep the default profiles or add `no-new-privileges` or the default AppArmor profile.
-An SELinux label option is accepted only when it selects the runtime's standard confined container type (`container_t`, formerly `svirt_lxc_net_t`) or a single sensitivity level with individual categories; user and role fields, any other type such as `spc_t` or an unconfined type, category ranges, and `label=disable` are rejected.
-A host or shared namespace, an unconfined or replaced profile, and any value outside that list are refused.
-Each of these fields must be present in the runtime's report; an absent field fails admission.
-Transfer is attempted once, and uncertainty requires reconciliation instead of repeating the copy.
-Cleanup checks both ownership labels and attempt-specific container names before removing projections, and refuses to remove resources whose ownership changed.
-The storage adapter supplies only storage observations; the native launcher combines these with control-plane admission and revocation evidence.
-
-### Project Context
-
-`ProjectContext.current()` resolves the process current directory and reserves `.heartwood/` beneath it for local launches.
-An operator deployment binds the exact research directory to an external state root and policy ceiling before the managed gateway opens stores.
-The worker receives selected projections, not that canonical state or the complete research directory.
-No interface accepts a separate public workspace path.
-
-### Startup Plan
-
-The startup planner combines read-only readiness with typed platform capabilities and returns one phase: project review, connection required, credential required, model required, compute required, ready, or recovery required.
-Terminal, browser, and notebook clients consume the same projection.
-
-### Session Commands and Events
-
-Interfaces submit typed commands to the gateway.
-OpenHands work runs in a supervised background thread so an interface can send guidance, pause, resume, or review an action set while the task is active.
-Final messages, actions, lifecycle changes, task plans, usage snapshots, specialist lineage, and errors become typed durable events.
-Incremental token text is transient and is never appended to the session or audit log.
-Progress can expose a terminal lifecycle before native execution has released its worker slot.
-The adapter therefore emits a separate transient execution-settled signal after final reconciliation, and automatic review assessment waits for that boundary or an idle backend.
-This signal does not authorize a new turn, grant tool permission, or cause replay to resume execution.
-
-### Interface Projections
-
-The gateway reduces durable events and current transient text into one session projection.
-That projection contains the conversation, versioned correlated action records, lifecycle, complete pending action set, task plan, total and per-purpose model usage, specialist lineage, activity, available commands, researcher-facing status, and a bounded set of contextual next-step suggestions.
-The gateway enforces those available commands before dispatch, so terminal, browser, and notebook clients share the same lifecycle rules.
-REST and streaming transports return events and that projection from one serialized snapshot; a transient revision orders token-only updates between durable events.
-The terminal, browser, and notebook bridge render the projection without maintaining their own event reducers.
-
-The gateway also owns researcher-facing setup choices, model-connection categories, readiness diagnostics, lifecycle and task labels, usage-purpose labels, specialist summaries, contextual suggestions, and action settings.
-Interfaces may present these differently, but they do not infer separate labels, capabilities, or persistence behavior.
-Technical identifiers remain in the typed projection for diagnosis and correlation, while presentation adapters keep them out of the primary workflow.
-
-### Research Workflow Contracts
-
-A versioned workflow definition declares researcher inputs, ordered stages, expected artifacts, deterministic check identifiers, researcher gates, and bounded work budgets.
-Definitions reference existing Skills and advisory specialists; they contain no provider routes, credentials, tool implementations, or platform-specific execution logic.
-Artifact paths use the same project-relative validation as workspace inspection.
-Each output has one producing stage and at least one required check, and a stage cannot depend on an output from a later stage.
-
-The gateway exposes these definitions through one read-only workflow catalog, including required inputs, stages, artifacts, and budgets.
-Availability derives from registered check implementations; a definition with a missing evaluator is not advertised as supported.
-Catalog discovery does not create project state, load a model, qualify a provider, or authorize execution.
-
-The evidence gate compares gateway-produced check results with the exact input and output digests they inspected.
-Missing, failed, unknown, or stale evidence cannot be replaced by a model-reported success.
-An assessment identifies its definition, stage, and evidence fingerprint and records whether researcher review is required.
-Evidence eligibility does not grant permission to advance a workflow or execute a tool.
-The researcher decision must bind to the workflow run, stage, and exact assessment, while tool actions retain the normal session review policy.
-
-The gateway binds explicitly selected project-relative files and researcher text to their initial content digests.
-Its read-only stage evaluator reuses workspace inspection, excludes private state and symbolic links, rejects unavailable or truncated inputs, and detects observed changes during inspection.
-Changing an original input invalidates evidence even if a new artifact is internally consistent with the changed data.
-
-Maintained tabular checks use a declared data dictionary for column roles, primary keys, permitted predictors, held-out partitions, validity rules, and optional group balance.
-They verify aggregate readiness reports, analysis plans, group-disjoint splits, and univariate ordinary least-squares results, including held-out predictions, a training-mean comparator, and leave-one-group-out sensitivity.
-Python's standard statistical routines compute the reference results independently of generated code; benchmark-specific expected answers remain in the compliance suite.
-Static Python and nonempty-report checks establish syntax or presence, not execution or scientific correctness.
-Matching copied artifacts cannot satisfy reproduction, which requires separate evidence from reviewed execution.
-
-Evaluation accepts complete UTF-8 files within the workspace inspection limits, at most 10,000 table rows and 128 columns, and at most 128 training groups for omission sensitivity.
-Unsupported evaluators remain unverified rather than passing by default.
-The checks do not establish that an analysis is scientifically appropriate or replace researcher review.
-They neither launch an agent nor grant permission to advance stages or approve tools.
-Execution and recovery belong to the existing gateway and authoritative session command/event path, not a separate workflow persistence layer.
-
-### Independent Review Evidence
-
-Review proposals and independently verified findings have separate typed contracts.
-The proposal schema works with OpenHands' structured `FinishTool` and contains only advisory candidates.
-The caller attaches the review identity, reviewer, and evidence snapshot after parsing; these are not model-selected fields.
-The gateway binds explicitly selected project files to their exact content hashes and byte counts through the existing confined workspace reader.
-A submission references that snapshot; changed or unavailable context cannot support an actionable finding.
-Review identities reject conflicting retries, and equivalent conditions on the same evidence produce one finding with the original reviewer claims retained separately.
-
-The read-only verification service supports four bounded observations: analysis plans incompatible with the supported predictor, outcome, grouping, or split requirements; empty or syntactically invalid Python source; baseline results inconsistent with independent recomputation; and byte differences between declared original and reproduced artifacts.
-Unsupported conditions, invalid analysis prerequisites, and exhausted check limits remain unverified.
-Verified claims and their severity come from the maintained check, not from the model's explanation.
-A syntax check does not execute code, a byte comparison does not prove reproduction, and a matching numerical result does not establish scientific appropriateness.
-
-These assessments are observations, not action permissions or proof that files remain unchanged afterward.
-The service does not execute corrections, start a reviewer, persist session transitions, or authenticate a model-supplied reviewer identity.
-Its caller owns the association between a submission and the actual reviewer; detailed proposals belong to scientific review context, not the content-minimized security audit.
-
-Research workflow conversations configure their advisory specialists with the same structured proposal schema and supported-condition guidance.
-The existing Task adapter captures the public structured response before OpenHands closes the child and retains it in the parent's typed task observation.
-Missing or malformed structured results are task failures, even if the specialist's prose claims success.
-Ordinary conversations retain unstructured specialist summaries.
-The existing session event journal and shared projection preserve proposals and native task lineage across replay without repeating model work.
-Terminal, browser, and notebook presentations explicitly distinguish these unverified proposals from independently assessed findings.
-
-Explicit workflow review commands capture the declared stage files before model dispatch and record that intent through the existing command receipt and paired journal.
-The gateway associates completed proposals only with selected native tasks that were proposed within that review and belong to the same session.
-It re-reads the captured evidence for independent assessment; changed conversation context invalidates the association.
-Serialized backend event handling assesses a settled review automatically through the same paired journal, without another model call or an interface command.
-Reconciliation can finish an interrupted assessment from retained evidence without repeating reviewer work.
-The automatic result references the initiating review command and identifies the gateway as its actor.
-Assessment is read-only and runs even after the work budget expires, while further model work and stage acceptance remain budget-gated.
-The shared workflow projection retains the review state and findings, and the security audit retains a digest of the review record rather than its file paths or findings.
-An advisory review does not replace stage checks, authorize corrections, or turn the reviewer's finish status into the original stage's outcome.
-
-Correction evidence uses separate, explicitly declared output paths while preserving every file in the reviewed snapshot.
-The gateway's read-only correction planner recomputes the original assessment before selecting repairable outputs from the maintained verifier registry.
-It refuses stale reviews, unsupported findings, existing destinations, and destinations overlapping reviewed files.
-The rechecker applies the same independent validators to the new files and their unchanged dependencies.
-A `not_observed` result means only that the original bounded defect was not observed in those bytes; it does not establish execution, successful reproduction, or scientific correctness.
-For artifact comparisons, only the reproduced copy is replaceable, never the original reference.
-These planning and inspection APIs neither start model work nor grant approval or advance a workflow stage.
-They validate content and declared associations; authenticated task lineage still requires the owning session journal.
-
-Workflow bindings retain a resolved project-relative path for every declared artifact.
-Stage prompts, independent checks, reproduction instructions, provenance, and interface artifact links use that same map rather than reconstructing locations from the catalog.
-The initial output directory is a preparation default, not an alternative source of current file locations.
-A proposed correction binding may replace only the unaccepted stage's declared outputs after a fresh recheck; it preserves all input and earlier-stage bindings.
-Constructing that candidate binding does not mutate the run or bypass the stage's ordinary checks and researcher acceptance.
-
-### Journaled Stage Execution
-
-The gateway accepts explicit workflow start, run, evaluate, review, and cancel commands through the existing session command journal.
-A workflow starts in an unused session, before OpenHands creates its conversation, and enables the SDK's structured `FinishTool` outcome for that conversation only.
-Ordinary conversations retain their existing finish behavior.
-Each transition records a run identity and revision in the paired event and audit journal; command receipts prevent repeated submissions across retries and restarts.
-An interruption with an uncertain dispatch outcome requires the existing session recovery procedure rather than automatic resubmission.
-
-A stage runs as an ordinary OpenHands turn with the existing coding tools and action review.
-Advancement requires settled workers, resolved tool approvals, a structured outcome from the latest stage turn, and independent artifact checks.
-Previously accepted inputs and results are checked again before another stage starts.
-Researcher review binds the exact assessment to the observed run revision and does not approve future tool actions.
-The shared session projection includes the persisted workflow state; clients do not reconstruct it from model prose.
-
-The projection also supplies typed stage controls, including the exact run revision and evidence fingerprint for each decision.
-Clients submit the displayed request unchanged; they do not replace it with a newer revision when the researcher acts.
-Active work and unresolved tool approvals suppress stage controls, while command handling independently rechecks those boundaries.
-Browser artifact previews use the existing bounded workspace reader and invalidate displayed content when its workspace revision changes.
-
-Reproduction preparation and completion are recorded in the same session journal, not a separate execution cache.
-Before approving a separately proposed canonical rerun, the gateway checks the original inputs, accepted artifacts, and absence of the destination through confined workspace inspection.
-Completion links that preparation to the actual OpenHands terminal observation, its reported working directory, and the intervening single-action approval.
-The gateway captures protected-file and output hashes at live completion and rechecks them during stage assessment.
-Missing completion observations remain unverified after restart; replay never inspects later files to manufacture execution evidence.
-These observations establish the bounded reproduction contract, not an adversarial filesystem sandbox or scientific validity.
-
-Run and stage budgets use the same observed usage contract as research benchmarks.
-Known overruns prevent acceptance, and exhausted limits prevent further model continuations; already-counted tool proposals exactly at the action limit can still be approved.
-Elapsed-time limits include waiting for review, and unavailable provider measurements remain unknown.
-These are admission checks at observed boundaries, not hard spending caps or preemption within an uninterrupted model run.
-Cancellation requires settled work and no pending tool approvals; pausing and rejecting tools remain separate session controls.
-
-### Model Artifact Lifecycle
-
-The gateway owns one local-model choice contract for catalog recommendations, inspected Hugging Face repositories, raw imports, downloads, and transferred bundles.
-Every successful path converges on the same project-local selection, resource planner, integrity verifier, and runtime launcher.
-
-Downloads resolve repository metadata to an immutable revision before writing project state.
-A portable transfer first verifies the selected model, records the exact payload and runtime configuration in a canonical manifest, and writes a reproducible uncompressed ZIP64 bundle.
-Import validates archive structure, path safety, sizes, and every SHA-256 digest before atomically publishing private files under `models/` in the bound state directory.
-Existing destinations are reverified on retries, and incomplete staging is never selected.
-Cancellation and selection failure preserve verified, published cache files because another transfer may already use them.
-Only incomplete staging is removed during failure cleanup.
-
-The shared transfer manager owns byte progress, lifecycle, warnings, cancellation, and results for the terminal, browser, and notebook adapters.
-Gateway shutdown stops new model downloads and transfers, requests cooperative cancellation, and waits for their worker threads and final selection callbacks.
-Shutdown first closes admission to the gateway API and waits for accepted calls, including synchronous downloads and nested calls, to finish.
-If calls are still active after five seconds, shutdown reports a timeout and retains session ownership and credentials for the in-flight work; admission remains closed and shutdown can be retried.
-After shutdown starts, callers must use a new gateway instance for further work; REST requests to the stopped instance return `503`.
-The wait does not hold the gateway state lock, so a callback already in progress can finish.
-If model work remains active after the shutdown deadline, the gateway reports failure and retains its worker references for a later shutdown attempt.
-This does not stop a separately supervised inference runtime or establish project-wide migration exclusion.
-The native inference launcher holds project ownership while reading the selected model, staging files, supervising inference, and cleaning up.
-It writes a durable launch intent before spawning its inference child and removes that intent only after observing the child's exit.
-The launcher unwinds through the same cleanup on `SIGTERM` and `SIGHUP`, so a closed terminal or an ordinary termination request stops the child and retires the intent.
-An abruptly killed launcher, a failed spawn, or failed termination leaves the intent in place and prevents another native launch or migration staging, even if the launcher's process lease has disappeared.
-An unresolved intent requires operator reconciliation against the platform supervisor, described in [Troubleshooting](../reference/troubleshooting.md#managed-inference-outcome-is-unresolved); a stale PID or absent launcher is not proof that inference has stopped.
-These controls cover the supervised child, not arbitrary descendants or independently launched inference services; complete runtime termination still requires platform qualification.
-An explicit license decision is required before import, and the request is bound to the SHA-256 identity of the exact manifest shown during review.
-Bundle integrity is not treated as source authorization or platform qualification: exact catalog identities are rehydrated from trusted local catalog metadata, while every other transferred model is marked unvalidated.
-Transferred models remain outside the repository-download registry, so an offline restart cannot silently turn an imported artifact into a network request.
-
-### Skill Artifact Lifecycle
-
-The curated `heartwood-skills` source owns complete Agent Skill validation and deterministic catalog artifacts.
-Heartwood pins one exact source revision for bundled content and uses deployment-owned TUF roots for additional connected or offline sources.
-
-The gateway refreshes signed metadata, projects catalog entries for every interface, binds explicit approval to the reviewed tree digest, and atomically activates the complete verified directory under `skills/` in the bound state directory.
-It reapplies signed revocations and revalidates source metadata and installed content before supplying active roots to OpenHands.
-Local directories use the same complete-tree verifier and content-addressed store but remain visibly unreviewed.
-See [Skill Trust and Distribution](skills.md) for the trust and ownership boundaries.
-
-### Workspace Inspection
-
-The gateway owns one bounded read-only workspace service for project trees, UTF-8 text files, changed paths, and per-file diffs.
-It accepts normalized project-relative paths, excludes `.heartwood/` and `.git/` at every depth, does not follow symbolic links, and rejects special files.
-Every operation applies fixed count, depth, line, and byte bounds.
-Tree and changed-path responses publish the active limits, and all responses report unavailable, binary, truncated, non-Git, or unsupported state when applicable.
-
-For Git projects, the service delegates changed-file and diff inspection to the pinned OpenHands `LocalWorkspace` API.
-For non-Git projects, it projects only successful paths attributed to typed OpenHands file-editor actions in the selected session.
-Terminal command text is never parsed into file evidence.
-The terminal, REST API, browser, and notebook bridge adapt this service without maintaining separate workspace roots or change stores.
-
-### Gateway Ingress
-
-`IngressPolicy` is the transport boundary for HTTP and WebSocket requests.
-It models direct loopback, a local Jupyter proxy, and an explicitly trusted proxy with one canonical external origin and base path.
-It rejects undeclared non-loopback exposure, untrusted forwarding metadata, origin and host mismatches, duplicate security headers, and ambiguous paths before the REST, streaming, or static-asset adapters see a route.
-Every REST, server-sent event, and WebSocket request must also carry the process-lifetime [launch capability](../operate/security.md#launch-capability), and the gateway derives the command actor from it rather than from the request.
-
-The browser reads its base path from server-injected non-secret metadata.
-It does not derive platform proxy paths or reduce gateway events itself.
-The selected platform adapter advertises supported ingress modes, while deployment configuration supplies exact proxy values.
-
-### OpenHands Adapter
-
-Gateway lifecycle startup imports the SDK before accepting concurrent browser requests, avoiding competing cold imports through the Skill and specialist catalogs.
-Approval requests are published only after native execution settles, so every interface receives the complete action group rather than a partially appended batch.
-This initializes modules only; model clients, conversations, and tool executors are created when agent work is requested.
-
-The adapter creates an OpenHands conversation with `OpenHandsAgentSettings`, the selected LiteLLM-compatible model profile, project workspace, Skills, persistence directory, and an always-pausing confirmation policy; the session service decides which paused action sets continue without the researcher.
-It uses public typed OpenHands events and conversation state to derive lifecycle, unmatched actions, task progress, usage, and errors.
-For remote state, each reconciliation reads one native branch snapshot containing the conversation identity, active events, execution status, and reported usage.
-The adapter rejects a snapshot for another conversation and reports unavailable snapshots without exposing worker response content.
-It does not reconstruct the worker's event tree or mutate its context view; pending-action recovery belongs to the worker runtime.
-Local conversations retain the pinned SDK's existing state and context-repair path.
-Snapshot support does not enable remote execution by default or establish worker-attempt identity, authorization for external effects, or infrastructure isolation.
-OpenHands' privacy-safe failure classifications are translated into stable Heartwood diagnostics, and raw conversation-error detail is minimized at the OpenHands file-store boundary before persistence.
 OpenHands owns the agent loop, conversation persistence, coding tools, Task Tracker, and specialist execution.
-The gateway supplies a catalog-scoped Task adapter that reuses OpenHands orchestration while rejecting agents outside the executable catalog, supervising child interruption, and applying the same content-minimized persistence policy to parent and child conversations.
-Specialist conversations use OpenHands' asynchronous run API inside its blocking Task worker so interruption can cancel active model I/O.
-The adapter reads running children from the native task manager rather than maintaining a separate active-child registry, and attempts interruption of every running child even if one reports an error.
-Heartwood translates that state into its stable event contract instead of maintaining a parallel agent loop or pending-action cache.
-Persisted non-token progress is reconciled while a run is active, while raw token deltas remain transient.
-The gateway's bounded idle wait includes final worker callbacks, not only the SDK's reported lifecycle or the availability of its execution slot.
-It releases gateway and session command locks while waiting, keeping pause and shutdown available, and invalidates its result if the owning service changes.
-An idle session may still need action approval or may have failed; callers must assess the reconciled lifecycle and evidence separately.
-Standard provider routes use OpenHands' LiteLLM-backed LLM interface.
-ChatGPT account access uses OpenHands' native subscription registry, OAuth credential store and refresh, and Codex Responses API transport without a Heartwood token implementation.
+The gateway configures it through the public SDK and does not keep a parallel agent loop, pending-action cache, or tool implementation.
+The default tool list is the terminal, the project file editor, Task Tracker, and the sequential Task tool, with a global tool concurrency of one.
+Model switching, Model Context Protocol servers, critic refinement, and automatic model routing are disabled.
+OpenHands is the only retry owner for model calls, with at most three attempts for a remote route and two for a local one.
 
-The default tool contract enables the OpenHands terminal, project file editor, Task Tracker, and sequential Task tool.
-Global tool concurrency is one, model switching and Model Context Protocol servers are disabled, and critic refinement is disabled.
+### Process Ownership
 
-The adapter can bind an optional gateway-owned authorizer for structured advisory Task batches.
-The authorizer must recheck qualification and record exact action identities before returning a scoped review plan; it is not exposed as model input or an interface eligibility flag.
-The adapter checks the native tool and executor types, selected roles, distinct action identities, and absence of task resumption before using OpenHands' bounded `ParallelToolExecutor`.
-Terminal, editor, mixed, unconfigured, and ordinary Task batches retain sequential execution.
-There is no separate worker pool, agent loop, pending-action cache, or usage ledger.
-Each usage projection takes one temporary snapshot of OpenHands metrics so a completing child cannot change the metric collection between per-purpose rows and totals.
-Slow authorization runs off the agent event loop so cancellation can prevent dispatch while shared storage is being checked.
-Prepared children retain the parent's native cancellation token and check it before asynchronous startup, preventing a pre-start pause from being mistaken for permission to resume.
-The normal grouped-action policy still applies before this execution boundary; qualification does not approve actions.
+Project configuration writes take a project-scoped interprocess lock.
+Each gateway registers a lifetime lease for the project before serving calls; leases of different gateways are independent, so separate sessions run concurrently.
+Session mutation takes a separate writer lease, held by the gateway process that first handles a command for that session until its session service closes.
+Two processes therefore cannot fork one session; interfaces continue a session sequentially or use different session identifiers.
+Writer metadata left by a stopped process is treated as stale only after the operating-system lock is acquired.
+These locks coordinate gateway processes; they do not stop older binaries or separately supervised inference runtimes.
 
-`SessionGateway` accepts a deployment-owned parallel-review preparer and binds it to the existing workflow evaluator and native adapter.
-Without that preparer, the default factory does not enable parallel review controls or execution.
-Standard deployments can supply `HEARTWOOD_REVIEW_QUALIFICATIONS` to use the built-in preparer over an operator-owned retained-evidence file outside the project.
-The same gateway configuration serves terminal, browser, and notebook sessions; no interface can install qualification evidence.
-See [Qualify Parallel Reviews](../operate/parallel-reviews.md) for preparation and trust boundaries.
-The preparer must assess trusted evidence against the current route; it is not a project setting or a model-supplied eligibility claim.
-The workflow first journals a preview, then exact researcher consent, and finally native action admission through the same paired session and audit journal.
-Qualification I/O runs outside the session command lock; dispatch then rechecks cancellation, ownership, workflow state, expiry, files, and remaining work limits.
-This protects session transitions but does not provide a filesystem transaction against external programs changing project files.
-The gateway supplies one review-execution summary and exact revision-bound controls to the terminal, browser, and notebook.
+Shutdown closes admission to the gateway API, waits up to five seconds for accepted calls, and then stops model transfers and session services.
+If work is still active, shutdown reports failure and keeps session ownership and the gateway lease so it can be retried; REST requests to a stopped gateway return `503`.
+
+## Agent Worker
+
+Both execution modes implement the same backend contract, so session commands, review, journaling, and projections do not depend on where the agent runs.
+
+### Local Backend
+
+The local backend creates an OpenHands `LocalConversation` over the research directory in the gateway process.
+It is the default for `heartwood`, `heartwood gateway serve` without `--deployment`, and the notebook bridge.
+
+The local backend does not isolate anything.
+An approved terminal command runs with the researcher's operating-system identity and can read or change any file that identity can, including `.heartwood/` state, audit records, and model credentials available to the process.
+The audit chain detects accidental damage, but such a command can rewrite records and recompute the chain.
+For that reason `review-outside-effects` is never in force outside a sandbox, and `review-changes` applies only when the model route needs no credential or uses a qualified platform-isolated transport ([Model Credentials](#model-credentials)).
+
+### Managed Native Worker
+
+`heartwood gateway serve --deployment MANIFEST` selects the managed worker when the [deployment manifest](#protected-state-and-the-deployment-manifest) contains a `worker` table with `driver = "openshell-docker"`.
+No other launch path selects it, and a managed session never falls back to the local backend.
+
+The worker is the OpenHands agent server from the Heartwood worker image, started by `images/worker/launch.py` as user `10001`.
+Before starting the server it registers the image's own verified advisory specialists.
+It runs in an OpenShell sandbox created through OpenShell's Docker driver, with `/inputs` and `/skills` mounted read-only and `/workspace` as its working directory.
+The sandbox has no network of its own (`network=none`); its only routes are those the OpenShell policy and supervisor permit.
+
+The gateway reaches the worker through an `openshell forward service` tunnel on loopback and authenticates every request with a per-attempt `SESSION_API_KEY`.
+The remote conversation uses Heartwood's agent settings and tool construction; gateway-local parallel-review executors are not installed in the worker, so specialists there run sequentially.
+Admission refuses a worker whose mounts reach protected state, the research directory, the native configuration home, or the Docker socket.
+
+## Trust Boundary
+
+The managed worker and everything it returns are untrusted.
+The gateway admits a worker, binds it to one durable attempt, bounds what it may send, and validates each response and event before the SDK or the session sees it.
+Four things cross the boundary: the launch and admission of a worker, the attempt binding that every request carries, the budgets and deadlines on worker traffic, and the admission of individual responses and events.
+
+### Worker Admission
+
+Launch happens once per session service, on the session's first backend read:
+
+1. The session policy evaluates the worker's inference endpoint, credential reference, and capability tier; a denied route reaches no platform callback.
+   The route must also equal the manifest's `profile_id`, `model`, and `model_endpoint`.
+2. The gateway stages the manifest's `inputs` (at most 128 files, 16 MiB each and 64 MiB in total) and a [Skill projection](skills.md#worker-projection) into a private directory under the state root.
+   One input identity digest binds the inputs, the Skill selection, the specialist catalog fingerprint, and any client-tool specifications.
+3. The session journals the attempt intent before any sandbox exists.
+4. The launcher connects to the registered OpenShell gateway with its mutual TLS identity and reads its reported version through the SDK health call.
+   A version outside the manifest's `gateway_versions` stops serving at start with `HW-WORKER-001`, and stops a later launch or reconciliation before any sandbox, volume, or deletion request.
+5. A short-lived preparation container copies the staged snapshots into two attempt-owned Docker volumes.
+   It runs only the image's `chmod` with no network, a read-only root filesystem, all capabilities dropped except `FOWNER`, and `no-new-privileges`.
+6. OpenShell creates the sandbox with the pinned image digest, the operator's policy, the provider attachment, CPU and memory limits, and attempt labels.
+7. The launcher admits the sandbox only when OpenShell reports the expected identity, labels, ready phase, main-process generation, and an accepted configuration whose policy hash equals `sandbox_policy_sha256`.
+8. Docker inspection of the worker container must report the pinned image, `NetworkMode: none`, no privilege, no added capability, and exactly one read-only volume at each of `/inputs` and `/skills`.
+9. A probe inside the worker must report the expected file digests, read-only projections, no `/workspace/.heartwood`, user `10001`, the expected specialist catalog fingerprint, and an `openshell:resolve:env:` inference placeholder.
+10. The forwarded API must answer with the attempt key and refuse a request without it, and the sandbox is admitted once more before the binding is returned.
+
+The operator's policy file must match `policy_file_sha256`, require Landlock as a hard requirement, run as `10001:10001`, and list `/inputs` and `/skills` as read-only.
+
+Container inspection accepts only listed confinement values: the container's own process and user namespaces, a private or absent IPC namespace, and security options that keep the default profiles, add `no-new-privileges`, or select the default AppArmor profile.
+An SELinux label is accepted only for the standard confined type (`container_t`, or its former name `svirt_lxc_net_t`) or a single sensitivity level with individual categories.
+Every field must be present in Docker's report; an absent field fails admission.
+A mount whose host source overlaps the research directory, protected state, native configuration home, or Docker socket is rejected.
+Sources are compared as written, after normalization, and as resolved on the gateway host; a runtime that reports paths from another filesystem namespace is checked only in the written forms.
+Inspection does not restrict other mounts the OpenShell supervisor adds.
+
+The gateway version check compares the operator's declaration with the gateway's own report.
+It catches a misconfigured deployment, not a gateway that misreports its version or lacks the behavior Heartwood's revocation evidence depends on.
+The patched OpenShell gateway Heartwood builds exists only for qualification ([Build and Qualification](#build-and-qualification)).
 
 ### Worker Attempt Ownership
 
-Managed worker launch intent and observed runtime bindings use the existing paired session and audit journal.
-The gateway issues a fresh attempt identity before dispatch, retaining the project, session, native conversation, image digest, deployment policy, sandbox policy, and input-manifest digest.
-Replacement preserves the native conversation identity and requires the previous attempt to be fenced with independently observed service-revocation evidence retained by the trusted launcher.
-Replaying a record does not grant a live capability or permit a local execution fallback.
-Once revocation of the previous attempt is recorded, the next owner of the session can launch one replacement attempt with a new identity, credentials, placeholder and response budget in a new sandbox.
-The replacement starts a new worker conversation and an empty sandbox workspace: the revoked worker's conversation state and files existed only inside its sandbox and are not restored.
-The session journal and audit record are retained, and the session projection adds a notice at the point where a replacement became active so no interface presents the new worker as a continuation.
-Replacement is refused when the journal shows work that only the revoked worker's conversation could finish: a run whose last recorded state is not idle, finished or error, a pause that no resume or new run ended, an action still awaiting review, an outcome recorded as unknown, or an outside operation or result release that is not terminal.
-A refused command records an error without ending a run or a pause, so it never makes a session replaceable.
-Only a gateway that launches workers admits a command for a revoked session; a gateway without a worker configuration refuses it rather than running the session on its own backend.
-Such a session stays readable and work continues in a new session.
-A fenced attempt blocks replacement until revocation is recorded, and a service that already launched an attempt never launches a second one.
+A worker attempt is a durable record in the paired session and audit journal with the phases `prepared`, `active`, `fenced`, and `revoked`.
+Its intent binds the project, session, native conversation, image digest, deployment policy, sandbox policy, and input identity.
+Records contain no worker credentials.
 
-Each process-local admission capability belongs to one retained binding and session writer.
-The native launcher binds one outside runtime observer before connection; subsequent admission checks reject a changed sandbox, process generation, configuration or forwarding process and permanently fence the lease.
-A passing observation is reused for one second, so a changed runtime is rejected at the first admission check after that interval, while fencing and writer ownership are checked at every admission.
-The native forwarder does not itself pin process generation, so its continued liveness is insufficient evidence.
-The full worker workspace requires that capability and restricts requests and event connections to its observed origin and native conversation.
-Creation supplies the retained conversation identity; gateway-initiated forks require a separately authorized lifecycle and are rejected by this binding.
-Fencing closes its HTTP, event, and callback admission.
-In-flight HTTP responses and queued event messages are checked again before admission, and session callbacks require the same live capability.
-A capability cannot prove that a sandbox stopped or that service access was revoked.
-The sandbox control plane and outside services enforce those controls, and an unavailable or uncertain revocation blocks replacement.
-Attempt records and ordinary session/audit correlation contain no worker credentials.
-These internal launcher contracts do not launch sandboxes, verify an observer's evidence, or revoke service access themselves.
-Native worker selection is explicit and requires qualified runtime dependencies; ordinary launch does not silently switch execution modes.
-After an uncertain creation response, revocation may resolve the uniquely named sandbox only when its full project and attempt ownership match this process's retained intent.
-Revocation deletes the sandbox through the control client connected at launch before it stops the forwarder, rechecks the native configuration or removes projections.
-A failure in those later steps therefore leaves the attempt fenced for retry but does not leave the worker running.
-When the sandbox itself cannot be stopped, revocation still closes the forwarder before it reports the failure.
-Cleanup verifies native worker absence and removes only owned staging resources before releasing the session writer.
-If provisioning is still unresolved, deletion can require retry while the attempt remains fenced and the writer remains owned.
-A control-plane absence response alone is insufficient when the container runtime still retains attempt resources; never release ownership or repeat creation to bypass that discrepancy.
-The native deletion API is name-scoped rather than an atomic expected-generation deletion; unique attempt names and outside identity checks do not replace control-plane authorization.
-A changed native connection identity blocks projection cleanup and revocation evidence in the owning process until the identity is restored or a later gateway start reconciles the attempt.
-A prior process's attempt is never revoked by another session's launch state.
-Reconciliation at gateway start resolves the sandbox by the attempt's unique name, deletes it only when its project and attempt labels and any retained sandbox identity match, verifies that the container runtime retains no attempt-owned worker, and removes owned projections before recording evidence.
-It observes the control plane and Docker daemon named by the current deployment manifest.
-An operator who points the manifest at different infrastructure must first remove the earlier worker there, because absence on the new infrastructure would otherwise be recorded as revocation.
-Reconciliation cannot signal the ended process's forwarder; that process loses its target when the sandbox is deleted.
-A reconciled session has the same retained state as one whose gateway stopped normally, including eligibility for a replacement attempt.
+The launcher returns a runtime binding (sandbox identity, process generation, endpoint, image, and policy), and the session issues a process-local lease for it.
+Every HTTP request, event connection, and session callback requires a live lease that still owns the session writer.
+The lease reobserves the sandbox through OpenShell before admission, reusing a passing observation for at most one second; a changed sandbox, generation, configuration, or a stopped forwarder fences the attempt.
+Fencing closes HTTP, event, and callback admission at once, including responses already in flight.
 
-### Remote Response Admission
+The gateway fences an attempt when it observes an exhausted response budget, a missed request deadline, a failed admission or runtime observation, execution reported without a recorded decision, or session close.
+Fencing starts revocation on its own short-lived thread, so no control-plane call runs under a session lock or on a transport thread.
+Revocation waits for a session command in progress and is bounded by the control-plane timeouts: 15 seconds to observe the sandbox, 90 seconds for the delete request, and 90 seconds to observe its absence.
+It deletes the sandbox through the control client connected at launch, stops the forwarder, rechecks the native configuration, requires Docker to report no attempt-owned worker container, and removes the attempt's volumes before the session records `revoked` with its evidence.
+Revocation is attempted once.
+If it fails, the attempt stays fenced and the writer stays owned, and the worker can keep running until the session closes, the gateway stops, or the next gateway start reconciles it.
+A fence is raised only when the gateway observes the condition, so a worker the gateway is not exchanging data with is not detected by this path.
 
-The remote workspace adapter validates HTTP responses before the native SDK consumes them.
-Its caller supplies exact tool-name/module pairs from trusted deployment configuration; an empty set permits no tool imports.
-The complete returned registration set must match before any import can execute, including on create, attach, resume, and fork.
-The adapter uses the public workspace client property and HTTPX transport interface without changing SDK code or conversation orchestration.
+A gateway that ends without revoking leaves its attempt in the journal.
+`heartwood gateway serve --deployment` calls `SessionGateway.reconcile_workers` before serving: it fences each unrevoked attempt, deletes the sandbox only when its name, labels, and any retained sandbox identity match, verifies absence, removes owned volumes, and records the evidence.
+Sessions whose revocation was not observed are reported and stay fenced until a later start.
+Reconciliation uses the control plane and Docker daemon named by the current manifest; an operator who points the manifest at other infrastructure must first remove the earlier worker, because absence on the new infrastructure would otherwise be recorded as revocation.
+OpenShell deletion is name-scoped rather than conditional on a generation; unique attempt names and identity checks do not replace control-plane authorization.
 
-Responses are bounded, uncompressed UTF-8 JSON with unique object keys and finite numbers.
-A response body is limited to 4 MiB, except a branch snapshot, which carries the whole active branch and is limited to 16 MiB.
-Because a parsed value costs the gateway far more memory than its JSON bytes, a response may also contain at most 524,288 values, counted from its structure before it is parsed.
-That keeps the gateway's peak memory for one response, including the SDK's validation, near 70 MiB.
-A real session uses about 136 values per tool step, so a snapshot holds about 3,800 steps with short outputs, about 1,400 with 10 KB of output each, and about 320 when every output reaches the SDK's 50,000-character limit.
-Each event in a page or snapshot must validate as a native event before the SDK receives it, because the SDK validates a snapshot as one list and would record an error for every invalid event.
-One wall-clock deadline of 120 seconds covers each request from connection to the last body byte, so a worker cannot extend it by sending status lines, headers, interim responses or chunk framing slowly.
-A walk through paged history ends when a page identifier repeats or after 1,024 pages or 32 MiB, whichever comes first; a later walk starts again from the first page.
-Concurrent requests share one response budget, described below; resetting the HTTP client does not replenish it.
-Exhaustion, a missed deadline, an unbounded history or invalid response admission permanently closes the workspace's HTTP admission, including responses still in flight.
-Starting another workspace requires a new trusted execution decision; reconnecting is not a budget renewal.
-These limits bound received data and request count, not the SDK's exact memory consumption or execution inside the worker.
-Admission failure does not stop worker execution; the trusted launcher must revoke access and stop the worker through the independent sandbox control plane.
-HTTP requests through this client remain on the configured server origin; redirects, ambient proxies, and server-selected client tools are rejected.
-Trusted gateway configuration may supply exact native client-tool specifications.
-Admission captures those specifications independently of mutable caller objects and compares returned names, descriptions, parameter schemas, and annotations before native registration, including on attachment and state updates.
-Client reset and model revalidation do not replace that captured contract.
-The SDK owns client-tool registration and execution semantics: its acknowledgement means a proposal was dispatched to the client, not that an external effect was authorized or completed.
-Outside authorization and independently observed service results remain separate requirements; worker claims cannot grant either.
+After a recorded revocation, a gateway configured to launch workers can start one replacement attempt with a new identity, key, placeholder, and response budget in a new sandbox.
+The replacement starts a new conversation in an empty workspace; the session projection marks where it became active.
+Replacement is refused while the journal holds work only the revoked worker's conversation could finish: an unsettled run, an unended pause, an action awaiting review, an unrecoverable outcome, or a non-terminal outside operation or result release.
+A gateway without a worker configuration refuses commands for a revoked session instead of running it locally; the session stays readable.
+
+### Budgets and Deadlines
+
+Every worker attempt has one response budget shared by HTTP responses, connection attempts, and received events.
+It allows bursts of 1,024 responses and 32 MiB and refills at four responses and 1 MiB per second.
+Each response is charged its size or 16 bytes per parsed value, whichever is larger; received events are charged by size.
+Resetting the HTTP client does not replenish the budget, and a replacement attempt receives a new one.
+
+Each request has one wall-clock deadline of 120 seconds from connection to the last body byte, so slow status lines, headers, interim responses, or chunk framing cannot extend it.
+A response body is limited to 4 MiB, or 16 MiB for a branch snapshot, and to 524,288 JSON values counted before parsing.
+A walk through paged history ends when a page identifier repeats or after 1,024 pages or 32 MiB.
+Exhausting the budget, missing a deadline, or returning a history that does not end fences the attempt.
+
+These limits bound what the gateway receives, about 70 MiB of peak memory for one response; they do not bound work inside the worker.
+The event connection has no deadline of its own: it is idle while a session waits for its researcher, its handshake is limited to ten seconds, and keepalive closes a connection whose peer stops answering.
+After the first backend read, which can launch the worker, reconciliation reads the worker without holding the session command lock or the gateway state lock.
+A command's own request to the worker still runs under both locks, within the request deadline.
+
+### Response and Event Admission
+
+Responses must be uncompressed UTF-8 JSON with unique keys and finite numbers, on the configured origin, without redirects, ambient proxies, or server-selected client tools.
+Every event in a page or snapshot must validate as a native OpenHands event before the SDK receives it.
+The returned tool registrations must equal the exact tool-name and module pairs and client-tool specifications from trusted configuration on create, attach, resume, and fork.
+
 Conversation metadata is admitted field by field against the creation request the gateway sent.
-A field the request sets, such as the agent, security analyzer, confirmation policy, hook configuration, workspace, iteration limit or secret registry, is admitted only when it equals the sent value, apart from redacted or omitted secret values.
-A fixed list of reported fields, such as execution status, usage, identifiers and timestamps, is admitted as plain data, and any other field is rejected, including one introduced by a later SDK.
-The rule applies to the created and retained conversation, to full-state updates and to single-field updates.
-A worker therefore cannot select another agent implementation, model route, tokenizer, analyzer, secret source or completion-log setting for the gateway to construct.
-Errors expose a stable admission failure rather than worker response content.
-Resetting the workspace client retains the same admission policy.
+Fields the request sets, including the agent, security analyzer, confirmation policy, hooks, workspace, iteration limit, and secret registry, are admitted only when they equal the sent values.
+A fixed set of reported fields such as status, usage, identifiers, and timestamps is admitted as data, and any other field is rejected.
+A worker therefore cannot select the agent implementation, model route, analyzer, or secret source the gateway constructs.
 
-The full worker workspace additionally requires the SDK's public connection and raw-message admission hooks before it can be constructed.
-It rejects an installed SDK without those hooks, including the pinned application SDK.
-The event connection permits only the configured origin's canonical conversation endpoint, without credentials in the URL, query parameters, fragments, redirects, ambient proxies, or compression.
-TLS uses the bundled certificate authorities with certificate and hostname verification; ambient certificate variables cannot replace that trust.
-The library bounds each message to 4 MiB and its receive queue to four frames.
-HTTP responses, connection attempts and received events share one response budget for the worker attempt.
-It admits bursts of 1,024 responses and 32 MiB and refills at four responses and 1 MiB per second, which covers status polling and progress reads for a run of any length.
-Received events are charged by size only.
-Each response is charged its size or 16 bytes per parsed value, whichever is larger, so a response dense with small values spends the allowance as fast as the memory it costs.
-A 16 MiB branch can therefore be read twice from a full allowance and then once every 16 seconds, and a response at the value limit four times and then once every 8 seconds.
-The refill bounds the rate of received data, not the events the SDK retains for a long session.
-A worker that exceeds the budget or the request deadline, or returns a history that does not end, is fenced.
-The event connection has no deadline of its own: an idle connection is the normal state while a session waits for its researcher, no gateway lock is held while it is read, its handshake is limited to ten seconds, and the library's keepalive closes a connection whose peer stops answering.
-After a session's first backend read, which can launch its worker, reconciliation reads the worker without holding the session command lock or the gateway state lock, so a slow response delays neither the fencing and revocation of its own attempt nor other sessions and settings.
-A command's own request to the worker still runs under both locks within the request deadline; fencing closes the attempt's admission at once and records the transition when that command returns.
-Individual and full-state updates receive the same metadata checks as HTTP responses.
-Raw text passes the JSON admission rules and native event schema before callback delivery; binary messages, completion-log events, and rejected data cannot authorize local file writing or appear in admission errors.
+The event connection permits only the origin's canonical conversation endpoint without credentials in the URL, query, or fragment, verifies TLS against bundled certificate authorities, limits messages to 4 MiB, and queues at most four frames.
+Binary messages and completion-log events are rejected.
+Admission errors never include worker response content.
 
-Neither workspace adapter is connected to the default local conversation factory.
-Hook availability alone does not qualify remote execution: the selected SDK/runtime set, remote-state projections, attempt fencing, independently authorized external effects, and infrastructure isolation require their own qualification.
+A worker acknowledgement means a proposal was dispatched, not that an outside effect was authorized or completed.
+Admission failure does not stop the worker; revocation through the sandbox control plane does.
 
-### Research Specialist Catalog
+### Model Credentials
 
-The gateway loads the maintained specialist catalog through OpenHands `AgentDefinition` and registers enabled roles with OpenHands' public agent factory and Task tool.
-Heartwood validates presentation metadata, model inheritance, confirmation mode, iteration and usage limits, tool capability, and repository-verified Skill references before registration.
-It injects verified OpenHands `Skill` objects directly and disables user, public, and project Skill discovery for child agents.
+The managed worker receives only an `openshell:resolve:env:` placeholder; the provider credential stays in the OpenShell control plane, which resolves it at request time.
+Credential expiry, model allowlists, and tenant restrictions are provider and inference-service settings; the selected model name and a provider attachment do not enforce them against a compromised worker.
 
-The enabled planning and review roles are advisory and tool-free.
-They inherit the parent's model route, run sequentially by default through OpenHands, and receive only the evidence delegated by the parent agent.
-Heartwood projects OpenHands Task lifecycle, lineage, result, failure, and combined usage into the same gateway-owned session view used by every interface.
-It does not add a scheduler, child-agent loop, conversation store, or role-specific interface reducer.
+For the local backend the gateway classifies the route against the platform capability as credential-free, application-scrubbed, or platform-isolated.
+An application-scrubbed route keeps provider material out of tool inputs, durable state, and projections, but the model client and the tools still share one operating-system identity, so every action is reviewed.
+A platform-isolated route requires a separately authorized transport and live synthetic qualification.
 
-The catalog includes a project-action implementation role but does not register it.
-The pinned public OpenHands task interface does not expose nested child actions for gateway-owned review or restore their lineage after a restart, so a tool-capable child fails closed instead of receiving project tools.
+## Action Review and Review Modes
 
-The gateway exposes only non-secret subscription status and short-lived device-code sign-in values to interfaces.
-The terminal delegates the complete interactive login to OpenHands; the browser uses OpenHands' supported device-code sign-in methods and retains the opaque pending handle only in gateway memory.
+OpenHands pauses before every action set (`AlwaysConfirm`), and the session service decides whether the set waits for the researcher.
+The OpenHands policy-rail and pattern analyzers rate each action from its typed content; a rating can send an action to the researcher but never allow one, and the model's own risk field is not an input.
+A decision applies to the complete action set and is bound to a digest of its exact content ([Action Decisions](sessions-audit.md#action-decisions)).
 
-### Model Credential Boundary
+The gateway classifies each action from its type: a file-editor `view` of a path it resolved inside the project is `read`, a Task Tracker update is `plan`, any other file-editor or terminal action is `workspace`, and everything else is `other`.
+Terminal commands are never classified by their text.
 
-The gateway classifies the active model route against the selected platform capability.
-A credential-free model requires no model secret.
-An application-scrubbed route excludes provider material from supported tool inputs and durable or interface state, but OpenHands model calls and tools still share an operating-system identity.
-A platform-isolated route requires a separately authorized model transport plus live synthetic qualification.
+| Mode | The gateway allows a set without the researcher when | Available |
+|---|---|---|
+| `review-all` | never | always; every fail-closed path falls back to it |
+| `review-changes` | every action is `read`, or every action is `plan`, with a low or medium analyzer rating | in a sandbox, or locally when the model route needs no credential or is platform-isolated |
+| `review-outside-effects` | every action is `read`, `plan`, or `workspace` with a low or medium rating, in an admitted sandbox | only while the session's worker attempt is active and admitted |
 
-The classification is part of the shared model-settings and readiness projections.
-The gateway passes the classification to the session service, which reviews every action in a session outside an isolated worker while the route is application-scrubbed.
-Terminal, browser, and notebook clients render that decision and its reason rather than implementing credential rules.
+A set always waits for the researcher when it contains an outside operation, a result release, or a tool bound to an outside service, when its proposal is not yet durable, when the researcher paused the session or the run stopped, or when the worker's admission failed.
+Any unknown classification or unreadable setting selects researcher review.
 
-OpenHands Agent Server and RemoteWorkspace are retained as upstream deployment options, but they place the model client and tools in the same remote agent environment.
-They are not treated as model-only isolation without an additional platform boundary.
+The researcher selects a mode with `--review-mode`, `/permissions`, browser settings, or `PUT /settings/actions/review`; without a selection the mode is `review-outside-effects` in a sandbox when the ceiling permits it, and `review-all` otherwise.
+The policy profile's `allowed_action_review_modes` is the ceiling; [Deployment Ceiling](../operate/security.md#deployment-ceiling) describes the built-in defaults and how manifest and project lists combine.
+
+A gateway decision is recorded like a researcher decision: an accepted command and an `approval.recorded` event with the actor `gateway` and the applied mode and rule (`read.file-view`, `plan.task-tracker`, or `sandbox.contained`), followed by the same checkpoint boundary and resolution events.
+If the worker reports executing an action without such a record, the session records an error and fences the attempt.
+Under `review-outside-effects`, containment of automatically allowed actions rests on the OpenShell policy and on outside-operation admission, not on per-action review.
+The [action-review evaluation](testing.md#action-review-evaluation) is the evidence a deployment needs before listing a mode.
+
+## Outside Operations and Result Releases
+
+An outside operation is a worker tool call that would change state in a platform service.
+A result release sends an outside observation back to the worker's model.
+Both always require a researcher decision bound to exact content; no review mode allows them automatically.
+
+The outside service adapter (`ExternalActionAdapter`) is a trusted dependency an embedding launcher supplies to `SessionGateway` through `external_actions_factory`.
+`heartwood gateway serve` installs none; native qualification uses a synthetic authenticated MCP service.
+The [Platform Contract](../operate/platform-contract.md) defines the messages an adapter exchanges.
+
+An outside operation proceeds through these steps:
+
+1. The worker proposes a call to a tool the adapter lists.
+   The adapter resolves it into a canonical request of at most 64 KiB with at most 16 immutable input references totalling at most 16 MiB, without performing an effect.
+2. The gateway issues an `ExternalActionProposal` binding the operation identity, the worker attempt, the proposing event, the service policy digest, the request, and a validity interval, and presents it as an action with an `unknown` rating.
+3. The researcher's decision binds the proposal's SHA-256 digest and permits one use.
+   An approval is journaled and must be retained as checkpoint evidence before any dispatch.
+4. Before dispatch the gateway rechecks the live worker lease, the policy digests, the adapter's policy and actor entitlement, expiry, and the input bytes, then records `submitting` and calls the adapter once.
+5. The adapter's observation must name the same proposal, operation, project, and service.
+   An uncertain dispatch is recorded as `unknown` and later resolved by status lookup, never by resubmission.
+
+Only an exact retry of the approval command that recorded an authorization can dispatch it; a status read, reconciliation, another command, or an automatic decision cannot.
+Denying the same review withdraws an undispatched authorization, and an authorization that outlives its interval is recorded as expired.
+
+A result release is a separate proposal that binds the operation digest, the observation event, the sanitized content, the destination model route, and a validity interval.
+After approval the adapter independently authorizes disclosure to that route, the worker must be idle with no pending review, and the gateway submits the content once as a user message wrapped in an `outside-result` envelope.
+The envelope labels the data; it is not an instruction boundary, and the model can act on instructions in released content.
+
+## Protected State and the Deployment Manifest
+
+The process current directory is the research-file boundary, and no interface accepts another workspace path.
+A local launch keeps project state in `.heartwood/` under it.
+A managed launch binds the research directory to external state through an operator manifest with the schema `heartwood.project-deployment.v1`: the project UUID, the exact research directory, a `state_root` named by that UUID, the `policy` that is the project's default and ceiling, and optional `worker` and `evidence` tables ([Deployment Manifest](../reference/configuration.md#deployment-manifest)).
+
+The gateway validates the manifest, its ownership and permissions, and every worker and evidence authority file before opening any store.
+Project content can neither select a manifest nor supply deployment authority, and copying the research directory does not grant access to the original state.
+A project's own policy may only narrow the manifest's, and broader or malformed persisted rules fail closed.
+Without a manifest, the selected platform adapter supplies the default policy and no deployment ceiling applies.
+
+`heartwood project migrate --deployment` moves local state into the external root, and `heartwood project recover-migration --deployment` resumes or reverses an interrupted move ([Persistence](sessions-audit.md#persistence)).
+External placement keeps state out of the worker's mounts; operating-system identities still decide who else can read it, and the gateway can always write it.
+
+## Audit, Checkpoints, and Evidence
+
+Each session event and its content-minimized audit record are committed together through a recovery journal, and the audit chain links every record by hash.
+The chain uses no key; only a signed checkpoint binds history, and only as it stood when it was signed ([Audit Integrity](sessions-audit.md#audit-integrity)).
+
+With an `evidence` table, the gateway anchors every action-set decision, every outside decision, and session close as a checkpoint boundary.
+It stages the audit prefix to an S3-compatible records service and has the signer from the deployment's signer registry publish the checkpoint.
+In `required` mode a boundary returns only after the retained signature is read back, so an approved action or outside operation does not dispatch without it; in `buffered` mode an unavailable records service is recorded as a visible gap.
+An approved outside operation always requires its checkpoint.
+A session whose history contains checkpoint evidence refuses to dispatch from a gateway that lacks the records configuration.
+[Audit Checkpoints and Retention](../operate/audit-checkpoints.md) defines the operator contract.
+
+## Interfaces
+
+The terminal, browser, and notebook bridge submit typed commands and render one gateway projection; they keep no event reducers or business rules of their own.
+
+- The startup planner combines read-only readiness with platform capabilities and returns one phase: project review, connection required, credential required, model required, compute required, ready, or recovery required.
+- Agent work runs in a supervised background thread, so an interface can guide, pause, resume, or review while a task is active.
+  Final messages, actions, lifecycle changes, task plans, usage, specialist lineage, and errors become durable events; token text stays transient.
+- The session projection contains the conversation, versioned action records, lifecycle, the complete pending action set, task plan, usage by purpose, specialist lineage, available commands, status, and bounded next-step suggestions.
+  The gateway enforces the available commands before dispatch.
+- REST, server-sent events, and WebSocket return events and the projection from one serialized snapshot; a transient revision orders token-only updates.
+
+`IngressPolicy` models direct loopback, a local Jupyter proxy, and an explicitly trusted proxy with one external origin and base path.
+It rejects undeclared non-loopback exposure, untrusted forwarding metadata, origin and host mismatches, duplicate security headers, and ambiguous paths before a route runs.
+Every REST, server-sent-event, and WebSocket request must carry the process-lifetime [launch capability](../operate/security.md#launch-capability), and the gateway derives the command actor from it.
 
 ### Platform Adapter
 
-The selected adapter supplies environment detection, capabilities, ingress modes, model-credential boundary, data-mount declarations, credential allowlists, and default policy.
-Generic, Terra, and Carina behavior differs only through these boundaries and startup/runtime orchestration.
+The selected adapter supplies environment detection, capabilities, ingress modes, the model-credential boundary, data-mount declarations, credential allowlists, and the default policy.
+Generic, Terra, and Carina behavior differs only through these boundaries and their launch orchestration.
+The versioned Heartwood–platform contract and its offline conformance checks are described in the [Platform Contract](../operate/platform-contract.md).
 
-A trusted embedding launcher can supply an immutable `deployment_policy` to `SessionGateway`.
-That profile is the default and the maximum authority for every project configuration read, write, update, and restore in that gateway.
-Project rules may narrow endpoint, credential, capability, and action-review allowlists or raise the aggregate-count floor; they cannot disable default-deny egress or change platforms.
-Selecting a Custom API route does not add endpoints or credentials when a deployment policy is supplied.
-Malformed or broader persisted rules fail closed rather than silently changing the operator's policy.
-The ceiling is a constructor dependency, never selected by project content or an interface request.
-Launchers without that dependency retain the platform-default workflow and do not provide this deployment ceiling.
-This application admission control requires an independently confined worker and infrastructure egress enforcement to withstand a compromised execution process.
+## Gateway Services
 
-## Process Ownership
+These services run in the gateway and share the session journal, review, and projection.
 
-An operator-owned project deployment manifest binds one opaque project identifier to an exact research directory, an external state directory, and a model-policy ceiling.
-The gateway verifies that binding against its launch directory before opening any project state.
-Project-local hints cannot select the binding, and copying the research directory does not authorize access to the original project's state.
-The manifest and state directory must remain outside the research directory; the external state directory is named by the project identifier.
-An existing project-local state marker requires an explicit migration before this launch mode can initialize external state.
-This placement separates canonical configuration, sessions, audit records, Skills, runtime records, and model artifacts from research files; operating-system identities and worker mounts still enforce access.
+### Research Workflows
 
-Project configuration writes use a project-scoped interprocess lock.
-Each gateway registers a native lifetime lease before serving calls for an initialized project or completing first initialization.
-Registration uses the existing project initialization lock, and distinct gateways keep independent leases so separate sessions remain concurrent.
-Successful shutdown releases the gateway lease only after accepted calls, model workers, and session services have drained; failed shutdown retains it.
-An internal maintenance context holds the initialization lock and every gateway lease before session staging can begin.
-Idle gateways therefore prevent staging, and new gateways cannot enter the project during staging.
-Process exit releases native ownership; an old empty lease file does not indicate a live gateway.
-These locks coordinate participating gateway processes, not older binaries or independently supervised inference runtimes, which must be stopped separately.
-Session mutation uses a separate interprocess lease for each session, owned by the gateway process that first handles a command.
-The lease remains active until that session service closes.
+A versioned definition declares inputs, ordered stages, artifacts, deterministic checks, researcher gates, and work budgets, and references existing Skills and advisory specialists.
+A stage is an ordinary OpenHands turn with normal action review; advancing requires settled work, resolved approvals, a structured outcome, and gateway-run checks against the exact input and output digests.
+Model-reported success cannot replace a missing, failed, or stale check, and checks establish bounded properties, not scientific appropriateness.
+Budgets are admission checks at observed boundaries, not spending caps.
+See [Research Workflows](../use/research-workflows.md) and [Experiment Records](experiments.md).
 
-Command receipts make completed requests idempotent across retries and restarts.
-A paired event-and-audit recovery journal completes verified interrupted appends without duplicating either record.
-Writer metadata left by a stopped process is treated as stale only after the operating-system lock can be acquired; the new owner then validates recovery state before continuing.
+### Independent Review
 
-The browser, terminal, and notebook interfaces therefore cannot fork one session by writing from separate processes.
-They may continue the session sequentially after the current owner stops, or use distinct session identifiers concurrently.
+Advisory reviewers return structured proposals through OpenHands' `FinishTool`; the gateway verifies supported findings against captured evidence and keeps unverified proposals visibly separate.
+A verified finding is an observation, not permission to correct, approve, or advance.
+
+### Research Specialists
+
+The catalog is loaded through OpenHands `AgentDefinition` and registered with the public Task tool.
+The enabled planning and review roles are tool-free, inherit the parent's model route, and run sequentially; the project-action role is not registered because nested child actions cannot be reviewed through the public task interface.
+Parallel advisory review requires deployment-supplied qualification evidence ([Qualify Parallel Reviews](../operate/parallel-reviews.md)).
+
+### Skills
+
+Signed catalog content and local directories are verified as complete trees, approved by exact digest, and passed to OpenHands as exact directories ([Skill Trust and Distribution](skills.md)).
+
+### Model Artifacts
+
+Catalog choices, Hugging Face downloads, raw imports, and portable bundles converge on one selection, resource planner, integrity verifier, and launcher.
+Downloads pin an immutable revision, bundles are verified digest by digest before atomic publication under `models/`, and import requires an explicit license decision bound to the reviewed manifest.
+The native inference launcher writes a durable launch intent before starting its child and removes it only after observing the child exit; an unresolved intent blocks another launch and migration until the operator reconciles it ([Troubleshooting](../reference/troubleshooting.md#managed-inference-outcome-is-unresolved)).
+
+### Workspace Inspection
+
+One bounded read-only service serves trees, text files, changed paths, and diffs, excluding `.heartwood/` and `.git/` at every depth and refusing symbolic links and special files.
+Git projects use OpenHands `LocalWorkspace`; other projects report only paths changed by typed file-editor actions, never paths parsed from terminal text.
+
+## Build and Qualification
+
+The application's default lock installs patched OpenHands and OpenShell SDK wheels from `vendor/runtime-wheels/`, which is not committed.
+`deploy/build-worker-candidate.py --bootstrap` builds them there from immutable upstream archives and the reviewed patches in `images/worker/candidate/`, or verifies existing wheels against the digests in `sources.json`.
+The patches add the remote-event and configuration-admission hooks the trust boundary requires; the gateway refuses to construct a managed worker on an SDK without them.
+
+The OpenShell gateway is also built from pinned source with two deletion patches, as version `0.1.8+heartwood.2` with the purpose `qualification-only`.
+Heartwood ships no production OpenShell gateway: a deployment's gateway is checked only by its declared version, and it must separately provide the [behavior native qualification depends on](../operate/platform-requirements.md).
+
+Native qualification runs the installed application, worker image, and qualification gateway through the complete boundary and produces commit-bound, verifiable evidence; [Testing and Evidence](testing.md) describes the cases, evidence, and verification.
+Qualification uses synthetic data and does not establish sensitive-data readiness or institutional approval.

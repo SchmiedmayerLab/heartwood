@@ -6,95 +6,75 @@ SPDX-License-Identifier: MIT
 
 # Use Heartwood on Terra
 
-[Terra](https://terra.bio/) provides cloud workspaces, Jupyter applications, compute, persistent storage, and access controls for biomedical research.
-The Heartwood Terra image extends Terra's Jupyter environment with the terminal agent, notebook bridge, verified Skills, and optional managed inference.
+[Terra](https://terra.bio/) provides cloud workspaces, Jupyter applications, compute, persistent storage and access controls for biomedical research.
+The Heartwood Terra images extend Terra's Jupyter environment with the `heartwood` terminal, the notebook bridge, verified Skills and optional managed inference.
+Terra supports the Heartwood terminal and notebook interfaces; it has no supported route to the browser interface.
 
-Terra supports the Heartwood **terminal** and **notebook** interfaces.
-Operators preparing Terra for a group of researchers should also [record a standard environment](../operate/index.md#record-a-standard-environment).
-It does not currently expose a supported route to the Heartwood browser interface.
+This guide creates cloud compute that Terra charges for.
+Review the price Terra shows before creating the environment, and use synthetic or non-sensitive data.
 
-This guide changes cloud compute and can incur charges.
-Begin with synthetic or non-sensitive data and review the price shown by Terra before creating the environment.
+## Qualification
+
+The Terra images are built from the Terra Jupyter base and tested in CI for Jupyter inheritance, the prefixed internal gateway route, persistence and the Docker manifest shape Terra requires.
+The Terra adapter reports validation level `ci`; CI does not start a live Terra workspace.
+The two-T4 Qwen3 Coder 30B AWQ configuration completed Heartwood's coding-agent qualification in a Terra workspace on 2026-08-15 with the pinned vLLM runtime listed in [GPU Compatibility](../reference/gpu-compatibility.md).
+A Terra launch is a local launch with `.heartwood/` state on the persistent disk; the isolated worker deployment is not qualified on Terra.
+Operators preparing Terra for a group should also [record a standard environment](../operate/index.md#record-a-standard-environment).
 
 ## Before You Begin
 
-You need access to a Terra workspace and permission to create or replace its Jupyter Cloud Environment.
-Terra supports custom images derived from a Terra base image; see Terra's [custom Jupyter environment guide](https://support.terra.bio/hc/en-us/articles/360037143432-Docker-tutorial-Custom-Cloud-Environments-for-Jupyter-Notebooks).
+You need a Terra workspace and permission to create or replace its Jupyter Cloud Environment.
+Terra accepts custom images derived from a Terra base image; see Terra's [custom Jupyter environment guide](https://support.terra.bio/hc/en-us/articles/360037143432-Docker-tutorial-Custom-Cloud-Environments-for-Jupyter-Notebooks).
 
 ## Choose the Image and Compute
 
-If the workspace already has a Jupyter Cloud Environment and you want to change its Heartwood image tag or GPU configuration, delete that Cloud Environment before continuing.
-Terra does not apply those changes to an existing environment; create a new environment with the required Heartwood image and compute.
-Deleting the compute environment and deleting its persistent disk are separate choices, so retain the disk when it contains project files you still need.
+Terra does not apply a new image tag or GPU configuration to an existing Cloud Environment.
+To change either, delete the Cloud Environment and create a new one; deleting the environment and deleting its persistent disk are separate choices, so keep the disk if it holds files you need.
 See Terra's [GPU Cloud Environment guide](https://support.terra.bio/hc/en-us/articles/4403006001947-Getting-started-with-GPUs-in-a-Cloud-Environment).
 
-Open the workspace's Jupyter Cloud Environment settings and configure the environment in this order:
+In the workspace's Jupyter Cloud Environment settings:
 
-1. Select **Customize**, then choose **Custom Environment** under application configuration.
+1. Select **Customize**, then **Custom Environment** under application configuration.
 2. Select the CPU and memory combination from the table below.
-3. Enable the GPU, when required, and verify the GPU type and count.
+3. Enable the GPU when required and check its type and count.
 4. Set the persistent-disk size and auto-pause interval.
-5. Enter the corresponding container image last.
-6. Review every value before selecting **Create**.
+5. Enter the container image last and wait until auto-detection enables **Next**.
+6. Review every value, then select **Create**.
 
-Terra can reset the image or GPU selection when the CPU choice changes, so set compute resources first and verify the complete form before creation.
-After entering the image, wait for Terra to finish auto-detection and enable **Next** before changing fields or continuing.
+Changing the CPU choice can reset the image or GPU selection, which is why the image goes last.
 
-Use one of these combinations:
-
-| Model Route | Image | Practical Starting Point |
+| Model Route | Image | Starting Point |
 |---|---|---|
-| Stanford AI API Gateway or hosted service | `ghcr.io/schmiedmayerlab/heartwood:0.4.0-terra` | 8 CPUs, 30 GB RAM, 50 GB persistent disk |
+| Stanford AI API Gateway or a hosted service | `ghcr.io/schmiedmayerlab/heartwood:0.4.0-terra` | 8 CPUs, 30 GB RAM, 50 GB persistent disk |
 | Run with Heartwood: Qwen3 Coder 30B AWQ | `ghcr.io/schmiedmayerlab/heartwood:0.4.0-terra-gpu-nvidia` | 32 CPUs, 120 GB RAM, two T4 GPUs with 16 GB each, 200 GB persistent disk |
 
 A hosted model is the shortest first run.
-Use the GPU image for a capable model managed inside the Terra environment.
+For a Heartwood-managed CPU model, whose catalog recommendation is 32 GB RAM, use 16 CPUs and 60 GB RAM instead.
+The GPU qualification applies to two T4 GPUs at an 18,432-token context; one- and four-T4 results are separate records and do not carry over.
+Heartwood stops before starting vLLM on P4, P100 or V100 GPUs, whose compute capability is below the supported floor.
 
-These are starting points rather than universal requirements.
-Terra's current standard machine choices pair 8 CPUs with 30 GB RAM and 16 CPUs with 60 GB RAM.
-The 16 CPU option preserves the catalog's recommended system-memory headroom; 8 CPUs and 30 GB RAM is a lower-cost evaluation configuration that may leave less room for model loading and concurrent notebook work.
-The GPU image and Qwen3 Coder configuration above completed Heartwood's coding-agent qualification on two T4 GPUs with an 18,432-token context window.
-This qualification is specific to two T4 GPUs; the recorded one- and four-T4 configurations are not interchangeable with it.
-Heartwood reports the detected GPU, memory, driver, model cache, and compatible catalog entries before startup.
-It stops before launching modern vLLM on P4, P100, or V100 GPUs because their compute capability is below the supported floor.
-For the first model download, verification, or startup, set auto-pause to at least 120 minutes.
-The pinned model download is about 17 GiB and depends on network conditions.
-The first run can remain active well beyond 15 minutes while Heartwood reports each stage and its elapsed time.
-After setup is complete, shorten auto-pause to match the normal research workflow.
-
-Heartwood inspects model size and available memory before launch, chooses a context capacity with response headroom, and warns when the selected compute is below its conservative estimate.
-Larger GPU memory can enable context capacities above 32K when the model supports them, but increasing context also increases GPU-memory use and response latency.
-See [Choose a Heartwood-Managed Model](../models/choose-managed.md) for download and resource estimates and [GPU Compatibility](../reference/gpu-compatibility.md) for exact runtime combinations.
-
-Retain the persistent disk when replacing compute and copy valuable results to workspace storage.
-Before downloading a managed model, open a terminal and run `df -h /home/jupyter`.
-The disk needs the model's recommended free space in addition to existing notebooks, project files, and `.heartwood/` state.
-If the retained disk is too small, preserve important files, delete only the Cloud Environment, and recreate it with a larger persistent disk.
-For an existing project that already contains model files or other analyses, 250 GB is a safer managed-inference starting point than the 200 GB fresh-project minimum.
-See [Starting and Customizing Your Jupyter App](https://support.terra.bio/hc/en-us/articles/5075814468379-Starting-and-customizing-your-Jupyter-app).
+For the first model download, verification and startup, set auto-pause to at least 120 minutes; the pinned model is about 17 GiB, and the first run can stay active well beyond 15 minutes while Heartwood reports each stage.
+Shorten auto-pause afterwards.
+The persistent disk needs the model's recommended free space in addition to existing notebooks, project files and `.heartwood/`; check it with `df -h /home/jupyter` before downloading.
+For a project that already contains models or other analyses, start from 250 GB rather than 200 GB.
+See [Choose a Heartwood-Managed Model](../models/choose-managed.md) for sizes and Terra's [Jupyter app guide](https://support.terra.bio/hc/en-us/articles/5075814468379-Starting-and-customizing-your-Jupyter-app) for disk changes.
 
 ## Create and Verify the Environment
 
-Select **Create** and wait for Jupyter to become ready.
-Open Jupyter, then select **File -> New -> Terminal**.
-
-Verify the installed release:
+Select **Create**, wait for Jupyter to become ready, open it, and select **File -> New -> Terminal**.
 
 ```bash
 heartwood --version
 ```
 
-The reported version must match the image tag in this guide.
-If it reports an older release, Terra is still running the previous immutable image: delete and recreate only the Cloud Environment with the intended tag, retain the persistent disk, and verify the version again before setup.
-
-Do not install another Heartwood copy into the environment.
-The custom image already contains the tested command, notebook kernel, Skills, and inference runtime while preserving Terra's base-image behavior.
+The version must match the image tag.
+If it reports an older release, Terra is still running the previous image: delete and recreate only the Cloud Environment with the intended tag, keep the persistent disk, and check again.
+Do not install another copy of Heartwood into the environment.
 
 ## Create a Project Directory
 
-Terra preserves files below `/home/jupyter` while the persistent disk is retained.
-Google Cloud encrypts persistent disks and workspace buckets at rest by default, and workspace sharing and Authorization Domains decide who can read workspace data.
-Create a dedicated child directory so the agent boundary does not include unrelated notebooks or files:
+Terra keeps files below `/home/jupyter` while the persistent disk exists.
+Create a dedicated child directory so that the project does not include unrelated notebooks or files:
 
 ```bash
 mkdir -p /home/jupyter/heartwood-project
@@ -102,45 +82,34 @@ cd /home/jupyter/heartwood-project
 heartwood doctor
 ```
 
-This directory is the project for every Heartwood command and notebook started there.
-Configuration, model files, sessions, and audit records remain under `/home/jupyter/heartwood-project/.heartwood/`.
-Terra documents persistent-disk behavior and deletion precautions in its [Cloud Environment FAQ](https://support.terra.bio/hc/en-us/articles/360057425291-Cloud-Environment-FAQs).
+This directory is the project for every Heartwood command and notebook started there, and its state is in `/home/jupyter/heartwood-project/.heartwood/`.
+Workspace sharing and Authorization Domains decide who can read workspace data; see Terra's [Cloud Environment FAQ](https://support.terra.bio/hc/en-us/articles/360057425291-Cloud-Environment-FAQs) for persistent-disk behavior.
 
 ## Choose a Model and Start the Terminal
-
-Run:
 
 ```bash
 heartwood
 ```
 
-The first-use flow confirms the project and asks where the model runs.
+Heartwood confirms the project and asks where the model runs:
 
-- Choose **Stanford AI API Gateway** when the route is approved for the Terra project.
-- Choose **Sign in with ChatGPT** for an eligible Plus or Pro account only when the ChatGPT service is authorized for the intended data.
-- Choose **OpenAI API**, Anthropic, or **Other compatible service** only when that endpoint is authorized for the intended data.
-- Choose **Run with Heartwood** to download and serve model weights inside the Terra environment.
+- **Stanford AI API Gateway**, when the route is approved for the Terra project;
+- **Sign in with ChatGPT**, **OpenAI API**, **Anthropic** or **Other compatible service**, only when that service is authorized for the intended data; or
+- **Run with Heartwood**, to download and serve model weights inside the Terra environment.
 
-On the qualified two-T4 configuration, Heartwood recommends **Qwen3 Coder 30B AWQ** and shows its resource, license, and download details before asking for confirmation.
-You can instead choose an advanced catalog entry for explicit evaluation or choose **Other Hugging Face model** and enter another public repository.
-Heartwood inspects its metadata and reports a clear unsupported-model error when the available runtime cannot serve it safely.
+On two T4 GPUs, Heartwood recommends **Qwen3 Coder 30B AWQ** and shows its resources, license and download size before asking.
+Other catalog entries and **Other Hugging Face model** are available for explicit evaluation; Heartwood reports an unsupported-model error when the runtime cannot serve a choice.
 
-Model download progress appears in the terminal and files persist under `.heartwood/models/`.
-Running `heartwood models download MODEL` is itself an explicit request to download that model; the guided `heartwood` flow presents the selected model and asks before downloading it.
-After the model is available in the project, Heartwood verifies every selected file before vLLM prepares GPU memory.
-Allow 10-15 minutes for a full verification on a Terra persistent disk and another 2-15 minutes for startup.
-Importing an existing model directory is a separate copy and integrity-verification operation; it needs another model-sized block of free space and can take considerably longer on a standard persistent disk.
-Heartwood reports the active stage, elapsed time, selected context capacity, and memory assessment while you wait.
+Download progress appears in the terminal, and files persist under `.heartwood/models/`.
+Before vLLM starts, Heartwood verifies every model file; allow 10-15 minutes for verification on a persistent disk and another 2-15 minutes for startup.
+Importing an existing model directory copies and verifies it, needs another model-sized block of free space and can take considerably longer.
 
-Use `heartwood --plain` when the full-screen terminal is not rendered correctly.
-See [Use the Terminal](../use/terminal.md) for conversations, grouped action review, replay, and audit export.
+Use `heartwood --plain` if the full-screen terminal does not render correctly, and see [Use the Terminal](../use/terminal.md) for the conversation and review workflow.
 
 ## Use the Notebook Bridge
 
-Create or open a notebook inside the same project directory and select the **Python 3 (Heartwood)** kernel.
-The default Terra Python kernel and the `python` command in a terminal may not contain the Heartwood packages; selecting the named kernel is required.
-
-Verify the boundary in the first cell:
+Open a notebook inside the project directory and select the **Python 3 (Heartwood)** kernel.
+The default Terra Python kernel does not contain the Heartwood packages.
 
 ```python
 from pathlib import Path
@@ -151,43 +120,36 @@ session = NotebookSession(session_id="terra-notebook-analysis")
 session.startup_plan()
 ```
 
-Use a distinct session identifier if the terminal is open at the same time.
-When a Heartwood-managed model is selected, keep the terminal process that supervises the model running while the notebook submits requests.
-
-Follow [Use Heartwood From a Notebook](../use/notebooks.md) to inspect readiness, submit a task, review a grouped action set, and export the audit record.
-The [downloadable Terra notebook](../assets/examples/terra-heartwood.ipynb) is an output-free synthetic starting point.
+Use a distinct session identifier while the terminal is open.
+With a Heartwood-managed model, keep the terminal process that supervises the model running while the notebook submits requests.
+Continue with [Use Heartwood From a Notebook](../use/notebooks.md); the [Terra notebook](../assets/examples/terra-heartwood.ipynb) is an output-free synthetic starting point.
 
 ## Try a Bounded Synthetic Task
-
-Start with a request that names the allowed files, expected result, and verification:
 
 ```text
 Inspect the synthetic analysis files in this project. Summarize the cohort inclusion and exclusion rules, run only the existing synthetic validation command, and report the aggregate participant count. Do not access parent directories or network resources, and do not export row-level data.
 ```
 
-Review every proposed operation before allowing the grouped action set.
-Inspect the resulting files and command output independently; an agent response is not scientific validation.
+Review every proposed operation before allowing the action set, and check the resulting files and output yourself; an agent response is not scientific validation.
 
 ## Preserve Results and Stop Compute
 
-Exit Heartwood with `/exit`.
-Save project files on the persistent disk and copy durable results to workspace storage according to the research workflow.
-Pause or delete the Cloud Environment when finished and decide whether the persistent disk should remain.
-
-Terra charges can continue for retained resources.
-Deleting the persistent disk removes `.heartwood/` and project files stored only there.
+Exit Heartwood with `/exit`, copy durable results to workspace storage, and pause or delete the Cloud Environment when finished.
+Retained resources continue to incur charges.
+Deleting the persistent disk deletes `.heartwood/` and any project files stored only there.
 
 ## Troubleshooting Terra
 
-- If Jupyter returns **404**, open Jupyter from the Terra workspace rather than using a guessed host path.
-- If creation fails with `ZONE_RESOURCE_POOL_EXHAUSTED`, the requested Google Cloud resources are temporarily unavailable in Terra's default zone; the container has not started. Delete only the failed Cloud Environment, retain its persistent disk, and retry later. Terra also documents an [advanced Swagger API procedure](https://support.terra.bio/hc/en-us/articles/4403307463067-How-to-create-a-custom-Cloud-Environment-with-the-Swagger-API) for selecting another zone; use it only when you are comfortable creating and tracking a Cloud Environment outside the standard form.
-- If a Heartwood browser URL returns **401** or **404**, use the terminal or notebook interface; browser access is not supported on Terra.
-- If `import heartwood` fails in a notebook, switch the notebook kernel to **Python 3 (Heartwood)** and restart the kernel.
-- If a model download stops, rerun Heartwood from the same project; completed files in the private partial snapshot are reused and the model is published into `.heartwood/models/` only after full verification.
-- If Heartwood reports insufficient persistent storage, run `df -h /home/jupyter`, retain needed files, and recreate only the Cloud Environment with a larger disk.
-- If model startup is slow or fails, compare the printed model plan with attached RAM, GPU memory, and persistent-disk space, then inspect `.heartwood/logs/local-model.log` from the same project.
-- If Heartwood reports an unsupported P4, P100, or V100, delete and recreate the Cloud Environment with a T4 while retaining the persistent disk; do not replace the released vLLM or PyTorch packages in place.
-- If the GPU is not detected, confirm that the GPU image and GPU were selected together, then run `nvidia-smi` and `heartwood doctor` from the project terminal.
-- If Terra rejects the image during auto-detection, confirm that the tag ends in `-terra` or `-terra-gpu-nvidia`; these tags use the single-platform manifest format required by Terra's Leonardo service.
-- If `heartwood --version` does not match the requested image tag, replace the Cloud Environment while retaining the persistent disk; resuming an existing environment does not update its image.
-- Run `heartwood doctor` for stable `HW-TERRA-*` recovery guidance.
+- If Jupyter returns 404, open Jupyter from the Terra workspace rather than a guessed URL.
+- If creation fails with `ZONE_RESOURCE_POOL_EXHAUSTED`, the requested resources are unavailable in Terra's default zone and the container did not start. Delete only the failed Cloud Environment, keep the disk, and retry later; Terra's [Swagger API procedure](https://support.terra.bio/hc/en-us/articles/4403307463067-How-to-create-a-custom-Cloud-Environment-with-the-Swagger-API) can select another zone.
+- If a Heartwood browser URL returns 401 or 404, use the terminal or notebook; the browser interface is not supported on Terra.
+- If `import heartwood` fails in a notebook, switch to the **Python 3 (Heartwood)** kernel and restart it.
+- If a model download stops, rerun Heartwood from the same project; completed files are reused, and the model is published into `.heartwood/models/` only after full verification.
+- If Heartwood reports insufficient storage, run `df -h /home/jupyter`, keep needed files, and recreate only the Cloud Environment with a larger disk.
+- If model startup is slow or fails, compare the printed model plan with the attached RAM, GPU memory and disk, then inspect `.heartwood/logs/local-model.log`.
+- If Heartwood reports an unsupported P4, P100 or V100, recreate the Cloud Environment with T4 GPUs and keep the disk; do not replace the vLLM or PyTorch packages in place.
+- If the GPU is not detected, confirm that the GPU image and a GPU were selected together, then run `nvidia-smi` and `heartwood doctor`.
+- If Terra rejects the image during auto-detection, confirm that the tag ends in `-terra` or `-terra-gpu-nvidia`; only these tags use the single-platform manifest Terra accepts.
+- If `heartwood --version` does not match the tag, recreate the Cloud Environment and keep the disk; resuming an environment does not update its image.
+
+`heartwood doctor` reports `HW-TERRA-*` diagnostics with recovery steps.

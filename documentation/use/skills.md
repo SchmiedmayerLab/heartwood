@@ -6,18 +6,8 @@ SPDX-License-Identifier: MIT
 
 # Research Skills
 
-Skills give Heartwood reusable instructions, scripts, references, and supporting files for a research workflow.
-They use the Agent Skills format supported by OpenHands.
-
-Heartwood starts with a small set of reviewed Skills included in every release.
-Your research environment may also offer additional reviewed Skills from a signed catalog.
-Anything you install is active only for the current project.
-
-| Source | What the user sees |
-|---|---|
-| Heartwood release | **Bundled** Skills maintained with Heartwood |
-| Deployment catalog | **Available** Skills published as signed immutable packages by Heartwood or another configured operator |
-| Current project | **Local and unreviewed** packages added explicitly by a maintainer |
+A Skill gives the agent reusable instructions, scripts, and reference files for a research task, in the Agent Skills format that OpenHands supports.
+Every release includes a small set of reviewed Skills; a deployment can offer more from a signed catalog, and anything you install is active only in the current project.
 
 ## See What Is Available
 
@@ -25,19 +15,27 @@ Anything you install is active only for the current project.
 heartwood skills list
 ```
 
-The browser **Skills** view shows the same list and status.
+The browser **Skills** view shows the same list.
+Each entry has a source and a status:
 
-Entries are labeled as:
+| Source | Meaning |
+|---|---|
+| `bundled` | Included and reviewed with this Heartwood release |
+| catalog source ID | Offered as a signed, immutable package by a source the deployment configured |
+| `installed` | Installed in this project from a catalog or a local directory |
 
-- **Bundled:** included and reviewed with this Heartwood release.
-- **Available:** offered by a signed source configured by the deployment.
-- **Installed:** approved and stored for this project.
-- **Revoked:** withdrawn by its signed source and no longer available to the agent.
-- **Unsupported:** not compatible with the current platform.
+| Status | Meaning |
+|---|---|
+| `active` | Given to the agent |
+| `available` | Offered by a catalog and not installed |
+| `revoked` | Withdrawn by its signed source and no longer given to the agent |
+| `unsupported` | Not compatible with this platform; the reason is shown |
+
+The browser also labels each Skill as **Repository reviewed** or **Local and unreviewed**, and says whether the deployment approved it for controlled data.
 
 ## Add a Reviewed Skill
 
-Refresh the configured sources, then inspect a Skill before installing it:
+Refresh the configured sources, inspect the Skill, and install it:
 
 ```bash
 heartwood skills refresh
@@ -46,10 +44,10 @@ heartwood skills install SKILL_NAME
 ```
 
 Inspection shows the description, declared tools, network and data-access requirements, dataset types, download size, source, and exact content digest.
-The interactive install command shows the current revision again and asks before continuing.
-Installation refreshes the signed source again and stops if the content changes after that review.
+The install command shows the current revision again and asks before continuing; it refreshes the signed source once more and stops if the content changed after your review.
+In the browser, select the review button next to an available Skill.
 
-Non-interactive automation must supply the exact digest from inspection instead of approving whichever revision is current:
+Non-interactive automation must supply the digest from inspection instead of approving whichever revision is current:
 
 ```bash
 heartwood skills install SKILL_NAME \
@@ -57,33 +55,36 @@ heartwood skills install SKILL_NAME \
   --expected-tree-sha256 sha256:DIGEST_FROM_INSPECTION
 ```
 
-If more than one source is configured, add `--source SOURCE_ID` to `refresh`, `inspect`, or `install`.
+With more than one configured source, add `--source SOURCE_ID` to `refresh`, `inspect`, or `install`.
 
-## Add a Skill From This Environment
+## Add a Skill From This Project
 
-A maintainer may place a complete Agent Skill directory inside the current project.
-This is an advanced path because the content has not passed repository review:
+A maintainer can install a complete Agent Skill directory from inside the project.
+Its content has not passed repository review:
 
 ```bash
 heartwood skills inspect-local ./skills/my-skill
 heartwood skills install-local ./skills/my-skill
 ```
 
-Heartwood rejects paths outside the project or inside `.heartwood`, verifies and copies the complete directory without following links, binds approval to its exact digest, and labels it **Local and unreviewed** in every interface.
-Local installation uses the same interactive confirmation and digest-bound automation options as signed catalog installation.
+Heartwood rejects paths outside the project or inside `.heartwood/`, copies the complete directory without following links, binds the approval to its exact digest, and labels it **Local and unreviewed** in every interface.
+The same interactive confirmation and digest options apply.
 
-Remove an installed Skill with:
+## Remove a Skill
 
 ```bash
 heartwood skills remove SKILL_NAME
 ```
 
+Removal deactivates the Skill, records the change, and resets open sessions so they no longer use it.
+If unexpected files sit beside an installed Skill, Heartwood stops listing Skills and starting sessions until they are removed, and the error names the directory to clean up.
+
 ## What Approval Means
 
-Skill installation does not grant filesystem, network, credential, model, or platform permissions.
-OpenHands tools, the project boundary, action confirmation, process permissions, and deployment policy remain authoritative.
+Installing a Skill grants no file, network, credential, model, or platform permission.
+Action review, the project boundary, process permissions, and deployment policy still apply to everything the agent does with it.
 
-Repository review is also not controlled-data approval.
-Only a deployment can approve an exact Skill digest for controlled data, and the interface reports that decision separately.
+Repository review is not controlled-data approval.
+Only a deployment can approve an exact Skill digest for controlled data, and the interfaces report that decision separately.
 
-See [Skill Trust and Distribution](../architecture/skills.md) for the verification model and [Configuration and State](../reference/configuration.md#skill-source-registries) for deployment source configuration.
+See [Skill Trust and Distribution](../architecture/skills.md) for the verification model and [Configuration and State](../reference/configuration.md#skill-source-registries) for configuring sources.

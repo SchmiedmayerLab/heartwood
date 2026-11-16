@@ -6,328 +6,212 @@ SPDX-License-Identifier: MIT
 
 # Platform API and Access Requirements
 
-Heartwood provides research sessions, reviewed actions and audit records while the research platform retains authority over identity, data, compute, inference and spending.
-This guide specifies the APIs, access and deployment controls needed to integrate a platform such as Terra or Seven Bridges.
-It is intended for platform engineering, security and research-computing teams.
-The [Platform Contract](platform-contract.md) defines message semantics and failure behavior; the generated OpenAPI and schema bundle provide the machine-readable definitions.
+These are the APIs, access and deployment controls a platform team such as Terra or Seven Bridges provides to integrate Heartwood.
+The [Platform Contract](platform-contract.md) defines the message semantics, versioning and conformance checks behind each request.
 
 ## Select the Integration Scope
 
-Hosting, inference and access to research services are independent capabilities.
-An inference-only deployment does not require workflow submission, billing administration or a platform tool service.
-Start with a synthetic project and the smallest selected access scope.
+Hosting, isolated workers, inference and research services are independent capabilities; select only what the integration needs and start with a synthetic project.
 
-| Capability | What we request from the platform | Heartwood availability |
+| Capability | Requested from the platform | Heartwood status |
 |---|---|---|
-| Run the application | A supported application artifact, durable storage and an authenticated researcher route | Terminal, browser and notebook availability depend on the platform adapter |
-| Isolate complete workers | An outside sandbox control plane, protected canonical state, selected read-only inputs, bounded writable storage and enforced egress | Native reference adapter available; exact deployment qualification required |
-| Use approved inference | Authorized model discovery and an approved inference endpoint with streaming and native tool calls | Built-in connections and configured compatible services; deployment connection-manifest startup is unavailable |
-| Inspect research metadata | Authorized project, dataset, file and workflow descriptions | Draft service-discovery profile and offline conformance checks; no built-in platform metadata connector |
-| Execute research workflows | Native submission, status, results and cancellation APIs with independent authorization | Draft platform operation profile; optional trusted Python adapter boundary requires a platform-specific connector |
-| Estimate work and inspect budgets | Platform-owned estimates, observed spend and allocation constraints | Draft schemas only; no runtime budget integration or Heartwood billing cap |
+| Run the application | A release artifact, durable storage and an authenticated researcher route | Current; interfaces depend on the platform adapter |
+| Isolate complete workers | A Docker engine and sandbox gateway under operator control, protected state, selected read-only inputs, bounded writable storage and enforced egress | Current for the OpenShell Docker reference adapter; qualified only against the qualification-only gateway build |
+| Use approved inference | Authorized model discovery and an inference endpoint with streaming and native tool calls | Current through built-in and configured routes; connection-manifest startup unavailable |
+| Inspect research metadata | Authorized project, dataset, file and workflow descriptions | Draft profile and offline checks; no built-in connector |
+| Execute research workflows | Native submission, status, results and cancellation with independent authorization | Draft profile; the trusted Python [outside operation](platform-contract.md#outside-operation-admission) interface requires a platform-specific adapter |
+| Estimate work and inspect budgets | Platform-owned estimates, observed spend and allocation constraints | Draft schemas only |
 
-The service-access requests below specify an integration target, not an assertion that a Terra or Seven Bridges service connector is installed.
-A trusted Python embedding can bind an `ExternalActionAdapter` to an owned native worker and the existing action-review flow; see [Outside Operation Admission](platform-contract.md#outside-operation-admission).
-This extension is not installed by the built-in launchers and does not add gateway HTTP routes for adapter registration or operation proposals.
-The Terra image supports its documented terminal and notebook paths; it does not implement Terra workflow API orchestration.
-No built-in Seven Bridges adapter is advertised.
-Installation, schema conformance, live validation and institutional approval are separate evidence levels.
-
-## API Directions and Ownership
-
-| Direction | Interface | Authority |
-|---|---|---|
-| Researcher interface → Heartwood gateway | Generated gateway OpenAPI, server-sent events and WebSocket extension | Heartwood validates ingress, launch capability, commands and approvals |
-| Sandboxed worker → inference transport → provider | Existing provider API and model identity | Outside transport controls routing and credentials; provider controls account, model and tenant authorization |
-| Trusted service adapter → platform | Existing platform APIs, optionally exposed through the draft MCP integration profile | Platform authenticates each call and enforces project, dataset, compute and billing permissions |
-| Trusted launcher → sandbox infrastructure | Existing infrastructure control API | Operator owns admission, policy, runtime identity and observed revocation |
-| Trusted gateway → signer and records service | Authenticated checkpoint-signing interface and versioned object-storage API | Independent signer authorizes checkpoint publication; records service enforces scoped access and retention |
-
-The sandbox management API is not an agent tool or a researcher-facing Heartwood API.
-OpenShell control objects are specific to the reference adapter; a platform is not required to expose them as portable integration messages.
-Reuse supported platform APIs and identity mechanisms rather than adding a second scheduler, provider proxy or secret store.
-MCP can describe authorized tools; it does not replace native workflow semantics or create authorization.
+The service requests below describe an integration target; no Terra workflow or Seven Bridges connector is installed.
+The Terra image supports the documented terminal and notebook paths.
 
 ## Hosting and Researcher Access
 
-For a workspace deployment, provide one authorized research directory and persistent canonical state.
-For managed isolation, bind the state directory outside the research directory through an operator-owned deployment manifest and keep it inaccessible to workers.
-State storage must support native advisory locks and preserve the project UUID across restart and restore.
-An object-store mount is not sufficient merely because it exposes files.
-The `--deployment` manifest is accepted by `heartwood gateway serve` and the explicit `heartwood project migrate` and `heartwood project recover-migration` commands.
-Standalone terminal, notebook and other maintenance commands do not automatically consume it.
-Qualify the selected interface against the explicitly bound gateway.
+Provide one authorized research directory and persistent canonical state on storage with native advisory locks that preserves the project UUID across restart and restore; an object-store mount is not sufficient because it exposes files.
+For a managed project, bind state outside the research directory with an operator-owned [deployment manifest](../reference/configuration.md#deployment-manifest) and keep it inaccessible to workers.
+The manifest is read only by `heartwood gateway serve --deployment`, `heartwood project migrate` and `heartwood project recover-migration`; qualify each interface against the gateway it binds.
 
-Provide the following connection details without secret values:
+Provide, without secret values:
 
-- exact application artifact digest, supported architecture and execution mode;
-- research directory, external state location and operator responsible for their binding;
-- authenticated public origin, exact base path, proxy source ranges and TLS termination;
-- secret-manager reference or protected descriptor source for the gateway capability;
+- the artifact digest, architecture and execution shape;
+- the research directory, state location and the operator responsible for their binding;
+- the authenticated public origin, exact base path, proxy source ranges and TLS termination;
+- the secret-manager reference or protected descriptor source for the gateway capability;
 - gateway lifecycle, session expiry, backup and restoration arrangements; and
-- available interfaces and the synthetic environment used to qualify them.
+- the available interfaces and the synthetic environment used to qualify them.
 
-The proxy must authenticate and authorize the researcher, strip client-supplied forwarding and identity headers, and prevent direct access to the gateway.
-Use one gateway per researcher and project; Heartwood records one launching principal and does not verify individual users sharing that gateway.
-Native OpenID Connect verification and platform token exchange are not implemented by Heartwood.
-Use separate authenticated origins for mutually untrusted projects: different URL prefixes on one origin do not isolate browser storage from scripts on that origin.
-
-### Gateway API Contract
-
-The complete route inventory, methods, request and response schemas, status codes and security scheme are generated from the owning contracts in `gateway.openapi.json`.
-The [Gateway API reference](../reference/gateway-api.md) explains command bodies, approval targets, retry behavior, error handling and streaming clients.
-The following are the principal integration surfaces, relative to the configured gateway base path:
-
-| Surface | Implemented API | Purpose |
-|---|---|---|
-| Launch | `POST /launch` | Exchange a one-time launch token for a gateway capability |
-| Discovery | `GET /project/capabilities`, `GET /project/readiness`, `GET /project/startup` | Discover supported interfaces and the next valid setup step |
-| Sessions | `GET /sessions`, `POST /sessions`, `GET /sessions/{session_id}` | List, create and inspect sessions |
-| Commands | `POST /sessions/{session_id}/commands` | Submit typed command envelopes; handlers validate command-specific payloads |
-| Projection | `GET /sessions/{session_id}/projection` | Obtain the shared interface projection |
-| Replay | `GET /sessions/{session_id}/events?after=…` | Retrieve durable events and the projection after a known cursor |
-| Streaming | `GET /sessions/{session_id}/events/stream?after=…` | Receive server-sent event updates |
-| WebSocket | `/sessions/{session_id}/events` | Receive the same event/projection contract over a WebSocket |
-| Audit export | `GET /sessions/{session_id}/audit-export` | Obtain the content-minimized session audit export |
-
-Gateway HTTP API requests require `X-Heartwood-Capability` after ingress validation; `/launch` is the token exchange described by its own OpenAPI security entry.
-The operator can supply the capability through `--capability-fd`; environment delivery is rejected.
-Browser WebSockets authenticate in their first JSON frame within five seconds, or receive the capability header from the trusted proxy.
-Capability cookies are not accepted, and the gateway capability must never reach the worker.
-
-Proxies must support streaming without response buffering and WebSocket upgrades.
-Clients reconnect using the `after` query cursor; `Last-Event-ID` replay is not implemented.
-New requests during shutdown receive `503`, and WebSockets close with `1012`; reconnect to the replacement gateway using the retained cursor.
-Conflicting project maintenance or ownership can produce `409`; it is not permission to force a second writer.
-A successful HTTP exchange does not establish that an asynchronous research action completed.
-See the [transport and failure contract](platform-contract.md#generate-and-review-the-current-artifacts) for replay, command retry and validation limitations.
+The proxy authenticates and authorizes the researcher, strips client-supplied forwarding and identity headers, supports unbuffered streaming and WebSocket upgrades, and prevents direct access to the gateway.
+Use one gateway per researcher and project, and separate authenticated origins for mutually untrusted projects.
+Heartwood does not verify OpenID Connect identities or exchange platform tokens.
+The [Gateway API reference](../reference/gateway-api.md) and the generated `gateway.openapi.json` define every route.
 
 ## Inference Access
 
-For a compatible inference service, provide its exact API base URL, authenticated model-list endpoint and approved model identifiers.
-The model list must be restricted to the caller's authorized models.
-The minimum compatible-service profile requires Chat Completions, streaming and native tool calls; declare Responses support separately where available.
-Provider-specific routes retain their SDK-supported protocols.
+For a compatible inference service, provide the API base URL, the authenticated model-list endpoint and the approved model identifiers.
+The model list returns only the caller's authorized models.
+The minimum profile is Chat Completions with streaming and native tool calls; declare Responses support separately.
+State context and output limits, tool support, rate limits, quota behavior, permitted data classes, retention terms and region restrictions where known; missing declarations stay unknown.
 
-Supply model context and output limits, tool support, rate limits, quota behavior, supported data classes, retention terms and region restrictions where known.
-Missing declarations remain unknown; a model name or API-compatible response does not establish data eligibility.
-Heartwood's draft model-metadata schema supplements provider facts but is not consumed as a runtime model catalog.
-
-For isolated workers, the approved external inference transport holds the real credential and provides only a placeholder to the worker.
-The reference adapter reuses OpenShell inference transport; an institutional gateway can remain the provider endpoint behind it.
-Keep credentials out of project files, worker mounts, worker environments, command arguments and logs.
-Provision through the platform's secret manager or protected operator mechanism, with documented rotation and revocation.
-
-Enforce model and tenant restrictions at the destination or an existing authorized inference gateway.
-A network allowlist for a hostname does not constrain which account, model, project or request body a compromised worker uses there.
-Specify whether the credential authorizes one model or an explicitly approved model set and test rejected alternatives accordingly.
-Demonstrate revocation independently of key rotation, including existing connections and in-flight calls.
-
-Heartwood-managed local inference uses an owner-only Unix socket and process supervision, without a TCP fallback.
-It is a local launcher facility, not a worker-accessible platform service.
-Using local model compute for an isolated worker requires a separately authenticated outside route; the reference deployment does not automatically bridge the local socket into its inference transport.
+For isolated workers, the outside inference transport holds the real credential and gives the worker only a placeholder.
+The reference adapter uses the OpenShell inference transport; an institutional gateway can remain the provider endpoint behind it.
+Enforce model and tenant restrictions at the provider or an authorized inference gateway, because a hostname allowlist does not constrain which account, model or request a compromised worker sends there.
+State whether the credential authorizes one model or an approved set, and demonstrate revocation separately from rotation, including existing connections.
+A Heartwood-managed local model server is not reachable from an isolated worker; local compute for a worker needs a separately authenticated outside route.
 
 ## Research Service APIs and Permissions
 
-Select these capabilities individually; inspection does not imply permission to execute, export data or change membership.
-Credentials belong to the trusted outside adapter, with the platform checking the caller's effective permission on every request.
-Do not give raw platform credentials or unrestricted API tools to the sandboxed worker.
+Select each capability individually; inspection does not imply permission to execute, export or change membership.
+Credentials belong to the trusted outside adapter, and the platform checks the caller's permission on every request.
+Never give raw platform credentials or unrestricted API tools to a worker.
 
 | Capability | Required API behavior | Minimum access to request |
 |---|---|---|
-| Project discovery | Resolve an authorized project and its stable identifier | Read selected project metadata; no organization-wide enumeration requirement |
+| Project discovery | Resolve an authorized project and its stable identifier | Read selected project metadata |
 | Dataset and file discovery | Return identifiers, metadata, versions or checksums, and access restrictions | Read metadata for selected resources |
-| Input access | Resolve authorized content or scoped retrieval references | Read only the selected data; metadata permission alone is insufficient |
-| Workflow discovery | Retrieve immutable workflow/app revision, input schema and required resources | Read approved workflow definitions |
-| Submission | Submit the exact reviewed native request and return an operation identifier | Execute only in the selected project and authorized billing context |
-| Monitoring | Read authoritative status, outputs and permitted logs by operation identifier | Observe the authorized operation; log access remains data access |
-| Cancellation | Request cancellation and subsequently observe the terminal outcome | Cancel the authorized operation; no blanket project deletion permission |
-| Output publication | Write reviewed outputs to an authorized destination | Explicit destination-scoped write or export permission |
-| Budget observation | Return timestamped allocation and spending evidence, including unknown or delayed values | Read the relevant project allocation; no billing-administrator role by default |
+| Input access | Resolve authorized content or scoped retrieval references | Read only the selected data |
+| Workflow discovery | Retrieve the immutable workflow or app revision, input schema and resources | Read approved workflow definitions |
+| Submission | Submit the exact reviewed native request and return an operation identifier | Execute only in the selected project and billing context |
+| Monitoring | Read status, outputs and permitted logs by operation identifier | Observe the authorized operation |
+| Cancellation | Request cancellation and observe the terminal outcome | Cancel the authorized operation only |
+| Output publication | Write reviewed outputs to an authorized destination | Destination-scoped write or export permission |
+| Budget observation | Return timestamped allocation and spending, including unknown or delayed values | Read the relevant allocation; no billing-administrator role |
 
-For submission, retain the exact workflow revision, input references, effective limits, project and platform-owned billing binding in the reviewed proposal.
-Ask the platform which APIs provide idempotency keys or reliable lookup after a lost response; do not assume that a native POST is safe to retry.
-If acceptance is uncertain, reconcile using the native operation identity before any resubmission.
-Cancellation acknowledgment does not prove the operation stopped or that charges ceased.
-Data retrieval, logging and export can incur costs even when the API permission is read-only.
-
-An MCP service for these capabilities must describe its tools, input/output schemas, permission requirements and explicit `readOnlyHint`, `destructiveHint`, `idempotentHint` and `openWorldHint` annotations.
-These annotations are untrusted hints, not grants of authority.
-The [draft service and operation contract](platform-contract.md#platform-services) specifies review binding, asynchronous results and failure states.
-It does not require a platform to replace its existing native APIs or imply a working Heartwood MCP transport.
+State which APIs accept idempotency keys or support lookup after a lost response; a native POST is not assumed safe to retry.
+Cancellation acknowledgement does not prove that work or charges stopped, and data retrieval, logging and export can incur cost under read-only permissions.
+An MCP service for these capabilities follows the [service discovery profile](platform-contract.md#service-discovery).
 
 ### Terra
 
-Confirm the Terra deployment and cloud first; the workspace and workflow requirements here apply to the Google Cloud workspace integration.
-Use the platform's [API reference](https://api.firecloud.org/) to select the supported workspace, data-table, method-configuration and submission operations.
-Terra workflows use WDL and Cromwell; provide the approved workflow revision and its configured inputs rather than a new execution format. See [Terra workflow execution](https://support.terra.bio/hc/en-us/articles/360036379771-Overview-Running-workflows-in-Terra).
+These requirements apply to the Google Cloud Terra workspace integration; confirm the deployment and cloud first.
+Terra workflows use WDL and Cromwell; provide the approved workflow revision and configured inputs. See [Terra workflow execution](https://support.terra.bio/hc/en-us/articles/360036379771-Overview-Running-workflows-in-Terra).
 
-Request a synthetic workspace identifier, authorized principal and a declared permission set.
-Terra separates Reader, Writer and Owner roles from the ability to compute: request Reader for inspection, and Writer with Can-compute for workflow or interactive-compute launch.
-Writer also permits changes to workspace tables and workflow configurations; it is broader than submission-only access, so use a dedicated integration workspace when that additional authority is unacceptable in a shared workspace.
-Owner and sharing permissions are not baseline integration requirements.
-Workspace charges use its Terra billing project; even some read/copy operations can incur transfer costs. See [Terra workspace access controls](https://support.terra.bio/hc/en-us/articles/360025851892-Sharing-data-and-tools-with-workspace-access-controls).
+Request a synthetic workspace, an authorized principal and a declared permission set.
+Request Reader for inspection, and Writer with Can-compute for workflow or interactive-compute launch.
+Writer also permits changes to workspace tables and method configurations; use a dedicated integration workspace when that authority is unacceptable.
+Owner and sharing permissions are not required.
+Workspace charges use its Terra billing project, and some read or copy operations incur transfer costs. See [Terra workspace access controls](https://support.terra.bio/hc/en-us/articles/360025851892-Sharing-data-and-tools-with-workspace-access-controls).
 
-The public [Terra API specification](https://api.firecloud.org/) defines these workspace routes, relative to `/api/workspaces/{workspaceNamespace}/{workspaceName}`:
+The [Terra API specification](https://api.firecloud.org/) defines these routes relative to `/api/workspaces/{workspaceNamespace}/{workspaceName}`:
 
-| Operation | Native method and relative path | Requested access |
+| Operation | Native method and path | Requested access |
 |---|---|---|
 | Inspect data-table types | `GET /entities` | Selected workspace metadata |
 | Inspect workflow configurations | `GET /methodconfigs` | Approved configuration metadata |
 | Inspect submission history | `GET /submissions` | Authorized workflow history |
-| Submit the reviewed configuration | `POST /submissions` | Writer with Can-compute in the bound workspace |
+| Submit the reviewed configuration | `POST /submissions` | Writer with Can-compute |
 | Monitor the submission | `GET /submissions/{submissionId}` | Authorized submission state |
-| Read workflow execution metadata | `GET /submissions/{submissionId}/workflows/{workflowId}` | Authorized metadata; outputs may need separate storage access |
-| Request abort | `DELETE /submissions/{submissionId}` | Explicit abort permission; observe terminal status afterward |
+| Read workflow execution metadata | `GET /submissions/{submissionId}/workflows/{workflowId}` | Authorized metadata; outputs may need storage access |
+| Request abort | `DELETE /submissions/{submissionId}` | Abort permission; observe terminal status afterward |
 
-Confirm these operations and their exact permissions for the selected deployment, plus data-table changes if selected.
-Use the native specification for request bodies and version-specific validation; this list does not grant access or promise safe retries.
-Confirm bucket/object access and controlled-data entitlements independently of workspace metadata access.
-Terra Data Repository has a separate [API and authentication surface](https://support.terra.bio/hc/en-us/articles/4407244155931-How-to-authenticate-troubleshoot-Swagger-for-TDR); include it only when the selected datasets require it.
-Use an institution-approved user or service identity with the least privileges needed, following [Terra's service-account guidance](https://support.terra.bio/hc/en-us/articles/360031023592-Best-practices-for-using-service-accounts-in-Terra).
-Do not request unrestricted Google Cloud credentials or mount a researcher's cloud credential directory into a worker.
+Use the native specification for request bodies and validation.
+Confirm bucket and object access and controlled-data entitlements separately from workspace metadata access.
+Include the Terra Data Repository [API](https://support.terra.bio/hc/en-us/articles/4407244155931-How-to-authenticate-troubleshoot-Swagger-for-TDR) only when the selected datasets require it.
+Use a least-privilege user or service identity following [Terra's service-account guidance](https://support.terra.bio/hc/en-us/articles/360031023592-Best-practices-for-using-service-accounts-in-Terra), and never mount a researcher's cloud credential directory into a worker.
 
 ### Seven Bridges
 
-Confirm the specific deployment and regional API base before configuring access.
-The public Platform documents AWS US `https://api.sbgenomics.com/v2` and AWS EU `https://eu-api.sbgenomics.com/v2`; other hosted deployments require their own confirmed endpoint.
-Its API authenticates with `X-SBG-Auth-Token`; keep the token in the outside service adapter. See [Seven Bridges API overview](https://docs.sevenbridges.com/docs/the-api).
+Confirm the deployment and regional API base: the public Platform documents `https://api.sbgenomics.com/v2` (AWS US) and `https://eu-api.sbgenomics.com/v2` (AWS EU).
+The API authenticates with `X-SBG-Auth-Token`; keep the token in the outside adapter. See the [Seven Bridges API overview](https://docs.sevenbridges.com/docs/the-api).
 
-Request an existing synthetic project, its project identifier and approved app revision.
-Use native project, file and app APIs for discovery; file identifiers select inputs.
-For selected execution access, the native task lifecycle is:
+Request a synthetic project, its identifier and an approved app revision.
+Use the native project, file and app APIs for discovery; file identifiers select inputs.
+The task lifecycle is:
 
-| Operation | Native API, relative to the selected `/v2` base | Reference |
+| Operation | Native API relative to `/v2` | Reference |
 |---|---|---|
 | Create a draft task | `POST /tasks` | [Create a draft task](https://docs.sevenbridges.com/reference/create-a-new-task) |
 | Start the reviewed task | `POST /tasks/{task_id}/actions/run` | [API task workflow](https://docs.sevenbridges.com/docs/api-quickstart) |
 | Read status and outputs | `GET /tasks/{task_id}` | [Get task details](https://docs.sevenbridges.com/reference/get-details-of-a-task) |
 | Request cancellation | `POST /tasks/{task_id}/actions/abort` | [Abort a task](https://docs.sevenbridges.com/reference/abort-a-task) |
 
-Request Read for names, metadata and workflows; Copy is a separate permission for content access and downloads.
-Execute permits running workflows and aborting tasks; Write permits changes to files and workflows.
-Request only the selected capabilities and confirm endpoint-specific prerequisites with the operator.
-Admin, membership management and funding-source changes are not baseline requirements. See [Seven Bridges project permissions](https://docs.sevenbridges.com/docs/projects-and-members).
-These permissions apply at project scope; they are not per-file or per-task capabilities.
-Use a dedicated project and restricted outside adapter when the required authority must be narrower than the platform role.
-The platform retains the project billing binding; the worker must not select or modify it.
-Do not treat a file download URL or copied file as approval to export controlled data.
+Read covers names, metadata and workflows; Copy covers content access and downloads; Execute covers running and aborting tasks; Write covers changes to files and workflows.
+Admin, membership and funding-source permissions are not required. See [Seven Bridges project permissions](https://docs.sevenbridges.com/docs/projects-and-members).
+These permissions apply per project, so use a dedicated project when the required authority must be narrower than a platform role.
+The platform keeps the project billing binding, and a download URL or copied file is not approval to export controlled data.
 
 ## Audit and Records Access
 
-The platform's records service is a separate authority from research storage and workflow execution.
-Provide the signer endpoint, its authentication mechanism, approved deployment identifier, public verification keys and key-version identifiers, and the applicable retention policy.
-The implemented signer interface is `POST /v1/checkpoints/sign`, accepting `heartwood.audit-checkpoint-sign-request.v1` and returning `heartwood.audit-checkpoint-signature.v1` over authenticated HTTPS.
-It is an outside service interface, not a route on the Heartwood gateway.
-See [Audit Checkpoints and Retention](audit-checkpoints.md) for exact registry fields, algorithms and verification behavior.
+Provide the signer endpoint, its authentication mechanism, the approved deployment identifier, public verification keys with key versions, and the retention policy.
+The signer implements `POST /v1/checkpoints/sign` as described in [Audit and Records](platform-contract.md#audit-and-records); it is an outside service, not a gateway route.
 
-For independently retained evidence, identify the records destination, supported versioning and immutable-retention controls, authorized publishers and readers, and restoration procedure.
-Request these permissions separately:
+For managed evidence, also provide the records service origin, versioning and Object Lock retention, authorized publishers and readers, and the restore procedure, with these principals:
 
-| Principal | Required authority | Boundary |
+| Principal | Authority | Boundary |
 |---|---|---|
-| Trusted gateway | Stage candidate audit and experiment records, read retained history, and request signing for its bound scope | No checkpoint-ordinal publication, signing key, key administration or records-policy administration |
-| Signing service | Independently authorize the fixed scope, read candidates and complete retained history, sign and conditionally publish checkpoints | Private key stays in the service or its KMS/HSM; worker cannot invoke it; no retention bypass or deletion authority |
-| Independent verifier | Read retained versions, signatures and retention metadata | No write, signing or key-administration permission |
-| Worker | No signing or records-service authority | Neither credentials nor network access to these services |
+| Gateway | Stage candidate audit and experiment records, read retained history, request signing for its scope | No checkpoint publication, signing key or policy administration |
+| Signing service | Authorize the fixed scope, read candidates and retained history, sign and conditionally publish checkpoints | Private key stays in the service or its KMS or HSM; no retention bypass or deletion |
+| Independent verifier | Read retained versions, signatures and retention metadata | No write, signing or key administration |
+| Worker | None | No credentials for or network route to these services |
 
-The operator must confirm the platform-specific API actions that implement these roles; this is an access requirement, not a portable IAM policy or an automatically provisioned integration.
-For the implemented S3-compatible adapter, provide version listing, exact-version reads and retention metadata, with conditional writes limited to each identity's prefixes.
-The bucket must enforce versioning, COMPLIANCE retention and create-only publication independently of the client.
-The [records permissions contract](audit-checkpoints.md#records-permissions-and-retention) maps these operations to S3 permissions and identifies the required policy checks.
-An arbitrary signing endpoint that returns a valid signature is insufficient for managed evidence: the independently authorized service must retain the checkpoint before returning it.
-Retain the association between Heartwood project/session identifiers, platform operation identifiers, key versions and the independently stored records.
-Define how loss of signing, retention or external telemetry is detected and which work must stop; a local record or signed retention date alone does not prove outside collection or enforcement.
+[Records Permissions and Retention](audit-checkpoints.md#records-permissions-and-retention) maps these roles to S3 actions.
+A signing endpoint that returns a valid signature without retaining the checkpoint first does not satisfy managed evidence.
+Define how loss of signing, retention or telemetry is detected and which work stops.
 
 ## Worker and Sensitive-Data Controls
 
-The entire worker, including the model client, tools and subprocesses, belongs inside the externally enforced boundary.
-The trusted gateway retains policy, approvals and canonical records outside it.
-Task-relevant instructions and verified Skills are projected as content; signed authority records, signing keys, provider credentials and control-plane access are not task context.
-A signature on content proves only what its verification establishes; it does not authorize an action by the worker.
-
-Request mandatory filesystem and process controls, resource limits and default-deny network enforcement with exact approved routes.
-Qualification must test private and metadata addresses, alternate routes, redirects, peer workers, management endpoints and process inheritance as applicable to the selected infrastructure.
-The operator must be able to observe and revoke a worker independently of its messages and retain ownership while an outcome is uncertain.
-No Docker socket, infrastructure credential, broad research mount or canonical-state mount belongs inside the worker.
-The native reference adapter needs an operator-controlled Docker service; it does not require handing Docker administration to the researcher or agent.
+The complete worker, including its model client, tools and subprocesses, belongs inside the externally enforced boundary; the gateway keeps policy, approvals and canonical records outside it.
+Request mandatory filesystem and process controls, resource limits and default-deny networking with exact approved routes.
+Qualification must cover private and metadata addresses, alternate routes, redirects, peer workers, management endpoints and process inheritance on the selected infrastructure.
+No Docker socket, infrastructure credential, research-directory mount or state mount belongs in the worker.
+The reference adapter needs an operator-controlled Docker engine; it does not hand Docker administration to the researcher or agent.
 
 ### Gateway Behavior Behind Native Qualification
 
-Heartwood does not distribute a production sandbox gateway; the reference adapter uses the OpenShell gateway that the operator registers.
-Native qualification instead runs against a gateway built for qualification only, from the upstream source revision and the two patches recorded in `images/worker/candidate/gateway.json`.
-Its revocation and cleanup evidence depends on two behaviors of that build which the unmodified upstream release at the same revision does not provide:
+Heartwood does not distribute a production sandbox gateway.
+Native qualification runs against a gateway built only for qualification from the upstream OpenShell revision and the two patches recorded in `images/worker/candidate/gateway.json`.
+Its revocation and cleanup evidence depends on two behaviors of that build that the unmodified upstream release at the same revision lacks:
 
-- The Docker driver rejects deletion of a sandbox whose provisioning has not settled, instead of abandoning the provisioning task.
-  Without it, a container request already sent to Docker can produce a worker after the gateway reported the sandbox deleted and Heartwood recorded its absence.
-- An explicit delete of a sandbox that is already marked as deleting calls the driver again.
-  Without it, a failed deletion that the gateway could not roll back stays marked as deleting, later requests are acknowledged without cleanup, and revocation times out without evidence of absence.
+- The Docker driver rejects deletion of a sandbox whose provisioning has not settled, instead of abandoning the provisioning task; without it, a container request already sent to Docker can produce a worker after the gateway reported the sandbox deleted and Heartwood recorded its absence.
+- An explicit delete of a sandbox already marked as deleting calls the driver again; without it, a failed deletion stays marked as deleting, later requests are acknowledged without cleanup, and revocation times out without evidence of absence.
 
-An operator's gateway must provide both behaviors before qualification results for revocation or cleanup are applied to that deployment.
-The operator declares each gateway version covered by such evidence in the deployment manifest's `gateway_versions`; managed workers cannot be configured without it.
-Before it serves, launches a worker or reconciles a retained attempt, Heartwood reads the registered gateway's reported version through the `Health` API and stops with `HW-WORKER-001` unless it equals a declared value.
-This detects a gateway that was replaced or misregistered.
-It is not proof of behavior: the value is an operator declaration compared with the gateway's own report, and Heartwood does not test the deletion behavior of the registered gateway.
-The qualified build reports the `version` recorded in `gateway.json`, a local version that no upstream release uses, from `openshell-gateway --version` and from the gateway `Health` API.
-The `gateway_build` entry of the [qualification evidence](../architecture/testing.md#native-qualification-evidence) records the same version, source revision and binary digests.
-Compare the deployed gateway with that record, or repeat the native qualification against the deployed gateway and retain its evidence.
-A gateway that reports another version requires its own evidence for both behaviors; the published qualification does not cover it.
+A deployment's gateway must provide both behaviors before qualification results for revocation or cleanup apply to it.
+Declare each gateway version covered by such evidence in the manifest's `gateway_versions`; Heartwood stops with `HW-WORKER-001` when the gateway's `Health` API reports any other version.
+That check detects a replaced or misregistered gateway; it is not proof of behavior, because it compares a declaration with the gateway's own report.
+The qualification build reports `0.1.8+heartwood.2` from `openshell-gateway --version` and its `Health` API, and the `gateway_build` entry of the [qualification evidence](../architecture/testing.md#native-qualification-evidence) records its source revision and binary digests.
+Compare the deployed gateway with that record, or repeat native qualification against it and retain the evidence; a gateway that reports another version needs its own evidence for both behaviors.
 
-Sensitive-data use additionally requires institution-approved data eligibility, provider agreements, residency, retention, monitoring and output-release controls for the exact deployment.
-Heartwood provides selected-input staging and native read-only mounts, but not a complete quarantine or steward-approved release service.
-Signed checkpoint export does not establish immutable retention or continuity between checkpoints.
-Automatic externally anchored evidence uses the deployment manifest's `evidence` table with complete worker isolation, an approved signer registry and a separately authorized records identity.
-Provide the exact records service origin, scoped permissions, retention policy and credential source described in [managed evidence configuration](audit-checkpoints.md#configure-managed-evidence).
-Managed checkpoint creation requires a trusted integration with the bound gateway methods; there is no checkpoint-creation HTTP route, and the standalone audit CLI does not consume the deployment manifest.
-Required evidence mode blocks the reviewed action while signing or retained-history verification is unavailable.
-Buffered mode allows ordinary work during an eligible service outage with a visible evidence gap; outside operations and outside-result disclosure still require retained evidence.
-These limitations prevent treating a successful synthetic sandbox run as sensitive-data approval.
+### Sensitive Data
+
+Sensitive-data use requires institution-approved data eligibility, provider agreements, residency, retention, monitoring and output-release controls for the exact deployment.
+Heartwood provides selected-input staging and read-only mounts, not quarantine or steward-approved release.
+Managed evidence in `required` mode blocks a reviewed action while signing or retained-history verification is unavailable; `buffered` mode lets ordinary work continue with a visible gap, but outside operations and result releases still wait for retained evidence.
+A successful synthetic sandbox run is not sensitive-data approval.
 
 ## Information to Return
 
-A platform team can return the following non-secret configuration and supporting documentation:
-
 | Item | Requested information |
 |---|---|
-| Scope | Hosting, inference, metadata, workflow execution, output publication and budget capabilities selected independently |
+| Scope | Hosting, isolation, inference, metadata, workflow execution, output publication and budget capabilities, each selected independently |
 | Environment | Deployment, cloud, region, synthetic project identifier and technical contact |
-| Identity | Approved principal type, audience/scopes, project permissions, token lifetime, secret reference and revocation mechanism |
-| APIs | Base URLs, API/specification versions, selected operations, request limits, pagination, retry and error semantics |
-| Inference | Exact model identifiers and protocols, permitted model set, data eligibility, quota and retention terms |
-| Storage | Research/state locations, project identity binding, locking, backup/restore and input/output controls |
-| Network | Proxy origin/base path, gateway access restrictions, approved egress destinations and outside enforcement |
-| Compute | Supported worker architecture, isolation mechanism, control-plane owner, image policy and resource limits |
-| Operations | Workflow/app revisions, billing binding, status/cancellation behavior and lost-response reconciliation |
-| Records | Signer endpoint and identity, verification keys, retention destination and policy, publisher/verifier permissions and restore procedure |
-| Evidence | Synthetic test procedure, audit correlation, revocation checks, deployment limitations and institutional approval owner |
+| Identity | Principal type, audience and scopes, project permissions, token lifetime, secret reference and revocation mechanism |
+| APIs | Base URLs, specification versions, selected operations, request limits, pagination, retry and error semantics |
+| Inference | Model identifiers and protocols, permitted model set, data eligibility, quota and retention terms |
+| Storage | Research and state locations, project identity binding, locking, backup and restore, input and output controls |
+| Network | Proxy origin and base path, gateway access restrictions, approved egress and its enforcement |
+| Compute | Worker architecture, isolation mechanism, sandbox gateway version, image policy and resource limits |
+| Operations | Workflow or app revisions, billing binding, status and cancellation behavior, lost-response reconciliation |
+| Records | Signer endpoint and identity, verification keys, retention destination and policy, publisher and verifier permissions, restore procedure |
+| Evidence | Synthetic test procedure, audit correlation, revocation checks, known limitations and the institutional approval owner |
 
-Send identifiers and secret-manager references through the integration documentation; deliver credentials through the approved secret provisioning channel.
-Do not include real research data or credentials in API examples, tickets or qualification artifacts.
+Send identifiers and secret-manager references through the integration documentation and credentials through the approved secret channel.
+Never include real research data or credentials in examples, tickets or qualification artifacts.
 
 ## Contract Bundle and Acceptance
 
-Export the complete machine-readable bundle using the [canonical exporter](platform-contract.md#generate-and-review-the-current-artifacts).
-Distribute `contract.json`, `gateway.openapi.json`, all referenced schemas and the upstream provenance/license files together.
-Include this requirements guide, the [Gateway API reference](../reference/gateway-api.md) and the [Platform Contract](platform-contract.md), along with the exact application source revision or released artifact digest.
-The material is suitable for integration and access review; it is not an assertion that the described draft services are deployed.
-The index identifies artifact hashes and whether each document describes a current contract, a draft message or an unchanged upstream specification.
-The operator deployment manifest and native worker profile remain implementation-specific inputs documented in the [CLI reference](../reference/cli.md#operator-commands); they are not exported portable platform schemas.
+[Export the contract bundle](platform-contract.md#generate-and-review-the-current-artifacts) and distribute the complete directory with these requirements, the [Platform Contract](platform-contract.md), the [Gateway API reference](../reference/gateway-api.md) and the exact source revision or release digest.
+The bundle supports integration and access review; it does not assert that draft services are deployed.
 
-Validate captured model and service responses with the existing offline conformance helpers before testing authenticated transport.
-Then qualify the exact artifact in the synthetic environment: ingress rejection, permission denial, action-content binding, worker admission/revocation, inference authorization, persistence and restore, and safe handling of lost responses.
-Require both successful authorized operations and rejected unauthorized controls; a failed request alone can indicate a broken service rather than effective policy.
-Record the available capabilities and unresolved limitations against that deployment, following [Validate a Platform](platform-contract.md#validate-a-platform).
-
-For each selected capability, return both an authorized positive control and the corresponding rejected alternative:
+Check captured model and service responses with the [offline conformance checks](platform-contract.md#check-platform-service-responses), then qualify the artifact in the synthetic environment.
+For each selected capability, return an authorized control and its rejected alternative; a failed request alone can indicate a broken service rather than effective policy.
 
 | Capability | Authorized control | Rejected or interrupted control |
 |---|---|---|
-| Gateway access | Owning researcher reaches the declared route and reconnects to the event stream | Another principal, invalid capability, wrong origin or direct upstream connection cannot enter |
-| Inference | Approved model and identity complete a bounded synthetic tool call | Disallowed model or tenant, direct credential access and revoked worker route fail |
-| Data access | Selected synthetic input is readable through its approved staging route | Unselected resources, writes to read-only inputs and unauthorized export fail |
-| Workflow execution | Exact reviewed request yields a correlated native operation | Changed inputs or project, expired approval and replay with conflicting content fail; lost replies reconcile without resubmission |
-| Retained evidence | Independently authorized checkpoint is readable and verifies after restore | Wrong-scope signer requests, unauthorized publication, replacement or deletion fail; required-mode outage prevents dispatch |
-| Worker lifecycle | Outside controller admits and subsequently revokes the exact attempt | Worker cannot reach protected state or management authority; uncertain deletion does not release ownership |
+| Gateway access | The owning researcher reaches the declared route and reconnects to the event stream | Another principal, an invalid capability, a wrong origin or a direct upstream connection is refused |
+| Inference | The approved model and identity complete a bounded synthetic tool call | A disallowed model or tenant, direct credential access and a revoked worker route fail |
+| Data access | A selected synthetic input is readable through its staging route | Unselected resources, writes to read-only inputs and unauthorized export fail |
+| Workflow execution | The exact reviewed request yields a correlated native operation | Changed inputs or project, expired approval and conflicting replay fail; a lost reply reconciles without resubmission |
+| Retained evidence | An authorized checkpoint is readable and verifies after restore | Wrong-scope signing, unauthorized publication, replacement and deletion fail; a `required`-mode outage prevents dispatch |
+| Worker lifecycle | The outside controller admits and then revokes the exact attempt | The worker cannot reach protected state or management authority; uncertain deletion does not release ownership |
 
-For capabilities without a Heartwood runtime integration, platform-side evidence establishes the native service behavior only.
-It does not establish end-to-end Heartwood support.
+For capabilities without a Heartwood runtime integration, platform-side evidence establishes only the native service behavior.
+Record the result against the deployment following [Validate a Platform](platform-contract.md#validate-a-platform).

@@ -6,40 +6,42 @@ SPDX-License-Identifier: MIT
 
 # Product Boundaries
 
-Heartwood adds a researcher-oriented control plane around an OpenHands coding agent.
-It owns project setup, platform capabilities, model routing, action-review policy, Skills, session presentation, and audit evidence while reusing OpenHands for the conversation loop and coding tools.
-Heartwood does not fork the OpenHands agent loop or maintain a parallel coding-tool implementation.
+Heartwood is a research agent system built around an OpenHands coding agent.
+A gateway owns project state, policy, action review, outside authorization, records, and audit; the OpenHands agent worker proposes and runs actions, either in the gateway process or inside an OpenShell sandbox; terminal, browser, and notebook interfaces render one gateway contract.
+Heartwood reuses OpenHands for the conversation loop and coding tools and does not maintain a parallel agent loop or tool implementation.
+[System Architecture](system.md) describes the components and the trust boundary between them.
 
 ## In Scope
 
-- one current-directory research project and private state, with an explicit operator binding for protected external state;
-- terminal, browser, and notebook presentations over one gateway contract;
+- one current-directory research project with private state, locally in `.heartwood/` or in external state bound by an operator deployment manifest;
+- terminal, browser, and notebook interfaces over one gateway contract;
+- OpenHands conversations run locally or by a managed native worker in an OpenShell sandbox, with admitted, attempt-bound, budgeted worker traffic and revocation;
+- complete-set action review with gateway-decided review modes under an operator ceiling;
+- content-bound researcher authorization of outside operations and result releases;
+- persistent sessions, replay, tamper-evident audit export, and signed, retained audit checkpoints;
+- [reviewed research stages](../use/research-workflows.md) with independent artifact checks, [experiment records](experiments.md), task tracking, and bounded research specialists;
+- verified and explicitly installed [Skills](skills.md);
 - platform-aware model discovery and Heartwood-managed model planning;
-- OpenHands SDK conversations and tool execution, locally or through the explicitly selected native sandbox adapter;
-- OpenHands task tracking and bounded sequential research specialists;
-- [reviewed research stages](../use/research-workflows.md) with independent artifact checks and [experiment records](experiments.md);
-- grouped action review independent of model risk hints;
-- repository-verified and explicitly installed Skills;
-- persistent sessions, replay, and tamper-evident audit export;
-- generic, Terra, and Stanford Carina platform adapters; and
-- container, native, CI, and release artifacts.
+- generic, Terra, and Stanford Carina platform adapters and a versioned Heartwood–platform contract with offline conformance checks; and
+- container, native, worker, and qualification artifacts built from pinned inputs, with [native qualification](testing.md#native-qualification) evidence bound to a commit.
 
 ## Outside the Product Boundary
 
 Heartwood does not:
 
-- discover, authorize, or validate a real biomedical dataset automatically;
-- determine whether a provider or platform may process a particular data class;
-- replace operating-system, container, scheduler, or cloud isolation;
+- discover, authorize, or validate a real biomedical dataset;
+- determine whether a provider or platform may process a particular data class, or claim readiness for sensitive data;
+- replace operating-system, container, scheduler, or cloud isolation; the local backend runs tools with the researcher's identity and isolates nothing;
+- ship a production OpenShell gateway or outside-service adapter;
 - guarantee model output, code correctness, statistical validity, or reproducibility;
 - approve third-party Skills or model licenses on behalf of an institution;
 - provide a multi-user authentication service for the browser; or
-- independently approve individual tool calls when OpenHands supplies them as one confirmation callback.
+- approve individual tool calls separately when OpenHands supplies them as one action set.
 
 ## Design Principles
 
-1. **Reuse the agent platform.** OpenHands owns agent reasoning, conversation persistence hooks, and coding tools.
+1. **Reuse the agent platform.** OpenHands owns agent reasoning, conversation persistence, and coding tools.
 2. **One product contract.** Every interface uses the same gateway commands, events, configuration, and project state.
-3. **Make safe behavior visible.** Project, route, credential lifetime, action grouping, compute request, and recovery are explicit.
+3. **The gateway decides.** Worker output is data; approvals, outside effects, and records require the gateway's own admission and decisions.
 4. **Keep platform differences at the boundary.** Adapters define capabilities and policy without forking the workflow.
 5. **Prefer clean pre-1.0 contracts.** Superseded commands and state layouts are removed rather than maintained as parallel paths.

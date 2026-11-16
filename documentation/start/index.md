@@ -6,35 +6,35 @@ SPDX-License-Identifier: MIT
 
 # Your First Heartwood Project
 
-This guide takes you from an empty folder to a conversation in which you can review an agent action.
-Use synthetic or non-sensitive files for this first run.
+This guide goes from an empty folder to a conversation in which you review and allow an agent action.
+It uses a local launch, so Heartwood keeps its state in `.heartwood/` inside the folder.
+Use synthetic or non-sensitive files.
 
 ## Before You Begin
 
 You need:
 
-- a [supported Heartwood installation](install.md);
-- a terminal, which is an application for entering text commands;
-- a dedicated folder that Heartwood may read and modify; and
+- a [Heartwood installation](install.md);
+- a terminal, the application for entering text commands;
+- a new folder that Heartwood may read and modify; and
 - access to one model connection, or enough disk and memory for a model that Heartwood runs in the current environment.
 
-If you work in Terra or Stanford Carina, follow the [platform guide](../platforms/index.md) first because installation and access differ.
+On Terra or Stanford Carina, follow the [platform guide](../platforms/index.md) first; installation and storage differ there.
+If an operator runs Heartwood for you in a managed deployment, use the launch link and setup the operator provides; the installation and setup steps below apply to a local launch.
 
 ## Create a Project Folder
-
-Open a terminal and run:
 
 ```bash
 mkdir heartwood-first-project
 cd heartwood-first-project
 ```
 
-`mkdir` creates the folder.
-`cd` enters it, making it the current directory and therefore the Heartwood project.
+`mkdir` creates the folder and `cd` enters it.
+The current directory is the Heartwood project.
 
 !!! warning "Choose the boundary carefully"
-    Heartwood may work with files in this folder and its subfolders.
-    Do not start Heartwood from your home directory, a shared storage root, or another folder that contains unrelated files.
+    Heartwood works with files in this folder and its subfolders.
+    Do not start it from your home directory, a shared storage root, or a folder that contains unrelated files.
 
 ## Check the Environment
 
@@ -42,8 +42,8 @@ cd heartwood-first-project
 heartwood doctor
 ```
 
-The command reports the project path, detected platform, and the next setup step without creating `.heartwood/` or changing project files.
-On a new project, **setup-required** is expected.
+The command reports the project path, the detected platform and the next setup step without creating `.heartwood/` or changing project files.
+On a new project it reports `Readiness: setup-required`.
 
 ## Start Heartwood
 
@@ -51,18 +51,17 @@ On a new project, **setup-required** is expected.
 heartwood
 ```
 
-Heartwood shows the resolved project path before it creates private project state.
-In an empty folder, choose **Add the synthetic first example** to add two small synthetic CSV files under `data/`, or choose **Use this project** to keep the folder unchanged.
-
-Heartwood then lists only the model connections available in the detected environment.
+Heartwood shows the resolved project path before it creates any state.
+In an empty folder, choose **Add the synthetic first example** to add two small synthetic CSV files under `data/`, or **Use this project** to keep the folder unchanged.
 
 ### Choose a Model Connection
 
-Choose a connection, select a model returned by that service, and provide a credential only when the selected route requires one.
-**Sign in with ChatGPT** uses a Plus or Pro account and a one-time browser code; **OpenAI API**, **Anthropic**, and **Stanford AI API Gateway** use API keys.
+Heartwood lists the model connections that the detected platform permits.
+Choose one, select a model returned by that service, and enter a credential only when the route requires one.
+**Sign in with ChatGPT** uses a Plus or Pro account and a one-time browser code; **OpenAI API**, **Anthropic** and **Stanford AI API Gateway** use API keys.
 
-For a Heartwood-managed model, Heartwood shows a small set of recommendations and an **Other Hugging Face model** option.
-It displays the model format, license metadata, download size, runtime, and resource guidance before downloading.
+For **Run with Heartwood**, Heartwood shows its recommendations and an **Other Hugging Face model** option, with the model format, license, download size, runtime and resource guidance, before anything is downloaded.
+See [Models](../models/index.md) for the differences between routes.
 
 ## Ask for a Bounded Task
 
@@ -72,18 +71,18 @@ If you added the synthetic example, enter:
 Inspect the CSV files under data. Summarize their columns and row counts in a new file named summary.md. Do not access files outside this project.
 ```
 
-Heartwood displays activity while the model works.
-When the agent proposes one or more related actions, Heartwood presents them as one set with the tool, risk, and relevant arguments for each member.
+Heartwood shows activity while the model works.
+When the agent proposes one or more related actions, Heartwood presents them as one action set, with the tool, risk and relevant arguments of each member.
 
 ## Review the Action Set
 
-Inspect every proposed action.
-Use the arrow keys to allow the complete set once or reject it, then press Enter.
-In the plain terminal, enter `/allow` or `/reject`.
+A local launch starts in **Review Every Action**, so every action set waits for you.
+Inspect each proposed command and file operation, then choose **Reject** or **Allow Once** for the complete set.
+In the plain terminal (`heartwood --plain`), enter `/allow` or `/reject`.
 
 ## Verify and Resume
 
-After allowing the expected action, inspect the project:
+After allowing the expected action, inspect the result:
 
 ```bash
 ls
@@ -91,13 +90,11 @@ cat summary.md
 ```
 
 Exit Heartwood with `/exit`, then run `heartwood` again from the same folder.
-The same project configuration and session history remain under `.heartwood/`.
-
-Use `/replay` to review the durable session events and `/audit-export` to create a scrubbed JSON Lines export.
+The project configuration and session history are still in `.heartwood/`.
+Use `/replay` to review the durable session events and `/audit-export` to write a scrubbed JSON Lines export.
 
 ## Next Steps
 
-- Learn the [core workflow](../use/index.md).
-- Choose between the [terminal](../use/terminal.md), [browser](../use/browser.md), and [notebook](../use/notebooks.md) interfaces.
-- Compare [model connections](../models/index.md).
 - Read [Projects and Private State](project.md) before adding real project files.
+- Learn the [core workflow](../use/index.md) and the [terminal](../use/terminal.md), [browser](../use/browser.md) and [notebook](../use/notebooks.md) interfaces.
+- Read [Actions and Audit History](../use/actions-audit.md) for review modes and what each one allows.

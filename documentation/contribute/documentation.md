@@ -67,4 +67,5 @@ uv run --group docs zensical build --clean --strict
 ```
 
 Strict mode checks links, anchors, references, and footnotes.
+Link to headings without em dashes or other punctuation so anchors are identical on GitHub and in the built site, and keep the troubleshooting headings that `diagnostic_catalog()` links to.
 Documentation contract tests also validate navigation, commands, release references, diagnostic routes, screenshot dimensions, and the absence of planning artifacts.

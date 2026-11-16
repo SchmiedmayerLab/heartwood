@@ -7,24 +7,28 @@ SPDX-License-Identifier: MIT
 # Use Heartwood on Stanford Carina
 
 Carina is a Stanford research-computing platform with project storage and Slurm-managed compute.
-Heartwood uses a native release installation, the terminal interface, an optional Stanford AI API Gateway connection, and vLLM on requested GPU compute for Heartwood-managed models.
+Heartwood runs there from a native installation in project storage, with the terminal interface, an optional Stanford AI API Gateway connection, and vLLM on requested GPU compute for Heartwood-managed models.
 
-Do not access protected health information while evaluating Heartwood unless the complete deployment, model route, project, and task are approved for that data.
+Do not access protected health information while evaluating Heartwood unless the complete deployment, model route, project and task are approved for that data.
+
+## Qualification
+
+The Carina installer and its installation layout are tested in CI with a simulated Slurm environment; the Carina adapter reports validation level `ci`.
+The two-L40S Muse Glimmer 30B BF16 configuration completed Heartwood's coding-agent qualification on Carina on 2026-08-14 with the pinned vLLM runtime listed in [GPU Compatibility](../reference/gpu-compatibility.md).
+A Carina launch is a local launch: `.heartwood/` state lives in the project directory and agent tools run with your account's permissions.
+The isolated worker deployment is not qualified on Carina.
 
 ## Before You Begin
 
 You need Carina access, the Stanford full-tunnel VPN, an authorized project directory, and enough project storage for the installation and any Heartwood-managed model.
-Follow Carina's current [connection guide](https://docs.carina.stanford.edu/connect); login nodes are resource-limited and intended for setup, file management, and job submission rather than inference.
+Follow Carina's [connection guide](https://docs.carina.stanford.edu/connect).
+Login nodes are resource-limited and meant for setup, file management and job submission, not inference.
 
-The guide below uses two sibling directories:
-
-- `heartwood-installation/` for the release executable and Python/vLLM environments; and
-- `heartwood-project/` for research files and `.heartwood/` state.
+The guide uses two sibling directories: `heartwood-installation/` for the release and its Python and vLLM environments, and `heartwood-project/` for research files and `.heartwood/` state.
 
 ## Enter Approved Project Storage
 
 Ask the project owner for the approved writable directory below `/projects`; its structure varies by allocation.
-Enter that directory, confirm that it is writable, and create private installation and project directories:
 
 ```bash
 cd /projects/APPROVED_PATH
@@ -33,8 +37,7 @@ df -h .
 mkdir -m 700 heartwood-installation heartwood-project
 ```
 
-Replace `APPROVED_PATH` with the path assigned to your group.
-Do not use a shared project root itself as the Heartwood project.
+Replace `APPROVED_PATH` with your group's path, and do not use a shared project root itself as the Heartwood project.
 
 ## Install the Release
 
@@ -47,14 +50,13 @@ chmod 700 heartwood-installer
 export PATH="$PWD/bin:$PATH"
 ```
 
-Where the GitHub CLI is available, `gh attestation verify heartwood-installer --repo SchmiedmayerLab/heartwood` confirms that the Heartwood release workflow built the installer.
-The version-stamped installer downloads the matching native archive, GPU runtime, and checksum, verifies them, checks storage, prevents concurrent updates to the same installation, and assembles a private source-and-runtime generation before making it current.
-The GPU runtime is mirrored as an immutable Heartwood release asset because Carina blocks the upstream vLLM wheel host; its digest remains pinned to the upstream artifact.
-When started on a login node, it moves the dependency installation into a bounded CPU-only Slurm allocation on the `dev` partition before loading micromamba and creating the environments.
-This avoids performing sustained dependency work on the login node; no GPU is requested for installation.
-Dependency resolution and the vLLM environment can take several minutes, and the installer reports the allocation, seven named stages, and elapsed time.
+Where the GitHub CLI is available, `gh attestation verify heartwood-installer --repo SchmiedmayerLab/heartwood` confirms that the release workflow built the installer.
+The installer downloads the matching native archive, the GPU runtime and their checksums, verifies them, checks storage, and assembles a private installation before making it current.
+The GPU runtime is mirrored as a release asset because Carina blocks the upstream vLLM wheel host; its digest is pinned to the upstream artifact.
+On a login node, the installer moves dependency installation into a CPU-only Slurm allocation on the `dev` partition; no GPU is requested.
+It reports the allocation, seven named stages and elapsed time, and can take several minutes.
 
-To keep the command available in a later shell, add the printed `bin` path through your normal shell configuration or export it again.
+Add the printed `bin` path to your shell configuration, or export it again in each new shell.
 
 ## Open the Project
 
@@ -64,107 +66,82 @@ heartwood doctor
 heartwood
 ```
 
-Heartwood detects Carina, uses this exact directory as the project, and creates `.heartwood/` only after confirmation.
-The first Heartwood command after installation can take tens of seconds while Python dependencies load from the installed runtime; keep waiting while the activity indicator is moving.
-Later commands should start more quickly.
-The supported Carina interaction surface is the terminal; the platform adapter does not advertise a Heartwood browser route.
+Heartwood detects Carina, uses this directory as the project, and creates `.heartwood/` only after you confirm.
+The first command after installation can take tens of seconds while Python dependencies load; later commands start faster.
+Carina offers the terminal interface only.
 
 ## Choose a Model Route
 
+Carina's policy permits two routes: **Stanford AI API Gateway** and **Run with Heartwood**.
+
 ### Stanford AI API Gateway
 
-Choose **Stanford AI API Gateway** when your project has an eligible gateway key and the route is approved for the intended data.
-Heartwood queries the gateway for available models and keeps an entered key only for the running process unless the deployment supplies a mounted secret binding.
-
-Stanford's [AI API Gateway service page](https://uit.stanford.edu/service/ai-api-gateway) describes current access, data-security status, rates, and support.
-Those current Stanford terms, not Heartwood platform detection, determine data eligibility.
+Choose **Stanford AI API Gateway** when your project has an eligible key and the route is approved for the intended data.
+Heartwood lists the models the gateway enables for that key and keeps an entered key only for the running process unless the deployment supplies a mounted secret.
+Stanford's [AI API Gateway service page](https://uit.stanford.edu/service/ai-api-gateway) states the current access, data-security status and rates; those terms, not Heartwood's platform detection, decide data eligibility.
 
 ### Heartwood-Managed GPU Model
 
-Choose **Run with Heartwood**, select a catalog model or another public Hugging Face repository, and review the download and resource plan.
-Model files are stored under the project's `.heartwood/models/`, not the installation directory.
-Model setup verifies every file before it persists the selection.
-On project storage, verification of a large existing cache can take several minutes even when no network download is needed.
-Start managed-model setup explicitly from the project directory:
+Start managed-model setup from the project directory:
 
 ```bash
 heartwood setup --model-source heartwood
 ```
 
-On a Carina login node, the installed wrapper moves this download and verification work into a bounded CPU Slurm allocation before Heartwood presents the model choices.
-It requests eight CPUs, 64 GiB RAM, and at most two hours on `dev` by default; set `HEARTWOOD_MODEL_PREPARATION_PARTITION` when the project requires another CPU partition.
-
-When you start Heartwood with a selected Heartwood-managed model, it inspects the GPU-capable Slurm partitions, available L40S count, GPU memory, CPU and RAM limits, existing model cache, and requested capability tier.
-It then prints the strongest compatible qualified model, expected download and startup range, and complete `srun` request.
-Heartwood asks separately before downloading weights and before allocating GPUs; it does neither silently.
-
-Carina 2.0 compute nodes provide eight NVIDIA L40S GPUs and 1.5 TB RAM, but the requested allocation should include only the resources the task needs.
-The current partitions are `dev`, `normal`, and `long`; all can provide GPUs, with different time limits described in the official [Slurm guide](https://docs.carina.stanford.edu/slurm-carina) and hardware described in [Carina Facts](https://docs.carina.stanford.edu/carina-facts).
-
-### Choose Carina Resources
-
-The following release-pinned configuration has completed the tool, approval, edit, replay, and audit qualification on Carina.
+On a login node, the installed command moves download and verification into a CPU Slurm allocation with 8 CPUs, 64 GiB RAM and a two-hour limit on `dev`; set `HEARTWOOD_MODEL_PREPARATION_PARTITION` to use another CPU partition.
+Select a catalog model or another public Hugging Face repository and review the download and resource plan.
+Model files are stored in `.heartwood/models/` in the project, not in the installation, and every file is verified before the selection is saved; on project storage, verifying a large existing cache can take several minutes.
+An approved `HF_TOKEN` can raise Hugging Face rate limits during the first download and is used only by the download.
 
 | Tier | Model Configuration | GPUs | Recommended RAM | Free Project Storage | Default Context | Estimated Runtime Startup |
 |---|---|---:|---:|---:|---:|---:|
-| Maximum capability, qualified | Muse Glimmer 30B BF16 | 2 x L40S | 128 GiB | 96 GiB | 32,768 | 5-20 minutes |
+| Maximum capability, qualified | Muse Glimmer 30B BF16 | 2 x L40S | 128 GB | 96 GB | 32,768 | 5-20 minutes |
 
-The qualified model downloads about 55.5 GiB.
-Runtime startup estimates apply after the model is available in `.heartwood/models/`.
-Complex agent turns can take several minutes even after startup; Heartwood keeps the elapsed-time indicator active while the model is working.
-An approved `HF_TOKEN` can improve Hugging Face rate limits during the first download and is used only by the download process.
-See [Choose a Heartwood-Managed Model](../models/choose-managed.md) for complete sizes and [GPU Compatibility](../reference/gpu-compatibility.md) for exact revisions and runtime settings.
+The model download is about 55.5 GiB, and the startup estimate applies once it is in `.heartwood/models/`.
+Complex agent turns can take several minutes after startup.
+See [Choose a Heartwood-Managed Model](../models/choose-managed.md) for the catalog.
 
-For a short interactive session, normal `heartwood` startup selects Slurm's default compatible GPU partition.
-On the current Carina configuration this is typically `dev` when `sinfo` marks it with `*`:
+### Start GPU Compute
 
-```bash
-heartwood
-```
+When you run `heartwood` with a managed model selected, Heartwood inspects the GPU-capable Slurm partitions, available L40S GPUs, memory limits and model cache.
+It prints the strongest compatible qualified configuration, the expected startup range and the complete `srun` request, and asks before downloading weights and again before allocating GPUs.
+Without a partition, Heartwood uses Slurm's default compatible GPU partition, usually `dev` on Carina.
 
-If no default GPU partition can be selected, inspect the plan and specify one through the advanced runtime command:
+If no default GPU partition can be selected, name one:
 
 ```bash
 heartwood runtime start --partition dev --time 01:00:00
 ```
 
-Preview a particular capability tier without downloading or allocating:
+Preview a capability tier without downloading or allocating:
 
 ```bash
 heartwood runtime start --task-profile maximum --dry-run
 ```
 
-This preview is a recommendation only.
-It does not select or download the model.
-Run `heartwood` and complete model setup before using `heartwood runtime start` without `--dry-run`; Heartwood otherwise stops before requesting an allocation.
+The preview neither selects nor downloads a model; complete setup before running `heartwood runtime start` without `--dry-run`.
+`--task-profile` accepts `auto`, `standard`, `powerful` or `maximum`, and `--gpus` must match a GPU count at which a catalog configuration was qualified.
+For scripted deployment, `--yes-download` and `--yes-request-allocation` are separate approvals; interactive use should keep both prompts.
 
-`auto` considers the **Maximum capability** tier on Carina and recommends only a qualified configuration that fits an available allocation.
-Use `--task-profile standard`, `powerful`, or `maximum` when the task has a known resource envelope.
-The `--gpus` option is an advanced constraint and must match a catalog configuration that was qualified at that tensor-parallel size.
-
-Heartwood scopes model caches to the project, waits up to ten minutes by default, and reports the current stage and elapsed startup time every 15 seconds.
-For multi-GPU Carina allocations, Heartwood's secured vLLM launcher applies the conservative NCCL communication fallback automatically; users should not set NCCL or custom-all-reduce options manually.
-The installer reports completion only after temporary installation state and locks have been removed.
-For scripted deployment, `--yes-download` and `--yes-request-allocation` are separate explicit approvals; normal interactive use should retain both prompts.
+Heartwood waits up to ten minutes for the runtime (`--startup-timeout`, in seconds) and reports the elapsed time every 15 seconds.
+For multi-GPU allocations, Heartwood's vLLM launcher applies the NCCL communication fallback itself; do not set NCCL or custom all-reduce options manually.
+The Carina 2.0 nodes, partitions and their time limits are described in Carina's [Slurm guide](https://docs.carina.stanford.edu/slurm-carina) and [Carina Facts](https://docs.carina.stanford.edu/carina-facts).
 
 ## Review, Exit, and Return
 
-Use the terminal workflow normally.
-Action sets are displayed together and resolved with `/allow` or `/reject`; internal confirmation identifiers do not need to be copied.
-
+Use the [terminal workflow](../use/terminal.md); action sets wait for **Allow Once** or **Reject**, or `/allow` and `/reject` in the plain terminal.
 Exit with `/exit`.
-The interactive Slurm allocation and supervised vLLM process end with the Heartwood process, while the project, model files, sessions, and audit records remain in project storage.
+The interactive Slurm allocation and the supervised vLLM process end with Heartwood; the project, model files, sessions and audit records remain in project storage.
 
 ## Troubleshooting Carina
 
-- If a command disappears or is killed on a login node, stop and use Slurm for the compute work; Carina documents strict login-node limits.
-- If the installer reports that its default `dev` partition is unavailable, inspect `sinfo --noheader --format='%P|%G|%a'` and retry with an available CPU partition, for example `HEARTWOOD_INSTALL_PARTITION=normal ./heartwood-installer --platform carina`.
-- If a partition is unavailable, run `sinfo --noheader --format='%P|%G|%a'` and choose one of the GPU-capable partitions Heartwood reports.
-- If Slurm reports `QOSMaxGRESPerUser` or `QOSMaxMemoryPerUser`, the account cannot request the planned GPU or RAM total; choose the strongest qualified lower tier or ask the Carina project owner to review the account limits.
-- If the requested model does not fit the available GPU count or memory, choose the strongest compatible lower tier instead of changing tensor parallelism or precision manually.
-- If startup reports a driver or CUDA incompatibility, retain the released CUDA 12.9 environment and report the detected driver; do not install CUDA 13 into the Heartwood runtime.
-- If a Hugging Face transfer is interrupted, rerun the same Heartwood command from the project directory.
-  The Carina installer uses the regular HTTP transfer path on shared project storage, and Heartwood reuses completed files from the private partial snapshot.
+- If a command disappears or is killed on a login node, stop and use Slurm for the compute work; Carina enforces strict login-node limits.
+- If the installer's `dev` partition is unavailable, inspect `sinfo --noheader --format='%P|%G|%a'` and retry with another CPU partition, for example `HEARTWOOD_INSTALL_PARTITION=normal ./heartwood-installer --platform carina`.
+- If a GPU partition is unavailable, run the same `sinfo` command and choose one of the GPU-capable partitions Heartwood reports.
+- If Slurm reports `QOSMaxGRESPerUser` or `QOSMaxMemoryPerUser`, the account cannot request the planned GPUs or RAM; ask the Carina project owner to review the account limits.
+- If the model does not fit the available GPUs or memory, do not change tensor parallelism or precision manually.
+- If startup reports a driver or CUDA incompatibility, keep the released CUDA 12.9 environment and report the detected driver; do not install CUDA 13 into the Heartwood runtime.
+- If a Hugging Face transfer is interrupted, rerun the same command from the project directory; completed files are reused.
 - If model startup fails, inspect `.heartwood/logs/` and the `HW-COMPUTE-*` checks from `heartwood doctor` without sharing project content or secrets.
-- If an interactive allocation disconnects, the process ends with the terminal; Carina recommends `tmux`, `screen`, or a batch job for work that must survive a connection loss.
-- Use Carina's [troubleshooting guide](https://docs.carina.stanford.edu/troubleshooting) for platform and Slurm failures.
+- If an interactive allocation disconnects, the process ends with the terminal; use `tmux`, `screen` or a batch job for work that must survive a connection loss.
+- For platform and Slurm failures, use Carina's [troubleshooting guide](https://docs.carina.stanford.edu/troubleshooting).

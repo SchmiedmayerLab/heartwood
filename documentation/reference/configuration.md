@@ -7,98 +7,234 @@ SPDX-License-Identifier: MIT
 # Configuration and State Reference
 
 Heartwood derives the project from the process current directory.
-Normal users do not set a Heartwood home, workspace, state root, model root, or session directory through environment variables.
+No environment variable selects a Heartwood home, workspace, state root, model root, or session directory.
 
-## Project Layout
+## Project State Layout
 
-The paths below describe local launches.
-With an [operator deployment](../start/project.md#operator-bound-external-state), replace the `.heartwood/` prefix with the external state directory bound by the manifest.
-The layout and owning stores remain the same; the research directory does not select that binding.
-`heartwood gateway serve --deployment` and the explicit `heartwood project migrate` and `recover-migration` commands consume this manifest.
-Ordinary local commands do not automatically select managed state.
-Canonical state is accessible to the trusted gateway and must not be mounted into a sandboxed worker.
+A local launch keeps project state in `.heartwood/` inside the research directory.
+`heartwood gateway serve --deployment` and `heartwood project migrate` and `recover-migration` instead use the `state_root` that the [deployment manifest](#deployment-manifest) binds; the layout below is the same.
+No other command selects the external state, and research-directory content cannot select or replace it.
 
 | Path | Contents |
 |---|---|
-| `.heartwood/config.toml` | Non-secret platform, model, action, policy, audit-signer profile, and Heartwood-managed model selection; the action-review mode is stored and read only in operator-bound external state |
-| `.heartwood/state.json` | State-schema marker |
-| `.heartwood/sessions/` | Session metadata, events, audit chains, exports, and OpenHands persistence |
-| `.heartwood/models/` | Downloaded or verified bundle-imported model artifacts and provenance |
-| `.heartwood/skills/` | Explicitly installed project Skills |
-| `.heartwood/audit/` | Project-level audit artifacts |
-| `.heartwood/runtime/` | Runtime process and readiness state |
-| `.heartwood/logs/` | Heartwood-managed inference and gateway diagnostics |
-| `.heartwood/cache/` | Project-scoped model and runtime caches |
+| `config.toml` | Non-secret project configuration; see [Project Configuration](#project-configuration) |
+| `state.json` | State-schema marker with the version of each persisted record type |
+| `sessions/` | Session metadata, events, audit chains, command receipts, recovery journals, and OpenHands persistence |
+| `models/` | Downloaded or bundle-imported model artifacts and their provenance |
+| `skills/` | Installed project Skills |
+| `audit/` | Project-level audit artifacts |
+| `runtime/` | Managed runtime process and readiness state, including `managed-inference.pending.json` |
+| `logs/` | Managed inference and gateway diagnostics |
+| `cache/` | Project-scoped model and runtime caches |
 
-Heartwood creates the state root and children with private filesystem permissions and rejects symbolic-link substitutions.
-The internal `.gitignore` excludes every state file from the surrounding Git repository.
-The state marker records the current versions of each independently persisted Heartwood envelope.
-Heartwood applies only registered deterministic forward migrations, under a process-shared native lock, and atomically replaces migrated metadata.
-Unknown versions and malformed records fail closed rather than being rewritten heuristically.
+Heartwood creates these with owner-only permissions and rejects symbolic-link substitutions.
+A `.gitignore` inside local `.heartwood/` excludes every state file from the surrounding Git repository.
+Heartwood applies only registered forward migrations, under a process-shared lock, and replaces migrated records atomically; unknown versions and malformed records fail closed.
+Lock files such as `.config.lock`, `.state.lock`, and each session's `.writer.lock` hold ownership; never delete them.
+Protected external state must never be mounted into an isolated worker.
 
-## Configuration Ownership
+## Project Configuration
 
-Use the CLI or browser settings rather than editing `config.toml` manually.
-Writes are validated, atomic, and protected by a project-scoped configuration lock.
+Change configuration through the CLI or browser settings, not by editing `config.toml`.
+Writes are validated, atomic, and serialized by `.config.lock`.
+The file never contains a raw credential.
 
-The file may contain endpoint URLs, model identifiers, credential binding names, policy settings, and artifact provenance.
-It must never contain raw credential values.
+| Key | Contents |
+|---|---|
+| `schema_version` | `heartwood.project-config.v2` |
+| `platform_id` | Detected platform: `generic`, `terra`, or `carina` |
+| `model_source` | Selected connection identifier, such as `heartwood` or `openai` |
+| `[action]` | Action-review selection; see [Action Review Settings](#action-review-settings) |
+| `[audit]` | Optional `signer_profile` approved by the deployment signer registry |
+| `[models]` | Non-secret model profiles and `active_profile` |
+| `[[connections]]` | Platform-provided model connections |
+| `[local_model]` | Selected Heartwood-managed model artifact with its path, source, license, runtime settings, and qualification record |
+| `[policy]` | Project policy; see [Policy Fields](#policy-fields) |
 
-### Audit Signer Selection
+Any other key is rejected.
+Select the audit signer with `heartwood audit signer select` or `default`; signer endpoints, keys, and tokens are never project configuration.
 
-The optional project audit setting contains only a profile approved by the active deployment registry:
+### Action Review Settings
 
 ```toml
-[audit]
-signer_profile = "stanford-records"
+[action]
+schema_version = "heartwood.action-settings.v1"
+review_mode = "review-changes"
 ```
 
-Use `heartwood audit signer list`, `select`, and `default` instead of editing this value directly.
-Signer endpoints, trusted keys, authorization tokens, and private keys are never project configuration.
+`review_mode` is `review-all`, `review-changes`, or `review-outside-effects`.
+When it is absent, sessions in an isolated worker use `review-outside-effects` and all other sessions use `review-all`.
+The effective mode is `review-all` whenever the selection is outside `allowed_action_review_modes`, needs an isolated worker the session does not have, or reduces review outside an isolated worker while the model credential is not isolated from the tool runtime.
+A stored `review_mode` that the effective ceiling no longer permits stops the project from loading until the selection is reset or the manifest permits it.
+
+The selection has one of two scopes, reported as `scope` by `GET /settings/actions` and `heartwood actions`:
+
+| Scope | Where the selection lives |
+|---|---|
+| `project` | `[action]` in the deployment's protected `config.toml`, shared by every interface and applied to the next action set |
+| `launch` | Gateway memory for a local launch; it ends with the process and `review_mode` is never written to `.heartwood/` |
+
+Outside operations and result releases always wait for the researcher, in every mode.
+
+### Policy Fields
+
+`[policy]` in `config.toml` and in the deployment manifest uses the `heartwood.policy-profile.v1` fields:
+
+| Field | Default | Meaning |
+|---|---|---|
+| `policy_id` | required | Policy identifier |
+| `platform_id` | required | Must equal the detected platform |
+| `deny_egress_by_default` | `true` | Must be `true` under a deployment manifest |
+| `allowed_model_endpoints` | `[]` | Exact model request endpoints |
+| `allowed_model_catalog_endpoints` | `[]` | Exact model catalog endpoints |
+| `allowed_capability_tiers` | `["supervised"]` | Any of `autonomous`, `supervised`, `experimental` |
+| `allowed_action_review_modes` | all three modes | Review-mode ceiling; must list `review-all` exactly once |
+| `credential_allowlist` | `[]` | Credential binding names the policy permits |
+| `aggregate_count_floor` | `20` | Minimum aggregate count; at least `20` |
+| `notes` | none | Free text |
+
+The built-in platform policies for local launches permit `review-all` and `review-changes`.
+Under a deployment manifest the project policy can only narrow the manifest's: endpoints, tiers, review modes, and credential names must be subsets, and the aggregate floor cannot be lower.
+The effective review ceiling is the intersection of the two lists; a project list equal to the manifest's is not stored, so a later manifest change applies.
+
+## Deployment Manifest
+
+An operator deployment manifest binds one research directory to protected external state, a policy ceiling, and optionally a managed worker and checkpoint evidence.
+Only a trusted launcher passes it, as `heartwood gateway serve --deployment PATH` or to the [migration commands](cli.md#project-state-migration).
+
+```toml
+schema_version = "heartwood.project-deployment.v1"
+project_id = "93d29ccd-6177-4817-9806-44ea579818c9"
+workspace = "/research/project"
+state_root = "/var/lib/heartwood/projects/93d29ccd-6177-4817-9806-44ea579818c9"
+
+[policy]
+policy_id = "deployment-models"
+platform_id = "generic"
+deny_egress_by_default = true
+allowed_model_endpoints = ["https://models.example.invalid/v1/chat/completions"]
+allowed_model_catalog_endpoints = ["https://models.example.invalid/v1/models"]
+allowed_capability_tiers = ["supervised"]
+allowed_action_review_modes = ["review-all"]
+credential_allowlist = ["HEARTWOOD_CUSTOM_MODEL_API_KEY"]
+aggregate_count_floor = 20
+```
+
+| Key | Requirement |
+|---|---|
+| `schema_version` | `heartwood.project-deployment.v1` |
+| `project_id` | Canonical lowercase UUID |
+| `workspace` | Exact research directory; Heartwood must be started from it |
+| `state_root` | Absolute protected state directory outside the research directory, whose final component is `project_id`; its parent must exist |
+| `[policy]` | Required; see [Policy Fields](#policy-fields) |
+| `[worker]` | Optional managed worker; see [Managed Worker](#managed-worker) |
+| `[evidence]` | Optional automatic checkpointing; requires `[worker]`; see [Configure Managed Evidence](../operate/audit-checkpoints.md#configure-managed-evidence) |
+
+Any other key, at any level, is rejected.
+The manifest must be an absolute path that traverses no symbolic link, lie outside the research directory and the state root, be a regular file of at most 64 KiB owned by root or the gateway user, and not be writable by group or others.
+Every parent directory of the manifest and of `state_root` must be owned by root or the gateway user and not be group- or world-writable, except a root-owned sticky directory such as `/tmp`.
+An omitted `allowed_action_review_modes` permits all three modes, which makes `review-outside-effects` the default for sessions in an isolated worker; list the modes explicitly.
+Credential names are references; credentials never belong in the manifest.
+See [Projects and Private State](../start/project.md#operator-bound-external-state) for the operator workflow.
+
+### Managed Worker
+
+The `[worker]` table runs each session's agent in an OpenShell sandbox through the Docker reference driver.
+Replace the example identities and digests with independently qualified values; the effective policy digest must not be learned from the worker whose admission it decides.
+
+```toml
+[worker]
+driver = "openshell-docker"
+gateway = "research-workers"
+gateway_versions = ["0.0.0+replace.with.qualified.version"]
+native_config_home = "/etc/heartwood/native"
+openshell_cli = "/opt/heartwood/bin/openshell"
+docker_cli = "/opt/heartwood/bin/docker"
+docker_host = "unix:///run/docker.sock"
+workspace = "research"
+image_digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+sandbox_policy_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+policy_path = "/etc/heartwood/native/worker-policy.json"
+policy_file_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+profile_id = "approved-research"
+model = "provider/approved-model"
+model_endpoint = "https://models.example.invalid/v1/chat/completions"
+provider = "approved-research"
+placeholder_env = "HEARTWOOD_CUSTOM_MODEL_API_KEY"
+cpu = "1"
+memory = "2Gi"
+
+[worker.inputs]
+schema_version = "heartwood.worker-inputs.v1"
+files = []
+```
+
+| Key | Requirement |
+|---|---|
+| `driver` | `openshell-docker` |
+| `gateway` | Name of the registered sandbox gateway |
+| `gateway_versions` | One to eight version strings the sandbox gateway may report and that qualification evidence covers |
+| `native_config_home` | Contains `openshell/gateways/<gateway>/metadata.json` and `mtls/ca.crt`, `mtls/tls.crt`, and an owner-only `mtls/tls.key` |
+| `openshell_cli`, `docker_cli` | Absolute executable paths |
+| `docker_host` | `unix://` path of the local Docker socket; no TCP endpoint is accepted |
+| `docker_socket_group` | Optional numeric group ID; required when the socket is group-writable |
+| `workspace` | Sandbox workspace name |
+| `image_digest` | `sha256:` digest of the qualified worker image |
+| `sandbox_policy_sha256` | Digest of the effective sandbox policy the gateway must observe |
+| `policy_path`, `policy_file_sha256` | Native sandbox-policy JSON file and the SHA-256 of its contents |
+| `profile_id`, `model`, `model_endpoint` | Must match the selected application model profile; the endpoint must be HTTPS and allowed by `[policy]` |
+| `provider` | Sandbox inference provider attachment name |
+| `placeholder_env` | Environment name under which the worker receives a credential placeholder, never the real credential |
+| `cpu`, `memory` | Resource limits such as `1` or `500m`, and `512Mi` or `2Gi` |
+| `[worker.inputs]` | Required, with `schema_version = "heartwood.worker-inputs.v1"`; `files` lists project files by `path`, `sha256`, and `size_bytes` to copy into the sandbox, at most 128 files, 16 MiB each and 64 MiB in total, and an empty list transfers none |
+
+`gateway`, `workspace`, and `provider` use lowercase letters, digits, and hyphens.
+Every path is absolute and canonical, outside the research directory and state root, and every native tool, configuration, policy file, and certificate is owned by root or the gateway user, not group- or world-writable, and singly linked.
+The socket must be owned by root or the gateway user and not world-writable; a group-writable socket needs `docker_socket_group`, and when that is set the socket's group must match it.
+Membership in the socket's group grants Docker control-plane authority; never add a worker identity to it.
+`gateway_versions` is a declaration checked against the sandbox gateway's own report, not evidence of how that gateway behaves; see [Gateway Behavior Behind Native Qualification](../operate/platform-requirements.md#gateway-behavior-behind-native-qualification).
+The inference endpoint must enforce approved models and tenant scope itself; the manifest adds no model router.
 
 ## Credential Binding Names
 
-Built-in provider profiles use environment-style names such as `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, and `STANFORD_AI_API_KEY`.
-The name identifies a secret source; it is not the secret.
-
-On a supported workstation, an explicitly remembered value is stored by the operating-system keyring under a project-scoped account.
-Local containers and platform adapters can use process entry, a mounted secret file or managed identity.
-A sandboxed worker instead receives the selected inference placeholder; real provider credentials and secret-source configuration remain outside its environment and mounts.
+Built-in connections use binding names such as `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `STANFORD_AI_API_KEY`, and `HEARTWOOD_CUSTOM_MODEL_API_KEY`.
+A binding name identifies a secret source; it is not the secret.
+On a workstation, a value saved with `--remember-credential` is stored in the operating-system keyring under a project-scoped account.
+Containers and platform adapters use process entry, a mounted secret file, or a managed identity.
+An isolated worker receives only the inference placeholder; real credentials and their sources stay outside its environment and mounts.
 
 ## ChatGPT Account State
 
-The **Sign in with ChatGPT** connection delegates OAuth, token storage, refresh, supported-model discovery, and request transport to OpenHands.
-OpenHands stores that account credential in its private user-level credential store, outside `.heartwood/`, so the account can be reused across projects for the same operating-system user.
-Heartwood project state retains non-secret connection and model-profile metadata, including the selected model; it does not retain the account credential.
-Disposable containers require an explicit private credential-directory mount to retain this state after the container exits.
-
-Run `heartwood models forget openai-subscription` or use **Sign out** in browser settings to remove the OpenHands credential.
+**Sign in with ChatGPT** delegates sign-in, token storage, refresh, model discovery, and request transport to OpenHands.
+OpenHands stores the account credential in its private per-user store outside project state, so one sign-in serves every project of the same operating-system user.
+Project state keeps only the non-secret connection and selected model.
+A disposable container needs a private credential-directory mount to keep the sign-in after it exits.
+Remove the credential with `heartwood models forget openai-subscription` or **Sign out** in browser settings.
 
 ## Deployment Environment
 
-Environment variables remain valid at platform boundaries for detection, provider-secret injection, Jupyter routing, scheduler identity, GPU visibility, and packaged runtime wiring.
-They are operator inputs rather than the normal researcher project-selection mechanism.
+Environment variables are operator inputs at platform boundaries: platform detection, provider credentials, Jupyter routing, scheduler identity, GPU visibility, and packaged runtime wiring.
+Never write real secret values into shell history or documentation.
 
-`HEARTWOOD_CHECKPOINT_SIGNER_REGISTRY` is an operator-only override for one absolute deployment registry path when the standard system location is unavailable.
-Heartwood otherwise checks `/etc/heartwood/checkpoint-signers.toml` and then the explicit workstation fallback at `~/.config/heartwood/checkpoint-signers.toml`.
-Registry scopes are not merged.
+| Variable | Effect |
+|---|---|
+| `HEARTWOOD_CHECKPOINT_SIGNER_REGISTRY` | Absolute path of the one checkpoint signer registry to use |
+| `HEARTWOOD_SKILL_SOURCES_FILE` | Absolute path of the one Skill source registry to use |
+| `HEARTWOOD_TERMINAL_ENV_ALLOWLIST` | Comma-separated extra variable names admitted into local agent terminals; see [Security and Controlled Data](../operate/security.md) |
+| `HEARTWOOD_REVIEW_QUALIFICATIONS` | Operator-owned retained review evidence; see [Parallel Reviews](../operate/parallel-reviews.md) |
+| `HEARTWOOD_GATEWAY_CAPABILITY` | Rejected; deliver the capability with [`--capability-fd`](cli.md#gateway-serve) |
 
-The gateway rejects `HEARTWOOD_GATEWAY_CAPABILITY` because initial process environments can expose credentials.
-Supply the operator capability through `heartwood gateway serve --capability-fd N` instead.
-The gateway consumes and closes the inherited file or pipe descriptor and prints no launch link; the proxy presents the secret in the `X-Heartwood-Capability` header.
-See the [operator command reference](cli.md#operator-commands) for descriptor limits and source protection.
+### Checkpoint Signer Registry
 
-Common examples include platform markers, `GOOGLE_PROJECT`, `CLUSTER_NAME`, Slurm variables, CUDA visibility, and provider credential bindings.
-Do not add these to shell history or documentation with real secret values.
+Heartwood reads exactly one registry: `HEARTWOOD_CHECKPOINT_SIGNER_REGISTRY` when set, otherwise `/etc/heartwood/checkpoint-signers.toml`, otherwise `heartwood/checkpoint-signers.toml` under `XDG_CONFIG_HOME` or `~/.config`.
+Registries are never merged.
+See [Audit Checkpoints and Retention](../operate/audit-checkpoints.md).
 
 ### Skill Source Registries
 
-Signed Skill sources are deployment configuration rather than project state.
-Heartwood checks `/etc/heartwood/skill-sources.toml` and then `~/.config/heartwood/skill-sources.toml`; the first existing registry is authoritative and registries are not merged.
-`HEARTWOOD_SKILL_SOURCES_FILE` may select one absolute registry path for packaged or test environments.
-The home registry and environment-selected registry may configure sources, but they cannot assert controlled-data approval.
-
-A connected source uses HTTPS endpoints and a separately provisioned TUF root:
+Signed Skill sources are deployment configuration, not project state.
+Heartwood reads exactly one registry: `HEARTWOOD_SKILL_SOURCES_FILE` when set, otherwise `/etc/heartwood/skill-sources.toml`, otherwise `~/.config/heartwood/skill-sources.toml`.
+Relative `trusted-root` and `repository` paths resolve against the registry's directory.
 
 ```toml
 schema_version = "heartwood.skill-sources.v1"
@@ -109,12 +245,6 @@ kind = "remote"
 trusted-root = "/etc/heartwood/trust/institution-skills-root.json"
 metadata-url = "https://skills.example.edu/metadata/"
 targets-url = "https://skills.example.edu/targets/"
-```
-
-An offline deployment points to a complete transferred repository:
-
-```toml
-schema_version = "heartwood.skill-sources.v1"
 
 [[sources]]
 id = "institution-offline"
@@ -123,13 +253,12 @@ trusted-root = "/approved-media/skills/metadata/1.root.json"
 repository = "/approved-media/skills"
 ```
 
-The trusted root must arrive through an independently trusted deployment channel.
-In a managed deployment, mount the source registry and trusted root read-only to the Heartwood process and keep the root outside Heartwood's writable TUF metadata cache.
-Mount a transferred offline repository read-only when the platform permits it.
-Remote URLs must use HTTPS and cannot contain credentials, query strings, or fragments.
-Heartwood verifies signatures, metadata versions and expiry, target length and digest, catalog policy, the complete archive manifest, and the extracted Agent Skill before installation.
+A `remote` source takes HTTPS `metadata-url` and `targets-url` without credentials, query, or fragment; an `offline` source takes a `repository` holding `metadata/` and `targets/`.
+`enabled = false` disables a source.
+The TUF trusted root must arrive through an independently trusted channel; mount it and the registry read-only, outside Heartwood's writable metadata cache.
+Heartwood verifies signatures, metadata versions and expiry, target length and digest, catalog policy, the archive manifest, and the extracted Agent Skill before installation.
 
-Only the deployment-owned `/etc/heartwood/skill-sources.toml` registry may declare optional controlled-data approval tied to exact tree digests:
+Only `/etc/heartwood/skill-sources.toml` may approve exact Skill trees for controlled data, per source:
 
 ```toml
 controlled-data-approved-digests = [
@@ -137,21 +266,19 @@ controlled-data-approved-digests = [
 ]
 ```
 
-Do not copy this example digest.
-Repository review alone never populates this list.
-An unrestricted marketplace, mutable branch, or unauthenticated archive URL is not a trusted Heartwood Skill source.
+Values are unique 64-character SHA-256 tree digests; a registry selected any other way that contains them is rejected.
+Do not copy the example digest, and do not populate the list from repository review alone.
+A marketplace, mutable branch, or unauthenticated archive URL is not a Heartwood Skill source.
 
 ## Concurrency
 
-Configuration updates are serialized across concurrent Heartwood processes.
-Each active session also has an enforced writer lease.
-Stop the process that owns a session before continuing it from another interface, or use separate session identifiers for simultaneous work.
-Do not delete internal lock, command-receipt, or recovery-journal files.
+Configuration updates are serialized across Heartwood processes.
+Each active session has one writer, enforced by an operating-system lock.
+Stop the process that owns a session before continuing it from another interface, or use another session identifier.
+Do not delete lock, command-receipt, or recovery-journal files.
 
 ## Audit Artifacts
 
-Session audit logs and generated exports remain private project state.
-An authoritative checkpoint, deployment signer registry, signer credential, private signing key, and independently trusted public key must resolve outside the project.
-Use deployment records storage for checkpoint retention; neither local `.heartwood/` nor operator-bound state is an authoritative archive.
-
-See [Audit Checkpoints and Retention](../operate/audit-checkpoints.md) for signing, verification, and key-management responsibilities.
+Session audit logs and exports are private project state.
+Authoritative checkpoints, signer registries, signer credentials, private keys, and independently trusted public keys belong outside the project.
+Neither `.heartwood/` nor protected external state is an authoritative archive; retain checkpoints in deployment records storage.

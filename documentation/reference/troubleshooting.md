@@ -13,8 +13,8 @@ Start with the content-safe readiness report:
 heartwood doctor
 ```
 
-Each warning or failure includes a stable `HW-*` code, plain-language title, next action, and documentation route.
-Use `heartwood doctor --json` when an administrator needs the structured report; review paths before sharing it.
+Each warning or failure carries a stable `HW-*` code, a title, a next action, and a link to its section here.
+`heartwood doctor --json` prints the structured report; it can contain project paths, so review it before sharing.
 
 ## How Diagnostic Codes Work
 
@@ -32,17 +32,16 @@ Codes use `HW-{AREA}-{NNN}`.
 | `WORKSPACE` | Read-only project file and change inspection |
 | `COMPUTE` | Scheduler allocation, GPU, memory, and scratch storage |
 | `TERRA` | Terra-specific project and compute requirements |
-| `ENV` | Conditions that cannot yet be classified more precisely |
+| `WORKER` | Managed worker sandbox gateway |
+| `ENV` | Readiness checks without a more specific code |
 
-Numbers from `001` through `899` are assigned sequentially within that area and are never reused for a different condition.
-Numbers from `900` through `999` are reserved for generic fallbacks when Heartwood cannot classify a condition more precisely.
-A gap can therefore represent a retired code rather than an omitted priority level.
-
-Warning and failure status is reported separately from the code, so a numeric suffix does not imply urgency.
+Numbers `001` to `899` are assigned in sequence within an area and never reused; `900` to `999` are generic fallbacks.
+A gap is a retired code.
+Warning or failure status is reported separately, so the number does not imply urgency.
 
 ## Project Storage
 
-### `HW-PROJECT-001` — Project Storage Is Unavailable
+### `HW-PROJECT-001`: Project Storage Is Unavailable
 
 Enter an existing writable directory dedicated to the analysis.
 Check the path and permissions:
@@ -55,44 +54,44 @@ ls -ld .
 On Terra, use a child directory below `/home/jupyter`.
 On Carina, use an approved writable project directory below `/projects`.
 
-### `HW-PROJECT-002` — Project Setup Needs Attention
+### `HW-PROJECT-002`: Project Setup Needs Attention
 
 Run `heartwood` from the intended project and confirm **Use this project**.
 If local `.heartwood/` already exists but has no valid state marker, preserve it and investigate its contents before any migration or replacement.
 For a managed deployment, have the operator verify the manifest, project UUID and external state path; do not delete markers or fall back to project-local state.
 
-### `HW-PROJECT-003` — Choose a Dedicated Project Directory
+### `HW-PROJECT-003`: Choose a Dedicated Project Directory
 
 Heartwood refuses a filesystem root or home directory because that boundary is too broad.
 Create and enter a child folder, then run `heartwood doctor` again.
 
 ## Configuration
 
-### `HW-SETUP-001` — Project Configuration Needs Attention
+### `HW-SETUP-001`: Project Configuration Needs Attention
 
 Run `heartwood setup` or open browser settings and choose a model connection.
 Do not repair `config.toml` by inserting a token or copying a profile from another platform.
 
-### `HW-SETUP-002` — Model and Policy Settings Do Not Agree
+### `HW-SETUP-002`: Model and Policy Settings Do Not Agree
 
 Open setup and select the intended model connection again.
 This regenerates the non-secret model profile and matching platform policy as one update.
 
 ## Models and Credentials
 
-### `HW-MODEL-001` — No Model Is Selected
+### `HW-MODEL-001`: No Model Is Selected
 
 Run `heartwood` and choose a model returned by an available connection.
 For Heartwood-managed inference, download or import the model before starting the agent.
 
-### `HW-CREDENTIAL-001` — Model Credential Is Unavailable
+### `HW-CREDENTIAL-001`: Model Credential Is Unavailable
 
 Reopen setup and enter the provider API key, or ask the platform operator how its secret binding is supplied.
 An operating-system keyring entry is project-scoped, so another project may correctly ask again.
 For **Sign in with ChatGPT**, repeat the one-time-code flow.
 If the account should no longer be used, run `heartwood models forget openai-subscription` before signing in with another account.
 
-### `HW-CREDENTIAL-002` — Model Credential Isolation Is Unavailable
+### `HW-CREDENTIAL-002`: Model Credential Isolation Is Unavailable
 
 The selected model uses a credential, but the active platform provides application scrubbing rather than a separate model-only credential boundary.
 Outside an isolated worker the session then reviews every action, and **Review Changes** is listed as unavailable with this reason.
@@ -102,7 +101,7 @@ Application scrubbing still keeps the credential out of supported tool inputs, p
 It does not isolate same-identity process memory or every operating-system resource.
 See [Security and Controlled Data](../operate/security.md#model-credential-isolation).
 
-### `HW-MODEL-002` — Heartwood-Managed Model Files Are Unavailable
+### `HW-MODEL-002`: Heartwood-Managed Model Files Are Unavailable
 
 Run:
 
@@ -127,114 +126,114 @@ For a runtime warning, install a compatible Heartwood release or choose a model 
 
 ## Agent Runtime
 
-### `HW-AGENT-001` — Agent Runtime Is Unavailable
+### `HW-AGENT-001`: Agent Runtime Is Unavailable
 
 The installed OpenHands dependency set cannot be loaded.
 Run `heartwood --version`, reinstall the same Heartwood release through its documented installation route, and rerun `heartwood doctor`.
 Model download, import, and inspection commands remain available so a broken agent runtime does not block project recovery.
 
-### `HW-AGENT-002` — An Agent Action Failed
+### `HW-AGENT-002`: An Agent Action Failed
 
 Heartwood received a failed action from the OpenHands runtime.
 Review the proposed action set and model connection in Activity & audit, then try the task again.
 Heartwood deliberately omits provider and project content from this diagnostic.
 
-### `HW-AGENT-003` — The Agent Conversation Stopped
+### `HW-AGENT-003`: The Agent Conversation Stopped
 
 OpenHands stopped the conversation before the task completed.
 Review Activity & audit, verify the model connection, and start the task again.
 
-### `HW-AGENT-004` — The Agent Worker Stopped
+### `HW-AGENT-004`: The Agent Worker Stopped
 
 The background OpenHands worker stopped unexpectedly.
 Run `heartwood doctor`, review Activity & audit, and try the task again.
 
-### `HW-AGENT-005` — The Agent Cannot Perform That Operation
+### `HW-AGENT-005`: The Agent Cannot Perform That Operation
 
 The requested operation does not match the conversation's current state.
 Review the active task or pending action set before trying the operation again.
 
-### `HW-AGENT-006` — An Approved Action Has an Unknown Outcome
+### `HW-AGENT-006`: An Approved Action Has an Unknown Outcome
 
 Heartwood stopped after an action was approved but before OpenHands recorded whether it completed.
 Do not approve or repeat the action blindly.
 Inspect the project files and Activity & audit, then continue in a new session once you understand the project state.
 
-### `HW-AGENT-007` — An Agent Turn Has an Unknown Outcome
+### `HW-AGENT-007`: An Agent Turn Has an Unknown Outcome
 
 Heartwood stopped during a model turn before OpenHands recorded a stable completion boundary.
 Do not repeat the task blindly because the provider may already have processed the request.
 Inspect the session replay and Activity & audit, then continue in a new session.
 
-### `HW-AGENT-008` — Model Provider Authentication Failed
+### `HW-AGENT-008`: Model Provider Authentication Failed
 
 The model provider rejected the credential configured for the active connection.
 Open model settings, update the credential through the supported secret mechanism, and validate the connection before retrying.
 
-### `HW-AGENT-009` — Model Provider Quota Exhausted
+### `HW-AGENT-009`: Model Provider Quota Exhausted
 
 The provider reported that the configured quota, credit, or budget is exhausted.
 Review the approved provider account or select another approved model connection before continuing.
 
-### `HW-AGENT-010` — Model Provider Rate Limited
+### `HW-AGENT-010`: Model Provider Rate Limited
 
 The provider temporarily limited requests.
 Wait briefly and retry the task without repeating any action whose outcome is unknown.
 
-### `HW-AGENT-011` — Model Configuration Is Invalid
+### `HW-AGENT-011`: Model Configuration Is Invalid
 
 The selected model, endpoint, or provider configuration cannot serve the requested task.
 Open model settings, correct the connection, and validate it before retrying.
 
-### `HW-AGENT-012` — Model Provider Is Unavailable
+### `HW-AGENT-012`: Model Provider Is Unavailable
 
 The configured model service could not be reached or returned a temporary availability failure.
 Check the connection and provider status, then retry the task.
 
-### `HW-AGENT-013` — Session Runtime Is Incompatible
+### `HW-AGENT-013`: Session Runtime Is Incompatible
 
 The session was saved by a different OpenHands SDK version and cannot be resumed without a supported migration.
 Keep its history and start a new session in the same project to continue working with the updated runtime.
 To resume the original conversation, use the Heartwood version that created it.
 Do not edit or delete the persistence marker to bypass this check; pending actions must not be replayed against an unqualified runtime.
 
-### `HW-AGENT-999` — The Agent Runtime Reported an Error
+### `HW-AGENT-999`: The Agent Runtime Reported an Error
 
 An execution backend returned an error without a more specific stable code.
 Review Activity & audit, run `heartwood doctor`, and try the task again.
 
 ## Project Inspection
 
-### `HW-WORKSPACE-001` — Project Path Is Invalid
+### `HW-WORKSPACE-001`: Project Path Is Invalid
 
 Use a normalized path relative to the current project.
 Do not use an absolute path, `..`, backslashes, repeated separators, control characters, or a trailing separator.
 
-### `HW-WORKSPACE-002` — Private Project State Is Not Available
+### `HW-WORKSPACE-002`: Private Project State Is Not Available
 
 The Files and Changes interfaces never expose `.heartwood/` or `.git/`, including nested directories with either name.
 Use the documented audit export or Git commands from a trusted terminal when you are authorized to inspect that state.
 
-### `HW-WORKSPACE-003` — Symbolic Link Inspection Is Not Available
+### `HW-WORKSPACE-003`: Symbolic Link Inspection Is Not Available
 
 Heartwood does not follow symbolic links through its read-only project API.
 Inspect the intended regular file through its project-relative path.
 
-### `HW-WORKSPACE-004` — Expected a Directory
+### `HW-WORKSPACE-004`: Expected a Directory
 
 Use `heartwood files show FILE` for a file or choose a directory for `heartwood files list`.
 
-### `HW-WORKSPACE-005` — Project Entry Is Unavailable
+### `HW-WORKSPACE-005`: Project Entry Is Unavailable
 
 The path does not exist or its metadata cannot be read.
 Confirm the spelling and project permissions, then retry from the same project directory.
 
-### `HW-WORKSPACE-006` — Requested Tree Depth Is Unsupported
+### `HW-WORKSPACE-006`: Requested Tree Depth Is Unsupported
 
 Choose a positive depth no greater than the limit reported by the workspace response.
 Omit `--depth` to use the default bounded depth.
 
-### `HW-WORKSPACE-007` — File Fingerprint Is Unavailable
+### `HW-WORKSPACE-007`: File Fingerprint Is Unavailable
 
 Use a regular project file, not a symbolic link, and wait for any process writing it to finish.
 The file must fit within the capture operation's byte limit.
@@ -242,31 +241,57 @@ Retry capture before relying on its digest as execution evidence.
 
 ## Managed Workers
 
-### `HW-WORKER-001` — Sandbox Gateway Version Is Not Declared as Qualified
+### `HW-WORKER-001`: Sandbox Gateway Version Is Not Declared as Qualified
 
-`heartwood gateway serve --deployment` read the version reported by the registered sandbox gateway, and it is not listed in the manifest's `gateway_versions`, or the version could not be read.
-Confirm that the gateway named in the manifest is running and reachable with its registered mutual TLS identity, and that it is the gateway your qualification evidence covers.
-If the gateway was upgraded or replaced, obtain evidence for the [behavior native qualification depends on](../operate/platform-requirements.md#gateway-behavior-behind-native-qualification) before adding its reported version to `gateway_versions`.
-Do not add a version only to make the check pass; the check compares your declaration with the gateway's own report and proves nothing about its behavior.
-The same condition after start stops the affected worker launch or reconciliation and leaves the attempt fenced.
+`heartwood gateway serve --deployment` could not read the version the registered sandbox gateway reports, or that version is not in the manifest's `gateway_versions`.
+Confirm that the gateway named in the manifest is running, reachable with its registered mutual TLS identity, and the one your qualification evidence covers.
+After an upgrade or replacement, obtain evidence for the [behavior native qualification depends on](../operate/platform-requirements.md#gateway-behavior-behind-native-qualification) before adding the reported version.
+Never add a version only to pass the check: it compares your declaration with the gateway's own report and proves nothing about its behavior.
+The same condition after start stops that worker launch or reconciliation and leaves the attempt fenced.
 
-A session whose earlier worker was stopped and revoked shows "A new worker replaced the earlier one" when its next task starts a replacement.
+### Managed Worker Control Is Unavailable
+
+`gateway serve` prints `Managed worker control is unavailable:` with the reason when the native tools, gateway registration, or protected state named by `[worker]` cannot be used.
+`deployment manifest is unavailable or invalid` and the other `deployment …` messages name the [manifest requirement](configuration.md#deployment-manifest) that failed, such as ownership, write protection, a symbolic link, a path inside the project, or a changed policy file digest.
+Correct the operator files; do not loosen their permissions or move them into the project.
+
+### Worker Revocation Was Not Observed
+
+At start, `gateway serve` reports `Worker revocation was not observed for session ID; its attempt remains fenced until the next gateway start.`
+The earlier worker may still be running.
+Confirm through OpenShell and Docker that its sandbox is gone or stop it there, then restart the gateway so reconciliation records the revocation.
+Do not delete the session's records or writer files to release it.
+
+### A Replacement Worker Started
+
+A session whose earlier worker was revoked shows "A new worker replaced the earlier one" when its next task starts a replacement.
 The replacement does not remember the earlier conversation and starts with an empty sandbox workspace; restate the context it needs.
-A session is refused instead when its earlier worker left a run, pause, action review or outside operation unsettled; inspect its record and continue in a new session.
+A session is refused instead while its earlier worker left an unsettled run, an unended pause, an action awaiting review, an unrecoverable outcome, or a non-terminal outside operation or result release; inspect its record and continue in a new session.
+
+## Action Review Mode
+
+`--review-mode`, `/permissions`, browser settings, and `PUT /settings/actions/review` refuse a mode for one of these reasons, shown with the mode:
+
+| Cause | Resolution |
+|---|---|
+| The mode is outside the deployment's `allowed_action_review_modes` | Only the operator can change the ceiling; in a local launch the built-in policy lists only `review-all` and `review-changes`, so `review-outside-effects` is reported as not permitted by the deployment's policy |
+| `review-outside-effects` without an admitted sandbox worker | Available only under a deployment manifest with a `[worker]` table; a local launch never runs one, so the mode is always unavailable there |
+| Reduced review outside a sandbox worker with a credential-backed model route | See [`HW-CREDENTIAL-002`](#hw-credential-002-model-credential-isolation-is-unavailable) |
+| A session is active and the selection asks less often than the current mode | Finish or resolve the active session work; a stricter mode is always accepted |
 
 ## Managed Compute
 
-### `HW-COMPUTE-001` — A Compute Allocation May Be Required
+### `HW-COMPUTE-001`: A Compute Allocation May Be Required
 
 On Carina, start `heartwood`, inspect the full Slurm request, and approve it only when the resources and duration are appropriate.
 Use `heartwood runtime start --dry-run` to inspect without allocating.
 
-### `HW-COMPUTE-002` — Allocation Scratch Storage Is Unavailable
+### `HW-COMPUTE-002`: Allocation Scratch Storage Is Unavailable
 
 Request an allocation that provides writable job scratch or use the platform's supported runtime path.
 Keep durable project and model state in approved project storage.
 
-### `HW-COMPUTE-003` — A Compatible GPU Is Unavailable
+### `HW-COMPUTE-003`: A Compatible GPU Is Unavailable
 
 Choose a hosted model, a GGUF CPU model, or GPU-enabled compute.
 For containers, verify the NVIDIA Container Toolkit and `--gpus all`; for Terra, select the GPU image and attach an NVIDIA GPU.
@@ -288,7 +313,7 @@ Do not remove the record while the process outcome is unknown; a surviving runti
 
 ## Terra
 
-### `HW-TERRA-001` — Choose a Dedicated Terra Project Directory
+### `HW-TERRA-001`: Choose a Dedicated Terra Project Directory
 
 ```bash
 mkdir -p /home/jupyter/heartwood-project
@@ -298,21 +323,21 @@ heartwood doctor
 
 Do not use `/home/jupyter` itself as the agent boundary.
 
-### `HW-TERRA-002` — Terra GPU Support Is Unavailable
+### `HW-TERRA-002`: Terra GPU Support Is Unavailable
 
 Use the `-terra-gpu-nvidia` image and attach supported GPU compute, or choose hosted inference.
 Delete and recreate the Cloud Environment with a T4 while retaining the persistent disk; Terra does not apply a changed image or GPU selection to an existing environment.
 
 ## Environment Fallback
 
-### `HW-ENV-999` — Environment Check Needs Attention
+### `HW-ENV-999`: Environment Check Needs Attention
 
 Heartwood encountered a readiness check that has no more specific public diagnostic.
 Run `heartwood doctor`, inspect the failed check and its next action, and include the structured `heartwood doctor --json` output in a synthetic issue report if the condition persists.
 
 ## Gateway Ingress
 
-### `HW-INGRESS-001` — Gateway Ingress Configuration Is Unsafe
+### `HW-INGRESS-001`: Gateway Ingress Configuration Is Unsafe
 
 The requested bind, origin, prefix, or proxy trust values do not form one safe route.
 Use the default loopback gateway for direct access.
@@ -321,7 +346,7 @@ For a Jupyter or trusted platform proxy, configure the exact browser-visible ori
 Do not solve this diagnostic by widening the bind or using a wildcard origin.
 See [Add a Platform](../operate/platform-integration.md#gateway-ingress).
 
-### `HW-INGRESS-002` — Gateway Request Does Not Match the Configured Route
+### `HW-INGRESS-002`: Gateway Request Does Not Match the Configured Route
 
 Use the exact URL supplied by the deployment.
 If the route is operator-managed, verify the upstream source address, external host and protocol, stripped or preserved prefix, HTTP and WebSocket origins, and complete forwarded-header set.
@@ -329,7 +354,7 @@ If the route is operator-managed, verify the upstream source address, external h
 The proxy must remove forwarding and identity headers supplied by the client before adding its own values.
 Do not disable host, origin, or path validation to make the request pass.
 
-### `HW-INGRESS-003` — Gateway Request Is Missing the Launch Capability
+### `HW-INGRESS-003`: Gateway Request Is Missing the Launch Capability
 
 The request reached the gateway route but did not carry the capability that `heartwood gateway serve` issued at startup.
 Open the launch link printed by the terminal that started Heartwood; it works once and authorizes that browser tab.
@@ -343,11 +368,11 @@ Do not share the link or the secret with other users or processes.
 
 If the browser page does not open:
 
-1. keep the launching terminal running;
-2. confirm `heartwood --interface web` reported ready;
-3. use the printed launch link, and start Heartwood again when the link was already used;
-4. check whether port `8767` is already in use; and
-5. run `heartwood doctor` from the same directory.
+1. Keep the launching terminal running.
+2. Confirm that `heartwood --interface web` reported ready.
+3. Use the printed launch link; when it was already used, start Heartwood again.
+4. Check whether port `8767` is in use, or start with another `--port`.
+5. Run `heartwood doctor` from the same directory.
 
 The browser interface is not supported on Terra or Stanford Carina.
 Use the terminal or the Terra notebook interface instead of constructing a proxy path.

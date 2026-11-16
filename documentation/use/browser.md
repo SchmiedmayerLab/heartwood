@@ -6,10 +6,8 @@ SPDX-License-Identifier: MIT
 
 # Use the Browser
 
-The browser interface presents conversations, action review, read-only project files and changes, model setup, Skills, activity, and audit export without introducing a separate backend or project state.
-It is available on workstations and in the generic container.
-Terra and Stanford Carina do not expose a supported Heartwood browser route.
-Use the terminal or notebook interface on Terra and the terminal interface on Stanford Carina.
+The browser interface is available on workstations and in the generic container.
+Terra and Stanford Carina do not expose a supported browser route; use the terminal or notebook on Terra and the terminal on Stanford Carina.
 
 ## Open the Interface
 
@@ -20,121 +18,93 @@ heartwood --interface web
 ```
 
 Keep the terminal process running and open the launch link Heartwood prints.
-The link works once and authorizes the browser tab for the running gateway, then the page continues at `http://127.0.0.1:8767/` on a workstation.
-Reloads in that tab retain access; restarting the gateway requires its new launch link.
-Opening a new launch link in an existing tab reloads the page and refreshes its access and session view.
-If the browser later reports **HW-INGRESS-003**, stop Heartwood with `Ctrl-C`, run it again, and open the new link.
+The link works once: it authorizes that browser tab for the running gateway, and the page continues at `http://127.0.0.1:8767/` on a workstation.
+Reloading the tab keeps access; after restarting Heartwood, open the new link it prints.
 
-![Heartwood browser interface showing a project conversation](../assets/screenshots/browser-conversation-light.png#gh-light-mode-only){ .theme-screenshot-light }
-![Heartwood browser interface showing a project conversation](../assets/screenshots/browser-conversation-dark.png#gh-dark-mode-only){ .theme-screenshot-dark }
+The page is read-only until you select **Use this project**.
+Setup then offers the model sources available in this environment, the models the selected service returns, and the credential handling the platform supports.
+See [Choose a Model](../models/index.md) for each source.
 
-## First Use
+![Heartwood browser interface showing a completed request with its approved actions](../assets/screenshots/browser-conversation-light.png#gh-light-mode-only){ .theme-screenshot-light }
+![Heartwood browser interface showing a completed request with its approved actions](../assets/screenshots/browser-conversation-dark.png#gh-dark-mode-only){ .theme-screenshot-dark }
 
-Opening the page is read-only until you select **Use this project**.
-The setup panel then presents model sources available in the detected environment, models returned by the selected service, and credential handling supported by the platform.
+## Send a Request and Review Its Actions
 
-The project, model selection, and action-review setting are shared with the terminal and notebook bridge.
-Provider API keys and subscription tokens are never stored in browser storage.
-The interface follows the operating-system appearance on first use and stores only an explicit light or dark preference in browser storage.
+Type a request in the composer and send it.
+The first browser conversation is the same **Main session** the terminal and notebook use by default; **New analysis** creates another persistent session.
 
-For **Sign in with ChatGPT**, select the connection and choose **Sign in with ChatGPT**.
-Open the displayed OpenAI page, enter the one-time code, and return to Heartwood.
-The page updates when OpenHands has stored the account credential; you can then load the supported model list and make a selection.
-Use **Sign out** in the same panel to remove the account from the OpenHands credential store.
+When the agent proposes actions, the review panel lists every member with its exact command or file operation, risk label, and summary.
+**Allow All Once** runs every listed action once; **Reject All** runs none of them.
+Keyboard focus moves to a new review and returns to the composer after your decision.
 
-If you download or import a model for Heartwood to run, wait for **Downloaded. Restart Heartwood to load this model.**
-Stop the launching command with `Ctrl-C`, then run `heartwood --interface web` again from the same project.
-Heartwood starts and supervises the selected model before reopening the page.
-Hosted and Stanford AI API Gateway connections do not require this restart.
+![Heartwood action review showing two proposed terminal commands and the Allow All Once and Reject All controls](../assets/screenshots/browser-action-review-light.png#gh-light-mode-only){ .theme-screenshot-light }
+![Heartwood action review showing two proposed terminal commands and the Allow All Once and Reject All controls](../assets/screenshots/browser-action-review-dark.png#gh-dark-mode-only){ .theme-screenshot-dark }
 
-For an offline destination, expand **Move a model between environments** in model settings.
-The browser can create or inspect a verified Heartwood model bundle at a path visible to the gateway, display license and platform warnings, and report import or export progress with cancellation.
-It uses the same project-local selection as the terminal; it does not upload or download the bundle through the browser.
-Follow [Move a Model Into an Offline Environment](../models/offline.md) for the complete transfer boundary.
+Completed actions appear under **Agent actions** with their state, exit status, bounded result, and the project paths a typed file operation changed.
+An action that Heartwood allowed under a review rule is marked as allowed automatically, with the rule.
+
+The current review mode is shown in the session header; select it, or open **Settings** and then **Action Review**, to change which actions Heartwood allows without asking.
+Unavailable modes are listed with the reason.
+See [Review Modes](actions-audit.md#review-modes).
+
+Where a deployment provides [outside operations](actions-audit.md#outside-operations-and-result-releases), each review of an operation or result release has its own heading and a marked panel that shows what would be sent and where, without opening a disclosure.
 
 ## Work With a Session
 
-The first browser conversation is the same **Main session** used by the terminal and notebook defaults. Choose a named session explicitly when you want a separate conversation.
-
-Heartwood offers at most two suggested next steps based on the current session state.
-Selecting one places its full request in the composer so you can review or edit it before sending.
-These suggestions come from the gateway and are the same ones shown by the terminal and notebook bridge; they do not infer scientific conclusions from project data.
-
-- Use **New analysis** to create another persistent session.
-- Enter requests in the composer after model readiness is confirmed.
-- Send additional guidance or pause while OpenHands is working.
-- Use **Files** to inspect the bounded project tree with read-only syntax highlighting.
-- Use **Changes** to inspect Git changes or session-attributed non-Git changes with read-only per-file diffs.
-- Open **Research** to set up a [research workflow](research-workflows.md), inspect stage evidence, and review its artifacts.
-- Expand **Project Experiment Records** in Research to inspect recorded workflow stages and scripts across the project, refresh their status, or export their provenance.
+- Send further guidance or pause while OpenHands is working.
+- Select one of up to two suggested next steps to place its full request in the composer for editing; suggestions come from the session state, not from project data.
 - Inspect task progress, model-call totals, and specialist status below the conversation.
-- Open **Activity & audit** to inspect route decisions, tool results, and errors.
-- Open **Skills** to inspect repository-verified and installed Skills.
-- Open **Specialists** to inspect the bounded research specialists available to the parent agent.
-- Select the current **Action review** value in the session header to choose which actions need your decision.
+- Open **Research** to run a [research workflow](research-workflows.md); **Project Experiment Records** there lists recorded workflow stages and scripts across the project.
+- Open **Specialists** to see the [research specialists](specialists.md) and **Skills** to see [Skills](skills.md).
+- Open **Activity & audit** for route decisions, tool results, and errors, and use **Export audit** to download the scrubbed [audit export](actions-audit.md#audit-export).
 - Use the appearance button in the session header to switch between light and dark mode.
-- Open **Settings** to change the selected model or [action-review mode](actions-audit.md#review-modes); modes the deployment does not permit are listed with the reason.
-- In **Agent actions**, an action that Heartwood allowed under a review rule is marked as allowed automatically with that rule.
-- Export the audit record from the session controls.
 
-The session header and conversation use the same gateway-owned states as the other interfaces, including ready, working, waiting for review, paused, complete, rejected, and recovery-required conditions.
-When a command cannot be applied, the browser presents a separate request notice without replacing the authoritative agent lifecycle.
-Task and specialist labels are shown in researcher-facing language; OpenHands identifiers remain available under **Technical details** when they are needed for diagnosis.
+Status labels are the same as in the other interfaces: ready, working, waiting for review, paused, complete, rejected, and recovery required.
+When a request cannot be applied, the browser shows a separate notice without changing the session state.
+OpenHands identifiers stay under **Technical details**.
 
-![Heartwood Specialists panel showing bounded research-review roles](../assets/screenshots/browser-specialists-light.png#gh-light-mode-only){ .theme-screenshot-light }
-![Heartwood Specialists panel showing bounded research-review roles](../assets/screenshots/browser-specialists-dark.png#gh-dark-mode-only){ .theme-screenshot-dark }
-
-When the parent delegates work, the OpenHands Task action appears in the normal grouped review flow.
-Heartwood runs one specialist at a time by default and shows its lifecycle and final result in the shared session projection.
-Supported workflow stages can offer explicitly authorized [parallel review](research-workflows.md#parallel-reviews) when the deployment has qualified it.
-See [Research Specialists](specialists.md) for the available roles and their boundaries.
-
-Agent responses support headings, lists, tables, quotations, links, inline code, and code blocks.
-Heartwood treats every response as untrusted content: raw HTML and unsafe links are removed, remote images are not loaded, invisible control characters are made visible, and very large responses are truncated for display.
-
-## Review an Action Set
-
-![Heartwood action review showing grouped proposed operations](../assets/screenshots/browser-action-review-light.png#gh-light-mode-only){ .theme-screenshot-light }
-![Heartwood action review showing grouped proposed operations](../assets/screenshots/browser-action-review-dark.png#gh-dark-mode-only){ .theme-screenshot-dark }
-
-The review panel lists all proposed members together with tool names, risk labels, summaries, and relevant arguments.
-One decision resolves the complete OpenHands action set: allowing runs every listed action once, while rejecting runs none of them.
-Completed action records show the correlated state, exit status, bounded result, and affected paths when OpenHands supplied reliable typed evidence.
-Keyboard focus moves to a newly proposed action set and returns to the task composer after the decision is resolved.
-
-A review of an [outside operation or result release](actions-audit.md#outside-operations-and-result-releases) has its own heading and a marked panel that shows what would be sent and where it goes without opening a disclosure.
+Responses support headings, lists, tables, quotations, links, and code.
+Heartwood treats every response as untrusted: raw HTML and unsafe links are removed, remote images are not loaded, invisible control characters are made visible, and very large responses are truncated for display.
 
 ## Inspect the Project
 
-The **Files** and **Changes** views are read-only.
-They never provide a second editing path around action review.
-Tree, file, changed-path, and diff responses have fixed depth, count, line, and byte limits; the interface labels truncated or unavailable content instead of silently omitting the condition.
+**Files** and **Changes** are read-only and never offer a way to edit around action review.
 
-![Heartwood Files view showing the bounded project tree and a syntax-highlighted result](../assets/screenshots/browser-files-light.png#gh-light-mode-only){ .theme-screenshot-light }
-![Heartwood Files view showing the bounded project tree and a syntax-highlighted result](../assets/screenshots/browser-files-dark.png#gh-dark-mode-only){ .theme-screenshot-dark }
+![Heartwood Files view showing the project tree and a syntax-highlighted file](../assets/screenshots/browser-files-light.png#gh-light-mode-only){ .theme-screenshot-light }
+![Heartwood Files view showing the project tree and a syntax-highlighted file](../assets/screenshots/browser-files-dark.png#gh-dark-mode-only){ .theme-screenshot-dark }
 
-Select a file to inspect its contents without leaving the session.
+Select a changed path to compare it with the Git baseline.
+In a project without Git, **Changes** shows only successful typed file-editor actions from the selected session; terminal command text is not treated as evidence of a change.
 
 ![Heartwood Changes view showing a Git-backed per-file diff](../assets/screenshots/browser-changes-light.png#gh-light-mode-only){ .theme-screenshot-light }
 ![Heartwood Changes view showing a Git-backed per-file diff](../assets/screenshots/browser-changes-dark.png#gh-dark-mode-only){ .theme-screenshot-dark }
 
-Select a changed path to compare its current contents with the Git baseline.
-When the project does not use Git, Heartwood instead shows changes that OpenHands reported through typed file-editor actions in the selected session.
+Both views exclude `.heartwood/` and `.git/` at every depth, refuse path traversal, symbolic links, special files, and non-UTF-8 text, and apply fixed depth, count, line, and byte limits.
+Truncated or unavailable content is labelled.
 
-Heartwood excludes `.heartwood/` and `.git/` at every depth and refuses path traversal, symbolic links, special files, and non-UTF-8 text.
-In a non-Git project, **Changes** includes only successful typed file-editor actions from the selected session.
-Terminal command text is not treated as authoritative file evidence.
+## Models That Need a Restart
+
+**Sign in with ChatGPT** shows a one-time code; enter it on the OpenAI page, return to Heartwood, and the page updates when the account credential is stored.
+**Sign out** in the same panel removes it.
+
+After downloading or importing a model for Heartwood to run, wait for **Downloaded. Restart Heartwood to load this model.**, stop the launching command with `Ctrl-C`, and run `heartwood --interface web` again.
+Hosted and Stanford AI API Gateway connections need no restart.
+For an offline destination, **Move a model between environments** in model settings creates or inspects a verified model bundle at a path the gateway can read; follow [Move a Model Into an Offline Environment](../models/offline.md).
+
+Provider API keys and subscription tokens are never stored in browser storage.
+The browser stores only an explicit light or dark preference.
 
 ## Keep the Interface Reachable
 
 Bind Heartwood to loopback unless a trusted authenticated proxy terminates access.
 The launch link authorizes one browser for the running gateway; other users on the machine cannot send commands or approve actions without it.
 It does not separate the gateway from commands that run as your own user, including approved agent commands, and your browser also sends it to other local servers on the same address, so open only local links you trust.
-The development server and generic container do not add user authentication by themselves.
-Platform operators must configure the typed ingress mode, exact origin, base path, and trusted source boundary rather than relying on forwarded headers implicitly.
-See [Security and Controlled Data](../operate/security.md#gateway-ingress).
+Operators configure the ingress mode, exact origin, base path, and trusted source boundary as described in [Security and Controlled Data](../operate/security.md#gateway-ingress).
 
-If the page loads but requests fail, keep the launching terminal open and run `heartwood doctor` in another terminal from the same project.
-If live updates are interrupted, the page first reconnects through the supported fallback transport without changing the command state.
-If both live transports stop, the saved conversation remains visible and the page provides **Reconnect**.
+| Problem | Next Step |
+|---|---|
+| The browser reports **HW-INGRESS-003** | Stop Heartwood with `Ctrl-C`, run it again, and open the new link |
+| The page loads but requests fail | Keep the launching terminal open and run `heartwood doctor` from the same project in another terminal |
+| Live updates stop | The page first falls back to another live transport; if both stop, the saved conversation stays visible and **Reconnect** appears |
+
 See [Diagnostics and Troubleshooting](../reference/troubleshooting.md#browser-access).
