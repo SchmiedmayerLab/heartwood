@@ -235,12 +235,9 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("resume", help="Resume the current session.")
     subparsers.add_parser("replay", help="Replay the persisted session event stream.")
 
-    actions = subparsers.add_parser("actions", help="Configure action review.")
-    action_subparsers = actions.add_subparsers(dest="actions_command", metavar="<actions-command>")
-    action_set = action_subparsers.add_parser(
-        "set", help="Select an action-review mode allowed by platform policy."
+    subparsers.add_parser(
+        "actions", help="Show the action-review mode and each mode this launch can use."
     )
-    action_set.add_argument("mode", choices=_REVIEW_MODE_CHOICES)
 
     configure_models(
         subparsers.add_parser(
@@ -564,7 +561,7 @@ def _main(argv: Sequence[str] | None = None) -> int:
         if args.command == "models":
             return _handle_models(parser, gateway, args)
         if args.command == "actions":
-            return _handle_actions(parser, gateway, args)
+            return _handle_actions(parser, gateway)
         if args.command == "skills":
             return _handle_skills(parser, gateway, args)
         if args.command == "specialists":
@@ -772,23 +769,10 @@ def _create_synthetic_example(project: ProjectContext) -> None:
     print("Added synthetic data under data/. No real research data was accessed.")
 
 
-def _handle_actions(
-    parser: argparse.ArgumentParser,
-    gateway: SessionGateway,
-    args: argparse.Namespace,
-) -> int:
-    """Show or update the action-review mode."""
+def _handle_actions(parser: argparse.ArgumentParser, gateway: SessionGateway) -> int:
+    """Show the action-review mode; it is selected at launch or in a running interface."""
     try:
-        if getattr(args, "actions_command", None) == "set":
-            if gateway.action_settings()["scope"] == "launch":
-                parser.error(
-                    "this project has no deployment manifest, so the review mode is not stored; "
-                    "select it in a running Heartwood interface with /permissions or in the "
-                    "browser settings"
-                )
-            settings = gateway.select_action_review_mode(args.mode)
-        else:
-            settings = gateway.action_settings()
+        settings = gateway.action_settings()
     except ActionSettingsError as error:
         parser.error(str(error))
     print(format_action_settings(settings))

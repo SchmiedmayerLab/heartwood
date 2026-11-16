@@ -382,3 +382,39 @@ def test_a_launch_selection_obeys_every_limit_and_leaves_the_project_untouched(
         assert gateway.action_settings()["review_mode"] == "review-changes"
     finally:
         gateway.stop()
+
+
+def _unavailable_reason(gateway: SessionGateway, mode: str) -> str | None:
+    return next(
+        option["unavailable_reason"]
+        for option in gateway.action_settings()["modes"]
+        if option["mode"] == mode
+    )
+
+
+def test_each_interface_learns_why_sandbox_review_is_unavailable(tmp_path: Path) -> None:
+    """A missing worker and a policy that forbids the mode are distinct, accurate reasons."""
+    for name in ("local", "managed", "forbidden"):
+        (tmp_path / name).mkdir()
+    local = SessionGateway(
+        project=ProjectContext(tmp_path / "local"), env={}, backend_id="deterministic"
+    )
+    without_workers = _managed_gateway(tmp_path / "managed", backend_id="deterministic")
+    forbidden = _managed_gateway(
+        tmp_path / "forbidden",
+        ceiling=_policy("review-all", "review-changes"),
+        workers=True,
+    )
+
+    needs_worker = _unavailable_reason(local, "review-outside-effects")
+    policy = _unavailable_reason(forbidden, "review-outside-effects")
+
+    # The built-in local policy omits the mode too, but the worker is what a researcher lacks.
+    assert needs_worker is not None
+    assert policy is not None
+    assert needs_worker != policy
+    assert _unavailable_reason(without_workers, "review-outside-effects") == needs_worker
+    with pytest.raises(ActionSettingsError) as refused:
+        local.select_action_review_mode("review-outside-effects")
+    assert str(refused.value) == needs_worker
+    assert _unavailable_reason(forbidden, "review-changes") is None
