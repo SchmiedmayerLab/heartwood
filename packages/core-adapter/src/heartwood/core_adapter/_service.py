@@ -276,6 +276,8 @@ class SessionService:
         # Sets this process sent; a live read can still show one pending before its step starts.
         self._sent_group_ids: set[str] = set()
         self._reappearance_checked = False
+        # Sets a reloaded conversation could show again, read from the journal once.
+        self._reappearance_candidates: frozenset[str] | None = None
         self.backend.bind_runtime(
             event_sink=self._accept_unbound_backend_events,
             token_sink=self._accept_unbound_backend_token,
@@ -2067,42 +2069,58 @@ class SessionService:
 
         A conversation reloaded after a stop during an approved step reports the state it
         last saved, which still shows the set as pending. The check ends with the first read
-        that shows a pending set; a set this service sent can also look pending until its
-        step starts and is not counted. A read that fails or reports nothing pending, which
-        is also the answer while a conversation cannot be opened, leaves the check for a
-        later recovery, and the decision guard refuses a second decision on the set
-        meanwhile. A session in an isolated worker is never checked: a restarted gateway
-        fences the worker and continues in a new conversation, and its read is remote.
+        of a readable conversation; a set this service sent can also look pending until its
+        step starts and is not counted. A failed read or an unreadable conversation leaves
+        the check for a later recovery, and the decision guard refuses a second decision on
+        the set meanwhile. A session in an isolated worker is never checked: only the owner
+        that launched its worker reads the worker's conversation, and a replacement worker
+        starts with an empty one.
         """
-        events = self.replay_events()
-        sent = {
-            group_id
-            for event in events
-            if event.kind in {EventKind.APPROVAL_RECORDED, EventKind.ACTION_DISPATCH_STARTED}
-            and isinstance((group_id := event.payload.get("group_id")), str)
-        }
-        if (
-            not sent
-            or current_worker_attempt(events) is not None
-            or any(
+        self._known_source_event_ids_locked()
+        if self._reappearance_candidates is None:
+            events = self.replay_events()
+            sent = frozenset(
+                group_id
+                for event in events
+                if event.kind in {EventKind.APPROVAL_RECORDED, EventKind.ACTION_DISPATCH_STARTED}
+                and isinstance((group_id := event.payload.get("group_id")), str)
+            )
+            if not sent or any(
                 event.kind == EventKind.ERROR_RECORDED
                 and backend_error_is_fatal(event.payload.get("code"))
                 for event in events
-            )
-        ):
+            ):
+                self._reappearance_checked = True
+                return ()
+            self._reappearance_candidates = sent
+        if self._worker_record is not None:
             self._reappearance_checked = True
             return ()
         try:
-            group = self.backend.pending_action_group(session_id=self.store.session_id)
+            readable = self.backend.conversation_readable(session_id=self.store.session_id)
+            group = (
+                self.backend.pending_action_group(session_id=self.store.session_id)
+                if readable
+                else None
+            )
         except Exception:
             return ()
         if group is None:
+            self._reappearance_checked = readable
             return ()
         self._reappearance_checked = True
         if (
-            group.group_id not in sent
+            group.group_id not in self._reappearance_candidates
             or group.group_id in self._sent_group_ids
             or not self._approval_handed_over(group.group_id)
+        ):
+            return ()
+        events = self.replay_events()
+        if any(
+            event.kind == EventKind.ERROR_RECORDED
+            and event.payload.get("code") == BackendErrorCode.ACTION_OUTCOME_UNKNOWN.value
+            and event.payload.get("group_id") == group.group_id
+            for event in events
         ):
             return ()
         command_id = next(

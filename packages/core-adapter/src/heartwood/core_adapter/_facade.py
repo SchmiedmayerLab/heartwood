@@ -445,6 +445,9 @@ class AgentBackend(Protocol):
     def pending_action_group(self, *, session_id: str) -> PendingActionGroup | None:
         """Return the atomic unmatched action group directly from backend state."""
 
+    def conversation_readable(self, *, session_id: str) -> bool:
+        """Return whether backend state can be read now, so no pending group means none."""
+
     def submit_context(self, *, session_id: str, content: str) -> tuple[BackendEvent, ...]:
         """Submit reviewed external data through the native conversation.
 
@@ -554,6 +557,10 @@ class DeterministicAgentBackend:
         """Return the current deterministic pending action group."""
         actions = () if self._pending is None else (self._pending,)
         return pending_action_group(actions)
+
+    def conversation_readable(self, *, session_id: str) -> bool:  # noqa: ARG002
+        """Return that deterministic state is always readable."""
+        return True
 
     def submit_context(self, *, session_id: str, content: str) -> tuple[BackendEvent, ...]:
         """Exercise the same deterministic continuation with reviewed synthetic data."""

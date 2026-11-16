@@ -358,6 +358,9 @@ class _UnconfiguredAgentBackend:
     ) -> PendingActionGroup | None:
         return None
 
+    def conversation_readable(self, *, session_id: str) -> bool:  # noqa: ARG002
+        return False
+
     def submit_context(self, *, session_id: str, content: str) -> tuple[BackendEvent, ...]:
         """Use this backend's existing admission behavior for reviewed context."""
         return self.submit_turn(session_id=session_id, prompt=content)

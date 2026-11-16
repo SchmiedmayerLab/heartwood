@@ -1291,33 +1291,6 @@ def test_a_failing_pending_read_never_blocks_reads_or_commands(tmp_path: Path) -
     service.close()
 
 
-def test_a_set_shown_pending_only_after_a_first_empty_read_is_still_recorded(
-    tmp_path: Path,
-) -> None:
-    # A backend that cannot open its conversation yet reports nothing pending; that answer
-    # does not end the check, so a later read that shows the set records its outcome.
-    action = _action("run-1", "workspace")
-    backend = _ScriptedBackend((action,))
-    service = _service(tmp_path, backend, mode="review-all")
-    _chat(service)
-    group = service.backend.pending_action_group(session_id=_SESSION)
-    assert group is not None
-    service.handle(
-        _command(CommandKind.APPROVE, "approve", target_type="action-set", target_id=group.group_id)
-    )
-    service = _restart(service, tmp_path, backend, "review-all")
-    service.reconcile()
-    assert _unknown_outcomes(service) == []
-
-    backend.replace_pending(action)
-    service.reconcile()
-
-    (unknown,) = _unknown_outcomes(service)
-    assert unknown.payload["group_id"] == group.group_id
-    assert backend.executed == ["run-1"]
-    service.close()
-
-
 def test_the_reappearance_check_ends_with_the_first_read_that_shows_a_pending_set(
     tmp_path: Path,
 ) -> None:
@@ -1346,6 +1319,80 @@ def test_the_reappearance_check_ends_with_the_first_read_that_shows_a_pending_se
 
     assert reads == []
     assert _unknown_outcomes(service) == []
+    service.close()
+
+
+def test_an_idle_session_ends_the_check_with_its_first_read(tmp_path: Path) -> None:
+    # After an approved set has run, nothing is pending; a readable conversation that says so
+    # ends the check, so later reconciliations neither replay the journal nor read for it.
+    action = _action("run-1", "workspace")
+    backend = _ScriptedBackend((action,))
+    service = _service(tmp_path, backend, mode="review-all")
+    _chat(service)
+    group = service.backend.pending_action_group(session_id=_SESSION)
+    assert group is not None
+    service.handle(
+        _command(CommandKind.APPROVE, "approve", target_type="action-set", target_id=group.group_id)
+    )
+    service = _restart(service, tmp_path, backend, "review-all")
+    service.reconcile()
+    replays: list[int] = []
+    reads: list[str] = []
+    replay = service.replay_events
+    pending = backend.pending_action_group
+
+    def counted_replay() -> tuple[SessionEvent, ...]:
+        replays.append(1)
+        return replay()
+
+    def counted_read(*, session_id: str) -> PendingActionGroup | None:
+        reads.append(session_id)
+        return pending(session_id=session_id)
+
+    service.replay_events = counted_replay  # type: ignore[method-assign]
+    backend.pending_action_group = counted_read  # type: ignore[method-assign]
+    for _ in range(5):
+        service.reconcile()
+
+    assert (replays, reads) == ([], [])
+    service.close()
+
+
+def test_an_unreadable_conversation_leaves_the_check_without_replaying(tmp_path: Path) -> None:
+    # A conversation that cannot be opened also reports nothing pending; the check stays
+    # open without a journal replay, and a later readable read that shows the set records it.
+    action = _action("run-1", "workspace")
+    backend = _ScriptedBackend((action,))
+    service = _service(tmp_path, backend, mode="review-all")
+    _chat(service)
+    group = service.backend.pending_action_group(session_id=_SESSION)
+    assert group is not None
+    service.handle(
+        _command(CommandKind.APPROVE, "approve", target_type="action-set", target_id=group.group_id)
+    )
+    service = _restart(service, tmp_path, backend, "review-all")
+    backend.conversation_readable = lambda **_: False  # type: ignore[method-assign]
+    replays: list[int] = []
+    replay = service.replay_events
+
+    def counted_replay() -> tuple[SessionEvent, ...]:
+        replays.append(1)
+        return replay()
+
+    service.reconcile()
+    service.replay_events = counted_replay  # type: ignore[method-assign]
+    service.reconcile()
+    service.reconcile()
+    assert replays == []
+    assert _unknown_outcomes(service) == []
+    service.replay_events = replay  # type: ignore[method-assign]
+
+    del backend.conversation_readable
+    backend.replace_pending(action)
+    service.reconcile()
+
+    (unknown,) = _unknown_outcomes(service)
+    assert unknown.payload["group_id"] == group.group_id
     service.close()
 
 
