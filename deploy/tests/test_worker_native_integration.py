@@ -80,7 +80,13 @@ def _retain_session_diagnostics(applications: Sequence[SessionGateway], path: Pa
     fields = ("reason", "code", "error_code", "status", "phase", "decision", "tool_name")
     sessions = []
     for application in applications:
-        for session_id, service in application._services.items():
+        with application._state_lock:
+            # A session whose close still fails is detached from the cache until a later stop.
+            releasing = {
+                session_id: service for session_id, (service, _) in application._releasing.items()
+            }
+            services = {**application._services, **releasing}
+        for session_id, service in services.items():
             events = []
             for event in service.replay_events():
                 record = event.payload.get("record")
@@ -92,7 +98,9 @@ def _retain_session_diagnostics(applications: Sequence[SessionGateway], path: Pa
                         **{name: details[name] for name in fields if name in details},
                     }
                 )
-            sessions.append({"session_id": session_id, "events": events})
+            sessions.append(
+                {"session_id": session_id, "releasing": session_id in releasing, "events": events}
+            )
     path.write_text(json.dumps(sessions, indent=2) + "\n")
 
 
@@ -281,7 +289,9 @@ def _stop(application: SessionGateway) -> None:
             # stop retries it.
             with application._state_lock:
                 released = application._releasing.get("composition")
-            service = released[0] if released else application._service("composition")
+                cached = application._services.get("composition")
+            service = released[0] if released else cached
+            assert service is not None, "the stopped session is neither cached nor closing"
             attempt = service.worker_attempt()
             assert attempt is not None
             assert attempt.phase == "fenced"
