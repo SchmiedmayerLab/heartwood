@@ -130,7 +130,8 @@ docker run --rm -it \
   heartwood --interface web --host 0.0.0.0 --host-loopback-publication
 ```
 
-Open the launch link the container prints, choose a model connection and ask for a small task with synthetic files.
+Open the launch link the container prints; the page continues at [http://127.0.0.1:8767/](http://127.0.0.1:8767/).
+Choose a model connection and ask for a small task with synthetic files.
 The image contains no model weights or credentials.
 
 ## Documentation

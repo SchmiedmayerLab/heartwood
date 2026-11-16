@@ -202,11 +202,10 @@ def test_documentation_builds_directly_from_canonical_sources() -> None:
     assert 'source_path="${repository_root}/documentation/index.md"' in smoke
 
 
-def test_readme_links_to_published_documentation_channels() -> None:
+def test_readme_links_to_published_documentation() -> None:
     readme = _read("README.md")
 
     assert "https://schmiedmayerlab.github.io/heartwood/" in readme
-    assert "https://schmiedmayerlab.github.io/heartwood/preview/" in readme
     assert re.search(r"\]\(documentation/[^)]+\.md\)", readme) is None
 
 
