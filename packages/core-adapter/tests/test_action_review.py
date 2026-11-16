@@ -1368,6 +1368,48 @@ def test_an_automatic_decision_the_backend_may_have_received_is_never_offered_ag
     service.close()
 
 
+@pytest.mark.parametrize("review_class", ["workspace", "read"])
+def test_a_recovery_send_journals_its_dispatch_before_the_backend_receives_it(
+    tmp_path: Path, review_class: ReviewClass
+) -> None:
+    # The first stop falls before the backend has the approval, so recovery sends it; the
+    # second stop falls after the backend ran it, so the next recovery must never send it.
+    mode = "review-all" if review_class == "workspace" else "review-changes"
+    backend = _ScriptedBackend((_action("run-1", review_class),))
+    service = _service(tmp_path, backend, mode=mode)
+    if review_class == "workspace":
+        _chat(service)
+        group = service.backend.pending_action_group(session_id=_SESSION)
+        assert group is not None
+        approve = _command(
+            CommandKind.APPROVE, "approve", target_type="action-set", target_id=group.group_id
+        )
+        _interrupt_before_dispatch(service)
+        with pytest.raises(_Interrupted):
+            service.handle(approve)
+    else:
+        # The gateway decides the file view as part of the request.
+        _interrupt_before_dispatch(service)
+        with pytest.raises(_Interrupted):
+            _chat(service)
+    assert backend.executed == []
+
+    service = _restart(service, tmp_path, backend, mode)
+    _interrupt_after_dispatch(backend)
+    with pytest.raises(_Interrupted):
+        service.reconcile()
+    assert backend.executed == ["run-1"]
+
+    service = _restart(service, tmp_path, backend, mode)
+    service.reconcile()
+
+    assert backend.executed == ["run-1"]
+    assert len(_unknown_outcomes(service)) == 1
+    assert not service.store.unresolved_command_ids()
+    service.audit_log.verify()
+    service.close()
+
+
 _LEGACY_INTERRUPTED_DISPATCH = Path(__file__).parent / "fixtures" / "interrupted-dispatch-0.5.0"
 
 
