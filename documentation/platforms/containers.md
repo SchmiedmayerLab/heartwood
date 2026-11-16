@@ -25,7 +25,7 @@ docker run --rm -it \
   --user "$(id -u):$(id -g)" \
   --env HOME=/tmp \
   -v "$PWD:/workspace" \
-  ghcr.io/schmiedmayerlab/heartwood:0.4.0 \
+  ghcr.io/schmiedmayerlab/heartwood:0.5.0 \
   heartwood
 ```
 
@@ -48,7 +48,7 @@ docker run --rm -it \
   --env HOME=/tmp \
   -v "$PWD:/workspace" \
   -v "$HOME/.local/share/heartwood/openhands-auth:/tmp/.openhands/auth" \
-  ghcr.io/schmiedmayerlab/heartwood:0.4.0 \
+  ghcr.io/schmiedmayerlab/heartwood:0.5.0 \
   heartwood
 ```
 
@@ -62,7 +62,7 @@ docker run --rm -it \
   --env HOME=/tmp \
   -p 127.0.0.1:8767:8767 \
   -v "$PWD:/workspace" \
-  ghcr.io/schmiedmayerlab/heartwood:0.4.0 \
+  ghcr.io/schmiedmayerlab/heartwood:0.5.0 \
   heartwood --interface web --host 0.0.0.0 --host-loopback-publication
 ```
 
@@ -82,7 +82,7 @@ docker run --rm -it \
   --user "$(id -u):$(id -g)" \
   --env HOME=/tmp \
   -v "$PWD:/workspace" \
-  ghcr.io/schmiedmayerlab/heartwood:0.4.0-gpu-nvidia \
+  ghcr.io/schmiedmayerlab/heartwood:0.5.0-gpu-nvidia \
   heartwood
 ```
 
@@ -96,10 +96,10 @@ Use immutable release tags for research work:
 
 | Tag | Image | Architectures |
 |---|---|---|
-| `ghcr.io/schmiedmayerlab/heartwood:0.4.0` | Standard | AMD64, ARM64 |
-| `ghcr.io/schmiedmayerlab/heartwood:0.4.0-gpu-nvidia` | NVIDIA GPU | AMD64 |
-| `ghcr.io/schmiedmayerlab/heartwood:0.4.0-terra` | Terra | AMD64 |
-| `ghcr.io/schmiedmayerlab/heartwood:0.4.0-terra-gpu-nvidia` | Terra NVIDIA GPU | AMD64 |
+| `ghcr.io/schmiedmayerlab/heartwood:0.5.0` | Standard | AMD64, ARM64 |
+| `ghcr.io/schmiedmayerlab/heartwood:0.5.0-gpu-nvidia` | NVIDIA GPU | AMD64 |
+| `ghcr.io/schmiedmayerlab/heartwood:0.5.0-terra` | Terra | AMD64 |
+| `ghcr.io/schmiedmayerlab/heartwood:0.5.0-terra-gpu-nvidia` | Terra NVIDIA GPU | AMD64 |
 
 The moving `edge` tags follow `main` and are for development, not reproducible analyses.
 Release publication promotes only the candidate digests it verified for the release commit.

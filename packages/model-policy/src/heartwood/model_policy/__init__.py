@@ -25,4 +25,4 @@ __all__ = [
     "validate_policy_restriction",
 ]
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
