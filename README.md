@@ -104,13 +104,13 @@ flowchart TB
 
 Green components belong to Heartwood; blue ones are provided by the operator's platform.
 
-- The operator's [deployment manifest](https://schmiedmayerlab.github.io/heartwood/reference/configuration/) binds a project to protected state outside the research folder and sets the policy, the permitted review modes and the worker profile.
+- The operator's [deployment manifest](https://schmiedmayerlab.github.io/heartwood/stable/reference/configuration/) binds a project to protected state outside the research folder and sets the policy, the permitted review modes and the worker profile.
 - Each session's agent runs as an OpenHands worker in an OpenShell sandbox with read-only inputs and a private workspace; credentials, the Docker socket and signing keys stay on the gateway host.
 - The gateway admits each worker attempt, checks every response against what it sent, and deletes the sandbox when it revokes the attempt.
-- Under **Review Outside Effects**, commands and file edits inside the sandbox run without a per-action decision; operations that leave it wait for a researcher decision bound to their exact content.
+- Under **Review Outside Effects**, commands and file edits inside the sandbox run without a per-action decision and can send content to the admitted model endpoint; operations through the gateway's outside services wait for a researcher decision bound to their exact content.
 - Every request, decision and result is journaled; with checkpoint evidence configured, each approval and rejection is retained as a signed checkpoint in a separate records service.
 
-[Deploy Heartwood](https://schmiedmayerlab.github.io/heartwood/operate/) describes the setup, and [Security Limits](https://schmiedmayerlab.github.io/heartwood/operate/security/#security-limits) lists what these controls do not cover.
+[Deploy Heartwood](https://schmiedmayerlab.github.io/heartwood/stable/operate/) describes the setup, and [Security Limits](https://schmiedmayerlab.github.io/heartwood/stable/operate/security/#security-limits) lists what these controls do not cover.
 
 ## Local Evaluation
 
@@ -136,12 +136,12 @@ The image contains no model weights or credentials.
 
 ## Documentation
 
-- [Your First Project](https://schmiedmayerlab.github.io/heartwood/start/) walks through the first reviewed action.
-- [Work With Heartwood](https://schmiedmayerlab.github.io/heartwood/use/) covers the interfaces, review modes, Skills, specialists and research workflows.
-- [Choose a Platform](https://schmiedmayerlab.github.io/heartwood/platforms/) covers containers, native Linux, Terra and Stanford Carina.
-- [Deploy Heartwood](https://schmiedmayerlab.github.io/heartwood/operate/) covers the deployment manifest, the isolated worker and deployment validation.
-- [Security and Controlled Data](https://schmiedmayerlab.github.io/heartwood/operate/security/) describes the threat model and what the sandbox and the gateway enforce.
-- [Architecture](https://schmiedmayerlab.github.io/heartwood/architecture/) explains the components, boundaries and data flow.
+- [Your First Project](https://schmiedmayerlab.github.io/heartwood/stable/start/) walks through the first reviewed action.
+- [Work With Heartwood](https://schmiedmayerlab.github.io/heartwood/stable/use/) covers the interfaces, review modes, Skills, specialists and research workflows.
+- [Choose a Platform](https://schmiedmayerlab.github.io/heartwood/stable/platforms/) covers containers, native Linux, Terra and Stanford Carina.
+- [Deploy Heartwood](https://schmiedmayerlab.github.io/heartwood/stable/operate/) covers the deployment manifest, the isolated worker and deployment validation.
+- [Security and Controlled Data](https://schmiedmayerlab.github.io/heartwood/stable/operate/security/) describes the threat model and what the sandbox and the gateway enforce.
+- [Architecture](https://schmiedmayerlab.github.io/heartwood/stable/architecture/) explains the components, boundaries and data flow.
 
 ## Contributing
 
