@@ -15,7 +15,7 @@ Versions use strict Semantic Versioning without a `v` prefix, such as `0.5.0` or
 2. Run the complete test and documentation suites.
 3. Merge the reviewed change to `main` and wait for **Main Validation** to pass on that commit.
 4. Start **Create Release** from `main` with the exact version.
-5. Review the draft release: generated notes, assets, checksums, and target commit.
+5. Review the draft release: generated notes, assets, checksums, qualification evidence, and target commit.
 6. Approve the `release` environment to publish.
 
 ## What the Workflow Checks
@@ -26,12 +26,12 @@ The workflow stops unless all of the following hold for the commit:
 - the commit is still the tip of `main`, checked again before the draft and before publication;
 - every catalog model source verifies, and the curated Skill revision is published on `heartwood-skills` `main`;
 - the `Release Candidate Ready`, `Analyze (python)`, and `Analyze (javascript-typescript)` checks passed;
+- the Native Qualification workflow passed for the commit and its evidence verifies against the commit and its attestation;
 - immutable container candidates exist for the commit.
 
-`Release Candidate Ready` requires every Main Validation job, including capable-model acceptance, native worker qualification, and the attestation of its evidence.
-Its `evidence-attestation` job verifies the native qualification evidence against the commit with `deploy/qualification_evidence.py` and creates a GitHub artifact attestation for its `SHA256SUMS`; the job builds and runs no application code.
-The evidence stays a workflow artifact, `worker-native-qualification-<commit>`, retained for 90 days; it is not attached to the release.
-Verify it with `gh attestation verify` bound to this repository, the Main Validation workflow, `refs/heads/main`, and the commit.
+`Release Candidate Ready` requires every Main Validation job, including capable-model acceptance.
+On `main`, the separate **Native Qualification** workflow qualifies and attests every commit without cancelling earlier runs; see [Native Qualification Evidence](../architecture/testing.md#native-qualification-evidence).
+Release creation downloads that run's evidence and attestation, verifies them with `gh attestation verify` bound to this repository, the Native Qualification workflow, `refs/heads/main`, and the commit, and with `deploy/qualification_evidence.py`, and fails when either is missing or does not verify.
 Pull-request runs are not attested.
 
 The workflow then builds the native assets from the commit, tests the installer layout and an installation from an empty Ubuntu container, attests every asset, and creates a draft release with GitHub-generated notes.
@@ -52,6 +52,7 @@ Administrators may recover an interrupted workflow, which replaces an unpublishe
 | `heartwood-native.tar.gz` | Application source, curated Skills, maintained runtime wheels, and browser assets |
 | vLLM wheel | The CUDA 12.9 wheel pinned in `images/gpu/compatibility.toml`, for restricted environments such as Carina |
 | `SHA256SUMS` | Checksums of the native archive and the vLLM wheel |
+| Qualification evidence | `native-qualification-evidence.tar.gz`, the commit's native qualification evidence with its `SHA256SUMS`, and `native-qualification-evidence.sigstore.jsonl`, its attestation bundle, verified as described in [Native Qualification Evidence](../architecture/testing.md#native-qualification-evidence) |
 | Image tags | `VERSION`, `VERSION-gpu-nvidia`, `VERSION-terra`, and `VERSION-terra-gpu-nvidia`, promoted from the commit's candidate images |
 | Documentation | The `VERSION` path of the versioned site |
 

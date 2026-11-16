@@ -14,6 +14,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tomllib
 from collections.abc import Callable
 from pathlib import Path
@@ -490,36 +491,57 @@ def test_candidate_workflow_retains_the_checksummed_evidence(evidence: ModuleTyp
         assert jobs[job]["if"] == "needs.scope.outputs.required == 'true'"
     assert jobs["native"]["needs"] == ["gateway", "build", "records"]
     assert "if" not in jobs["native"]
-    for entrypoint in ("main-validation.yml", "pull-request-validation.yml"):
-        validation = _workflow(entrypoint)["jobs"]
-        assert validation["native-qualification"] == {
-            "name": "Native Worker Qualification",
-            "uses": "./.github/workflows/worker-candidate.yml",
-        }
-        assert "native-qualification" in validation["release-ready"]["needs"]
+    qualification = {
+        "name": "Native Worker Qualification",
+        "uses": "./.github/workflows/worker-candidate.yml",
+    }
+    pull_request = _workflow("pull-request-validation.yml")["jobs"]
+    assert pull_request["native-qualification"] == qualification
+    assert "native-qualification" in pull_request["release-ready"]["needs"]
+    assert _workflow("native-qualification.yml")["jobs"]["native-qualification"] == qualification
+    main = (_ROOT / ".github/workflows/main-validation.yml").read_text()
+    assert "worker-candidate.yml" not in main
+    assert "worker-native-qualification" not in main
 
 
-def test_only_a_main_validation_job_without_candidate_code_can_attest() -> None:
+def test_every_main_commit_completes_its_own_qualification() -> None:
+    workflow = _workflow("native-qualification.yml")
+
+    assert workflow["on"] == {"push": {"branches": ["main"]}, "workflow_dispatch": ""}
+    assert workflow["permissions"] == {"contents": "read"}
+    # A concurrency group keeps at most one pending run, so a newer commit would replace it.
+    assert "concurrency" not in workflow
+    for job in workflow["jobs"].values():
+        assert "concurrency" not in job
+    candidate = _workflow("worker-candidate.yml")
+    assert "concurrency" not in candidate
+    for job in candidate["jobs"].values():
+        assert "concurrency" not in job
+
+
+def test_only_a_main_job_without_candidate_code_can_attest() -> None:
     candidate = (_ROOT / ".github/workflows/worker-candidate.yml").read_text()
     pull_request = (_ROOT / ".github/workflows/pull-request-validation.yml").read_text()
-    main = _workflow("main-validation.yml")
-    attestation = main["jobs"]["evidence-attestation"]
+    main = (_ROOT / ".github/workflows/main-validation.yml").read_text()
+    qualification = _workflow("native-qualification.yml")
+    attestation = qualification["jobs"]["evidence-attestation"]
 
     # Jobs that build and run candidate code never hold signing permissions.
+    for workflow in (candidate, pull_request, main):
+        assert "actions/attest" not in workflow
     for workflow in (candidate, pull_request):
         assert "attestations:" not in workflow
-        assert "actions/attest" not in workflow
     assert "id-token" not in candidate
     assert _workflow("worker-candidate.yml")["permissions"] == {"contents": "read"}
-    assert "pull_request" not in main["on"]
+    assert "pull_request" not in qualification["on"]
     assert attestation["needs"] == "native-qualification"
-    assert "if" not in attestation
+    # Documented verification requires the main branch as the attested source ref.
+    assert attestation["if"] == "github.ref == 'refs/heads/main'"
     assert attestation["permissions"] == {
         "attestations": "write",
         "contents": "read",
         "id-token": "write",
     }
-    assert "evidence-attestation" in main["jobs"]["release-ready"]["needs"]
     checkout, download, verify, attest = attestation["steps"]
     assert checkout["with"]["ref"] == "${{ github.sha }}"
     assert download["with"] == {
@@ -532,3 +554,158 @@ def test_only_a_main_validation_job_without_candidate_code_can_attest() -> None:
     )
     assert attest["uses"] == "actions/attest@v4"
     assert attest["with"] == {"subject-path": "test-results/native-qualification/SHA256SUMS"}
+
+
+_RELEASE_EVIDENCE = "Verify attested native qualification evidence"
+_EVIDENCE_ASSETS = (
+    "native-qualification-evidence.tar.gz",
+    "native-qualification-evidence.sigstore.jsonl",
+)
+# Stands in for the GitHub CLI: one qualification run, its artifact, and its attestation.
+_GITHUB_CLI = """#!/usr/bin/env bash
+printf '%s\\n' "$*" >>"${GH_CALLS}"
+case "$1 $2" in
+  "run list") printf '%s\\n' "${RUN_ID}" ;;
+  "run download")
+    while [[ "$1" != --dir ]]; do shift; done
+    cp -R "${EVIDENCE}" "$2"
+    ;;
+  "attestation download")
+    test -n "${ATTESTED}" || exit 1
+    printf '{"bundle":"synthetic"}\\n' >"sha256:$(shasum -a 256 "$3" | cut -c 1-64).jsonl"
+    ;;
+  "attestation verify") exit "${VERIFY_STATUS}" ;;
+  *) exit 2 ;;
+esac
+"""
+
+
+def _release_evidence(
+    evidence: ModuleType, tmp_path: Path, **overrides: str
+) -> tuple[subprocess.CompletedProcess[str], Path]:
+    directory = tmp_path / "artifact"
+    directory.mkdir()
+    _package(evidence, directory, _manifest(evidence))
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    (tools / "gh").write_text(_GITHUB_CLI)
+    (tools / "gh").chmod(0o755)
+    (tools / "python3").symlink_to(sys.executable)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "deploy").symlink_to(_ROOT / "deploy")
+    release = _workflow("create-release.yml")
+    step = next(
+        step for step in release["jobs"]["verify"]["steps"] if step.get("name") == _RELEASE_EVIDENCE
+    )
+    environment = {
+        "ATTESTED": "1",
+        "EVIDENCE": str(directory),
+        "GH_CALLS": str(tmp_path / "calls"),
+        "GITHUB_REPOSITORY": "SchmiedmayerLab/heartwood",
+        "GITHUB_SHA": _COMMIT,
+        "PATH": f"{tools}:{os.environ['PATH']}",
+        "RUN_ID": "7",
+        "VERIFY_STATUS": "0",
+    } | overrides
+    completed = subprocess.run(
+        ["bash", "-e", "-c", step["run"]],
+        cwd=workspace,
+        env=environment,
+        capture_output=True,
+        text=True,
+    )
+    return completed, workspace
+
+
+def test_release_attaches_only_attested_evidence_of_its_commit(
+    evidence: ModuleType, tmp_path: Path
+) -> None:
+    completed, workspace = _release_evidence(evidence, tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    calls = (tmp_path / "calls").read_text().splitlines()
+    assert calls[0] == (
+        "run list --repo SchmiedmayerLab/heartwood --workflow native-qualification.yml"
+        f" --branch main --commit {_COMMIT} --status success --limit 1"
+        " --json databaseId --jq .[0].databaseId // empty"
+    )
+    assert calls[1].startswith(
+        "run download 7 --repo SchmiedmayerLab/heartwood"
+        f" --name worker-native-qualification-{_COMMIT} "
+    )
+    assert calls[2] == (
+        "attestation download ../native-qualification/SHA256SUMS --repo SchmiedmayerLab/heartwood"
+    )
+    verification = calls[3].split()
+    assert verification[:3] == [
+        "attestation",
+        "verify",
+        "test-results/release-evidence/native-qualification/SHA256SUMS",
+    ]
+    for option, value in (
+        ("--repo", "SchmiedmayerLab/heartwood"),
+        (
+            "--signer-workflow",
+            "SchmiedmayerLab/heartwood/.github/workflows/native-qualification.yml",
+        ),
+        ("--source-ref", "refs/heads/main"),
+        ("--source-digest", _COMMIT),
+    ):
+        assert verification[verification.index(option) + 1] == value
+    bundle = workspace / "dist" / _EVIDENCE_ASSETS[1]
+    assert verification[verification.index("--bundle") + 1].endswith(".jsonl")
+    assert bundle.read_text() == '{"bundle":"synthetic"}\n'
+    extracted = tmp_path / "extracted"
+    extracted.mkdir()
+    subprocess.run(
+        ["tar", "-xzf", str(workspace / "dist" / _EVIDENCE_ASSETS[0]), "-C", str(extracted)],
+        check=True,
+    )
+    assert evidence.verify(extracted / "native-qualification", _COMMIT) == []
+
+
+@pytest.mark.parametrize(
+    ("overrides", "reason"),
+    [
+        ({"RUN_ID": ""}, "no successful native qualification exists"),
+        ({"ATTESTED": ""}, ""),
+        ({"VERIFY_STATUS": "1"}, ""),
+        ({"GITHUB_SHA": _OTHER_COMMIT}, "the evidence describes another source commit"),
+    ],
+)
+def test_release_without_verified_evidence_for_its_commit_fails(
+    evidence: ModuleType, tmp_path: Path, overrides: dict[str, str], reason: str
+) -> None:
+    completed, workspace = _release_evidence(evidence, tmp_path, **overrides)
+
+    assert completed.returncode != 0
+    assert reason in completed.stderr
+    for asset in _EVIDENCE_ASSETS:
+        assert not (workspace / "dist" / asset).exists()
+
+
+def test_release_requires_and_publishes_the_evidence_assets() -> None:
+    release = _workflow("create-release.yml")
+    verify = release["jobs"]["verify"]
+    names = [step.get("name") for step in verify["steps"]]
+
+    assert release["permissions"]["attestations"] == "read"
+    assert (
+        names.index(_RELEASE_EVIDENCE)
+        == names.index("Verify release readiness on the exact commit") + 1
+    )
+    upload = next(
+        step for step in verify["steps"] if step.get("name") == "Upload approved candidate assets"
+    )
+    for asset in _EVIDENCE_ASSETS:
+        assert f"dist/{asset}" in upload["with"]["path"].split()
+    publish = next(
+        step
+        for step in release["jobs"]["publish"]["steps"]
+        if step.get("name") == "Verify candidate, editable draft, and assets"
+    )
+    assert f"evidence_assets=({' '.join(_EVIDENCE_ASSETS)})" in publish["run"]
+    assert 'release_assets+=("${evidence_assets[@]}")' in publish["run"]
+    assert "printf '%s\\n' \"${release_assets[@]}\" | sort" in publish["run"]
+    assert 'for asset in "${release_assets[@]}"; do' in publish["run"]

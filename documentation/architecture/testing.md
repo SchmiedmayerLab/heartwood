@@ -43,14 +43,14 @@ These tests establish protocol and authorization behavior, not process isolation
 
 ## Continuous Integration
 
-Pull-request and main-branch validation both end in the required `Release Candidate Ready` aggregate, which requires every validation workflow, including capable-model acceptance and native worker qualification.
+Pull-request and main-branch validation both end in the required `Release Candidate Ready` aggregate, which requires every validation workflow, including capable-model acceptance; on pull requests it also requires native worker qualification.
 On a pull request, native qualification and its candidate builds are skipped only when every changed path is under `documentation/` or `.github/` other than the worker candidate and pull-request validation workflows; any other path, including one the selection does not recognize, requires them.
-Every main-branch commit runs the complete native qualification, and main validation adds an evidence attestation job to the aggregate.
+On the main branch, the separate **Native Qualification** workflow runs the complete native qualification for every commit and attests its evidence; it has no concurrency group, so a newer commit never cancels the run of an earlier one.
 
 Pull-request jobs that build and run candidate code hold no signing or package-write permission; the Python job holds an identity token only to upload coverage to Codecov.
 Multi-platform manifests, moving tags, and evidence attestation run only on the main branch.
 Registry writes run on the main branch, except that the manual Terra GPU Qualification Candidate workflow pushes a `candidate-sha-<commit>-terra-gpu-nvidia` image from the branch it is started on.
-Release creation requires `Release Candidate Ready` and the `Analyze (python)` and `Analyze (javascript-typescript)` code-scanning checks for the exact commit.
+Release creation requires `Release Candidate Ready`, the `Analyze (python)` and `Analyze (javascript-typescript)` code-scanning checks, and the attested Native Qualification evidence for the exact commit.
 
 ## Capable-Model Acceptance
 
@@ -212,24 +212,33 @@ A reduced, extended, or skipped selection therefore fails, and adding, removing,
 Each worker case retains `worker-container.json`, the image, privilege, capabilities, security options, network, namespaces, and mounts Docker reported before admission was decided, without host paths, labels, or environment, so a rejected sandbox still shows its observed values.
 Private gateway state and generated credentials share the output directory and are excluded from the checksums and from retention.
 The worker candidate workflow verifies the evidence against its own commit and retains it for 90 days on the main branch and 14 days on pull requests.
-On the main branch a separate job, which runs no candidate code, downloads the evidence, verifies it again, and attests `SHA256SUMS` with a GitHub build-provenance attestation.
-Pull-request, manual, local, and capable-model runs are not attested.
+On the main branch, a separate Native Qualification job, which runs no candidate code, downloads the evidence, verifies it again, and attests `SHA256SUMS` with a GitHub build-provenance attestation.
+Pull-request, manual, local, and capable-model runs, and manual Native Qualification runs on another branch, are not attested.
 
-To verify a downloaded evidence directory, check out the commit it claims to qualify and run inside the evidence directory:
+Release creation keeps the evidence beyond its artifact retention.
+It locates the successful Native Qualification run of the release commit, downloads its evidence and attestation, verifies both as below, and fails when any of these is missing or does not verify.
+The release then carries `native-qualification-evidence.tar.gz`, the evidence directory with its `SHA256SUMS`, and `native-qualification-evidence.sigstore.jsonl`, the attestation bundle for that `SHA256SUMS`.
+
+To verify release evidence, check out the release tag and run these commands in a directory holding both assets:
 
 ```bash
 commit="$(git -C "$HEARTWOOD_CHECKOUT" rev-parse HEAD)"
-gh attestation verify SHA256SUMS --repo SchmiedmayerLab/heartwood \
-  --signer-workflow SchmiedmayerLab/heartwood/.github/workflows/main-validation.yml \
+tar -xzf native-qualification-evidence.tar.gz
+gh attestation verify native-qualification/SHA256SUMS --repo SchmiedmayerLab/heartwood \
+  --bundle native-qualification-evidence.sigstore.jsonl \
+  --signer-workflow SchmiedmayerLab/heartwood/.github/workflows/native-qualification.yml \
   --source-ref refs/heads/main --source-digest "$commit"
-sha256sum --check SHA256SUMS
-python3 "$HEARTWOOD_CHECKOUT/deploy/qualification_evidence.py" . --commit "$commit"
+(cd native-qualification && sha256sum --check SHA256SUMS)
+python3 "$HEARTWOOD_CHECKOUT/deploy/qualification_evidence.py" native-qualification --commit "$commit"
 ```
+
+The bundle holds the attestation that release creation verified; without `--bundle`, the command verifies against the attestations GitHub stores for the repository.
+Evidence downloaded from a workflow run is verified the same way from a checkout of the commit it claims to qualify: run the commands inside the evidence directory, with `SHA256SUMS` and `.` as the paths and without `--bundle`.
 
 | Option | Establishes |
 |---|---|
 | `--repo` | The attestation was signed by a run of this repository |
-| `--signer-workflow` | Main validation signed it, not another workflow with attestation permission |
+| `--signer-workflow` | The Native Qualification workflow signed it, not another workflow with attestation permission |
 | `--source-ref` | The run built the main branch, not a pull request, tag, or other branch |
 | `--source-digest` | The run built exactly the commit being verified |
 

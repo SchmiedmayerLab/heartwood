@@ -20,6 +20,7 @@ concurrency:
 
 permissions:
   actions: read
+  attestations: read
   checks: read
   contents: read
   packages: read
@@ -99,6 +100,39 @@ jobs:
             --required-check 'Release Candidate Ready' \
             --required-check 'Analyze (python)' \
             --required-check 'Analyze (javascript-typescript)'
+      - name: Verify attested native qualification evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          run_id="$(gh run list --repo "${GITHUB_REPOSITORY}" \
+            --workflow native-qualification.yml --branch main --commit "${GITHUB_SHA}" \
+            --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty')"
+          if [[ -z "${run_id}" ]]; then
+            echo "no successful native qualification exists for ${GITHUB_SHA}" >&2
+            exit 1
+          fi
+          evidence=test-results/release-evidence
+          mkdir -p "${evidence}/attestation" dist
+          gh run download "${run_id}" --repo "${GITHUB_REPOSITORY}" \
+            --name "worker-native-qualification-${GITHUB_SHA}" \
+            --dir "${evidence}/native-qualification"
+          (
+            cd "${evidence}/attestation"
+            gh attestation download ../native-qualification/SHA256SUMS --repo "${GITHUB_REPOSITORY}"
+          )
+          bundles=("${evidence}"/attestation/*.jsonl)
+          test "${#bundles[@]}" -eq 1
+          gh attestation verify "${evidence}/native-qualification/SHA256SUMS" \
+            --bundle "${bundles[0]}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/native-qualification.yml" \
+            --source-ref refs/heads/main \
+            --source-digest "${GITHUB_SHA}"
+          python3 deploy/qualification_evidence.py \
+            "${evidence}/native-qualification" --commit "${GITHUB_SHA}"
+          tar -czf dist/native-qualification-evidence.tar.gz \
+            -C "${evidence}" native-qualification
+          cp "${bundles[0]}" dist/native-qualification-evidence.sigstore.jsonl
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4.4.1
       - name: Log in to GitHub Container Registry
@@ -146,6 +180,8 @@ jobs:
             dist/heartwood-native.tar.gz
             dist/*.whl
             dist/SHA256SUMS
+            dist/native-qualification-evidence.tar.gz
+            dist/native-qualification-evidence.sigstore.jsonl
           if-no-files-found: error
           retention-days: 7
 
@@ -266,14 +302,17 @@ jobs:
           fi
           actual_assets="$(jq -r '.assets[].name' <<<"${release_json}" | sort)"
           gpu_runtime_asset="$(python3 -c 'import tomllib; print(tomllib.load(open("images/gpu/compatibility.toml", "rb"))["runtime"]["vllm_wheel_filename"])')"
-          expected_assets="$(printf '%s\n' SHA256SUMS heartwood-installer heartwood-native.tar.gz "${gpu_runtime_asset}" | sort)"
+          evidence_assets=(native-qualification-evidence.tar.gz native-qualification-evidence.sigstore.jsonl)
+          release_assets=(SHA256SUMS heartwood-installer heartwood-native.tar.gz "${gpu_runtime_asset}")
+          release_assets+=("${evidence_assets[@]}")
+          expected_assets="$(printf '%s\n' "${release_assets[@]}" | sort)"
           if [[ "${actual_assets}" != "${expected_assets}" ]]; then
             echo "release draft assets differ from the verified candidate" >&2
             exit 1
           fi
           mkdir -p /tmp/release-assets
           gh release download "${RELEASE_VERSION}" --repo "${GITHUB_REPOSITORY}" --dir /tmp/release-assets
-          for asset in SHA256SUMS heartwood-installer heartwood-native.tar.gz "${gpu_runtime_asset}"; do
+          for asset in "${release_assets[@]}"; do
             cmp "dist/${asset}" "/tmp/release-assets/${asset}"
           done
           if git ls-remote --exit-code --tags origin "refs/tags/${RELEASE_VERSION}" >/dev/null 2>&1; then

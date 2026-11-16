@@ -1,0 +1,51 @@
+# This source file is part of the Heartwood open-source project
+#
+# SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+#
+# SPDX-License-Identifier: MIT
+
+# Every main commit is qualified and attested: this workflow has no concurrency group,
+# so a newer commit never cancels or replaces the run of an earlier one.
+name: Native Qualification
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-qualification:
+    name: Native Worker Qualification
+    uses: ./.github/workflows/worker-candidate.yml
+  evidence-attestation:
+    name: Attest Native Qualification Evidence
+    needs: native-qualification
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      attestations: write
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout the qualified commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          submodules: true
+      - name: Download the retained evidence
+        uses: actions/download-artifact@v8
+        with:
+          name: worker-native-qualification-${{ github.sha }}
+          path: test-results/native-qualification
+      - name: Verify the evidence for this commit
+        run: >-
+          python3 deploy/qualification_evidence.py
+          test-results/native-qualification --commit "${GITHUB_SHA}"
+      - name: Attest the evidence checksums
+        uses: actions/attest@v4
+        with:
+          subject-path: test-results/native-qualification/SHA256SUMS

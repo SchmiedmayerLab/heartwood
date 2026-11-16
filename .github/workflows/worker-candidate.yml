@@ -56,9 +56,6 @@ jobs:
     if: needs.scope.outputs.required == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 120
-    concurrency:
-      group: worker-gateway-${{ github.ref }}
-      cancel-in-progress: false
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
