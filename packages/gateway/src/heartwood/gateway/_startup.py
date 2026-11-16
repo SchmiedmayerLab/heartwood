@@ -11,12 +11,14 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Literal
 
 from heartwood.adapters import PlatformCapabilities
 from heartwood.adapters.platform import select_platform_adapter
 from heartwood.gateway._project import ProjectContext
 from heartwood.gateway._readiness import DeploymentReadiness, inspect_deployment
+from heartwood.gateway._skill_settings import BUNDLED_SKILL_DIGESTS
 
 type InterfaceKind = Literal["terminal", "web", "notebook"]
 type SetupPhase = Literal[
@@ -63,6 +65,8 @@ def plan_startup(
     interface: InterfaceKind = "terminal",
     port: int = 8767,
     env: Mapping[str, str] | None = None,
+    bundled_skills_dir: Path | None = None,
+    bundled_skill_digests: Mapping[str, str] = BUNDLED_SKILL_DIGESTS,
 ) -> StartupPlan:
     """Inspect a project and return the next product-level startup action."""
     if port < 1 or port > 65_535:
@@ -70,7 +74,12 @@ def plan_startup(
     active_env = dict(os.environ if env is None else env)
     adapter = select_platform_adapter(active_env)
     capabilities = adapter.capabilities()
-    readiness = inspect_deployment(project, active_env)
+    readiness = inspect_deployment(
+        project,
+        active_env,
+        bundled_skills_dir=bundled_skills_dir,
+        bundled_skill_digests=bundled_skill_digests,
+    )
     supported = interface in capabilities.interfaces
     phase = _setup_phase(readiness)
     if not supported:

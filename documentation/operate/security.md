@@ -200,6 +200,11 @@ Do not enable unbounded runtime caches, share them between users, or place them 
 Reviewed external Skill packages install only from deployment-approved TUF roots, after verification of signatures, expiry, rollback state, target hashes, the complete file manifest, declared policy and OpenHands compatibility.
 Approval binds the exact tree digest, installation is atomic, and a signed revocation prevents later activation.
 Only the deployment-owned system Skill registry can approve a digest for controlled data.
+The agent receives each verified active Skill directory individually, never a parent directory that OpenHands would scan for more Skills.
+Content placed beside an installed Skill in the project store, including another Skill directory or an interrupted installation, is not loaded; Heartwood names it in the Skill list, in `heartwood doctor` and in the gateway log.
+Release-bundled Skills must match the complete-tree digests pinned in the Heartwood release; an edited or missing bundled Skill stops Skill use, and unpinned entries beside them are reported and never loaded.
+Container and worker images install that directory and the pin root-owned.
+Source checkouts and native installations leave both writable by the runtime user, so the pin detects drift there but cannot stop that account, or a terminal command it approves, from rewriting the installation.
 Verification establishes source and integrity, not that instructions are safe for a dataset; see [Skill Trust and Distribution](../architecture/skills.md).
 
 ## Audit Data

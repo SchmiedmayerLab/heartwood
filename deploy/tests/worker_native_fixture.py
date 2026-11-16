@@ -894,7 +894,10 @@ print(json.dumps(result))
                 ),
                 policy=self.policy,
                 providers=[self.identity],
-                environment={"SESSION_API_KEY": secrets.token_urlsafe(32)},
+                environment={
+                    "SESSION_API_KEY": secrets.token_urlsafe(32),
+                    "HEARTWOOD_SKILL_PLATFORM": "generic",
+                },
                 command=[PYTHON, "-I", "-B", "-u", "/opt/heartwood/images/worker/launch.py"],
             ),
         )

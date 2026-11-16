@@ -119,7 +119,6 @@ def test_production_observation_needs_no_inference_and_omits_credentials(
             max_output_tokens=4096,
         ),
         workspace=tmp_path,
-        skills_dir=tmp_path / ".heartwood/skills",
         persistence_dir=tmp_path / ".heartwood/sessions/test/openhands",
         conversation_key="evaluation-observation-test",
         env={},

@@ -945,6 +945,7 @@ class SkillSummaryResponse(_ApiResponse):
     archive_size: int | None
     revocation_reason: str | None
     compatibility_reason: str | None
+    unexpected_content: list[str]
     installable: bool
 
 

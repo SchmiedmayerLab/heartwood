@@ -38,6 +38,12 @@ from heartwood.gateway._project_config import (
     ProjectConfigError,
     ProjectConfigStore,
 )
+from heartwood.gateway._skill_settings import (
+    BUNDLED_SKILL_DIGESTS,
+    SkillSettingsError,
+    pinned_bundled_manifests,
+    unexpected_bundled_entries,
+)
 from heartwood.gateway._subscriptions import (
     OPENAI_SUBSCRIPTION_CONNECTION_ID,
     OPENAI_SUBSCRIPTION_CREDENTIAL_REFERENCE,
@@ -46,7 +52,9 @@ from heartwood.gateway._subscriptions import (
     SubscriptionError,
 )
 from heartwood.model_policy import ModelPolicyEngine
+from heartwood.persistence import NativeLockUnavailableError
 from heartwood.schemas import PolicyProfile
+from heartwood.skills import SkillArtifactStore, SkillStoreError
 
 ReadinessState = Literal["ready", "setup-required", "compute-required", "recovery-required"]
 ModelSource = Literal[
@@ -212,6 +220,9 @@ def _agent_runtime_available(env: Mapping[str, str], *, platform_id: str) -> boo
 def inspect_deployment(
     project: ProjectContext,
     env: Mapping[str, str] | None = None,
+    *,
+    bundled_skills_dir: Path | None = None,
+    bundled_skill_digests: Mapping[str, str] = BUNDLED_SKILL_DIGESTS,
 ) -> DeploymentReadiness:
     """Inspect project setup without creating files or calling external services."""
     active_env = dict(os.environ if env is None else env)
@@ -282,6 +293,11 @@ def inspect_deployment(
                 "Project state is initialized" if state_valid else "Project setup is incomplete",
             )
         )
+
+    if bundled_skills_dir is not None:
+        checks.append(_bundled_skill_check(bundled_skills_dir, bundled_skill_digests))
+    if state_valid:
+        checks.append(_installed_skill_check(project))
 
     if adapter.adapter_id == "terra":
         checks.extend(_terra_environment_checks(project=project, env=active_env))
@@ -451,6 +467,46 @@ def inspect_deployment(
         state_root=str(project.state_root),
         evidence=detection.evidence,
         checks=tuple(checks),
+    )
+
+
+def _bundled_skill_check(bundled_dir: Path, digests: Mapping[str, str]) -> ReadinessCheck:
+    """Report release-bundled Skills that differ from the release pin."""
+    try:
+        pinned_bundled_manifests(bundled_dir, digests)
+    except SkillSettingsError as error:
+        return ReadinessCheck("bundled-skills", "fail", str(error))
+    if unexpected := unexpected_bundled_entries(bundled_dir, digests):
+        return ReadinessCheck(
+            "bundled-skills",
+            "warning",
+            "Unpinned entries in the bundled Skill directory are not loaded; remove: "
+            + ", ".join(str(path) for path in unexpected),
+        )
+    return ReadinessCheck("bundled-skills", "pass", "Bundled Skills match this release")
+
+
+def _installed_skill_check(project: ProjectContext) -> ReadinessCheck:
+    """Report content that is stored beside an active installed Skill but never loaded."""
+    store = SkillArtifactStore(project.skills_dir)
+    try:
+        unexpected = tuple(
+            str(path)
+            for record in store.records()
+            if record.status == "active"
+            for path in store.unexpected_artifact_entries(record)
+        )
+    except (NativeLockUnavailableError, SkillStoreError) as error:
+        return ReadinessCheck("installed-skills", "fail", str(error))
+    if unexpected:
+        return ReadinessCheck(
+            "installed-skills",
+            "warning",
+            "Unverified content beside installed Skills is not loaded; remove: "
+            + ", ".join(unexpected),
+        )
+    return ReadinessCheck(
+        "installed-skills", "pass", "Installed Skill storage holds only verified content"
     )
 
 

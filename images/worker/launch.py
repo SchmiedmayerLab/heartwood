@@ -57,6 +57,12 @@ def worker_environment(source: Mapping[str, str]) -> dict[str, str]:
         for name, expected in _TLS_ENVIRONMENT.items()
         if source.get(name) == expected
     )
+    # The gateway's deployment platform selects compatible specialist Skills.
+    platform = source.get("HEARTWOOD_SKILL_PLATFORM")
+    if platform is not None:
+        if re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?", platform) is None:
+            raise ValueError("worker Skill platform is invalid")
+        environment["HEARTWOOD_SKILL_PLATFORM"] = platform
     placeholder = source.get("HEARTWOOD_INFERENCE_PLACEHOLDER")
     if placeholder is not None:
         if not placeholder or len(placeholder) > 4096 or any(c in placeholder for c in "\0\r\n"):

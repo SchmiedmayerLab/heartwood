@@ -217,6 +217,9 @@ def _format_skill_settings(settings: SkillSettingsResponse) -> str:
         lines.append(f"    {item['description']}")
         if item["compatibility_reason"] is not None:
             lines.append(f"    {item['compatibility_reason']}")
+        if item["unexpected_content"]:
+            lines.append("    Unverified content is not loaded; remove it:")
+            lines.extend(f"      {path}" for path in item["unexpected_content"])
     return "\n".join(lines)
 
 

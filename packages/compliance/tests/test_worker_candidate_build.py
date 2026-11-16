@@ -9,6 +9,10 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import os
+import shutil
+import subprocess
+import sys
 import tomllib
 import zipfile
 from pathlib import Path
@@ -439,3 +443,60 @@ def test_gateway_tests_cli_requires_gateway(
             builder.main()
         assert failure.value.code == 2
         assert not calls
+
+
+def test_candidate_application_install_keeps_bundled_skills_verifiable(tmp_path: Path) -> None:
+    """Install the real gateway wheel the way the candidate image does."""
+    from heartwood.gateway._skill_settings import pinned_bundled_manifests
+
+    uv = shutil.which("uv")
+    if uv is None:
+        pytest.skip("requires uv")
+    application = tmp_path / "application"
+    subprocess.run(
+        [uv, "build", "--wheel", "packages/gateway", "--out-dir", str(application)],
+        cwd=_ROOT,
+        check=True,
+        capture_output=True,
+    )
+    wheel = next(application.glob("heartwood_gateway-*.whl"))
+    name, version = wheel.name.split("-")[:2]
+    digest = hashlib.sha256(wheel.read_bytes()).hexdigest()
+    (application / "application-requirements.txt").write_text(
+        f"{name.replace('_', '-')}=={version} --hash=sha256:{digest}\n"
+    )
+    environment = tmp_path / "environment"
+    subprocess.run(
+        [uv, "venv", "--no-config", "--quiet", "--python", sys.executable, str(environment)],
+        check=True,
+    )
+    python = environment / "bin" / "python"
+    # The candidate image compiles bytecode for every uv installation by default.
+    image_environment = {**os.environ, "UV_COMPILE_BYTECODE": "1", "UV_LINK_MODE": "copy"}
+    subprocess.run(
+        [
+            "bash",
+            "images/worker/candidate/install-application.sh",
+            uv,
+            str(python),
+            str(application),
+        ],
+        cwd=_ROOT,
+        check=True,
+        capture_output=True,
+        env=image_environment,
+    )
+    purelib = subprocess.run(
+        [str(python), "-I", "-c", "import sysconfig; print(sysconfig.get_path('purelib'))"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    bundled = Path(purelib) / "heartwood/gateway/_bundled/vendor/heartwood-skills/skills"
+
+    assert not list(bundled.rglob("__pycache__"))
+    assert {manifest.name for manifest in pinned_bundled_manifests(bundled)} == {
+        "aggregate-export",
+        "baseline-model",
+        "omop-cohort-summary",
+    }

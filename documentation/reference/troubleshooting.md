@@ -239,6 +239,25 @@ Use a regular project file, not a symbolic link, and wait for any process writin
 The file must fit within the capture operation's byte limit.
 Retry capture before relying on its digest as execution evidence.
 
+## Skills
+
+### `HW-SKILL-001`: Installed Skill Storage Needs Attention
+
+Each installed Skill is stored alone in its content-addressed directory under the project's Skill store.
+Something else in that directory, such as a directory written beside the Skill or a staging directory left by an interrupted installation, has no verified digest or activation record.
+Heartwood never loads it, and the verified Skill stays active.
+Remove each path named in the check summary, or under **Unverified content** in the Skill list, with an account that owns the Skill store.
+The same check fails when the installation index cannot be read or locked, because no conversation can select Skills until the project state is repaired or restored.
+
+### `HW-SKILL-002`: Bundled Skills Do Not Match This Release
+
+Heartwood pins the complete-tree digest of every Skill bundled with the release.
+A failing check names a bundled Skill that is missing or has changed; Skills and specialists stay unavailable until it is restored.
+In a source checkout, run `git submodule update --init` and discard local changes under `vendor/heartwood-skills`.
+Restoring tracked files does not remove git-ignored files inside a Skill folder, such as `__pycache__/` or `.DS_Store`, and any extra file changes the Skill's digest; list them with `git -C vendor/heartwood-skills status --ignored skills` and delete them.
+In a native installation, reinstall the same release; in a container, use the published image unchanged.
+A warning names entries in the bundled Skill directory that are not part of the release, such as `.DS_Store`; Heartwood never loads them, and you can delete them.
+
 ## Managed Workers
 
 ### `HW-WORKER-001`: Sandbox Gateway Version Is Not Declared as Qualified

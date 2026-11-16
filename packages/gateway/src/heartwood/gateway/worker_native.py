@@ -289,7 +289,10 @@ class _NativeWorkerAttempt:
                 template=template,
                 policy=self._policy,
                 providers=[self.settings.provider],
-                environment={"SESSION_API_KEY": self._key},
+                environment={
+                    "SESSION_API_KEY": self._key,
+                    "HEARTWOOD_SKILL_PLATFORM": self.request.skills.platform_id,
+                },
                 command=[
                     "/opt/heartwood/.venv/bin/python",
                     "-I",
@@ -407,7 +410,7 @@ for mount in ('inputs','skills'):
 assert not Path('/workspace/.heartwood').exists()
 catalog=load_specialist_catalog(
  Path('/opt/heartwood/agents/verified'),
- Path('/opt/heartwood/vendor/heartwood-skills/skills'))
+ Path('/opt/heartwood/vendor/heartwood-skills/skills'),platform_id=sys.argv[2])
 print(json.dumps({'files':files,'uid':os.getuid(),
  'placeholder':os.environ[sys.argv[1]],'catalog':catalog.fingerprint}))
 """
@@ -420,6 +423,7 @@ print(json.dumps({'files':files,'uid':os.getuid(),
                 "-c",
                 program,
                 self.settings.placeholder_env,
+                self.request.skills.platform_id,
             ],
             workspace=self.settings.workspace,
             timeout_seconds=30,

@@ -230,10 +230,11 @@ class RestGateway:
             except ValueError:
                 return _error(409, "Experiment records require integrity recovery")
         if parts == ("settings", "specialists") and request.method == "GET":
-            return RestResponse(
-                status_code=200,
-                body=_json_object(self.gateway.specialist_settings()),
-            )
+            try:
+                specialist_settings = self.gateway.specialist_settings()
+            except SkillSettingsError as error:
+                return _error(422, error)
+            return RestResponse(status_code=200, body=_json_object(specialist_settings))
         if parts == ("settings", "skills", "inspect") and request.method == "POST":
             return self._handle_skill_inspection(body=request.body)
         if parts == ("settings", "skills", "install") and request.method == "POST":
@@ -464,6 +465,8 @@ class RestGateway:
             result = self.gateway.handle(command)
         except (CommandConflictError, SessionOwnershipError, SessionRecoveryError) as error:
             return _error(409, error)
+        except SkillSettingsError as error:
+            return _error(422, error)
         snapshot = self.gateway.session_snapshot(session_id=session_id)
         return RestResponse(
             status_code=200,

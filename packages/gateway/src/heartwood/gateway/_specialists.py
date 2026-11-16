@@ -22,11 +22,17 @@ os.environ.setdefault("OPENHANDS_SUPPRESS_BANNER", "1")
 
 from openhands.sdk import LLM, Agent
 from openhands.sdk.context import AgentContext
-from openhands.sdk.skills import Skill, load_skills_from_dir
+from openhands.sdk.skills import Skill
 from openhands.sdk.subagent import (
     AgentDefinition,
     agent_definition_to_factory,
     load_agents_from_dir,
+)
+
+from heartwood.gateway._skill_settings import (
+    BUNDLED_SKILL_DIGESTS,
+    compatible_bundled_manifests,
+    load_verified_skills,
 )
 
 
@@ -137,7 +143,13 @@ class SpecialistCatalog:
         return {"specialists": [role.safe_dict() for role in self.roles]}
 
 
-def load_specialist_catalog(agents_dir: Path, skills_dir: Path) -> SpecialistCatalog:
+def load_specialist_catalog(
+    agents_dir: Path,
+    skills_dir: Path,
+    *,
+    platform_id: str | None = None,
+    bundled_digests: Mapping[str, str] = BUNDLED_SKILL_DIGESTS,
+) -> SpecialistCatalog:
     """Load OpenHands definitions and enforce Heartwood's narrower role boundary."""
     resolved_agents_dir = agents_dir.resolve()
     definition_files = (
@@ -156,7 +168,14 @@ def load_specialist_catalog(agents_dir: Path, skills_dir: Path) -> SpecialistCat
         raise SpecialistCatalogError("the bundled specialist catalog is empty")
     if len(definitions) != len(definition_files):
         raise SpecialistCatalogError("OpenHands could not load every bundled specialist definition")
-    available_skills = _load_verified_skills(skills_dir)
+    available_skills = {
+        skill.name: skill
+        for skill in load_verified_skills(
+            compatible_bundled_manifests(
+                skills_dir, platform_id=platform_id, digests=bundled_digests
+            )
+        )
+    }
     roles = tuple(
         sorted(
             (
@@ -239,7 +258,8 @@ def _specialist_role(
         skill = available_skills.get(skill_name)
         if skill is None:
             raise SpecialistCatalogError(
-                f"specialist {definition.name} references an unverified Skill: {skill_name}"
+                f"specialist {definition.name} references an unverified or unavailable Skill: "
+                f"{skill_name}"
             )
         verified_skills.append(skill)
     return SpecialistRole(
@@ -310,14 +330,6 @@ def _validate_openhands_boundary(
         raise SpecialistCatalogError(
             f"unavailable specialist {definition.name} must declare the blocked tool capability"
         )
-
-
-def _load_verified_skills(skills_dir: Path) -> dict[str, Skill]:
-    repository, knowledge, agent = load_skills_from_dir(skills_dir.resolve())
-    combined = {**repository, **knowledge, **agent}
-    if len(combined) != len(repository) + len(knowledge) + len(agent):
-        raise SpecialistCatalogError("bundled Skill names must be unique")
-    return combined
 
 
 def _mapping(value: object, specialist_id: str) -> Mapping[str, Any]:

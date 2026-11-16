@@ -8,12 +8,16 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+import logging
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Final, Literal, Protocol
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Final, Literal, Protocol
+
+from heartwood_skill_catalog import CatalogBuildError, inspect_skill
 
 from heartwood.audit import AuditIntegrityError, AuditLog
 from heartwood.gateway.worker_skills import WorkerSkillProjection, stage_skill_projection
@@ -33,6 +37,21 @@ from heartwood.skills import (
     SkillStoreError,
     SkillVerificationError,
     skill_compatibility_reason,
+)
+
+if TYPE_CHECKING:
+    from openhands.sdk.skills import Skill
+
+_LOGGER = logging.getLogger(__name__)
+
+# Complete-tree digests of the release-bundled Skills in the pinned heartwood-skills
+# revision. Advance them together with that submodule.
+BUNDLED_SKILL_DIGESTS: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "aggregate-export": "2a8575cb0f0b06f48bd20551a50791ec33476b74cbbae6eef8156c029d9754ee",
+        "baseline-model": "2311e80e99d79d0a9f07e8d85b2cc073f8ca3c964209d81400a5ae7bd04ea22a",
+        "omop-cohort-summary": "4f1c6425c8089b487d3899f274b5fe4d38b5367d481f8235d711092a85537479",
+    }
 )
 
 
@@ -81,6 +100,7 @@ class SkillSummary:
     archive_size: int | None = None
     revocation_reason: str | None = None
     compatibility_reason: str | None = None
+    unexpected_content: tuple[str, ...] = ()
 
     @property
     def installable(self) -> bool:
@@ -172,6 +192,7 @@ class SkillSummary:
         manifest: SkillManifest,
         *,
         compatibility_reason: str | None = None,
+        unexpected_content: tuple[str, ...] = (),
     ) -> SkillSummary:
         """Build a projection from an activated content-addressed artifact."""
         status: Literal["active", "revoked", "unsupported"]
@@ -201,6 +222,7 @@ class SkillSummary:
             source_revision=record.source_revision,
             revocation_reason=record.revocation_reason,
             compatibility_reason=compatibility_reason,
+            unexpected_content=unexpected_content,
         )
 
     def safe_dict(self) -> dict[str, object]:
@@ -226,6 +248,7 @@ class SkillSummary:
             "archive_size": self.archive_size,
             "revocation_reason": self.revocation_reason,
             "compatibility_reason": self.compatibility_reason,
+            "unexpected_content": list(self.unexpected_content),
             "installable": self.installable,
         }
 
@@ -243,8 +266,10 @@ class SkillManager:
         audit_path: Path,
         platform_id: str,
         client_factory: Callable[[SkillSourceProfile, Path], _CatalogClient] | None = None,
+        bundled_digests: Mapping[str, str] = BUNDLED_SKILL_DIGESTS,
     ) -> None:
         self.bundled_dir = bundled_dir.resolve()
+        self.bundled_digests = bundled_digests
         self.store = store
         self.lifecycle_lock_path = store.root / ".lifecycle.lock"
         self.source_registry = source_registry
@@ -459,27 +484,37 @@ class SkillManager:
         # is no longer loaded, so its directory is not reverified here.
         self._record_removal(removed)
 
-    def active_skill_roots(self) -> tuple[Path, ...]:
-        """Return verified installed roots consumable by OpenHands."""
+    def active_skill_manifests(self) -> tuple[SkillManifest, ...]:
+        """Return exactly the verified, active Skills that OpenHands may load."""
         with self._lifecycle_lock():
-            return tuple(manifest.root.parent for manifest in self._active_skill_manifests())
+            return self._agent_skill_manifests()
 
     @contextmanager
     def stage_worker_skills(
         self, *, project_root: Path, staging_parent: Path
     ) -> Iterator[WorkerSkillProjection]:
         """Project verified active content without exposing the installation store."""
-        with self._lifecycle_lock():
-            manifests = [
-                manifest
-                for manifest in self._bundled_manifests()
-                if self._compatibility_reason(manifest) is None
-            ]
-            manifests.extend(self._active_skill_manifests())
-            with stage_skill_projection(
-                manifests, project_root=project_root, staging_parent=staging_parent
-            ) as projection:
-                yield projection
+        with (
+            self._lifecycle_lock(),
+            stage_skill_projection(
+                self._agent_skill_manifests(),
+                project_root=project_root,
+                staging_parent=staging_parent,
+            ) as projection,
+        ):
+            yield projection
+
+    def _agent_skill_manifests(self) -> tuple[SkillManifest, ...]:
+        """Select compatible bundled and active installed Skills under the lifecycle lock."""
+        bundled = compatible_bundled_manifests(
+            self.bundled_dir, platform_id=self.platform_id, digests=self.bundled_digests
+        )
+        if unexpected := unexpected_bundled_entries(self.bundled_dir, self.bundled_digests):
+            _LOGGER.error(
+                "Unpinned entries in the bundled Skill directory are not loaded; remove: %s",
+                ", ".join(repr(str(path)) for path in unexpected),
+            )
+        return (*bundled, *self._active_skill_manifests())
 
     def _active_skill_manifests(self) -> tuple[SkillManifest, ...]:
         """Return active packages while holding the lifecycle lock."""
@@ -505,6 +540,14 @@ class SkillManager:
                 if record.status != "active":
                     continue
                 manifest = self.store.manifest(record)
+                if unexpected := self.store.unexpected_artifact_entries(record):
+                    # Unverified content in the trusted store is an integrity fault, and the
+                    # gateway runs OpenHands with LOG_LEVEL=ERROR, so report it at that level.
+                    _LOGGER.error(
+                        "Unverified content beside installed Skill %s is not loaded; remove: %s",
+                        record.name,
+                        ", ".join(repr(str(path)) for path in unexpected),
+                    )
                 if self._compatibility_reason(manifest) is None:
                     manifests.append(manifest)
             return tuple(manifests)
@@ -582,23 +625,7 @@ class SkillManager:
         )
 
     def _bundled_manifests(self) -> tuple[SkillManifest, ...]:
-        if not self.bundled_dir.is_dir():
-            return ()
-        verifier = LocalSkillVerifier(
-            self.bundled_dir,
-            review="repository-reviewed",
-            require_repository_review=True,
-        )
-        manifests: list[SkillManifest] = []
-        for path in sorted(self.bundled_dir.iterdir()):
-            if not path.is_dir():
-                continue
-            try:
-                manifest = verifier.inspect_manifest(path)
-            except SkillVerificationError as error:
-                raise SkillSettingsError(f"Invalid bundled Skill {path.name}: {error}") from error
-            manifests.append(manifest)
-        return tuple(manifests)
+        return pinned_bundled_manifests(self.bundled_dir, self.bundled_digests)
 
     def _installed_summaries(self) -> tuple[SkillSummary, ...]:
         try:
@@ -614,6 +641,9 @@ class SkillManager:
                             record,
                             manifest,
                             compatibility_reason=self._compatibility_reason(manifest),
+                            unexpected_content=tuple(
+                                str(path) for path in self.store.unexpected_artifact_entries(record)
+                            ),
                         ),
                         # The retained record describes the deployment that installed
                         # the Skill; only the current registry decides this status.
@@ -726,6 +756,84 @@ class SkillManager:
             )
         except (AuditIntegrityError, NativeLockUnavailableError) as error:
             raise SkillSettingsError(f"Unable to record Skill audit event: {error}") from error
+
+
+def pinned_bundled_manifests(
+    bundled_dir: Path, digests: Mapping[str, str] = BUNDLED_SKILL_DIGESTS
+) -> tuple[SkillManifest, ...]:
+    """Verify every release-pinned bundled Skill tree; unpinned entries are never selected."""
+    verifier = LocalSkillVerifier(
+        bundled_dir,
+        review="repository-reviewed",
+        require_repository_review=True,
+    )
+    manifests: list[SkillManifest] = []
+    for name in sorted(digests):
+        path = bundled_dir / name
+        if not path.is_dir():
+            raise SkillSettingsError(f"Bundled Skill is missing from the release: {name}")
+        try:
+            manifest = verifier.inspect_manifest(path)
+        except SkillVerificationError as error:
+            raise SkillSettingsError(f"Invalid bundled Skill {name}: {error}") from error
+        if manifest.tree_sha256 != digests[name]:
+            raise SkillSettingsError(f"Bundled Skill does not match the release: {name}")
+        manifests.append(manifest)
+    return tuple(manifests)
+
+
+def unexpected_bundled_entries(
+    bundled_dir: Path, digests: Mapping[str, str] = BUNDLED_SKILL_DIGESTS
+) -> tuple[Path, ...]:
+    """Return entries in the bundled directory that are not release-pinned Skills."""
+    if not bundled_dir.is_dir():
+        return ()
+    # Compare identities, not names: a case-insensitive file system can list a pinned
+    # Skill directory under a different spelling of its name.
+    pinned: set[tuple[int, int]] = set()
+    for name in digests:
+        with suppress(FileNotFoundError):
+            metadata = (bundled_dir / name).lstat()
+            pinned.add((metadata.st_dev, metadata.st_ino))
+    unexpected: list[Path] = []
+    for path in sorted(bundled_dir.iterdir()):
+        metadata = path.lstat()
+        if (metadata.st_dev, metadata.st_ino) not in pinned:
+            unexpected.append(path)
+    return tuple(unexpected)
+
+
+def compatible_bundled_manifests(
+    bundled_dir: Path,
+    *,
+    platform_id: str | None,
+    digests: Mapping[str, str] = BUNDLED_SKILL_DIGESTS,
+) -> tuple[SkillManifest, ...]:
+    """Select the release-pinned bundled Skills compatible with one deployment."""
+    return tuple(
+        manifest
+        for manifest in pinned_bundled_manifests(bundled_dir, digests)
+        if skill_compatibility_reason(
+            manifest.policy, declared_tools=manifest.declared_tools, platform_id=platform_id
+        )
+        is None
+    )
+
+
+def load_verified_skills(manifests: Sequence[SkillManifest]) -> list[Skill]:
+    """Load exactly the selected Skill directories after rechecking each selected digest."""
+    from openhands.sdk.skills import Skill, SkillError
+
+    skills: list[Skill] = []
+    for manifest in manifests:
+        try:
+            if inspect_skill(manifest.root).tree_sha256 != manifest.tree_sha256:
+                raise SkillSettingsError(f"Verified Skill changed before loading: {manifest.name}")
+            skill = Skill.load(manifest.root / "SKILL.md")
+        except (CatalogBuildError, OSError, SkillError) as error:
+            raise SkillSettingsError(f"Unable to load verified Skill {manifest.name}") from error
+        skills.append(skill)
+    return skills
 
 
 def _summary_order(summary: SkillSummary) -> tuple[int, str, str]:

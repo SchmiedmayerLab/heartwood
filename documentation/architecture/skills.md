@@ -23,6 +23,12 @@ The Heartwood release pins one exact `heartwood-skills` Git revision as a submod
 Packaging verifies that the initialized directory is clean and matches that gitlink, then archives that revision into native and container artifacts.
 Release creation additionally verifies that the pinned revision is published on the protected `heartwood-skills/main` branch.
 Bundled Skills are governed by that Heartwood release; withdrawing bundled content requires a new Heartwood release.
+Heartwood also pins the complete-tree digest of each bundled Skill in its gateway source.
+Before it lists, loads, or projects bundled Skills, the gateway verifies that every pinned Skill directory is present with its pinned digest, and it refuses all three operations otherwise.
+Other entries in the bundled directory, such as `.DS_Store`, are never selected or loaded; the gateway logs them and `heartwood doctor` reports them.
+A mismatch fails `heartwood doctor` and the browser's readiness view as `HW-SKILL-002`, the Skill and specialist settings return the cause instead of a server error, and the browser keeps the rest of the project readable.
+Verification ignores no file inside a Skill directory, because a stray file such as cached bytecode for a helper module could execute with the Skill.
+Installations therefore must not write bytecode into the bundled Skill trees: the candidate image installs the Heartwood application wheels without bytecode compilation, and every image sets `PYTHONDONTWRITEBYTECODE`.
 Signed catalog revocations govern catalog-installed content and do not silently rewrite release-bundled content.
 
 Curated packages live directly under `skills/<skill-name>/`; directory names do not encode review or publication state.
@@ -31,7 +37,7 @@ Every catalog target contains the complete immutable Agent Skill package, rather
 
 OpenHands also provides installed-Skill and marketplace APIs for its general-purpose runtime.
 Heartwood does not use those APIs as a second installation registry because they do not carry deployment TUF roots, exact-digest controlled-data approvals, signed revocation state, or project-scoped audit evidence.
-Heartwood instead verifies and activates a Skill once in its gateway-owned project store, then passes only the verified active directories to the public OpenHands loader.
+Heartwood instead verifies and activates a Skill once in its gateway-owned project store, then loads each verified active Skill directory individually with the public OpenHands Skill loader.
 Installation decisions and lifecycle results use Heartwood's existing recoverable, scrubbed, hash-chained audit log rather than a Skill-specific logging format.
 
 ## Signed Source Flow
@@ -67,6 +73,25 @@ Heartwood revalidates the signed source, installed tree, and matching activation
 Runtime selection rereads the installation index after refreshing signed sources, so a newly observed revocation excludes the package from that same selection.
 It also reevaluates tool, network, and platform compatibility for the current deployment, so project state moved between environments cannot activate an incompatible Skill.
 The projection likewise reports controlled-data approval for an installed Skill from the current deployment registry, not from the retained installation record.
+
+## Agent Selection
+
+The agent context contains the release-bundled Skills compatible with the current deployment and the verified active installed Skills, and nothing else.
+The local gateway and the worker projection use this same selection.
+The gateway loads each selected Skill from its own `SKILL.md`; it never passes a parent directory to OpenHands for discovery.
+When it creates the conversation, it first rechecks each selected Skill's complete-tree digest, so content changed between selection and loading is refused.
+Scripts and references that the local agent reads or runs later in the conversation are not rechecked; the worker path instead mounts a read-only, digest-bound projection.
+A selected Skill that has changed or fails to load stops conversation setup rather than being skipped.
+Research specialists receive the Skills their definitions name from the compatible release-bundled part of this selection, loaded and rechecked the same way.
+The worker image applies the gateway's deployment platform, which the launcher passes to it, so both build the same specialist catalog.
+
+Each content-addressed slot `artifacts/sha256/<tree-digest>/` holds exactly one Skill directory.
+Anything else in that slot, such as a directory written beside the Skill or a staging directory left by an interrupted installation, has neither a verified digest nor an activation record.
+Heartwood does not load or project that content.
+The installed Skill's summary lists each unexpected path: the CLI and browser Skill lists show it, the notebook bridge returns it, and `heartwood doctor` reports it as `HW-SKILL-001`.
+The gateway also logs an error naming the entries whenever it selects the Skill.
+Removing the unexpected entries clears the report; the verified Skill remains available meanwhile.
+Entries are compared by file identity, so a case-insensitive file system that stores the Skill directory under another spelling of its name reports nothing.
 
 ## Worker Projection
 

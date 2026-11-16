@@ -374,7 +374,6 @@ def test_altered_managed_route_is_rejected_before_client_creation(
     backend = OpenHandsSdkBackend(
         profile=profile,
         workspace=tmp_path,
-        skills_dir=tmp_path / "skills",
         persistence_dir=tmp_path / "state",
         conversation_key="synthetic",
         managed_inference=True,

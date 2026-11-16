@@ -1477,7 +1477,6 @@ def _sdk_gateway(
                 credential_kind="none",
             ),
             workspace=root,
-            skills_dir=root / ".heartwood/skills",
             persistence_dir=gateway.sessions_root / session_id / "openhands",
             conversation_key=f"{root}#{session_id}",
             structured_task_outcomes=True,

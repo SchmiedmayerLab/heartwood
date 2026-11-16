@@ -130,6 +130,7 @@ from heartwood.gateway._review_executor import (
     bind_review_executor,
     scoped_review_execution_enabled,
 )
+from heartwood.gateway._skill_settings import SkillSettingsError, load_verified_skills
 from heartwood.gateway._specialist_task import (
     HeartwoodSpecialistObservation,
     HeartwoodSpecialistToolSet,
@@ -150,6 +151,7 @@ from heartwood.gateway._worker_events import AdmittedWorkerWorkspace
 from heartwood.schemas import ActionReviewMode, JsonValue
 from heartwood.schemas.evaluation import EvaluationRuntimeObservation
 from heartwood.schemas.project_paths import ProjectPathError, project_relative_path
+from heartwood.skills import SkillManifest
 
 install_privacy_safe_retry_logging()
 
@@ -233,7 +235,11 @@ def register_specialist_catalog(catalog: SpecialistCatalog) -> None:
         with _SPECIALIST_REGISTRATION_LOCK:
             registered_definition = _REGISTERED_HEARTWOOD_SPECIALISTS.get(definition.name)
             if registered_definition is not None:
-                if registered_definition != definition:
+                # The same release definition loads from a different path in a checkout and
+                # in an installed wheel; only its content identifies it, as in the fingerprint.
+                if registered_definition.model_dump(
+                    mode="json", exclude={"source"}
+                ) != definition.model_dump(mode="json", exclude={"source"}):
                     raise OpenHandsSdkError(
                         f"specialized agent name has conflicting definitions: {definition.name}"
                     )
@@ -300,10 +306,9 @@ class OpenHandsSdkBackend:
         *,
         profile: ModelProfile,
         workspace: Path,
-        skills_dir: Path,
         persistence_dir: Path,
         conversation_key: str,
-        additional_skills_dirs: Sequence[Path] = (),
+        verified_skills: Sequence[SkillManifest] = (),
         specialist_catalog: SpecialistCatalog | None = None,
         credential_environment_names: Sequence[str] = (),
         env: Mapping[str, str] | None = None,
@@ -319,8 +324,7 @@ class OpenHandsSdkBackend:
         self.profile = profile
         self._managed_inference = managed_inference
         self.workspace = workspace.resolve()
-        self.skills_dir = skills_dir.resolve()
-        self.additional_skills_dirs = tuple(path.resolve() for path in additional_skills_dirs)
+        self.verified_skills = tuple(verified_skills)
         self.specialist_catalog = specialist_catalog
         self.persistence_dir = persistence_dir.resolve()
         self.conversation_key = conversation_key
@@ -844,16 +848,12 @@ class OpenHandsSdkBackend:
             managed_api_key = configure_managed_inference(
                 os.environ if self.env is None else self.env
             )
-        from openhands.sdk.skills import load_skills_from_dir
-
         self.workspace.mkdir(parents=True, exist_ok=True)
         self.persistence_dir.mkdir(parents=True, exist_ok=True)
-        skills: list[Skill] = []
-        for skills_dir in (self.skills_dir, *self.additional_skills_dirs):
-            if not skills_dir.is_dir():
-                continue
-            repository, knowledge, agent_skills = load_skills_from_dir(skills_dir)
-            skills.extend((*repository.values(), *knowledge.values(), *agent_skills.values()))
+        try:
+            skills = load_verified_skills(self.verified_skills)
+        except SkillSettingsError as error:
+            raise OpenHandsSdkError(str(error)) from error
         self._register_specialized_agents()
         options = _llm_options(
             self.profile,

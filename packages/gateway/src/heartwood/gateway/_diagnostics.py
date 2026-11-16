@@ -225,6 +225,20 @@ _DIAGNOSTICS: dict[str, DiagnosticDefinition] = {
         "Open Heartwood through the launch link printed by the terminal that started it.",
         "/reference/troubleshooting/#hw-ingress-003-gateway-request-is-missing-the-launch-capability",
     ),
+    "installed-skills": DiagnosticDefinition(
+        "HW-SKILL-001",
+        "Installed Skill storage needs attention",
+        "Remove the entries named in the summary; verified Skills stay active.",
+        "/reference/troubleshooting/#hw-skill-001-installed-skill-storage-needs-attention",
+        "path-sensitive",
+    ),
+    "bundled-skills": DiagnosticDefinition(
+        "HW-SKILL-002",
+        "Bundled Skills do not match this release",
+        "Restore the release's bundled Skills and remove the entries named in the summary.",
+        "/reference/troubleshooting/#hw-skill-002-bundled-skills-do-not-match-this-release",
+        "path-sensitive",
+    ),
     "worker-gateway-version": DiagnosticDefinition(
         "HW-WORKER-001",
         "Sandbox gateway version is not declared as qualified",

@@ -84,6 +84,20 @@ def test_worker_child_receives_only_explicit_environment(launcher: ModuleType) -
     assert source["PATH"] not in environment["PATH"]
 
 
+def test_worker_admits_only_a_valid_skill_platform(launcher: ModuleType) -> None:
+    key = "a" * 43
+    environment = launcher.worker_environment(
+        {"SESSION_API_KEY": key, "HEARTWOOD_SKILL_PLATFORM": "terra"}
+    )
+    assert environment["HEARTWOOD_SKILL_PLATFORM"] == "terra"
+    assert "HEARTWOOD_SKILL_PLATFORM" not in launcher.worker_environment({"SESSION_API_KEY": key})
+    for platform in ("", "Terra", "terra\n", "../terra", "x" * 65):
+        with pytest.raises(ValueError, match="Skill platform"):
+            launcher.worker_environment(
+                {"SESSION_API_KEY": key, "HEARTWOOD_SKILL_PLATFORM": platform}
+            )
+
+
 @pytest.mark.parametrize("key", ["", "short", "a" * 42, "a" * 257, "a" * 43 + "\n"])
 def test_worker_rejects_missing_or_invalid_attempt_key(launcher: ModuleType, key: str) -> None:
     with pytest.raises(ValueError, match="attempt key"):

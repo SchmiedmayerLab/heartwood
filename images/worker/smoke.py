@@ -112,6 +112,8 @@ def main() -> None:
         "--env",
         "HEARTWOOD_INFERENCE_PLACEHOLDER=synthetic-placeholder",
         "--env",
+        "HEARTWOOD_SKILL_PLATFORM=generic",
+        "--env",
         "HTTPS_PROXY=http://unapproved.invalid",
         "--env",
         "OH_ENABLE_VSCODE=true",

@@ -1498,6 +1498,8 @@ class SessionGateway:
         return inspect_deployment(
             self.project,
             self._credential_environment(strict=False),
+            bundled_skills_dir=self.skill_manager.bundled_dir,
+            bundled_skill_digests=self.skill_manager.bundled_digests,
         )
 
     @gateway_operation
@@ -1526,6 +1528,8 @@ class SessionGateway:
             interface=interface,
             port=port,
             env=self._credential_environment(strict=False),
+            bundled_skills_dir=self.skill_manager.bundled_dir,
+            bundled_skill_digests=self.skill_manager.bundled_digests,
         )
 
     @gateway_operation
@@ -2263,8 +2267,7 @@ class SessionGateway:
         return OpenHandsSdkBackend(
             profile=profile,
             workspace=self.project.root,
-            skills_dir=self.skill_manager.bundled_dir,
-            additional_skills_dirs=self.skill_manager.active_skill_roots(),
+            verified_skills=self.skill_manager.active_skill_manifests(),
             specialist_catalog=self._specialist_catalog(),
             persistence_dir=self.sessions_root / session_id / "openhands",
             conversation_key=f"{self.project.root}#{session_id}",
@@ -2300,6 +2303,8 @@ class SessionGateway:
         catalog = load_specialist_catalog(
             _runtime_resource_root() / "agents" / "verified",
             self.skill_manager.bundled_dir,
+            platform_id=self.skill_manager.platform_id,
+            bundled_digests=self.skill_manager.bundled_digests,
         )
         self._specialist_catalog_cache = catalog
         return catalog
