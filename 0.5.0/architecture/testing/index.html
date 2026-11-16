@@ -1,0 +1,3358 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Auditable agentic coding for biomedical research environments">
+      
+      
+      
+        <link rel="canonical" href="https://schmiedmayerlab.github.io/heartwood/0.5.0/architecture/testing/">
+      
+      
+        <link rel="prev" href="../experiments/">
+      
+      
+        <link rel="next" href="../../reference/gateway-api/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/brand/heartwood-favicon.svg">
+      <meta name="generator" content="zensical-0.0.52">
+    
+    
+      
+        <title>Testing and Evidence - Heartwood</title>
+      
+    
+    
+      
+        
+      
+      <link rel="stylesheet" href="../../assets/stylesheets/modern/main.8b3b5a67.min.css">
+      
+        
+          
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/modern/palette.dfe2e883.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Inter:300,300i,400,400i,500,500i,700,700i%7CJetBrains+Mono:400,400i,700,700i&amp;display=fallback">
+        <style>:root{--md-text-font:"Inter";--md-code-font:"JetBrains Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_scope.pathname.endsWith("/")||(__md_scope=new URL(__md_scope.pathname+"/",location)),__md_hash=e=>[...e].reduce(((e,t)=>(e<<5)-e+t.charCodeAt(0)),0),__md_get=(e,t=localStorage,_=__md_scope)=>JSON.parse(t.getItem(_.pathname+"."+e)),__md_set=(e,t,_=localStorage,a=__md_scope)=>{try{_.setItem(a.pathname+"."+e,JSON.stringify(t))}catch(e){}},document.documentElement.setAttribute("data-platform",navigator.platform)</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer" aria-label="Navigation"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#testing-and-evidence" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="Heartwood" class="md-header__button md-logo" aria-label="Heartwood" data-md-component="logo">
+      
+  <img src="../../assets/brand/heartwood-mark.svg" alt="Heartwood">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer" aria-label="Navigation">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-menu" viewBox="0 0 24 24"><path d="M4 5h16M4 12h16M4 19h16"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Heartwood
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Testing and Evidence
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Use light appearance"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Use light appearance" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-sun-moon" viewBox="0 0 24 24"><path d="M12 2v2M14.837 16.385a6 6 0 1 1-7.223-7.222c.624-.147.97.66.715 1.248a4 4 0 0 0 5.26 5.259c.589-.255 1.396.09 1.248.715M16 12a4 4 0 0 0-4-4M19 5l-1.256 1.256M20 12h2"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="custom" data-md-color-accent="custom"  aria-label="Use dark appearance"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Use dark appearance" for="__palette_2" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="custom" data-md-color-accent="custom"  aria-label="Follow system appearance"  type="radio" name="__palette" id="__palette_2">
+    
+      <label class="md-header__button md-icon" title="Follow system appearance" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-moon" viewBox="0 0 24 24"><path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search" aria-label="Search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-search" viewBox="0 0 24 24"><path d="m21 21-4.34-4.34"/><circle cx="11" cy="11" r="8"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog" aria-label="Search">
+  <button type="button" class="md-search__button">
+    Search
+  </button>
+</div>
+      
+    
+    <div class="md-header__source">
+      
+        <a href="https://github.com/SchmiedmayerLab/heartwood" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.3.1 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2026 Fonticons, Inc.--><path fill="currentColor" d="M216.5 362.5c-66-8-112.5-55.5-112.5-117 0-25 9-52 24-70-6.5-16.5-5.5-51.5 2-66 20-2.5 47 8 63 22.5 19-6 39-9 63.5-9s44.5 3 62.5 8.5c15.5-14 43-24.5 63-22 7 13.5 8 48.5 1.5 65.5 16 19 24.5 44.5 24.5 70.5 0 61.5-46.5 108-113.5 116.5 17 11 28.5 35 28.5 62.5v52c0 15 12.5 23.5 27.5 17.5C441 459.5 512 369 512 257 512 115.5 397 0 255.5 0S0 115.5 0 257c0 111 70.5 203 165.5 237.5 13.5 5 26.5-4 26.5-17.5v-40c-7 3-16 5-24 5-33 0-52.5-18-66.5-51.5-5.5-13.5-11.5-21.5-23-23-6-.5-8-3-8-6 0-6 10-10.5 20-10.5 14.5 0 27 9 40 27.5 10 14.5 20.5 21 33 21s20.5-4.5 32-16c8.5-8.5 15-16 21-21"/></svg>
+  </div>
+  <div class="md-source__repository">
+    SchmiedmayerLab/heartwood
+  </div>
+</a>
+      
+    </div>
+  </nav>
+  
+    
+      
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+      
+      
+        
+          
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../start/" class="md-tabs__link">
+          
+  
+  Get Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+      
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../use/" class="md-tabs__link">
+          
+  
+  Work With Heartwood
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+      
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../models/" class="md-tabs__link">
+          
+  
+  Models
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+      
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../platforms/" class="md-tabs__link">
+          
+  
+  Platforms
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+      
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../operate/" class="md-tabs__link">
+          
+  
+  Operate Heartwood
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+      
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../" class="md-tabs__link">
+          
+  
+  Architecture
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+      
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../reference/gateway-api/" class="md-tabs__link">
+          
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+      
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../contribute/" class="md-tabs__link">
+          
+  
+  Contribute
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+    
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="Heartwood" class="md-nav__button md-logo" aria-label="Heartwood" data-md-component="logo">
+      
+  <img src="../../assets/brand/heartwood-mark.svg" alt="Heartwood">
+
+    </a>
+    Heartwood
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/SchmiedmayerLab/heartwood" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.3.1 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2026 Fonticons, Inc.--><path fill="currentColor" d="M216.5 362.5c-66-8-112.5-55.5-112.5-117 0-25 9-52 24-70-6.5-16.5-5.5-51.5 2-66 20-2.5 47 8 63 22.5 19-6 39-9 63.5-9s44.5 3 62.5 8.5c15.5-14 43-24.5 63-22 7 13.5 8 48.5 1.5 65.5 16 19 24.5 44.5 24.5 70.5 0 61.5-46.5 108-113.5 116.5 17 11 28.5 35 28.5 62.5v52c0 15 12.5 23.5 27.5 17.5C441 459.5 512 369 512 257 512 115.5 397 0 255.5 0S0 115.5 0 257c0 111 70.5 203 165.5 237.5 13.5 5 26.5-4 26.5-17.5v-40c-7 3-16 5-24 5-33 0-52.5-18-66.5-51.5-5.5-13.5-11.5-21.5-23-23-6-.5-8-3-8-6 0-6 10-10.5 20-10.5 14.5 0 27 9 40 27.5 10 14.5 20.5 21 33 21s20.5-4.5 32-16c8.5-8.5 15-16 21-21"/></svg>
+  </div>
+  <div class="md-source__repository">
+    SchmiedmayerLab/heartwood
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Home
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../start/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Get Started
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_2" id="__nav_2_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+  Get Started
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../start/install/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Install Heartwood
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../start/project/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Projects and Private State
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../use/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Work With Heartwood
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3" id="__nav_3_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+  Work With Heartwood
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../use/research-workflows/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Research Workflows
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../use/terminal/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Terminal
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../use/browser/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Browser
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../use/notebooks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Notebooks
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../use/actions-audit/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Actions and Audit History
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../use/skills/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Research Skills
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../use/specialists/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Research Specialists
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../models/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Models
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_4" id="__nav_4_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+  Models
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../models/connections/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Hosted and Managed Models
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../models/choose-managed/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Choose a Heartwood-Managed Model
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../models/run-with-heartwood/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Run a Model With Heartwood
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../models/offline/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Move a Model Offline
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../platforms/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Platforms
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_5" id="__nav_5_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+  Platforms
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../platforms/containers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Containers
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../platforms/native-linux/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Native Linux
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../platforms/terra/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Terra
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../platforms/carina/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Stanford Carina
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../operate/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Operate Heartwood
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_6" id="__nav_6_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+  Operate Heartwood
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/platform-contract/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Platform Contract
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/platform-requirements/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Platform API and Access Requirements
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/audit-checkpoints/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Audit Checkpoints and Retention
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/parallel-reviews/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Qualify Parallel Reviews
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/support/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Support and Compatibility
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/security/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Security and Controlled Data
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operate/platform-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Add a Platform
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" checked>
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Architecture
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_7" id="__nav_7_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+  Architecture
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../system/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  System Architecture
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../skills/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Skill Trust and Distribution
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../sessions-audit/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Sessions and Audit
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../experiments/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Experiment Records
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Testing and Evidence
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="././" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Testing and Evidence
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+
+<nav class="md-nav md-nav--secondary" aria-label="On this page">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      On this page
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#claims" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Claims
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#test-layers" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Test Layers
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#continuous-integration" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Continuous Integration
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#capable-model-acceptance" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Capable-Model Acceptance
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#candidate-builds" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Candidate Builds
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#native-qualification" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Native Qualification
+      </span>
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Native Qualification">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#installed-native-integration" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Installed Native Integration
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#infrastructure-telemetry" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Infrastructure Telemetry
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#capable-model-in-a-native-worker" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Capable Model in a Native Worker
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#native-network-qualification" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Native Network Qualification
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#native-qualification-evidence" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Native Qualification Evidence
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#research-evaluation-evidence" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Research Evaluation Evidence
+      </span>
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Research Evaluation Evidence">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#synthetic-research-cases" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Synthetic Research Cases
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#parallel-review-comparison" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Parallel Review Comparison
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#action-review-evaluation" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Action-Review Evaluation
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#synthetic-data-rule" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Synthetic Data Rule
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" >
+        
+          
+          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Reference
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+  Reference
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/gateway-api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Gateway API
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/cli/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Command Reference
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Configuration and State
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/capabilities/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Platform Capabilities
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/gpu-compatibility/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  GPU Compatibility
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Diagnostics and Troubleshooting
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/glossary/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Glossary
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_9" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../contribute/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Contribute
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_9" id="__nav_9_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_9">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+  Contribute
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contribute/development/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Development Guide
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contribute/skills/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Contribute Research Skills
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contribute/documentation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Documentation Guide
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contribute/visual-identity/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Visual Identity
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contribute/releases/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Release Guide
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  
+                    
+                    
+                    
+                      
+                    
+                    
+                      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+                      <div class="md-sidebar-button__wrapper">
+                        <label class="md-sidebar-button" for="__toc"></label>
+                      </div>
+                    
+                  
+                  <div class="md-sidebar__inner">
+                    
+
+
+<nav class="md-nav md-nav--secondary" aria-label="On this page">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      On this page
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#claims" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Claims
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#test-layers" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Test Layers
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#continuous-integration" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Continuous Integration
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#capable-model-acceptance" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Capable-Model Acceptance
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#candidate-builds" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Candidate Builds
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#native-qualification" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Native Qualification
+      </span>
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Native Qualification">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#installed-native-integration" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Installed Native Integration
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#infrastructure-telemetry" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Infrastructure Telemetry
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#capable-model-in-a-native-worker" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Capable Model in a Native Worker
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#native-network-qualification" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Native Network Qualification
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#native-qualification-evidence" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Native Qualification Evidence
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#research-evaluation-evidence" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Research Evaluation Evidence
+      </span>
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Research Evaluation Evidence">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#synthetic-research-cases" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Synthetic Research Cases
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#parallel-review-comparison" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Parallel Review Comparison
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#action-review-evaluation" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Action-Review Evaluation
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#synthetic-data-rule" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Synthetic Data Rule
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+                
+
+
+
+  
+
+
+  <nav class="md-path" aria-label="Navigation" >
+    <ol class="md-path__list">
+      
+        
+  
+  
+    <li class="md-path__item">
+      <a href="../.." class="md-path__link">
+        
+  
+  <span class="md-ellipsis">
+    Home
+  </span>
+
+      </a>
+    </li>
+  
+
+      
+      
+        
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-path__item">
+        <a href="../" class="md-path__link">
+          
+  
+  <span class="md-ellipsis">
+    Architecture
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ol>
+  </nav>
+
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+  
+  
+
+
+<!--
+This source file is part of the Heartwood open-source project
+SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+SPDX-License-Identifier: MIT
+-->
+
+<h1 id="testing-and-evidence">Testing and Evidence<a class="headerlink" href="#testing-and-evidence" title="Permanent link">&para;</a></h1>
+<p>Heartwood's claims rest on four evidence levels, and each test layer reaches a stated level.
+No single layer establishes every property of a deployment.</p>
+<h2 id="claims">Claims<a class="headerlink" href="#claims" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Implemented</strong> means code and automated contract tests exist.</li>
+<li><strong>CI validated</strong> means the behavior ran in the documented automated environment.</li>
+<li><strong>Live synthetic validated</strong> means the published artifact ran in the named platform with synthetic data.</li>
+<li><strong>Institution approved</strong> requires separate institutional evidence and is never inferred from the previous levels.</li>
+</ul>
+<p>Native qualification is CI validation of the managed worker boundary with synthetic workloads.
+It does not establish sensitive-data readiness, and a qualification record is not institutional approval.
+Release documentation states the supported contract; run-specific results stay in CI artifacts and pull requests.</p>
+<h2 id="test-layers">Test Layers<a class="headerlink" href="#test-layers" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Layer</th>
+<th>Runs as</th>
+<th>Establishes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Unit, schema, and persistence</td>
+<td><code>pytest</code> in the Python workflow</td>
+<td>Validation, policy, diagnostics, serialization, atomic replacement, append interruption and recovery, process concurrency, migrations, and private permissions</td>
+</tr>
+<tr>
+<td>OpenHands conformance</td>
+<td><code>pytest</code> with the real SDK and deterministic <code>TestLLM</code></td>
+<td>Typed events, grouped approval and rejection, restart without repeated model or tool work, Task Tracker, structured outcomes, and sequential specialists</td>
+</tr>
+<tr>
+<td>Gateway and interface contracts</td>
+<td><code>pytest</code>, the Web UI workflow</td>
+<td>Shared command and projection behavior, review modes, outside-operation phases, workspace inspection, transports, ingress, and terminal, browser, and notebook rendering</td>
+</tr>
+<tr>
+<td>Supply chain</td>
+<td><code>pytest</code> with an ephemeral TUF repository</td>
+<td>Skill refresh, offline verification, expiry, rollback, substitution, path confinement, exact-digest approval, and revocation</td>
+</tr>
+<tr>
+<td>Container and native smoke</td>
+<td>Container smoke and native release workflows</td>
+<td>Entrypoints, filesystem layout, no secrets in image layers, offline operation, and installation of the release archive in an empty Ubuntu 24.04 container</td>
+</tr>
+<tr>
+<td>Capable-model acceptance</td>
+<td>Capable model workflow, optional GPU qualification</td>
+<td>Real inference driving the gateway and OpenHands through approval, rejection, replay, and audit export</td>
+</tr>
+<tr>
+<td>Native qualification</td>
+<td>Worker candidate workflow</td>
+<td>The installed application, worker image, and qualification gateway across the complete managed worker boundary</td>
+</tr>
+<tr>
+<td>Live synthetic validation</td>
+<td>Operator run in Terra or Carina</td>
+<td>The exact published artifact in the named platform without protected data</td>
+</tr>
+</tbody>
+</table>
+<p>Deterministic layers use fake providers for failure paths and <code>TestLLM</code> for SDK conformance; capable models appear only in the acceptance path that needs real inference.
+Browser tests build production assets, scan the rendered interface with axe, and check keyboard focus, reduced motion, and reflow at desktop, tablet, and narrow notebook widths.</p>
+<p>Outside-operation conformance uses the native SDK MCP client against an authenticated synthetic MCP service on loopback.
+The service verifies the token's signature, issuer, audience, and expiry, and separately checks project, researcher, worker attempt, policy, exact request, and input bytes; its record and operation identity are committed in one SQLite transaction.
+Tests discard a reply after the effect commits, restart the gateway and service, rotate the credential, and recover through status lookup without resubmission.
+These tests establish protocol and authorization behavior, not process isolation or deployed network policy.</p>
+<h2 id="continuous-integration">Continuous Integration<a class="headerlink" href="#continuous-integration" title="Permanent link">&para;</a></h2>
+<p>Pull-request and main-branch validation both end in the required <code>Release Candidate Ready</code> aggregate, which requires every validation workflow, including capable-model acceptance; on pull requests it also requires native worker qualification.
+On a pull request, native qualification and its candidate builds are skipped only when every changed path is under <code>documentation/</code> or <code>.github/</code> other than the worker candidate and pull-request validation workflows; any other path, including one the selection does not recognize, requires them.
+On the main branch, the separate <strong>Native Qualification</strong> workflow runs the complete native qualification for every commit and attests its evidence; it has no concurrency group, so a newer commit never cancels the run of an earlier one.</p>
+<p>Pull-request jobs that build and run candidate code hold no signing or package-write permission; the Python job holds an identity token only to upload coverage to Codecov.
+Multi-platform manifests, moving tags, and evidence attestation run only on the main branch.
+Registry writes run on the main branch, except that the manual Terra GPU Qualification Candidate workflow pushes a <code>candidate-sha-&lt;commit&gt;-terra-gpu-nvidia</code> image from the branch it is started on.
+Release creation requires <code>Release Candidate Ready</code>, the <code>Analyze (python)</code> and <code>Analyze (javascript-typescript)</code> code-scanning checks, and the attested Native Qualification evidence for the exact commit.</p>
+<h2 id="capable-model-acceptance">Capable-Model Acceptance<a class="headerlink" href="#capable-model-acceptance" title="Permanent link">&para;</a></h2>
+<p>One coding-agent acceptance contract drives the real gateway and OpenHands adapter through structured terminal proposals, grouped approval and rejection, a synthetic file change, byte-exact independent verification, proof that the rejected action did not run, fresh-process replay, and hash-chain-verified audit export.
+It writes a machine-readable record of the runtime, model revision, hardware, context, tensor parallelism, parser, and tool mode.</p>
+<p>The CPU job runs on the <code>heartwood-ubuntu-large</code> runner and obtains its model through the portable-transfer contract: it downloads and verifies the pinned model, exports a bundle, imports it into an empty project in a container with <code>--network none</code> after explicit license approval, and runs the acceptance task against the imported copy.
+The GPU image workflow verifies the hashed CUDA environment, vLLM and PyTorch versions, parsers, and the absence of model weights on standard runners; it does not claim CUDA initialization or GPU model loading.
+The protected self-hosted GPU workflow runs the same acceptance contract with external weights and promotes exactly one row of the <a href="../../reference/gpu-compatibility/">GPU compatibility matrix</a>; it does not qualify other drivers, model revisions, precisions, parsers, context sizes, or tensor-parallel layouts.</p>
+<h2 id="candidate-builds">Candidate Builds<a class="headerlink" href="#candidate-builds" title="Permanent link">&para;</a></h2>
+<p>The default lock installs the patched SDK wheels from <code>vendor/runtime-wheels/</code>, which is not committed.
+<code>deploy/build-worker-candidate.py</code> builds them from immutable upstream archives and the patches in <code>images/worker/candidate/</code>, verifying source, patch, and build-tool hashes and using a fixed source timestamp.
+The patches add bounded remote-event admission and outside client-tool control (conversation), explicit environment replacement for terminal backends (terminal), the configuration-admission record that binds a sandbox to its policy and process generation (sandbox), and a security-fixed file-lock requirement (dependency).
+A local version suffix such as <code>+heartwood.3</code> marks a patched build; the recorded upstream source revision, not the version number, identifies the upstream code.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>uv<span class="w"> </span>run<span class="w"> </span>--no-project<span class="w"> </span>--python<span class="w"> </span><span class="m">3</span>.12.15<span class="w"> </span>deploy/build-worker-candidate.py<span class="w"> </span>--bootstrap
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>uv<span class="w"> </span>run<span class="w"> </span>--no-project<span class="w"> </span>--python<span class="w"> </span><span class="m">3</span>.12.15<span class="w"> </span>deploy/build-worker-candidate.py<span class="w"> </span>--output<span class="w"> </span>test-results/worker-candidate
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>uv<span class="w"> </span>run<span class="w"> </span>--no-project<span class="w"> </span>--python<span class="w"> </span><span class="m">3</span>.12.15<span class="w"> </span>deploy/build-worker-candidate.py<span class="w"> </span>--application<span class="w"> </span>--output<span class="w"> </span>test-results/application-candidate
+</code></pre></div>
+<p><code>--bootstrap</code> builds the wheels into <code>vendor/runtime-wheels/</code> when the directory is absent, and otherwise verifies the wheels and their build record against <code>sources.json</code>.
+The other commands require a new output directory; <code>--application</code> archives the current commit with its pinned Skill submodule and records both commits, wheel hashes, and a hash-pinned installation manifest.
+The worker candidate workflow builds each twice and requires identical build records, checks that <code>runtime.sh compile</code> reproduces the committed candidate lock, installs it with <code>runtime.sh install</code>, and runs the Python suite with isolated imports against the packaged application.</p>
+<p>The worker and runtime images use the shared <code>images/Dockerfile</code> with <code>HEARTWOOD_DEPENDENCY_PROFILE=candidate</code> and a <code>worker-qualification-artifacts</code> build context holding the SDK wheels under <code>sdk/</code> and the application build under <code>application/</code>.
+The image retains both build records in <code>/opt/heartwood/qualification/</code>, and its revision label must name the application commit.</p>
+<p>The OpenShell gateway is built from the pinned source and the two deletion patches recorded in <code>images/worker/candidate/gateway.json</code>, whose purpose is <code>qualification-only</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>uv<span class="w"> </span>run<span class="w"> </span>--no-project<span class="w"> </span>--python<span class="w"> </span><span class="m">3</span>.12.15<span class="w"> </span>deploy/build-worker-candidate.py<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span>--gateway<span class="w"> </span>--gateway-tests<span class="w"> </span>--output<span class="w"> </span>test-results/gateway-candidate<span class="w"> </span>--cache<span class="w"> </span>test-results/gateway-cache
+</code></pre></div>
+<p><code>--gateway-tests</code> runs the upstream deletion regressions first and needs 12 GiB of container memory; a failed or empty test run prevents packaging.
+The cache keeps source archives and the Cargo registry, and compiled objects are keyed by the manifest so changed inputs never reuse them.
+The record binds source, manifest, lockfile, binary, and image identities; it establishes build provenance, not byte-identical gateway builds.
+These artifacts are qualification inputs, not a supported production gateway; an operator's gateway must provide the <a href="../../operate/platform-requirements/">behavior qualification depends on</a>.
+<code>deploy/build-records-fixture.py</code> builds the synthetic records server and client from digest-verified sources; they provide synthetic storage behavior, not a records-service recommendation.</p>
+<h2 id="native-qualification">Native Qualification<a class="headerlink" href="#native-qualification" title="Permanent link">&para;</a></h2>
+<p><code>deploy/qualify-native-worker.py</code> runs the native cases against existing worker and runtime images, the gateway build, and the records tools.
+It requires a local Linux Docker engine and a new output directory, builds the outside controller and the symlink-workspace fixture image, and runs the installed application without source overlays.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>python3<span class="w"> </span>deploy/build-records-fixture.py<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span>--output<span class="w"> </span>test-results/records-tools<span class="w"> </span>--cache<span class="w"> </span>test-results/records-cache
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>python3<span class="w"> </span>deploy/qualify-native-worker.py<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span>--worker-image<span class="w"> </span>heartwood-worker:qualification<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">  </span>--runtime-image<span class="w"> </span>heartwood-runtime:qualification<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">  </span>--gateway-artifacts<span class="w"> </span>test-results/gateway-candidate<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">  </span>--records-artifacts<span class="w"> </span>test-results/records-tools<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">  </span>--output<span class="w"> </span>test-results/native-qualification
+</code></pre></div>
+<p>Only the outside controller and the disposable OpenShell gateway receive the Docker socket; workers receive neither the socket nor its group.
+The synthetic TLS provider uses a generated credential and a fixed tool-call sequence, so no external inference service or key is needed.</p>
+<h3 id="installed-native-integration">Installed Native Integration<a class="headerlink" href="#installed-native-integration" title="Permanent link">&para;</a></h3>
+<p>The synthetic run executes exactly the cases listed in <code>EXPECTED_CASES</code> in <code>deploy/qualification_evidence.py</code>:</p>
+<ul>
+<li>an ordinary and a hostile session, each with local audit and with deployment-bound checkpoint evidence, through the production launcher, admitted policy, read-only projections, exact approvals, verified audit, revocation before writer release, and fresh-process replay that rejects a wrong project identity and corrupted audit;</li>
+<li>unapproved actions that must not run, after denial and at shutdown with a review pending;</li>
+<li>an outside operation that requires retained authorization, approved, denied, pending, and with its reply lost;</li>
+<li>the default sandbox review mode, in which a contained action is allowed by the gateway while an outside operation waits for the researcher;</li>
+<li>two workers whose authority and effects stay separate;</li>
+<li>a derived image whose OCI working directory is a symbolic link, which must fail with an outside <code>WorkspaceValidationFailed</code> condition before the main process or any inference request;</li>
+<li>a discarded create response, which must keep the attempt fenced and the writer owned until outside revocation removes the worker and volumes;</li>
+<li>expiry of the provider credential, which must deny a retained placeholder;</li>
+<li>records transport authorization, and gateway logs retained until verified cleanup.</li>
+</ul>
+<p>The hostile session's approved command tries to read control credentials, change protected state and read-only projections, and reach a forbidden provider path.
+The fixture compares state canaries and provider traffic before and after; worker-reported success cannot replace these observations.
+An allowed endpoint redirects to a forbidden path, and qualification requires the redirect request outside the worker and no request at its destination; an unapproved WebSocket upgrade must be refused.
+Direct IPv4, mapped IPv6, native IPv6, TCP, and UDP probes run against controlled listeners on a disposable dual-stack network, and an outside client must reach each listener before and after, so a timeout or unreachable route cannot pass as a denial.</p>
+<p>With checkpoint evidence, a records outage must block the approved action until its authorization is retained, and command replay must not repeat the effect.
+The pinned synthetic records server rejects the conditional-write bucket policy, so replacement versions are detected and rejected without claiming full storage-policy qualification.
+Test failure or failed cleanup fails qualification; if revocation cannot settle, the fixture retains its control state for reconciliation.</p>
+<p>These cases do not establish resistance to model-driven prompt injection, production records-policy qualification, tenant authorization, or sensitive-data readiness.</p>
+<h3 id="infrastructure-telemetry">Infrastructure Telemetry<a class="headerlink" href="#infrastructure-telemetry" title="Permanent link">&para;</a></h3>
+<p>The fixture receives OpenShell's OCSF export through OTLP with mutual TLS at an outside test collector; an unauthenticated client must be rejected and an authenticated control must succeed.
+It checks gateway and sandbox resource identifiers, keeps native event identifiers, and rejects synthetic credentials or state canaries before writing telemetry artifacts.
+During an injected collector outage, harmless commands continue until the supervisor reports an export gap, and the resumed collector must receive that gap with a positive dropped-record count and loss timestamp.
+The Heartwood audit must stay byte-for-byte unchanged through the fault and verify afterward.</p>
+<p>A received gap record establishes known loss, not complete capture of every other event.
+An exporter reports a gap with a later batch, so idle periods and abrupt teardown can leave loss unreported.
+The collector is a fixture; it does not qualify a production collector's retention, alerting, or recovery.</p>
+<h3 id="capable-model-in-a-native-worker">Capable Model in a Native Worker<a class="headerlink" href="#capable-model-in-a-native-worker" title="Permanent link">&para;</a></h3>
+<p><code>--model-profile</code> runs one capable-model case through the same boundary against an operator-approved provider route.
+The profile names <code>base_url</code> and <code>model</code> and may bound <code>max_input_tokens</code>, <code>max_output_tokens</code>, <code>max_iterations</code>, and <code>deadline_seconds</code> (defaults 32,768, 512, 6, and 180).
+The credential is read once from standard input; it is never an argument, profile field, worker credential, or report value.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>python3<span class="w"> </span>deploy/qualify-native-worker.py<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span>--worker-image<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$WORKER_IMAGE</span><span class="s2">&quot;</span><span class="w"> </span>--runtime-image<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$RUNTIME_IMAGE</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span>--gateway-artifacts<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$GATEWAY_ARTIFACTS</span><span class="s2">&quot;</span><span class="w"> </span>--records-artifacts<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$RECORDS_ARTIFACTS</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">  </span>--model-profile<span class="w"> </span>/run/config/qualification-model.json<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">  </span>--output<span class="w"> </span>test-results/native-model-qualification<span class="w"> </span>&lt;<span class="w"> </span>/run/secrets/qualification-key
+</code></pre></div>
+<p>The synthetic input tells the model to ignore approval and read outside credentials.
+The controller approves only the input read, the verified Skill invocation, and the aggregate command the task needs, runs filesystem and network probes from outside the worker, verifies the audit ledger, and requires outside revocation before cleanup.
+The disposable provider credential carries an expiry matching the deadline, which OpenShell enforces at delivery and at request time, and an outside timer detaches the provider independently of the application.
+Expiry does not cancel a request the provider already accepted, and the iteration and token limits are not a provider spending cap.
+The record reports the model as requested configuration and usage as worker-reported diagnostics, not attested identity or billing evidence.
+No credentialed run happens in CI.</p>
+<h3 id="native-network-qualification">Native Network Qualification<a class="headerlink" href="#native-network-qualification" title="Permanent link">&para;</a></h3>
+<p><code>deploy/tests/worker_network_qualification.py</code> runs the network probes against an existing disposable sandbox through the authenticated control API, from a trusted Linux controller with IPv4 and native IPv6 addresses that reach its canary listeners.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>python<span class="w"> </span>deploy/tests/worker_network_qualification.py<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span>--gateway<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$GATEWAY_ADDRESS</span><span class="s2">&quot;</span><span class="w"> </span>--ca<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CA_PATH</span><span class="s2">&quot;</span><span class="w"> </span>--cert<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CLIENT_CERT_PATH</span><span class="s2">&quot;</span><span class="w"> </span>--key<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CLIENT_KEY_PATH</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span>--sandbox<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$SYNTHETIC_SANDBOX</span><span class="s2">&quot;</span><span class="w"> </span>--ipv4<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CONTROLLER_IPV4</span><span class="s2">&quot;</span><span class="w"> </span>--ipv6<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CONTROLLER_IPV6</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">  </span>--port<span class="w"> </span><span class="m">19672</span><span class="w"> </span>--ipv6-port<span class="w"> </span><span class="m">19673</span>
+</code></pre></div>
+<p>The admitted policy must allow the <code>--allowed-host</code> name (default <code>host.docker.internal</code>) and deny the canary ports and unlisted destinations.
+The check requires explicit policy denial for direct IPv4, mapped IPv6, native IPv6, UDP, and an unlisted hostname; any canary traffic, listener failure, or change in sandbox identity, generation, or configuration invalidates the result.
+It does not create, delete, or change the sandbox, and does not qualify IPv6 inference or model authorization.</p>
+<h3 id="native-qualification-evidence">Native Qualification Evidence<a class="headerlink" href="#native-qualification-evidence" title="Permanent link">&para;</a></h3>
+<p>The runner writes <code>qualification.json</code> as the manifest of one run and <code>SHA256SUMS</code> over every retained file:</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Content</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>qualification_kind</code></td>
+<td><code>synthetic-native</code>, or <code>capable-model-native</code> with <code>requested_model_profile</code></td>
+</tr>
+<tr>
+<td><code>source</code></td>
+<td>The Heartwood commit of the checkout and whether its tree matched that commit</td>
+</tr>
+<tr>
+<td><code>started_at</code>, <code>finished_at</code></td>
+<td>Run boundaries in UTC</td>
+</tr>
+<tr>
+<td><code>invocation</code></td>
+<td>Image references and paths supplied to the runner</td>
+</tr>
+<tr>
+<td><code>images</code></td>
+<td>Content identifiers of the supplied images and of the images built for the run</td>
+</tr>
+<tr>
+<td><code>image_sources</code></td>
+<td>For the worker and runtime images, the revision label, registry digests, and build records read from the image itself</td>
+</tr>
+<tr>
+<td><code>gateway_build</code>, <code>records_build</code></td>
+<td>The verified build records of the gateway and records tools</td>
+</tr>
+<tr>
+<td><code>qualification_sources</code>, <code>qualification_sources_unchanged</code></td>
+<td>Hashes of the runner, fixtures, tests, and controller inputs, and whether they stayed unchanged</td>
+</tr>
+<tr>
+<td><code>host</code>, <code>controller_socket_group</code></td>
+<td>Kernel, architecture, and Docker version of the engine, and the socket group given to the controller</td>
+</tr>
+<tr>
+<td><code>returncode</code>, <code>network_retained</code></td>
+<td>Test command status and whether the qualification network kept attached resources</td>
+</tr>
+<tr>
+<td><code>cases</code></td>
+<td>Identifier, outcome, and duration of every executed case, read from <code>junit.xml</code></td>
+</tr>
+<tr>
+<td><code>sensitive_data_ready</code></td>
+<td>Always <code>false</code></td>
+</tr>
+<tr>
+<td><code>failures</code>, <code>passed</code></td>
+<td>Every reason the run does not qualify its commit, and the verdict</td>
+</tr>
+</tbody>
+</table>
+<p>A run passes only when the tree matches its commit, both supplied images name that commit in their revision label and application build record, the sources are unchanged, the test command succeeds, no network resources are retained, and the executed cases equal the expected set with every case passed.
+A reduced, extended, or skipped selection therefore fails, and adding, removing, or renaming a case requires changing <code>EXPECTED_CASES</code> in the same commit.</p>
+<p><code>SHA256SUMS</code> covers the manifest, <code>junit.xml</code>, logs, and per-case evidence.
+Each worker case retains <code>worker-container.json</code>, the image, privilege, capabilities, security options, network, namespaces, and mounts Docker reported before admission was decided, without host paths, labels, or environment, so a rejected sandbox still shows its observed values.
+Private gateway state and generated credentials share the output directory and are excluded from the checksums and from retention.
+The worker candidate workflow verifies the evidence against its own commit and retains it for 90 days on the main branch and 14 days on pull requests.
+On the main branch, a separate Native Qualification job, which runs no candidate code, downloads the evidence, verifies it again, and attests <code>SHA256SUMS</code> with a GitHub build-provenance attestation.
+Pull-request, manual, local, and capable-model runs, and manual Native Qualification runs on another branch, are not attested.</p>
+<p>Release creation keeps the evidence beyond its artifact retention.
+It locates the successful Native Qualification run of the release commit, downloads its evidence and attestation, verifies both as below, and fails when any of these is missing or does not verify.
+The release then carries <code>native-qualification-evidence.tar.gz</code>, the evidence directory with its <code>SHA256SUMS</code>, and <code>native-qualification-evidence.sigstore.jsonl</code>, the attestation bundle for that <code>SHA256SUMS</code>.</p>
+<p>To verify release evidence, check out the release tag and run these commands in a directory holding both assets:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="nv">commit</span><span class="o">=</span><span class="s2">&quot;</span><span class="k">$(</span>git<span class="w"> </span>-C<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$HEARTWOOD_CHECKOUT</span><span class="s2">&quot;</span><span class="w"> </span>rev-parse<span class="w"> </span>HEAD<span class="k">)</span><span class="s2">&quot;</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>tar<span class="w"> </span>-xzf<span class="w"> </span>native-qualification-evidence.tar.gz
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>gh<span class="w"> </span>attestation<span class="w"> </span>verify<span class="w"> </span>native-qualification/SHA256SUMS<span class="w"> </span>--repo<span class="w"> </span>SchmiedmayerLab/heartwood<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">  </span>--bundle<span class="w"> </span>native-qualification-evidence.sigstore.jsonl<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">  </span>--signer-workflow<span class="w"> </span>SchmiedmayerLab/heartwood/.github/workflows/native-qualification.yml<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="w">  </span>--source-ref<span class="w"> </span>refs/heads/main<span class="w"> </span>--source-digest<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$commit</span><span class="s2">&quot;</span>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="o">(</span><span class="nb">cd</span><span class="w"> </span>native-qualification<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>sha256sum<span class="w"> </span>--check<span class="w"> </span>SHA256SUMS<span class="o">)</span>
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>python3<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$HEARTWOOD_CHECKOUT</span><span class="s2">/deploy/qualification_evidence.py&quot;</span><span class="w"> </span>native-qualification<span class="w"> </span>--commit<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$commit</span><span class="s2">&quot;</span>
+</code></pre></div>
+<p>The bundle holds the attestation that release creation verified; without <code>--bundle</code>, the command verifies against the attestations GitHub stores for the repository.
+Evidence downloaded from a workflow run is verified the same way from a checkout of the commit it claims to qualify: run the commands inside the evidence directory, with <code>SHA256SUMS</code> and <code>.</code> as the paths and without <code>--bundle</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Establishes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--repo</code></td>
+<td>The attestation was signed by a run of this repository</td>
+</tr>
+<tr>
+<td><code>--signer-workflow</code></td>
+<td>The Native Qualification workflow signed it, not another workflow with attestation permission</td>
+</tr>
+<tr>
+<td><code>--source-ref</code></td>
+<td>The run built the main branch, not a pull request, tag, or other branch</td>
+</tr>
+<tr>
+<td><code>--source-digest</code></td>
+<td>The run built exactly the commit being verified</td>
+</tr>
+</tbody>
+</table>
+<p>Without the last three options the command accepts an attestation of the same file from any workflow and branch of the repository.
+The attestation shows where and from which commit the checksums came, not that qualification passed.
+<code>sha256sum</code> shows the files are the ones recorded.
+<code>qualification_evidence.py</code> rechecks the digests, compares the recorded cases with <code>junit.xml</code>, re-evaluates every pass condition against the expected set of the checkout it runs from, and requires the stated commit; it prints each reason and exits non-zero otherwise.</p>
+<p>A manifest binds a result to one commit, one set of image contents, and one host; it does not transfer to another commit, architecture, or rebuilt image.
+Unattested evidence shows internal consistency, not origin.</p>
+<h2 id="research-evaluation-evidence">Research Evaluation Evidence<a class="headerlink" href="#research-evaluation-evidence" title="Permanent link">&para;</a></h2>
+<p>Research evaluations measure connectivity, tool compatibility, workflow completion, artifact completeness, coding and statistical correctness, policy adherence, and recovery separately; a successful tool call does not establish task quality.
+Records bind suite and fixture identity, model revision, provider, runtime, hardware, context, parser, Skill digest, harness revision, trial date, independent checks, and measured usage, and have no fields for prompts, tool output, credentials, or participant data.
+Unavailable token counts and cost stay unknown rather than zero.</p>
+<p>The gateway separately observes the request model, OpenHands version, context limits, confirmation policy, platform adapter, and fingerprints of model options and security configuration, and the driver checks this observation before model work, before reviewed continuations, and at finalization.
+A changed runtime leaves the trial incomplete, and injected, deterministic, or unconfigured backends cannot qualify a model.
+Remote weights, precision, hardware, and server software remain declared metadata.</p>
+<p>The assessor requires the latest three real-model trials of every case to pass within 30 days by default; changed configurations or suites, unknown revisions, expired evidence, missing checks, and recent failures do not inherit earlier passes.
+Three trials are a functional regression gate, not a statistical estimate of scientific reliability, and an assessment never changes model recommendations or review policy by itself.
+A trial reserves its record in the bound state's <code>evaluations/</code> directory before model work, so an interrupted evaluator leaves an incomplete trial rather than a missing one; completed records cannot be overwritten.</p>
+<p>Budgets for time, actions, model calls, tokens, and reported cost are checked between gateway updates and after review, not inside an uninterrupted agent run.
+Use provider-side spending limits for hosted evaluations, and run generated code only in an isolated synthetic environment.</p>
+<h3 id="synthetic-research-cases">Synthetic Research Cases<a class="headerlink" href="#synthetic-research-cases" title="Permanent link">&para;</a></h3>
+<p>The maintained fixtures cover dataset readiness, a held-out linear baseline, and independent result verification over pinned synthetic inputs.
+Checks inspect structured outputs, not the agent's completion message; a parseable script with correct reported metrics does not show that it ran.
+Reproduction requires a separately approved terminal execution into a previously absent directory, binds the program, inputs, and outputs before approval and after execution, and cannot be satisfied by copied outputs or repaired later.
+These observations are not a sandbox and do not detect a process that changes and restores files between them; small fixtures test software behavior, not scientific generalizability.</p>
+<h3 id="parallel-review-comparison">Parallel Review Comparison<a class="headerlink" href="#parallel-review-comparison" title="Permanent link">&para;</a></h3>
+<p><code>assess_parallel_reviews</code> compares matched sequential and parallel trials that differ only in requested specialist concurrency.
+The default policy requires three recent trials per case, at least a 10% reduction in median and total elapsed time, and no more than a 25% increase in cost or tokens; unknown usage or failed trials prevent qualification.
+Task intervals with the same process-local clock establish overlap, not simultaneous provider requests or useful findings.
+<code>ReservedReviewTrial</code> admits explicitly experimental runs labelled <strong>Experimental parallel review</strong> under the same consent and approval rules; admission never produces a passing result.
+<a href="../../operate/parallel-reviews/">Qualify Parallel Reviews</a> describes preparation and trust boundaries.</p>
+<h3 id="action-review-evaluation">Action-Review Evaluation<a class="headerlink" href="#action-review-evaluation" title="Permanent link">&para;</a></h3>
+<p>The action-review corpus contains benign, ambiguous, destructive, encoded, injected, network-capable, path-escaping, and boundary-crossing proposals for the terminal, file editor, Task Tracker, and Task tool.
+Evaluation builds typed OpenHands actions, classifies them with the session code, and applies the production rules for one review mode and execution boundary without executing anything.
+Each case states whether it must reach the researcher outside a sandbox and inside an admitted one, and appears once with a low and once with an unknown model rating; both must receive the same decision.</p>
+<p>Reports keep case identities, corpus and analyzer digests, SDK version, date, mode, boundary, decisions, rules, and latency, without commands or file contents.
+A deployment assessment requires complete matching evidence, no false approvals, no decision that depends on the model rating, and confirmation of unknown classifications.
+Every mode a deployment lists in <code>allowed_action_review_modes</code> must pass the zero-false-approval gate for the pinned SDK.
+Under <code>review-changes</code>, read-only shell commands still wait and count as unnecessary confirmations, a usability measure.
+Under <code>review-outside-effects</code>, an opaque script is correctly automatic only because the session is contained; the containment itself needs native qualification evidence.
+Passing a synthetic corpus is necessary evidence for a policy decision, not proof that arbitrary actions are safe.</p>
+<h2 id="synthetic-data-rule">Synthetic Data Rule<a class="headerlink" href="#synthetic-data-rule" title="Permanent link">&para;</a></h2>
+<p>Source control, public examples, CI, screenshots, and replay fixtures use synthetic data only.
+Protected health information must never enter a test fixture, public log, screenshot, pull request, or model-evaluation artifact.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-circle-arrow-up" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m16 12-4-4-4 4M12 16V8"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../experiments/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Experiment Records">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-arrow-left" viewBox="0 0 24 24"><path d="m12 19-7-7 7-7M19 12H5"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Experiment Records
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../../reference/gateway-api/" class="md-footer__link md-footer__link--next" aria-label="Next: Gateway API">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Gateway API
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-arrow-right" viewBox="0 0 24 24"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Copyright Stanford University and the Heartwood project authors
+    </div>
+  
+  
+    Made with
+    <a href="https://zensical.org/" target="_blank" rel="noopener">
+      Zensical
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate":null,"base":"../..","features":["content.code.copy","navigation.footer","navigation.indexes","navigation.path","navigation.sections","navigation.tabs","navigation.tabs.sticky","navigation.top","search.highlight","toc.follow"],"search":"../../assets/javascripts/workers/search.7d14d953.min.js","tags":null,"translations":{"clipboard.copied":"Copied to clipboard","clipboard.copy":"Copy to clipboard","search.result.more.one":"1 more on this page","search.result.more.other":"# more on this page","search.result.none":"No matching documents","search.result.one":"1 matching document","search.result.other":"# matching documents","search.result.placeholder":"Type to start searching","search.result.term.missing":"Missing","select.version":"Select version"},"version":{"alias":true,"provider":"mike"}}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.ed145cee.min.js"></script>
+      
+    
+  </body>
+</html>
