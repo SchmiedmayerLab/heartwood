@@ -1051,27 +1051,36 @@ def test_a_revoked_worker_is_not_a_sandbox_and_cannot_run_on_another_backend(
     restored.close()
 
 
+class _Interrupted(BaseException):
+    """Stands in for the process stopping at the point where it is raised."""
+
+
+def _interrupt_before_dispatch(service: SessionService) -> None:
+    """Stop the process at the decision's checkpoint boundary, before the backend has it."""
+
+    def interrupt(event: SessionEvent, *, required: bool = False) -> tuple[SessionEvent, ...]:
+        del event, required
+        del service._checkpoint_boundary
+        raise _Interrupted
+
+    service._checkpoint_boundary = interrupt  # type: ignore[method-assign, assignment]
+
+
 def test_recovery_reapplies_the_rule_to_an_interrupted_automatic_decision(tmp_path: Path) -> None:
     selection: list[str | None] = ["review-changes"]
     backend = _ScriptedBackend((_action("read-1", "read"),))
     service = _service(tmp_path, backend, mode=lambda: selection[0])
 
-    class _Interrupted(BaseException):
-        pass
-
-    def interrupt() -> None:
-        raise _Interrupted
-
-    backend.before_resolution = interrupt
+    _interrupt_before_dispatch(service)
     with pytest.raises(_Interrupted):
         _chat(service)
     (approval,) = _approvals(service)
     assert approval.payload["actor_id"] == AUTOMATIC_REVIEW_ACTOR
     assert service.store.unresolved_command_ids()
+    assert backend.executed == []
     service.close()
 
     # The next launch starts without the in-memory selection, so the rule no longer holds.
-    backend.before_resolution = lambda: None
     selection[0] = None
     restarted = SessionService.local_default(
         tmp_path,
@@ -1101,21 +1110,271 @@ def test_recovery_completes_an_interrupted_automatic_decision_the_rule_still_all
     backend = _ScriptedBackend((_action("read-1", "read"),))
     service = _service(tmp_path, backend, mode="review-changes")
 
-    class _Interrupted(BaseException):
-        pass
-
-    def interrupt() -> None:
-        raise _Interrupted
-
-    backend.before_resolution = interrupt
+    _interrupt_before_dispatch(service)
     with pytest.raises(_Interrupted):
         _chat(service)
-    backend.before_resolution = lambda: None
+    assert backend.executed == []
 
     service.reconcile()
 
     assert backend.executed == ["read-1"]
     assert _not_applied(service) == []
+    service.close()
+
+
+def test_recovery_sends_an_interrupted_researcher_approval_the_backend_never_received(
+    tmp_path: Path,
+) -> None:
+    backend = _ScriptedBackend((_action("run-1", "workspace"),))
+    service = _service(tmp_path, backend, mode="review-changes")
+    _chat(service)
+    group = service.backend.pending_action_group(session_id=_SESSION)
+    assert group is not None
+
+    _interrupt_before_dispatch(service)
+    with pytest.raises(_Interrupted):
+        service.handle(
+            _command(
+                CommandKind.APPROVE, "approve", target_type="action-set", target_id=group.group_id
+            )
+        )
+    assert backend.executed == []
+
+    service.reconcile()
+
+    assert backend.executed == ["run-1"]
+    assert not service.store.unresolved_command_ids()
+    assert not _unknown_outcomes(service)
+    service.close()
+
+
+# Dispatch
+
+
+def _unknown_outcomes(service: SessionService) -> list[SessionEvent]:
+    return [
+        event
+        for event in service.replay_events()
+        if event.kind == EventKind.ERROR_RECORDED
+        and event.payload.get("code") == BackendErrorCode.ACTION_OUTCOME_UNKNOWN.value
+    ]
+
+
+def _interrupt_after_dispatch(
+    backend: _ScriptedBackend, error: BaseException | None = None
+) -> None:
+    """Stop the process once the backend has run the set but before the session records it.
+
+    A conversation reloaded after such a stop reports the state it last saved, which can
+    still show the set as pending although it ran. With ``error``, the process continues
+    and only the backend's reply is lost.
+    """
+    original = backend.resolve_confirmation
+
+    def resolve(
+        *, session_id: str, action_group_id: str, approved: bool
+    ) -> tuple[BackendEvent, ...]:
+        stale = backend.pending_action_group(session_id=session_id)
+        original(session_id=session_id, action_group_id=action_group_id, approved=approved)
+        del backend.resolve_confirmation
+        assert stale is not None
+        backend.replace_pending(*stale.actions)
+        raise error or _Interrupted
+
+    backend.resolve_confirmation = resolve  # type: ignore[method-assign]
+
+
+def _restart(
+    service: SessionService,
+    tmp_path: Path,
+    backend: _ScriptedBackend,
+    mode: str | Callable[[], str | None],
+) -> SessionService:
+    service.close()
+    return _service(tmp_path, backend, mode=mode)
+
+
+@pytest.mark.parametrize("sandboxed", [False, True])
+def test_an_approved_set_shown_as_pending_again_is_never_approved_twice(
+    tmp_path: Path, sandboxed: bool
+) -> None:
+    action = _action("run-1", "workspace")
+    backend = _ScriptedBackend((action,))
+    service = _service(tmp_path, backend, mode="review-all", sandboxed=sandboxed)
+    _chat(service)
+    group = service.backend.pending_action_group(session_id=_SESSION)
+    assert group is not None
+    service.handle(
+        _command(CommandKind.APPROVE, "approve", target_type="action-set", target_id=group.group_id)
+    )
+    assert backend.executed == ["run-1"]
+
+    # A conversation reloaded after a stop during the approved step shows it pending again;
+    # a restarted worker is fenced, so the isolated case stays within one gateway process.
+    backend.replace_pending(action)
+    if not sandboxed:
+        service = _restart(service, tmp_path, backend, "review-all")
+    service.reconcile()
+    result = service.handle(
+        _command(CommandKind.APPROVE, "again", target_type="action-set", target_id=group.group_id)
+    )
+
+    assert backend.executed == ["run-1"]
+    assert len(_approvals(service)) == 1
+    (refusal,) = [event for event in result.events if event.kind == EventKind.ERROR_RECORDED]
+    assert refusal.payload["group_id"] == group.group_id
+    assert _pending(service) == ("run-1",)
+
+    # Rejecting the stale set stays available and sends nothing to run.
+    service.handle(
+        _command(CommandKind.DENY, "reject", target_type="action-set", target_id=group.group_id)
+    )
+    assert backend.executed == ["run-1"]
+    assert _pending(service) == ()
+    assert [event.payload["decision"] for event in _approvals(service)] == ["approved", "denied"]
+    service.audit_log.verify()
+    service.close()
+
+
+@pytest.mark.parametrize(
+    ("review_class", "sandboxed", "restart"),
+    [
+        ("workspace", False, True),
+        ("read", False, True),
+        ("workspace", False, False),
+        ("read", False, False),
+        ("workspace", True, False),
+        ("read", True, False),
+    ],
+)
+def test_recovery_never_sends_an_approval_the_backend_may_have_received(
+    tmp_path: Path, review_class: ReviewClass, sandboxed: bool, restart: bool
+) -> None:
+    # A workspace action waits for the researcher; a file view is decided by the gateway.
+    mode = "review-all" if review_class == "workspace" else "review-changes"
+    backend = _ScriptedBackend((_action("run-1", review_class),))
+    service = _service(tmp_path, backend, mode=mode, sandboxed=sandboxed)
+    _interrupt_after_dispatch(backend)
+
+    def request_and_approve() -> None:
+        _chat(service)
+        pending = service.backend.pending_action_group(session_id=_SESSION)
+        assert pending is not None
+        service.handle(
+            _command(
+                CommandKind.APPROVE, "approve", target_type="action-set", target_id=pending.group_id
+            )
+        )
+
+    with pytest.raises(_Interrupted):
+        request_and_approve()
+    assert backend.executed == ["run-1"]
+    group = service.backend.pending_action_group(session_id=_SESSION)
+    assert group is not None
+
+    if restart:
+        service = _restart(service, tmp_path, backend, mode)
+    service.reconcile()
+
+    assert backend.executed == ["run-1"]
+    (unknown,) = _unknown_outcomes(service)
+    assert unknown.payload["group_id"] == group.group_id
+    assert not service.store.unresolved_command_ids()
+    service.handle(
+        _command(CommandKind.APPROVE, "again", target_type="action-set", target_id=group.group_id)
+    )
+    assert backend.executed == ["run-1"]
+    service.audit_log.verify()
+    service.close()
+
+
+@pytest.mark.parametrize("review_class", ["workspace", "read"])
+def test_a_lost_worker_reply_after_dispatch_leaves_the_outcome_unknown(
+    tmp_path: Path, review_class: ReviewClass
+) -> None:
+    # An isolated worker can receive the approval and run the set while its reply is lost.
+    mode = "review-all" if review_class == "workspace" else "review-changes"
+    backend = _ScriptedBackend((_action("run-1", review_class),))
+    service = _service(tmp_path, backend, mode=mode, sandboxed=True)
+    _interrupt_after_dispatch(backend, ConnectionError("the worker reply was lost"))
+    _chat(service)
+    group = service.backend.pending_action_group(session_id=_SESSION)
+    assert group is not None
+    if review_class == "workspace":
+        approve = _command(
+            CommandKind.APPROVE, "approve", target_type="action-set", target_id=group.group_id
+        )
+        with pytest.raises(ConnectionError):
+            service.handle(approve)
+    assert backend.executed == ["run-1"]
+
+    service.reconcile()
+
+    assert backend.executed == ["run-1"]
+    (unknown,) = _unknown_outcomes(service)
+    assert unknown.payload["group_id"] == group.group_id
+    assert _not_applied(service) == []
+    assert not service.store.unresolved_command_ids()
+    service.handle(
+        _command(CommandKind.APPROVE, "again", target_type="action-set", target_id=group.group_id)
+    )
+    assert backend.executed == ["run-1"]
+    service.audit_log.verify()
+    service.close()
+
+
+@pytest.mark.parametrize(("sandboxed", "restart"), [(False, True), (False, False), (True, False)])
+def test_an_automatic_decision_the_backend_may_have_received_is_never_offered_again(
+    tmp_path: Path, sandboxed: bool, restart: bool
+) -> None:
+    selection: list[str | None] = ["review-changes"]
+    backend = _ScriptedBackend((_action("read-1", "read"),))
+    service = _service(tmp_path, backend, mode=lambda: selection[0], sandboxed=sandboxed)
+    _interrupt_after_dispatch(backend)
+    with pytest.raises(_Interrupted):
+        _chat(service)
+    assert backend.executed == ["read-1"]
+    group = service.backend.pending_action_group(session_id=_SESSION)
+    assert group is not None
+
+    # A stricter mode no longer allows the set, but it can no longer be withdrawn either.
+    selection[0] = "review-all"
+    if restart:
+        service = _restart(service, tmp_path, backend, lambda: selection[0])
+    service.reconcile()
+
+    assert _not_applied(service) == []
+    (unknown,) = _unknown_outcomes(service)
+    assert unknown.payload["group_id"] == group.group_id
+    service.handle(
+        _command(CommandKind.APPROVE, "again", target_type="action-set", target_id=group.group_id)
+    )
+    assert backend.executed == ["read-1"]
+    service.audit_log.verify()
+    service.close()
+
+
+def test_a_dispatch_is_journaled_before_the_backend_receives_the_approval(tmp_path: Path) -> None:
+    backend = _ScriptedBackend((_action("read-1", "read"),))
+    service = _service(tmp_path, backend, mode="review-changes")
+    journaled: list[list[str]] = []
+    backend.before_resolution = lambda: journaled.append(
+        [str(event.kind) for event in service.replay_events()]
+    )
+
+    _chat(service)
+
+    (kinds,) = journaled
+    assert kinds[-2:] == [EventKind.APPROVAL_RECORDED, EventKind.ACTION_DISPATCH_STARTED]
+    (started,) = [
+        event
+        for event in service.replay_events()
+        if event.kind == EventKind.ACTION_DISPATCH_STARTED
+    ]
+    (approval,) = _approvals(service)
+    assert started.payload["command_id"] == approval.payload["command_id"]
+    assert started.payload["group_id"] == approval.payload["group_id"]
+    assert started.payload["tool_call_ids"] == ["read-1"]
     service.close()
 
 

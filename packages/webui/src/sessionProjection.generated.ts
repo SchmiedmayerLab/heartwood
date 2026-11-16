@@ -35,6 +35,8 @@ export type ProjectionActionDetails =
  * the same turns. ``MODEL_CALL_DECISION_RECORDED`` records route authorization
  * before task submission or a continuation that may call the model;
  * ``POLICY_DECISION_RECORDED`` is reserved for other policy decisions.
+ * ``ACTION_DISPATCH_STARTED`` is journaled before an approved action set is handed
+ * to the backend; without its resolution, the set's outcome is unknown.
  */
 export type EventKind =
   | "command.received"
@@ -45,6 +47,7 @@ export type EventKind =
   | "agent_message.emitted"
   | "tool_call.proposed"
   | "confirmation.requested"
+  | "action_dispatch.started"
   | "confirmation.resolved"
   | "tool.execution.recorded"
   | "agent.lifecycle.updated"

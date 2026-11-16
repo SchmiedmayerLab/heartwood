@@ -169,6 +169,8 @@ def project_audit_payload(kind: EventKind, payload: dict[str, JsonValue]) -> dic
                 "risk",
             )
         }
+    if kind == EventKind.ACTION_DISPATCH_STARTED:
+        return _selected_audit_fields(payload, "command_id", "group_id")
     if kind == EventKind.CONFIRMATION_RESOLVED:
         return _selected_audit_fields(
             payload,

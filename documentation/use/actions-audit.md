@@ -25,6 +25,7 @@ When a set needs you, every interface lists all of its members: the exact comman
 Each interface applies your decision to the set it displayed, so a set you have not seen is never decided.
 The risk label comes from fixed threat checks on the action itself, not from the model.
 An interrupted action whose result cannot be established is marked **Outcome Unknown** rather than treated as safe to repeat.
+An allowed set is sent to run at most once: if it appears to wait for review again after a restart, allowing it again is refused, and rejecting it remains available.
 
 ## Review Modes
 
@@ -129,6 +130,7 @@ The audit export keeps the actor, mode, rule, action-set identifier, and action 
 The decision binds the exact set: if the pending set differs when the decision is applied, nothing runs.
 Checkpoint evidence, model-route authorization, and workflow limits apply as they do to your decisions.
 If Heartwood cannot apply an automatic decision, for example because required audit evidence is unavailable, the set returns to you with a note that automatic review was not applied.
+Once an automatic decision has been sent to run, it is never returned to you; if Heartwood stops before recording the result, the set is marked **Outcome Unknown**.
 
 Every interface shows these actions as allowed automatically, with the rule, and never as approved by you.
 No interface command can record a decision as `gateway`.

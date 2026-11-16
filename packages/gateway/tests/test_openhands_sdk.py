@@ -1883,6 +1883,148 @@ def test_grouped_pending_actions_restart_with_matched_tool_history(
     restored.close()
 
 
+class _ProcessStopped(BaseException):
+    """Stands in for the gateway process stopping where it is raised."""
+
+
+def _restartable_sdk_service(
+    tmp_path: Path, state_root: Path, llm: TestLLM, conversation_id: uuid.UUID
+) -> SessionService:
+    """Build a local-launch session whose journal and conversation state live under one root."""
+    persistence_dir = state_root / "openhands"
+    backend = OpenHandsSdkBackend(
+        profile=_local_profile(),
+        workspace=tmp_path / "workspace",
+        persistence_dir=persistence_dir,
+        conversation_key="backend-test",
+        env={},
+        conversation_factory=_conversation_factory(
+            tmp_path,
+            llm,
+            tools=[Tool(name=TerminalTool.name)],
+            conversation_id=conversation_id,
+            persistence_dir=persistence_dir,
+        ),
+    )
+    return SessionService.local_default(
+        state_root / "sessions",
+        session_id="session-1",
+        backend=backend,
+        env={},
+        clock=lambda: "2026-07-25T00:00:00Z",
+    )
+
+
+def _session_command(command_id: str, kind: CommandKind, **payload: JsonValue) -> SessionCommand:
+    return SessionCommand(
+        command_id=command_id,
+        session_id="session-1",
+        kind=kind,
+        actor_id="test-user",
+        created_at="2026-07-25T00:00:00Z",
+        payload=payload,
+    )
+
+
+def _journaled_pending_group(service: SessionService) -> PendingActionGroup:
+    service.handle(_session_command("chat", CommandKind.CHAT, prompt="Count once"))
+    group = _wait_for_pending_group(cast(OpenHandsSdkBackend, service.backend))
+    service.reconcile()
+    return group
+
+
+def _copy_state_during_step(counter: Path, live: Path, stopped: Path) -> None:
+    """Copy the state a process stop leaves behind while the approved step is running."""
+    deadline = time.monotonic() + 10
+    while not counter.exists() and time.monotonic() < deadline:
+        time.sleep(0.02)
+    time.sleep(0.3)
+    shutil.copytree(live, stopped)
+
+
+@pytest.mark.parametrize("approval_journaled", [True, False])
+def test_a_stop_during_an_approved_step_never_runs_the_set_again(
+    tmp_path: Path, approval_journaled: bool
+) -> None:
+    # The SDK saves conversation state only when a step releases its lock, so a conversation
+    # reloaded after a stop during the step reports the approved set as pending again.
+    conversation_id = uuid.uuid4()
+    live, stopped = tmp_path / "live", tmp_path / "stopped"
+    counter = tmp_path / "workspace" / "count.txt"
+    service = _restartable_sdk_service(
+        tmp_path,
+        live,
+        TestLLM.from_messages(
+            [
+                _tool_message(("call-count", "printf x >> count.txt; sleep 2")),
+                _assistant_message("Counted once."),
+            ]
+        ),
+        conversation_id,
+    )
+    backend = cast(OpenHandsSdkBackend, service.backend)
+    group = _journaled_pending_group(service)
+    approve = _session_command(
+        "approve", CommandKind.APPROVE, target_type="action-set", target_id=group.group_id
+    )
+    if approval_journaled:
+        service.handle(approve)
+        _copy_state_during_step(counter, live, stopped)
+    else:
+        # The stop falls between handing the approval to OpenHands and journaling its result.
+        original = backend.resolve_confirmation
+
+        def stop_after_dispatch(
+            *, session_id: str, action_group_id: str, approved: bool
+        ) -> tuple[BackendEvent, ...]:
+            original(session_id=session_id, action_group_id=action_group_id, approved=approved)
+            _copy_state_during_step(counter, live, stopped)
+            raise _ProcessStopped
+
+        backend.resolve_confirmation = stop_after_dispatch  # type: ignore[method-assign]
+        with pytest.raises(_ProcessStopped):
+            service.handle(approve)
+    _wait_for_lifecycle(backend, BackendLifecycle.FINISHED)
+    service.close()
+
+    restored = _restartable_sdk_service(
+        tmp_path,
+        stopped,
+        TestLLM.from_messages([_assistant_message("Counted again.")]),
+        conversation_id,
+    )
+    try:
+        restored.reconcile()
+        restored_group = restored.backend.pending_action_group(session_id="session-1")
+        assert restored_group is not None
+        assert restored_group.group_id == group.group_id
+        again = restored.handle(
+            _session_command(
+                "approve-again",
+                CommandKind.APPROVE,
+                target_type="action-set",
+                target_id=group.group_id,
+            )
+        )
+        # A second run appends once its restored terminal starts.
+        deadline = time.monotonic() + 5
+        while counter.read_text(encoding="utf-8") == "x" and time.monotonic() < deadline:
+            time.sleep(0.05)
+
+        assert counter.read_text(encoding="utf-8") == "x"
+        assert again.events[-1].kind == EventKind.ERROR_RECORDED
+        assert not restored.store.unresolved_command_ids()
+        unknown = [
+            event
+            for event in restored.replay_events()
+            if event.payload.get("code") == BackendErrorCode.ACTION_OUTCOME_UNKNOWN.value
+        ]
+        assert len(unknown) == (0 if approval_journaled else 1)
+        restored.audit_log.verify()
+    finally:
+        restored.close()
+
+
 def test_rejected_pending_action_restart_rebuilds_history_before_next_turn(
     tmp_path: Path,
 ) -> None:

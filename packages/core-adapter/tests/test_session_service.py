@@ -1251,9 +1251,10 @@ def test_interrupted_approval_receipt_recovers_without_repeating_tool_resolution
     assert backend.resolutions == [(_action_group_id(tool_call), True)]
 
 
-def test_approval_intent_recovers_when_interrupted_before_backend_transition(
+def test_approval_interrupted_inside_the_backend_call_is_never_sent_again(
     tmp_path: Path,
 ) -> None:
+    # The session cannot tell how far the backend got, so the outcome is unknown.
     tool_call = ProposedToolCall(
         tool_call_id="session-main-action",
         tool_name="file_editor",
@@ -1287,22 +1288,14 @@ def test_approval_intent_recovers_when_interrupted_before_backend_transition(
     with pytest.raises(OSError, match="before backend transition"):
         service.handle(approval)
     recovered = service.reconcile()
-    denied = service.handle(
-        _command(
-            CommandKind.DENY,
-            target_type="action-set",
-            target_id=_action_group_id(tool_call),
-        ).model_copy(update={"session_id": "session-main"})
-    )
     replayed = service.handle(approval)
 
     assert replayed.replayed
-    assert backend.resolutions == [(_action_group_id(tool_call), True)]
-    assert any(event.kind == EventKind.CONFIRMATION_RESOLVED.value for event in recovered)
-    assert denied.events[-1].kind == EventKind.ERROR_RECORDED.value
-    assert denied.events[-1].payload["reason"] == (
-        f"no matching pending action group: {_action_group_id(tool_call)}"
-    )
+    assert backend.resolutions == []
+    assert [event.payload.get("code") for event in recovered] == [
+        BackendErrorCode.ACTION_OUTCOME_UNKNOWN.value
+    ]
+    assert not service.store.unresolved_command_ids()
 
 
 def test_approval_intent_recovers_from_backend_state_after_interrupted_return(
@@ -1872,16 +1865,17 @@ def test_approved_action_records_tool_execution(tmp_path: Path) -> None:
     assert [event.kind for event in result.events] == [
         EventKind.COMMAND_RECEIVED.value,
         EventKind.APPROVAL_RECORDED.value,
+        EventKind.ACTION_DISPATCH_STARTED.value,
         EventKind.CONFIRMATION_RESOLVED.value,
         EventKind.TOOL_EXECUTION_RECORDED.value,
     ]
     assert result.events[1].payload["decision"] == "approved"
-    assert result.events[3].payload["exit_code"] == 0
-    assert result.events[3].payload["tool_call_id"] == "session-synthetic-001-toolcall-0"
-    assert result.events[3].payload["action_id"] is None
+    assert result.events[4].payload["exit_code"] == 0
+    assert result.events[4].payload["tool_call_id"] == "session-synthetic-001-toolcall-0"
+    assert result.events[4].payload["action_id"] is None
     assert project_audit_payload(
         EventKind.TOOL_EXECUTION_RECORDED,
-        result.events[3].payload,
+        result.events[4].payload,
     ) == {
         "backend_id": "deterministic-local",
         "tool_call_id": "session-synthetic-001-toolcall-0",
