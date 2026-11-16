@@ -26,10 +26,42 @@ Heartwood is an open-source research agent system for biomedical research enviro
 A researcher describes work on a project folder in ordinary language, and an OpenHands agent proposes commands and file changes.
 The Heartwood gateway decides which proposals wait for the researcher, records every request, decision and result, and keeps a hash-chained audit history that can be exported and signed.
 
+## Research Sessions
+
+<table>
+<tr>
+<td width="50%" valign="top">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="documentation/assets/screenshots/browser-conversation-dark.png">
+  <img alt="Heartwood browser interface showing a project conversation" src="documentation/assets/screenshots/browser-conversation-light.png">
+</picture>
+<b>Conversation.</b> The researcher works with the agent in ordinary language on one project folder, in the browser, the terminal or a notebook.
+</td>
+<td width="50%" valign="top">
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="documentation/assets/screenshots/browser-action-review-dark.png">
   <img alt="Heartwood browser interface showing a grouped action review" src="documentation/assets/screenshots/browser-action-review-light.png">
 </picture>
+<b>Action review.</b> Proposed commands and file changes are shown as one complete action set, and one decision allows or rejects it.
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="documentation/assets/screenshots/browser-changes-dark.png">
+  <img alt="Heartwood browser interface showing a read-only change view" src="documentation/assets/screenshots/browser-changes-light.png">
+</picture>
+<b>Changes.</b> Every file the agent created or changed is listed with a read-only view of its content or diff.
+</td>
+<td width="50%" valign="top">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="documentation/assets/screenshots/browser-specialists-dark.png">
+  <img alt="Heartwood browser interface showing the available research specialists" src="documentation/assets/screenshots/browser-specialists-light.png">
+</picture>
+<b>Research specialists.</b> Bounded planning, data-quality, cohort, statistical and reproducibility specialists review evidence and report back to the conversation.
+</td>
+</tr>
+</table>
 
 ## Operator Deployment
 
