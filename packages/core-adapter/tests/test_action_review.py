@@ -1291,6 +1291,116 @@ def test_a_failing_pending_read_never_blocks_reads_or_commands(tmp_path: Path) -
     service.close()
 
 
+def test_a_set_shown_pending_only_after_a_first_empty_read_is_still_recorded(
+    tmp_path: Path,
+) -> None:
+    # A backend that cannot open its conversation yet reports nothing pending; that answer
+    # does not end the check, so a later read that shows the set records its outcome.
+    action = _action("run-1", "workspace")
+    backend = _ScriptedBackend((action,))
+    service = _service(tmp_path, backend, mode="review-all")
+    _chat(service)
+    group = service.backend.pending_action_group(session_id=_SESSION)
+    assert group is not None
+    service.handle(
+        _command(CommandKind.APPROVE, "approve", target_type="action-set", target_id=group.group_id)
+    )
+    service = _restart(service, tmp_path, backend, "review-all")
+    service.reconcile()
+    assert _unknown_outcomes(service) == []
+
+    backend.replace_pending(action)
+    service.reconcile()
+
+    (unknown,) = _unknown_outcomes(service)
+    assert unknown.payload["group_id"] == group.group_id
+    assert backend.executed == ["run-1"]
+    service.close()
+
+
+def test_the_reappearance_check_ends_with_the_first_read_that_shows_a_pending_set(
+    tmp_path: Path,
+) -> None:
+    backend = _ScriptedBackend((_action("run-1", "workspace"),), (_action("run-2", "workspace"),))
+    service = _service(tmp_path, backend, mode="review-all")
+    _chat(service)
+    group = service.backend.pending_action_group(session_id=_SESSION)
+    assert group is not None
+    service.handle(
+        _command(CommandKind.APPROVE, "approve", target_type="action-set", target_id=group.group_id)
+    )
+    assert _pending(service) == ("run-2",)
+
+    # After a restart, the first read shows the next set, which was never approved.
+    service = _restart(service, tmp_path, backend, "review-all")
+    service.reconcile()
+    reads: list[str] = []
+
+    def unavailable(*, session_id: str) -> PendingActionGroup | None:
+        reads.append(session_id)
+        raise RuntimeError("conversation snapshot is unavailable")
+
+    backend.pending_action_group = unavailable  # type: ignore[method-assign]
+    service.reconcile()
+    service.reconcile()
+
+    assert reads == []
+    assert _unknown_outcomes(service) == []
+    service.close()
+
+
+def test_an_isolated_worker_session_never_reads_its_worker_for_the_check(tmp_path: Path) -> None:
+    # A restarted gateway fences the worker and continues in a new conversation, so the
+    # replacement never shows a set sent before; its read is a remote round trip.
+    project_id = uuid4()
+    first_backend = _ScriptedBackend((_action("run-1", "workspace"),))
+    first = _service(
+        tmp_path, first_backend, mode="review-all", sandboxed=True, project_id=project_id
+    )
+    _chat(first)
+    group = first.backend.pending_action_group(session_id=_SESSION)
+    assert group is not None
+    first.handle(
+        _command(CommandKind.APPROVE, "approve", target_type="action-set", target_id=group.group_id)
+    )
+    attempt = first.worker_attempt()
+    assert attempt is not None
+    first.fence_worker_attempt(attempt_id=attempt.intent.attempt_id)
+    first.record_worker_revocation(
+        WorkerRevocationEvidence(
+            attempt_id=attempt.intent.attempt_id,
+            sandbox_id="synthetic-sandbox",
+            observer_id="synthetic-control-plane",
+            evidence_sha256="d" * 64,
+            outcome="revoked",
+        )
+    )
+    first.close()
+
+    replacement = _ScriptedBackend()
+    reads: list[str] = []
+
+    def counted(*, session_id: str) -> PendingActionGroup | None:
+        reads.append(session_id)
+        return None
+
+    replacement.pending_action_group = counted  # type: ignore[method-assign]
+    restored = _service(tmp_path, replacement, mode="review-all", project_id=project_id)
+    restored.admit_worker_replacement()
+    restored.launch_worker(
+        _runtime,
+        image_digest=_IMAGE,
+        sandbox_policy_sha256=_SANDBOX_POLICY,
+        input_manifest_sha256="c" * 64,
+    )
+    restored.reconcile()
+    restored.reconcile()
+    restored.handle(_command(CommandKind.PAUSE, "pause"))
+
+    assert reads == []
+    restored.close()
+
+
 @pytest.mark.parametrize(
     ("review_class", "sandboxed", "restart"),
     [

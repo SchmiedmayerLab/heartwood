@@ -145,9 +145,10 @@ A gateway decision under a [review mode](system.md#action-review-and-review-mode
 The projection labels an action as decided only from these records and names the rule for a gateway decision.
 If a backend reports executing an action without one, the session records an error and fences the worker attempt.
 A set with a recorded approval or a started dispatch may have run, so it refuses a further approval, rejection, or gateway decision from every interface.
-The first reconciliation after the gateway process starts checks whether OpenHands shows such a set as pending again, and records `HW-AGENT-006` for it once.
-A set sent by the current process is not counted, because it can look pending until its step starts.
-If that read fails, the check is left for a later reconciliation, and reads and commands continue.
+After a session owner starts, reconciliation checks whether OpenHands shows such a set as pending again, and records `HW-AGENT-006` for it once.
+The check ends with the first read that shows a pending set, and a set sent by the same session owner is not counted, because it can look pending until its step starts.
+A read that fails or reports nothing pending leaves the check for a later reconciliation, and reads and commands continue.
+A session in an isolated worker is not checked, because a restarted gateway fences the worker and continues in a new conversation.
 Rejecting a pending set that was not approved remains available.
 
 Each OpenHands proposal becomes one `heartwood.action-record.v1` projection correlated by stable action and tool-call identifiers.

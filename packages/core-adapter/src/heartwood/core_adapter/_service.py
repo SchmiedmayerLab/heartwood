@@ -2066,10 +2066,13 @@ class SessionService:
         """Record once that a set the backend shows as pending after it was sent may have run.
 
         A conversation reloaded after a stop during an approved step reports the state it
-        last saved, which still shows the set as pending, so the first read after this
-        process starts shows it. A set this process sent can also look pending until its
-        step starts and is not counted. A failed read leaves the check for a later recovery;
-        the decision guard refuses a second decision on the set meanwhile.
+        last saved, which still shows the set as pending. The check ends with the first read
+        that shows a pending set; a set this service sent can also look pending until its
+        step starts and is not counted. A read that fails or reports nothing pending, which
+        is also the answer while a conversation cannot be opened, leaves the check for a
+        later recovery, and the decision guard refuses a second decision on the set
+        meanwhile. A session in an isolated worker is never checked: a restarted gateway
+        fences the worker and continues in a new conversation, and its read is remote.
         """
         events = self.replay_events()
         sent = {
@@ -2078,10 +2081,14 @@ class SessionService:
             if event.kind in {EventKind.APPROVAL_RECORDED, EventKind.ACTION_DISPATCH_STARTED}
             and isinstance((group_id := event.payload.get("group_id")), str)
         }
-        if not sent or any(
-            event.kind == EventKind.ERROR_RECORDED
-            and backend_error_is_fatal(event.payload.get("code"))
-            for event in events
+        if (
+            not sent
+            or current_worker_attempt(events) is not None
+            or any(
+                event.kind == EventKind.ERROR_RECORDED
+                and backend_error_is_fatal(event.payload.get("code"))
+                for event in events
+            )
         ):
             self._reappearance_checked = True
             return ()
@@ -2089,10 +2096,11 @@ class SessionService:
             group = self.backend.pending_action_group(session_id=self.store.session_id)
         except Exception:
             return ()
+        if group is None:
+            return ()
         self._reappearance_checked = True
         if (
-            group is None
-            or group.group_id not in sent
+            group.group_id not in sent
             or group.group_id in self._sent_group_ids
             or not self._approval_handed_over(group.group_id)
         ):
