@@ -31,36 +31,60 @@ The Heartwood gateway decides which proposals wait for the researcher, records e
   <img alt="Heartwood browser interface showing a grouped action review" src="documentation/assets/screenshots/browser-action-review-light.png">
 </picture>
 
-## Components
+## Operator Deployment
 
-- The gateway owns project state, policy, action review, authorization of operations outside the agent, session records and audit.
-- The agent loop and coding tools come from OpenHands and run either in the Heartwood process or as a complete worker inside an OpenShell sandbox.
-- The terminal (`heartwood`), browser (`heartwood --interface web`) and notebook (`NotebookSession()`) interfaces present the same gateway contract, so a session and its review decisions look the same in each.
-- The operator's deployment manifest binds a project to protected state outside the research folder and sets the policy, the permitted review modes, the worker profile and the audit evidence settings.
-- `heartwood audit checkpoint` writes a signed audit export with deployment and retention metadata outside the project, and `heartwood audit verify-checkpoint` checks it against a trusted public key; with managed evidence, the gateway checkpoints every approval and rejection.
-- Research Skills, bounded research specialists and staged research workflows run inside the same session, review and records.
+```mermaid
+flowchart TB
+    subgraph Interfaces
+        direction LR
+        CLI["Terminal"]
+        Web["Browser"]
+        Notebook["Notebook"]
+    end
+    subgraph Host["Gateway host"]
+        direction LR
+        Manifest["Deployment manifest"]
+        Gateway["Heartwood gateway<br/>review, policy, records"]
+        State["Protected project state"]
+    end
+    subgraph Sandbox["OpenShell sandbox"]
+        direction LR
+        Worker["OpenHands worker"]
+        Inputs["Read-only inputs and Skills"]
+    end
+    subgraph Platform["Platform services"]
+        direction LR
+        Model["Model endpoint"]
+        Service["Outside service"]
+        Records["Records service and signer"]
+    end
+    Interfaces --> Gateway
+    Manifest --> Gateway
+    Gateway --> State
+    Gateway -- "admitted requests and events" --> Worker
+    Worker --> Inputs
+    Worker -- "inference" --> Model
+    Gateway -- "approved outside operations" --> Service
+    Gateway -- "signed checkpoints" --> Records
+    classDef heartwood fill:#0b694d26,stroke:#2b8268
+    classDef platform fill:#3f5b7426,stroke:#6f8fae
+    class CLI,Web,Notebook,Gateway,State,Worker,Inputs heartwood
+    class Manifest,Model,Service,Records platform
+```
 
-## Launch Modes
+Green components belong to Heartwood; blue ones are provided by the operator's platform.
 
-### Local Launch
+- The operator's [deployment manifest](https://schmiedmayerlab.github.io/heartwood/reference/configuration/) binds a project to protected state outside the research folder and sets the policy, the permitted review modes and the worker profile.
+- Each session's agent runs as an OpenHands worker in an OpenShell sandbox with read-only inputs and a private workspace; credentials, the Docker socket and signing keys stay on the gateway host.
+- The gateway admits each worker attempt, checks every response against what it sent, and deletes the sandbox when it revokes the attempt.
+- Under **Review Outside Effects**, commands and file edits inside the sandbox run without a per-action decision; operations that leave it wait for a researcher decision bound to their exact content.
+- Every request, decision and result is journaled; with checkpoint evidence configured, each approval and rejection is retained as a signed checkpoint in a separate records service.
 
-A researcher runs `heartwood` in a project folder on a workstation, in a container, on Terra or on Stanford Carina.
-Heartwood keeps configuration, sessions and audit records in `.heartwood/` inside that folder.
-Every action set waits for the researcher, unless they select **Review Changes**, which allows file views and plan updates without a decision when the model route needs no credential.
-Agent tools run with the researcher's own permissions: an allowed command can read anything that user can read and can change `.heartwood/`, so a local launch is a reviewed assistant, not an isolation boundary.
+[Deploy Heartwood](https://schmiedmayerlab.github.io/heartwood/operate/) describes the setup, and [Security Limits](https://schmiedmayerlab.github.io/heartwood/operate/security/#security-limits) lists what these controls do not cover.
 
-### Operator Deployment
+## Local Evaluation
 
-An operator starts `heartwood gateway serve --deployment /absolute/path/project.toml` with a manifest whose `[worker]` table runs each session in an OpenShell sandbox on an operator-controlled Linux Docker host.
-The worker receives selected read-only inputs, verified Skills and a private workspace; the protected state, provider credentials, Docker socket and signing keys stay outside it.
-The gateway journals and fences each worker attempt, accepts a worker response only when its settings match what the gateway sent, inspects the container's confinement, and deletes the sandbox when it revokes an attempt.
-Under **Review Outside Effects**, terminal commands and file edits inside the worker can run without a per-action decision.
-Operations outside the worker go through a service adapter that an embedding launcher supplies, and each operation and the release of its result needs a researcher decision bound to the exact content reviewed.
-The platform keeps authority over identity, storage, network controls, compute and inference under the [platform contract](https://schmiedmayerlab.github.io/heartwood/operate/platform-contract/).
-[Security Limits](https://schmiedmayerlab.github.io/heartwood/operate/security/#security-limits) lists what these controls do not cover.
-
-## First Session
-
+To try Heartwood on a workstation, run it in a project folder; every action then waits for your review, and agent tools run with your permissions.
 With Docker on macOS or Linux:
 
 ```bash
@@ -76,12 +100,8 @@ docker run --rm -it \
   heartwood --interface web --host 0.0.0.0 --host-loopback-publication
 ```
 
-Open the launch link the container prints; the page continues at [http://127.0.0.1:8767/](http://127.0.0.1:8767/).
-Confirm the project, choose a model connection, and ask for a small task.
-For the terminal, replace the last line with `heartwood`.
+Open the launch link the container prints, choose a model connection and ask for a small task with synthetic files.
 The image contains no model weights or credentials.
-
-Use synthetic or non-sensitive files.
 
 ## Documentation
 
