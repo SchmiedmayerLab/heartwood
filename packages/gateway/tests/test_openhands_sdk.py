@@ -1928,19 +1928,36 @@ def _session_command(command_id: str, kind: CommandKind, **payload: JsonValue) -
 
 
 def _journaled_pending_group(service: SessionService) -> PendingActionGroup:
+    backend = cast(OpenHandsSdkBackend, service.backend)
     service.handle(_session_command("chat", CommandKind.CHAT, prompt="Count once"))
-    group = _wait_for_pending_group(cast(OpenHandsSdkBackend, service.backend))
+    group = _wait_for_pending_group(backend)
+    # The run that requested confirmation journals the proposal when its final publication
+    # returns; an approval before that is refused as not yet durably published.
+    assert backend.wait_for_idle(60)
     service.reconcile()
+    assert any(
+        event.kind == EventKind.CONFIRMATION_REQUESTED
+        and cast(dict[str, JsonValue], event.payload["request"])["group_id"] == group.group_id
+        for event in service.replay_events()
+    )
     return group
 
 
-def _copy_state_during_step(counter: Path, live: Path, stopped: Path) -> None:
-    """Copy the state a process stop leaves behind while the approved step is running."""
-    deadline = time.monotonic() + 10
-    while not counter.exists() and time.monotonic() < deadline:
-        time.sleep(0.02)
-    time.sleep(0.3)
-    shutil.copytree(live, stopped)
+def _copy_state_during_step(
+    service: SessionService, workspace: Path, live: Path, stopped: Path
+) -> None:
+    """Copy the state a process stop leaves behind, then let the held approved step finish."""
+    try:
+        deadline = time.monotonic() + 60
+        while not (workspace / "count.txt").exists():
+            if time.monotonic() > deadline:
+                pytest.fail("The approved step did not start")
+            time.sleep(0.02)
+        # Journal writes hold the command lock, so the copy contains only complete records.
+        with service._command_lock:
+            shutil.copytree(live, stopped)
+    finally:
+        (workspace / "release.txt").touch()
 
 
 @pytest.mark.parametrize("approval_journaled", [True, False])
@@ -1951,13 +1968,20 @@ def test_a_stop_during_an_approved_step_never_runs_the_set_again(
     # reloaded after a stop during the step reports the approved set as pending again.
     conversation_id = uuid.uuid4()
     live, stopped = tmp_path / "live", tmp_path / "stopped"
-    counter = tmp_path / "workspace" / "count.txt"
+    workspace = tmp_path / "workspace"
+    counter = workspace / "count.txt"
     service = _restartable_sdk_service(
         tmp_path,
         live,
         TestLLM.from_messages(
             [
-                _tool_message(("call-count", "printf x >> count.txt; sleep 2")),
+                # The step stays running until the stopped state has been copied.
+                _tool_message(
+                    (
+                        "call-count",
+                        "printf x >> count.txt; until [ -e release.txt ]; do sleep 0.05; done",
+                    )
+                ),
                 _assistant_message("Counted once."),
             ]
         ),
@@ -1970,7 +1994,7 @@ def test_a_stop_during_an_approved_step_never_runs_the_set_again(
     )
     if approval_journaled:
         service.handle(approve)
-        _copy_state_during_step(counter, live, stopped)
+        _copy_state_during_step(service, workspace, live, stopped)
     else:
         # The stop falls between handing the approval to OpenHands and journaling its result.
         original = backend.resolve_confirmation
@@ -1979,12 +2003,13 @@ def test_a_stop_during_an_approved_step_never_runs_the_set_again(
             *, session_id: str, action_group_id: str, approved: bool
         ) -> tuple[BackendEvent, ...]:
             original(session_id=session_id, action_group_id=action_group_id, approved=approved)
-            _copy_state_during_step(counter, live, stopped)
+            _copy_state_during_step(service, workspace, live, stopped)
             raise _ProcessStopped
 
         backend.resolve_confirmation = stop_after_dispatch  # type: ignore[method-assign]
         with pytest.raises(_ProcessStopped):
             service.handle(approve)
+    assert backend.wait_for_idle(60)
     _wait_for_lifecycle(backend, BackendLifecycle.FINISHED)
     service.close()
 
@@ -2010,11 +2035,8 @@ def test_a_stop_during_an_approved_step_never_runs_the_set_again(
                 (CommandKind.DENY, "reject-after-run"),
             )
         ]
-        # A second run appends once its restored terminal starts.
-        deadline = time.monotonic() + 5
-        while counter.read_text(encoding="utf-8") == "x" and time.monotonic() < deadline:
-            time.sleep(0.05)
-
+        # A second run would have appended before its worker exits.
+        assert cast(OpenHandsSdkBackend, restored.backend).wait_for_idle(60)
         assert counter.read_text(encoding="utf-8") == "x"
         assert all(result.events[-1].kind == EventKind.ERROR_RECORDED for result in refused)
         assert not restored.store.unresolved_command_ids()
