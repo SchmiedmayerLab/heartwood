@@ -797,7 +797,11 @@ def unexpected_bundled_entries(
             pinned.add((metadata.st_dev, metadata.st_ino))
     unexpected: list[Path] = []
     for path in sorted(bundled_dir.iterdir()):
-        metadata = path.lstat()
+        try:
+            metadata = path.lstat()
+        except FileNotFoundError:
+            # An entry removed after the listing is no longer in the directory.
+            continue
         if (metadata.st_dev, metadata.st_ino) not in pinned:
             unexpected.append(path)
     return tuple(unexpected)
