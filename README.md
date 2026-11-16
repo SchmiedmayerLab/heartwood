@@ -40,7 +40,7 @@ The Heartwood gateway decides which proposals wait for the researcher, records e
 - `heartwood audit checkpoint` writes a signed audit export with deployment and retention metadata outside the project, and `heartwood audit verify-checkpoint` checks it against a trusted public key; with managed evidence, the gateway checkpoints every approval and rejection.
 - Research Skills, bounded research specialists and staged research workflows run inside the same session, review and records.
 
-## Two Ways to Run It
+## Launch Modes
 
 ### Local Launch
 
@@ -90,7 +90,7 @@ Use synthetic or non-sensitive files.
 - [Choose a Platform](https://schmiedmayerlab.github.io/heartwood/platforms/) covers containers, native Linux, Terra and Stanford Carina.
 - [Deploy Heartwood](https://schmiedmayerlab.github.io/heartwood/operate/) covers the deployment manifest, the isolated worker and deployment validation.
 - [Security and Controlled Data](https://schmiedmayerlab.github.io/heartwood/operate/security/) describes the threat model and what the sandbox and the gateway enforce.
-- [How Heartwood Works](https://schmiedmayerlab.github.io/heartwood/architecture/) explains the architecture.
+- [Architecture](https://schmiedmayerlab.github.io/heartwood/architecture/) explains the components, boundaries and data flow.
 
 ## Contributing
 

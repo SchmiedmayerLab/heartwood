@@ -10,7 +10,7 @@ This guide goes from an empty folder to a conversation in which you review and a
 It uses a local launch, so Heartwood keeps its state in `.heartwood/` inside the folder.
 Use synthetic or non-sensitive files.
 
-## Before You Begin
+## Prerequisites
 
 You need:
 

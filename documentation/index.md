@@ -68,4 +68,4 @@ Use synthetic or non-sensitive files until the institution has approved the depl
 - [Models](models/index.md) compares institution-managed, hosted, compatible-service and Heartwood-managed routes.
 - [Platforms](platforms/index.md) covers containers, native Linux, Terra and Stanford Carina.
 - [Diagnostics and Troubleshooting](reference/troubleshooting.md) maps `HW-*` codes to recovery steps.
-- [How Heartwood Works](architecture/index.md) explains the architecture and its boundaries.
+- [Architecture](architecture/index.md) explains the components and their boundaries.

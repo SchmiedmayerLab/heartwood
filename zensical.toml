@@ -55,7 +55,7 @@ nav = [
         { "Security and Controlled Data" = "operate/security.md" },
         { "Add a Platform" = "operate/platform-integration.md" },
     ] },
-    { "How Heartwood Works" = [
+    { "Architecture" = [
         { "Product Boundaries" = "architecture/index.md" },
         { "System Architecture" = "architecture/system.md" },
         { "Skill Trust and Distribution" = "architecture/skills.md" },

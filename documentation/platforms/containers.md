@@ -10,7 +10,7 @@ The Heartwood container is the recommended first installation on a macOS or Linu
 It packages the `heartwood` command, the browser interface, OpenHands, repository-verified Skills and managed inference software.
 It contains no model weights and no credentials, and it is not set up for notebooks; use the terminal or browser, or a Terra image for notebooks.
 
-## Before You Begin
+## Prerequisites
 
 Install Docker Desktop or Docker Engine and confirm that `docker version` succeeds.
 Create a dedicated host folder for the project; the bind mount makes it `/workspace` inside the container.

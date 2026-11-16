@@ -14,7 +14,7 @@ Zensical builds that tree directly; there is no copied staging tree or duplicate
 - **Get Started** teaches one complete first success.
 - **Work With Heartwood**, **Models**, and **Platforms** solve researcher tasks.
 - **Operate Heartwood** supports deployment and security reviewers.
-- **How Heartwood Works** explains durable architecture and rationale.
+- **Architecture** explains durable architecture and rationale.
 - **Reference** provides complete, exact, scannable facts.
 - **Contribute** documents repository work and releases.
 

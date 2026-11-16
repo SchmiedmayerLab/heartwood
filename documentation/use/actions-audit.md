@@ -58,7 +58,7 @@ The operator's manifest sets which modes a deployment permits, as described in [
 
 Each interface shows the mode in use, the default, and every unavailable mode with its reason.
 
-### Actions That Always Wait for You
+### Actions That Always Require Review
 
 No review mode decides these on your behalf:
 
