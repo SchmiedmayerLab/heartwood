@@ -134,6 +134,8 @@ class _ApprovalIntent:
     group_id: str
     approved: bool
     tool_call_ids: tuple[str, ...]
+    # Whether the decision journals its dispatch; an older journal never did.
+    dispatch_journaled: bool = True
 
 
 _REVIEW_NOT_APPLIED = "not-applied"
@@ -1479,6 +1481,7 @@ class SessionService:
                     "actor_id": command.actor_id,
                     "group_id": pending_group.group_id,
                     "decision": decision,
+                    "dispatch_journaled": True,
                     **({"review": {"mode": review.mode, "rule": review.rule}} if review else {}),
                     **self._evidence_policy(),
                     "tool_call_ids": [action.tool_call_id for action in pending_group.actions],
@@ -1995,9 +1998,12 @@ class SessionService:
                     and tuple(action.tool_call_id for action in pending_group.actions)
                     == intent.tool_call_ids
                 )
-                if _dispatch_started(events, intent.command_id):
+                if intent.approved and (
+                    not intent.dispatch_journaled or _dispatch_started(events, intent.command_id)
+                ):
                     # A set the backend received can show as pending again after a restart
-                    # although it ran, so it is never sent again or withdrawn.
+                    # although it ran, so it is never sent again or withdrawn. An approval
+                    # journaled before dispatch records existed may have been sent as well.
                     recovered.append(self._record_unknown_approval_outcome(intent))
                 elif (
                     matches
@@ -2366,6 +2372,7 @@ def _approval_intent(
         group_id=group_id,
         approved=decision == "approved",
         tool_call_ids=tuple(cast(str, tool_call_id) for tool_call_id in raw_tool_call_ids),
+        dispatch_journaled=approval.payload.get("dispatch_journaled") is True,
     )
 
 

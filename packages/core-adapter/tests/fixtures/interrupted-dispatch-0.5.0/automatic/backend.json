@@ -1,0 +1,1 @@
+{"action_id":"action-read-1","affected_paths":[],"arguments":{"command":"view","path":"data/synthetic.csv"},"kind":"file-editor","project_path":null,"review_class":"read","risk":"low","summary":"view one synthetic file","tool_call_id":"session-legacy-toolcall-0","tool_name":"file-editor"}

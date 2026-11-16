@@ -90,6 +90,7 @@ An interrupted approval is completed automatically only when its recorded intent
 After the decision's checkpoint boundary and before OpenHands receives an approved set, the session durably journals an `action_dispatch.started` record.
 An interrupted approval without that record never reached OpenHands: recovery sends it once if the pending set still matches, and withdraws an interrupted gateway decision that its rule no longer allows.
 An interrupted approval with that record but without its resolution has an unknown outcome (`HW-AGENT-006`) and is never sent again or withdrawn.
+Each `approval.recorded` event states that its dispatch is journaled; an interrupted approval without that statement was written before dispatch records existed, may have been sent, and is recovered the same way.
 OpenHands saves conversation state only when a step ends, so a conversation reloaded after a stop during an approved step can show the set as pending again although it ran.
 Otherwise the session rejects further mutation, so a second approval or task cannot repeat an uncertain side effect; verify the evidence and continue in a new session.
 

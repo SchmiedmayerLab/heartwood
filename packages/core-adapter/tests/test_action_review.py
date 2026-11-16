@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
@@ -1350,6 +1351,61 @@ def test_an_automatic_decision_the_backend_may_have_received_is_never_offered_ag
         _command(CommandKind.APPROVE, "again", target_type="action-set", target_id=group.group_id)
     )
     assert backend.executed == ["read-1"]
+    service.audit_log.verify()
+    service.close()
+
+
+_LEGACY_INTERRUPTED_DISPATCH = Path(__file__).parent / "fixtures" / "interrupted-dispatch-0.5.0"
+
+
+class _RecordingBackend(DeterministicAgentBackend):
+    def __init__(self, *, persistence_path: Path) -> None:
+        super().__init__(persistence_path=persistence_path)
+        self.resolutions: list[str] = []
+
+    def resolve_confirmation(
+        self, *, session_id: str, action_group_id: str, approved: bool
+    ) -> tuple[BackendEvent, ...]:
+        self.resolutions.append(action_group_id)
+        return super().resolve_confirmation(
+            session_id=session_id, action_group_id=action_group_id, approved=approved
+        )
+
+
+@pytest.mark.parametrize("decided_by", ["researcher", "automatic"])
+def test_a_journal_stopped_while_sending_before_dispatch_records_is_never_sent_again(
+    tmp_path: Path, decided_by: str
+) -> None:
+    # Written by Heartwood 0.5.0, stopped while it sent an approval: the journal holds the
+    # approval but no dispatch record and no result, and the saved backend state still
+    # shows the set as pending.
+    root = tmp_path / "sessions"
+    shutil.copytree(_LEGACY_INTERRUPTED_DISPATCH / decided_by, root)
+    for path in (root, *root.rglob("*")):
+        path.chmod(0o700 if path.is_dir() else 0o600)
+    backend = _RecordingBackend(persistence_path=root / "backend.json")
+    service = SessionService.local_default(
+        root,
+        session_id="session-legacy",
+        backend=backend,
+        policy_profile=_policy(),
+        env={},
+        clock=lambda: "2026-01-01T00:00:00Z",
+        action_review_mode=lambda: "review-changes",
+        credentials_isolated=lambda: True,
+    )
+    group = backend.pending_action_group(session_id="session-legacy")
+    assert group is not None
+    (approval,) = _approvals(service)
+    assert approval.payload["group_id"] == group.group_id
+
+    service.reconcile()
+
+    assert backend.resolutions == []
+    assert _not_applied(service) == []
+    (unknown,) = _unknown_outcomes(service)
+    assert unknown.payload["command_id"] == approval.payload["command_id"]
+    assert not service.store.unresolved_command_ids()
     service.audit_log.verify()
     service.close()
 
