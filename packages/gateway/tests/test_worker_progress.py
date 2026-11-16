@@ -26,6 +26,7 @@ from openhands.sdk.conversation import ConversationExecutionStatus
 from openhands.sdk.conversation.conversation_stats import ConversationStats
 from openhands.sdk.conversation.impl.remote_conversation import RemoteEventsList
 from openhands.sdk.conversation.request import StartConversationRequest
+from openhands.sdk.conversation.state import ConversationState
 from openhands.sdk.event import ActionEvent, MessageEvent, ObservationEvent, StreamingDeltaEvent
 from openhands.sdk.event import Event as OpenHandsEvent
 from openhands.sdk.event.conversation_state import ConversationStateUpdateEvent
@@ -33,6 +34,7 @@ from openhands.sdk.llm import LLM, Message, MessageToolCall, TextContent
 from openhands.sdk.security import SecurityRisk
 from openhands.sdk.security.confirmation_policy import AlwaysConfirm
 from openhands.sdk.testing import TestLLM
+from openhands.sdk.tool.builtins.think import ThinkAction, ThinkExecutor, ThinkObservation
 from openhands.sdk.workspace import LocalWorkspace
 from openhands.tools.terminal import TerminalAction
 
@@ -120,11 +122,15 @@ class _Worker:
         for event in events:
             self.events.append(event.model_copy(update={"parent_id": self._tip()}))
 
-    def append_update(self) -> None:
+    def append_update(self, status: ConversationExecutionStatus | None = None) -> None:
         """Log a state update, which names the tip as parent but leaves the branch."""
-        stats = ConversationStats().model_dump(mode="json")
+        key, value = (
+            ("stats", ConversationStats().model_dump(mode="json"))
+            if status is None
+            else ("execution_status", status.value)
+        )
         self.events.append(
-            ConversationStateUpdateEvent(key="stats", value=stats, parent_id=self._tip())
+            ConversationStateUpdateEvent(key=key, value=value, parent_id=self._tip())
         )
 
     def _tip(self) -> str | None:
@@ -462,6 +468,43 @@ def test_status_is_read_before_the_events_it_describes() -> None:
     assert worker.requests == [("status", None), ("search", worker.events[0].id)]
 
 
+def test_logged_status_replaces_the_status_the_worker_last_saved() -> None:
+    # The agent server saves its status only when a step releases the conversation, but
+    # logs each change when it is made.
+    worker = _Worker()
+    worker.append(_message("Start."), _action("action-1", "call-1"))
+    worker.status = ConversationExecutionStatus.WAITING_FOR_CONFIRMATION
+    branch = worker.branch()
+    assert branch.read().execution_status == ConversationExecutionStatus.WAITING_FOR_CONFIRMATION
+    worker.append_update(ConversationExecutionStatus.RUNNING)
+    assert branch.read().execution_status == ConversationExecutionStatus.RUNNING
+    # Once the step's result advances the leaf past the update, the status stays running
+    # until the worker logs another change.
+    worker.append(_message("Partial result."))
+    assert branch.read().execution_status == ConversationExecutionStatus.RUNNING
+    worker.append_update()
+    worker.append_update(ConversationExecutionStatus.FINISHED)
+    assert branch.read().execution_status == ConversationExecutionStatus.FINISHED
+    worker.status = ConversationExecutionStatus.FINISHED
+    assert branch.read().execution_status == ConversationExecutionStatus.FINISHED
+
+
+def test_an_invalid_logged_status_fences_the_attempt() -> None:
+    worker = _Worker()
+    worker.append(_message("Start."))
+    branch = worker.branch()
+    branch.read()
+    worker.events.append(
+        ConversationStateUpdateEvent(
+            key="execution_status", value="unknown", parent_id=worker.events[-1].id
+        )
+    )
+    with pytest.raises(WorkerResponseError, match="state update"):
+        branch.read()
+    with pytest.raises(WorkerResponseError, match="closed"):
+        worker.budget.charge(0)
+
+
 def test_concurrent_reads_share_one_consistent_branch() -> None:
     worker = _Worker()
     worker.append(_message("Start."))
@@ -770,3 +813,91 @@ def test_pinned_agent_server_confirmation_cycle_is_read_incrementally(
     assert finished.stats == ConversationStats.model_validate(snapshot["stats"])
     # Every read after the first is the status, then the history after the leaf.
     assert paths == ["snapshot", "status", "search", "status", "search"]
+
+
+def test_pinned_agent_server_approved_action_is_not_read_as_pending_during_its_step(
+    agent_server: httpx.Client, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    scripted = TestLLM.from_messages(
+        [
+            Message(
+                role="assistant",
+                content=[TextContent(text="Two steps.")],
+                tool_calls=[
+                    _tool_call("think-1", "think", {"thought": "Slow."}),
+                    _tool_call("think-2", "think", {"thought": "Second."}),
+                ],
+            ),
+            Message(
+                role="assistant",
+                content=[TextContent(text="")],
+                tool_calls=[_tool_call("finish-1", "finish", {"message": "Done."})],
+            ),
+        ]
+    )
+    monkeypatch.setattr(LLM, "acompletion", staticmethod(scripted.acompletion))
+    monkeypatch.setattr(LLM, "completion", staticmethod(scripted.completion))
+    executing, release = Event(), Event()
+    think = ThinkExecutor.__call__
+
+    def slow_think(
+        self: ThinkExecutor,
+        action: ThinkAction,
+        conversation: object = None,  # noqa: ARG001
+    ) -> ThinkObservation:
+        executing.set()
+        assert release.wait(10)
+        return think(self, action)
+
+    monkeypatch.setattr(ThinkExecutor, "__call__", slow_think)
+    request = StartConversationRequest(
+        agent=Agent(
+            llm=TestLLM(model="test-model"),
+            tools=[],
+            include_default_tools=["FinishTool", "ThinkTool"],
+        ),
+        workspace=LocalWorkspace(working_dir=tmp_path / "worker-workspace"),
+        confirmation_policy=AlwaysConfirm(),
+        autotitle=False,
+    )
+    identity = _create(agent_server, request)
+    sent = agent_server.post(
+        f"/api/conversations/{identity}/events",
+        json={"role": "user", "content": [{"type": "text", "text": "Begin."}], "run": False},
+    )
+    assert sent.status_code == 200
+    branch, _paths = _admitted_branch(agent_server, request, identity)
+    branch.read()
+
+    def reported() -> str:
+        return str(agent_server.get(f"/api/conversations/{identity}").json()["execution_status"])
+
+    def settles(status: ConversationExecutionStatus) -> None:
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            if reported() == status.value:
+                return
+            time.sleep(0.02)
+        pytest.fail(f"agent server did not reach {status.value}")
+
+    assert agent_server.post(f"/api/conversations/{identity}/run").status_code == 200
+    settles(ConversationExecutionStatus.WAITING_FOR_CONFIRMATION)
+    waiting = branch.read()
+    assert waiting.execution_status == ConversationExecutionStatus.WAITING_FOR_CONFIRMATION
+    assert ConversationState.get_unmatched_actions(waiting.events)
+    # Running a conversation that waits for confirmation runs its pending actions, as the
+    # gateway does after an approval.
+    try:
+        assert agent_server.post(f"/api/conversations/{identity}/run").status_code == 200
+        assert executing.wait(10)
+        # The status the worker reports is still the one it saved before the step.
+        assert reported() == ConversationExecutionStatus.WAITING_FOR_CONFIRMATION.value
+        during = branch.read()
+        assert during.execution_status == ConversationExecutionStatus.RUNNING
+        assert ConversationState.get_unmatched_actions(during.events)
+    finally:
+        release.set()
+    settles(ConversationExecutionStatus.FINISHED)
+    finished = branch.read()
+    assert finished.execution_status == ConversationExecutionStatus.FINISHED
+    assert not ConversationState.get_unmatched_actions(finished.events)

@@ -734,6 +734,8 @@ class WorkerBranch:
     must name its predecessor as its parent, so a repeated, missing, reordered or
     replaced event fences the attempt. The retained branch is bounded like the snapshot
     that would carry it, so the conversation can always be attached from one snapshot.
+    The latest execution status the worker logged after the snapshot is retained with
+    its place in the log, so a read never reports an older status than one already read.
     """
 
     def __init__(self, workspace: AdmittedRemoteWorkspace, conversation_id: UUID) -> None:
@@ -745,13 +747,17 @@ class WorkerBranch:
         self._positions: dict[str, int] = {}
         self._bytes = 0
         self._values = 0
+        self._logged: _LoggedStatus | None = None
 
     def read(self) -> WorkerBranchRead:
         """Read the worker's status and usage, then the events after the admitted leaf.
 
-        The agent server persists an event before it publishes the status that follows
-        it, so a status read first describes a prefix of the events read after it. An
-        empty branch is read as one snapshot, which carries its own status.
+        The agent server reports the status it last saved, which it saves only when a
+        step releases the conversation, so during a step that status can be older than
+        the events. It logs every status change as a state update when the change is
+        made, so the latest logged status describes the events read with it and replaces
+        the reported one. An empty branch is read as one snapshot, which carries its own
+        status.
         """
         try:
             with self._lock:
@@ -761,7 +767,15 @@ class WorkerBranch:
                 self._extend((), snapshot.events)
                 return snapshot
             execution_status, stats = self._status(self._get(""))
-            events = self._extend(base, self._after(base))
+            new, logged = self._after(base)
+            events = self._extend(base, new)
+            with self._lock:
+                if logged is not None and (
+                    self._logged is None or logged.position > self._logged.position
+                ):
+                    self._logged = logged
+                if self._logged is not None:
+                    execution_status = self._logged.status
             return WorkerBranchRead(events, execution_status, stats)
         except WorkerResponseError:
             self._workspace._response_budget.close()
@@ -800,10 +814,14 @@ class WorkerBranch:
             raise WorkerResponseError("worker branch response is invalid")
         return WorkerBranchRead(branch, execution_status, stats)
 
-    def _after(self, base: tuple[Event, ...]) -> tuple[Event, ...]:
+    def _after(self, base: tuple[Event, ...]) -> tuple[tuple[Event, ...], _LoggedStatus | None]:
+        """Return the branch events after the leaf and the latest status logged with them."""
         leaf = base[-1]
         events: list[Event] = []
         seen: set[str] = set()
+        logged: _LoggedStatus | None = None
+        # A logged event's place: the branch length before it and its order after that.
+        position = (len(base), 0)
         page, first = leaf.id, True
         while True:
             value = self._get("/events/search", page_id=page, limit=_HISTORY_PAGE_EVENTS)
@@ -820,10 +838,17 @@ class WorkerBranch:
                 )
             if repeated:
                 raise WorkerResponseError("worker history does not continue the admitted branch")
+            for event in items[1:] if first else items:
+                if not isinstance(event, ConversationStateUpdateEvent):
+                    position = (position[0] + 1, 0)
+                    continue
+                position = (position[0], position[1] + 1)
+                if (status := _logged_status(event)) is not None:
+                    logged = _LoggedStatus(position, status)
             events.extend(new)
             following = value.get("next_page_id")
             if following is None:
-                return tuple(events)
+                return tuple(events), logged
             page, first = following, False
 
     def _extend(self, base: tuple[Event, ...], new: tuple[Event, ...]) -> tuple[Event, ...]:
@@ -845,6 +870,30 @@ class WorkerBranch:
                 self._positions[longer[index].id] = index
             self._events, self._bytes, self._values = longer, size, values
         return candidate
+
+
+@dataclass(frozen=True, slots=True)
+class _LoggedStatus:
+    """An execution status the worker logged, with its place in the worker's log."""
+
+    position: tuple[int, int]
+    status: ConversationExecutionStatus
+
+
+def _logged_status(event: ConversationStateUpdateEvent) -> ConversationExecutionStatus | None:
+    """Return the execution status a logged state update sets, if it sets one."""
+    if event.key == "execution_status":
+        value: object = event.value
+    elif event.key == FULL_STATE_KEY and isinstance(event.value, dict):
+        if "execution_status" not in event.value:
+            return None
+        value = event.value["execution_status"]
+    else:
+        return None
+    try:
+        return ConversationExecutionStatus(value)
+    except ValueError:
+        raise WorkerResponseError("worker state update is invalid") from None
 
 
 def _require_chain(

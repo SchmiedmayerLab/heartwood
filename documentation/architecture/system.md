@@ -219,7 +219,8 @@ Admission errors never include worker response content.
 Admitted event callbacks coalesce progress reads, token deltas do not request one, and a five-second fallback refresh and final reconciliation preserve progress and settled state.
 The first read of a conversation, at creation or attachment, is one native branch snapshot with the conversation identity, active events, execution status, and reported usage.
 Later reads first request the conversation's execution status and reported usage from the worker, admitted like any other response, and then only the history after the admitted leaf, starting at the leaf itself.
-The agent server persists an event before it publishes the status that follows it, so a status read first describes only events the same read returns; the state the SDK caches from its event connection is not used, because it can lag the worker.
+The status the agent server reports is the state it last saved, and it saves only when a step releases the conversation, so during a step that status can be older than the events; the state the SDK caches from its event connection is not used, because it can lag the worker.
+The agent server logs every status change as a state update when it makes the change, so the latest status logged in the history the gateway has read replaces the reported one, and a read never reports a status older than one already read.
 Each later read must begin with the admitted leaf unchanged, and each event after it must name the previous branch event as its parent; logged state updates name the branch tip but are not part of the branch.
 A repeated, missing, reordered, replaced, or forked event fences the attempt, as does a snapshot for another conversation or a branch that does not chain from its root.
 Admission parses and validates each response once, and the gateway's branch reads use those validated events.
