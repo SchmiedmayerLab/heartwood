@@ -176,6 +176,18 @@ def _fast_provider_failures(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(openhands_sdk_module, "_AGENT_PROGRESS_POLL_SECONDS", 0.01)
 
 
+@pytest.fixture
+def _responses_attempt_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Give Responses scenarios a model timeout that a cold first call fits within.
+
+    The first Responses API call in a process imports a large part of LiteLLM inside
+    the hard per-attempt timeout. These scenarios check matched tool history, not
+    timeouts, so the one-second failure budget would only make them depend on how
+    quickly the runner imports.
+    """
+    monkeypatch.setattr(openhands_sdk_module, "_AGENT_LLM_LOCAL_TIMEOUT_SECONDS", 30)
+
+
 @pytest.fixture(autouse=True)
 def _provider_logs_are_content_safe(
     caplog: pytest.LogCaptureFixture,
@@ -439,6 +451,7 @@ def test_malformed_or_interrupted_streams_fail_closed_without_leaking_content(
     ],
     ids=["single-action", "grouped-actions"],
 )
+@pytest.mark.usefixtures("_responses_attempt_budget")
 def test_responses_api_restart_preserves_matched_tool_history(
     tmp_path: Path,
     mock_provider: _MockProviderServer,
@@ -523,6 +536,7 @@ def test_responses_api_restart_preserves_matched_tool_history(
         restored.close()
 
 
+@pytest.mark.usefixtures("_responses_attempt_budget")
 def test_cold_approval_never_records_the_internal_view_repair_pause(
     tmp_path: Path,
     mock_provider: _MockProviderServer,
