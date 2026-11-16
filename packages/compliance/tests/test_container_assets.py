@@ -1277,8 +1277,8 @@ def test_isolated_smoke_uses_real_openhands_sdk_without_weights() -> None:
     assert " reject " in smoke
     assert "Action set approved" in smoke
     assert "Action set rejected" in smoke
-    assert r"\[Succeeded\] \$" in reference_smoke
-    assert r"\[Failed\] \$" in reference_smoke
+    assert r"\[Succeeded\] Model-proposed command: \$" in reference_smoke
+    assert r"\[Failed\] Model-proposed command: \$" in reference_smoke
     assert "terminal completed" in reference_smoke
     assert "terminal failed" in reference_smoke
     assert "Tool terminal exit=" not in reference_smoke
