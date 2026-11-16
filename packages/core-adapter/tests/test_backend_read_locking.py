@@ -12,6 +12,7 @@ from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Event, Thread
+from time import monotonic
 from uuid import UUID, uuid4
 
 import pytest
@@ -183,6 +184,36 @@ def test_prompt_revocation_during_a_stalled_read_completes_and_discards_it(
     assert attempt is not None
     assert attempt.phase == "revoked"
     assert _messages(service) == []
+
+
+def test_back_to_back_reads_do_not_starve_revocation(service: SessionService) -> None:
+    lease = _activate(service)
+    revoked = Event()
+
+    def revoke() -> None:
+        service.revoke_worker(lambda _record: _revocation(lease))
+        revoked.set()
+
+    lock = service._command_lock
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        lock.acquire()
+        try:
+            revoking = executor.submit(revoke)
+            deadline = monotonic() + _WAIT
+            # Like reads that follow one another, replay the journal under the command lock,
+            # then release it and request it again at once.
+            while not revoked.is_set() and monotonic() < deadline:
+                service.replay_events()
+                lock.release()
+                lock.acquire()
+            starved = not revoked.is_set()
+        finally:
+            lock.release()
+        revoking.result(timeout=_WAIT)
+    assert not starved
+    attempt = service.worker_attempt()
+    assert attempt is not None
+    assert attempt.phase == "revoked"
 
 
 def test_read_is_committed_once_when_nothing_interleaves(
