@@ -275,6 +275,7 @@ class SessionService:
         self._worker_replacement_admitted = False
         # Sets this process sent; a live read can still show one pending before its step starts.
         self._sent_group_ids: set[str] = set()
+        self._reappearance_checked = False
         self.backend.bind_runtime(
             event_sink=self._accept_unbound_backend_events,
             token_sink=self._accept_unbound_backend_token,
@@ -2057,36 +2058,54 @@ class SessionService:
                 first_sequence=first_sequence,
                 last_sequence=last_sequence,
             )
-        recovered.extend(self._record_reappeared_approval_locked())
+        if not self._reappearance_checked:
+            recovered.extend(self._record_reappeared_approval_locked())
         return tuple(recovered)
 
     def _record_reappeared_approval_locked(self) -> tuple[SessionEvent, ...]:
         """Record once that a set the backend shows as pending after it was sent may have run.
 
         A conversation reloaded after a stop during an approved step reports the state it
-        last saved, which still shows the set as pending. A set this process sent can also
-        look pending until its step starts, so only one sent before this process counts.
+        last saved, which still shows the set as pending, so the first read after this
+        process starts shows it. A set this process sent can also look pending until its
+        step starts and is not counted. A failed read leaves the check for a later recovery;
+        the decision guard refuses a second decision on the set meanwhile.
         """
-        group = self.backend.pending_action_group(session_id=self.store.session_id)
+        events = self.replay_events()
+        sent = {
+            group_id
+            for event in events
+            if event.kind in {EventKind.APPROVAL_RECORDED, EventKind.ACTION_DISPATCH_STARTED}
+            and isinstance((group_id := event.payload.get("group_id")), str)
+        }
+        if not sent or any(
+            event.kind == EventKind.ERROR_RECORDED
+            and backend_error_is_fatal(event.payload.get("code"))
+            for event in events
+        ):
+            self._reappearance_checked = True
+            return ()
+        try:
+            group = self.backend.pending_action_group(session_id=self.store.session_id)
+        except Exception:
+            return ()
+        self._reappearance_checked = True
         if (
             group is None
+            or group.group_id not in sent
             or group.group_id in self._sent_group_ids
             or not self._approval_handed_over(group.group_id)
         ):
             return ()
-        events = self.replay_events()
-        if any(
-            event.kind == EventKind.ERROR_RECORDED
-            and event.payload.get("code") == BackendErrorCode.ACTION_OUTCOME_UNKNOWN.value
-            and event.payload.get("group_id") == group.group_id
-            for event in events
-        ):
-            return ()
         command_id = next(
-            str(event.payload.get("command_id"))
-            for event in reversed(events)
-            if event.kind in {EventKind.APPROVAL_RECORDED, EventKind.ACTION_DISPATCH_STARTED}
-            and event.payload.get("group_id") == group.group_id
+            (
+                command_id
+                for event in reversed(events)
+                if event.kind in {EventKind.APPROVAL_RECORDED, EventKind.ACTION_DISPATCH_STARTED}
+                and event.payload.get("group_id") == group.group_id
+                and isinstance((command_id := event.payload.get("command_id")), str)
+            ),
+            "",
         )
         return (
             self._record_unknown_approval_outcome(
@@ -2131,8 +2150,7 @@ class SessionService:
         self, command_id: str, group_id: str, tool_call_ids: tuple[str, ...]
     ) -> SessionEvent:
         """Journal that an approved set is about to reach the backend, which may then run it."""
-        self._sent_group_ids.add(group_id)
-        return self._record_event(
+        event = self._record_event(
             EventKind.ACTION_DISPATCH_STARTED,
             {
                 "command_id": command_id,
@@ -2140,6 +2158,8 @@ class SessionService:
                 "tool_call_ids": list(tool_call_ids),
             },
         )
+        self._sent_group_ids.add(group_id)
+        return event
 
     def _approval_handed_over(self, group_id: str) -> bool:
         """Return whether an approval of the set may already have reached the backend.

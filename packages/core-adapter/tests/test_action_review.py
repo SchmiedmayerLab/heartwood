@@ -1250,6 +1250,47 @@ def test_an_approved_set_shown_as_pending_again_is_never_approved_twice(
     service.close()
 
 
+def test_a_failing_pending_read_never_blocks_reads_or_commands(tmp_path: Path) -> None:
+    # An isolated worker's snapshot read can fail; the check for a set shown as pending again
+    # is then not completed, and reads and commands keep working.
+    action = _action("run-1", "workspace")
+    backend = _ScriptedBackend((action,))
+    service = _service(tmp_path, backend, mode="review-all")
+    _chat(service)
+    group = service.backend.pending_action_group(session_id=_SESSION)
+    assert group is not None
+    service.handle(
+        _command(CommandKind.APPROVE, "approve", target_type="action-set", target_id=group.group_id)
+    )
+    service = _restart(service, tmp_path, backend, "review-all")
+    reads: list[str] = []
+
+    def unavailable(*, session_id: str) -> PendingActionGroup | None:
+        reads.append(session_id)
+        raise RuntimeError("conversation snapshot is unavailable")
+
+    backend.pending_action_group = unavailable  # type: ignore[method-assign]
+    service.reconcile()
+    paused = service.handle(_command(CommandKind.PAUSE, "pause"))
+    assert [event.kind for event in paused.events][-1] == EventKind.SESSION_PAUSED
+    assert _unknown_outcomes(service) == []
+
+    # A later read completes the check once; further reads and commands never repeat it.
+    del backend.pending_action_group
+    backend.replace_pending(action)
+    service.reconcile()
+    (unknown,) = _unknown_outcomes(service)
+    assert unknown.payload["group_id"] == group.group_id
+    reads.clear()
+    backend.pending_action_group = unavailable  # type: ignore[method-assign]
+    service.reconcile()
+    service.reconcile()
+    assert reads == []
+    assert backend.executed == ["run-1"]
+    service.audit_log.verify()
+    service.close()
+
+
 @pytest.mark.parametrize(
     ("review_class", "sandboxed", "restart"),
     [
