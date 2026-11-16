@@ -1215,24 +1215,37 @@ def test_an_approved_set_shown_as_pending_again_is_never_approved_twice(
     backend.replace_pending(action)
     if not sandboxed:
         service = _restart(service, tmp_path, backend, "review-all")
+
+    # Before reconciliation the set itself refuses a second decision of either kind, so a
+    # set that ran is never approved again or recorded as rejected.
+    for kind, command_id in ((CommandKind.APPROVE, "again"), (CommandKind.DENY, "reject")):
+        result = service.handle(
+            _command(kind, command_id, target_type="action-set", target_id=group.group_id),
+            reconcile_before_command=False,
+        )
+        (refusal,) = [event for event in result.events if event.kind == EventKind.ERROR_RECORDED]
+        assert refusal.payload["group_id"] == group.group_id
+        assert "may have run" in str(refusal.payload["reason"])
+
+    # After a restart, reconciliation records the unknown outcome once and the session stays
+    # closed to the set. Within the process that sent it, a set can look pending until its
+    # step starts, so only the refusals above apply.
     service.reconcile()
-    result = service.handle(
-        _command(CommandKind.APPROVE, "again", target_type="action-set", target_id=group.group_id)
+    service.reconcile()
+    unknown = _unknown_outcomes(service)
+    assert [event.payload["group_id"] for event in unknown] == (
+        [] if sandboxed else [group.group_id]
     )
+    for kind, command_id in ((CommandKind.APPROVE, "later"), (CommandKind.DENY, "reject-later")):
+        result = service.handle(
+            _command(kind, command_id, target_type="action-set", target_id=group.group_id)
+        )
+        assert result.events[-1].kind == EventKind.ERROR_RECORDED
 
     assert backend.executed == ["run-1"]
-    assert len(_approvals(service)) == 1
-    (refusal,) = [event for event in result.events if event.kind == EventKind.ERROR_RECORDED]
-    assert refusal.payload["group_id"] == group.group_id
+    assert [event.payload["decision"] for event in _approvals(service)] == ["approved"]
     assert _pending(service) == ("run-1",)
-
-    # Rejecting the stale set stays available and sends nothing to run.
-    service.handle(
-        _command(CommandKind.DENY, "reject", target_type="action-set", target_id=group.group_id)
-    )
-    assert backend.executed == ["run-1"]
-    assert _pending(service) == ()
-    assert [event.payload["decision"] for event in _approvals(service)] == ["approved", "denied"]
+    assert len(_unknown_outcomes(service)) == (0 if sandboxed else 1)
     service.audit_log.verify()
     service.close()
 

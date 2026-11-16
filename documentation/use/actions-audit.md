@@ -25,7 +25,8 @@ When a set needs you, every interface lists all of its members: the exact comman
 Each interface applies your decision to the set it displayed, so a set you have not seen is never decided.
 The risk label comes from fixed threat checks on the action itself, not from the model.
 An interrupted action whose result cannot be established is marked **Outcome Unknown** rather than treated as safe to repeat.
-An allowed set is sent to run at most once: if it appears to wait for review again after a restart, allowing it again is refused, and rejecting it remains available.
+An allowed set is sent to run at most once.
+If it appears to wait for review again after a restart, it may already have run: Heartwood marks it **Outcome Unknown** and refuses to allow or reject it again.
 
 ## Review Modes
 

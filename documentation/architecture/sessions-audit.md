@@ -144,7 +144,10 @@ An action is recorded as approved only when the session holds a recorded decisio
 A gateway decision under a [review mode](system.md#action-review-and-review-modes) is such a record: an accepted command and an `approval.recorded` event with the actor `gateway` and the applied mode and rule, followed by the same checkpoint boundary, digest check, and resolution events as a researcher decision.
 The projection labels an action as decided only from these records and names the rule for a gateway decision.
 If a backend reports executing an action without one, the session records an error and fences the worker attempt.
-A set with a recorded approval or a started dispatch refuses a further approval and a further gateway decision from every interface; rejecting it remains available.
+A set with a recorded approval or a started dispatch may have run, so it refuses a further approval, rejection, or gateway decision from every interface.
+When OpenHands shows such a set as pending again after a restart, reconciliation records `HW-AGENT-006` for it once.
+A set sent by the current process is excluded, because it can look pending until its step starts.
+Rejecting a pending set that was never sent remains available.
 
 Each OpenHands proposal becomes one `heartwood.action-record.v1` projection correlated by stable action and tool-call identifiers.
 The same record accumulates its group, decision, execution state, bounded result, and typed affected-path evidence across replay.

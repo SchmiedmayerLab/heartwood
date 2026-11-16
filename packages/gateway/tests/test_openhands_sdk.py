@@ -136,6 +136,7 @@ from heartwood.gateway._openhands_sdk import (
     _usage_source_event_id,
     register_specialist_catalog,
 )
+from heartwood.gateway._session_projection import project_session
 from heartwood.gateway._specialist_task import HeartwoodSpecialistToolSet
 from heartwood.gateway._specialists import (
     SpecialistCatalog,
@@ -1998,28 +1999,43 @@ def test_a_stop_during_an_approved_step_never_runs_the_set_again(
         restored_group = restored.backend.pending_action_group(session_id="session-1")
         assert restored_group is not None
         assert restored_group.group_id == group.group_id
-        again = restored.handle(
-            _session_command(
-                "approve-again",
-                CommandKind.APPROVE,
-                target_type="action-set",
-                target_id=group.group_id,
+        refused = [
+            restored.handle(
+                _session_command(
+                    command_id, kind, target_type="action-set", target_id=group.group_id
+                )
             )
-        )
+            for kind, command_id in (
+                (CommandKind.APPROVE, "approve-again"),
+                (CommandKind.DENY, "reject-after-run"),
+            )
+        ]
         # A second run appends once its restored terminal starts.
         deadline = time.monotonic() + 5
         while counter.read_text(encoding="utf-8") == "x" and time.monotonic() < deadline:
             time.sleep(0.05)
 
         assert counter.read_text(encoding="utf-8") == "x"
-        assert again.events[-1].kind == EventKind.ERROR_RECORDED
+        assert all(result.events[-1].kind == EventKind.ERROR_RECORDED for result in refused)
         assert not restored.store.unresolved_command_ids()
+        events = restored.replay_events()
         unknown = [
             event
-            for event in restored.replay_events()
+            for event in events
             if event.payload.get("code") == BackendErrorCode.ACTION_OUTCOME_UNKNOWN.value
         ]
-        assert len(unknown) == (0 if approval_journaled else 1)
+        assert len(unknown) == 1
+        assert unknown[0].payload["group_id"] == group.group_id
+        assert [
+            event.payload["decision"]
+            for event in events
+            if event.kind == EventKind.APPROVAL_RECORDED
+        ] == ["approved"]
+        projection = project_session(events, session_id="session-1")
+        assert projection.lifecycle.status == "error"
+        assert projection.available_commands == ()
+        assert projection.pending_approval is None
+        assert [action.state for action in projection.actions] == ["outcome-unknown"]
         restored.audit_log.verify()
     finally:
         restored.close()
