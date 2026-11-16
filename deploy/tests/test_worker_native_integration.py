@@ -242,7 +242,7 @@ def _application(
         assert project.protected_state is not None
         fixture.prepare_hostile(project.protected_state)
     if restarted:
-        assert application.reconcile_workers() == ()
+        assert application.reconcile_workers() == {}
     return application
 
 
@@ -277,7 +277,11 @@ def _stop(application: SessionGateway) -> None:
             application.stop()
             return
         except Exception:
-            service = application._service("composition")
+            # A close that still fails leaves its session detached and refused until a later
+            # stop retries it.
+            with application._state_lock:
+                released = application._releasing.get("composition")
+            service = released[0] if released else application._service("composition")
             attempt = service.worker_attempt()
             assert attempt is not None
             assert attempt.phase == "fenced"
@@ -931,6 +935,12 @@ def test_native_revoked_worker_is_replaced_for_the_next_command(
     infrastructure: NativeFixture,
 ) -> None:
     fixture = infrastructure
+    # Each worker's run finishes without an action, so no review the revoked worker
+    # proposed blocks its replacement.
+    fixture.provider.script = [
+        ("finish", {"message": "Synthetic task completed."}),
+        ("finish", {"message": "Synthetic task completed by the new worker."}),
+    ]
     application = _application(fixture)
     service = application._service("composition")
     try:
