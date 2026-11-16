@@ -16,14 +16,14 @@ You describe work on a project folder in ordinary language; an OpenHands agent p
 [Start Your First Project](start/index.md){ .md-button .md-button--primary }
 [Choose a Platform](platforms/index.md){ .md-button }
 
-## The Parts
+## Components
 
 - The gateway owns project state, policy, action review, authorization of operations outside the agent, session records and audit.
 - The agent loop and coding tools come from OpenHands and run either in the Heartwood process or as a complete worker inside an OpenShell sandbox.
 - The terminal, browser and notebook interfaces present the same gateway contract, so a session, its settings and its review decisions look the same in each.
 - Research Skills, bounded research specialists and staged research workflows run inside the same session, review and records.
 
-## Who Runs What
+## Roles and Responsibilities
 
 | Role | Decides | Starts with |
 |---|---|---|
@@ -52,19 +52,13 @@ Operations outside the worker, and the release of their results to it, are autho
 No production outside-service adapter ships and `gateway serve` installs none; these operations are available only through an embedding launcher.
 See [Projects and Private State](start/project.md#operator-bound-external-state) and [Security and Controlled Data](operate/security.md).
 
-## What Is Qualified
+## Support Levels
 
-| Claim | Evidence level |
-|---|---|
-| Container, GPU container, Terra images and native installers | Built and tested in CI for each release commit |
-| Isolated worker on Linux Docker | Native qualification in CI with synthetic workloads, against a qualification-only sandbox gateway build; evidence is bound to the commit |
-| Heartwood-managed model configurations | Per platform, as listed in [GPU Compatibility](reference/gpu-compatibility.md) and the model catalog |
-| Terra and Carina adapters | CI; the managed GPU model configurations were qualified live on each platform, see the [platform pages](platforms/index.md) |
-
-Heartwood does not claim sensitive-data readiness for any deployment.
-Heartwood ships no production sandbox gateway: the patched gateway used by native qualification exists only in the qualification build, and a deployment's gateway is checked only by the version it reports.
-Synthetic qualification is evidence for an institutional review, not an institutional approval.
-Begin with synthetic or non-sensitive files, and read [Security and Controlled Data](operate/security.md) before any restricted data.
+Container, GPU container and Terra images and native installers are built and tested in CI for each release commit.
+The isolated worker passes native qualification in CI on Linux Docker with synthetic workloads, and the evidence is bound to the commit.
+Heartwood-managed model configurations are qualified per platform as listed in [GPU Compatibility](reference/gpu-compatibility.md).
+[Support and Compatibility](operate/support.md#compatibility) gives the level of each configuration, and [Security Limits](operate/security.md#security-limits) states what the controls do not cover.
+Use synthetic or non-sensitive files until the institution has approved the deployment for a data class.
 
 ## Find an Answer
 

@@ -35,10 +35,10 @@ A deployment manifest with a `[worker]` table runs the complete OpenHands agent 
 The gateway, canonical state, deployment authority, provider credentials, signer material and management sockets stay outside the worker's mounts and process identity.
 The worker receives only the inputs selected in the manifest and verified Skills, both read-only, plus a private writable workspace, home and temporary directory.
 
-The isolated worker shape is implemented and passes native qualification against the qualification-only sandbox gateway build; see [Testing and Evidence](../architecture/testing.md#installed-native-integration).
-A deployment's sandbox gateway is checked only by its declared version, as described in [Gateway Behavior Behind Native Qualification](platform-requirements.md#gateway-behavior-behind-native-qualification).
+The isolated worker passes native qualification against a patched OpenShell gateway that exists only in the qualification build; see [Testing and Evidence](../architecture/testing.md#installed-native-integration).
+Heartwood distributes no production sandbox gateway, and checks a deployment's sandbox gateway only by its declared version, as described in [Gateway Behavior Behind Native Qualification](platform-requirements.md#gateway-behavior-behind-native-qualification).
 
-## What the Sandbox Enforces
+## Sandbox Enforcement
 
 The sandbox and the surrounding infrastructure enforce everything that constrains code running inside the worker:
 
@@ -55,7 +55,7 @@ Credential lifetime, rotation and detachment are the operator's OpenShell provid
 Heartwood does not inspect commands the worker runs.
 In [`review-outside-effects`](#action-review), these controls are the only limit on what an automatically allowed command can do inside the worker.
 
-## What the Gateway Enforces
+## Gateway Enforcement
 
 The gateway enforces everything that decides authority, independently of anything the worker reports:
 
@@ -215,16 +215,14 @@ It does not enforce retention or prove that no events were removed before it was
 Managed evidence additionally verifies each checkpoint against independently retained history, and the signer, not the gateway, publishes checkpoint ordinals.
 See [Audit Checkpoints and Retention](audit-checkpoints.md).
 
-## What Heartwood Does Not Claim
+## Security Limits
 
-- No deployment is claimed ready for sensitive or regulated data; native qualification uses synthetic and benign workloads.
-- Synthetic qualification, CI validation and a running sandbox are not institutional approval.
-- Heartwood distributes no production sandbox gateway; the patched gateway exists only in the qualification build, and a deployment's gateway is checked by declared version, not behavior.
-- Local execution is not a sandbox and does not isolate model credentials from tools.
-- Review modes are not a security boundary for an isolated worker; a compromised worker does not need an approval to act inside its sandbox.
-- Released outside results reach the model as a user-role message; the envelope that labels them is not an instruction boundary.
-- Heartwood does not verify individual identities, attribute commands to individual people behind one gateway, or replace platform authorization.
-- Heartwood does not provide quarantine, steward-approved output release, encrypted execution storage or records-system retention enforcement.
+Native qualification runs synthetic and benign workloads, and no deployment of Heartwood is qualified for sensitive or regulated data.
+Synthetic qualification, CI validation and a running sandbox are evidence for an institutional review, not institutional approval.
+Review modes do not constrain a compromised isolated worker, which can act inside its sandbox without an approval.
+A released outside result reaches the model as a user-role message; the envelope that labels it is not an instruction boundary.
+Heartwood does not verify individual identities, attribute commands to individual people behind one gateway, or replace platform authorization.
+Heartwood provides no quarantine, steward-approved output release, encrypted execution storage or records-system retention enforcement.
 
 ## Deployment Security Checklist
 

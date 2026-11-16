@@ -16,7 +16,7 @@ heartwood doctor
 Each warning or failure carries a stable `HW-*` code, a title, a next action, and a link to its section here.
 `heartwood doctor --json` prints the structured report; it can contain project paths, so review it before sharing.
 
-## How Diagnostic Codes Work
+## Diagnostic Code Format
 
 Codes use `HW-{AREA}-{NNN}`.
 `AREA` identifies where the condition must be resolved; it does not identify severity.

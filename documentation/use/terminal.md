@@ -25,7 +25,7 @@ After the work settles, Heartwood may offer up to two suggested next requests.
 
 Heartwood falls back to the plain interface when the terminal cannot run the full-screen application.
 
-## Choose How Heartwood Starts
+## Launch Options
 
 | Command | Result |
 |---|---|

@@ -72,7 +72,7 @@ The contract reuses existing standards and adds only what Heartwood needs:
 
 Upstream definitions stay authoritative for their own messages, streaming, errors and lifecycle; the bundle pins their revisions instead of copying them.
 
-## What the Platform Provides
+## Platform Responsibilities
 
 ### Hosting
 
@@ -202,7 +202,7 @@ Required:
 The reference adapter uses OpenShell on a local Docker engine with the native OpenHands remote conversation, workspace and event contracts.
 OpenShell names, policy objects and control credentials belong to that adapter, not to portable platform messages; another adapter must keep the same authority, lifecycle and evidence properties on its own infrastructure.
 Worker-reported events and output are untrusted: they cannot create approvals, authorize platform operations or prove that the worker has stopped.
-[What the Sandbox Enforces](security.md#what-the-sandbox-enforces) and [What the Gateway Enforces](security.md#what-the-gateway-enforces) divide these controls between the two sides.
+[Sandbox Enforcement](security.md#sandbox-enforcement) and [Gateway Enforcement](security.md#gateway-enforcement) divide these controls between the two sides.
 
 ### Controlled Data
 
@@ -360,7 +360,7 @@ Price and cost fields reuse FOCUS definitions from the SKU Price proposal at rev
 | Workload, coverage and decisions | Heartwood interaction records, not FOCUS columns |
 | Observation time and estimate expiry | Platform interaction records, not the price's effective period |
 
-## What Heartwood Provides
+## Heartwood Responsibilities
 
 ### Gateway API
 

@@ -104,7 +104,7 @@ Use immutable release tags for research work:
 The moving `edge` tags follow `main` and are for development, not reproducible analyses.
 Release publication promotes only the candidate digests it verified for the release commit.
 
-## What the Container Does Not Isolate
+## Isolation Limits
 
 A container launch is a local launch.
 Agent tools run as the container user with full access to the mounted folder, including `.heartwood/`, and to the container's network.
