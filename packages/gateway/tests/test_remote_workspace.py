@@ -17,7 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from threading import Event, Thread
+from threading import Event, Thread, Timer
 from typing import Any
 from uuid import uuid4
 
@@ -518,6 +518,39 @@ def test_worker_that_trickles_any_part_of_a_response_is_cut_off_at_the_deadline(
             stopped.set()
             server.join(timeout=10)
     assert not server.is_alive()
+
+
+def test_request_waiting_for_a_worker_ends_when_its_attempt_is_fenced(
+    worker_attempt: Callable[[str], WorkerAttemptLease],
+) -> None:
+    stopped = Event()
+
+    def serve(listener: socket.socket) -> None:
+        connection, _ = listener.accept()
+        with connection:
+            connection.recv(65536)
+            # The worker never answers; only fencing ends the request before its deadline.
+            stopped.wait(30)
+
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        server = Thread(target=serve, args=(listener,), daemon=True)
+        server.start()
+        host = f"http://127.0.0.1:{listener.getsockname()[1]}"
+        attempt = worker_attempt(host)
+        identity = attempt.intent.conversation_id
+        workspace = AdmittedRemoteWorkspace(host=host, working_dir="/workspace", attempt=attempt)
+        try:
+            Timer(0.3, attempt.fence).start()
+            started = time.monotonic()
+            with pytest.raises(WorkerResponseError, match="closed"):
+                _within(10, lambda: workspace.client.get(f"/api/conversations/{identity}"))
+            assert time.monotonic() - started < 5
+        finally:
+            stopped.set()
+            workspace.reset_client()
+            server.join(timeout=10)
 
 
 def _history(

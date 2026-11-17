@@ -336,6 +336,7 @@ class OpenHandsSdkBackend:
         self._worker_branch: WorkerBranch | None = None
         self._conversation_lock = RLock()
         self._conversation_closing = False
+        self._conversation_starting = False
         self._closed = False
         self._event_sink: BackendEventSink = lambda _events: None
         self._token_sink: TokenDeltaSink = lambda _delta: None
@@ -424,7 +425,11 @@ class OpenHandsSdkBackend:
     def bind_review_authorizer(self, authorize: ReviewBatchAuthorizer) -> None:
         """Bind deployment admission before creating or restoring the native conversation."""
         with self._conversation_lock:
-            if self._conversation is not None or self._conversation_closing:
+            if (
+                self._conversation is not None
+                or self._conversation_starting
+                or self._conversation_closing
+            ):
                 raise OpenHandsSdkError(
                     "Review admission must be bound before conversation startup"
                 )
@@ -806,31 +811,49 @@ class OpenHandsSdkBackend:
             self._conversation_closing = False
 
     def _get_conversation(self) -> BaseConversation:
+        """Return the conversation, creating it once without holding the conversation lock.
+
+        Creating a worker conversation launches the worker through the session, so the
+        conversation lock, which commands take under the session command lock, is not
+        held meanwhile. A caller that arrives while another creates it is refused rather
+        than kept waiting; the session serializes its first read so that only callers
+        holding session locks can arrive then.
+        """
         with self._conversation_lock:
-            if self._closed:
-                raise OpenHandsSdkError("OpenHands conversation is closed")
-            if self._conversation_closing:
-                raise OpenHandsSdkError("OpenHands conversation is closing")
-            conversation = self._conversation
-            if conversation is None:
-                conversation = self._conversation_factory(
-                    self._handle_sdk_event,
-                    self._handle_token,
-                )
-                if self._review_batch_authorizer is not None and not isinstance(
-                    conversation, RemoteConversation
-                ):
-                    try:
-                        agent = conversation.state.agent
-                        if not isinstance(agent, Agent):
-                            raise OpenHandsSdkError("Advisory execution requires the native agent")
-                        bind_review_executor(agent, self._review_batch_authorizer)
-                    except Exception:
-                        with suppress(Exception):
-                            conversation.close()
-                        raise
+            self._require_open_locked()
+            if self._conversation is not None:
+                return self._conversation
+            if self._conversation_starting:
+                raise OpenHandsSdkError("OpenHands conversation is starting")
+            self._conversation_starting = True
+        conversation: BaseConversation | None = None
+        try:
+            conversation = self._conversation_factory(self._handle_sdk_event, self._handle_token)
+            if self._review_batch_authorizer is not None and not isinstance(
+                conversation, RemoteConversation
+            ):
+                agent = conversation.state.agent
+                if not isinstance(agent, Agent):
+                    raise OpenHandsSdkError("Advisory execution requires the native agent")
+                bind_review_executor(agent, self._review_batch_authorizer)
+            with self._conversation_lock:
+                self._require_open_locked()
                 self._conversation = conversation
+                self._conversation_starting = False
             return conversation
+        except BaseException:
+            if conversation is not None:
+                with suppress(Exception):
+                    conversation.close()
+            with self._conversation_lock:
+                self._conversation_starting = False
+            raise
+
+    def _require_open_locked(self) -> None:
+        if self._closed:
+            raise OpenHandsSdkError("OpenHands conversation is closed")
+        if self._conversation_closing:
+            raise OpenHandsSdkError("OpenHands conversation is closing")
 
     def _default_conversation_factory(  # pragma: no cover - container integration
         self,
