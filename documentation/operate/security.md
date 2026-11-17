@@ -159,6 +159,15 @@ Removing a credential from Heartwood settings does not revoke it at its issuer o
 Rotating a sandbox provider credential is not revocation: confirm acknowledged detachment or worker revocation, neither of which recalls requests already forwarded.
 OpenShell's `stable_placeholder` provider capability allows value-only rotation without replacing the worker; qualify it against the deployed gateway before relying on it.
 
+### Repository Secret Scan
+
+The **Secret Scan** workflow runs a pinned, checksum-verified gitleaks release and reports findings in redacted form.
+Pull-request and main-branch validation scan the history reachable from the commit they validate.
+A scheduled run every day at 10:17 UTC, and every manual run of the workflow, scans the complete history of every branch and tag, including branches without a pull request.
+That run fails when its checkout lacks a branch or tag the repository advertises, so a partial checkout cannot pass as a complete scan.
+A finding fails the workflow without printing the matched value.
+Removing a detected secret from history and rotating it remain manual incident steps; a scan does not show that a value was never exposed.
+
 ## Gateway Ingress
 
 The gateway accepts traffic through one configured ingress mode:

@@ -11,6 +11,8 @@ name: Secret Scan
 on:
   workflow_call:
   workflow_dispatch:
+  schedule:
+    - cron: "17 10 * * *"
 
 permissions:
   contents: read
@@ -30,7 +32,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
           submodules: true
-      - name: Install and run gitleaks
+      - name: Install gitleaks
         env:
           GITLEAKS_VERSION: 8.30.1
           GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
@@ -40,4 +42,27 @@ jobs:
           curl --proto '=https' --tlsv1.2 -sSfLO "${base}/${asset}"
           echo "${GITLEAKS_SHA256}  ${asset}" | sha256sum --check -
           tar -xzf "${asset}" gitleaks
-          ./gitleaks git . --log-opts HEAD --no-banner --redact --exit-code 1
+      - name: Scan the validated history or every branch and tag
+        env:
+          # A calling validation workflow names the run; its scan keeps to the validated history.
+          ALL_REFS: ${{ github.workflow == 'Secret Scan' }}
+        run: |
+          # The complete checkout holds every branch and tag, so scheduled and manual runs of
+          # this workflow also scan branches without a pull request.
+          scope=HEAD
+          if [[ "${ALL_REFS}" == "true" ]]; then
+            scope=--all
+            remote="$(git ls-remote origin 'refs/heads/*' 'refs/tags/*')"
+            test -n "${remote}"
+            while read -r object ref; do
+              if [[ "${ref}" == *'^{}' ]]; then
+                continue
+              fi
+              local_ref="${ref/#refs\/heads\//refs/remotes/origin/}"
+              if [[ "$(git rev-parse --verify --quiet "${local_ref}")" != "${object}" ]]; then
+                echo "the checkout does not hold ${ref} at ${object}" >&2
+                exit 1
+              fi
+            done <<<"${remote}"
+          fi
+          ./gitleaks git . "--log-opts=${scope}" --no-banner --redact --exit-code 1
