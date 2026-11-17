@@ -19,13 +19,17 @@ import queue
 import select
 import socket
 import threading
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from openshell import SandboxClient
+
+# An outside listener standing for a forward proxy the worker might use instead of its own.
+ALTERNATE_PROXY_PORT = 19678
+_POSITIVE_CONTROLS = 6
 
 
 def serve_canary(
@@ -61,11 +65,12 @@ def outside_canaries(port: int, ipv6_port: int) -> Iterator[queue.SimpleQueue[by
     listeners: list[socket.socket] = []
     threads: list[threading.Thread] = []
     try:
-        for family, host, local_port in (
-            (socket.AF_INET, "0.0.0.0", port),
-            (socket.AF_INET6, "::", ipv6_port),
+        for family, host, local_port, kinds in (
+            (socket.AF_INET, "0.0.0.0", port, (socket.SOCK_STREAM, socket.SOCK_DGRAM)),
+            (socket.AF_INET6, "::", ipv6_port, (socket.SOCK_STREAM, socket.SOCK_DGRAM)),
+            (socket.AF_INET, "0.0.0.0", ALTERNATE_PROXY_PORT, (socket.SOCK_STREAM,)),
         ):
-            for kind in (socket.SOCK_STREAM, socket.SOCK_DGRAM):
+            for kind in kinds:
                 listener = socket.socket(family, kind)
                 listeners.append(listener)
                 if kind == socket.SOCK_STREAM:
@@ -93,6 +98,22 @@ def outside_canaries(port: int, ipv6_port: int) -> Iterator[queue.SimpleQueue[by
             raise RuntimeError("Canary listener failed") from errors.get_nowait()
 
 
+def reachable(targets: list[tuple[str, int]]) -> list[bool]:
+    """Report whether an outside client completes a TCP connection to each endpoint."""
+    results = []
+    for address, port in targets:
+        family = socket.AF_INET6 if ":" in address else socket.AF_INET
+        try:
+            with socket.socket(family, socket.SOCK_STREAM) as connection:
+                connection.settimeout(5)
+                connection.connect((address, port))
+        except OSError:
+            results.append(False)
+        else:
+            results.append(True)
+    return results
+
+
 def send_positive_controls(
     ipv4: ipaddress.IPv4Address,
     ipv6: ipaddress.IPv6Address,
@@ -107,6 +128,7 @@ def send_positive_controls(
         (socket.AF_INET, str(ipv4), port, socket.SOCK_DGRAM),
         (socket.AF_INET6, str(ipv6), ipv6_port, socket.SOCK_STREAM),
         (socket.AF_INET6, str(ipv6), ipv6_port, socket.SOCK_DGRAM),
+        (socket.AF_INET, str(ipv4), ALTERNATE_PROXY_PORT, socket.SOCK_STREAM),
     ):
         with socket.socket(family, kind) as connection:
             connection.settimeout(5)
@@ -128,7 +150,7 @@ def positive_controls(
         send_positive_controls(ipv4, ipv6, port, ipv6_port)
     else:
         peer()
-    for _ in range(5):
+    for _ in range(_POSITIVE_CONTROLS):
         if observations.get(timeout=5) != b"synthetic-outside-positive-control":
             raise AssertionError("Unexpected traffic during the outside positive control")
     if not observations.empty():
@@ -147,7 +169,19 @@ def qualify_network(
     allowed_host: str = "host.docker.internal",
     python: str = "/opt/heartwood/.venv/bin/python",
     peer: Callable[[], None] | None = None,
+    host_services: Mapping[str, tuple[str, int]] | None = None,
+    service_controls: Callable[[], int] | None = None,
+    metadata_control: Callable[[], dict[str, str]] | None = None,
 ) -> dict[str, object]:
+    """Probe every route from inside the worker; each must end in an explicit denial.
+
+    `host_services` names the real endpoints of services on the worker's host, each by
+    one route to it. `service_controls` connects to those endpoints from outside the
+    worker and returns how many it reached; it runs before and after the probe.
+    `metadata_control` reaches a listener at each metadata address from outside and
+    names what answered; it also runs before and after the probe.
+    """
+    services = dict(host_services or {})
     if ipv6.ipv4_mapped is not None:
         raise ValueError("The native IPv6 canary must not be an IPv4-mapped address")
     before = control.get(sandbox, workspace=workspace)
@@ -163,6 +197,8 @@ def qualify_network(
     ):
         raise AssertionError("The sandbox does not have an active admitted configuration")
     program = Path(__file__).with_name("worker_network_probe.py").read_text()
+    metadata = {} if metadata_control is None else metadata_control()
+    reached = 0 if service_controls is None else service_controls()
     with outside_canaries(port, ipv6_port) as observations:
         positive_controls(ipv4, ipv6, port, ipv6_port, observations, peer)
         result = control.exec(
@@ -183,6 +219,11 @@ def qualify_network(
                 str(ipv6_port),
                 "--allowed-host",
                 allowed_host,
+                *(
+                    f"--service={name}={address}:{item}"
+                    for name, (address, item) in services.items()
+                ),
+                f"--proxy-port={ALTERNATE_PROXY_PORT}",
             ],
             workspace=workspace,
             timeout_seconds=45,
@@ -192,7 +233,16 @@ def qualify_network(
             raise AssertionError("Worker network probe failed; a denial was not established")
         checks = json.loads(result.stdout)
         dns = {"allowed-dns", "unlisted-dns-synthetic"}
-        tcp = {"unknown-host-tcp", "ipv4-tcp", "mapped-ipv6-tcp", "native-ipv6-tcp"}
+        tcp = {
+            "unknown-host-tcp",
+            "ipv4-tcp",
+            "mapped-ipv6-tcp",
+            "native-ipv6-tcp",
+            "metadata-ipv4-tcp",
+            "metadata-ipv6-tcp",
+            "alternate-proxy-tcp",
+            *(f"{name}-tcp" for name in services),
+        }
         udp = {"direct-udp", "native-ipv6-udp"}
         if (
             not isinstance(checks, dict)
@@ -215,16 +265,26 @@ def qualify_network(
         # A second round proves the destinations stayed reachable throughout the
         # probe and detects any worker traffic queued before these controls.
         positive_controls(ipv4, ipv6, port, ipv6_port, observations, peer)
+        if service_controls is not None:
+            reached += service_controls()
+        if metadata_control is not None and metadata_control() != metadata:
+            raise AssertionError("A metadata positive control changed during the probe")
     if not observations.empty():
         raise AssertionError("The worker reached an outside canary")
     return {
-        "drill_id": "dns-and-direct-egress.v1",
+        "drill_id": "dns-and-direct-egress.v3",
         "sandbox_id": before.id,
         "generation": before.status.main_process_instance_id,
         "policy_sha256": admission.policy_hash,
         "network_probe_sha256": hashlib.sha256(program.encode()).hexdigest(),
         "network_checks": checks,
-        "outside_positive_controls": 10,
+        "outside_positive_controls": 2 * _POSITIVE_CONTROLS,
+        "host_service_targets": {
+            name: f"{address}:{item}" for name, (address, item) in services.items()
+        },
+        "host_service_positive_controls": reached,
+        "alternate_proxy_port": ALTERNATE_PROXY_PORT,
+        "metadata_positive_controls": metadata,
         "outside_control_origin": "peer" if peer is not None else "controller",
         "canary_addresses": {"ipv4": str(ipv4), "ipv6": str(ipv6)},
         "forbidden_canary_requests": 0,
@@ -245,7 +305,20 @@ def main() -> None:
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--ipv6-port", type=int, required=True)
     parser.add_argument("--allowed-host", default="host.docker.internal")
+    parser.add_argument(
+        "--service",
+        action="append",
+        default=[],
+        metavar="NAME=ADDRESS:PORT",
+        help="A real endpoint of a service on the worker's host, by one route to it",
+    )
     args = parser.parse_args()
+    from worker_network_probe import service_targets
+
+    try:
+        services = service_targets(args.service)
+    except ValueError as error:
+        parser.error(str(error))
     from openshell import SandboxClient, TlsConfig
 
     control = SandboxClient(
@@ -263,6 +336,7 @@ def main() -> None:
             port=args.port,
             ipv6_port=args.ipv6_port,
             allowed_host=args.allowed_host,
+            host_services=services,
         )
         print(json.dumps(record))
     finally:

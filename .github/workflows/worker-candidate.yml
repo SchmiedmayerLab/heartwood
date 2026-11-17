@@ -236,6 +236,7 @@ jobs:
             test-results/native-qualification/SHA256SUMS
             test-results/native-qualification/qualification.json
             test-results/native-qualification/junit.xml
+            test-results/native-qualification/drill-results.json
             test-results/native-qualification/qualification.log
             test-results/native-qualification/controller-preflight.log
             test-results/native-qualification/network.json

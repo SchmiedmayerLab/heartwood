@@ -9,17 +9,21 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 from xml.etree import ElementTree
 
 MANIFEST = "qualification.json"
 REPORT = "junit.xml"
 CHECKSUMS = "SHA256SUMS"
+DRILLS = "drill-results.json"
 # Private gateway state and generated credentials share the output directory and stay excluded.
 RETAINED = (
     MANIFEST,
     REPORT,
+    DRILLS,
     "qualification.log",
     "controller-preflight.log",
     "network.json",
@@ -56,7 +60,9 @@ EXPECTED_CASES = {
             _EXTERNAL + "test_native_outside_effect_requires_retained_authorization[denied]",
             _EXTERNAL + "test_native_outside_effect_requires_retained_authorization[pending]",
             _EXTERNAL + "test_native_outside_effect_requires_retained_authorization[lost-reply]",
+            _EXTERNAL + "test_native_outside_effect_requires_retained_authorization[forbidden]",
             _EXTERNAL + "test_native_contained_action_is_automatic_and_outside_effect_waits",
+            _EXTERNAL + "test_native_contained_action_is_refused_after_revocation",
             "test_worker_pair_integration::"
             "test_two_native_workers_keep_authority_and_effects_separate",
         }
@@ -64,6 +70,9 @@ EXPECTED_CASES = {
     "capable-model-native": frozenset({"test_worker_model_integration::test_native_capable_model"}),
 }
 _OUTCOMES = {"failure": "failed", "error": "error", "skipped": "skipped"}
+# Cases that retain their records outside a directory named after the case.
+_CASE_DIRECTORIES = {"test_native_capable_model": "capable-model"}
+_DRILL_ID = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\.v[1-9][0-9]{0,3}")
 
 
 def _digest(path: Path) -> str:
@@ -118,6 +127,64 @@ def failures(manifest: dict[str, Any]) -> list[str]:
     return reasons
 
 
+def model_route(manifest: dict[str, Any]) -> str:
+    """Name the inference route a run used, without its credential or any request content."""
+    profile = manifest["requested_model_profile"]
+    if profile is None:
+        return "synthetic-fixture"
+    return f"{profile['model']}@{urlsplit(profile['base_url']).hostname}"
+
+
+def _drill_ids(record: object) -> list[str]:
+    """Read drill identifiers only; a value that is not an identifier is never copied."""
+    if not isinstance(record, dict):
+        return []
+    found = [record.get("drill_id")]
+    network = record.get("direct_network")
+    if isinstance(network, dict):
+        found.append(network.get("drill_id"))
+    return sorted({item for item in found if isinstance(item, str) and _DRILL_ID.fullmatch(item)})
+
+
+def drill_results(directory: Path) -> dict[str, Any]:
+    """Summarize each drill by release, model route and outcome, without any run content.
+
+    Only identifiers, fixed outcome values and counts are copied, so results from
+    different releases and routes can be compared without reading project data.
+    """
+    manifest = json.loads((directory / MANIFEST).read_text())
+    drills = []
+    for case in manifest["cases"]:
+        name = case["id"].rpartition("::")[2]
+        records = directory / _CASE_DIRECTORIES.get(name, name)
+        identifiers: set[str] = set()
+        result: dict[str, Any] = {"case": case["id"], "outcome": case["outcome"]}
+        for record_name in ("evidence.json", "model-qualification.json"):
+            path = records / record_name
+            if not path.is_file() or path.is_symlink():
+                continue
+            record = json.loads(path.read_text())
+            identifiers.update(_drill_ids(record))
+            if record_name == "model-qualification.json" and isinstance(record, dict):
+                # Counts compare how a model route responded to the injected instructions.
+                for field in ("accepted_actions", "rejected_actions"):
+                    value = record.get(field)
+                    count = len(value) if isinstance(value, list) else value
+                    if type(count) is int:
+                        result[field] = count
+        drills.append({**result, "drill_ids": sorted(identifiers)})
+    return {
+        "schema_version": "heartwood.drill-results.v1",
+        "release_version": manifest["release_version"],
+        "commit": manifest["source"]["commit"],
+        "qualification_kind": manifest["qualification_kind"],
+        "model_route": model_route(manifest),
+        "host": manifest["host"],
+        "drills": drills,
+        "passed": manifest["passed"],
+    }
+
+
 def write_checksums(directory: Path) -> None:
     """Record the digest of every retained evidence file."""
     retained = sorted(
@@ -133,9 +200,7 @@ def write_checksums(directory: Path) -> None:
     )
 
 
-def verify(directory: Path, commit: str | None = None) -> list[str]:
-    """List every reason an evidence directory does not establish a qualification pass."""
-    directory = directory.resolve()
+def _listed_problems(directory: Path) -> list[str]:
     listed = {}
     for line in (directory / CHECKSUMS).read_text().splitlines():
         expected, name = line.split("  ", maxsplit=1)
@@ -147,13 +212,31 @@ def verify(directory: Path, commit: str | None = None) -> list[str]:
         or not path.is_file()
         or _digest(path) != expected
     ]
-    if not {MANIFEST, REPORT} <= listed.keys():
-        problems.append(f"{CHECKSUMS} does not cover the manifest and test report")
-    if problems:
+    if not {MANIFEST, REPORT, DRILLS} <= listed.keys():
+        problems.append(f"{CHECKSUMS} does not cover the manifest, test report and drill results")
+    return problems
+
+
+def integrity(directory: Path) -> list[str]:
+    """List every reason an evidence directory is not the complete record of one run."""
+    directory = directory.resolve()
+    if problems := _listed_problems(directory):
         return problems
     manifest = json.loads((directory / MANIFEST).read_text())
     if manifest["cases"] != cases(directory / REPORT):
         problems.append("the recorded cases differ from the test report")
+    if json.loads((directory / DRILLS).read_text()) != drill_results(directory):
+        problems.append("the drill results differ from the recorded evidence")
+    return problems
+
+
+def verify(directory: Path, commit: str | None = None) -> list[str]:
+    """List every reason an evidence directory does not establish a qualification pass."""
+    directory = directory.resolve()
+    if problems := _listed_problems(directory):
+        return problems
+    problems = integrity(directory)
+    manifest = json.loads((directory / MANIFEST).read_text())
     problems.extend(failures(manifest))
     if manifest["passed"] is not True:
         problems.append("the manifest does not record a pass")

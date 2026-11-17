@@ -8,12 +8,13 @@ from __future__ import annotations
 
 import json
 import time
+from contextlib import suppress
 from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
 from openhands.sdk.tool.client_tool import ClientToolSpec
-from test_worker_native_integration import _application, _stop, _submit
+from test_worker_native_integration import _application, _assert_absent, _stop, _submit
 from test_worker_native_integration import infrastructure as infrastructure
 from worker_native_fixture import NativeFixture
 
@@ -29,7 +30,7 @@ from heartwood.gateway._openhands_sdk import OpenHandsSdkBackend
 from heartwood.session import CommandKind, EventKind, SessionCommand
 
 
-@pytest.mark.parametrize("decision", ["approved", "denied", "pending", "lost-reply"])
+@pytest.mark.parametrize("decision", ["approved", "denied", "pending", "lost-reply", "forbidden"])
 def test_native_outside_effect_requires_retained_authorization(
     infrastructure: NativeFixture, decision: str
 ) -> None:
@@ -66,6 +67,9 @@ def test_native_outside_effect_requires_retained_authorization(
     fixture.provider.forbidden_values += (token,)
     with serve_records(records) as url, records_client(url, token) as client:
         adapter = RecordsAdapter(client)
+        if decision == "forbidden":
+            # The deployment forbids this destination; the researcher approves the effect anyway.
+            adapter.allowed_destinations = frozenset()
         service = application._service("composition")
         try:
             _submit(
@@ -118,7 +122,13 @@ def test_native_outside_effect_requires_retained_authorization(
                     payload={"target_type": "action-set", "target_id": record.proposal.group_id},
                 )
                 records.drop_after_submit = decision == "lost-reply"
-                application.handle(request)
+                handled = application.handle(request)
+                if decision == "forbidden":
+                    assert [
+                        event.payload["reason"]
+                        for event in handled.events
+                        if event.kind == EventKind.ERROR_RECORDED
+                    ] == ["outside authorization or input validation failed"]
                 if decision == "lost-reply":
                     assert (
                         external_action_records(service.replay_events())[
@@ -138,6 +148,7 @@ def test_native_outside_effect_requires_retained_authorization(
             assert retained.phase == (
                 "observed" if expected else decision if decision == "denied" else "proposed"
             )
+            assert (retained.decision is None) == (decision in {"pending", "forbidden"})
             if expected:
                 assert retained.observation is not None
                 assert retained.observation.operation.status == "completed"
@@ -155,7 +166,11 @@ def test_native_outside_effect_requires_retained_authorization(
             (fixture.output / "evidence.json").write_text(
                 json.dumps(
                     {
-                        "drill_id": "native-outside-effect.v1",
+                        "drill_id": (
+                            "deployment-forbidden-effect.v1"
+                            if decision == "forbidden"
+                            else "native-outside-effect.v1"
+                        ),
                         "decision": decision,
                         "worker_attempt_id": worker_id,
                         "worker_image": fixture.worker,
@@ -342,3 +357,113 @@ def test_native_contained_action_is_automatic_and_outside_effect_waits(
             )
         finally:
             _stop(application)
+
+
+def test_native_contained_action_is_refused_after_revocation(
+    infrastructure: NativeFixture,
+) -> None:
+    """A contained action proposed before its worker is revoked can never run afterwards."""
+    fixture = infrastructure
+    terminal = "printf revoked > /workspace/revoked.txt"
+    fixture.provider.script = [
+        ("terminal", {"command": terminal}),
+        ("finish", {"message": "Synthetic contained step completed."}),
+    ]
+    application = _application(fixture, action_review_modes=REVIEW_MODES)
+    # Under the sandbox default the gateway would allow this action in the operation that
+    # journals it; reviewing every action keeps the proposal undecided until revocation.
+    assert application.action_settings()["default_mode"] == "review-outside-effects"
+    application.select_action_review_mode("review-all")
+    service = application._service("composition")
+    try:
+        _submit(application, CommandKind.CHAT, {"prompt": "Write the contained marker."})
+        backend = service.backend
+        assert isinstance(backend, OpenHandsSdkBackend)
+        deadline = time.monotonic() + 180
+        while time.monotonic() < deadline:
+            service.reconcile()
+            requests = [
+                event.payload["request"]
+                for event in service.replay_events()
+                if event.kind == EventKind.CONFIRMATION_REQUESTED
+                and isinstance(event.payload.get("request"), dict)
+            ]
+            if requests and backend.wait_for_idle(0):
+                break
+            time.sleep(0.1)
+        else:
+            raise AssertionError("Native worker did not propose the contained action")
+        (request,) = requests
+        events = service.replay_events()
+        (proposal,) = [
+            event
+            for event in events
+            if event.kind == EventKind.TOOL_CALL_PROPOSED
+            and event.payload.get("tool_name") == "terminal"
+        ]
+        assert proposal.payload["arguments"] == {"command": terminal}
+        assert proposal.payload["review_class"] == "workspace"
+        attempt = service.worker_attempt()
+        assert attempt is not None
+        assert attempt.phase == "active"
+        assert proposal.payload["worker_attempt_id"] == str(attempt.intent.attempt_id)
+        assert not [e for e in events if e.kind == EventKind.APPROVAL_RECORDED]
+        assert len(fixture.provider.observations) == 1
+
+        # The same fence a failed worker exchange raises; prompt revocation follows from it.
+        service.fence_worker_attempt(attempt_id=attempt.intent.attempt_id)
+        deadline = time.monotonic() + 180
+        while time.monotonic() < deadline:
+            # A fenced worker exchange may fail, which is the expected refusal.
+            with suppress(Exception):
+                service.reconcile()
+            revoked = service.worker_attempt()
+            assert revoked is not None
+            if revoked.phase == "revoked":
+                break
+            time.sleep(0.5)
+        else:
+            raise AssertionError("The fenced worker was not revoked before its deadline")
+        assert revoked.revocation is not None
+        assert revoked.revocation.outcome == "revoked"
+        _assert_absent(str(attempt.intent.attempt_id))
+
+        # The researcher's approval of the action proposed before revocation is refused.
+        before = len(service.replay_events())
+        _submit(
+            application,
+            CommandKind.APPROVE,
+            {"target_type": "action-set", "target_id": request["group_id"]},
+        )
+        later = service.replay_events()[before:]
+        assert any(event.kind == EventKind.ERROR_RECORDED for event in later)
+        assert not [e for e in service.replay_events() if e.kind == EventKind.APPROVAL_RECORDED]
+        # An executed action would return its result to the model in another request.
+        assert len(fixture.provider.observations) == 1
+        _stop(application)
+        assert not [
+            e for e in service.replay_events() if e.kind == EventKind.TOOL_EXECUTION_RECORDED
+        ]
+        (fixture.output / "evidence.json").write_text(
+            json.dumps(
+                {
+                    "drill_id": "native-revoked-contained.v2",
+                    "default_review_mode": "review-outside-effects",
+                    "review_mode": "review-all",
+                    "worker_attempt_id": str(attempt.intent.attempt_id),
+                    "worker_image": fixture.worker,
+                    "contained_proposals_before_revocation": 1,
+                    "review_class": "workspace",
+                    "decisions_before_revocation": 0,
+                    "researcher_approvals_refused": 1,
+                    "executions": 0,
+                    "provider_requests": len(fixture.provider.observations),
+                    "attempt_resources_absent": True,
+                    "sensitive_data_ready": False,
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+    finally:
+        _stop(application)

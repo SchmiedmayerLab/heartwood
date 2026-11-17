@@ -43,14 +43,18 @@ Heartwood distributes no production sandbox gateway, and checks a deployment's s
 The sandbox and the surrounding infrastructure enforce everything that constrains code running inside the worker:
 
 - filesystem access limited to the projected volumes, with inputs and Skills mounted read-only;
-- a non-root process identity with `no-new-privileges` and no added Linux capabilities;
+- a non-root process identity with `no-new-privileges` and every Linux capability dropped;
 - Docker `network=none` for the worker container, with network access only through the sandbox's deny-by-default policy and inference transport;
-- CPU and memory limits from the manifest;
+- CPU and memory limits from the manifest and a process limit;
 - substitution of the real provider credential outside the worker, which holds only an `openshell:resolve:env:` placeholder; and
 - deletion of the sandbox when the gateway revokes the attempt.
 
 Heartwood sets no expiry on the provider credential behind that placeholder.
 Credential lifetime, rotation and detachment are the operator's OpenShell provider configuration; native qualification checks only that its own fixture's expired credential is refused.
+
+The worker's attempt key, `SESSION_API_KEY`, authenticates only requests to that worker's own agent server.
+Agent commands do not inherit it, but they run as the worker user that started the agent server, so code in the worker may be able to read the key from that process's start-up environment under `/proc`; native qualification records whether it can.
+The key grants no authority beyond what code in the worker already has.
 
 Heartwood does not inspect commands the worker runs.
 In [`review-outside-effects`](#action-review), these controls are the only limit on what an automatically allowed command can do inside the worker.
@@ -61,7 +65,7 @@ The gateway enforces everything that decides authority, independently of anythin
 
 - the deployment manifest's paths, ownership, policy ceiling and qualified gateway versions, before any store opens;
 - the sandbox's reported version against `gateway_versions`, and stops with `HW-WORKER-001` otherwise;
-- outside inspection of the worker container, which rejects an unexpected image, a network other than `none`, privileged mode, added capabilities, a shared host or container namespace, mounts that expose withheld host paths, and any security option other than `no-new-privileges`, AppArmor `docker-default`, or an SELinux `container_t` or `svirt_lxc_net_t` type with individual categories;
+- outside inspection of the worker container, which rejects an unexpected image, a network other than `none`, privileged mode, any retained capability, a missing `no-new-privileges`, a shared host or container process, IPC, user or cgroup namespace, a device, a bind mount, mounts that expose withheld host paths, missing CPU and memory limits or process limit, and any security option other than `no-new-privileges`, AppArmor `docker-default`, or an SELinux `container_t` type with individual categories;
 - admission of the sandbox's accepted policy hash and process generation against `sandbox_policy_sha256`;
 - worker attempts bound to project, session, image, policy and input-manifest identity, journaled and fenced so that only one attempt can write a session;
 - worker responses admitted only when every conversation setting equals what the gateway sent, so a worker cannot select the agent, model client, security analyzer or secret source the gateway constructs;

@@ -13,12 +13,21 @@ import os
 import shutil
 import subprocess
 import sys
+import tomllib
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from qualification_evidence import MANIFEST, cases, failures, image_source, write_checksums
+from qualification_evidence import (
+    DRILLS,
+    MANIFEST,
+    cases,
+    drill_results,
+    failures,
+    image_source,
+    write_checksums,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -203,6 +212,7 @@ def qualify(
         if digest(records / name) != expected:
             raise ValueError("Records artifact digest mismatch")
     source_hashes = {str(path.relative_to(ROOT)): digest(path) for path in source_paths}
+    release_version = tomllib.loads((ROOT / "VERSION.toml").read_text())["version"]
     source = {
         "commit": subprocess.check_output(
             ["git", "-C", str(ROOT), "rev-parse", "HEAD"], text=True
@@ -460,6 +470,7 @@ def qualify(
     }
     evidence: dict[str, Any] = {
         "qualification_kind": "capable-model-native" if profile else "synthetic-native",
+        "release_version": release_version,
         "source": source,
         "started_at": started_at,
         "finished_at": timestamp(),
@@ -481,6 +492,7 @@ def qualify(
     evidence["failures"] = failures(evidence)
     evidence["passed"] = not evidence["failures"]
     (output / MANIFEST).write_text(json.dumps(evidence, indent=2) + "\n")
+    (output / DRILLS).write_text(json.dumps(drill_results(output), indent=2) + "\n")
     write_checksums(output)
     if evidence["failures"]:
         raise RuntimeError(

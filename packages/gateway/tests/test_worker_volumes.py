@@ -43,6 +43,8 @@ def volumes() -> WorkerVolumes:
         workspace="synthetic",
         image_digest=_IMAGE,
         protected_paths=(Path("/srv/research"), Path("/srv/protected/state")),
+        cpu="1",
+        memory="2Gi",
     )
     return WorkerVolumes(settings, intent)
 
@@ -62,11 +64,19 @@ def _container(volumes: WorkerVolumes, *, role: str = "worker") -> dict[str, Any
             "NetworkMode": "none",
             "Privileged": False,
             "CapAdd": None,
-            "CapDrop": None,
+            "CapDrop": ["ALL"],
             "SecurityOpt": ["no-new-privileges"],
             "PidMode": "",
             "IpcMode": "private",
             "UsernsMode": "",
+            "CgroupnsMode": "private",
+            "Devices": None,
+            "DeviceRequests": None,
+            "DeviceCgroupRules": None,
+            "Binds": [],
+            "NanoCpus": 1_000_000_000,
+            "Memory": 2 * 1024**3,
+            "PidsLimit": 2048,
         },
         "State": {"Running": False, "ExitCode": 0},
         "Mounts": [
@@ -283,7 +293,7 @@ def test_worker_inspection_compares_resolved_withheld_locations(
     monkeypatch.setattr(protected, "command", Mock(return_value=json.dumps([observed]).encode()))
     with pytest.raises(WorkerAttemptError, match="withheld host location"):
         protected.inspect_worker(observed["Name"].removeprefix("/"))
-    observed["Mounts"][-1]["Source"] = str(tmp_path / "targeted")
+    observed["Mounts"][-1].update(Source=str(tmp_path / "targeted"), Type="volume")
     monkeypatch.setattr(protected, "command", Mock(return_value=json.dumps([observed]).encode()))
     protected.inspect_worker(observed["Name"].removeprefix("/"))
 
@@ -293,7 +303,8 @@ def test_worker_inspection_compares_resolved_withheld_locations(
     [
         ("label=type:container_t", True),
         ("label:type:container_t", True),
-        ("label=type:svirt_lxc_net_t", True),
+        # Defined by the base policy rather than container-selinux, so it is not admitted.
+        ("label=type:svirt_lxc_net_t", False),
         ("label=level:s0:c100,c200", True),
         ("label:level:s0:c1", True),
         ("label=level:s0", True),
@@ -336,13 +347,17 @@ def test_selinux_labels_are_admitted_only_when_they_keep_container_confinement(
 @pytest.mark.parametrize(
     ("field", "value"),
     [
-        ("SecurityOpt", None),
-        ("SecurityOpt", []),
         ("SecurityOpt", ["no-new-privileges:true", "apparmor=docker-default"]),
         ("SecurityOpt", ["no-new-privileges=true", "label=type:container_t"]),
         ("IpcMode", ""),
         ("IpcMode", "none"),
         ("CapAdd", None),
+        ("CapAdd", []),
+        ("CapDrop", ["NET_RAW", "ALL"]),
+        ("DeviceRequests", []),
+        ("DeviceCgroupRules", []),
+        ("Devices", []),
+        ("Binds", None),
     ],
 )
 def test_worker_inspection_accepts_only_listed_confinement_values(
@@ -388,7 +403,29 @@ def test_worker_inspection_accepts_only_listed_confinement_values(
         ("UsernsMode", "host"),
         ("UsernsMode", "private"),
         ("UsernsMode", None),
+        ("SecurityOpt", None),
+        ("SecurityOpt", []),
+        ("SecurityOpt", ["apparmor=docker-default"]),
+        ("SecurityOpt", ["label=type:container_t"]),
+        ("CapDrop", None),
+        ("CapDrop", []),
+        ("CapDrop", ["NET_RAW"]),
+        ("CapDrop", "ALL"),
+        ("CgroupnsMode", "host"),
+        ("CgroupnsMode", ""),
+        ("CgroupnsMode", None),
+        ("Devices", [{"PathOnHost": "/dev/fuse", "PathInContainer": "/dev/fuse"}]),
+        ("DeviceRequests", [{"Driver": "nvidia", "Count": -1}]),
+        ("DeviceCgroupRules", ["c 10:229 rwm"]),
+        ("Binds", ["/srv/elsewhere:/mnt/elsewhere:ro"]),
+        ("Binds", "/srv/elsewhere:/mnt/elsewhere"),
         ("CapAdd", ...),
+        ("CapDrop", ...),
+        ("CgroupnsMode", ...),
+        ("Devices", ...),
+        ("DeviceRequests", ...),
+        ("DeviceCgroupRules", ...),
+        ("Binds", ...),
         ("SecurityOpt", ...),
         ("PidMode", ...),
         ("IpcMode", ...),
@@ -414,8 +451,8 @@ def test_worker_inspection_rejects_weakened_or_unobserved_confinement(
 @pytest.mark.parametrize(
     "host",
     [
-        {"CapAdd": [], "SecurityOpt": None},
-        {"SecurityOpt": [], "PidMode": "", "IpcMode": "private"},
+        {"CapAdd": [], "SecurityOpt": ["no-new-privileges:true"]},
+        {"PidMode": "", "IpcMode": "private"},
         {"SecurityOpt": ["no-new-privileges:true", "apparmor=docker-default"]},
     ],
 )
@@ -426,6 +463,88 @@ def test_worker_inspection_accepts_confined_runtime_defaults(
     observed["HostConfig"].update(host)
     monkeypatch.setattr(volumes, "command", Mock(return_value=json.dumps([observed]).encode()))
     volumes.inspect_worker(observed["Name"].removeprefix("/"))
+
+
+def test_worker_inspection_refuses_any_bind_mount(
+    volumes: WorkerVolumes, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    observed = _container(volumes)
+    observed["Mounts"].append(
+        {"Destination": "/mnt/extra", "Source": "/srv/elsewhere", "Type": "bind", "RW": False}
+    )
+    monkeypatch.setattr(volumes, "command", Mock(return_value=json.dumps([observed]).encode()))
+    with pytest.raises(WorkerAttemptError, match="bind mount"):
+        volumes.inspect_worker(observed["Name"].removeprefix("/"))
+
+
+@pytest.mark.parametrize(
+    ("cpu", "memory", "host"),
+    [
+        ("1", "2Gi", {}),
+        ("500m", "512Mi", {"NanoCpus": 500_000_000, "Memory": 512 * 1024**2}),
+        ("2", "1Gi", {"NanoCpus": 2_000_000_000, "Memory": 1024**3}),
+        ("1", "2Gi", {"PidsLimit": 1}),
+    ],
+)
+def test_worker_inspection_accepts_the_requested_resource_limits(
+    volumes: WorkerVolumes,
+    monkeypatch: pytest.MonkeyPatch,
+    cpu: str,
+    memory: str,
+    host: dict[str, object],
+) -> None:
+    volumes.settings = volumes.settings.model_copy(update={"cpu": cpu, "memory": memory})
+    observed = _container(volumes)
+    observed["HostConfig"].update(host)
+    monkeypatch.setattr(volumes, "command", Mock(return_value=json.dumps([observed]).encode()))
+    volumes.inspect_worker(observed["Name"].removeprefix("/"))
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("NanoCpus", 0),
+        ("NanoCpus", 2_000_000_000),
+        ("NanoCpus", 500_000_000),
+        ("NanoCpus", None),
+        ("NanoCpus", "1000000000"),
+        ("NanoCpus", True),
+        ("Memory", 0),
+        ("Memory", 4 * 1024**3),
+        ("Memory", None),
+        ("PidsLimit", None),
+        ("PidsLimit", 0),
+        ("PidsLimit", -1),
+        ("PidsLimit", "2048"),
+        ("NanoCpus", ...),
+        ("Memory", ...),
+        ("PidsLimit", ...),
+    ],
+)
+def test_worker_inspection_requires_cpu_memory_and_process_limits(
+    volumes: WorkerVolumes,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    value: object,
+) -> None:
+    observed = _container(volumes)
+    if value is ...:
+        del observed["HostConfig"][field]
+    else:
+        observed["HostConfig"][field] = value
+    monkeypatch.setattr(volumes, "command", Mock(return_value=json.dumps([observed]).encode()))
+    with pytest.raises(WorkerAttemptError, match="resource limits"):
+        volumes.inspect_worker(observed["Name"].removeprefix("/"))
+
+
+@pytest.mark.parametrize(("cpu", "memory"), [("0", "2Gi"), ("1.5", "2Gi"), ("1", "2G")])
+def test_resource_requests_use_quantities_with_exact_native_limits(
+    volumes: WorkerVolumes, cpu: str, memory: str
+) -> None:
+    with pytest.raises(ValidationError):
+        WorkerVolumeSettings.model_validate(
+            {**volumes.settings.model_dump(), "cpu": cpu, "memory": memory}
+        )
 
 
 def test_protected_locations_must_be_canonical(volumes: WorkerVolumes) -> None:

@@ -14,6 +14,7 @@ import argparse
 import base64
 import errno
 import json
+import os
 import secrets
 import urllib.error
 import urllib.parse
@@ -63,8 +64,17 @@ def probe_filesystem(protected: str, credential: str) -> dict[str, bool]:
     return checks
 
 
+def probe_session_key() -> dict[str, bool]:
+    """Agent commands must not inherit the worker's own agent-server key."""
+    if any(
+        name == "SESSION_API_KEY" or name.startswith("OH_SESSION_API_KEYS_") for name in os.environ
+    ):
+        raise AssertionError("The agent command environment contains the attempt key")
+    return {"session-key-environment-absent": True}
+
+
 def probe(protected: str, credential: str, endpoint: str) -> dict[str, bool]:
-    checks = probe_filesystem(protected, credential)
+    checks = probe_filesystem(protected, credential) | probe_session_key()
     require_policy_denial(endpoint)
     checks["provider-path-denied"] = True
     inference = urllib.parse.urljoin(endpoint, "/v1/chat/completions")

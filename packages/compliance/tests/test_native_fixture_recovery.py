@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import socket
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import cast
@@ -172,6 +173,14 @@ def test_worker_container_record_is_retained_before_admission_decides(
                 "PidMode": "",
                 "IpcMode": "private",
                 "UsernsMode": "<absent>",
+                "CgroupnsMode": "<absent>",
+                "Devices": "<absent>",
+                "DeviceRequests": "<absent>",
+                "DeviceCgroupRules": "<absent>",
+                "NanoCpus": "<absent>",
+                "Memory": "<absent>",
+                "PidsLimit": "<absent>",
+                "ReadonlyRootfs": "<absent>",
             },
             "mounts": [{"type": "bind", "destination": "/mnt", "read_write": True}],
         }
@@ -195,3 +204,109 @@ def test_unavailable_container_observation_leaves_the_admission_decision_unchang
         WorkerVolumes.inspect_worker(cast(WorkerVolumes, volumes), "worker")
     assert decided == ["worker"]
     assert not (tmp_path / native.WORKER_CONTAINERS).exists()
+
+
+def test_researcher_gateway_is_served_only_while_the_probe_runs(
+    native: ModuleType, tmp_path: Path
+) -> None:
+    from heartwood.gateway import ProjectContext, SessionGateway
+
+    application = SessionGateway(
+        project=ProjectContext(tmp_path), env={}, backend_id="deterministic"
+    )
+    with (
+        native.researcher_gateway(application) as port,
+        socket.create_connection(("127.0.0.1", port), timeout=5) as connection,
+    ):
+        connection.sendall(b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+        assert connection.recv(16).startswith(b"HTTP/1.1 ")
+    with pytest.raises(ConnectionRefusedError):
+        socket.create_connection(("127.0.0.1", port), timeout=5).close()
+
+
+def test_host_services_are_probed_by_every_route_to_the_controller(native: ModuleType) -> None:
+    targets = native.host_service_targets(
+        {"sandbox-gateway": 19670, "signer": 9443},
+        {"host-alias": "host.docker.internal", "bridge-gateway": "172.17.0.1"},
+    )
+
+    assert targets == {
+        "sandbox-gateway-via-host-alias": ("host.docker.internal", 19670),
+        "sandbox-gateway-via-bridge-gateway": ("172.17.0.1", 19670),
+        "signer-via-host-alias": ("host.docker.internal", 9443),
+        "signer-via-bridge-gateway": ("172.17.0.1", 9443),
+    }
+
+
+def metadata_owner(present: list[bool]) -> MagicMock:
+    owner = MagicMock()
+    owner.identity = "hw-native-synthetic"
+    owner.controller_image = "synthetic-controller"
+    owner._peer.side_effect = lambda network, targets: (
+        present[: len(targets)] if network == "bridge" else [True] * len(targets)
+    )
+    return owner
+
+
+@pytest.mark.parametrize(
+    ("present", "subnets"),
+    [
+        ([False, False], ["169.254.169.248/29", "fd00:ec2::/64"]),
+        ([True, False], ["fd00:ec2::/64"]),
+        ([True, True], None),
+    ],
+)
+def test_metadata_controls_never_shadow_a_metadata_service_the_host_serves(
+    native: ModuleType, present: list[bool], subnets: list[str] | None
+) -> None:
+    owner = metadata_owner(present)
+    created: list[list[str]] = []
+
+    def docker(arguments: list[str], **_kwargs: object) -> str:
+        created.append(arguments)
+        if arguments[:2] == ["docker", "inspect"]:
+            return json.dumps(
+                [{"Config": {"Labels": {"heartwood-qualification-owner": owner.identity}}}]
+            )
+        return ""
+
+    with (
+        patch.object(native, "command", side_effect=docker),
+        native.NativeFixture.metadata_listener(owner) as control,
+    ):
+        origins = control()
+    assert origins == {
+        "metadata-ipv4": "host-service" if present[0] else "disposable-listener",
+        "metadata-ipv6": "host-service" if present[1] else "disposable-listener",
+    }
+    networks = [
+        arguments for arguments in created if arguments[:3] == ["docker", "network", "create"]
+    ]
+    if subnets is None:
+        assert networks == []
+        return
+    (network,) = networks
+    assert [
+        network[index + 1] for index, item in enumerate(network) if item == "--subnet"
+    ] == subnets
+    assert ["docker", "network", "rm", "hw-native-synthetic-metadata"] in created
+
+
+def test_an_unreachable_metadata_listener_fails_the_control(native: ModuleType) -> None:
+    owner = metadata_owner([False, False])
+    owner._peer.side_effect = lambda _network, targets: [False] * len(targets)
+
+    def docker(arguments: list[str], **_kwargs: object) -> str:
+        if arguments[:2] == ["docker", "inspect"]:
+            return json.dumps(
+                [{"Config": {"Labels": {"heartwood-qualification-owner": owner.identity}}}]
+            )
+        return ""
+
+    with (
+        patch.object(native, "command", side_effect=docker),
+        patch.object(native.time, "sleep"),
+        pytest.raises(AssertionError, match="metadata listener"),
+        native.NativeFixture.metadata_listener(owner),
+    ):
+        pass

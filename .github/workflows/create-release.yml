@@ -133,6 +133,16 @@ jobs:
           tar -czf dist/native-qualification-evidence.tar.gz \
             -C "${evidence}" native-qualification
           cp "${bundles[0]}" dist/native-qualification-evidence.sigstore.jsonl
+      - name: Record agent safety drills for each model route
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: >-
+          python3 deploy/release_drills.py
+          --version "${RELEASE_VERSION}"
+          --commit "${GITHUB_SHA}"
+          --synthetic test-results/release-evidence/native-qualification
+          --routes deploy/release-model-routes.toml
+          --output dist/agent-safety-drills.json
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4.4.1
       - name: Log in to GitHub Container Registry
@@ -182,6 +192,7 @@ jobs:
             dist/SHA256SUMS
             dist/native-qualification-evidence.tar.gz
             dist/native-qualification-evidence.sigstore.jsonl
+            dist/agent-safety-drills.json
           if-no-files-found: error
           retention-days: 7
 
@@ -303,6 +314,7 @@ jobs:
           actual_assets="$(jq -r '.assets[].name' <<<"${release_json}" | sort)"
           gpu_runtime_asset="$(python3 -c 'import tomllib; print(tomllib.load(open("images/gpu/compatibility.toml", "rb"))["runtime"]["vllm_wheel_filename"])')"
           evidence_assets=(native-qualification-evidence.tar.gz native-qualification-evidence.sigstore.jsonl)
+          evidence_assets+=(agent-safety-drills.json)
           release_assets=(SHA256SUMS heartwood-installer heartwood-native.tar.gz "${gpu_runtime_asset}")
           release_assets+=("${evidence_assets[@]}")
           expected_assets="$(printf '%s\n' "${release_assets[@]}" | sort)"

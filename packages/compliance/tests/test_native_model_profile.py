@@ -543,8 +543,24 @@ def test_direct_network_probe_uses_the_actual_provider_hostname(
     fixture.base_url = base_url
     fixture.control = MagicMock()
     fixture.ipv4, fixture.ipv6 = "192.0.2.1", "2001:db8::1"
+    fixture.control_address, fixture.bridge_gateway = "172.17.0.2", "172.17.0.1"
+    fixture.records = None
+    application = MagicMock()
+    served = MagicMock()
+    served.return_value.__enter__.return_value = 8123
+    metadata = MagicMock()
+    monkeypatch.setattr(module, "researcher_gateway", served)
+    monkeypatch.setattr(module.NativeFixture, "metadata_listener", metadata)
     qualify = MagicMock(return_value={"passed": True})
     monkeypatch.setattr(module, "qualify_network", qualify)
-    assert fixture.qualify_direct_network("worker") == {"passed": True}
+    assert fixture.qualify_direct_network("worker", application) == {"passed": True}
     assert qualify.call_args.kwargs["allowed_host"] == hostname
     assert qualify.call_args.args == (fixture.control, "worker")
+    served.assert_called_once_with(application)
+    targets = qualify.call_args.kwargs["host_services"]
+    assert targets["researcher-gateway-via-host-gateway"] == ("172.17.0.2", 8123)
+    assert targets["sandbox-gateway-via-bridge-gateway"] == ("172.17.0.1", 19670)
+    assert targets["sandbox-gateway-via-host-alias"] == ("host.docker.internal", 19670)
+    assert targets["researcher-gateway-via-qualification-network"] == ("192.0.2.1", 8123)
+    # Without retained checkpoints no records service or signer runs.
+    assert len(targets) == 8

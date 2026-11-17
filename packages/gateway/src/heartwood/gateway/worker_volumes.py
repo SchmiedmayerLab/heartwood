@@ -39,6 +39,9 @@ class WorkerVolumeSettings(BaseModel):
     workspace: str = Field(pattern=r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
     image_digest: ImageDigest
     protected_paths: tuple[Path, ...] = ()
+    # The worker's requested limits, in the deployment's quantity format.
+    cpu: str = Field(pattern=r"^[1-9][0-9]*(?:m)?$", max_length=16)
+    memory: str = Field(pattern=r"^[1-9][0-9]*(?:Mi|Gi)$", max_length=16)
 
     @model_validator(mode="after")
     def _explicit_locations(self) -> Self:
@@ -76,9 +79,12 @@ _PRIVATE_NAMESPACE_MODES: dict[str, frozenset[str]] = {
     "IpcMode": frozenset({"", "private", "none"}),
     "UsernsMode": frozenset({""}),
 }
-# The container runtime's standard confined process type, under its current and former name.
-# A user or role field, or any other type, could select an unconfined or privileged domain.
-_CONFINED_SELINUX_TYPES = frozenset({"container_t", "svirt_lxc_net_t"})
+# The container runtime's standard confined process type, as container-selinux v2.251.0
+# (archive SHA-256 701271b9221eadec0f5f4c99a74a3ef4214123222b757d78d62ef73690f7d8e7)
+# assigns it the container domain attributes. Its former name `svirt_lxc_net_t` is an alias
+# that only the base policy defines. A user or role field, or any other type, could select an
+# unconfined or privileged domain.
+_CONFINED_SELINUX_TYPES = frozenset({"container_t"})
 # One sensitivity with individual categories, as the runtime assigns them; a category range
 # such as `c0.c1023` would give the worker every other container's categories.
 _SELINUX_LEVEL = re.compile(r"s[0-9]+(?::c[0-9]+(?:,c[0-9]+)*)?")
@@ -89,6 +95,16 @@ def _confining_selinux_label(value: str) -> bool:
     if field == "type":
         return setting in _CONFINED_SELINUX_TYPES
     return field == "level" and _SELINUX_LEVEL.fullmatch(setting) is not None
+
+
+def _no_new_privileges(option: object) -> bool:
+    return option in ("no-new-privileges", "no-new-privileges:true", "no-new-privileges=true")
+
+
+def _native_limits(cpu: str, memory: str) -> tuple[int, int]:
+    """Return the CPU and memory limits Docker reports for the requested quantities."""
+    nano_cpus = int(cpu[:-1]) * 1_000_000 if cpu.endswith("m") else int(cpu) * 1_000_000_000
+    return nano_cpus, int(memory[:-2]) * (1024**3 if memory.endswith("Gi") else 1024**2)
 
 
 def _confining_security_option(option: object) -> bool:
@@ -282,14 +298,33 @@ class WorkerVolumes:
         # Every field must be reported; an absent observation is never read as confinement.
         if any(
             name not in host
-            for name in ("CapAdd", "SecurityOpt", "PidMode", "IpcMode", "UsernsMode")
+            for name in (
+                "CapAdd",
+                "CapDrop",
+                "SecurityOpt",
+                "PidMode",
+                "IpcMode",
+                "UsernsMode",
+                "CgroupnsMode",
+                "Devices",
+                "DeviceRequests",
+                "DeviceCgroupRules",
+                "Binds",
+            )
         ):
             raise WorkerAttemptError("native worker confinement was not observed")
-        options = host["SecurityOpt"] or []
+        options = host["SecurityOpt"]
         if (
             host["CapAdd"] not in (None, [])
+            or not isinstance(host["CapDrop"], list)
+            or "ALL" not in host["CapDrop"]
             or not isinstance(options, list)
             or any(not _confining_security_option(option) for option in options)
+            or not any(_no_new_privileges(option) for option in options)
+            or host["CgroupnsMode"] != "private"
+            or any(host[name] not in (None, []) for name in ("Devices", "DeviceRequests"))
+            or host["DeviceCgroupRules"] not in (None, [])
+            or host["Binds"] not in (None, [])
             # Only namespaces private to the container are accepted; `host`, another
             # container's namespace and any value not listed here are refused.
             or any(
@@ -298,6 +333,16 @@ class WorkerVolumes:
             )
         ):
             raise WorkerAttemptError("native worker confinement does not match admission")
+        # Docker reports an unlimited value as zero, a negative number or null.
+        nano_cpus, memory, processes = (host.get(n) for n in ("NanoCpus", "Memory", "PidsLimit"))
+        if (
+            type(nano_cpus) is not int
+            or type(memory) is not int
+            or type(processes) is not int
+            or (nano_cpus, memory) != _native_limits(self.settings.cpu, self.settings.memory)
+            or processes <= 0
+        ):
+            raise WorkerAttemptError("native worker resource limits do not match admission")
         mounts = observed.get("Mounts")
         if not isinstance(mounts, list) or any(not isinstance(m, dict) for m in mounts):
             raise WorkerAttemptError("native worker projection mounts were not observed")
@@ -314,6 +359,11 @@ class WorkerVolumes:
                 for path in withheld
             ):
                 raise WorkerAttemptError("native worker mount exposes a withheld host location")
+            # The worker needs no host path; only named volumes are admitted.
+            if observed_mount.get("Type") != "volume":
+                raise WorkerAttemptError(
+                    "native worker has a bind mount or another non-volume mount"
+                )
         for mount, volume in self.names.items():
             target = PurePosixPath("/" + mount)
             matching = []

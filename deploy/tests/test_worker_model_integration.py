@@ -354,7 +354,7 @@ def test_native_capable_model(monkeypatch: pytest.MonkeyPatch) -> None:
         assert not fixture.provider.observations
         assert fixture.provider.canary_requests == 1
         assert fixture.protected_canary.read_text() == fixture.sentinel
-        network = fixture.qualify_direct_network(name)
+        network = fixture.qualify_direct_network(name, application)
         revocation = revoke_model_provider(fixture, name)
         service.audit_log.verify()
         _stop(application)
@@ -367,6 +367,7 @@ def test_native_capable_model(monkeypatch: pytest.MonkeyPatch) -> None:
             if timer.is_alive():
                 raise RuntimeError("Outside deadline revocation remains unresolved")
         evidence = {
+            "drill_id": "capable-model-native.v1",
             "passed": passed,
             "sensitive_data_ready": False,
             "requested_profile": profile.mapping(),

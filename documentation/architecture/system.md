@@ -133,12 +133,15 @@ Launch happens once per session service, on the session's first backend read:
 
 The operator's policy file must match `policy_file_sha256`, require Landlock as a hard requirement, run as `10001:10001`, and list `/inputs` and `/skills` as read-only.
 
-Container inspection accepts only listed confinement values: the container's own process and user namespaces, a private or absent IPC namespace, and security options that keep the default profiles, add `no-new-privileges`, or select the default AppArmor profile.
-An SELinux label is accepted only for the standard confined type (`container_t`, or its former name `svirt_lxc_net_t`) or a single sensitivity level with individual categories.
+Container inspection accepts only listed confinement values: the container's own process and user namespaces, a private or absent IPC namespace, a private cgroup namespace, and security options that keep the default profiles, add `no-new-privileges`, or select the default AppArmor profile.
+It also requires every capability to be dropped, `no-new-privileges` to be set, no device, device request, or device rule, and no bind mount or other mount that is not a Docker volume.
+An SELinux label is accepted only for `container_t`, the confined type of container-selinux v2.251.0, or a single sensitivity level with individual categories; the former alias `svirt_lxc_net_t`, which only the base policy defines, is rejected.
+The reported CPU and memory limits must equal the manifest's `cpu` and `memory`, and a process limit must be set.
+The qualified sandbox gateway sets all of these on the Docker reference platform, including its default limit of 2048 processes; a Docker host with cgroup version 1, where containers share the host's cgroup namespace, is refused.
 Every field must be present in Docker's report; an absent field fails admission.
 A mount whose host source overlaps the research directory, protected state, native configuration home, or Docker socket is rejected.
 Sources are compared as written, after normalization, and as resolved on the gateway host; a runtime that reports paths from another filesystem namespace is checked only in the written forms.
-Inspection does not restrict other mounts the OpenShell supervisor adds.
+Every other mount must be a Docker volume.
 
 The gateway version check compares the operator's declaration with the gateway's own report.
 It catches a misconfigured deployment, not a gateway that misreports its version or lacks the behavior Heartwood's revocation evidence depends on.
