@@ -8,8 +8,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from dataclasses import dataclass
+import json
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
+from typing import Literal
 
 from heartwood.core_adapter._facade import backend_error_is_fatal
 from heartwood.core_adapter.action_review import AUTOMATIC_REVIEW_ACTOR
@@ -17,16 +19,20 @@ from heartwood.core_adapter.external_actions import external_action_records
 from heartwood.core_adapter.external_results import external_result_records
 from heartwood.session import CommandKind, EventKind, SessionEvent
 
-# Researcher commands that continue the agent and so end a pause; the gateway's own
-# decisions and anything the backend reports never do.
+# Researcher commands that continue the agent and so end a pause once the service accepts
+# them; a resume ends it when it is recorded. A workflow command continues the agent only
+# through an allowed model route, so one that changes only the workflow, such as a cancel,
+# leaves the pause. The gateway's own decisions, a refused command and anything the
+# backend reports never end it.
 _CONTINUING_COMMANDS = frozenset(
     {
         CommandKind.CHAT.value,
-        CommandKind.RESUME.value,
         CommandKind.APPROVE.value,
         CommandKind.WORKFLOW.value,
     }
 )
+
+ReviewDecision = Literal["approved", "denied"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,11 +42,18 @@ class SessionActivity:
     status: str
     """The last recorded run state; a recorded error alone never ends a run."""
     paused: bool
-    """A researcher pause that no later researcher command continuing the agent has ended."""
+    """A researcher pause that no later accepted researcher command continuing the agent ended."""
     fatal: bool
     """An error after which the session accepts no further work."""
     awaiting_review: frozenset[str]
     """Tool calls whose review was requested and not resolved."""
+    stopped_by: Literal["error", "decision", "review"] | None = None
+    """What stopped the run after its last report: a recoverable error, a review decision,
+    or an action set returned to the researcher for review."""
+    open_reviews: tuple[str, ...] = ()
+    """Action sets, in the order they were first reviewed, that wait for a researcher decision."""
+    retained_approvals: tuple[str, ...] = ()
+    """Approved outside action sets that were neither sent, withdrawn nor expired."""
 
     @property
     def settled(self) -> bool:
@@ -63,40 +76,211 @@ class SessionActivity:
         )
 
 
+@dataclass(slots=True)
+class SessionActivityReducer:
+    """Apply journal events in order; the service and the interface projection share it."""
+
+    status: str = "idle"
+    paused: bool = False
+    fatal: bool = False
+    stopped_by: Literal["error", "decision", "review"] | None = None
+    awaiting_review: set[str] = field(default_factory=set)
+    review_groups: dict[str, list[str]] = field(default_factory=dict)
+    """Every reviewed action set, in the order it was first reviewed, with its actions."""
+    review_decisions: dict[str, ReviewDecision | None] = field(default_factory=dict)
+    review_resolutions: dict[str, dict[str, ReviewDecision]] = field(default_factory=dict)
+    retained_groups: set[str] = field(default_factory=set)
+    continuing: str | None = None
+    """The kind of a researcher command received during a pause whose acceptance is not yet
+    recorded."""
+
+    def review_group(self, tool_call_id: str) -> str:
+        """Return the action set that reviewed a tool call, or an empty identifier."""
+        return next(
+            (
+                group_id
+                for group_id, tool_call_ids in self.review_groups.items()
+                if tool_call_id in tool_call_ids
+            ),
+            "",
+        )
+
+    def apply(self, event: SessionEvent) -> None:
+        """Reduce one verified journal event."""
+        payload = event.payload
+        kind = str(event.kind)
+        if self.continuing:
+            self._continuing_command_answered(kind, payload)
+        if kind == EventKind.AGENT_LIFECYCLE_UPDATED.value:
+            self.status, self.stopped_by = str(payload.get("status")), None
+        elif kind == EventKind.COMMAND_RECEIVED.value:
+            command_kind = payload.get("command_kind")
+            self.continuing = (
+                str(command_kind)
+                if self.paused
+                and command_kind in _CONTINUING_COMMANDS
+                and payload.get("actor_id") != AUTOMATIC_REVIEW_ACTOR
+                else None
+            )
+        elif kind == EventKind.SESSION_PAUSED.value:
+            self.status, self.paused, self.stopped_by = "paused", True, None
+        elif kind == EventKind.SESSION_RESUMED.value:
+            self.status, self.paused, self.stopped_by = "running", False, None
+        elif kind == EventKind.ERROR_RECORDED.value:
+            self.fatal = self.fatal or backend_error_is_fatal(payload.get("code"))
+            if payload.get("automatic_review") == "not-applied":
+                # A withdrawn gateway decision returns its action set to the researcher.
+                group_id = _text(payload.get("group_id"))
+                self.review_decisions[group_id] = None
+                self.review_resolutions.pop(group_id, None)
+                self.stopped_by = "review"
+            elif payload.get("affects_lifecycle") is not False:
+                self.stopped_by = "error"
+        elif kind == EventKind.CONFIRMATION_REQUESTED.value:
+            self._review_requested(payload.get("request"))
+        elif kind == EventKind.APPROVAL_RECORDED.value:
+            self._decision_recorded(payload)
+        elif kind == EventKind.CONFIRMATION_RESOLVED.value:
+            self._review_resolved(payload)
+        elif kind in {
+            EventKind.EXTERNAL_ACTION_RECORDED.value,
+            EventKind.EXTERNAL_RESULT_RECORDED.value,
+        }:
+            self._outside_recorded(event)
+
+    def activity(self) -> SessionActivity:
+        """Return what the events applied so far establish."""
+        return SessionActivity(
+            status=self.status,
+            paused=self.paused,
+            fatal=self.fatal,
+            awaiting_review=frozenset(self.awaiting_review),
+            stopped_by=self.stopped_by,
+            open_reviews=tuple(
+                group_id
+                for group_id in self.review_groups
+                if self.review_decisions.get(group_id) is None
+            ),
+            retained_approvals=tuple(
+                group_id for group_id in self.review_groups if group_id in self.retained_groups
+            ),
+        )
+
+    def _continuing_command_answered(self, kind: str, payload: Mapping[str, object]) -> None:
+        """End the pause at the first record that the service accepted the command.
+
+        The service records a refusal as an error before any effect: after the prompt,
+        after a change of the governing policy or review mode, and after a model-route
+        decision that did not allow the turn. A workflow command is accepted as continuing
+        the agent only at an allowed model route.
+        """
+        if kind in {EventKind.ERROR_RECORDED.value, EventKind.COMMAND_RECEIVED.value}:
+            self.continuing = None
+            return
+        decision = payload.get("decision")
+        allowed = (
+            kind == EventKind.MODEL_CALL_DECISION_RECORDED.value
+            and isinstance(decision, dict)
+            and decision.get("decision") == "allow"
+        )
+        if not allowed and (
+            self.continuing == CommandKind.WORKFLOW.value
+            or kind
+            in {
+                EventKind.USER_MESSAGE_RECORDED.value,
+                EventKind.POLICY_DECISION_RECORDED.value,
+                EventKind.MODEL_CALL_DECISION_RECORDED.value,
+            }
+        ):
+            return
+        self.continuing = None
+        self.paused = False
+        if self.status == "paused":
+            # The researcher continued the agent; neither state is settled.
+            self.status = "running"
+
+    def _review_requested(self, request: object) -> None:
+        if not isinstance(request, dict):
+            self.awaiting_review.add("")
+            request = {}
+        else:
+            self.awaiting_review.add(str(request.get("tool_call_id")))
+        self.status, self.stopped_by = "waiting-for-confirmation", None
+        tool_call_id = _text(request.get("tool_call_id"))
+        if not tool_call_id:
+            return
+        group_id = _text(request.get("group_id")) or "pending-action-set"
+        group = self.review_groups.setdefault(group_id, [])
+        if tool_call_id not in group:
+            group.append(tool_call_id)
+        self.review_decisions[group_id] = None
+
+    def _decision_recorded(self, payload: Mapping[str, object]) -> None:
+        group_id = _text(payload.get("group_id"))
+        decision = _decision(payload.get("decision"))
+        listed = payload.get("tool_call_ids")
+        tool_call_ids = [
+            item for item in map(_text, listed if isinstance(listed, list) else ()) if item
+        ]
+        if not (group_id and decision is not None and tool_call_ids):
+            return
+        group = self.review_groups.setdefault(group_id, [])
+        group.extend(item for item in tool_call_ids if item not in group)
+        self.review_decisions[group_id] = decision
+        self.review_resolutions[group_id] = dict.fromkeys(tool_call_ids, decision)
+        self.stopped_by = "decision"
+
+    def _review_resolved(self, payload: Mapping[str, object]) -> None:
+        self.awaiting_review.discard(str(payload.get("tool_call_id")))
+        if not self.awaiting_review and self.status == "waiting-for-confirmation":
+            self.status = "idle"
+        tool_call_id = _text(payload.get("tool_call_id"))
+        group_id = _text(payload.get("group_id")) or self.review_group(tool_call_id)
+        decision = _decision(payload.get("decision"))
+        group = self.review_groups.get(group_id)
+        recorded = self.review_decisions.get(group_id)
+        # A resolution that contradicts the recorded decision changes nothing.
+        if group is None or decision is None or recorded not in {None, decision}:
+            return
+        resolutions = self.review_resolutions.setdefault(group_id, {})
+        resolutions[tool_call_id] = decision
+        if recorded is None and all(resolutions.get(item) == decision for item in group):
+            self.review_decisions[group_id] = decision
+            self.stopped_by = "decision"
+
+    def _outside_recorded(self, event: SessionEvent) -> None:
+        # Imported here: outside records depend on worker attempts, which use this reducer.
+        from heartwood.core_adapter.external_actions import ExternalActionRecord
+        from heartwood.core_adapter.external_results import ExternalResultRecord
+
+        content = json.dumps(event.payload["record"])
+        record = (
+            ExternalActionRecord.model_validate_json(content)
+            if str(event.kind) == EventKind.EXTERNAL_ACTION_RECORDED.value
+            else ExternalResultRecord.model_validate_json(content)
+        )
+        group_id = record.proposal.group_id
+        self.review_groups[group_id] = [record.proposal.action_id]
+        self.review_decisions[group_id] = (
+            # Closed before dispatch, so neither awaiting review nor sent.
+            "denied"
+            if record.phase in {"expired", "withdrawn"}
+            else None
+            if record.decision is None
+            else record.decision.decision
+        )
+        if record.phase == "authorized":
+            self.retained_groups.add(group_id)
+        else:
+            self.retained_groups.discard(group_id)
+
+
 def session_activity(events: Sequence[SessionEvent]) -> SessionActivity:
     """Reduce verified journal events; the result grants no capability by itself."""
-    status = "idle"
-    paused = fatal = False
-    awaiting_review: set[str] = set()
+    reducer = SessionActivityReducer()
     for event in events:
-        payload = event.payload
-        if event.kind == EventKind.AGENT_LIFECYCLE_UPDATED:
-            status = str(payload.get("status"))
-        elif event.kind == EventKind.COMMAND_RECEIVED:
-            if (
-                payload.get("command_kind") in _CONTINUING_COMMANDS
-                and payload.get("actor_id") != AUTOMATIC_REVIEW_ACTOR
-            ):
-                paused = False
-        elif event.kind == EventKind.SESSION_PAUSED:
-            status, paused = "paused", True
-        elif event.kind == EventKind.SESSION_RESUMED:
-            status, paused = "running", False
-        elif event.kind == EventKind.ERROR_RECORDED:
-            fatal = fatal or backend_error_is_fatal(payload.get("code"))
-        elif event.kind == EventKind.CONFIRMATION_REQUESTED:
-            request = payload.get("request")
-            awaiting_review.add(
-                str(request.get("tool_call_id")) if isinstance(request, dict) else ""
-            )
-            status = "waiting-for-confirmation"
-        elif event.kind == EventKind.CONFIRMATION_RESOLVED:
-            awaiting_review.discard(str(payload.get("tool_call_id")))
-            if not awaiting_review and status == "waiting-for-confirmation":
-                status = "idle"
-    return SessionActivity(
-        status=status, paused=paused, fatal=fatal, awaiting_review=frozenset(awaiting_review)
-    )
+        reducer.apply(event)
+    return reducer.activity()
 
 
 def worker_replacement_blocker(events: Sequence[SessionEvent]) -> str | None:
@@ -119,3 +303,13 @@ def worker_replacement_blocker(events: Sequence[SessionEvent]) -> str | None:
     ):
         return "an outside operation or result release of the revoked worker is unresolved"
     return None
+
+
+def _text(value: object) -> str:
+    if isinstance(value, str):
+        return value
+    return str(value) if isinstance(value, bool | int | float) else ""
+
+
+def _decision(value: object) -> ReviewDecision | None:
+    return "approved" if value == "approved" else "denied" if value == "denied" else None

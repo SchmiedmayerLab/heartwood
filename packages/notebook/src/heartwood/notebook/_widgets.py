@@ -16,14 +16,20 @@ from types import ModuleType
 from typing import Protocol, cast
 
 from heartwood.gateway import (
+    SPECIALIST_RESULT_LABEL,
+    SPECIALIST_TASK_LABEL,
     ProjectionSubagent,
+    action_arguments_label,
+    action_heading,
+    action_review_heading,
     action_risk_label,
     action_state_label,
     action_summary_label,
     action_tool_label,
     display_safe_text,
     outside_review_lines,
-    outside_review_title,
+    retained_approval_notice,
+    specialist_review_lines,
 )
 from heartwood.notebook._view_model import NotebookViewModel
 from heartwood.schemas import ProjectReadinessResponse
@@ -198,16 +204,13 @@ def _approval_items(view_model: NotebookViewModel) -> tuple[str, ...]:
     if group is None:
         return ()
     action_label = "action" if len(group.actions) == 1 else "actions"
-    items = [(f"Review {len(group.actions)} {action_label} as one complete set: pending")]
+    items = [
+        f"Approval not sent: {retained_approval_notice(view_model.projection)}"
+        if group.decision == "approved"
+        else f"Review {len(group.actions)} {action_label} as one complete set: pending"
+    ]
     for index, action in enumerate(group.actions, 1):
-        details = action.details
-        heading = (
-            f"$ {details.command}"
-            if details.kind == "terminal"
-            else f"{details.operation} {details.path or 'path unavailable'}"
-            if details.kind == "file-editor"
-            else outside_review_title(action) or action_tool_label(action.tool_name)
-        )
+        heading = action_review_heading(action)
         lines = [
             f"{index}. {heading}",
             f"{action_tool_label(action.tool_name)} · {action_risk_label(action.risk)}",
@@ -215,16 +218,12 @@ def _approval_items(view_model: NotebookViewModel) -> tuple[str, ...]:
         ]
         if action.summary:
             lines.append(f"{action_summary_label(action)}: {action.summary}")
-        if action.details.kind == "task":
-            role = action.details.role_label or action.details.subagent_type
-            if role:
-                lines.append(f"Specialist: {role}")
-            if action.details.capability:
-                lines.append(f"Capability: {action.details.capability.replace('-', ' ').title()}")
-            if action.details.prompt:
-                lines.append(f"Objective: {action.details.prompt}")
+        lines.extend(specialist_review_lines(action))
         if action.arguments:
-            lines.append(f"Arguments:\n{json.dumps(action.arguments, indent=2, sort_keys=True)}")
+            lines.append(
+                f"{action_arguments_label(action)}:\n"
+                + json.dumps(action.arguments, indent=2, sort_keys=True)
+            )
         items.append("\n".join(lines))
     return tuple(items)
 
@@ -232,17 +231,7 @@ def _approval_items(view_model: NotebookViewModel) -> tuple[str, ...]:
 def _action_items(view_model: NotebookViewModel) -> tuple[str, ...]:
     items: list[str] = []
     for action in view_model.actions:
-        details = action.details
-        if details.kind == "terminal":
-            label = f"$ {details.command}"
-        elif details.kind == "file-editor":
-            label = f"{details.operation} {details.path or 'path unavailable'}"
-        elif details.kind == "task":
-            label = (
-                details.role_label or details.description or details.subagent_type or action.summary
-            )
-        else:
-            label = action.summary
+        label = action_heading(action)
         outcome = (
             ""
             if action.outcome is None
@@ -259,7 +248,10 @@ def _action_items(view_model: NotebookViewModel) -> tuple[str, ...]:
         elif action.group_id is not None:
             lines.append(f"Complete action set decision: {action.decision or 'pending'}")
         if action.arguments:
-            lines.append("Arguments:\n" + json.dumps(action.arguments, indent=2, sort_keys=True))
+            lines.append(
+                f"{action_arguments_label(action)}:\n"
+                + json.dumps(action.arguments, indent=2, sort_keys=True)
+            )
         if action.affected_paths:
             lines.append(
                 "Paths: "
@@ -296,9 +288,9 @@ def _runtime_items(view_model: NotebookViewModel) -> tuple[str, ...]:
 def _specialist_item(agent: ProjectionSubagent) -> str:
     details = [f"{agent.role_label}: {agent.status_label}"]
     if agent.task_summary is not None:
-        details.append(f"Task: {agent.task_summary}")
+        details.append(f"{SPECIALIST_TASK_LABEL}: {agent.task_summary}")
     if agent.result_summary is not None:
-        details.append(f"Result: {agent.result_summary}")
+        details.append(f"{SPECIALIST_RESULT_LABEL}: {agent.result_summary}")
     if agent.review_proposals is not None:
         details.extend(
             f"Unverified review proposal: {candidate.summary}"

@@ -22,6 +22,9 @@ from heartwood.cli._workspace_presentation import (
     format_workspace_tree,
 )
 from heartwood.gateway import (
+    RETAINED_APPROVAL_NOTICE,
+    SPECIALIST_RESULT_LABEL,
+    SPECIALIST_TASK_LABEL,
     ActionSettingsError,
     ModelSettingsError,
     ProjectionActionRecord,
@@ -29,13 +32,21 @@ from heartwood.gateway import (
     SessionGateway,
     SessionProjection,
     WorkspaceInspectionError,
+    action_arguments_label,
+    action_heading,
     action_mode_label,
+    action_review_heading,
     action_risk_label,
     action_state_label,
     action_summary_label,
     action_tool_label,
+    approval_retry_unavailable_reason,
     outside_review_lines,
     outside_review_title,
+    retained_approval,
+    retained_approval_notice,
+    retained_approval_sendable,
+    specialist_review_lines,
 )
 from heartwood.gateway import (
     display_safe_text as terminal_safe_text,
@@ -112,6 +123,11 @@ _COMMAND_ACTIVITIES = {
         waiting_label="Still continuing the action set",
         guidance="The model may need time to process the tool results.",
     ),
+    "/retry": InteractionActivity(
+        label="Resending the recorded approval",
+        waiting_label="Still resending the recorded approval",
+        guidance="Heartwood is sending the approval it recorded, once.",
+    ),
     "/reject": InteractionActivity(
         label="Rejecting the action set",
         waiting_label="Still rejecting the action set",
@@ -169,6 +185,15 @@ _COMMAND_ACTIVITIES = {
     ),
 }
 _STABLE_WAIT_TIMEOUT_SECONDS = 3600.0
+_RETAINED_APPROVAL_CHOICES = "Resend it with /retry, or withdraw it with /reject."
+
+
+def _retained_approval_choices(projection: SessionProjection) -> str:
+    return (
+        _RETAINED_APPROVAL_CHOICES
+        if retained_approval_sendable(projection)
+        else "Withdraw it with /reject."
+    )
 
 
 class InteractiveSession:
@@ -178,6 +203,8 @@ class InteractiveSession:
         self.gateway = gateway
         self.session_id = session_id
         self._displayed_workflow_controls: tuple[WorkflowControl, ...] = ()
+        # The last approval the gateway retains unsent; only this exact command may send it.
+        self._approval_retry: SessionCommand | None = None
 
     def replay(self) -> SessionProjection:
         """Return the gateway-owned session projection."""
@@ -276,15 +303,25 @@ class InteractiveSession:
                     message="No actions are awaiting review.",
                     error=True,
                 )
-            kind = CommandKind.APPROVE if directive == "/allow" else CommandKind.DENY
-            events = self._handle(
-                kind,
-                {"target_type": "action-set", "target_id": target},
-            )
-            return InteractionResult(
-                events=events,
-                projection=self.replay(),
-            )
+            payload: dict[str, JsonValue] = {"target_type": "action-set", "target_id": target}
+            if directive == "/reject":
+                events = self._handle(CommandKind.DENY, payload)
+                return InteractionResult(events=events, projection=self.replay())
+            projection = self.replay()
+            if retained_approval(projection) is not None:
+                # A new approval is refused while the recorded one waits to be sent.
+                return InteractionResult(
+                    message=f"{retained_approval_notice(projection)}\n"
+                    + _retained_approval_choices(projection),
+                    error=True,
+                )
+            return self._approve(self._command(CommandKind.APPROVE, payload))
+        if directive == "/retry" and len(parts) == 1:
+            reason = approval_retry_unavailable_reason(self.replay(), self._approval_retry)
+            if reason is not None or self._approval_retry is None:
+                self._approval_retry = None
+                return InteractionResult(message=reason, error=True)
+            return self._approve(self._approval_retry)
         if directive == "/pause" and len(parts) == 1:
             events = self._handle(CommandKind.PAUSE)
             return InteractionResult(events=events, projection=self.replay())
@@ -432,12 +469,40 @@ class InteractiveSession:
             return None
         return approval.group_id if requested_id is None else requested_id
 
+    def _approve(self, command: SessionCommand) -> InteractionResult:
+        """Send an approval, keeping it for an exact retry while the gateway retains it."""
+        try:
+            events = self.gateway.handle(command).events
+        except Exception as error:
+            projection = self.replay()
+            if approval_retry_unavailable_reason(projection, command) is not None:
+                self._approval_retry = None
+                raise
+            self._approval_retry = command
+            return InteractionResult(
+                projection=projection,
+                message=terminal_safe_text(
+                    f"{error}\n{RETAINED_APPROVAL_NOTICE}\n{_RETAINED_APPROVAL_CHOICES}",
+                    preserve_newlines=True,
+                ),
+                error=True,
+            )
+        self._approval_retry = None
+        return InteractionResult(events=events, projection=self.replay())
+
     def _handle(
         self,
         kind: CommandKind,
         payload: dict[str, JsonValue] | None = None,
     ) -> tuple[SessionEvent, ...]:
-        command = SessionCommand(
+        return self.gateway.handle(self._command(kind, payload)).events
+
+    def _command(
+        self,
+        kind: CommandKind,
+        payload: dict[str, JsonValue] | None = None,
+    ) -> SessionCommand:
+        return SessionCommand(
             command_id=new_command_id(self.session_id, kind),
             session_id=self.session_id,
             kind=kind,
@@ -445,13 +510,12 @@ class InteractiveSession:
             created_at=datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
             payload={} if payload is None else payload,
         )
-        return self.gateway.handle(command).events
 
 
 def command_help() -> str:
     """Return the commands common to terminal clients."""
     return (
-        "/allow  /reject  /permissions  /pause  /resume  /status  "
+        "/allow  /reject  /retry  /permissions  /pause  /resume  /status  "
         "/specialists  /workflows  /workflow  /experiments  /files  /show  /changes  "
         "/replay  /audit-export  /help  /exit"
     )
@@ -503,47 +567,41 @@ def format_projection_lines(
         outside_title = (
             outside_review_title(approval.actions[0]) if len(approval.actions) == 1 else None
         )
+        retained = approval.decision == "approved"
         lines.append(
-            f"Review {outside_title}:"
+            f"Approval not sent: {outside_title}"
+            if retained
+            else f"Review {outside_title}:"
             if outside_title
             else f"Review {len(approval.actions)} {label} as one OpenHands action set:"
         )
+        if retained:
+            lines.append(retained_approval_notice(projection))
         for index, action in enumerate(approval.actions, 1):
             tool_label = terminal_safe_text(action_tool_label(action.tool_name))
             risk_label = action_risk_label(action.risk)
-            details = action.details
-            summary = terminal_safe_text(
-                f"$ {details.command}"
-                if details.kind == "terminal"
-                else f"{details.operation} {details.path or 'path unavailable'}"
-                if details.kind == "file-editor"
-                else outside_review_title(action) or action_tool_label(action.tool_name)
-            )
+            summary = action_review_heading(action)
             lines.append(f"  {index}. {summary} [{tool_label} · {risk_label}]")
             lines.extend(f"     {line}" for line in outside_review_lines(action))
             if action.summary:
                 lines.append(
                     f"     {action_summary_label(action)}: {terminal_safe_text(action.summary)}"
                 )
-            if action.details.kind == "task":
-                role = action.details.role_label or action.details.subagent_type
-                if role:
-                    lines.append(f"     Specialist: {terminal_safe_text(role)}")
-                if action.details.capability:
-                    lines.append(
-                        "     Capability: "
-                        + terminal_safe_text(action.details.capability.replace("-", " ").title())
-                    )
-                if action.details.prompt:
-                    lines.append(
-                        "     Objective: "
-                        + terminal_safe_text(action.details.prompt, preserve_newlines=True)
-                    )
+            lines.extend(f"     {line}" for line in specialist_review_lines(action))
             if argument_lines := format_action_arguments(action.arguments):
-                lines.append("     Arguments:")
+                lines.append(f"     {action_arguments_label(action)}:")
                 lines.extend(f"       {line}" for line in argument_lines)
         lines.extend(
             (
+                *(
+                    ("Resend the recorded approval: /retry",)
+                    if retained_approval_sendable(projection)
+                    else ()
+                ),
+                "Reject the review to withdraw it: /reject",
+            )
+            if retained
+            else (
                 "Allow the complete set once: /allow",
                 "Reject the complete set: /reject",
             )
@@ -696,9 +754,13 @@ def format_runtime_lines(projection: SessionProjection) -> tuple[str, ...]:
                 f"  {terminal_safe_text(item.role_label)}: {terminal_safe_text(item.status_label)}"
             )
             if item.task_summary is not None:
-                lines.append(f"    Task: {terminal_safe_text(item.task_summary)}")
+                lines.append(
+                    f"    {SPECIALIST_TASK_LABEL}: {terminal_safe_text(item.task_summary)}"
+                )
             if item.result_summary is not None:
-                lines.append(f"    Result: {terminal_safe_text(item.result_summary)}")
+                lines.append(
+                    f"    {SPECIALIST_RESULT_LABEL}: {terminal_safe_text(item.result_summary)}"
+                )
             if item.review_proposals is not None:
                 lines.extend(
                     f"    Unverified review proposal: {terminal_safe_text(candidate.summary)}"
@@ -716,21 +778,7 @@ def format_runtime_lines(projection: SessionProjection) -> tuple[str, ...]:
 
 def format_action_record_lines(action: ProjectionActionRecord) -> tuple[str, ...]:
     """Render one correlated action record without reconstructing its state."""
-    state = action_state_label(action.state)
-    details = action.details
-    if details.kind == "terminal":
-        heading = f"  [{state}] $ {terminal_safe_text(details.command)}"
-    elif details.kind == "file-editor":
-        path = terminal_safe_text(details.path or "path unavailable")
-        heading = f"  [{state}] {details.operation} {path}"
-    elif details.kind == "task":
-        specialist = (
-            details.role_label or details.subagent_type or details.description or action.tool_name
-        )
-        heading = f"  [{state}] specialist {terminal_safe_text(specialist)}"
-    else:
-        heading = f"  [{state}] {terminal_safe_text(action.summary)}"
-    lines = [heading]
+    lines = [f"  [{action_state_label(action.state)}] {action_heading(action)}"]
     if action.automatic_rule is not None:
         lines.append(
             "    allowed automatically (rule " + terminal_safe_text(action.automatic_rule) + ")"
@@ -739,7 +787,7 @@ def format_action_record_lines(action: ProjectionActionRecord) -> tuple[str, ...
         lines.append(f"    decision {action.decision or 'pending'} (complete action set)")
     if action.arguments:
         lines.append(
-            "    arguments: "
+            f"    {action_arguments_label(action)}: "
             + terminal_safe_text(
                 json.dumps(action.arguments, sort_keys=True, separators=(",", ":"))
             )

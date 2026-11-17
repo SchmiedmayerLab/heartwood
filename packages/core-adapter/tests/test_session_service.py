@@ -56,6 +56,7 @@ from heartwood.core_adapter import (
 )
 from heartwood.core_adapter._audit_projection import project_audit_payload
 from heartwood.core_adapter._state import _writer_owner_summary
+from heartwood.core_adapter.session_activity import session_activity
 from heartwood.schemas import AuditEvent, ModelDataHandling, PolicyProfile
 from heartwood.session import (
     CommandKind,
@@ -2226,6 +2227,76 @@ def test_denied_route_never_calls_backend(tmp_path: Path) -> None:
     assert isinstance(decision, dict)
     assert decision["decision"] == "deny"
     assert result.events[-1].kind == EventKind.ERROR_RECORDED.value
+
+
+def test_a_turn_refused_by_platform_policy_leaves_the_pause_in_effect(tmp_path: Path) -> None:
+    backend = _RecordingBackend(endpoint="https://public.example.invalid/v1/chat/completions")
+    service = SessionService.local_default(
+        tmp_path,
+        backend=backend,
+        policy_profile=PolicyProfile(
+            policy_id="local-only",
+            platform_id="generic",
+            deny_egress_by_default=True,
+            allowed_model_endpoints=("http://127.0.0.1:8765/v1/chat/completions",),
+            credential_allowlist=(),
+        ),
+        clock=lambda: "2026-01-01T00:00:00Z",
+    )
+    service.handle(_command(CommandKind.PAUSE).model_copy(update={"session_id": "session-main"}))
+
+    service.handle(
+        _command(CommandKind.CHAT, prompt="Continue").model_copy(
+            update={"session_id": "session-main"}
+        )
+    )
+
+    assert backend.prompts == []
+    activity = session_activity(service.replay_events())
+    assert activity.paused
+    assert activity.status == "paused"
+    service.close()
+
+
+def test_a_turn_refused_after_a_policy_change_leaves_the_pause_in_effect(
+    tmp_path: Path,
+) -> None:
+    endpoint = "https://public.example.invalid/v1/chat/completions"
+
+    def service_under(*allowed: str) -> SessionService:
+        return SessionService.local_default(
+            tmp_path,
+            backend=_RecordingBackend(endpoint=endpoint),
+            policy_profile=PolicyProfile(
+                policy_id="site-policy",
+                platform_id="generic",
+                deny_egress_by_default=True,
+                allowed_model_endpoints=allowed,
+                credential_allowlist=(),
+            ),
+            clock=lambda: "2026-01-01T00:00:00Z",
+        )
+
+    first = service_under(endpoint)
+    first.handle(
+        _command(CommandKind.CHAT, prompt="Start").model_copy(update={"session_id": "session-main"})
+    )
+    first.handle(_command(CommandKind.PAUSE).model_copy(update={"session_id": "session-main"}))
+    first.close()
+    # The narrower policy is recorded as a governing change before the refused route.
+    second = service_under()
+    second.handle(
+        _command(CommandKind.CHAT, command_id="command-continue", prompt="Continue").model_copy(
+            update={"session_id": "session-main"}
+        )
+    )
+
+    events = second.replay_events()
+    assert EventKind.POLICY_DECISION_RECORDED in {event.kind for event in events}
+    activity = session_activity(events)
+    assert activity.paused
+    assert activity.status == "paused"
+    second.close()
 
 
 def test_approved_action_rechecks_route_before_backend_continuation(tmp_path: Path) -> None:

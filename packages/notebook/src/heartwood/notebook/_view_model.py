@@ -15,6 +15,7 @@ from typing import cast
 
 from heartwood.gateway import (
     DEFAULT_SESSION_ID,
+    RETAINED_APPROVAL_NOTICE,
     ModelProfile,
     ProjectContext,
     ProjectionActionRecord,
@@ -31,6 +32,10 @@ from heartwood.gateway import (
     ProjectionUsage,
     SessionGateway,
     SessionProjection,
+    approval_retry_unavailable_reason,
+    retained_approval,
+    retained_approval_notice,
+    retained_approval_sendable,
 )
 from heartwood.schemas import (
     ActionSettingsResponse,
@@ -209,6 +214,8 @@ class NotebookSession:
             raise ValueError("notebook project must match the injected gateway project")
         self.session_id = session_id
         self.gateway = SessionGateway(project=self.project) if gateway is None else gateway
+        # The last approval the gateway retains unsent; only this exact command may send it.
+        self._approval_retry: SessionCommand | None = None
 
     def chat(self, prompt: str) -> NotebookViewModel:
         """Submit one message and return the current session projection."""
@@ -513,10 +520,44 @@ class NotebookSession:
 
     def approve(self, *, group_id: str) -> NotebookViewModel:
         """Allow every action in the pending OpenHands action group once."""
-        return self._handle(
-            CommandKind.APPROVE,
-            {"target_type": "action-set", "target_id": group_id},
+        projection = self._view_model().projection
+        if retained_approval(projection) is not None:
+            # A new approval is refused while the recorded one waits to be sent.
+            raise RuntimeError(
+                f"{retained_approval_notice(projection)} "
+                + (
+                    _RETAINED_APPROVAL_CHOICES
+                    if retained_approval_sendable(projection)
+                    else "Withdraw it with session.deny(group_id=...)."
+                )
+            )
+        return self._approve(
+            self._command(CommandKind.APPROVE, {"target_type": "action-set", "target_id": group_id})
         )
+
+    def retry(self) -> NotebookViewModel:
+        """Resend the approval this notebook recorded but could not send, as the same command."""
+        # A reconciled read records an expiry that happened since the approval was kept.
+        reason = approval_retry_unavailable_reason(
+            self.gateway.session_projection(session_id=self.session_id), self._approval_retry
+        )
+        if reason is not None or self._approval_retry is None:
+            self._approval_retry = None
+            raise RuntimeError(reason)
+        return self._approve(self._approval_retry)
+
+    def _approve(self, command: SessionCommand) -> NotebookViewModel:
+        try:
+            self.gateway.handle(command)
+        except Exception as error:
+            if approval_retry_unavailable_reason(self._view_model().projection, command) is None:
+                self._approval_retry = command
+                error.add_note(f"{RETAINED_APPROVAL_NOTICE} {_RETAINED_APPROVAL_CHOICES}")
+            else:
+                self._approval_retry = None
+            raise
+        self._approval_retry = None
+        return self._view_model()
 
     def deny(self, *, group_id: str) -> NotebookViewModel:
         """Reject every action in the pending OpenHands action group."""
@@ -570,6 +611,11 @@ class NotebookSession:
             created_at=_utc_now(),
             payload={} if payload is None else payload,
         )
+
+
+_RETAINED_APPROVAL_CHOICES = (
+    "Resend it with session.retry(), or withdraw it with session.deny(group_id=...)."
+)
 
 
 def build_view_model(projection: SessionProjection) -> NotebookViewModel:

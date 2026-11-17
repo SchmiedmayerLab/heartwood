@@ -35,7 +35,10 @@ import {
   useRef,
   useState,
 } from "react";
-import { selectedActionMode } from "./actionPresentation";
+import {
+  retainedApprovalSendable,
+  selectedActionMode,
+} from "./actionPresentation";
 import {
   GatewayClient,
   createCommand,
@@ -927,7 +930,13 @@ export const App = ({ client, initialSessionId }: AppProps) => {
           {error ?
             <div className="error-banner" role="alert">
               <span>{error}</span>
-              {retryCommand?.session_id === sessionId ?
+              {(
+                retryCommand?.session_id === sessionId &&
+                // An approval the session can no longer send is only rejected.
+                (retryCommand.kind !== "approve" ||
+                  projection === null ||
+                  retainedApprovalSendable(projection))
+              ) ?
                 <Button
                   size="sm"
                   variant="outline"
@@ -948,7 +957,10 @@ export const App = ({ client, initialSessionId }: AppProps) => {
                 variant="ghost"
                 onClick={() => {
                   setError(null);
-                  setRetryCommand(null);
+                  // The review keeps offering a retained approval's retry.
+                  if (projection?.pendingApproval?.decision !== "approved") {
+                    setRetryCommand(null);
+                  }
                 }}
               >
                 <X size={16} />
@@ -1009,6 +1021,19 @@ export const App = ({ client, initialSessionId }: AppProps) => {
                 requestStatus={requestStatus}
                 onDecision={(decision, approval) =>
                   void decideAction(decision, approval)
+                }
+                onRetryApproval={
+                  (
+                    retryCommand?.session_id === sessionId &&
+                    retryCommand.kind === "approve" &&
+                    projection?.pendingApproval?.decision === "approved" &&
+                    retainedApprovalSendable(projection) &&
+                    retryCommand.payload.target_id ===
+                      projection.pendingApproval.groupId
+                  ) ?
+                    () =>
+                      void send("approve", retryCommand.payload, retryCommand)
+                  : null
                 }
                 onOpenSettings={() => openPanel("settings")}
                 onPauseToggle={() => {

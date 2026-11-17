@@ -1517,7 +1517,9 @@ describe("App", () => {
       name: "Agent actions",
     });
     expect(
-      within(history).getByText("create results/cohort-summary.json"),
+      within(history).getByText(
+        "Model-proposed file operation: create results/cohort-summary.json",
+      ),
     ).toBeInTheDocument();
     expect(within(history).getByText("Failed")).toBeInTheDocument();
     expect(
@@ -1531,7 +1533,9 @@ describe("App", () => {
     expect(
       within(history).getByText("Complete action set · approved"),
     ).toBeInTheDocument();
-    expect(within(history).getByText("Exact arguments")).toBeInTheDocument();
+    expect(
+      within(history).getByText("Exact arguments proposed by the model"),
+    ).toBeInTheDocument();
     expect(
       within(history).getByText("Action output (truncated)"),
     ).toBeInTheDocument();
@@ -2207,7 +2211,9 @@ describe("App", () => {
     expect(status).toHaveTextContent("2 calls");
     expect(status).toHaveTextContent("Primary Agent");
     expect(status).toHaveTextContent("Research Planner (Working)");
-    expect(status).toHaveTextContent("Task: Plan the synthetic analysis");
+    expect(status).toHaveTextContent(
+      "Model-provided task: Plan the synthetic analysis",
+    );
     expect(status).not.toHaveTextContent("Parent session session-test");
     expect(screen.getByLabelText("Task")).toBeEnabled();
     expect(screen.getByLabelText("Send guidance")).toBeInTheDocument();
@@ -2236,7 +2242,7 @@ describe("App", () => {
             status: "completed",
             statusLabel: "Complete",
             taskSummary: "Verify the result",
-            resultSummary: null,
+            resultSummary: "The result matches the plan",
             reviewProposals: {
               candidates: [
                 {
@@ -2262,6 +2268,9 @@ describe("App", () => {
     });
     await waitFor(() => expect(status).toHaveTextContent("$1.25"));
     expect(status).toHaveTextContent("2 specialists");
+    expect(status).toHaveTextContent(
+      "Model-provided result: The result matches the plan",
+    );
     expect(status).toHaveTextContent("Unverified review proposals");
     expect(status).toHaveTextContent(
       "Check the supplied <script>source</script>.",
@@ -2385,6 +2394,11 @@ describe("App", () => {
     expect(argumentsRegion).toHaveTextContent(
       "python run.py --output /project/cohort-summary.json",
     );
+    // The command and its arguments are the model's proposal, not gateway-verified text.
+    expect(screen.getByText("Model-proposed command")).toBeInTheDocument();
+    expect(
+      screen.getByText("Exact arguments proposed by the model"),
+    ).toBeInTheDocument();
     fireEvent.click(allow);
 
     await waitFor(() => expect(client.commands.at(-1)?.kind).toBe("approve"));
@@ -2395,7 +2409,7 @@ describe("App", () => {
     });
   });
 
-  it("shows catalog-owned specialist identity and objective during approval", async () => {
+  it("shows catalog-owned specialist identity and labels the model-written task", async () => {
     render(
       <App
         client={new SpecialistPendingClient()}
@@ -2406,7 +2420,17 @@ describe("App", () => {
     expect(await screen.findByText("Research Planner")).toBeVisible();
     expect(screen.getByText("Advisory review")).toBeVisible();
     expect(
-      screen.getByText("Review the supplied synthetic analysis plan."),
+      screen.getByText("Model-provided summary: Review the analysis plan"),
+    ).toBeVisible();
+    expect(
+      screen.getByText(
+        "Model-provided task description: Review the analysis plan",
+      ),
+    ).toBeVisible();
+    expect(
+      screen.getByText(
+        "Model-provided task prompt: Review the supplied synthetic analysis plan.",
+      ),
     ).toBeVisible();
   });
 
@@ -3575,7 +3599,9 @@ describe("App", () => {
     ).toHaveAttribute("datetime", "2026-01-01T00:05:00+00:00");
     expect(within(approval).queryByText(/preview truncated/u)).toBeNull();
     expect(
-      within(approval).getByText("Complete reviewed proposal"),
+      within(approval).getByText(
+        "Complete reviewed proposal prepared by the gateway",
+      ),
     ).toBeVisible();
 
     fireEvent.click(screen.getByLabelText("Allow 1 action once"));
@@ -3647,7 +3673,9 @@ describe("App", () => {
     expect(
       within(approval).queryByText(/Model-provided summary/u),
     ).not.toBeInTheDocument();
-    const complete = within(approval).getByText("Complete reviewed proposal");
+    const complete = within(approval).getByText(
+      "Complete reviewed proposal prepared by the gateway",
+    );
     expect(
       within(approval).getByText(/synthetic final row/u),
     ).not.toBeVisible();
@@ -3674,6 +3702,9 @@ describe("App", () => {
     const fileAction = within(approval).getAllByRole("listitem")[1];
     if (!fileAction) throw new Error("file action is missing");
     expect(fileAction.querySelector("strong")).toHaveTextContent(
+      "Model-proposed file operation",
+    );
+    expect(fileAction.querySelector("code")).toHaveTextContent(
       "create cohort-summary.md",
     );
     expect(
@@ -3691,8 +3722,9 @@ describe("App", () => {
       screen.getByRole("button", { name: "Allow 2 actions once" }),
     ).toBeVisible();
 
-    const argumentDisclosure =
-      within(approval).getAllByText("Exact arguments")[0];
+    const argumentDisclosure = within(approval).getAllByText(
+      "Exact arguments proposed by the model",
+    )[0];
     if (!argumentDisclosure)
       throw new Error("action argument disclosure is missing");
     argumentDisclosure.focus();
@@ -3886,6 +3918,64 @@ class OutsidePendingClient extends PendingClient {
     });
     this.projections.set(sessionId, projection);
     return Promise.resolve({ events: syntheticEvents(), projection });
+  }
+}
+
+class RetainedOutsideClient extends OutsidePendingClient {
+  retainedOnReplay = false;
+  unrecoverable = false;
+
+  constructor(private readonly outside: ReturnType<typeof syntheticAction>) {
+    super(outside);
+  }
+
+  retainedProjection(): SessionProjection {
+    const action = {
+      ...this.outside,
+      state: "approved" as const,
+      decision: "approved" as const,
+    };
+    return syntheticProjection({
+      sessionId: "session-test",
+      actions: [action],
+      pendingApproval: {
+        groupId: "action-set-session-test",
+        actions: [action],
+        decision: "approved",
+        decisionScope: "all",
+      },
+      availableCommands: ["deny"],
+      eventCount: 8,
+      revision: 7,
+      ...(this.unrecoverable ?
+        {
+          lifecycle: {
+            status: "error" as const,
+            canPause: false,
+            canResume: false,
+            canSteer: false,
+          },
+        }
+      : {}),
+    });
+  }
+
+  override replayEvents(sessionId: string): Promise<SessionProjectionResponse> {
+    if (!this.retainedOnReplay) return super.replayEvents(sessionId);
+    this.replayCalls += 1;
+    const projection = this.retainedProjection();
+    this.projections.set(sessionId, projection);
+    return Promise.resolve({ events: syntheticEvents(), projection });
+  }
+
+  override postCommand(
+    command: SessionCommand,
+  ): Promise<SessionProjectionResponse> {
+    if (command.kind === "approve" && this.commands.length === 0) {
+      this.commands.push(command);
+      return Promise.reject(new Error("records service unavailable"));
+    }
+    return super.postCommand(command);
   }
 }
 
@@ -4146,6 +4236,90 @@ describe("App error handling", () => {
     fireEvent.click(screen.getByRole("button", { name: "Export audit" }));
 
     expect(await screen.findByText("synthetic gateway failure")).toBeVisible();
+  });
+
+  it("resends a retained outside approval as the same command or rejects it", async () => {
+    const client = new RetainedOutsideClient(syntheticOutsideOperation());
+    render(<App client={client} initialSessionId="session-test" />);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Allow 1 action once" }),
+    );
+    expect(
+      await screen.findByText("records service unavailable"),
+    ).toBeVisible();
+    act(() => client.emitStream(client.retainedProjection()));
+
+    const review = await screen.findByRole("region", {
+      name: "Approval not sent",
+    });
+    expect(
+      within(review).queryByRole("button", { name: "Allow 1 action once" }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(review).getByRole("button", { name: "Reject 1 action" }),
+    ).toBeEnabled();
+    fireEvent.click(
+      within(review).getByRole("button", { name: "Retry request" }),
+    );
+
+    await waitFor(() => expect(client.commands).toHaveLength(2));
+    expect(client.commands[1]).toEqual(client.commands[0]);
+  });
+
+  it("offers no retry for an approval an unrecoverable session cannot send", async () => {
+    const client = new RetainedOutsideClient(syntheticOutsideOperation());
+    client.unrecoverable = true;
+    render(<App client={client} initialSessionId="session-test" />);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Allow 1 action once" }),
+    );
+    expect(
+      await screen.findByText("records service unavailable"),
+    ).toBeVisible();
+    act(() => client.emitStream(client.retainedProjection()));
+
+    const review = await screen.findByRole("region", {
+      name: "Approval not sent",
+    });
+    expect(within(review).getByText(/session cannot continue/u)).toBeVisible();
+    expect(
+      within(review).queryByText(/made in another window/u),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Retry request" }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(
+      within(review).getByRole("button", { name: "Reject 1 action" }),
+    );
+
+    await waitFor(() => expect(client.commands).toHaveLength(2));
+    expect(client.commands[1]?.kind).toBe("deny");
+  });
+
+  it("offers only rejection for an approval retained by another window", async () => {
+    const client = new RetainedOutsideClient(syntheticOutsideOperation());
+    client.retainedOnReplay = true;
+    render(<App client={client} initialSessionId="session-test" />);
+
+    const review = await screen.findByRole("region", {
+      name: "Approval not sent",
+    });
+    expect(within(review).getByText(/made in another window/u)).toBeVisible();
+    expect(
+      within(review).getByRole("button", { name: "Retry request" }),
+    ).toBeDisabled();
+    fireEvent.click(
+      within(review).getByRole("button", { name: "Reject 1 action" }),
+    );
+
+    await waitFor(() => expect(client.commands).toHaveLength(1));
+    expect(client.commands[0]?.kind).toBe("deny");
+    expect(client.commands[0]?.payload).toEqual({
+      target_id: "action-set-session-test",
+      target_type: "action-set",
+    });
   });
 
   it("retries an uncertain command with the original command identifier", async () => {

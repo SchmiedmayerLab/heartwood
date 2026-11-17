@@ -1,0 +1,80 @@
+{
+  "events": [
+    {
+      "event_id": "event-0",
+      "kind": "agent.lifecycle.updated",
+      "occurred_at": "2026-01-01T00:00:00+00:00",
+      "payload": {
+        "status": "running"
+      },
+      "sequence": 0,
+      "session_id": "synthetic-session"
+    },
+    {
+      "event_id": "event-1",
+      "kind": "command.received",
+      "occurred_at": "2026-01-01T00:00:00+00:00",
+      "payload": {
+        "actor_id": "researcher",
+        "command_id": "command-pause-0",
+        "command_kind": "pause"
+      },
+      "sequence": 1,
+      "session_id": "synthetic-session"
+    },
+    {
+      "event_id": "event-2",
+      "kind": "session.paused",
+      "occurred_at": "2026-01-01T00:00:00+00:00",
+      "payload": {
+        "command_id": "command-pause-0"
+      },
+      "sequence": 2,
+      "session_id": "synthetic-session"
+    },
+    {
+      "event_id": "event-3",
+      "kind": "agent.lifecycle.updated",
+      "occurred_at": "2026-01-01T00:00:00+00:00",
+      "payload": {
+        "status": "running"
+      },
+      "sequence": 3,
+      "session_id": "synthetic-session"
+    },
+    {
+      "event_id": "event-4",
+      "kind": "agent.lifecycle.updated",
+      "occurred_at": "2026-01-01T00:00:00+00:00",
+      "payload": {
+        "status": "finished"
+      },
+      "sequence": 4,
+      "session_id": "synthetic-session"
+    }
+  ],
+  "expected": {
+    "projection": {
+      "lifecycle": {
+        "status": "paused",
+        "can_pause": false,
+        "can_resume": true,
+        "can_steer": true
+      },
+      "paused": true,
+      "researcher_status": "paused",
+      "available_commands": [
+        "chat",
+        "resume"
+      ],
+      "pending_approval": null
+    },
+    "service": {
+      "status": "finished",
+      "paused": true,
+      "fatal": false,
+      "open_reviews": [],
+      "retained_approvals": []
+    }
+  }
+}

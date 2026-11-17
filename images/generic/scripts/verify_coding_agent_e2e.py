@@ -159,7 +159,7 @@ def verify_run(
         "approved action set": "Action set approved",
         "rejected action set": "Action set rejected",
         "terminal completion": "terminal completed",
-        "terminal action": "[Succeeded] $",
+        "terminal action": "[Succeeded] Model-proposed command: $",
     }
     missing_replay_markers = sorted(
         label for label, marker in replay_markers.items() if marker not in replay

@@ -17,8 +17,11 @@ from heartwood.gateway._action_settings import ACTION_MODE_OPTIONS
 if TYPE_CHECKING:
     from heartwood.gateway._session_projection import (
         ProjectionActionRecord,
+        ProjectionApprovalGroup,
         ProjectionOutsideContent,
+        SessionProjection,
     )
+    from heartwood.session import SessionCommand
 
 ACTION_TOOL_LABELS = {
     "file_editor": "File Change",
@@ -115,6 +118,74 @@ def outside_review_title(action: ProjectionActionRecord) -> str | None:
     return OUTSIDE_REVIEW_TITLES.get(action.details.kind)
 
 
+def model_proposed_operation(action: ProjectionActionRecord) -> tuple[str, str] | None:
+    """Return the label and text of a command or file operation exactly as the model proposed it."""
+    details = action.details
+    if details.kind == "terminal":
+        return "Model-proposed command", f"$ {details.command}"
+    if details.kind == "file-editor":
+        return (
+            "Model-proposed file operation",
+            f"{details.operation} {details.path or 'path unavailable'}",
+        )
+    return None
+
+
+def action_arguments_label(action: ProjectionActionRecord) -> str:
+    """Name who wrote an action's exact arguments: the model, or the gateway for outside reviews."""
+    return (
+        "Complete reviewed proposal prepared by the gateway"
+        if outside_review_title(action)
+        else "Exact arguments proposed by the model"
+    )
+
+
+def action_review_heading(action: ProjectionActionRecord) -> str:
+    """Head a pending action with its labelled operation, outside review title or tool name."""
+    if operation := model_proposed_operation(action):
+        return display_safe_text(": ".join(operation))
+    return display_safe_text(outside_review_title(action) or action_tool_label(action.tool_name))
+
+
+def action_heading(action: ProjectionActionRecord) -> str:
+    """Head an action with its command, path or trusted name, labelling any model-written text."""
+    details = action.details
+    if operation := model_proposed_operation(action):
+        heading = ": ".join(operation)
+    elif details.kind == "task" and details.role_label:
+        heading = details.role_label
+    elif details.kind == "task" and details.description:
+        heading = f"Model-provided task description: {details.description}"
+    elif details.kind == "task" and details.subagent_type:
+        heading = f"Model-provided specialist name: {details.subagent_type}"
+    elif title := outside_review_title(action):
+        heading = f"{title}: {action.summary}"
+    elif action.summary:
+        heading = f"{action_summary_label(action)}: {action.summary}"
+    else:
+        heading = action_tool_label(action.tool_name)
+    return display_safe_text(heading)
+
+
+def specialist_review_lines(action: ProjectionActionRecord) -> tuple[str, ...]:
+    """Name a specialist task's catalog role and label each field the model wrote."""
+    details = action.details
+    if details.kind != "task":
+        return ()
+    lines: list[str] = []
+    if details.role_label:
+        lines.append(f"Specialist: {details.role_label}")
+    elif details.subagent_type:
+        lines.append(f"Model-provided specialist name: {details.subagent_type}")
+    if details.capability:
+        lines.append("Capability: " + details.capability.replace("-", " ").title())
+    if details.description:
+        lines.append(f"Model-provided task description: {details.description}")
+    if details.prompt:
+        lines.append(f"Model-provided task prompt: {details.prompt}")
+    return tuple(display_safe_text(line, preserve_newlines=True) for line in lines)
+
+
 def _outside_content_identity(content: ProjectionOutsideContent) -> str:
     return f"{content.size_bytes:,} bytes of canonical JSON · SHA-256 {content.sha256}"
 
@@ -147,6 +218,73 @@ def outside_review_lines(action: ProjectionActionRecord) -> tuple[str, ...]:
     return tuple(display_safe_text(line) for line in lines)
 
 
+# Label a specialist's task and result as the model wrote them, wherever its runtime summary
+# is shown.
+SPECIALIST_TASK_LABEL = "Model-provided task"
+SPECIALIST_RESULT_LABEL = "Model-provided result"
+
+RETAINED_APPROVAL_NOTICE = (
+    "Your approval is recorded but was not sent. Nothing is sent until that same approval "
+    "is retried, and rejecting the review withdraws it."
+)
+UNSENDABLE_APPROVAL_NOTICE = (
+    "This session cannot continue, so the approval can no longer be sent; "
+    "rejecting the review withdraws it."
+)
+
+
+def retained_approval(projection: SessionProjection) -> ProjectionApprovalGroup | None:
+    """Return the outside approval the gateway holds unsent, if any."""
+    approval = projection.pending_approval
+    return approval if approval is not None and approval.decision == "approved" else None
+
+
+def retained_approval_sendable(projection: SessionProjection) -> bool:
+    """Return whether a retained approval's exact retry can still send it."""
+    lifecycle = projection.lifecycle
+    # After an unrecoverable error the gateway gives the session no worker to send it.
+    return lifecycle.status != "error" or lifecycle.can_steer
+
+
+def retained_approval_notice(projection: SessionProjection) -> str:
+    """Say what a retained approval waits for: its exact retry, or only its rejection."""
+    return (
+        RETAINED_APPROVAL_NOTICE
+        if retained_approval_sendable(projection)
+        else f"Your approval is recorded but was not sent. {UNSENDABLE_APPROVAL_NOTICE}"
+    )
+
+
+def approval_retry_unavailable_reason(
+    projection: SessionProjection, command: SessionCommand | None
+) -> str | None:
+    """Say why a kept approval cannot be resent, or return None while the gateway retains it."""
+    retained = retained_approval(projection)
+    target = None if command is None else command.payload.get("target_id")
+    if retained is not None and not retained_approval_sendable(projection):
+        return UNSENDABLE_APPROVAL_NOTICE
+    if retained is not None and retained.group_id == target:
+        return None
+    if retained is not None:
+        return (
+            "This approval was made in another window or before Heartwood restarted, so only "
+            "rejecting the review, or waiting until it expires, ends it here."
+        )
+    if command is None:
+        return "No approval is waiting to be sent."
+    outcome = next(
+        (
+            action.outcome
+            for action in projection.actions
+            if action.group_id == target and action.outcome is not None
+        ),
+        None,
+    )
+    if outcome is None:
+        return "The approval is no longer waiting to be sent."
+    return display_safe_text(f"The approval is no longer waiting to be sent: {outcome.summary}.")
+
+
 def action_presentation() -> dict[str, object]:
     """Return non-secret terminology consumed by interface adapters."""
     return {
@@ -164,15 +302,24 @@ __all__ = [
     "ACTION_STATE_LABELS",
     "ACTION_TOOL_LABELS",
     "OTHER_ACTION_TOOL_LABEL_TEMPLATE",
+    "RETAINED_APPROVAL_NOTICE",
+    "SPECIALIST_RESULT_LABEL",
+    "SPECIALIST_TASK_LABEL",
     "UNKNOWN_ACTION_RISK_LABEL",
     "UNKNOWN_ACTION_TOOL_LABEL",
+    "action_heading",
     "action_mode_label",
     "action_presentation",
     "action_risk_label",
     "action_state_label",
     "action_summary_label",
     "action_tool_label",
+    "approval_retry_unavailable_reason",
     "display_safe_text",
     "outside_review_lines",
     "outside_review_title",
+    "retained_approval",
+    "retained_approval_notice",
+    "retained_approval_sendable",
+    "specialist_review_lines",
 ]

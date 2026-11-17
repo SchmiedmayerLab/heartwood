@@ -341,8 +341,9 @@ async function main() {
     const replay = runCli("--session-id", sessionId, "replay");
     if (
       !replay.includes("Action set approved") ||
-      replay.match(/\[Succeeded\] \$/gu)?.length !== 4 ||
-      replay.match(/\[Failed\] \$/gu)?.length !== 1 ||
+      replay.match(/\[Succeeded\] Model-proposed command: \$/gu)?.length !==
+        4 ||
+      replay.match(/\[Failed\] Model-proposed command: \$/gu)?.length !== 1 ||
       replay.match(/terminal completed/gu)?.length !== 4 ||
       replay.match(/terminal failed/gu)?.length !== 1 ||
       !replay.includes("Research Planner: Complete") ||
@@ -426,7 +427,9 @@ async function runApprovedTask(page, task, taskSpec) {
     if (objective) {
       await expect(approval.getByText(summary, { exact: true })).toBeVisible();
       await expect(
-        approval.getByText(objective, { exact: true }),
+        approval.getByText(`Model-provided task prompt: ${objective}`, {
+          exact: true,
+        }),
       ).toBeVisible();
     } else {
       await expect(
@@ -441,7 +444,7 @@ async function runApprovedTask(page, task, taskSpec) {
         await expect(command).toHaveText(/^\$ .+/u);
         await expect(
           action.locator(".approval-action-heading strong"),
-        ).toHaveText(await command.innerText());
+        ).toHaveText("Model-proposed command");
       }
     }
     if (

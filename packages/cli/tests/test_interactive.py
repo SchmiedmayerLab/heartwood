@@ -387,6 +387,7 @@ def test_plain_terminal_renders_every_typed_action_and_automatic_decision() -> N
         "other-1",
         tool_name="synthetic_tool",
         summary="Run a custom action",
+        arguments={"target": "results"},
     )
 
     rendered = "\n".join(
@@ -395,10 +396,13 @@ def test_plain_terminal_renders_every_typed_action_and_automatic_decision() -> N
         for line in format_action_record_lines(action)
     )
 
-    assert "[Succeeded] unknown path unavailable" in rendered
+    assert "[Succeeded] Model-proposed file operation: unknown path unavailable" in rendered
     assert "created results/summary.txt (file-editor-action)" in rendered
-    assert "specialist research-planner" in rendered
-    assert "Run a custom action" in rendered
+    # A heading without a catalog role names the model as the author of its text.
+    assert "[Awaiting Review] Model-provided specialist name: research-planner" in rendered
+    assert "Model-provided summary: Run a custom action" in rendered
+    assert '    Exact arguments proposed by the model: {"target":"results"}' in rendered
+    assert "arguments: " not in rendered
 
 
 def test_terminal_projection_renders_control_sequences_visibly() -> None:
@@ -1207,8 +1211,8 @@ def test_line_formatter_renders_the_gateway_owned_atomic_action_set() -> None:
     assert "[x] Inspect the synthetic cohort (Complete)" in rendered
     assert "[ ] Write the aggregate result (In Progress)" in rendered
     assert "Research Planner: Complete" in rendered
-    assert "Task: Review the synthetic analysis plan" in rendered
-    assert "Result: Plan review completed" in rendered
+    assert "Model-provided task: Review the synthetic analysis plan" in rendered
+    assert "Model-provided result: Plan review completed" in rendered
     assert "Unverified review proposal: Inspect source\\u202e" in rendered
     assert "\u202e" not in rendered
     assert "task-call-1" not in rendered
@@ -1254,7 +1258,8 @@ def test_line_formatter_renders_catalog_specialist_approval_details() -> None:
 
     assert "Specialist: Research Planner" in rendered
     assert "Capability: Advisory" in rendered
-    assert "Objective: Review the supplied synthetic analysis plan." in rendered
+    assert "Model-provided task description: Review the analysis plan" in rendered
+    assert "Model-provided task prompt: Review the supplied synthetic analysis plan." in rendered
 
 
 def test_line_formatter_renders_gateway_owned_suggestions_without_internal_ids() -> None:
@@ -1629,8 +1634,10 @@ def test_terminal_review_shows_commands_and_paths_without_model_summaries() -> N
         ),
     )
     lines = "\n".join(format_projection_lines(projection))
-    assert f"$ {command}" in lines
-    assert f"create {path}" in lines
+    # The command, path and arguments are the model's proposal and say so.
+    assert f"Model-proposed command: $ {command}" in lines
+    assert f"Model-proposed file operation: create {path}" in lines
+    assert "Exact arguments proposed by the model:" in lines
     assert "Model-provided summary:" not in lines
 
     class ReviewSession(InteractiveSession):
@@ -1660,8 +1667,9 @@ def test_terminal_review_shows_commands_and_paths_without_model_summaries() -> N
             rendered = "\n".join(
                 line.text for line in app.query_one("#approval-actions", RichLog).lines
             )
-            assert f"$ {command}" in rendered
-            assert f"create {path}" in rendered
+            assert f"Model-proposed command: $ {command}" in rendered
+            assert f"Model-proposed file operation: create {path}" in rendered
+            assert "Exact arguments proposed by the model:" in rendered
             assert "Model-provided summary:" not in rendered
 
     asyncio.run(exercise())
@@ -1783,7 +1791,7 @@ def test_textual_terminal_keeps_the_first_long_action_visible() -> None:
                 pilot,
                 lambda: (
                     app.query_one("#approval", Vertical).display
-                    and "1. $ python analyze.py"
+                    and "1. Model-proposed command: $ python"
                     in str(app.query_one("#approval-actions", RichLog).lines)
                 ),
                 description="the long action review",
@@ -1792,7 +1800,7 @@ def test_textual_terminal_keeps_the_first_long_action_visible() -> None:
 
             assert action_log.auto_scroll is False
             assert action_log.scroll_y == 0
-            assert "1. $ python analyze.py" in str(action_log.lines)
+            assert "1. Model-proposed command: $ python" in str(action_log.lines)
             assert app.query_one("#approval-options", OptionList).highlighted == 0
 
     asyncio.run(exercise())

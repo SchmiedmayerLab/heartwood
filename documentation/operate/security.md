@@ -94,6 +94,7 @@ Model risk ratings and model-written summaries are not inputs to that decision.
 
 An action set with any other tool, or with an action that the deterministic OpenHands policy-rail and pattern analyzers rate high or cannot assess, waits for the researcher in every mode.
 Outside operations and result releases are never allowed automatically; see [Outside Authorization](#outside-authorization).
+A researcher approval never overrides deployment policy, and no mode requires an outside approval before every local operation until an executor that mediates each operation separately from the worker is qualified.
 [Actions and Audit History](../use/actions-audit.md#review-modes) describes how researchers select a mode and read automatic decisions.
 
 ### Deployment Ceiling

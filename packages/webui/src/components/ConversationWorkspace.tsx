@@ -27,9 +27,17 @@ import {
 import { useEffect, useRef, useState, type RefObject } from "react";
 import {
   actionCountLabel,
+  actionArgumentsLabel,
+  actionHeading,
   actionRiskPresentation,
   actionStateLabel,
   actionToolLabel,
+  modelProposedOperation,
+  retainedApprovalSendable,
+  specialistModelFields,
+  specialistResultLabel,
+  specialistTaskLabel,
+  summarySourceLabel,
 } from "../actionPresentation";
 import type { RequestActivity as RequestActivityState } from "../requestActivity";
 import type {
@@ -59,6 +67,8 @@ interface ConversationWorkspaceProps {
     decision: "approve" | "deny",
     approval: ProjectionApprovalGroup,
   ) => void;
+  /** Resends the exact approval this window recorded, when the gateway still retains it. */
+  onRetryApproval: (() => void) | null;
   onOpenSettings: () => void;
   onPauseToggle: () => void;
   onPrompt: (prompt: string) => void;
@@ -75,14 +85,19 @@ export const ConversationWorkspace = ({
   requestActivity,
   requestStatus,
   onDecision,
+  onRetryApproval,
   onOpenSettings,
   onPauseToggle,
   onPrompt,
   onSubmit,
 }: ConversationWorkspaceProps) => {
   const conversation = projection?.conversation ?? [];
+  // A retained approval stays in review: it can be retried or rejected, never approved anew.
   const pendingApproval =
-    projection?.pendingApproval?.decision === null ?
+    (
+      projection?.pendingApproval?.decision === null ||
+      projection?.pendingApproval?.decision === "approved"
+    ) ?
       projection.pendingApproval
     : null;
   const paused = projection?.paused ?? false;
@@ -174,6 +189,10 @@ export const ConversationWorkspace = ({
             canDeny={availableCommands.includes("deny")}
             busy={requestStatus === "busy"}
             onDecision={onDecision}
+            onRetry={onRetryApproval}
+            sendable={
+              projection === null || retainedApprovalSendable(projection)
+            }
           />
         : (
           conversation.length > 0 &&
@@ -498,7 +517,7 @@ const ActionHistory = ({
                   : null}
                   {Object.keys(action.arguments).length > 0 ?
                     <details className="trace-details">
-                      <summary>Exact arguments</summary>
+                      <summary>{actionArgumentsLabel(action)}</summary>
                       <pre tabIndex={0}>
                         {displaySafeText(
                           JSON.stringify(action.arguments, null, 2),
@@ -561,36 +580,13 @@ const ActionTechnicalDetails = ({
   );
 };
 
-const actionHeading = (action: ProjectionActionRecord) => {
-  if (action.details.kind === "terminal") {
-    return `$ ${action.details.command}`;
-  }
-  if (action.details.kind === "file-editor") {
-    return `${action.details.operation.replace("_", " ")} ${
-      action.details.path ?? "path unavailable"
-    }`;
-  }
-  if (action.details.kind === "task") {
-    return (
-      action.details.roleLabel ??
-      action.details.description ??
-      action.details.subagentType ??
-      action.summary
-    );
-  }
-  if (action.details.kind === "outside-operation") {
-    return `Outside operation to ${action.details.destination}: ${action.summary}`;
-  }
-  if (action.details.kind === "outside-result") {
-    return `Outside result release: ${action.summary}`;
-  }
-  return action.summary;
-};
-
-const summarySourceLabel = (action: ProjectionActionRecord) =>
-  action.summarySource === "gateway" ?
-    "Gateway-provided summary"
-  : "Model-provided summary";
+// Shared wording with the gateway's RETAINED_APPROVAL_NOTICE and retry reasons.
+const retainedApprovalNotice =
+  "Your approval is recorded but was not sent. Nothing is sent until that same approval is retried, and rejecting the review withdraws it.";
+const retainedElsewhereNotice =
+  "This approval was made in another window or before Heartwood restarted, so only rejecting the review, or waiting until it expires, ends it here.";
+const unsendableApprovalNotice =
+  "Your approval is recorded but was not sent. This session cannot continue, so the approval can no longer be sent; rejecting the review withdraws it.";
 
 const outsideReviewCopy = {
   "outside-operation": {
@@ -805,12 +801,14 @@ const RuntimeStatus = ({
                     </span>
                     {subagent.taskSummary ?
                       <small>
-                        Task: {displaySafeText(subagent.taskSummary)}
+                        {specialistTaskLabel}:{" "}
+                        {displaySafeText(subagent.taskSummary)}
                       </small>
                     : null}
                     {subagent.resultSummary ?
                       <small>
-                        Result: {displaySafeText(subagent.resultSummary)}
+                        {specialistResultLabel}:{" "}
+                        {displaySafeText(subagent.resultSummary)}
                       </small>
                     : null}
                     {subagent.reviewProposals?.candidates.length ?
@@ -857,6 +855,8 @@ const ApprovalRequest = ({
   canApprove,
   canDeny,
   onDecision,
+  onRetry,
+  sendable,
 }: {
   actionPresentation: ActionPresentation | null;
   approval: ProjectionApprovalGroup;
@@ -867,6 +867,9 @@ const ApprovalRequest = ({
     decision: "approve" | "deny",
     approval: ProjectionApprovalGroup,
   ) => void;
+  onRetry: (() => void) | null;
+  /** Whether a retained approval's retry can still send it. */
+  sendable: boolean;
 }) => {
   const headingRef = useRef<HTMLHeadingElement>(null);
   useEffect(() => {
@@ -878,6 +881,7 @@ const ApprovalRequest = ({
   const allowLabel =
     approval.actions.length === 1 ? "Allow Once" : "Allow All Once";
   const rejectLabel = approval.actions.length === 1 ? "Reject" : "Reject All";
+  const retained = approval.decision === "approved";
   return (
     <section
       className="approval-request"
@@ -887,14 +891,24 @@ const ApprovalRequest = ({
       <div className="approval-copy">
         <div className="approval-introduction">
           <h2 id="action-review-heading" ref={headingRef} tabIndex={-1}>
-            {outsideCopy?.heading ?? `Review ${countLabel}`}
+            {retained ?
+              "Approval not sent"
+            : (outsideCopy?.heading ?? `Review ${countLabel}`)}
           </h2>
           <p>
-            {outsideCopy?.introduction ??
+            {retained ?
+              sendable ?
+                retainedApprovalNotice
+              : unsendableApprovalNotice
+            : (outsideCopy?.introduction ??
               (approval.actions.length === 1 ?
                 "Allow runs it once. Reject skips it."
-              : "Allow runs all of them once. Reject runs none.")}
+              : "Allow runs all of them once. Reject runs none."))
+            }
           </p>
+          {retained && sendable && onRetry === null ?
+            <p>{retainedElsewhereNotice}</p>
+          : null}
         </div>
         <ol className="approval-batch-list" role="list">
           {approval.actions.map((control) => {
@@ -906,17 +920,16 @@ const ApprovalRequest = ({
             const specialist =
               control.details.kind === "task" ? control.details : null;
             const outside = outsideCopyFor(control);
+            const operation = modelProposedOperation(control);
             return (
               <li key={control.toolCallId}>
                 <div className="approval-action-heading">
                   <strong>
                     {displaySafeText(
-                      (
-                        control.details.kind === "terminal" ||
-                          control.details.kind === "file-editor"
-                      ) ?
-                        actionHeading(control)
-                      : (outside?.title ?? specialist?.roleLabel ?? tool),
+                      operation?.label ??
+                        outside?.title ??
+                        specialist?.roleLabel ??
+                        tool,
                     )}
                   </strong>
                   <Badge className={risk.className} variant="outline">
@@ -941,26 +954,19 @@ const ApprovalRequest = ({
                     : null}
                   </div>
                 : <OutsideReview action={control} />}
-                {specialist?.prompt ?
-                  <p className="approval-action-objective">
-                    {displaySafeText(specialist.prompt)}
+                {specialistModelFields(control).map((field) => (
+                  <p className="approval-action-objective" key={field.label}>
+                    {field.label}: {displaySafeText(field.value)}
                   </p>
-                : null}
-                {(
-                  control.details.kind === "terminal" ||
-                  control.details.kind === "file-editor"
-                ) ?
+                ))}
+                {operation !== null ?
                   <code className="approval-action-command">
-                    {displaySafeText(actionHeading(control))}
+                    {displaySafeText(operation.value)}
                   </code>
                 : null}
                 {Object.keys(control.arguments).length > 0 ?
                   <details className="approval-details">
-                    <summary>
-                      {outside === null ?
-                        "Exact arguments"
-                      : "Complete reviewed proposal"}
-                    </summary>
+                    <summary>{actionArgumentsLabel(control)}</summary>
                     <pre tabIndex={0} aria-label={`Arguments for ${tool}`}>
                       {displaySafeText(
                         JSON.stringify(control.arguments, null, 2),
@@ -983,14 +989,25 @@ const ApprovalRequest = ({
         >
           {rejectLabel}
         </Button>
-        <Button
-          aria-label={`Allow ${countLabel} once`}
-          disabled={busy || !canApprove}
-          size="sm"
-          onClick={() => onDecision("approve", approval)}
-        >
-          {allowLabel}
-        </Button>
+        {retained ?
+          sendable ?
+            <Button
+              disabled={busy || onRetry === null}
+              size="sm"
+              onClick={() => onRetry?.()}
+            >
+              Retry request
+            </Button>
+          : null
+        : <Button
+            aria-label={`Allow ${countLabel} once`}
+            disabled={busy || !canApprove}
+            size="sm"
+            onClick={() => onDecision("approve", approval)}
+          >
+            {allowLabel}
+          </Button>
+        }
       </div>
     </section>
   );

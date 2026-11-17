@@ -28,6 +28,14 @@ An interrupted action whose result cannot be established is marked **Outcome Unk
 An allowed set is sent to run at most once.
 If it appears to wait for review again after a restart, it may already have run: Heartwood marks it **Outcome Unknown** and refuses to allow or reject it again.
 
+The command, file operation and path, and the exact arguments are shown exactly as the model proposed them and are labelled **Model-proposed command**, **Model-proposed file operation**, and **Exact arguments proposed by the model** in the terminal, browser, and notebook; the gateway does not verify that they do what the summary says.
+A specialist task review is headed by the role from the specialist catalog; its task description, task prompt, and any specialist name that is not in the catalog were written by the model and are labelled **Model-provided**, and its exact arguments repeat them under the arguments label.
+The specialists panel labels the same task text **Model-provided task**, the specialist's own output **Model-provided result**, and names a specialist without a catalog role by its model-provided name.
+An action heading that falls back to model-written text carries the same label.
+
+Your approval never overrides deployment policy.
+The sandbox policy, the deployment's model-route and egress rules, and an outside service's policy check apply to an action you allowed exactly as to any other, and an allowed action still cannot do what they forbid.
+
 ## Review Modes
 
 The review mode decides which action sets the gateway allows on your behalf.
@@ -115,6 +123,8 @@ The first step that could change a file or send data anywhere else is a command 
 
 Under **Review Outside Effects**, the sandbox confines commands, not review: they can change or delete files in the worker workspace and send content to the admitted model endpoint without asking.
 Review applies to proposed tool calls; it does not intercept every operation of code already running inside the sandbox.
+Commands and file operations inside a worker run in the worker itself, so no review mode requires an outside, digest-bound approval before every local operation.
+Such a profile is unavailable until an executor that mediates each operation separately from the worker is qualified.
 
 ## Automatic Decisions in the Record
 
@@ -152,12 +162,17 @@ Without expanding anything, the review shows:
 - the time until which the review is valid.
 
 The browser shows the request or result content directly.
-When it is longer than the 2,000-character preview, the browser marks the preview as truncated and offers all of it under **Complete reviewed proposal**; the terminal and notebook print the complete proposal.
+When it is longer than the 2,000-character preview, the browser marks the preview as truncated and offers all of it under **Complete reviewed proposal prepared by the gateway**; the terminal and notebook print the complete proposal.
 The summary of these reviews comes from the outside-service adapter or the gateway and is labelled **Gateway-provided summary**.
 A released result reaches the model as message content; it is data from the service, not instructions Heartwood has checked.
 
 If an approval is recorded but cannot be sent, for example while the records service is unavailable, nothing is sent until you choose.
-In the browser, **Retry request** resends that same approval; a new approval from any interface is refused while it waits, so in the terminal and notebook you can only reject it or let it expire.
+Every interface then shows the review as **Approval not sent** and offers the same two choices: retry that approval, or reject the review to withdraw it.
+The window, terminal, or notebook that made the approval keeps it and resends the same command: **Retry request** in the browser, `/retry` or **Retry the Recorded Approval** in the terminal, and `session.retry()` in a notebook.
+A retry sends the approval at most once; after it has been sent, withdrawn, or expired, nothing is offered for a retry, and `/retry` and `session.retry()` say why.
+A new approval from any interface is refused while the recorded one waits, and an interface that did not make the approval, or was restarted since, can only reject the review or wait for it to expire.
+Rejection stays available while the approval waits, even after an unrecoverable session error or a restart, because it sends nothing and needs no worker.
+After an unrecoverable session error the approval can no longer be sent, so no interface offers its retry, and each says that only rejection remains.
 Opening or refreshing the session, other commands, and automatic decisions never send it.
 An approval not sent before the review's validity ends is recorded as expired.
 

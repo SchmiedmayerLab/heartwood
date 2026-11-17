@@ -1,0 +1,160 @@
+{
+  "events": [
+    {
+      "event_id": "event-0",
+      "kind": "tool_call.proposed",
+      "occurred_at": "2026-01-01T00:00:00+00:00",
+      "payload": {
+        "tool_call_id": "worker-event-0",
+        "tool_name": "synthetic-analysis",
+        "worker_attempt_id": "00000000-0000-0000-0000-000000000002",
+        "worker_project_id": "00000000-0000-0000-0000-000000000001"
+      },
+      "sequence": 0,
+      "session_id": "synthetic-session"
+    },
+    {
+      "event_id": "event-1",
+      "kind": "external_action.recorded",
+      "occurred_at": "2026-01-01T00:00:00+00:00",
+      "payload": {
+        "record": {
+          "decision": null,
+          "observation": null,
+          "phase": "proposed",
+          "proposal": {
+            "created_at": "2026-01-01T00:00:00Z",
+            "expires_at": "2026-01-01T00:05:00Z",
+            "operation_id": "00000000-0000-0000-0000-000000000064",
+            "request": {
+              "destination": "synthetic-results",
+              "inputs": [],
+              "request_json": "{}",
+              "service_id": "synthetic-service",
+              "summary": "Submit synthetic analysis",
+              "tool_name": "synthetic-analysis"
+            },
+            "schema_version": "heartwood.external-action.v1",
+            "service_policy_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "source_event_id": "event-0",
+            "worker": {
+              "attempt_id": "00000000-0000-0000-0000-000000000002",
+              "control_plane": null,
+              "conversation_id": "00000000-0000-0000-0000-000000000003",
+              "gateway_policy_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+              "image_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "input_manifest_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+              "model_data_handling": null,
+              "project_id": "00000000-0000-0000-0000-000000000001",
+              "sandbox_policy_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+              "session_id": "synthetic-session"
+            }
+          },
+          "withdrawal": null
+        }
+      },
+      "sequence": 1,
+      "session_id": "synthetic-session"
+    },
+    {
+      "event_id": "event-2",
+      "kind": "command.received",
+      "occurred_at": "2026-01-01T00:00:00+00:00",
+      "payload": {
+        "actor_id": "researcher",
+        "command_id": "command-approve-0",
+        "command_kind": "approve"
+      },
+      "sequence": 2,
+      "session_id": "synthetic-session"
+    },
+    {
+      "event_id": "event-3",
+      "kind": "external_action.recorded",
+      "occurred_at": "2026-01-01T00:00:00+00:00",
+      "payload": {
+        "record": {
+          "decision": {
+            "actor_id": "researcher",
+            "command_id": "command-approve-0",
+            "decided_at": "2026-01-01T00:00:00Z",
+            "decision": "approved",
+            "permitted_uses": 1,
+            "proposal_sha256": "805b323899a159f56257bf6dee54a90dec9858a5ab86dfa921cc3898f31845cb"
+          },
+          "observation": null,
+          "phase": "authorized",
+          "proposal": {
+            "created_at": "2026-01-01T00:00:00Z",
+            "expires_at": "2026-01-01T00:05:00Z",
+            "operation_id": "00000000-0000-0000-0000-000000000064",
+            "request": {
+              "destination": "synthetic-results",
+              "inputs": [],
+              "request_json": "{}",
+              "service_id": "synthetic-service",
+              "summary": "Submit synthetic analysis",
+              "tool_name": "synthetic-analysis"
+            },
+            "schema_version": "heartwood.external-action.v1",
+            "service_policy_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "source_event_id": "event-0",
+            "worker": {
+              "attempt_id": "00000000-0000-0000-0000-000000000002",
+              "control_plane": null,
+              "conversation_id": "00000000-0000-0000-0000-000000000003",
+              "gateway_policy_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+              "image_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "input_manifest_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+              "model_data_handling": null,
+              "project_id": "00000000-0000-0000-0000-000000000001",
+              "sandbox_policy_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+              "session_id": "synthetic-session"
+            }
+          },
+          "withdrawal": null
+        }
+      },
+      "sequence": 3,
+      "session_id": "synthetic-session"
+    },
+    {
+      "event_id": "event-4",
+      "kind": "agent.lifecycle.updated",
+      "occurred_at": "2026-01-01T00:00:00+00:00",
+      "payload": {
+        "status": "running"
+      },
+      "sequence": 4,
+      "session_id": "synthetic-session"
+    }
+  ],
+  "expected": {
+    "projection": {
+      "lifecycle": {
+        "status": "waiting-for-confirmation",
+        "can_pause": false,
+        "can_resume": false,
+        "can_steer": false
+      },
+      "paused": false,
+      "researcher_status": "waiting-for-review",
+      "available_commands": [
+        "deny"
+      ],
+      "pending_approval": {
+        "group_id": "action-set-540b3f609354b4ce90f6b588f1391c7a6bc2cfcc19f02329888343a469858833",
+        "decision": "approved"
+      }
+    },
+    "service": {
+      "status": "running",
+      "paused": false,
+      "fatal": false,
+      "open_reviews": [],
+      "retained_approvals": [
+        "action-set-540b3f609354b4ce90f6b588f1391c7a6bc2cfcc19f02329888343a469858833"
+      ]
+    }
+  }
+}

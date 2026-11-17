@@ -10,7 +10,18 @@ from __future__ import annotations
 
 import pytest
 
-from heartwood.gateway import SessionLifecycle, project_session
+from heartwood.core_adapter import BackendErrorCode
+from heartwood.core_adapter.action_review import AUTOMATIC_REVIEW_ACTOR
+from heartwood.core_adapter.session_activity import session_activity
+from heartwood.gateway import (
+    ProjectionTaskActionDetails,
+    SessionLifecycle,
+    action_arguments_label,
+    action_heading,
+    action_review_heading,
+    project_session,
+    specialist_review_lines,
+)
 from heartwood.schemas.execution import NativeTaskExecution
 from heartwood.session import EventKind, JsonValue, SessionEvent
 
@@ -104,7 +115,10 @@ def test_projection_replays_lifecycle_tasks_usage_and_subagent_lineage() -> None
         "condenser",
     ]
     assert projection.subagents[0].status == "completed"
-    assert projection.subagents[0].role_label == "Research Planner"
+    # Without a catalog role, the name the model chose is shown as the model's.
+    assert projection.subagents[0].role_label == (
+        "Specialist (model-provided name: research-planner)"
+    )
     assert projection.subagents[0].status_label == "Complete"
     assert projection.subagents[0].parent_session_id == "session-1"
     native_subagent = events[7].payload["subagent"]
@@ -798,7 +812,7 @@ def test_later_command_error_does_not_reopen_a_fail_closed_session() -> None:
                 EventKind.ERROR_RECORDED,
                 {
                     "backend_id": "openhands-sdk",
-                    "code": "HW-AGENT-006",
+                    "code": BackendErrorCode.ACTION_OUTCOME_UNKNOWN.value,
                     "reason": "The previous action outcome is unknown",
                 },
             ),
@@ -1478,7 +1492,7 @@ def test_projection_marks_unresolved_actions_outcome_unknown_and_fail_closed() -
                 2,
                 EventKind.ERROR_RECORDED,
                 {
-                    "code": "HW-AGENT-006",
+                    "code": BackendErrorCode.ACTION_OUTCOME_UNKNOWN.value,
                     "reason": "The previous action outcome is unknown",
                 },
             ),
@@ -1509,7 +1523,7 @@ def test_failed_group_resolution_replays_as_a_fatal_unknown_outcome() -> None:
                 2,
                 EventKind.ERROR_RECORDED,
                 {
-                    "code": "HW-AGENT-006",
+                    "code": BackendErrorCode.ACTION_OUTCOME_UNKNOWN.value,
                     "reason": "The approved action outcome is unknown",
                 },
             ),
@@ -1637,6 +1651,324 @@ def test_projection_normalizes_malformed_action_enums_without_raising() -> None:
     assert action.risk == "unknown"
     assert action.state == "awaiting-review"
     assert projection.pending_approval is not None
+
+
+def test_commands_paths_and_arguments_are_labelled_as_the_model_proposal() -> None:
+    projection = project_session(
+        (
+            _event(
+                0,
+                EventKind.TOOL_CALL_PROPOSED,
+                {
+                    "tool_call_id": "call-1",
+                    "tool_name": "terminal",
+                    "kind": "terminal",
+                    "arguments": {"command": "ls"},
+                },
+            ),
+            _event(
+                1,
+                EventKind.TOOL_CALL_PROPOSED,
+                {
+                    "tool_call_id": "call-2",
+                    "tool_name": "file_editor",
+                    "kind": "file-editor",
+                    "project_path": "notes.md",
+                    "arguments": {"command": "create", "path": "/workspace/notes.md"},
+                },
+            ),
+        ),
+        session_id="session-1",
+    )
+    command, edit = projection.actions
+
+    assert action_heading(command) == "Model-proposed command: $ ls"
+    assert action_review_heading(command) == "Model-proposed command: $ ls"
+    assert action_heading(edit) == "Model-proposed file operation: create notes.md"
+    assert action_review_heading(edit) == "Model-proposed file operation: create notes.md"
+    assert action_arguments_label(command) == "Exact arguments proposed by the model"
+
+
+def test_specialist_review_labels_every_model_written_field() -> None:
+    arguments: dict[str, JsonValue] = {
+        "description": "Check the plan",
+        "prompt": "Review the synthetic plan.\nReport gaps.",
+        "subagent_type": "research-planner",
+    }
+    proposed: dict[str, JsonValue] = {
+        "tool_call_id": "task-1",
+        "tool_name": "task",
+        "kind": "task",
+        "summary": "Delegate the review",
+        "arguments": arguments,
+    }
+    uncatalogued = project_session(
+        (_event(0, EventKind.TOOL_CALL_PROPOSED, proposed),), session_id="session-1"
+    ).actions[0]
+    catalogued = project_session(
+        (
+            _event(
+                0,
+                EventKind.TOOL_CALL_PROPOSED,
+                {
+                    **proposed,
+                    "specialist_label": "Research Planner",
+                    "specialist_capability": "advisory",
+                },
+            ),
+        ),
+        session_id="session-1",
+    ).actions[0]
+
+    assert specialist_review_lines(catalogued) == (
+        "Specialist: Research Planner",
+        "Capability: Advisory",
+        "Model-provided task description: Check the plan",
+        "Model-provided task prompt: Review the synthetic plan.\nReport gaps.",
+    )
+    assert specialist_review_lines(uncatalogued)[0] == (
+        "Model-provided specialist name: research-planner"
+    )
+    # Only the catalog role heads an action unlabelled; every fallback names the model.
+    assert action_heading(catalogued) == "Research Planner"
+    assert action_heading(uncatalogued) == "Model-provided task description: Check the plan"
+    without_description = uncatalogued.model_copy(
+        update={"details": uncatalogued.details.model_copy(update={"description": None})}
+    )
+    assert action_heading(without_description) == (
+        "Model-provided specialist name: research-planner"
+    )
+    bare = uncatalogued.model_copy(update={"details": ProjectionTaskActionDetails()})
+    assert action_heading(bare) == "Model-provided summary: Delegate the review"
+
+
+def _command(sequence: int, kind: str, *, actor_id: str = "researcher") -> SessionEvent:
+    return _event(
+        sequence,
+        EventKind.COMMAND_RECEIVED,
+        {"command_id": f"command-{sequence}", "command_kind": kind, "actor_id": actor_id},
+    )
+
+
+def test_only_a_researcher_command_ends_a_projected_pause() -> None:
+    paused = (
+        _event(0, EventKind.AGENT_LIFECYCLE_UPDATED, {"status": "running"}),
+        _event(
+            1, EventKind.TOOL_CALL_PROPOSED, {"tool_call_id": "call-1", "tool_name": "terminal"}
+        ),
+        _command(2, "pause"),
+        _event(3, EventKind.SESSION_PAUSED, {"command_id": "command-2"}),
+    )
+    backend_reports = (
+        _event(4, EventKind.AGENT_LIFECYCLE_UPDATED, {"status": "running"}),
+        _event(5, EventKind.AGENT_LIFECYCLE_UPDATED, {"status": "finished"}),
+        _event(
+            6,
+            EventKind.ERROR_RECORDED,
+            {"reason": "synthetic", "code": BackendErrorCode.ACTION_FAILED.value},
+        ),
+        _command(7, "approve", actor_id=AUTOMATIC_REVIEW_ACTOR),
+        _event(8, EventKind.AGENT_LIFECYCLE_UPDATED, {"status": "running"}),
+    )
+    events: tuple[SessionEvent, ...] = paused
+    for event in backend_reports:
+        events = (*events, event)
+        projection = project_session(events, session_id="session-1")
+        # The service still treats the session as paused, so every interface must too.
+        assert session_activity(events).paused
+        assert projection.lifecycle.status == SessionLifecycle.PAUSED
+        assert (projection.lifecycle.can_pause, projection.lifecycle.can_resume) == (False, True)
+        assert projection.available_commands == ("chat", "resume")
+        assert projection.researcher_status.code == "paused"
+        assert projection.actions[0].state == "proposed"
+
+    resumed = project_session(
+        (*events, _command(9, "resume"), _event(10, EventKind.SESSION_RESUMED, {})),
+        session_id="session-1",
+    )
+    assert resumed.lifecycle.status == SessionLifecycle.RUNNING
+    assert resumed.available_commands == ("chat", "pause")
+    continued = project_session(
+        (
+            *events,
+            _command(9, "chat"),
+            _event(10, EventKind.AGENT_LIFECYCLE_UPDATED, {"status": "running"}),
+        ),
+        session_id="session-1",
+    )
+    assert continued.lifecycle.status == SessionLifecycle.RUNNING
+    assert continued.lifecycle.can_pause
+
+
+def test_a_review_requested_during_a_pause_is_decided_first_and_a_rejection_keeps_the_pause() -> (
+    None
+):
+    requested = (
+        _command(0, "pause"),
+        _event(1, EventKind.SESSION_PAUSED, {}),
+        _event(
+            2, EventKind.TOOL_CALL_PROPOSED, {"tool_call_id": "call-1", "tool_name": "terminal"}
+        ),
+        _confirmation_event(3, "group-1", "call-1", "terminal"),
+    )
+    projection = project_session(requested, session_id="session-1")
+
+    # The gateway accepts only the decision, so nothing may offer resume or guidance.
+    assert session_activity(requested).paused
+    assert projection.lifecycle.status == SessionLifecycle.WAITING_FOR_CONFIRMATION
+    assert projection.lifecycle.model_dump() == {
+        "status": SessionLifecycle.WAITING_FOR_CONFIRMATION,
+        "can_pause": False,
+        "can_resume": False,
+        "can_steer": False,
+    }
+    assert projection.researcher_status.code == "waiting-for-review"
+    assert projection.pending_approval is not None
+    assert projection.available_commands == ("approve", "deny")
+
+    rejected = (
+        *requested,
+        _command(4, "deny"),
+        _event(
+            5,
+            EventKind.APPROVAL_RECORDED,
+            {"group_id": "group-1", "decision": "denied", "tool_call_ids": ["call-1"]},
+        ),
+        _event(
+            6,
+            EventKind.CONFIRMATION_RESOLVED,
+            {"group_id": "group-1", "tool_call_id": "call-1", "decision": "denied"},
+        ),
+    )
+    still_paused = project_session(rejected, session_id="session-1")
+    # A rejection does not continue the agent, so the pause is still in effect.
+    assert session_activity(rejected).paused
+    assert still_paused.paused
+    assert still_paused.available_commands == ("chat", "resume")
+
+    approving = (*requested, _command(4, "approve"))
+    # Until the service records the approval, the pause and the review stay as they were.
+    assert session_activity(approving).paused
+    assert project_session(approving, session_id="session-1").available_commands == (
+        "approve",
+        "deny",
+    )
+    approved = (
+        *approving,
+        _event(
+            5,
+            EventKind.APPROVAL_RECORDED,
+            {"group_id": "group-1", "decision": "approved", "tool_call_ids": ["call-1"]},
+        ),
+    )
+    assert not session_activity(approved).paused
+    assert not project_session(approved, session_id="session-1").paused
+
+
+@pytest.mark.parametrize(
+    ("kind", "accepted", "payload"),
+    [
+        ("chat", EventKind.MODEL_CALL_DECISION_RECORDED, {"decision": {"decision": "allow"}}),
+        ("workflow", EventKind.MODEL_CALL_DECISION_RECORDED, {"decision": {"decision": "allow"}}),
+        ("resume", EventKind.SESSION_RESUMED, {}),
+    ],
+)
+def test_a_researcher_command_ends_the_projected_pause_when_the_service_accepts_it(
+    kind: str, accepted: EventKind, payload: dict[str, JsonValue]
+) -> None:
+    paused = (
+        _event(0, EventKind.AGENT_LIFECYCLE_UPDATED, {"status": "running"}),
+        _command(1, "pause"),
+        _event(2, EventKind.SESSION_PAUSED, {}),
+        _command(3, kind),
+    )
+    refused = (
+        *paused,
+        _event(
+            4,
+            EventKind.ERROR_RECORDED,
+            {"command": kind, "reason": "synthetic refusal", "affects_lifecycle": False},
+        ),
+    )
+    # A workflow command continues the agent only through an allowed model route, so a
+    # backend report after one that sent no turn, such as a cancel, leaves the pause.
+    unperformed = ((*paused, _event(4, EventKind.AGENT_LIFECYCLE_UPDATED, {"status": "running"})),)
+    events = (
+        *paused,
+        _event(4, accepted, payload),
+    )
+
+    for still_paused in (paused, refused, *(unperformed if kind == "workflow" else ())):
+        assert session_activity(still_paused).paused
+        assert project_session(still_paused, session_id="session-1").available_commands == (
+            "chat",
+            "resume",
+        )
+    projection = project_session(events, session_id="session-1")
+    assert not session_activity(events).paused
+    assert not projection.paused
+    assert projection.lifecycle.status == SessionLifecycle.RUNNING
+    assert projection.available_commands == ("chat", "pause")
+
+
+@pytest.mark.parametrize("cause", ["fatal-error", "integrity"])
+def test_an_unrecoverable_session_advertises_no_decision_on_an_open_review(cause: str) -> None:
+    unrecoverable = (
+        _event(
+            2,
+            EventKind.ERROR_RECORDED,
+            {
+                "reason": "synthetic",
+                "code": BackendErrorCode.ACTION_OUTCOME_UNKNOWN.value,
+                "affects_lifecycle": False,
+            },
+        )
+        if cause == "fatal-error"
+        else _event(
+            2,
+            EventKind.TOOL_CALL_PROPOSED,
+            {"tool_call_id": "call-1", "tool_name": "terminal"},
+        )
+    )
+    projection = project_session(
+        (
+            _event(
+                0, EventKind.TOOL_CALL_PROPOSED, {"tool_call_id": "call-1", "tool_name": "terminal"}
+            ),
+            _confirmation_event(1, "group-1", "call-1", "terminal"),
+            unrecoverable,
+        ),
+        session_id="session-1",
+    )
+
+    # The gateway refuses every decision once the session cannot continue.
+    assert projection.pending_approval is not None
+    assert projection.lifecycle.status == SessionLifecycle.ERROR
+    assert not projection.lifecycle.can_steer
+    assert projection.researcher_status.code == "terminal-failure"
+    assert projection.available_commands == ()
+
+
+def test_a_fatal_error_ends_steering_whatever_its_lifecycle_flag() -> None:
+    events = (
+        _command(0, "pause"),
+        _event(1, EventKind.SESSION_PAUSED, {}),
+        _event(
+            2,
+            EventKind.ERROR_RECORDED,
+            {
+                "reason": "synthetic",
+                "code": BackendErrorCode.ACTION_OUTCOME_UNKNOWN.value,
+                "affects_lifecycle": False,
+            },
+        ),
+    )
+    projection = project_session(events, session_id="session-1")
+
+    assert session_activity(events).fatal
+    assert projection.lifecycle.status == SessionLifecycle.ERROR
+    assert not projection.lifecycle.can_steer
+    assert projection.available_commands == ()
 
 
 def _event(
