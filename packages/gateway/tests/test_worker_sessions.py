@@ -941,7 +941,8 @@ def test_close_during_launch_returns_at_once_and_the_launch_revokes_and_closes(
         assert launching.wait(timeout=10)
         began = monotonic()
         # The close does not wait for the control plane; the launch finishes it.
-        assert not worker.close()
+        closed_at_once = worker.close()
+        assert not closed_at_once
         assert monotonic() - began < 1
         assert worker.closing
         assert not worker.wait_closed(0.1)
@@ -955,7 +956,8 @@ def test_close_during_launch_returns_at_once_and_the_launch_revokes_and_closes(
         assert platform.calls.count("revoke") == 1
         assert _settles(service, "revoked")
         assert not service.store.owns_writer
-        assert worker.close()
+        closed = worker.close()
+        assert closed
     finally:
         release.set()
         gateway.stop()
