@@ -904,6 +904,7 @@ class SessionService:
             try:
                 result: tuple[Result] | BaseException = (request(),)
             except BaseException as error:
+                # Every outcome reaches the waiting command thread, which re-raises it.
                 result = error
             with self._command_changed:
                 outcome.append(result)
