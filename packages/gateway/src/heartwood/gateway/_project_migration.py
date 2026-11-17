@@ -73,7 +73,7 @@ def migrate_project_state(*, deployment: Path, workspace: Path, backup: Path) ->
                     destination.mkdir(mode=0o700)
                 else:
                     _copy_tree(source.state_root / name, destination)
-            for name in ("config.toml", "experiments.jsonl"):
+            for name in ("config.toml", "experiments.jsonl", "usage-summary-id"):
                 path = source.state_root / name
                 if path.exists():
                     _copy_file(path, stage / name)

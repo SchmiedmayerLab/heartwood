@@ -25,6 +25,7 @@ from heartwood.gateway._gateway import GatewaySessionSnapshot
 from heartwood.gateway._session_projection import SessionProjection
 from heartwood.schemas.experiments import ExperimentCollection, ExperimentExport
 from heartwood.schemas.python_environment import PythonEnvironmentSnapshot
+from heartwood.schemas.usage import ProjectUsageSummary
 from heartwood.schemas.workflows import WorkflowCatalog
 from heartwood.session import SessionCommand
 
@@ -74,6 +75,13 @@ _REST_OPERATIONS = (
         "/project/capabilities",
         "Inspect platform capabilities",
         api.PlatformCapabilitiesResponse,
+    ),
+    _Operation(
+        "GET",
+        "/project/usage-summary",
+        "Summarize project usage without content",
+        ProjectUsageSummary,
+        errors=(422,),
     ),
     _Operation(
         "GET",

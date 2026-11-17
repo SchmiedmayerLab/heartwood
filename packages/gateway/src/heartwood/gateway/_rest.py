@@ -34,6 +34,7 @@ from heartwood.gateway._model_settings import (
     model_profile_from_mapping,
 )
 from heartwood.gateway._model_transfer import ModelTransferError
+from heartwood.gateway._project import ProjectStateError
 from heartwood.gateway._project_activity import ProjectOwnershipError
 from heartwood.gateway._project_config import ProjectConfigError
 from heartwood.gateway._session_catalog import SessionCatalogError, SessionNotFoundError
@@ -126,6 +127,12 @@ class RestGateway:
                 status_code=200,
                 body=_json_object(self.gateway.platform_capabilities()),
             )
+        if parts == ("project", "usage-summary") and request.method == "GET":
+            try:
+                summary = self.gateway.usage_summary()
+            except ProjectStateError as error:
+                return _error(422, error)
+            return RestResponse(status_code=200, body=_json_object(summary.model_dump(mode="json")))
         if parts == ("project", "startup") and request.method == "GET":
             query = parse_qs(parsed.query)
             interface = query.get("interface", ["web"])[0]

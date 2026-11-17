@@ -148,8 +148,16 @@ Script recording is neither agent execution nor a sandbox; see [Experiment Recor
 | `heartwood replay` | Replay the persisted session event stream |
 | `heartwood audit export [--output PATH]` | Export scrubbed audit JSONL, optionally copied to `PATH` |
 | `heartwood audit verify` | Fully verify the session and audit history |
+| `heartwood usage summary [--json]` | Report content-free project counts and outcomes after verifying every session's history |
 
 Select the session with the top-level `--session-id`, for example `heartwood --session-id study-a pause`.
+
+`heartwood usage summary` reads the records of every session in the project and the project's experiment records without adding records or contacting a model route.
+It reports sessions, turns, allowed and rejected action sets, workflow runs by phase, reproduction outcomes and experiment runs by status, with the release version, the platform identifier and a random summary identifier created with the project state.
+It copies no prompt, path, file name, session title, model output or record identifier.
+If any session's history fails verification, it reports the failure without counts and exits with status `1`.
+If a session has an interrupted commit, it reports the history as incomplete, again without counts and with status `1`, and leaves the commit for Heartwood to complete when the session is next opened or verified, for example with `heartwood audit verify`.
+`--json` prints the published `heartwood.project-usage-summary.v1` document; see [Run a Pilot Evaluation](../operate/index.md#run-a-pilot-evaluation).
 
 ## Project Inspection
 

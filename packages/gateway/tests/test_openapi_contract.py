@@ -32,6 +32,7 @@ _GATEWAY_METHODS = {
     ("POST", "/sessions/default"): "default_session",
     ("GET", "/project/readiness"): "project_readiness",
     ("GET", "/project/capabilities"): "platform_capabilities",
+    ("GET", "/project/usage-summary"): "usage_summary",
     ("GET", "/project/startup"): "startup_plan",
     ("POST", "/project/initialize"): "initialize_project",
     ("GET", "/sessions/{session_id}"): "session",
@@ -237,7 +238,7 @@ def test_openapi_resolves_references_and_declares_path_parameters() -> None:
                 if parameter["in"] == "path" and parameter["required"]
             }
             assert declared == set(re.findall(r"{([^}]+)}", path))
-    assert len(operation_ids) == len(set(operation_ids)) == 54
+    assert len(operation_ids) == len(set(operation_ids)) == 55
     for schema in document["components"]["schemas"].values():
         Draft202012Validator.check_schema(schema)
     for reference in _references(document):

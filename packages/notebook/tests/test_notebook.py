@@ -107,6 +107,26 @@ def test_notebook_project_experiments_match_python_and_http_export(tmp_path: Pat
         gateway.stop()
 
 
+def test_notebook_usage_summary_matches_the_gateway_and_http_contract(tmp_path: Path) -> None:
+    project = ProjectContext(tmp_path)
+    project.initialize()
+    gateway = SessionGateway(project=project, env={})
+    try:
+        notebook = NotebookSession(gateway=gateway)
+        summary = notebook.usage_summary()
+        assert summary == gateway.usage_summary()
+        response = RestGateway(gateway).handle(
+            RestRequest(method="GET", path="/project/usage-summary")
+        )
+        assert response.status_code == 200
+        assert response.body == summary.model_dump(mode="json")
+        assert summary.counts is not None
+        assert summary.counts.sessions == 0
+        assert not gateway._services
+    finally:
+        gateway.stop()
+
+
 def test_notebook_setup_shows_declared_route_data_handling(tmp_path: Path) -> None:
     gateway = SessionGateway(project=ProjectContext(tmp_path), env={})
     try:

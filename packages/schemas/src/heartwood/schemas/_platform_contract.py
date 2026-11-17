@@ -42,6 +42,7 @@ from heartwood.schemas._upstream import (
     mcp_tasks_schema_bytes,
     platform_contract_notices,
 )
+from heartwood.schemas.usage import ProjectUsageSummary
 
 PLATFORM_CONTRACT_VERSION = "0.2.0"
 MCP_REQUIRED_TOOL_HINTS = ("readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint")
@@ -50,6 +51,7 @@ _CURRENT_ARTIFACTS = frozenset(
         "capabilities.schema.json",
         "model-connections.schema.json",
         "policy-profile.schema.json",
+        "usage-summary.schema.json",
         "gateway.openapi.json",
     }
 )
@@ -183,6 +185,7 @@ def platform_schema_documents() -> dict[str, dict[str, Any]]:
             mode="validation"
         ),
         "policy-profile.schema.json": PolicyProfile.model_json_schema(mode="validation"),
+        "usage-summary.schema.json": ProjectUsageSummary.model_json_schema(mode="serialization"),
         "data-classification.schema.json": TypeAdapter(DataClassification).json_schema(),
         "mcp-tool-annotations.schema.json": {
             "title": "Heartwood required MCP annotation subset",

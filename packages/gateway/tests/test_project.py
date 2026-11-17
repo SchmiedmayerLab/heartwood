@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
@@ -355,3 +356,18 @@ def test_current_project_is_exact_process_directory(
     monkeypatch.chdir(nested)
 
     assert ProjectContext.current().root == nested
+
+
+def test_project_state_carries_one_stable_random_usage_summary_identifier(tmp_path: Path) -> None:
+    project = ProjectContext(tmp_path)
+    with pytest.raises(ProjectStateError, match="usage summary identifier"):
+        project.usage_summary_id()
+    project.initialize()
+    identifier = project.usage_summary_id()
+    project.initialize()
+
+    assert re.fullmatch(r"[0-9a-f]{32}", identifier)
+    assert project.usage_summary_id() == identifier
+    project.usage_summary_id_path.write_text("not-random\n")
+    with pytest.raises(ProjectStateError, match="invalid"):
+        project.usage_summary_id()

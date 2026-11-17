@@ -118,6 +118,8 @@ def test_migration_preserves_canonical_records_models_and_original_backup(tmp_pa
         backup / "experiments.jsonl"
     ).read_bytes()
     assert (target / "models/synthetic.gguf").read_bytes() == b"synthetic model bytes"
+    # Usage summaries from before and after migration share their project identifier.
+    assert managed.usage_summary_id() == (backup / "usage-summary-id").read_text().strip()
     assert 'path = "models/synthetic.gguf"' in (target / "config.toml").read_text()
     assert 'path = ".heartwood/models/synthetic.gguf"' in (backup / "config.toml").read_text()
     migration.recover_project_migration(deployment=manifest, workspace=source.root)

@@ -139,9 +139,15 @@ Use synthetic or approved non-sensitive data, keep the release pinned, and name 
 |---|---|
 | Could participants start? | Installation success and time to the first action decision |
 | Did the workflows complete and reproduce? | `heartwood experiments list --json` and the verification report |
+| How was Heartwood used? | `heartwood usage summary --json` |
 | Is the record intact? | `heartwood audit verify` |
 | What did support require? | Requests and time to resolution |
 | Would participants use it? | Structured feedback |
 
 Collect counts and outcomes, not prompts, project files or session history.
+The usage summary verifies every session's history first and reports sessions, turns, action decisions, workflow, reproduction and experiment outcomes, the release and the platform.
+It contains no prompt, path, file name, session title, model output or record identifier; a random per-project summary identifier lets the operator distinguish participants' projects without identifying them.
+A summary whose audit verification failed carries no counts; investigate the project with `heartwood audit verify` instead of using partial results.
+A summary that reports the history as incomplete found an interrupted commit; it also carries no counts, and the summary succeeds again once Heartwood has completed the commit by opening or verifying that session.
+The summary is the published `usage-summary.schema.json` artifact of the [platform contract](platform-contract.md#contract-artifacts), also available through `GET /project/usage-summary` and `NotebookSession.usage_summary()`.
 Report the results as live synthetic validation of that environment; see [Testing and Evidence](../architecture/testing.md#claims).

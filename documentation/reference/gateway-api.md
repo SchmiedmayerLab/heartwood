@@ -55,7 +55,7 @@ Readiness and capabilities decide whether a route can do useful work in a deploy
 | Resource | Operations | Result |
 |---|---|---|
 | Launch | `POST /launch` | One-time token exchange |
-| Project | `GET /project/capabilities`, `/project/readiness`, `/project/startup`; `POST /project/initialize` | Interfaces, readiness diagnostics, setup phase, explicit initialization |
+| Project | `GET /project/capabilities`, `/project/readiness`, `/project/startup`, `/project/usage-summary`; `POST /project/initialize` | Interfaces, readiness diagnostics, setup phase, content-free usage counts, explicit initialization |
 | Sessions | `GET`, `POST /sessions`; `POST /sessions/default`; `GET`, `PATCH /sessions/{session_id}` | Discovery, creation, default selection, title changes |
 | Commands | `POST /sessions/{session_id}/commands` | Command events and the current projection |
 | Events | `GET /sessions/{session_id}/events`, `/events/stream`, `/projection`; WebSocket `/sessions/{session_id}/events` | Durable replay and live interface state |

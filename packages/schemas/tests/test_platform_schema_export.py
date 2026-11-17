@@ -65,3 +65,38 @@ def test_annotation_profile_requires_explicit_hints_without_granting_authority()
     for hint in hints:
         assert not validator.is_valid({key: value for key, value in hints.items() if key != hint})
         assert not validator.is_valid({**hints, hint: "true"})
+
+
+def test_usage_summary_schema_is_a_current_content_free_artifact() -> None:
+    from jsonschema import Draft202012Validator
+
+    from heartwood.schemas import platform_contract_index
+    from heartwood.schemas.usage import ProjectUsageSummary
+
+    schema_name = "usage-summary.schema.json"
+    documents = platform_schema_documents()
+    schema = documents[schema_name]
+    assert (
+        schema["properties"]
+        == (ProjectUsageSummary.model_json_schema(mode="serialization")["properties"])
+    )
+    index = platform_contract_index(documents)
+    assert index["contract_version"] == "0.2.0"
+    artifact = next(item for item in index["artifacts"] if item["path"] == schema_name)
+    assert artifact["maturity"] == "current"
+    validator = Draft202012Validator(schema)
+    failed = {
+        "schema_version": "heartwood.project-usage-summary.v1",
+        "summary_id": "0" * 32,
+        "release_version": "0.5.1",
+        "platform_id": "generic",
+        "audit_verification": "failed",
+        "counts": None,
+    }
+    assert validator.is_valid(failed)
+    for change in (
+        {"summary_id": "/home/researcher/project"},
+        {"platform_id": "Synthetic Platform"},
+        {"session_title": "Cohort analysis"},
+    ):
+        assert not validator.is_valid({**failed, **change})

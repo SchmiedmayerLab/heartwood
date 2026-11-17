@@ -46,6 +46,7 @@ from heartwood.core_adapter import (
     ProposedToolCall,
     SessionOwnershipError,
     SessionRecoveryError,
+    SessionRecoveryRequiredError,
     SessionService,
     SessionStorageCapabilityError,
     SessionStoreBoundaryError,
@@ -1108,6 +1109,38 @@ def test_interrupted_audit_first_commit_recovers_without_duplicate_records(
     assert len(restarted.audit_log.read()) == 1
     assert len(replayed) == 1
     assert replayed[0].kind == EventKind.COMMAND_RECEIVED.value
+
+
+def test_verified_events_leave_an_interrupted_commit_for_its_writer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_append = session_state._append_private_json_line
+    append_count = 0
+
+    def interrupt_second_append(path: Path, content: str) -> None:
+        nonlocal append_count
+        append_count += 1
+        if append_count == 2:
+            raise OSError("simulated process interruption")
+        original_append(path, content)
+
+    monkeypatch.setattr(session_state, "_append_private_json_line", interrupt_second_append)
+    service = SessionService.synthetic_default(tmp_path)
+    with pytest.raises(OSError, match="simulated process interruption"):
+        service.handle(_command(CommandKind.PAUSE))
+    service.close()
+    monkeypatch.setattr(session_state, "_append_private_json_line", original_append)
+    session_dir = service.store.session_dir
+    before = {path.name: path.read_bytes() for path in session_dir.iterdir() if path.is_file()}
+
+    with pytest.raises(SessionRecoveryRequiredError, match="interrupted commit"):
+        FileSessionStore(tmp_path, "session-synthetic-001").verified_events()
+
+    after = {path.name: path.read_bytes() for path in session_dir.iterdir() if path.is_file()}
+    assert after == before
+    assert ".pending-commit.json" in after
+    assert len(FileSessionStore(tmp_path, "session-synthetic-001").replay_events()) == 1
 
 
 def test_tampered_pending_commit_fails_closed(

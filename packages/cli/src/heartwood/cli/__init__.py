@@ -55,6 +55,7 @@ from heartwood.cli._setup import (
     configure_setup,
 )
 from heartwood.cli._skills import _handle_skills, configure_skills
+from heartwood.cli._usage import configure_usage, handle_usage
 from heartwood.cli._workspace_presentation import (
     format_workspace_changes,
     format_workspace_diff,
@@ -169,6 +170,9 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     configure_setup(
         subparsers.add_parser("setup", help="Configure a model route and conservative policy.")
+    )
+    configure_usage(
+        subparsers.add_parser("usage", help="Summarize project use without session content.")
     )
 
     runtime = subparsers.add_parser(
@@ -454,6 +458,8 @@ def _main(argv: Sequence[str] | None = None) -> int:
         return _handle_doctor(project=project, as_json=args.json)
     if args.command == "experiments":
         return handle_experiments(args, project=project)
+    if args.command == "usage":
+        return handle_usage(args, project=project)
     if args.command == "setup":
         return _handle_setup(parser, args, project=project)
     if args.command == "runtime" and args.runtime_command == "start":
