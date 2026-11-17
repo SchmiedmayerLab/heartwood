@@ -24,6 +24,10 @@ from heartwood.core_adapter._state import _write_private_json_atomic
         "[]",
         '{"tool_call_id":"","tool_name":"terminal"}',
         '{"tool_call_id":"call-1","tool_name":""}',
+        '{"turn_count":0}',
+        '{"turn_count":true}',
+        '{"turn_count":"1"}',
+        '{"turn_count":1,"tool_call_id":"call-1"}',
     ],
 )
 def test_corrupt_deterministic_state_fails_closed_and_preserves_evidence(
@@ -169,3 +173,26 @@ def test_deterministic_restart_restores_only_known_action_kinds(
     assert pending is not None
     assert pending.actions[0].kind == expected_kind
     assert pending.actions[0].affected_paths == ()
+
+
+def test_state_without_a_turn_count_continues_after_its_pending_first_turn(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "session" / "deterministic.json"
+    _write_private_json_atomic(
+        state_path,
+        {"tool_call_id": "session-1-toolcall-0", "tool_name": "heartwood.synthetic.noop"},
+    )
+    backend = DeterministicAgentBackend(persistence_path=state_path)
+    group = backend.pending_action_group(session_id="session-1")
+    assert group is not None
+    backend.resolve_confirmation(
+        session_id="session-1", action_group_id=group.group_id, approved=True
+    )
+
+    restored = DeterministicAgentBackend(persistence_path=state_path)
+    restored.submit_turn(session_id="session-1", prompt="Continue")
+    pending = restored.pending_action_group(session_id="session-1")
+
+    assert pending is not None
+    assert pending.actions[0].tool_call_id == "session-1-toolcall-1"

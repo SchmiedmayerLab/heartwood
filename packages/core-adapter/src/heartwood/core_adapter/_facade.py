@@ -14,7 +14,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
-from typing import Literal, Protocol, cast
+from typing import Any, Literal, Protocol, cast
 
 from heartwood.core_adapter._state import _write_private_json_atomic
 from heartwood.schemas import JsonValue
@@ -486,7 +486,7 @@ class DeterministicAgentBackend:
 
     def __init__(self, *, persistence_path: Path | None = None) -> None:
         self._persistence_path = None if persistence_path is None else persistence_path.resolve()
-        self._pending = self._load_pending()
+        self._pending, self._turn_count = self._load_state()
         self._event_sink: BackendEventSink = lambda _events: None
         self._token_sink: TokenDeltaSink = lambda _delta: None
 
@@ -574,8 +574,9 @@ class DeterministicAgentBackend:
                     error_code=BackendErrorCode.INVALID_STATE,
                 ),
             )
+        # Each turn proposes a distinct call, so its action set never matches an earlier approval.
         self._pending = ProposedToolCall(
-            tool_call_id=f"{session_id}-toolcall-0",
+            tool_call_id=f"{session_id}-toolcall-{self._turn_count}",
             tool_name="heartwood.synthetic.noop",
             risk="low",
             summary="run the synthetic aggregate no-op",
@@ -589,6 +590,7 @@ class DeterministicAgentBackend:
             ),
             BackendToolCallEvent(tool_call=self._pending),
         )
+        self._turn_count += 1
         self._persist_pending()
         action_group = self.pending_action_group(session_id=session_id)
         if action_group is None:  # pragma: no cover - pending action was just assigned
@@ -661,16 +663,26 @@ class DeterministicAgentBackend:
         """Synchronous deterministic actions have no background finalization."""
         return True
 
-    def _load_pending(self) -> ProposedToolCall | None:
+    def _load_state(self) -> tuple[ProposedToolCall | None, int]:
         path = self._persistence_path
         if path is None or not path.is_file():
-            return None
+            return None, 0
         try:
             raw: object = json.loads(path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError) as error:
             raise ValueError("deterministic backend state is invalid") from error
         if not isinstance(raw, dict):
             raise ValueError("deterministic backend state is invalid")
+        if "turn_count" not in raw:
+            # State written before turns were counted holds the pending call of the first turn.
+            return self._load_pending(raw), 1
+        turn_count = raw.pop("turn_count")
+        if type(turn_count) is not int or turn_count < 1:
+            raise ValueError("deterministic backend state is invalid")
+        return (self._load_pending(raw) if raw else None), turn_count
+
+    @staticmethod
+    def _load_pending(raw: dict[str, Any]) -> ProposedToolCall:
         tool_call_id = raw.get("tool_call_id")
         tool_name = raw.get("tool_name")
         if (
@@ -715,11 +727,13 @@ class DeterministicAgentBackend:
         if path is None:
             return
         if self._pending is None:
-            path.unlink(missing_ok=True)
+            # The count outlives the cleared call so that the next turn proposes a new call.
+            _write_private_json_atomic(path, {"turn_count": self._turn_count})
             return
         _write_private_json_atomic(
             path,
             {
+                "turn_count": self._turn_count,
                 "tool_call_id": self._pending.tool_call_id,
                 "tool_name": self._pending.tool_name,
                 "risk": self._pending.risk,

@@ -1885,6 +1885,44 @@ def test_approved_action_records_tool_execution(tmp_path: Path) -> None:
     }
 
 
+@pytest.mark.parametrize("restart", [False, True])
+def test_deterministic_session_approves_consecutive_turns(
+    tmp_path: Path,
+    restart: bool,
+) -> None:
+    service = SessionService.synthetic_default(tmp_path)
+    executed: list[JsonValue] = []
+    group_ids: list[str] = []
+    for turn in range(2):
+        if restart and turn:
+            service.close()
+            service = SessionService.synthetic_default(tmp_path)
+        service.handle(
+            _command(CommandKind.CHAT, command_id=f"command-chat-{turn}", prompt="run again")
+        )
+        group_ids.append(_pending_group_id(service))
+        result = service.handle(
+            _command(
+                CommandKind.APPROVE,
+                command_id=f"command-approve-{turn}",
+                target_type="action-set",
+                target_id=group_ids[-1],
+            )
+        )
+        executed.extend(
+            event.payload["tool_call_id"]
+            for event in result.events
+            if event.kind == EventKind.TOOL_EXECUTION_RECORDED.value
+        )
+    service.close()
+
+    assert group_ids[0] != group_ids[1]
+    assert executed == [
+        "session-synthetic-001-toolcall-0",
+        "session-synthetic-001-toolcall-1",
+    ]
+
+
 def test_rejected_action_is_not_recorded_as_tool_execution(tmp_path: Path) -> None:
     service = SessionService.synthetic_default(tmp_path)
     service.handle(_command(CommandKind.CHAT, prompt="run the workflow"))
