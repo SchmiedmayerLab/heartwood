@@ -3101,7 +3101,8 @@ def test_destination_restriction_denies_an_undeclared_route_before_model_work(
     model_profile = decision_event.payload["model_profile"]
     assert isinstance(model_profile, dict)
     # The decision also records the digest of the policy in force.
-    assert isinstance(model_profile.pop("policy_sha256"), str)
+    policy_sha256 = model_profile.pop("policy_sha256")
+    assert isinstance(policy_sha256, str)
     assert model_profile == {
         "backend_id": "deterministic-local",
         "profile_id": "deterministic-local",
