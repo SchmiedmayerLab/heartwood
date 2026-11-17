@@ -23,7 +23,14 @@ from pydantic import BaseModel, ConfigDict
 from heartwood.adapters.platform import select_platform_adapter
 from heartwood.gateway._diagnostics import diagnostic_for
 from heartwood.gateway._project import ProjectContext, ProjectStateError
-from heartwood.gateway._readiness import DeploymentControl, platform_policy_ceiling
+from heartwood.gateway._project_config import ProjectConfig, ProjectConfigStore
+from heartwood.gateway._readiness import (
+    DeploymentControl,
+    DeploymentReadiness,
+    EffectivePolicy,
+    inspect_deployment,
+    platform_policy_ceiling,
+)
 from heartwood.gateway.checkpoint_deployment import (
     CheckpointEvidenceDeployment,
     validate_evidence_deployment,
@@ -86,6 +93,30 @@ class ProjectDeployment:
             else "not-configured"
             for name in DeploymentRequirements.model_fields
         }
+
+
+def inspect_project_deployment(
+    deployment: ProjectDeployment, env: Mapping[str, str] | None = None
+) -> DeploymentReadiness:
+    """Inspect a deployment's project when its stored configuration stops the gateway.
+
+    The manifest ceiling bounds the configuration store exactly as in the gateway, so a
+    stored selection the ceiling no longer permits is reported instead of loaded.
+    """
+    adapter = select_platform_adapter(dict(os.environ if env is None else env))
+    store = ProjectConfigStore(
+        deployment.project,
+        ProjectConfig(platform_id=adapter.adapter_id, policy=deployment.policy),
+        deployment_policy=deployment.policy,
+    )
+    policy = EffectivePolicy(
+        "deployment",
+        deployment.policy,
+        manifest=None if deployment.manifest is None else str(deployment.manifest),
+        manifest_sha256=deployment.manifest_sha256,
+        **deployment.controls(),
+    )
+    return inspect_deployment(deployment.project, env, policy=policy, config_store=store)
 
 
 def load_project_deployment(

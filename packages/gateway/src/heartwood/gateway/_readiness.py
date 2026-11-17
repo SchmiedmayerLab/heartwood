@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 import os
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass, replace
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -30,7 +30,7 @@ from heartwood.gateway._model_catalog import (
     ModelConnection,
     active_model_connections,
     model_connections_from_mapping,
-    route_data_handling,
+    route_policy_decision,
 )
 from heartwood.gateway._model_settings import ModelProfile, ModelSettingsError
 from heartwood.gateway._project import ProjectContext, ProjectStateError
@@ -53,7 +53,7 @@ from heartwood.gateway._subscriptions import (
     OpenHandsOpenAISubscription,
     SubscriptionError,
 )
-from heartwood.model_policy import ModelPolicyEngine, policy_report, widen_route_fields
+from heartwood.model_policy import policy_report, widen_route_fields
 from heartwood.persistence import NativeLockUnavailableError
 from heartwood.schemas import PolicyProfile
 from heartwood.skills import SkillArtifactStore, SkillStoreError
@@ -256,8 +256,14 @@ def inspect_deployment(
     bundled_skills_dir: Path | None = None,
     bundled_skill_digests: Mapping[str, str] = BUNDLED_SKILL_DIGESTS,
     policy: EffectivePolicy | None = None,
+    config_store: ProjectConfigStore | None = None,
+    model_connections: Iterable[ModelConnection] | None = None,
 ) -> DeploymentReadiness:
-    """Inspect project setup without creating files or calling external services."""
+    """Inspect project setup without creating files or calling external services.
+
+    A gateway passes its own configuration store and model connections, so readiness
+    applies the deployment ceiling and route data handling its model calls apply.
+    """
     active_env = dict(os.environ if env is None else env)
     adapter = select_platform_adapter(active_env)
     detection = adapter.detect(active_env)
@@ -336,13 +342,14 @@ def inspect_deployment(
         checks.extend(_terra_environment_checks(project=project, env=active_env))
 
     config: ProjectConfig | None = None
-    config_store = ProjectConfigStore(
-        project,
-        ProjectConfig(
-            platform_id=adapter.adapter_id,
-            policy=adapter.default_policy_profile(),
-        ),
-    )
+    if config_store is None:
+        config_store = ProjectConfigStore(
+            project,
+            ProjectConfig(
+                platform_id=adapter.adapter_id,
+                policy=adapter.default_policy_profile(),
+            ),
+        )
     if state_valid and config_store.configured:
         try:
             config = config_store.load()
@@ -392,12 +399,16 @@ def inspect_deployment(
         )
     )
     credential_ready = True
-    model_connections = active_model_connections(
-        BUILT_IN_MODEL_CONNECTIONS,
-        () if config is None else config.additional_connections,
-        allowed_connection_ids=(
-            option.connection_id for option in model_source_options(active_env)
-        ),
+    model_connections = (
+        active_model_connections(
+            BUILT_IN_MODEL_CONNECTIONS,
+            () if config is None else config.additional_connections,
+            allowed_connection_ids=(
+                option.connection_id for option in model_source_options(active_env)
+            ),
+        )
+        if model_connections is None
+        else tuple(model_connections)
     )
     if active_model is not None:
         credential_status, credential_summary, credential_ready = _credential_readiness(
@@ -459,31 +470,8 @@ def inspect_deployment(
                 else f"Policy from the {adapter.adapter_id} platform is valid",
             )
         )
-        action_mode = config.action_settings.review_mode
-        checks.append(
-            ReadinessCheck(
-                "action-review",
-                "pass",
-                "Action review: "
-                + ("deployment default" if action_mode is None else action_mode_label(action_mode)),
-            )
-        )
-        coherent = active_model is not None and _configuration_is_coherent(
-            config, model_connections
-        )
-        checks.append(
-            ReadinessCheck(
-                "configuration-coherence",
-                "pass" if coherent else "warning" if active_model is None else "fail",
-                (
-                    "Model, policy, connection, and action settings agree"
-                    if coherent
-                    else "Model selection is incomplete"
-                    if active_model is None
-                    else "Model, policy, connection, or action settings do not agree"
-                ),
-            )
-        )
+        checks.append(narrowed_review_check(config_store) or _review_check(config))
+        checks.append(_coherence_check(config, model_connections, policy_source=policy.source))
 
     local_compute_required = False
     if adapter.adapter_id == "carina":
@@ -512,6 +500,29 @@ def inspect_deployment(
         evidence=detection.evidence,
         checks=tuple(checks),
         policy=policy,
+    )
+
+
+def narrowed_review_check(store: ProjectConfigStore) -> ReadinessCheck | None:
+    """Report a stored review mode that the deployment ceiling replaced on load."""
+    stored = store.narrowed_review_mode()
+    if stored is None:
+        return None
+    return ReadinessCheck(
+        "action-review",
+        "warning",
+        f"Stored action review {action_mode_label(stored)} is not permitted by the deployment "
+        f"policy; {action_mode_label('review-all')} applies",
+    )
+
+
+def _review_check(config: ProjectConfig) -> ReadinessCheck:
+    action_mode = config.action_settings.review_mode
+    return ReadinessCheck(
+        "action-review",
+        "pass",
+        "Action review: "
+        + ("deployment default" if action_mode is None else action_mode_label(action_mode)),
     )
 
 
@@ -760,11 +771,43 @@ def _credential_readiness(
     assert_never(kind)
 
 
-def _configuration_is_coherent(
-    config: ProjectConfig, model_connections: tuple[ModelConnection, ...]
-) -> bool:
+def _coherence_check(
+    config: ProjectConfig,
+    model_connections: tuple[ModelConnection, ...],
+    *,
+    policy_source: Literal["deployment", "platform"],
+) -> ReadinessCheck:
+    """Report whether the selected route matches its source and the policy permits it.
+
+    The decision is the one the gateway makes before each model call, so a route the
+    policy excludes is reported with the policy's reason.
+    """
     model = _active_model_profile(config)
-    if model is None or config.model_source is None:
+    if model is None:
+        return ReadinessCheck("configuration-coherence", "warning", "Model selection is incomplete")
+    if not _route_matches_source(config, model):
+        return ReadinessCheck(
+            "configuration-coherence",
+            "fail",
+            "Model, policy, connection, or action settings do not agree",
+        )
+    decision = route_policy_decision(model, config.policy, model_connections)
+    if decision.decision != "allow":
+        return ReadinessCheck(
+            "configuration-coherence",
+            "fail",
+            f"Selected model route is unavailable under the {policy_source} policy: "
+            f"{decision.reason}",
+        )
+    return ReadinessCheck(
+        "configuration-coherence",
+        "pass",
+        "Model, policy, connection, and action settings agree",
+    )
+
+
+def _route_matches_source(config: ProjectConfig, model: ModelProfile) -> bool:
+    if config.model_source is None:
         return False
     if config.model_source == "heartwood":
         source_matches = model.is_local
@@ -800,17 +843,7 @@ def _configuration_is_coherent(
         )
     else:
         source_matches = model.profile_id == config.model_source
-    if not source_matches:
-        return False
-    decision = ModelPolicyEngine(config.policy).evaluate(
-        endpoint=model.policy_endpoint,
-        capability_tier=model.capability_tier,
-        credential_reference=model.credential_reference,
-        data_handling=route_data_handling(model, model_connections),
-        decision_id="deployment-readiness",
-        purpose="deployment readiness",
-    )
-    return decision.decision == "allow"
+    return source_matches
 
 
 def _carina_compute_checks(

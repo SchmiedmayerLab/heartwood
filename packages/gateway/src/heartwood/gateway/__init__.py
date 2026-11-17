@@ -77,7 +77,11 @@ from heartwood.gateway._credentials import (
     CredentialStoreAvailability,
     CredentialStoreError,
 )
-from heartwood.gateway._deployment import ProjectDeployment, load_project_deployment
+from heartwood.gateway._deployment import (
+    ProjectDeployment,
+    inspect_project_deployment,
+    load_project_deployment,
+)
 from heartwood.gateway._diagnostics import (
     DiagnosticDefinition,
     diagnostic_catalog,
@@ -201,6 +205,7 @@ from heartwood.gateway._readiness import (
     ReadinessCheck,
     inspect_deployment,
     model_source_options,
+    narrowed_review_check,
     persist_deployment_profile,
 )
 from heartwood.gateway._rest import RestGateway, RestRequest, RestResponse
@@ -440,6 +445,7 @@ __all__ = [
     "inspect_deployment",
     "inspect_gpu_environment",
     "inspect_model_bundle",
+    "inspect_project_deployment",
     "load_checkpoint_signer_registry",
     "load_model_artifact_catalog",
     "load_model_connections",
@@ -461,6 +467,7 @@ __all__ = [
     "model_profile_from_preset",
     "model_settings_from_mapping",
     "model_source_options",
+    "narrowed_review_check",
     "outside_review_lines",
     "outside_review_title",
     "persist_deployment_profile",

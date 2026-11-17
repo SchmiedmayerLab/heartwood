@@ -118,8 +118,14 @@ _DIAGNOSTICS: dict[str, DiagnosticDefinition] = {
     "configuration-coherence": DiagnosticDefinition(
         "HW-SETUP-002",
         "Model and policy settings do not agree",
-        "Open setup and select the model connection again.",
-        "/reference/troubleshooting/#configuration",
+        "Open setup and select a model connection the policy permits, or ask the operator.",
+        "/reference/troubleshooting/#hw-setup-002-model-and-policy-settings-do-not-agree",
+    ),
+    "action-review": DiagnosticDefinition(
+        "HW-SETUP-003",
+        "Stored review mode is not permitted by the deployment",
+        "Select a review mode the deployment permits; Review Every Action applies until then.",
+        "/reference/troubleshooting/#hw-setup-003-stored-review-mode-is-not-permitted-by-the-deployment",
     ),
     "agent-runtime": DiagnosticDefinition(
         "HW-AGENT-001",

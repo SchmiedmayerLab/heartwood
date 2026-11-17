@@ -77,6 +77,7 @@ Every model-route decision in the session history records the descriptor of the 
 The scrubbed audit export keeps the destination, retention authority and route description without credentials or content.
 A deployment policy can list `allowed_data_destinations`; Heartwood then refuses to select, and denies before each model call, a route whose descriptor is missing or names another destination.
 Editing the active profile and selecting a Heartwood-managed model are selections too; editing or removing another profile is not.
+Selection applies the whole policy that each model call applies, so a route whose endpoint, capability tier or credential the policy does not permit is refused at selection as well, and `heartwood doctor` reports an active route the policy refuses as [`HW-SETUP-002`](../reference/troubleshooting.md#hw-setup-002-model-and-policy-settings-do-not-agree).
 See [Policy Fields](../reference/configuration.md#policy-fields) for the policy field.
 
 Session history is kept in Heartwood's project state as well; see [Projects and Private State](../start/project.md).

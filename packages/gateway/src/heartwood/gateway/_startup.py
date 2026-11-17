@@ -11,14 +11,12 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
-from pathlib import Path
 from typing import Literal
 
 from heartwood.adapters import PlatformCapabilities
 from heartwood.adapters.platform import select_platform_adapter
 from heartwood.gateway._project import ProjectContext
-from heartwood.gateway._readiness import DeploymentReadiness, EffectivePolicy, inspect_deployment
-from heartwood.gateway._skill_settings import BUNDLED_SKILL_DIGESTS
+from heartwood.gateway._readiness import DeploymentReadiness, inspect_deployment
 
 type InterfaceKind = Literal["terminal", "web", "notebook"]
 type SetupPhase = Literal[
@@ -65,23 +63,19 @@ def plan_startup(
     interface: InterfaceKind = "terminal",
     port: int = 8767,
     env: Mapping[str, str] | None = None,
-    bundled_skills_dir: Path | None = None,
-    bundled_skill_digests: Mapping[str, str] = BUNDLED_SKILL_DIGESTS,
-    policy: EffectivePolicy | None = None,
+    readiness: DeploymentReadiness | None = None,
 ) -> StartupPlan:
-    """Inspect a project and return the next product-level startup action."""
+    """Return the next product-level startup action for a project's readiness.
+
+    A gateway passes its own readiness; without one, the project is inspected here.
+    """
     if port < 1 or port > 65_535:
         raise ValueError("port must be between 1 and 65535")
     active_env = dict(os.environ if env is None else env)
     adapter = select_platform_adapter(active_env)
     capabilities = adapter.capabilities()
-    readiness = inspect_deployment(
-        project,
-        active_env,
-        bundled_skills_dir=bundled_skills_dir,
-        bundled_skill_digests=bundled_skill_digests,
-        policy=policy,
-    )
+    if readiness is None:
+        readiness = inspect_deployment(project, active_env)
     supported = interface in capabilities.interfaces
     phase = _setup_phase(readiness)
     if not supported:

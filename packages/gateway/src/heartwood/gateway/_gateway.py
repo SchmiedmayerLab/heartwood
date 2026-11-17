@@ -105,6 +105,7 @@ from heartwood.gateway._model_catalog import (
     load_model_connections,
     matching_model_connection,
     route_data_handling,
+    route_policy_decision,
 )
 from heartwood.gateway._model_settings import (
     MODEL_PRESETS,
@@ -174,6 +175,7 @@ from heartwood.schemas import (
     JsonValue,
     LocalModelImportResponse,
     ModelArtifactsResponse,
+    ModelCallDecision,
     ModelCatalogResponse,
     ModelDataHandling,
     ModelDownloadResponse,
@@ -602,7 +604,7 @@ class SessionGateway:
             model_repository=model_repository
             or HuggingFaceModelRepository(token=self.env.get("HF_TOKEN")),
             state_lock=self._state_lock,
-            authorize_selection=self._require_permitted_data_destination,
+            authorize_selection=self._require_permitted_route,
             on_selection_changed=self._reset_services,
         )
         self.local_model_manager = self.local_models.local_model_manager
@@ -1747,6 +1749,8 @@ class SessionGateway:
             bundled_skills_dir=self.skill_manager.bundled_dir,
             bundled_skill_digests=self.skill_manager.bundled_digests,
             policy=self.effective_policy(),
+            config_store=self.config_store,
+            model_connections=self._model_connections.values(),
         )
 
     @gateway_operation
@@ -1798,9 +1802,7 @@ class SessionGateway:
             interface=interface,
             port=port,
             env=self._credential_environment(strict=False),
-            bundled_skills_dir=self.skill_manager.bundled_dir,
-            bundled_skill_digests=self.skill_manager.bundled_digests,
-            policy=self.effective_policy(),
+            readiness=self.deployment_readiness(),
         )
 
     @gateway_operation
@@ -2061,7 +2063,7 @@ class SessionGateway:
             )
         current = self.settings_store.load()
         settings = current.with_profile(profile)
-        self._require_permitted_data_destination(settings, previous=current)
+        self._require_permitted_route(settings, previous=current)
         self.settings_store.save(settings)
         self._reset_services()
         return self.model_settings()
@@ -2098,20 +2100,7 @@ class SessionGateway:
         """Validate credential availability and platform route authorization."""
         profile = self.settings_store.load().profile(profile_id)
         data_handling = route_data_handling(profile, self._model_connections.values())
-        policy_profile = self._policy_profile()
-        purpose = (
-            "selected Heartwood-managed model"
-            if profile.profile_id == "heartwood"
-            else f"model profile {profile.profile_id}"
-        )
-        decision = ModelPolicyEngine(policy_profile).evaluate(
-            endpoint=profile.policy_endpoint,
-            capability_tier=profile.capability_tier,
-            credential_reference=profile.credential_reference,
-            data_handling=data_handling,
-            decision_id=f"model-profile-{profile.profile_id}",
-            purpose=purpose,
-        )
+        decision = self._route_decision(profile)
         return api_response(
             ModelValidationResponse,
             {
@@ -3235,7 +3224,7 @@ class SessionGateway:
         *,
         previous: ModelSettings | None = None,
     ) -> None:
-        self._require_permitted_data_destination(settings, previous=previous)
+        self._require_permitted_route(settings, previous=previous)
         if isinstance(self.settings_store, ProjectModelSettingsStore):
             self.settings_store.save_selection(source, settings)
             return
@@ -3249,16 +3238,21 @@ class SessionGateway:
             return None
         return route_data_handling(profile, self._model_connections.values())
 
-    def _require_permitted_data_destination(
+    def _route_decision(self, profile: ModelProfile) -> ModelCallDecision:
+        """Return the policy decision that each model call through this route receives."""
+        return route_policy_decision(
+            profile, self._policy_profile(), self._model_connections.values()
+        )
+
+    def _require_permitted_route(
         self, settings: ModelSettings, *, previous: ModelSettings | None = None
     ) -> None:
-        """Refuse to select a route the policy's data-destination restriction excludes.
+        """Refuse to select a route that the policy refuses before each model call.
 
         A write given the `previous` settings is checked only when it changes the active
         route, so editing or removing another profile never depends on the active one.
         """
-        allowed = self._policy_profile().allowed_data_destinations
-        if allowed is None or settings.active_profile is None:
+        if settings.active_profile is None:
             return
         if (
             previous is not None
@@ -3266,15 +3260,21 @@ class SessionGateway:
             and previous.profile() == settings.profile()
         ):
             return
+        allowed = self._policy_profile().allowed_data_destinations
         data_handling = self._route_data_handling(settings)
-        if data_handling is None:
-            raise ModelSettingsError(
-                "this deployment requires declared data handling; the selected route has none"
-            )
-        if data_handling.destination not in allowed:
-            raise ModelSettingsError(
-                f"this deployment does not permit the {data_handling.destination} data destination"
-            )
+        if allowed is not None:
+            if data_handling is None:
+                raise ModelSettingsError(
+                    "this deployment requires declared data handling; the selected route has none"
+                )
+            if data_handling.destination not in allowed:
+                raise ModelSettingsError(
+                    f"this deployment does not permit the {data_handling.destination} "
+                    "data destination"
+                )
+        decision = self._route_decision(settings.profile())
+        if decision.decision != "allow":
+            raise ModelSettingsError(f"the policy does not permit this route: {decision.reason}")
 
     def _credentials_isolated(self, settings: ModelSettings, *, model_source: str | None) -> bool:
         """Return whether a model route keeps its credential from the agent tool runtime."""

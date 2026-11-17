@@ -67,7 +67,7 @@ from heartwood.persistence import (
     unlink_durable,
     write_private_text_atomic,
 )
-from heartwood.schemas import PolicyProfile
+from heartwood.schemas import ActionReviewMode, PolicyProfile
 
 _CONFIG_SCHEMA_VERSION = PROJECT_CONFIG_VERSION
 _SAFE_SOURCE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
@@ -422,7 +422,11 @@ class ProjectConfig:
             None,
             *self.policy.allowed_action_review_modes,
         }:
-            raise ProjectConfigError("action review mode is not allowed by the project policy")
+            raise ProjectConfigError(
+                f"action review mode {self.action_settings.review_mode} is not allowed by the "
+                "project policy, which permits "
+                + ", ".join(self.policy.allowed_action_review_modes)
+            )
         signers = self.policy.allowed_checkpoint_signer_profiles
         if (
             signers is not None
@@ -511,8 +515,16 @@ class ProjectConfigStore:
 
     def load(self) -> ProjectConfig:
         """Load configuration or return the unsaved platform default."""
+        return self._load()[1]
+
+    def narrowed_review_mode(self) -> ActionReviewMode | None:
+        """Return the stored review mode the deployment ceiling replaced, if any."""
+        stored, config = self._load()
+        return stored if stored != config.action_settings.review_mode else None
+
+    def _load(self) -> tuple[ActionReviewMode | None, ProjectConfig]:
         if not self.project.config_path.exists():
-            return self.default
+            return self.default.action_settings.review_mode, self.default
         if self.project.config_path.is_symlink() or not self.project.config_path.is_file():
             raise ProjectConfigError(".heartwood/config.toml must be a regular file")
         try:
@@ -520,10 +532,17 @@ class ProjectConfigStore:
         except (DurableFileError, OSError, tomllib.TOMLDecodeError) as error:
             raise ProjectConfigError(f"unable to load .heartwood/config.toml: {error}") from error
         config = project_config_from_mapping(value, project=self.project)
+        stored = config.action_settings.review_mode
         if self._deployment_policy is not None:
-            config = replace(config, policy=restrict_policy(config.policy, self._deployment_policy))
+            policy = restrict_policy(config.policy, self._deployment_policy)
+            settings = config.action_settings
+            if stored not in {None, *policy.allowed_action_review_modes}:
+                # Like a narrowed destination list, a narrowed ceiling applies on load:
+                # the most protective mode, which every policy permits, takes effect.
+                settings = replace(settings, review_mode="review-all")
+            config = replace(config, policy=policy, action_settings=settings)
         self._validate_config(config)
-        return config
+        return stored, config
 
     def save(self, config: ProjectConfig) -> None:
         """Persist validated configuration as owner-only TOML."""
@@ -534,10 +553,11 @@ class ProjectConfigStore:
     def update(self, transform: Callable[[ProjectConfig], ProjectConfig]) -> ProjectConfig:
         """Apply one read-modify-write operation under the project configuration lock."""
         with self.locked():
-            current = self.load()
+            stored, current = self._load()
             updated = transform(current)
             self._validate_config(updated)
-            if updated == current:
+            # A write also replaces a stored review mode the deployment ceiling narrowed.
+            if updated == current and stored == current.action_settings.review_mode:
                 return current
             self._save_unlocked(updated)
             return updated

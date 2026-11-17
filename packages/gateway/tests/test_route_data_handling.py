@@ -18,6 +18,7 @@ import pytest
 from heartwood.core_adapter import FileSessionStore
 from heartwood.gateway import (
     BUILT_IN_MODEL_CONNECTIONS,
+    ModelCatalogError,
     ModelCatalogService,
     ModelConnection,
     ModelSettingsError,
@@ -186,7 +187,12 @@ def test_route_change_records_the_new_descriptor_before_the_next_model_call(
         gateway.stop()
 
 
-def _gateway(tmp_path: Path, *, deployment_policy: PolicyProfile | None = None) -> SessionGateway:
+def _gateway(
+    tmp_path: Path,
+    *,
+    deployment_policy: PolicyProfile | None = None,
+    backend_id: str = "deterministic",
+) -> SessionGateway:
     project = _project(tmp_path)
     if deployment_policy is None:
         config = ProjectConfig(platform_id="generic", policy=_policy())
@@ -200,7 +206,7 @@ def _gateway(tmp_path: Path, *, deployment_policy: PolicyProfile | None = None) 
     return SessionGateway(
         project=project,
         env={},
-        backend_id="deterministic",
+        backend_id=backend_id,
         deployment_policy=deployment_policy,
         model_catalog_service=ModelCatalogService(
             openai_lister=models,
@@ -314,6 +320,27 @@ def test_profile_changes_that_keep_the_active_route_are_not_refused(tmp_path: Pa
         gateway.stop()
 
 
+def test_profile_edits_and_selection_apply_the_full_route_policy(tmp_path: Path) -> None:
+    gateway = _gateway(tmp_path, deployment_policy=_policy())
+    try:
+        gateway.discover_models("openai", token=_OPENAI_TOKEN)
+        gateway.connect_model("openai", "provider-model")
+        active = gateway.settings_store.load().profile("openai")
+        endpoint = "https://unlisted.example/v1/chat/completions"
+        moved = replace(active, base_url="https://unlisted.example/v1", policy_endpoint=endpoint)
+        with pytest.raises(ModelSettingsError, match="the policy does not permit this route"):
+            gateway.save_model_profile(moved)
+        assert gateway.settings_store.load().profile("openai") == active
+
+        # Storing another profile is not a selection; selecting it is.
+        gateway.save_model_profile(replace(moved, profile_id="unlisted"))
+        with pytest.raises(ModelSettingsError, match="the policy does not permit this route"):
+            gateway.select_model_profile("unlisted")
+        assert gateway.model_settings()["active_profile"] == "openai"
+    finally:
+        gateway.stop()
+
+
 def test_local_model_selection_applies_the_destination_restriction(tmp_path: Path) -> None:
     gateway = _gateway(tmp_path, deployment_policy=_policy(allowed_data_destinations=("provider",)))
     try:
@@ -388,3 +415,131 @@ def test_a_project_destination_list_stays_within_a_changed_deployment_list(
     store = ProjectConfigStore(project, default, deployment_policy=disjoint)
     with pytest.raises(ProjectConfigError, match="allowed_data_destinations"):
         store.load()
+
+
+def _readiness_check(gateway: SessionGateway, check_id: str) -> dict[str, object]:
+    checks = cast(list[dict[str, object]], gateway.project_readiness()["checks"])
+    return next(check for check in checks if check["check_id"] == check_id)
+
+
+def test_readiness_reports_a_route_the_deployment_destinations_exclude(tmp_path: Path) -> None:
+    gateway = _gateway(tmp_path, deployment_policy=_policy())
+    try:
+        gateway.discover_models("openai", token=_OPENAI_TOKEN)
+        gateway.connect_model("openai", "provider-model")
+    finally:
+        gateway.stop()
+
+    gateway = _gateway(
+        tmp_path, deployment_policy=_policy(allowed_data_destinations=("same-compute",))
+    )
+    try:
+        readiness = gateway.project_readiness()
+        route = _readiness_check(gateway, "configuration-coherence")
+        assert route["status"] == "fail"
+        assert "deployment policy" in str(route["summary"])
+        assert "data destination provider is not allowed" in str(route["summary"])
+        assert readiness["state"] == "recovery-required"
+        startup = gateway.startup_plan(interface="web")
+        assert startup["phase"] == "recovery-required"
+    finally:
+        gateway.stop()
+
+
+_LOCAL_ENDPOINT = "http://127.0.0.1:8765/v1/chat/completions"
+_ALL_ENDPOINTS = (*_policy().allowed_model_endpoints, _LOCAL_ENDPOINT)
+
+
+@pytest.mark.parametrize(
+    "destinations", [None, ("provider",), ("same-compute",), ("institution-managed",)]
+)
+@pytest.mark.parametrize(
+    "limits",
+    [
+        {},
+        # The managed local and Anthropic endpoints are not allowlisted.
+        {
+            "allowed_model_endpoints": [
+                "https://api.openai.com/v1/chat/completions",
+                "https://custom.example/v1/chat/completions",
+            ]
+        },
+        {"allowed_capability_tiers": ["experimental"]},
+        {"credential_allowlist": ["HEARTWOOD_CUSTOM_MODEL_API_KEY", "OPENAI_API_KEY"]},
+    ],
+    ids=["all-routes", "endpoints", "capability-tiers", "credentials"],
+)
+def test_readiness_selection_and_calls_agree_on_every_route(
+    tmp_path: Path, destinations: tuple[str, ...] | None, limits: dict[str, object]
+) -> None:
+    permissive = _policy(allowed_model_endpoints=_ALL_ENDPOINTS)
+    ceiling = _policy(
+        **{"allowed_model_endpoints": _ALL_ENDPOINTS, **limits},
+        allowed_data_destinations=destinations,
+    )
+    for route in ("openai", "anthropic", "custom-api", "heartwood"):
+        # Selection: a fresh project selects the route under the deployment policy.
+        fresh = _gateway(tmp_path / route / "fresh", deployment_policy=ceiling)
+        try:
+            try:
+                _select_route(fresh, route)
+            except (ModelCatalogError, ModelSettingsError, ProjectConfigError):
+                # Discovery applies the same policy, so a refused catalog refuses selection.
+                selection_allows = False
+            else:
+                selection_allows = True
+        finally:
+            fresh.stop()
+
+        # Readiness and the call: a route selected before the policy applied.
+        project_root = tmp_path / route / "existing"
+        earlier = _gateway(project_root, deployment_policy=permissive)
+        try:
+            _select_route(earlier, route)
+        finally:
+            earlier.stop()
+        # The session's OpenHands backend makes the decision each model call receives;
+        # no model is called.
+        gateway = _gateway(project_root, deployment_policy=ceiling, backend_id="openhands")
+        try:
+            readiness = _readiness_check(gateway, "configuration-coherence")
+            readiness_allows = readiness["status"] == "pass"
+            assert readiness_allows or "deployment policy" in str(readiness["summary"])
+            validation = gateway.validate_model_profile()["policy_decision"]
+            validation_allows = cast(dict[str, object], validation)["decision"] == "allow"
+            call = gateway._service("session-1").model_route_decision(
+                decision_id="call-model-route", purpose="agent turn"
+            )
+            call_allows = call.decision == "allow"
+        finally:
+            gateway.stop()
+
+        assert readiness_allows == selection_allows == validation_allows == call_allows, (
+            route,
+            destinations,
+            limits,
+        )
+
+
+def _select_route(gateway: SessionGateway, route: str) -> None:
+    if route == "heartwood":
+        model_id = "qwen25-7b-instruct-q4_k_m"
+        model_path = gateway.project.models_dir / model_id / "model.gguf"
+        model_path.parent.mkdir(parents=True, exist_ok=True)
+        model_path.write_bytes(b"synthetic")
+        gateway.local_models.select_downloaded_local_model(model_id, model_path, "llama-cpp-cpu")
+    elif route == "custom-api":
+        gateway.connect_model(
+            "custom-api",
+            "custom-coder",
+            token="synthetic-custom-token",
+            base_url="https://custom.example/v1",
+            manual=True,
+        )
+    else:
+        gateway.discover_models(
+            route, token=_ANTHROPIC_TOKEN if route == "anthropic" else _OPENAI_TOKEN
+        )
+        gateway.connect_model(
+            route, "claude-synthetic" if route == "anthropic" else "provider-model"
+        )

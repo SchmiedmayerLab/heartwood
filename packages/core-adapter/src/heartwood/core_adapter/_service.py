@@ -114,6 +114,7 @@ from heartwood.schemas import (
     ActionReviewMode,
     ConfirmationRequest,
     JsonValue,
+    ModelCallDecision,
     ModelDataHandling,
     PolicyProfile,
 )
@@ -1454,6 +1455,17 @@ class SessionService:
         )
         return (user_event, *authorization_events, *self._translate_backend_events(stream))
 
+    def model_route_decision(self, *, decision_id: str, purpose: str) -> ModelCallDecision:
+        """Evaluate the session policy for the backend's model route, as each model call does."""
+        return self.policy.evaluate(
+            endpoint=self.backend.model_endpoint,
+            capability_tier=self.backend.capability_tier,
+            credential_reference=self.backend.credential_reference,
+            data_handling=self.model_data_handling,
+            decision_id=decision_id,
+            purpose=purpose,
+        )
+
     def _authorize_backend(
         self,
         command: SessionCommand,
@@ -1483,13 +1495,8 @@ class SessionService:
                     },
                 )
             ]
-        decision = self.policy.evaluate(
-            endpoint=self.backend.model_endpoint,
-            capability_tier=self.backend.capability_tier,
-            credential_reference=self.backend.credential_reference,
-            data_handling=self.model_data_handling,
-            decision_id=f"{command.command_id}-model-route",
-            purpose=purpose,
+        decision = self.model_route_decision(
+            decision_id=f"{command.command_id}-model-route", purpose=purpose
         )
         attestation = self.policy.attestation(
             decision=decision,

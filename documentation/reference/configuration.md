@@ -65,7 +65,8 @@ review_mode = "review-changes"
 `review_mode` is `review-all`, `review-changes`, or `review-outside-effects`.
 When it is absent, sessions in an isolated worker use `review-outside-effects` and all other sessions use `review-all`.
 The effective mode is `review-all` whenever the selection is outside `allowed_action_review_modes`, needs an isolated worker the session does not have, or reduces review outside an isolated worker while the model credential is not isolated from the tool runtime.
-A stored `review_mode` that the effective ceiling no longer permits stops the project from loading until the selection is reset or the manifest permits it.
+Under a deployment manifest, a stored `review_mode` that the manifest's ceiling no longer permits is replaced by `review-all` when the project loads, as a narrowed destination list is applied.
+The change is recorded in each session before its next model dispatch, `heartwood doctor`, the browser and `gateway serve` report it as [`HW-SETUP-003`](troubleshooting.md#hw-setup-003-stored-review-mode-is-not-permitted-by-the-deployment) with the stored and effective modes, and selecting any permitted mode replaces the stored one.
 
 The selection has one of two scopes, reported as `scope` by `GET /settings/actions` and `heartwood actions`:
 
@@ -103,6 +104,7 @@ The gateway applies a manifest's `allowed_data_destinations` every time it loads
 a project without its own list uses the manifest's, and a project list keeps only the destinations both permit.
 A project list that shares no destination with the manifest's stops the gateway from loading the project until one of them changes.
 An active route outside the list stays selected, but model validation reports it as denied and each model call is refused until a permitted route is selected.
+`heartwood doctor` and the browser readiness view report such a route as [`HW-SETUP-002`](troubleshooting.md#hw-setup-002-model-and-policy-settings-do-not-agree) with the policy's reason.
 
 ## Deployment Manifest
 

@@ -16,7 +16,13 @@ import tomli_w
 import uvicorn
 
 from heartwood.cli import main
-from heartwood.gateway import GatewayAsgiApp, SessionGateway, load_project_deployment
+from heartwood.gateway import (
+    GatewayAsgiApp,
+    ModelCatalogService,
+    ProviderModel,
+    SessionGateway,
+    load_project_deployment,
+)
 from heartwood.notebook import NotebookSession
 from heartwood.schemas import PolicyProfile
 
@@ -266,3 +272,151 @@ def test_doctor_browser_and_notebook_report_the_same_manifest_policy(
     local = json.loads(capsys.readouterr().out)["policy"]
     assert local["source"] == "platform"
     assert local["manifest"] is None
+
+
+def test_doctor_reports_a_route_the_manifest_destinations_exclude(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    workspace = tmp_path / "research"
+    workspace.mkdir()
+    (tmp_path / "protected").mkdir(mode=0o700)
+    identity = str(uuid4())
+    manifest = tmp_path / "deployment.toml"
+    policy: dict[str, object] = {
+        "policy_id": "site-policy",
+        "platform_id": "generic",
+        "allowed_model_endpoints": ["https://api.openai.com/v1/chat/completions"],
+        "allowed_model_catalog_endpoints": ["https://api.openai.com/v1/models"],
+        "allowed_capability_tiers": ["supervised"],
+        "allowed_action_review_modes": ["review-all"],
+        "credential_allowlist": ["OPENAI_API_KEY"],
+    }
+
+    def write_manifest() -> None:
+        manifest.write_text(
+            tomli_w.dumps(
+                {
+                    "schema_version": "heartwood.project-deployment.v1",
+                    "project_id": identity,
+                    "workspace": str(workspace),
+                    "state_root": str(tmp_path / "protected" / identity),
+                    "policy": policy,
+                }
+            )
+        )
+        manifest.chmod(0o600)
+
+    write_manifest()
+    monkeypatch.chdir(workspace)
+    monkeypatch.setenv("HEARTWOOD_PLATFORM", "generic")
+    gateway = SessionGateway(
+        deployment=load_project_deployment(manifest, project_root=workspace),
+        backend_id="deterministic",
+        model_catalog_service=ModelCatalogService(
+            openai_lister=lambda _connection, _key: (ProviderModel("provider-model"),),
+            compatibility=lambda _connection, _model: ("available", "verified", None, True),
+        ),
+    )
+    try:
+        gateway.discover_models("openai", token="synthetic-openai-token-value")
+        gateway.connect_model("openai", "provider-model")
+    finally:
+        gateway.stop()
+
+    policy["allowed_data_destinations"] = ["same-compute"]
+    write_manifest()
+    assert main(["doctor", "--json", "--deployment", str(manifest)]) == 1
+    readiness = json.loads(capsys.readouterr().out)
+    route = next(
+        check for check in readiness["checks"] if check["check_id"] == "configuration-coherence"
+    )
+    assert route["status"] == "fail"
+    assert route["code"] == "HW-SETUP-002"
+    assert "deployment policy" in route["summary"]
+    assert "data destination provider is not allowed" in route["summary"]
+    assert readiness["policy"]["data_destinations"] == ["same-compute"]
+
+
+def test_doctor_browser_and_serve_report_a_review_mode_the_manifest_narrowed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    workspace = tmp_path / "research"
+    workspace.mkdir()
+    (tmp_path / "protected").mkdir(mode=0o700)
+    identity = str(uuid4())
+    manifest = tmp_path / "deployment.toml"
+
+    def write_manifest(*modes: str) -> None:
+        manifest.write_text(
+            tomli_w.dumps(
+                {
+                    "schema_version": "heartwood.project-deployment.v1",
+                    "project_id": identity,
+                    "workspace": str(workspace),
+                    "state_root": str(tmp_path / "protected" / identity),
+                    "policy": {
+                        "policy_id": "site-policy",
+                        "platform_id": "generic",
+                        "allowed_action_review_modes": list(modes),
+                    },
+                }
+            )
+        )
+        manifest.chmod(0o600)
+
+    write_manifest("review-all", "review-changes")
+    monkeypatch.chdir(workspace)
+    monkeypatch.setenv("HEARTWOOD_PLATFORM", "generic")
+    gateway = SessionGateway(
+        deployment=load_project_deployment(manifest, project_root=workspace),
+        backend_id="deterministic",
+    )
+    try:
+        gateway.select_action_review_mode("review-changes")
+    finally:
+        gateway.stop()
+
+    write_manifest("review-all")
+    assert main(["doctor", "--json", "--deployment", str(manifest)]) == 0
+    reported = json.loads(capsys.readouterr().out)
+    checks = {check["check_id"]: check for check in reported["checks"]}
+    assert checks["configuration"]["status"] == "pass"
+    review = checks["action-review"]
+    assert review["status"] == "warning"
+    assert review["code"] == "HW-SETUP-003"
+    assert "Review Changes" in review["summary"]
+    assert reported["state"] != "recovery-required"
+    assert reported["policy"]["action_review_modes"] == ["review-all"]
+
+    browser = SessionGateway(
+        deployment=load_project_deployment(manifest, project_root=workspace),
+        backend_id="deterministic",
+    )
+    try:
+        assert browser.project_readiness()["checks"] == reported["checks"]
+        assert browser.startup_plan(interface="web")["readiness"]["checks"] == reported["checks"]
+        assert browser.action_settings()["review_mode"] == "review-all"
+    finally:
+        browser.stop()
+
+    # The gateway serves the project and reports the narrowed mode when it starts.
+    web = tmp_path / "web"
+    web.mkdir()
+    (web / "index.html").write_text("<main>Synthetic</main>")
+    served: list[str] = []
+
+    def run(server: uvicorn.Server, **_kwargs: object) -> None:
+        app = server.config.app
+        assert isinstance(app, GatewayAsgiApp)
+        served.append(str(app.gateway.action_settings()["review_mode"]))
+        app.gateway.stop()
+
+    monkeypatch.setattr("heartwood.cli.uvicorn.Server.run", run)
+    monkeypatch.setattr(
+        "heartwood.cli.uvicorn.Config.bind_socket",
+        lambda _config: socket.create_server(("127.0.0.1", 0)),
+    )
+    arguments = ["gateway", "serve", "--deployment", str(manifest), "--web-root", str(web)]
+    assert main([*arguments, "--ingress-mode", "direct-loopback"]) == 0
+    assert served == ["review-all"]
+    assert f"HW-SETUP-003: {review['summary']}" in capsys.readouterr().err
