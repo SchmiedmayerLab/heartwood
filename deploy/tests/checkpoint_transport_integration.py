@@ -27,7 +27,12 @@ import pytest
 import tomli_w
 from cryptography.hazmat.primitives import serialization
 
-from deploy.tests.checkpoint_records_integration import ObjectStore, QualificationClient, signer
+from deploy.tests.checkpoint_records_integration import (
+    ObjectStore,
+    QualificationClient,
+    conditional_write_policy,
+    signer,
+)
 from heartwood.audit import (
     AuditCheckpointError,
     CheckpointSignerError,
@@ -156,7 +161,6 @@ class RecordsTransport:
 @contextmanager
 def records_transport(
     binary: Path,
-    admin: Path,
     image: str,
     output: Path,
     *,
@@ -171,7 +175,7 @@ def records_transport(
     output.mkdir(mode=0o700)
     owned: list[ObjectStore] = []
     authority_process: subprocess.Popen[bytes] | None = None
-    report: dict[str, Any] = {"image": image, "checks": [], "passed": False}
+    report: dict[str, Any] = {"image": image, "store": binary.name, "checks": [], "passed": False}
     checks = report["checks"]
     try:
         ca = server_certificates(output / "tls")
@@ -181,57 +185,10 @@ def records_transport(
         root = server.client()
         bucket, prefix = "synthetic-evidence", "audit"
         root.create_bucket(Bucket=bucket, ObjectLockEnabledForBucket=True)
-        conditional_policy = {
-            "Version": "2012-10-17",
-            "Statement": [
-                {
-                    "Effect": "Deny",
-                    "Principal": "*",
-                    "Action": "s3:PutObject",
-                    "Resource": f"arn:aws:s3:::{bucket}/{prefix}/*",
-                    "Condition": {"Null": {"s3:if-none-match": "true"}},
-                }
-            ],
-        }
-        (output / "conditional-bucket-policy.json").write_text(json.dumps(conditional_policy))
-        conditional_enforcement = True
-        try:
-            root.put_bucket_policy(Bucket=bucket, Policy=json.dumps(conditional_policy))
-        except Exception as error:
-            response = getattr(error, "response", {}).get("Error", {})
-            if "invalid condition key 's3:if-none-match'" not in response.get("Message", ""):
-                raise
-            conditional_enforcement = False
-            report["conditional_policy_rejection"] = response
-        report["conditional_write_enforcement"] = conditional_enforcement
+        conditional_write_policy(server, bucket, report)
         report["records_policy_qualified"] = False
-        admin_home = output / "admin"
-        admin_home.mkdir(mode=0o700)
-        trust = admin_home / "certs/CAs"
-        trust.mkdir(parents=True, mode=0o700)
-        (trust / "synthetic.crt").write_bytes(ca.read_bytes())
-
-        def mc(*args: str) -> None:
-            result = subprocess.run(
-                [str(admin), "--config-dir", str(admin_home), "--json", *args],
-                env={**os.environ, "SSL_CERT_FILE": str(ca)},
-                capture_output=True,
-                timeout=30,
-            )
-            if result.returncode:
-                raise RuntimeError(
-                    "synthetic records administration failed: "
-                    + result.stdout.decode()[-1200:]
-                    + result.stderr.decode()[-1200:]
-                )
-
-        mc("alias", "set", "synthetic", server.endpoint, server.access, server.secret)
-        identities = {
-            name: ("synthetic-" + name, secrets.token_hex(24))
-            for name in ("gateway", "signer", "worker")
-        }
-        for name, (access, secret) in identities.items():
-            mc("admin", "user", "add", "synthetic", access, secret)
+        identities = {}
+        for name in ("gateway", "signer", "worker"):
             statements: list[dict[str, object]]
             if name == "worker":
                 statements = [
@@ -263,10 +220,7 @@ def records_transport(
                         ],
                     },
                 ]
-            policy = output / f"{name}-policy.json"
-            policy.write_text(json.dumps({"Version": "2012-10-17", "Statement": statements}))
-            mc("admin", "policy", "create", "synthetic", name, str(policy))
-            mc("admin", "policy", "attach", "synthetic", name, "--user", access)
+            identities[name] = server.identity("synthetic-" + name, statements)
         checks.append(
             "distinct gateway, signer and worker identities have server-enforced policies"
         )
@@ -416,7 +370,7 @@ def records_transport(
             server.stop()
         report["cleanup"] = {
             "authority_stopped": authority_process is None or authority_process.poll() is not None,
-            "records_stopped": all(server.process.poll() is not None for server in owned),
+            "records_stopped": all(server.stopped for server in owned),
         }
         report["limitations"] = [
             "Synthetic identities, TLS authority and signing key; "
@@ -424,16 +378,16 @@ def records_transport(
         ]
         if report.get("conditional_write_enforcement") is False:
             report["limitations"].append(
-                "Records server rejects conditional-write policy; storage policy qualification "
-                "is incomplete despite fail-closed duplicate-version detection"
+                "Records server does not enforce the conditional-write policy; storage policy "
+                "qualification is incomplete despite fail-closed duplicate-version detection"
             )
         (output / "transport-result.json").write_text(json.dumps(report, indent=2) + "\n")
         print(json.dumps(report, indent=2))
 
 
-def run(binary: Path, admin: Path, image: str, output: Path) -> None:
+def run(binary: Path, image: str, output: Path) -> None:
     """Qualify storage authorization, retained evidence and failure recovery."""
-    with records_transport(binary, admin, image, output) as transport:
+    with records_transport(binary, image, output) as transport:
         server, project, root = transport.server, transport.project, transport.root
         settings, credentials = transport.settings, transport.credentials
         endpoint, ca, token = transport.endpoint, transport.ca, transport.token
@@ -550,6 +504,7 @@ def run(binary: Path, admin: Path, image: str, output: Path) -> None:
                         **{k: v for k, v in common_write.items() if k != "IfNoneMatch"},
                         Key=namespace + "/candidates/unconditional.jsonl",
                     )
+                    checks.append("store refuses an unconditional write by the gateway identity")
                 control = root.put_object(
                     Bucket=bucket, Key="worker-control/probe", Body=b"synthetic positive control"
                 )
@@ -610,11 +565,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--serve-authority", type=Path)
     parser.add_argument("--server-binary", type=Path)
-    parser.add_argument("--admin-binary", type=Path)
     parser.add_argument("--image")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     if args.serve_authority:
         serve_authority(args.serve_authority)
     else:
-        run(args.server_binary, args.admin_binary, args.image, args.output)
+        run(args.server_binary, args.image, args.output)

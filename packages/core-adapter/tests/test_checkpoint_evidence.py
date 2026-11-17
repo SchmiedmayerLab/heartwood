@@ -19,7 +19,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from heartwood.audit import LocalEd25519CheckpointSigner, checkpoint_public_key_fingerprint
 from heartwood.audit._anchored_signer import AnchoredCheckpointSigner
-from heartwood.audit._checkpoint import _canonical_checkpoint
+from heartwood.audit._checkpoint import AuditCheckpointError, _canonical_checkpoint
 from heartwood.audit._records_s3 import CheckpointAuthorityScope, S3CheckpointRecords
 from heartwood.core_adapter import (
     BackendEvent,
@@ -38,8 +38,8 @@ from heartwood.schemas import (
     AuditCheckpointStatement,
     AuditRetention,
 )
-from heartwood.session import CommandKind, EventKind, SessionCommand
-from packages.audit.tests.records_fixtures import MemoryS3
+from heartwood.session import CommandKind, EventKind, SessionCommand, SessionEvent
+from packages.audit.tests.records_fixtures import MemoryS3, StoredObject
 
 
 class RecordingBackend(DeterministicAgentBackend):
@@ -384,24 +384,115 @@ def test_outage_retries_record_one_pending_event_per_boundary(
     env.service.close()
 
 
-def test_boundary_verifies_retained_history_once_before_and_once_after_publication(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def _boundary(env: Environment) -> tuple[SessionEvent, ...]:
+    return env.service._checkpoint_boundary(env.service._record_event(EventKind.SESSION_PAUSED, {}))
+
+
+def test_boundary_reads_a_bounded_number_of_records(tmp_path: Path) -> None:
     env = environment(tmp_path)
     env.service.handle(pending_approval(env))
-    for _ in range(3):
-        env.service._checkpoint_boundary(env.service._record_event(EventKind.SESSION_PAUSED, {}))
-    passes: list[int] = []
-    history = env.evidence.records.history
-
-    def counted() -> tuple[object, ...]:
-        retained = history()
-        passes.append(len(retained))
-        return retained
-
-    monkeypatch.setattr(env.evidence.records, "history", counted)
-    env.service._checkpoint_boundary(env.service._record_event(EventKind.SESSION_PAUSED, {}))
-    # The gateway verifies the predecessors, the signing authority verifies them
-    # independently, and the gateway then verifies the history including the new ordinal.
-    assert passes == [4, 4, 5]
+    reads = []
+    for _ in range(12):
+        before = env.client.reads
+        _boundary(env)
+        reads.append(env.client.reads - before)
+    # The gateway reads back its staged candidate and then the new checkpoint and its
+    # candidate; the signing authority reads six records. Neither depends on history length.
+    assert reads == [9] * 12
+    assert len(env.evidence.records.history()) == 13
     env.service.close()
+
+
+def test_failed_boundary_verifies_the_complete_history_again(tmp_path: Path) -> None:
+    env = environment(tmp_path)
+    env.service.handle(pending_approval(env))
+    for _ in range(4):
+        _boundary(env)
+    env.client.unavailable = True
+    with pytest.raises(CheckpointEvidenceUnavailableError):
+        _boundary(env)
+    env.client.unavailable = False
+    reads = []
+    for _ in range(2):
+        before = env.client.reads
+        _boundary(env)
+        reads.append(env.client.reads - before)
+    # The outage failed the gateway's first listing, so only the gateway discards its
+    # verification and rereads the five retained checkpoints and their candidates.
+    assert reads == [9 + 2 * 5, 9]
+    env.service.close()
+
+
+def _retained_key(env: Environment, ordinal: int) -> str:
+    return next(key for key in env.client.objects if key.endswith(f"/{ordinal:020d}.json"))
+
+
+@pytest.mark.parametrize("ordinal", [1, 2, 3], ids=["genesis", "middle", "head"])
+@pytest.mark.parametrize(
+    "fault", ["modified", "replacement-version", "different-version", "missing", "delete-marker"]
+)
+def test_changed_verified_history_blocks_the_next_boundary(
+    tmp_path: Path, ordinal: int, fault: str
+) -> None:
+    env = environment(tmp_path)
+    command = pending_approval(env)
+    env.service.handle(command)
+    _boundary(env)
+    _boundary(env)
+    key = _retained_key(env, ordinal)
+    stored = env.client.objects[key][0]
+    if fault == "modified":
+        stored.content += b"\n"
+    elif fault == "replacement-version":
+        env.client.objects[key].append(StoredObject(stored.content, stored.deadline, "hidden"))
+    elif fault == "different-version":
+        env.client.objects[key] = [StoredObject(stored.content, stored.deadline, "different")]
+    elif fault == "missing":
+        del env.client.objects[key]
+    else:
+        env.client.delete_markers.append(key)
+    with pytest.raises(CheckpointEvidenceUnavailableError):
+        _boundary(env)
+    assert sum("/checkpoints/" in key for key in env.client.objects) == 3 - (fault == "missing")
+    assert env.service.replay_events()[-1].payload["status"] == "pending"
+
+
+def test_restart_and_audit_verification_read_the_complete_history(tmp_path: Path) -> None:
+    env = environment(tmp_path)
+    env.service.handle(pending_approval(env))
+    for _ in range(5):
+        _boundary(env)
+    env.service.close()
+    restarted = SessionCheckpointEvidence(
+        records=env.evidence.records,
+        signer=env.authority,
+        trusted_keys=env.evidence.trusted_keys,
+        mode="required",
+    )
+    before = env.client.reads
+    assert len(restarted.records.verified_history(restarted.trusted_keys).checkpoints) == 7
+    # Each retained checkpoint and its audit candidate.
+    assert env.client.reads - before == 14
+
+    # Bytes changed behind unchanged version metadata are found only by rereading them.
+    stored = env.client.objects[_retained_key(env, 2)][0]
+    checkpoint = AuditCheckpoint.model_validate_json(stored.content)
+    stored.etag = stored.entity_tag
+    stored.content = _canonical_checkpoint(
+        checkpoint.model_copy(
+            update={
+                "signature": checkpoint.signature.model_copy(
+                    update={"value": base64.b64encode(bytes(64)).decode("ascii")}
+                )
+            }
+        )
+    ).encode()
+    with pytest.raises(AuditCheckpointError):
+        restarted.records.verified_history(restarted.trusted_keys)
+    service = SessionService.local_default(
+        tmp_path / "project", backend=env.backend, env={}, checkpoint_evidence=restarted
+    )
+    service.store.acquire_writer()
+    with pytest.raises(CheckpointEvidenceUnavailableError):
+        service._checkpoint_boundary(service._record_event(EventKind.SESSION_PAUSED, {}))
+    assert sum("/checkpoints/" in key for key in env.client.objects) == 7

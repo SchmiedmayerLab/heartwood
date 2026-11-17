@@ -411,8 +411,7 @@ class NativeFixture:
         assert self.records is None
         self.records = self.resources.enter_context(
             records_transport(
-                Path("/opt/qualification/bin/minio"),
-                Path("/opt/qualification/bin/mc"),
+                Path("/opt/qualification/bin/versitygw"),
                 self.controller_image,
                 self.private / "records",
                 project=project,

@@ -26,6 +26,7 @@ from qualification_evidence import (
     drill_results,
     failures,
     image_source,
+    records_service,
     write_checksums,
 )
 
@@ -201,12 +202,10 @@ def qualify(
         or records_build["sources"] != records_manifest["sources"]
         or set(records_build["files"])
         != {
-            "bin/minio",
-            "bin/mc",
-            "LICENSE.minio",
-            "LICENSE.mc",
-            "minio-source.tar.gz",
-            "mc-source.tar.gz",
+            "bin/versitygw",
+            "LICENSE.versitygw",
+            "NOTICE.versitygw",
+            "versitygw-source.tar.gz",
         }
     ):
         raise ValueError("Records artifacts do not match the reviewed build inputs")
@@ -509,6 +508,7 @@ def qualify(
         "returncode": result.returncode,
         "network_retained": retained,
         "cases": cases(output / "junit.xml"),
+        "records_service": records_service(output),
         "sensitive_data_ready": False,
     }
     evidence["failures"] = failures(evidence)

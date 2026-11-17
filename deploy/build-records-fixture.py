@@ -53,9 +53,9 @@ def build(output: Path, cache: Path) -> None:
     builder_hash = digest(Path(__file__))
     manifest = json.loads(MANIFEST.read_text())
     if (
-        manifest["schema_version"] != 1
+        manifest["schema_version"] != 2
         or manifest["purpose"] != "qualification-only"
-        or set(manifest["sources"]) != {"minio", "mc"}
+        or set(manifest["sources"]) != {"versitygw"}
         or "@sha256:" not in manifest["builder"]
     ):
         raise ValueError("Unsupported records fixture manifest")
@@ -88,7 +88,8 @@ def build(output: Path, cache: Path) -> None:
             checkout = staging / source["directory"]
             if not checkout.is_dir():
                 raise ValueError("Records source archive root is missing")
-            shutil.copyfile(checkout / "LICENSE", output / f"LICENSE.{name}")
+            for notice in source["notices"]:
+                shutil.copyfile(checkout / notice, output / f"{notice}.{name}")
             (output / f"{name}-source.tar.gz").write_bytes(archive)
             subprocess.run(
                 [
@@ -133,8 +134,12 @@ def build(output: Path, cache: Path) -> None:
                     "--workdir",
                     "/source",
                     "--entrypoint",
-                    "go",
+                    "sh",
                     manifest["builder"],
+                    "-c",
+                    # A restored module cache is not rehashed by a build; verify it first.
+                    'go mod verify && exec go "$@"',
+                    "go",
                     "build",
                     "-mod=readonly",
                     "-trimpath",
@@ -143,7 +148,7 @@ def build(output: Path, cache: Path) -> None:
                     "-ldflags=-s -w",
                     "-o",
                     f"/output/{name}",
-                    ".",
+                    source["package"],
                 ],
                 check=True,
             )

@@ -30,6 +30,7 @@ _ROOT = Path(__file__).resolve().parents[3]
 _COMMIT = "1" * 40
 _OTHER_COMMIT = "2" * 40
 _KIND = "synthetic-native"
+_RECORDS = {"store": "versitygw", "conditional_write_enforcement": True, "passed": True}
 
 
 @pytest.fixture
@@ -68,7 +69,14 @@ def _manifest(evidence: ModuleType) -> dict[str, Any]:
             {"id": identifier, "outcome": "passed", "seconds": 1.5}
             for identifier in sorted(evidence.EXPECTED_CASES[_KIND])
         ],
+        "records_service": dict(_RECORDS),
     }
+
+
+def _write_records_result(directory: Path, **changes: object) -> None:
+    path = directory / "records-service" / "records-result.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(_RECORDS | {"checks": ["synthetic"]} | changes))
 
 
 def test_report_cases_keep_their_identity_and_outcome(evidence: ModuleType, tmp_path: Path) -> None:
@@ -154,6 +162,16 @@ def _skipped_case(manifest: dict[str, Any]) -> None:
         (
             lambda manifest: manifest.update(qualification_sources_unchanged=False),
             "qualification sources changed during the run",
+        ),
+        (
+            lambda manifest: manifest["records_service"].update(
+                conditional_write_enforcement=False
+            ),
+            "the records store did not enforce create-only publication",
+        ),
+        (
+            lambda manifest: manifest.update(records_service=None),
+            "the records store did not enforce create-only publication",
         ),
     ],
 )
@@ -271,6 +289,7 @@ def _package(evidence: ModuleType, directory: Path, manifest: dict[str, Any]) ->
     (case / "private").mkdir(parents=True)
     (case / "evidence.json").write_text("{}\n")
     (case / "private" / "credential").write_text("generated")
+    _write_records_result(directory)
     (directory / "requested-model-profile.json").write_text("{}\n")
     _write_report(
         directory / "junit.xml",
@@ -292,6 +311,7 @@ def test_checksums_cover_only_retained_evidence(evidence: ModuleType, tmp_path: 
         "qualification.json",
         "drill-results.json",
         "test_case[a]/evidence.json",
+        "records-service/records-result.json",
     }
     assert listed["test_case[a]/evidence.json"] == hashlib.sha256(b"{}\n").hexdigest()
     assert evidence.verify(tmp_path, _COMMIT) == []
@@ -331,12 +351,20 @@ def test_verification_rejects_changed_or_overstated_evidence(
     _rewrite_manifest(
         tmp_path, lambda manifest: manifest["image_sources"]["worker"].update(revision=_COMMIT)
     )
+    removed = json.loads((tmp_path / "qualification.json").read_text())["cases"][0]
     _rewrite_manifest(tmp_path, _reduced_selection)
     evidence.write_checksums(tmp_path)
     assert evidence.verify(tmp_path) == [
         "the recorded cases differ from the test report",
         "the drill results differ from the recorded evidence",
         "the executed cases differ from the expected set",
+    ]
+
+    _rewrite_manifest(tmp_path, lambda manifest: manifest["cases"].insert(0, removed))
+    _write_records_result(tmp_path, conditional_write_enforcement=False)
+    evidence.write_checksums(tmp_path)
+    assert evidence.verify(tmp_path) == [
+        "the recorded records result differs from records-service/records-result.json"
     ]
 
     (tmp_path / "SHA256SUMS").write_text(f"{hashlib.sha256(b'outside').hexdigest()}  ../outside\n")
@@ -393,6 +421,7 @@ def _drill_package(
             (directory / name.rpartition("::")[2]).mkdir()
             (directory / name.rpartition("::")[2] / "evidence.json").write_text(json.dumps(record))
     _write_report(directory / "junit.xml", dict.fromkeys(cases))
+    _write_records_result(directory)
     manifest = manifest | {"failures": evidence.failures(manifest), "passed": True}
     (directory / "qualification.json").write_text(json.dumps(manifest))
     (directory / "drill-results.json").write_text(json.dumps(evidence.drill_results(directory)))
@@ -546,12 +575,10 @@ def _reviewed_inputs(tmp_path: Path) -> tuple[Path, Path]:
     records = tmp_path / "records"
     (records / "bin").mkdir(parents=True)
     names = (
-        "bin/minio",
-        "bin/mc",
-        "LICENSE.minio",
-        "LICENSE.mc",
-        "minio-source.tar.gz",
-        "mc-source.tar.gz",
+        "bin/versitygw",
+        "LICENSE.versitygw",
+        "NOTICE.versitygw",
+        "versitygw-source.tar.gz",
     )
     for name in names:
         (records / name).write_text("synthetic records artifact")
@@ -622,6 +649,7 @@ def test_runner_binds_its_result_to_the_images_own_source(
             Path(arguments[arguments.index("--iidfile") + 1]).write_text("sha256:built")
         for argument in arguments:
             if argument.startswith("--junitxml="):
+                _write_records_result(output)
                 _write_report(
                     Path(argument.removeprefix("--junitxml=")),
                     dict.fromkeys(executed),

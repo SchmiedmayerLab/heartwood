@@ -25,6 +25,7 @@ from openhands.sdk.tool.client_tool import ClientToolSpec
 from pydantic import JsonValue
 from worker_native_fixture import PYTHON, NativeFixture, command
 
+from deploy.tests.checkpoint_records_integration import run as qualify_records_service
 from deploy.tests.checkpoint_transport_integration import run as qualify_records_transport
 from heartwood.audit import (
     checkpoint_public_key_fingerprint,
@@ -153,8 +154,7 @@ def test_records_transport_authorization() -> None:
     private = output / "private"
     try:
         qualify_records_transport(
-            Path("/opt/qualification/bin/minio"),
-            Path("/opt/qualification/bin/mc"),
+            Path("/opt/qualification/bin/versitygw"),
             os.environ["HW_CONTROLLER_IMAGE"],
             private,
         )
@@ -164,6 +164,25 @@ def test_records_transport_authorization() -> None:
             report = json.loads(result.read_text())
             shutil.copyfile(result, output / "records-result.json")
             if all(report["cleanup"].values()):
+                shutil.rmtree(private)
+                (output / "cleanup.json").write_text('{"complete": true}\n')
+
+
+def test_records_service_qualification() -> None:
+    """Qualify publication, retention, recovery and restore against the pinned records server."""
+    output = Path(os.environ["HW_QUALIFICATION_OUTPUT"]) / "records-service"
+    output.mkdir(mode=0o700)
+    private = output / "private"
+    try:
+        qualify_records_service(
+            Path("/opt/qualification/bin/versitygw"), os.environ["HW_CONTROLLER_IMAGE"], private
+        )
+    finally:
+        result = private / "result.json"
+        if result.is_file():
+            report = json.loads(result.read_text())
+            shutil.copyfile(result, output / "records-result.json")
+            if report["cleanup"]["records_stopped"]:
                 shutil.rmtree(private)
                 (output / "cleanup.json").write_text('{"complete": true}\n')
 

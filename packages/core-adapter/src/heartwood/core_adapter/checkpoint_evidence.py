@@ -11,12 +11,12 @@ from collections.abc import Callable, Mapping
 from typing import Literal, cast
 
 from heartwood.audit import AuditIntegrityError, canonical_audit_jsonl, verify_audit_jsonl
-from heartwood.audit._continuity import (
-    RetainedCheckpoint,
-    checkpoint_context,
-    verify_checkpoint_extension,
+from heartwood.audit._continuity import checkpoint_context, checkpoint_digest
+from heartwood.audit._records_s3 import (
+    RecordsUnavailableError,
+    S3CheckpointRecords,
+    VerifiedHistory,
 )
-from heartwood.audit._records_s3 import RecordsUnavailableError, S3CheckpointRecords
 from heartwood.audit._signer import (
     CheckpointPublicKey,
     CheckpointSigner,
@@ -24,7 +24,12 @@ from heartwood.audit._signer import (
     verify_checkpoint_signature,
 )
 from heartwood.core_adapter._state import FileSessionStore, SessionRecoveryError
-from heartwood.schemas import AuditCheckpointContext, AuditCheckpointStatement, JsonValue
+from heartwood.schemas import (
+    AuditCheckpoint,
+    AuditCheckpointContext,
+    AuditCheckpointStatement,
+    JsonValue,
+)
 from heartwood.session import EventKind, SessionEvent
 
 type RecordEvent = Callable[[EventKind, dict[str, JsonValue]], SessionEvent]
@@ -41,6 +46,9 @@ class SessionCheckpointEvidence:
     Only the independently authorized signer may publish checkpoint ordinals.
     Required mode returns only after reading the externally retained signature;
     buffered mode records a visible gap when the records boundary is unavailable.
+
+    The first boundary verifies the complete retained history. Later boundaries
+    extend that verification and reject any change to it; a failure discards it.
     """
 
     def __init__(
@@ -58,6 +66,7 @@ class SessionCheckpointEvidence:
         self.signer = signer
         self.trusted_keys = dict(trusted_keys)
         self.mode = mode
+        self._verified: VerifiedHistory | None = None
 
     def ensure(
         self,
@@ -113,40 +122,19 @@ class SessionCheckpointEvidence:
                     "boundary_sequence": boundary.sequence,
                     "mode": effective_mode,
                     "status": "retained",
-                    "checkpoint_sha256": retained.digest,
-                    "covered_through_sequence": retained.checkpoint.statement.audit_event_count - 1,
+                    "checkpoint_sha256": checkpoint_digest(retained),
+                    "covered_through_sequence": retained.statement.audit_event_count - 1,
                 },
             )
         return tuple(event for event in store.replay_events() if event.sequence >= first_sequence)
 
-    def _history(self) -> tuple[RetainedCheckpoint, ...]:
-        previous: RetainedCheckpoint | None = None
-        history = self.records.history()
-        publications: set[str] = set()
-        for retained in history:
-            key = self.trusted_keys.get(retained.checkpoint.signature.public_key_sha256)
-            if key is None:
-                raise ValueError("retained signing key is not independently trusted")
-            try:
-                verify_checkpoint_signature(
-                    statement=retained.checkpoint.statement,
-                    signature=retained.checkpoint.signature,
-                    public_key=key,
-                )
-            except CheckpointSignerError as error:
-                raise AuditIntegrityError("retained checkpoint signature is invalid") from error
-            context = verify_checkpoint_extension(
-                statement=retained.checkpoint.statement,
-                audit_content=retained.audit_content,
-                project_id=self.records.scope.project_id,
-                predecessor=previous,
-                trusted_keys=self.trusted_keys,
-            )
-            if context.publication_id in publications:
-                raise ValueError("retained publication identity was reused")
-            publications.add(context.publication_id)
-            previous = retained
-        return history
+    def _history(self) -> VerifiedHistory:
+        try:
+            self._verified = self.records.verified_history(self.trusted_keys, self._verified)
+        except Exception:
+            self._verified = None
+            raise
+        return self._verified
 
     def _ensure(
         self,
@@ -154,7 +142,7 @@ class SessionCheckpointEvidence:
         boundary: SessionEvent,
         record: RecordEvent,
         publication_id: str,
-    ) -> RetainedCheckpoint:
+    ) -> AuditCheckpoint:
         if store.session_id != self.records.scope.session_id:
             raise ValueError("checkpoint evidence belongs to another session")
         events = store.replay_events()
@@ -162,7 +150,7 @@ class SessionCheckpointEvidence:
             raise ValueError("checkpoint boundary is not durably recorded")
         history = self._history()
         content, _ = store.verified_audit_export()
-        if history and not content.startswith(history[-1].audit_content):
+        if history.head is not None and not content.startswith(history.head.audit_content):
             raise ValueError("local history does not extend the independently retained checkpoint")
 
         # Finish every prepared export in order before creating another ordinal.
@@ -174,24 +162,23 @@ class SessionCheckpointEvidence:
             context = AuditCheckpointContext.model_validate(raw)
             if context.project_id != self.records.scope.project_id:
                 raise ValueError("prepared checkpoint belongs to another project")
-            if context.sequence > len(history):
+            if context.sequence > len(history.checkpoints):
                 audit_events, _ = verify_audit_jsonl(content)
                 snapshot = canonical_audit_jsonl(audit_events[: event.sequence + 1])
                 history = self._publish(snapshot, event.occurred_at)
-            retained = history[context.sequence - 1]
-            actual = checkpoint_context(retained.checkpoint.statement, retained.audit_content)
-            if actual != context:
+            if history.contexts[context.sequence - 1] != context:
                 raise ValueError("prepared checkpoint conflicts with retained history")
             if context.publication_id == publication_id:
-                if retained.checkpoint.statement.audit_event_count <= boundary.sequence:
+                retained = history.checkpoints[context.sequence - 1]
+                if retained.statement.audit_event_count <= boundary.sequence:
                     raise ValueError("checkpoint does not cover the authorization boundary")
                 return retained
 
-        previous = history[-1] if history else None
+        previous = history.head
         context = AuditCheckpointContext(
             project_id=self.records.scope.project_id,
             publication_id=publication_id,
-            sequence=len(history) + 1,
+            sequence=len(history.checkpoints) + 1,
             previous_checkpoint_sha256=previous.digest if previous else None,
         )
         exported = record(
@@ -203,12 +190,12 @@ class SessionCheckpointEvidence:
             },
         )
         content, _ = store.verified_audit_export()
-        retained = self._publish(content, exported.occurred_at)[-1]
-        if checkpoint_context(retained.checkpoint.statement, retained.audit_content) != context:
+        history = self._publish(content, exported.occurred_at)
+        if history.contexts[context.sequence - 1] != context:
             raise ValueError("retained checkpoint differs from the requested boundary")
-        return retained
+        return history.checkpoints[context.sequence - 1]
 
-    def _publish(self, content: str, created_at: str) -> tuple[RetainedCheckpoint, ...]:
+    def _publish(self, content: str, created_at: str) -> VerifiedHistory:
         """Sign one statement and return the history verified after its publication."""
         _, verification = verify_audit_jsonl(content)
         statement = AuditCheckpointStatement(
@@ -233,9 +220,9 @@ class SessionCheckpointEvidence:
         history = self._history()
         context = checkpoint_context(statement, content)
         if (
-            len(history) < context.sequence
-            or history[context.sequence - 1].checkpoint.statement != statement
-            or history[context.sequence - 1].checkpoint.signature != signature
+            len(history.checkpoints) < context.sequence
+            or history.checkpoints[context.sequence - 1].statement != statement
+            or history.checkpoints[context.sequence - 1].signature != signature
         ):
             raise ValueError("signer response is not independently retained")
         return history

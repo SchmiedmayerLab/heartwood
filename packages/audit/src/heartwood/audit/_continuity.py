@@ -32,8 +32,13 @@ class RetainedCheckpoint:
     @property
     def digest(self) -> str:
         """Identify the complete canonical checkpoint, including its signature."""
-        content = _canonical_checkpoint(self.checkpoint).encode("utf-8")
-        return "sha256:" + hashlib.sha256(content).hexdigest()
+        return checkpoint_digest(self.checkpoint)
+
+
+def checkpoint_digest(checkpoint: AuditCheckpoint) -> str:
+    """Identify the complete canonical checkpoint that a successor binds."""
+    content = _canonical_checkpoint(checkpoint).encode("utf-8")
+    return "sha256:" + hashlib.sha256(content).hexdigest()
 
 
 def checkpoint_context(

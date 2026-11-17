@@ -77,17 +77,15 @@ def test_substituted_native_artifacts_are_rejected_before_docker(
     records = tmp_path / "records"
     (records / "bin").mkdir(parents=True)
     files = (
-        "bin/minio",
-        "bin/mc",
-        "LICENSE.minio",
-        "LICENSE.mc",
-        "minio-source.tar.gz",
-        "mc-source.tar.gz",
+        "bin/versitygw",
+        "LICENSE.versitygw",
+        "NOTICE.versitygw",
+        "versitygw-source.tar.gz",
     )
     for name in files:
         (records / name).write_text("synthetic verified records artifact")
     records_manifest_path = manifest_path.with_name("records.json")
-    records_manifest = {"builder": "go@sha256:reviewed", "sources": {"minio": "reviewed"}}
+    records_manifest = {"builder": "go@sha256:reviewed", "sources": {"versitygw": "reviewed"}}
     records_manifest_path.write_text(json.dumps(records_manifest))
     records_builder = builder.with_name("build-records-fixture.py")
     records_builder.write_text("synthetic reviewed records builder")
@@ -104,7 +102,7 @@ def test_substituted_native_artifacts_are_rejected_before_docker(
     if changed == "missing-cli":
         del binaries_sha256["openshell"]
     elif changed == "records-missing-file":
-        del records_sha256["bin/minio"]
+        del records_sha256["bin/versitygw"]
     elif changed == "records-architecture":
         records_build["architecture"] = "arm64"
     elif changed == "records-path":
@@ -117,9 +115,9 @@ def test_substituted_native_artifacts_are_rejected_before_docker(
             "packaging": prebuilt,
             "records-manifest": records_manifest_path,
             "records-builder": records_builder,
-            "records-binary": records / "bin/minio",
-            "records-license": records / "LICENSE.mc",
-            "records-source": records / "mc-source.tar.gz",
+            "records-binary": records / "bin/versitygw",
+            "records-license": records / "NOTICE.versitygw",
+            "records-source": records / "versitygw-source.tar.gz",
         }[changed]
         target.write_text("{}" if changed.endswith("manifest") else "substituted content")
     (artifacts / "gateway-build-record.json").write_text(json.dumps(record))

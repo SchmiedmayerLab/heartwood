@@ -12,7 +12,7 @@ COPY --from=docker-client /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=worker-qualification-tools --chmod=0555 /bin/ /opt/qualification/bin/
 COPY --from=worker-qualification-tools /LICENSE.openshell /opt/qualification/LICENSE.openshell
 COPY --from=records-qualification-tools --chmod=0555 /bin/ /opt/qualification/bin/
-COPY --from=records-qualification-tools /LICENSE.minio /LICENSE.mc /opt/qualification/
+COPY --from=records-qualification-tools /LICENSE.versitygw /NOTICE.versitygw /opt/qualification/
 COPY deploy/tests/worker_network_*.py deploy/tests/worker_hostile_probe.py deploy/tests/worker_native_fixture.py deploy/tests/worker_telemetry.py deploy/tests/test_worker_native_integration.py /opt/qualification/tests/
 COPY deploy/tests/test_worker_external_integration.py /opt/qualification/tests/
 COPY deploy/tests/test_worker_pair_integration.py deploy/tests/test_worker_lifecycle_integration.py /opt/qualification/tests/
