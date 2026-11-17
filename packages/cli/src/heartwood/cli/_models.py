@@ -331,6 +331,7 @@ def _format_model_settings(settings: ModelSettingsResponse) -> str:
         "Heartwood models",
         "",
         f"Credential isolation: {settings['credential_isolation']['summary']}",
+        f"Data handling: {settings['data_handling_summary']}",
         "",
         "Connections:",
     ]
@@ -339,6 +340,7 @@ def _format_model_settings(settings: ModelSettingsResponse) -> str:
             f"  {connection['connection_id']}  {connection['label']}  "
             f"source={connection['source']}  credentials={connection['credential_status']}"
         )
+        lines.append(f"    data handling: {connection['data_handling_summary']}")
     lines.extend(("", "Active and saved profiles:"))
     active = settings["active_profile"]
     profiles = settings["profiles"]
@@ -386,6 +388,7 @@ def _format_model_validation(validation: ModelValidationResponse) -> str:
             f"Model: {profile['model']}",
             f"Credentials: {validation['credential_status']}",
             f"Credential isolation: {validation['credential_isolation']['summary']}",
+            f"Data handling: {validation['data_handling_summary']}",
             f"Action review: {action_mode_label(validation['action_review_mode'])}",
             f"Policy: {decision['decision']} ({decision['reason']})",
         )

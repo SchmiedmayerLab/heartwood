@@ -1568,6 +1568,8 @@ def test_cli_and_browser_gateway_observe_the_same_project_configuration(
     output = capsys.readouterr().out
     assert "* Review Every Action" in output
     assert "* heartwood  openai/local-model" in output
+    assert "Data handling: Content stays on the compute running this project" in output
+    assert "    data handling: Data handling is not declared for this route." in output
 
 
 def test_models_list_select_remove_and_artifacts_use_one_configuration(

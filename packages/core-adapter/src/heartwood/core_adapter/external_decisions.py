@@ -533,6 +533,11 @@ def _result_model_route(service: SessionService) -> str:
                 "action_review_mode": service._review_mode_locked(
                     sandboxed=service._sandboxed_locked()
                 ),
+                "data_handling": (
+                    None
+                    if service.model_data_handling is None
+                    else service.model_data_handling.model_dump(mode="json")
+                ),
             }
         )
     )

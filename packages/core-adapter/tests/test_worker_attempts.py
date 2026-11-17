@@ -39,6 +39,7 @@ from heartwood.core_adapter.worker_attempts import (
     WorkerRuntimeBinding,
     worker_replacement_blocker,
 )
+from heartwood.schemas import ModelDataHandling
 from heartwood.session import CommandKind, EventKind, JsonValue, SessionCommand, SessionEvent
 
 _PROJECT = UUID("2ce140c9-e046-4fe3-9437-72b87341bf6f")
@@ -148,6 +149,29 @@ def test_intent_and_binding_are_paired_and_audit_minimized(service: SessionServi
     assert "synthetic-worker" not in str(audit)
     with pytest.raises(AttributeError):
         lease.intent = intent.model_copy(update={"attempt_id": uuid4()})  # type: ignore[misc]
+
+
+def test_attempt_records_the_route_data_handling_it_was_launched_with(tmp_path: Path) -> None:
+    handling = ModelDataHandling(
+        destination="institution-managed",
+        retention_authority="institution",
+        route="Synthetic gateway to a synthetic provider",
+    )
+    managed = SessionService.local_default(
+        tmp_path,
+        worker_project_id=_PROJECT,
+        backend=RecordingBackend(),
+        model_data_handling=handling,
+    )
+    try:
+        assert _prepare(managed).model_data_handling == handling
+        replayed = SessionService.local_default(tmp_path, worker_project_id=_PROJECT)
+        try:
+            assert _record(replayed).intent.model_data_handling == handling
+        finally:
+            replayed.close()
+    finally:
+        managed.close()
 
 
 @pytest.mark.parametrize("phase", ["prepared", "active", "fenced"])

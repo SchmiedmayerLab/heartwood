@@ -32,6 +32,7 @@ from heartwood.schemas._api import (
     ModelCatalogResponse,
     ModelConnectionResponse,
     ModelConnectRequest,
+    ModelDataHandlingResponse,
     ModelDownloadRequest,
     ModelDownloadResponse,
     ModelPresetResponse,
@@ -81,7 +82,13 @@ from heartwood.schemas._api import (
     api_contract_schema,
     api_response,
 )
-from heartwood.schemas._connections import ModelConnectionManifest, ModelConnectionsManifest
+from heartwood.schemas._connections import (
+    DataDestination,
+    ModelConnectionManifest,
+    ModelConnectionsManifest,
+    ModelDataHandling,
+    RetentionAuthority,
+)
 from heartwood.schemas._planning_contract import (
     BudgetObservation,
     OperationResourceLimit,
@@ -158,6 +165,7 @@ __all__ = [
     "CredentialStoreAvailabilityResponse",
     "CustomLocalModelDownloadRequest",
     "DataClassification",
+    "DataDestination",
     "DataEligibilityObservation",
     "DetectorEvidence",
     "EgressAttestationRecord",
@@ -178,6 +186,8 @@ __all__ = [
     "ModelConnectionManifest",
     "ModelConnectionResponse",
     "ModelConnectionsManifest",
+    "ModelDataHandling",
+    "ModelDataHandlingResponse",
     "ModelDownloadRequest",
     "ModelDownloadResponse",
     "ModelPresetResponse",
@@ -212,6 +222,7 @@ __all__ = [
     "ProjectReadinessResponse",
     "ReadinessCheckResponse",
     "ResearcherDecision",
+    "RetentionAuthority",
     "ReviewedOperationSet",
     "SessionCreateRequest",
     "SessionListResponse",

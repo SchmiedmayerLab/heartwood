@@ -43,7 +43,7 @@ from heartwood.schemas._upstream import (
     platform_contract_notices,
 )
 
-PLATFORM_CONTRACT_VERSION = "0.1.0"
+PLATFORM_CONTRACT_VERSION = "0.2.0"
 MCP_REQUIRED_TOOL_HINTS = ("readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint")
 _CURRENT_ARTIFACTS = frozenset(
     {

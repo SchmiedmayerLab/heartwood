@@ -15,8 +15,9 @@ from heartwood.model_policy import (
     PolicyInputError,
     filter_credentials,
     normalize_endpoint,
+    validate_policy_restriction,
 )
-from heartwood.schemas import PolicyProfile
+from heartwood.schemas import ModelDataHandling, PolicyProfile
 
 
 def _policy() -> PolicyProfile:
@@ -219,3 +220,65 @@ def test_filter_credentials_keeps_only_allowlisted_values() -> None:
         ("ALLOWED_TOKEN",),
     )
     assert filtered == {"ALLOWED_TOKEN": "ok"}
+
+
+def test_destination_restriction_denies_undeclared_and_unlisted_routes() -> None:
+    profile = _policy().model_copy(update={"allowed_data_destinations": ("same-compute",)})
+    engine = ModelPolicyEngine(profile)
+    local = ModelDataHandling(
+        destination="same-compute", retention_authority="deployment", route="Local server"
+    )
+    provider = ModelDataHandling(
+        destination="provider", retention_authority="provider", route="Provider API"
+    )
+
+    def decide(data_handling: ModelDataHandling | None) -> tuple[str, str]:
+        decision = engine.evaluate(
+            endpoint="https://model.local.invalid/v1/chat/completions",
+            capability_tier="supervised",
+            data_handling=data_handling,
+            decision_id="decision-1",
+            purpose="synthetic model call",
+        )
+        return decision.decision, decision.reason
+
+    assert decide(local)[0] == "allow"
+    assert decide(None) == (
+        "deny",
+        "route data handling is not declared for synthetic model call",
+    )
+    assert decide(provider) == (
+        "deny",
+        "data destination provider is not allowed for synthetic model call",
+    )
+
+
+def test_unrestricted_policy_accepts_routes_without_descriptors() -> None:
+    decision = ModelPolicyEngine(_policy()).evaluate(
+        endpoint="https://model.local.invalid/v1/chat/completions",
+        capability_tier="supervised",
+        decision_id="decision-1",
+        purpose="synthetic model call",
+    )
+    assert decision.decision == "allow"
+
+
+def test_project_policy_cannot_lift_or_widen_destination_restriction() -> None:
+    ceiling = _policy().model_copy(
+        update={"allowed_data_destinations": ("same-compute", "institution-managed")}
+    )
+    validate_policy_restriction(
+        ceiling.model_copy(update={"allowed_data_destinations": ("same-compute",)}), ceiling
+    )
+    for widened in (None, ("same-compute", "provider")):
+        with pytest.raises(PolicyInputError, match="allowed_data_destinations"):
+            validate_policy_restriction(
+                ceiling.model_copy(update={"allowed_data_destinations": widened}), ceiling
+            )
+    validate_policy_restriction(ceiling, _policy())
+
+
+def test_destination_restriction_rejects_empty_or_repeated_lists() -> None:
+    for value in ((), ("provider", "provider")):
+        with pytest.raises(ValueError, match="allowed_data_destinations"):
+            PolicyProfile(policy_id="p", platform_id="generic", allowed_data_destinations=value)

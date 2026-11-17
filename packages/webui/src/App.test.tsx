@@ -147,6 +147,8 @@ const settings = (): ModelSettings => ({
   },
   credential_bindings: [],
   credential_isolation: credentialIsolation(),
+  data_handling: null,
+  data_handling_summary: "Data handling is not declared for this route.",
 });
 
 const actions = (): ActionSettings => ({
@@ -852,6 +854,8 @@ class FakeClient implements HeartwoodClient {
       active_profile: profile.profile_id,
       model_source: connection.connection_id,
       profiles: [profile],
+      data_handling: connection.data_handling,
+      data_handling_summary: connection.data_handling_summary,
     };
     this.currentReadiness = projectReadiness("ready");
     return Promise.resolve(this.currentSettings);
@@ -1186,6 +1190,8 @@ class FakeClient implements HeartwoodClient {
       profile: this.currentSettings.profiles[0] ?? localProfile(),
       credential_status: "configured",
       credential_isolation: credentialIsolation(),
+      data_handling: null,
+      data_handling_summary: "Data handling is not declared for this route.",
       action_review_mode: this.currentActions.review_mode,
       policy_decision: {
         schema_version: "heartwood.model-call-decision.v1",
@@ -2417,6 +2423,51 @@ describe("App", () => {
       screen.queryByRole("radio", { name: /Review Changes/u }),
     ).not.toBeInTheDocument();
     expect(screen.getByText("Review Changes")).toBeVisible();
+  });
+
+  it("shows a route's declared data handling before and after selection", async () => {
+    const client = new FakeClient();
+    const declared =
+      "Content goes to an institution-managed service (Research gateway); " +
+      "retention is governed by the institution's agreements.";
+    client.currentSettings = {
+      ...client.currentSettings,
+      connections: client.currentSettings.connections.map((connection) =>
+        connection.connection_id === "research-ai" ?
+          {
+            ...connection,
+            data_handling: {
+              destination: "institution-managed",
+              retention_authority: "institution",
+              route: "Research gateway",
+            },
+            data_handling_summary: declared,
+          }
+        : connection,
+      ),
+    };
+    render(<App client={client} initialSessionId="session-test" />);
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    await screen.findByRole("heading", { name: "Settings" });
+    const researchConnection = screen
+      .getByText("Research AI Service")
+      .closest(".connection-row");
+    fireEvent.click(
+      within(researchConnection as HTMLElement).getByRole("button", {
+        name: "Choose",
+      }),
+    );
+    expect(screen.getByText(declared)).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "Load models" }));
+    await screen.findByLabelText("Models available from Research AI Service");
+    fireEvent.click(screen.getByRole("button", { name: "Use model" }));
+    const status = (await screen.findByText("Data handling")).closest(
+      ".validation-status",
+    );
+    expect(status).not.toBeNull();
+    expect(status as HTMLElement).toHaveTextContent("Declared");
+    expect(status as HTMLElement).toHaveTextContent(declared);
   });
 
   it("configures and validates model profiles in the settings panel", async () => {
@@ -4185,6 +4236,18 @@ const modelConnection = (
     static_models: [],
     subscription_vendor:
       connectionId === "openai-subscription" ? "openai" : null,
+    data_handling:
+      connectionId === "heartwood" ?
+        {
+          destination: "same-compute",
+          retention_authority: "deployment",
+          route: "Heartwood-managed inference server",
+        }
+      : null,
+    data_handling_summary:
+      connectionId === "heartwood" ?
+        "Content stays on the compute running this project."
+      : "Data handling is not declared for this route.",
     group,
     group_label: groupLabel,
     accepts_token: acceptsToken,

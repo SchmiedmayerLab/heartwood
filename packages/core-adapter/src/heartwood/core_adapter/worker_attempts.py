@@ -20,7 +20,7 @@ from uuid import UUID
 from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, model_validator
 
 from heartwood.core_adapter.session_activity import session_activity
-from heartwood.schemas import PolicyProfile
+from heartwood.schemas import ModelDataHandling, PolicyProfile
 from heartwood.schemas.experiments import Digest, Reference
 from heartwood.session import EventKind, SessionEvent, validate_session_id
 
@@ -51,6 +51,8 @@ class WorkerAttemptIntent(_WorkerRecord):
     gateway_policy_sha256: Digest
     sandbox_policy_sha256: Digest
     input_manifest_sha256: Digest
+    # The declared handling of the model route the attempt was launched for.
+    model_data_handling: ModelDataHandling | None = None
 
     @model_validator(mode="after")
     def _session_identity(self) -> Self:

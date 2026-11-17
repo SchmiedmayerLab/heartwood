@@ -66,6 +66,7 @@ Choose **Other compatible service** for an authorized endpoint that implements t
 Enter the base URL, select or enter a model, and provide an API key only if the service requires one.
 The route is available on workstations, in containers and on Terra when the active policy permits user-defined routes; Carina does not offer it.
 Heartwood records the selected catalog and completion endpoints in the project policy before making requests, and a model that OpenHands identifies as Responses-capable needs `/responses` on the service as well.
+Heartwood cannot declare where such a service sends or retains content, so its [data handling](index.md#data-and-compliance-boundary) is undeclared and a deployment policy that restricts data destinations refuses it.
 
 ### Connect to an Existing Model Server
 

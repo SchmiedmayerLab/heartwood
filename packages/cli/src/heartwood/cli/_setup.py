@@ -246,6 +246,12 @@ def _configure_setup(
         if not resume_existing:
             gateway.configure_model_source(source)
         gateway.start()
+        selected_option = next(
+            option for option in MODEL_SOURCE_OPTIONS if option.source_id == source
+        )
+        for listed in gateway.model_settings()["connections"]:
+            if listed["connection_id"] == selected_option.connection_id:
+                print(f"  Data handling: {listed['data_handling_summary']}")
         if source == "heartwood":
             if not resume_managed_local:
                 _configure_local_model(
@@ -255,10 +261,7 @@ def _configure_setup(
                     yes_download=bool(getattr(args, "yes_download", False)),
                 )
             return 0, gateway
-        source_option = next(
-            option for option in MODEL_SOURCE_OPTIONS if option.source_id == source
-        )
-        connection_id = source_option.connection_id
+        connection_id = selected_option.connection_id
         if source == "custom" and base_url is None and not non_interactive:
             try:
                 base_url = input("Compatible service URL: ").strip()

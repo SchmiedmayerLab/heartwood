@@ -21,6 +21,7 @@ import pytest
 
 import heartwood.core_adapter._service as session_service
 import heartwood.core_adapter._state as session_state
+from heartwood.adapters.platform import GenericPlatformAdapter
 from heartwood.audit import AuditIntegrityError, compute_event_hash
 from heartwood.core_adapter import (
     BackendAgentMessageEvent,
@@ -38,6 +39,7 @@ from heartwood.core_adapter import (
     BackendUsage,
     BackendUsageEvent,
     CommandConflictError,
+    DeterministicAgentBackend,
     FileSessionStore,
     LocalWorkspaceAgentBackend,
     PendingActionGroup,
@@ -53,7 +55,7 @@ from heartwood.core_adapter import (
 )
 from heartwood.core_adapter._audit_projection import project_audit_payload
 from heartwood.core_adapter._state import _writer_owner_summary
-from heartwood.schemas import AuditEvent, PolicyProfile
+from heartwood.schemas import AuditEvent, ModelDataHandling, PolicyProfile
 from heartwood.session import (
     CommandKind,
     EventKind,
@@ -3027,3 +3029,103 @@ def test_execution_without_a_recorded_decision_is_not_recorded_as_approved(
         assert [error.payload["group_id"] for error in errors] == [group.group_id]
     finally:
         service.close()
+
+
+def _routed_service(tmp_path: Path, *, data_handling: ModelDataHandling | None) -> SessionService:
+    platform = GenericPlatformAdapter()
+    store = FileSessionStore(tmp_path, "session-synthetic-001")
+    return SessionService(
+        store=store,
+        platform_adapter=platform,
+        backend=DeterministicAgentBackend(),
+        policy_profile=platform.default_policy_profile().model_copy(
+            update={"allowed_data_destinations": ("same-compute",)}
+        ),
+        model_data_handling=data_handling,
+        env={},
+        clock=lambda: "2026-01-01T00:00:00Z",
+    )
+
+
+def test_destination_restriction_denies_an_undeclared_route_before_model_work(
+    tmp_path: Path,
+) -> None:
+    service = _routed_service(tmp_path, data_handling=None)
+
+    result = service.handle(_command(CommandKind.CHAT, prompt="summarize the cohort"))
+
+    kinds = [event.kind for event in result.events]
+    assert EventKind.AGENT_MESSAGE_EMITTED.value not in kinds
+    decision_event = next(
+        event for event in result.events if event.kind == EventKind.MODEL_CALL_DECISION_RECORDED
+    )
+    decision = decision_event.payload["decision"]
+    assert isinstance(decision, dict)
+    assert decision["decision"] == "deny"
+    assert decision["reason"] == (
+        "route data handling is not declared for agent turn through deterministic-local"
+    )
+    assert decision_event.payload["model_profile"] == {
+        "backend_id": "deterministic-local",
+        "profile_id": "deterministic-local",
+        "capability_tier": "supervised",
+        "action_review_mode": "review-all",
+        "data_handling": None,
+    }
+
+
+def test_model_route_decision_records_declared_handling_in_the_audit_export(
+    tmp_path: Path,
+) -> None:
+    declared = ModelDataHandling(
+        destination="same-compute",
+        retention_authority="deployment",
+        route="Synthetic in-environment server",
+    )
+    service = _routed_service(tmp_path, data_handling=declared)
+
+    result = service.handle(_command(CommandKind.CHAT, prompt="summarize the cohort"))
+
+    kinds = [str(event.kind) for event in result.events]
+    decision_index = kinds.index(EventKind.MODEL_CALL_DECISION_RECORDED.value)
+    assert decision_index < kinds.index(EventKind.AGENT_MESSAGE_EMITTED.value)
+    decision_event = result.events[decision_index]
+    profile = decision_event.payload["model_profile"]
+    assert isinstance(profile, dict)
+    assert profile["data_handling"] == declared.model_dump(mode="json")
+    content, _verification = service.store.verified_audit_export()
+    exported = [json.loads(line) for line in content.splitlines()]
+    audited = next(
+        event["payload"]
+        for event in exported
+        if event["event_type"] == EventKind.MODEL_CALL_DECISION_RECORDED.value
+    )
+    assert audited["model_profile"]["data_handling"] == declared.model_dump(mode="json")
+    assert "summarize the cohort" not in content
+
+
+def test_audit_projection_keeps_only_declared_handling_fields() -> None:
+    projected = project_audit_payload(
+        EventKind.MODEL_CALL_DECISION_RECORDED,
+        {
+            "decision": {"decision": "allow"},
+            "model_profile": {
+                "profile_id": "synthetic",
+                "data_handling": {
+                    "destination": "provider",
+                    "retention_authority": "provider",
+                    "route": "Synthetic provider",
+                    "api_key": "synthetic-secret-value",
+                },
+            },
+        },
+    )
+
+    assert projected["model_profile"] == {
+        "profile_id": "synthetic",
+        "data_handling": {
+            "destination": "provider",
+            "retention_authority": "provider",
+            "route": "Synthetic provider",
+        },
+    }

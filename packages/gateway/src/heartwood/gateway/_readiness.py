@@ -29,6 +29,7 @@ from heartwood.gateway._model_catalog import (
     ModelConnection,
     active_model_connections,
     model_connections_from_mapping,
+    route_data_handling,
 )
 from heartwood.gateway._model_settings import ModelProfile, ModelSettingsError
 from heartwood.gateway._project import ProjectContext, ProjectStateError
@@ -359,6 +360,13 @@ def inspect_deployment(
         )
     )
     credential_ready = True
+    model_connections = active_model_connections(
+        BUILT_IN_MODEL_CONNECTIONS,
+        () if config is None else config.additional_connections,
+        allowed_connection_ids=(
+            option.connection_id for option in model_source_options(active_env)
+        ),
+    )
     if active_model is not None:
         credential_status, credential_summary, credential_ready = _credential_readiness(
             active_model, active_env
@@ -368,13 +376,7 @@ def inspect_deployment(
             active_model,
             adapter.capabilities(),
             model_source=None if config is None else config.model_source,
-            model_connections=active_model_connections(
-                BUILT_IN_MODEL_CONNECTIONS,
-                () if config is None else config.additional_connections,
-                allowed_connection_ids=(
-                    option.connection_id for option in model_source_options(active_env)
-                ),
-            ),
+            model_connections=model_connections,
         )
         checks.append(
             ReadinessCheck(
@@ -426,7 +428,9 @@ def inspect_deployment(
                 + ("deployment default" if action_mode is None else action_mode_label(action_mode)),
             )
         )
-        coherent = active_model is not None and _configuration_is_coherent(config)
+        coherent = active_model is not None and _configuration_is_coherent(
+            config, model_connections
+        )
         checks.append(
             ReadinessCheck(
                 "configuration-coherence",
@@ -597,13 +601,15 @@ def persist_deployment_profile(
             if model_source == "stanford-ai-api-gateway"
             else current.additional_connections
         )
+        # Selecting a model source never lifts an existing data-destination restriction.
+        restriction = current.policy.allowed_data_destinations or policy.allowed_data_destinations
         return ProjectConfig(
             platform_id=adapter.adapter_id,
             model_source=model_source,
             action_settings=current.action_settings,
             model_settings=model_settings,
             additional_connections=additional_connections,
-            policy=policy,
+            policy=policy.model_copy(update={"allowed_data_destinations": restriction}),
             local_model=current.local_model,
         )
 
@@ -628,6 +634,11 @@ def _stanford_connection_manifest() -> dict[str, object]:
                 "policy_endpoint": f"{_STANFORD_ROOT}/chat/completions",
                 "description": "Models authorized for the supplied Stanford gateway key.",
                 "static_models": [],
+                "data_handling": {
+                    "destination": "institution-managed",
+                    "retention_authority": "institution",
+                    "route": "Stanford AI API Gateway and the model providers it routes to",
+                },
             }
         ],
     }
@@ -686,7 +697,9 @@ def _credential_readiness(
     assert_never(kind)
 
 
-def _configuration_is_coherent(config: ProjectConfig) -> bool:
+def _configuration_is_coherent(
+    config: ProjectConfig, model_connections: tuple[ModelConnection, ...]
+) -> bool:
     model = _active_model_profile(config)
     if model is None or config.model_source is None:
         return False
@@ -730,6 +743,7 @@ def _configuration_is_coherent(config: ProjectConfig) -> bool:
         endpoint=model.policy_endpoint,
         capability_tier=model.capability_tier,
         credential_reference=model.credential_reference,
+        data_handling=route_data_handling(model, model_connections),
         decision_id="deployment-readiness",
         purpose="deployment readiness",
     )

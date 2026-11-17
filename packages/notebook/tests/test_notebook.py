@@ -107,6 +107,22 @@ def test_notebook_project_experiments_match_python_and_http_export(tmp_path: Pat
         gateway.stop()
 
 
+def test_notebook_setup_shows_declared_route_data_handling(tmp_path: Path) -> None:
+    gateway = SessionGateway(project=ProjectContext(tmp_path), env={})
+    try:
+        settings = NotebookSession(gateway=gateway).model_settings()
+        heartwood = next(
+            connection
+            for connection in settings["connections"]
+            if connection["connection_id"] == "heartwood"
+        )
+        assert heartwood["data_handling"] is not None
+        assert heartwood["data_handling"]["destination"] == "same-compute"
+        assert heartwood["data_handling_summary"].startswith("Content stays on the compute")
+    finally:
+        gateway.stop()
+
+
 def test_notebook_workflow_uses_persisted_gateway_controls(tmp_path: Path) -> None:
     (tmp_path / "data.csv").write_text("x,y\n1,2\n")
     (tmp_path / "dictionary.json").write_text("{}")

@@ -12,7 +12,12 @@ from collections.abc import Mapping
 from typing import Literal, cast
 from urllib.parse import urlsplit
 
-from heartwood.schemas import EgressAttestationRecord, ModelCallDecision, PolicyProfile
+from heartwood.schemas import (
+    EgressAttestationRecord,
+    ModelCallDecision,
+    ModelDataHandling,
+    PolicyProfile,
+)
 
 type CapabilityTier = Literal["autonomous", "supervised", "experimental"]
 
@@ -93,6 +98,11 @@ def validate_policy_restriction(profile: PolicyProfile, ceiling: PolicyProfile) 
     ):
         if not set(getattr(profile, field)) <= set(getattr(ceiling, field)):
             raise PolicyInputError(f"project {field} exceeds deployment policy")
+    if ceiling.allowed_data_destinations is not None and (
+        profile.allowed_data_destinations is None
+        or not set(profile.allowed_data_destinations) <= set(ceiling.allowed_data_destinations)
+    ):
+        raise PolicyInputError("project allowed_data_destinations exceeds deployment policy")
     if profile.aggregate_count_floor < ceiling.aggregate_count_floor:
         raise PolicyInputError("project aggregate_count_floor weakens deployment policy")
 
@@ -112,10 +122,15 @@ class ModelPolicyEngine:
         endpoint: str,
         capability_tier: str,
         credential_reference: str | None = None,
+        data_handling: ModelDataHandling | None = None,
         decision_id: str,
         purpose: str,
     ) -> ModelCallDecision:
-        """Evaluate a proposed model call and return an auditable decision."""
+        """Evaluate a proposed model call and return an auditable decision.
+
+        A policy that restricts data destinations denies a route whose descriptor is
+        missing or names another destination; the descriptor remains a declaration.
+        """
         if capability_tier not in _VALID_CAPABILITY_TIERS:
             msg = f"unsupported capability tier: {capability_tier}"
             raise PolicyInputError(msg)
@@ -153,6 +168,24 @@ class ModelPolicyEngine:
                 capability_tier=checked_capability_tier,
                 decision="deny",
                 reason=f"credential reference is not allowed for {purpose}",
+            )
+
+        allowed_destinations = self.profile.allowed_data_destinations
+        if allowed_destinations is not None and (
+            data_handling is None or data_handling.destination not in allowed_destinations
+        ):
+            return ModelCallDecision(
+                decision_id=decision_id,
+                policy_profile_id=self.profile.policy_id,
+                endpoint=normalized_endpoint,
+                capability_tier=checked_capability_tier,
+                decision="deny",
+                reason=(
+                    f"route data handling is not declared for {purpose}"
+                    if data_handling is None
+                    else f"data destination {data_handling.destination} "
+                    f"is not allowed for {purpose}"
+                ),
             )
 
         if (

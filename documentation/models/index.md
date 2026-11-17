@@ -57,13 +57,27 @@ See [Managed Worker](../reference/configuration.md#managed-worker) for the manif
 A route shown in setup is implemented and permitted by the active Heartwood policy.
 That does not establish that the provider, account, agreement or deployment may receive a particular dataset.
 
-| Route | Destination of Project Content | Retention Governed By |
+Each connection carries a data-handling descriptor: the declared destination of model requests, including prompts, file contents and tool results, and the authority that governs their retention.
+Terminal setup, browser settings and the notebook bridge show it before a model is selected, and `heartwood models list` and `heartwood models validate` show it for the active route.
+
+| Route | Declared Destination | Retention Governed By |
 |---|---|---|
-| **Run with Heartwood** | The inference server on the same compute | The deployment |
-| **Stanford AI API Gateway** | Stanford's gateway and its model providers | Stanford's agreements for the gateway |
-| **OpenAI API** or **Anthropic** | The provider's API | The provider's API terms and the account's data controls |
-| **Sign in with ChatGPT** | OpenAI through the subscription account | The subscription's terms |
-| **Other compatible service** | The configured service | The service operator |
+| **Run with Heartwood** | `same-compute`: the Heartwood-managed inference server in this compute environment | `deployment` |
+| **Stanford AI API Gateway** | `institution-managed`: Stanford's gateway and the model providers it routes to | `institution`: Stanford's agreements for the gateway |
+| **OpenAI API** or **Anthropic** | `provider`: the provider's API | `provider`: the API terms and the account's data controls |
+| **Sign in with ChatGPT** | `provider`: OpenAI through the subscription account | `provider`: the subscription's terms |
+| **Other compatible service** | Not declared | Not declared |
+
+A descriptor states declared handling; it is not verified provider behavior, data eligibility or an agreement.
+It describes the complete inference route, including an institution's gateway and its ultimate provider; an outside transport proxy that substitutes credentials does not change the declared recipient.
+A service URL entered for **Other compatible service** carries no declaration, because its handling depends on its operator; a deployment that needs one supplies the service as a platform connection with a descriptor.
+A descriptor covers model inference requests; Heartwood has no transcription or embedding route, and a telemetry or trace exporter that a deployment enables is a separate destination for its own review.
+
+Every model-route decision in the session history records the descriptor of the route that the next model call uses, so a route change is recorded before its first request.
+The scrubbed audit export keeps the destination, retention authority and route description without credentials or content.
+A deployment policy can list `allowed_data_destinations`; Heartwood then refuses to select, and denies before each model call, a route whose descriptor is missing or names another destination.
+Editing the active profile and selecting a Heartwood-managed model are selections too; editing or removing another profile is not.
+See [Policy Fields](../reference/configuration.md#policy-fields) for the policy field.
 
 Session history is kept in Heartwood's project state as well; see [Projects and Private State](../start/project.md).
 Confirm institutional approval and data-use terms before sending controlled content to any route.
