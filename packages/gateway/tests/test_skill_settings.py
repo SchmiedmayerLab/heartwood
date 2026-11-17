@@ -1189,3 +1189,62 @@ def test_case_variant_bundled_skill_directory_is_not_reported_as_unpinned(
         monkeypatch.setattr(Path, "lstat", case_insensitive_lstat)
 
     assert unexpected_bundled_entries(bundled) == (bundled / ".DS_Store",)
+
+
+def test_bundled_entry_removed_during_enumeration_is_skipped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from heartwood.gateway._skill_settings import unexpected_bundled_entries
+
+    bundled = tmp_path / "bundled"
+    shutil.copytree(_skills_root(), bundled)
+    (bundled / ".DS_Store").write_bytes(b"synthetic finder metadata")
+    removed = bundled / "editor-swap.tmp"
+    removed.write_bytes(b"synthetic temporary file")
+    iterdir = Path.iterdir
+
+    def iterdir_then_remove(self: Path) -> Iterator[Path]:
+        entries = list(iterdir(self))
+        if self == bundled:
+            removed.unlink(missing_ok=True)
+        yield from entries
+
+    monkeypatch.setattr(Path, "iterdir", iterdir_then_remove)
+    manager = SkillManager(
+        bundled_dir=bundled,
+        store=SkillArtifactStore(tmp_path / "store"),
+        source_registry=SkillSourceRegistry(),
+        cache_dir=tmp_path / "cache",
+        audit_path=tmp_path / "audit.jsonl",
+        platform_id="generic",
+    )
+
+    assert unexpected_bundled_entries(bundled) == (bundled / ".DS_Store",)
+    removed.write_bytes(b"synthetic temporary file")
+    assert {manifest.name for manifest in manager.active_skill_manifests()} == {
+        "aggregate-export",
+        "baseline-model",
+        "omop-cohort-summary",
+    }
+
+
+def test_bundled_entry_that_cannot_be_inspected_is_not_skipped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from heartwood.gateway._skill_settings import unexpected_bundled_entries
+
+    bundled = tmp_path / "bundled"
+    shutil.copytree(_skills_root(), bundled)
+    unreadable = bundled / "unreadable-entry"
+    unreadable.write_bytes(b"synthetic entry")
+    lstat = Path.lstat
+
+    def refusing_lstat(self: Path) -> os.stat_result:
+        if self == unreadable:
+            raise PermissionError(13, "Permission denied", str(self))
+        return lstat(self)
+
+    monkeypatch.setattr(Path, "lstat", refusing_lstat)
+
+    with pytest.raises(PermissionError):
+        unexpected_bundled_entries(bundled)
