@@ -495,6 +495,7 @@ class _ServedGateway:
                 if self.client.get("/project/readiness").status_code == 200:
                     return
             except httpx.TransportError:
+                # The gateway is not listening yet; poll again until the deadline.
                 pass
             time.sleep(0.5)
         raise AssertionError("gateway serve did not become ready")
