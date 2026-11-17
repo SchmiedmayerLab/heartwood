@@ -310,18 +310,32 @@ The same condition after start stops that worker launch or reconciliation and le
 `deployment manifest is unavailable or invalid` and the other `deployment …` messages name the [manifest requirement](configuration.md#deployment-manifest) that failed, such as ownership, write protection, a symbolic link, a path inside the project, or a changed policy file digest.
 Correct the operator files; do not loosen their permissions or move them into the project.
 
-### Worker Revocation Was Not Observed
+### `HW-WORKER-002`: Worker Attempt Ran on Other Sandbox Infrastructure
 
-At start, `gateway serve` reports `Worker revocation was not observed for session ID; its attempt remains fenced until the next gateway start.`
-The earlier worker may still be running.
-Confirm through OpenShell and Docker that its sandbox is gone or stop it there, then restart the gateway so reconciliation records the revocation.
+`heartwood gateway serve --deployment` found a session whose worker attempt was left unrevoked, but the attempt ran on a different sandbox control plane or container runtime than the deployment manifest names now, or its record predates the recording of that infrastructure.
+Heartwood leaves the attempt fenced and does not record revocation, because a worker missing from the current infrastructure may still be running on the earlier one.
+Stop the worker on the infrastructure it ran on, using that control plane's own tools, and continue the work in a new session.
+Pointing the manifest back at the original control plane and Docker daemon lets the next gateway start reconcile the attempt normally.
+
+### `HW-WORKER-003`: Worker Revocation Was Not Observed
+
+The gateway could not observe that a worker attempt an earlier gateway process left running was stopped, typically because the sandbox control plane or the Docker daemon was unavailable.
+The attempt remains fenced, and the session refuses commands until revocation is observed; it stays readable.
+The gateway retries while it runs, with a growing interval of up to 10 minutes, so restoring the control plane is enough; restarting the gateway retries at once.
+A worker whose revocation fails while the gateway runs, including when its session's service is being closed, is handled the same way: the session stays fenced, refuses commands as retryable and stays readable until the retry observes revocation.
+When the gateway's request to create the worker failed or went unanswered, the attempt stays fenced even while the control plane answers, because absence does not show that the creation will not still complete; the retry deletes the worker if it appears.
+The only exception is a request the control plane rejected as invalid, unauthorized or unauthenticated, which the same gateway process then records as never created.
+A gateway process that ended after it prepared a worker and before it recorded the worker's runtime or its revocation leaves the attempt fenced the same way.
+Continue such a session's work in a new session.
 Do not delete the session's records or writer files to release it.
 
 ### A Replacement Worker Started
 
 A session whose earlier worker was revoked shows "A new worker replaced the earlier one" when its next task starts a replacement.
 The replacement does not remember the earlier conversation and starts with an empty sandbox workspace; restate the context it needs.
-A session is refused instead while its earlier worker left an unsettled run, an unended pause, an action awaiting review, an unrecoverable outcome, or a non-terminal outside operation or result release; inspect its record and continue in a new session.
+The earlier worker's unfinished tasks are shown as superseded, and its model usage is listed as "Earlier Workers" and included in the session total.
+A session is refused instead while its earlier worker left an unsettled run, an unended pause, an action awaiting review, an unrecoverable outcome, or a non-terminal outside operation or result release; the session shows "New Worker Unavailable" with the reason.
+Inspect its record and continue in a new session.
 
 ## Action Review Mode
 

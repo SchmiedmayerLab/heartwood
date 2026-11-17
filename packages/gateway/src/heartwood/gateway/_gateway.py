@@ -17,7 +17,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from functools import wraps
 from pathlib import Path
-from threading import Lock, RLock
+from threading import Event, Lock, RLock, Thread
 from typing import TYPE_CHECKING, Concatenate, Literal, Protocol, cast
 from uuid import uuid4
 
@@ -51,7 +51,11 @@ from heartwood.core_adapter import (
 from heartwood.core_adapter.action_review import effective_review_mode, is_tightening
 from heartwood.core_adapter.checkpoint_evidence import SessionCheckpointEvidence
 from heartwood.core_adapter.external_actions import ExternalActionAdapter
-from heartwood.core_adapter.worker_attempts import WorkerAttemptError, current_worker_attempt
+from heartwood.core_adapter.worker_attempts import (
+    WorkerAttemptError,
+    WorkerControlPlaneError,
+    current_worker_attempt,
+)
 from heartwood.gateway._action_presentation import action_presentation
 from heartwood.gateway._action_settings import (
     ACTION_MODE_LAUNCH_SCOPE_DESCRIPTION,
@@ -76,7 +80,7 @@ from heartwood.gateway._experiment_store import ExperimentStore
 from heartwood.gateway._gpu_environment import (
     GpuEnvironment,
 )
-from heartwood.gateway._lifecycle import GatewayOperations, gateway_operation
+from heartwood.gateway._lifecycle import GatewayClosedError, GatewayOperations, gateway_operation
 from heartwood.gateway._local_model_contract import (
     managed_model_native_tool_calling,
     managed_model_request_body,
@@ -235,6 +239,9 @@ _RESERVED_MODEL_PROFILE_IDS = {"heartwood"}
 _COMMAND_ATTEMPTS = 2
 # How long a command waits for its session's earlier worker service to finish closing.
 _RELEASE_WAIT_SECONDS = 10.0
+# Unresolved worker reconciliation is retried after these waits, doubling up to the maximum.
+_RECONCILIATION_RETRY_SECONDS = 30.0
+_RECONCILIATION_RETRY_MAX_SECONDS = 600.0
 _PROJECTED_COMMANDS = frozenset(
     {
         CommandKind.APPROVE.value,
@@ -508,6 +515,13 @@ class SessionGateway:
         self._worker_plan_factory = worker_plan_factory
         self._worker_reconciler = worker_reconciler
         self._worker_sessions: dict[int, ManagedWorkerSession] = {}
+        # Sessions whose earlier attempt is being revoked outside the state lock.
+        self._reconciling: set[str] = set()
+        # Sessions whose earlier attempt awaits observed revocation; no service is cached for
+        # them, so no command can take them out of the runtime retry.
+        self._unreconciled: set[str] = set()
+        self._reconciliation_stopped = Event()
+        self._reconciliation: Thread | None = None
         self._project_activity = ProjectActivity(self.project)
         self._operations = GatewayOperations(on_enter=self._project_activity.acquire_existing)
         self.sessions_root = self.project.sessions_dir
@@ -640,6 +654,7 @@ class SessionGateway:
 
     def stop(self) -> None:
         """Close admission, drain accepted calls, and stop owned background workers."""
+        self._reconciliation_stopped.set()
         self._operations.close_admission()
         self.local_model_manager.request_stop()
         self.model_transfer_manager.request_stop()
@@ -666,42 +681,91 @@ class SessionGateway:
         self._project_activity.close()
 
     @gateway_operation
-    def reconcile_workers(self) -> tuple[str, ...]:
+    def reconcile_workers(self) -> dict[str, str]:
         """Revoke worker attempts that an ended gateway process left unrevoked.
 
-        Returns the sessions whose attempt remains fenced because revocation was not observed.
+        Returns each session whose attempt remains fenced, with the diagnostic check that
+        explains why. Sessions whose revocation was not observed are retried while the
+        gateway runs, with backoff, until revocation is observed or the gateway stops.
         """
-        return self._reconcile_workers()
+        unresolved = self._reconcile_workers(None)
+        pending = tuple(
+            session for session, check in unresolved.items() if check == "worker-revocation"
+        )
+        if pending and self._reconciliation is None:
+            self._reconciliation = Thread(
+                target=self._retry_worker_reconciliation,
+                args=(pending,),
+                daemon=True,
+                name="worker-reconciliation",
+            )
+            self._reconciliation.start()
+        return unresolved
 
-    @_serialized_state
-    def _reconcile_workers(self) -> tuple[str, ...]:
-        if self._worker_reconciler is None:
-            return ()
-        unresolved: list[str] = []
-        for summary in self.session_catalog.list():
-            session_id = summary.session_id
-            # A session this process already serves revokes its own attempt when it closes.
-            if session_id in self._services:
-                continue
+    def _retry_worker_reconciliation(self, pending: tuple[str, ...]) -> None:
+        delay = _RECONCILIATION_RETRY_SECONDS
+        while pending and not self._reconciliation_stopped.wait(delay):
             try:
-                retained = current_worker_attempt(
-                    FileSessionStore(self.sessions_root, session_id).replay_events()
-                )
-                if retained is None or retained.phase == "revoked":
+                with self._operations.enter():
+                    unresolved = self._reconcile_workers(pending)
+            except GatewayClosedError:
+                return
+            pending = tuple(
+                session for session, check in unresolved.items() if check == "worker-revocation"
+            )
+            delay = min(delay * 2, _RECONCILIATION_RETRY_MAX_SECONDS)
+
+    def _reconcile_workers(self, session_ids: tuple[str, ...] | None) -> dict[str, str]:
+        reconciler = self._worker_reconciler
+        if reconciler is None:
+            return {}
+        unresolved: dict[str, str] = {}
+        if session_ids is None:
+            with self._state_lock:
+                session_ids = tuple(summary.session_id for summary in self.session_catalog.list())
+        for session_id in session_ids:
+            with self._state_lock:
+                # A session this process already serves, or still closes, revokes its own
+                # attempt.
+                if (
+                    session_id in self._services
+                    or session_id in self._releasing
+                    or session_id in self._reconciling
+                ):
                     continue
-                service = self._service(session_id)
                 try:
-                    service.revoke_worker(self._worker_reconciler)
-                finally:
-                    # Releasing the session keeps a later read from starting a replacement
-                    # worker; only a command to the session does that.
-                    self._services.pop(session_id, None)
-                    self._service_configurations.pop(session_id, None)
-                    with suppress(Exception):
-                        self._close_service(service)
+                    retained = current_worker_attempt(
+                        FileSessionStore(self.sessions_root, session_id).replay_events()
+                    )
+                    if retained is None or retained.phase == "revoked":
+                        self._unreconciled.discard(session_id)
+                        continue
+                    service = self._default_service(session_id, self._service_configuration())
+                except Exception:
+                    unresolved[session_id] = "worker-revocation"
+                    self._unreconciled.add(session_id)
+                    continue
+                self._reconciling.add(session_id)
+            # The control plane is asked without the state lock, so other sessions and
+            # settings do not wait for it; commands to this session are refused meanwhile.
+            # The service is never cached, so neither a read nor a command reaches it, and
+            # a later command starts a replacement only through a new service.
+            try:
+                service.revoke_worker(reconciler)
+            except WorkerControlPlaneError:
+                unresolved[session_id] = "worker-control-plane"
             except Exception:
-                unresolved.append(session_id)
-        return tuple(unresolved)
+                unresolved[session_id] = "worker-revocation"
+            finally:
+                with suppress(Exception):
+                    self._close_service(service)
+                with self._state_lock:
+                    self._reconciling.discard(session_id)
+                    if unresolved.get(session_id) == "worker-revocation":
+                        self._unreconciled.add(session_id)
+                    else:
+                        self._unreconciled.discard(session_id)
+        return unresolved
 
     @gateway_operation
     def handle(self, command: SessionCommand) -> SessionResult:
@@ -822,6 +886,9 @@ class SessionGateway:
                         f"{persisted_projection.lifecycle.status}"
                     ),
                 )
+        if self._worker_revoked(command.session_id):
+            # Only a command replaces a revoked worker's service; a read keeps it.
+            self._retire_service_locked(command.session_id)
         service = self._service(command.session_id)
         all_events = self._reconciled_session_events(
             session_id=command.session_id, service=service, reconciled=reconciled
@@ -2297,19 +2364,22 @@ class SessionGateway:
 
     @_serialized_state
     def _service(self, session_id: str) -> SessionService:
+        if session_id in self._reconciling:
+            raise SessionRecoveryError(
+                f"session {session_id} is revoking a worker an earlier gateway left; retry shortly"
+            )
+        if session_id in self._unreconciled:
+            raise SessionRecoveryError(
+                f"session {session_id} waits for revocation of a worker an earlier gateway left; "
+                "retry once the sandbox control plane answers"
+            )
         self._settle_releases_locked()
         if session_id in self._releasing:
             raise _SessionReleasingError(session_id)
         configuration = self._service_configuration()
         service = self._services.get(session_id)
         if service is not None and self._service_configurations.get(session_id) != configuration:
-            closed = self._close_service(service)
-            self._services.pop(session_id, None)
-            previous = self._service_configurations.pop(session_id, None)
-            self._discard_transient_state(session_id)
-            if not closed:
-                self._releasing[session_id] = (service, previous)
-                raise _SessionReleasingError(session_id)
+            self._retire_service_locked(session_id)
             service = None
         if service is None:
             if self._service_factory is not None:
@@ -2319,6 +2389,32 @@ class SessionGateway:
             self._services[session_id] = service
             self._service_configurations[session_id] = configuration
         return service
+
+    def _retire_service_locked(self, session_id: str) -> None:
+        """Close and forget a session's cached service before another replaces it.
+
+        A service whose close fails stays cached and owned. One whose worker finishes the
+        close on its own thread is detached, and no service starts for the session until
+        that close settles.
+        """
+        service = self._services[session_id]
+        closed = self._close_service(service)
+        self._services.pop(session_id, None)
+        previous = self._service_configurations.pop(session_id, None)
+        self._discard_transient_state(session_id)
+        if not closed:
+            self._releasing[session_id] = (service, previous)
+            raise _SessionReleasingError(session_id)
+
+    def _worker_revoked(self, session_id: str) -> bool:
+        """Return whether the session's cached service holds only a revoked worker attempt.
+
+        Such a service refuses every command, so the next command replaces it and the new
+        service may admit a replacement worker; a read alone does not.
+        """
+        service = self._services.get(session_id)
+        worker = None if service is None else self._worker_sessions.get(id(service))
+        return worker is not None and worker.replaceable
 
     def _service_configuration(self) -> _ServiceConfiguration:
         config = self.config_store.load()
@@ -2561,7 +2657,9 @@ class SessionGateway:
             service = self._services.get(session_id)
             if service is None and self._session_reconciler_locked(session_id)[0] == "service":
                 service = self._service(session_id)
-        if service is None:
+            worker = None if service is None else self._worker_sessions.get(id(service))
+        if service is None or (worker is not None and worker.preparing):
+            # A worker preparation in progress opens the backend; its journal is read instead.
             return None
         try:
             service.reconcile()
@@ -2625,26 +2723,37 @@ class SessionGateway:
     ) -> tuple[Literal["journal", "storage", "service"], tuple[SessionEvent, ...]]:
         """Return what reconciles a session, its journal alone, a storage or a live service.
 
-        A session whose earlier worker service is still closing is read from its journal.
+        A session whose earlier worker service is still closing, whose attempt left by an
+        earlier gateway is not yet revoked, or whose revoked worker left no open work, is
+        read from its journal.
         """
         self._settle_releases_locked()
-        if session_id in self._services:
+        served = session_id in self._services
+        if served and not self._worker_revoked(session_id):
             return "service", ()
         store = FileSessionStore(self.sessions_root, session_id)
         persisted = store.replay_events()
         persisted_projection = project_session(persisted, session_id=session_id)
         lifecycle = persisted_projection.lifecycle.status
         unresolved_command_ids = store.unresolved_command_ids()
-        if session_id in self._releasing or (
-            lifecycle
-            not in {
-                SessionLifecycle.RUNNING,
-                SessionLifecycle.PAUSED,
-                SessionLifecycle.WAITING_FOR_CONFIRMATION,
-            }
-            and not unresolved_command_ids
+        if (
+            session_id in self._releasing
+            or session_id in self._reconciling
+            or session_id in self._unreconciled
+            or (
+                lifecycle
+                not in {
+                    SessionLifecycle.RUNNING,
+                    SessionLifecycle.PAUSED,
+                    SessionLifecycle.WAITING_FOR_CONFIRMATION,
+                }
+                and not unresolved_command_ids
+            )
         ):
             return "journal", persisted
+        # A revoked worker's service with open work is read, never replaced, by a read.
+        if served:
+            return "service", ()
         if (
             lifecycle == SessionLifecycle.ERROR
             and not persisted_projection.lifecycle.can_steer
@@ -2994,10 +3103,10 @@ class SessionGateway:
 
     @_serialized_state
     def _reset_services(self) -> None:
-        """Detach every cached service; a worker's close may finish outside the state lock.
+        """Detach every cached service; a worker's close finishes outside the state lock.
 
         A service whose close fails stays cached and owned, so a later reset or stop
-        retries it.
+        retries it; a worker close retries an unobserved revocation itself.
         """
         self._settle_releases_locked()
         services = tuple(self._services.items())
@@ -3026,45 +3135,55 @@ class SessionGateway:
             raise ExceptionGroup("unable to close all session services", errors)
 
     def _finish_releases(self) -> None:
-        """Wait a bounded time for deferred worker closes, then retry those that failed."""
+        """Make each worker close attempt revocation once more, and wait a bounded time.
+
+        A close that still fails leaves its session owned, and a later stop retries it.
+        """
         with self._state_lock:
             workers = [
                 self._worker_sessions[id(service)] for service, _ in self._releasing.values()
             ]
         for worker in workers:
+            worker.stop_retrying()
+            worker.close()
+        for worker in workers:
             worker.wait_closed()
         with self._state_lock:
             failed = self._settle_releases_locked()
-            errors: list[Exception] = [
+            errors = [
                 WorkerAttemptError(f"worker close is still in progress for session {session_id}")
                 for session_id in self._releasing
+                if session_id not in failed
+            ] + [
+                WorkerAttemptError(f"worker close failed for session {session_id}")
+                for session_id in failed
             ]
-            if failed:
-                try:
-                    self._reset_services()
-                except ExceptionGroup as group:
-                    errors.extend(group.exceptions)
         if errors:
             raise ExceptionGroup("unable to close all session services", errors)
 
     def _settle_releases_locked(self) -> tuple[str, ...]:
         """Forget closed worker services, and cache again those whose deferred close failed.
 
-        Returns the sessions cached again.
+        A service is cached again only once its attempt's revocation is recorded; one whose
+        close stopped retrying an unobserved revocation stays detached and refused.
+        Returns the sessions whose close failed.
         """
         failed: list[str] = []
         for session_id, (service, configuration) in tuple(self._releasing.items()):
             worker = self._worker_sessions[id(service)]
             if worker.closing:
                 continue
-            del self._releasing[session_id]
             if worker.wait_closed(0):
+                del self._releasing[session_id]
                 self._worker_sessions.pop(id(service), None)
                 continue
+            failed.append(session_id)
+            if worker.revocation_pending:
+                continue
+            del self._releasing[session_id]
             self._services[session_id] = service
             if configuration is not None:
                 self._service_configurations[session_id] = configuration
-            failed.append(session_id)
         return tuple(failed)
 
     def _discard_transient_state(self, session_id: str) -> None:

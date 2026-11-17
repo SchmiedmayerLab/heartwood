@@ -30,18 +30,25 @@ from heartwood.core_adapter import (
     SessionService,
     TokenDeltaSink,
 )
+from heartwood.core_adapter.session_activity import worker_replacement_blocker
 from heartwood.core_adapter.worker_attempts import (
     WorkerAttemptError,
     WorkerAttemptIntent,
     WorkerAttemptLease,
     WorkerAttemptRecord,
+    WorkerControlPlane,
+    WorkerControlPlaneError,
     WorkerRevocationEvidence,
     WorkerRuntimeBinding,
-    worker_replacement_blocker,
+    current_worker_attempt,
+    validate_worker_transition,
 )
 from heartwood.schemas import ModelDataHandling
 from heartwood.session import CommandKind, EventKind, JsonValue, SessionCommand, SessionEvent
 
+_CONTROL_PLANE = WorkerControlPlane(
+    control_plane_sha256="1" * 64, container_runtime_sha256="2" * 64
+)
 _PROJECT = UUID("2ce140c9-e046-4fe3-9437-72b87341bf6f")
 _IMAGE = "sha256:" + "a" * 64
 
@@ -89,7 +96,10 @@ def _record(service: SessionService) -> WorkerAttemptRecord:
 
 def _prepare(service: SessionService) -> WorkerAttemptIntent:
     return service.prepare_worker_attempt(
-        image_digest=_IMAGE, sandbox_policy_sha256="b" * 64, input_manifest_sha256="c" * 64
+        image_digest=_IMAGE,
+        sandbox_policy_sha256="b" * 64,
+        input_manifest_sha256="c" * 64,
+        control_plane=_CONTROL_PLANE,
     )
 
 
@@ -751,3 +761,85 @@ def test_launcher_registered_after_fencing_is_notified_immediately(
     notified: list[bool] = []
     lease.on_fenced(lambda: notified.append(True))
     assert notified == [True]
+
+
+def test_attempts_record_their_infrastructure_and_legacy_records_name_none() -> None:
+    intent = WorkerAttemptIntent(
+        project_id=_PROJECT,
+        session_id="session-main",
+        attempt_id=uuid4(),
+        conversation_id=uuid4(),
+        image_digest=_IMAGE,
+        gateway_policy_sha256="a" * 64,
+        sandbox_policy_sha256="b" * 64,
+        input_manifest_sha256="c" * 64,
+        control_plane=_CONTROL_PLANE,
+    )
+    current = WorkerAttemptRecord(phase="prepared", intent=intent)
+    assert current.schema_version == "heartwood.worker-attempt.v2"
+    legacy_intent = intent.model_copy(update={"control_plane": None})
+    with pytest.raises(ValidationError, match="version 2"):
+        WorkerAttemptRecord(phase="prepared", intent=legacy_intent)
+    with pytest.raises(ValidationError, match="version 2"):
+        WorkerAttemptRecord(
+            schema_version="heartwood.worker-attempt.v1", phase="prepared", intent=intent
+        )
+    # A record written before launches retained their infrastructure stays readable as it is.
+    payload = current.model_dump(mode="json")
+    payload["schema_version"] = "heartwood.worker-attempt.v1"
+    del payload["intent"]["control_plane"]
+    legacy = current_worker_attempt(_journal((EventKind.WORKER_ATTEMPT_RECORDED, payload)))
+    assert legacy is not None
+    assert legacy.intent.control_plane is None
+    assert legacy.schema_version == "heartwood.worker-attempt.v1"
+    with pytest.raises(WorkerAttemptError, match="identity changed"):
+        validate_worker_transition(
+            legacy,
+            WorkerAttemptRecord(phase="fenced", intent=intent),
+        )
+
+
+def test_legacy_attempt_is_fenced_and_reconciliation_against_it_is_refused(
+    service: SessionService,
+) -> None:
+    intent: dict[str, JsonValue] = {
+        "project_id": str(_PROJECT),
+        "session_id": "session-main",
+        "attempt_id": str(uuid4()),
+        "conversation_id": str(uuid4()),
+        "image_digest": _IMAGE,
+        "gateway_policy_sha256": "a" * 64,
+        "sandbox_policy_sha256": "b" * 64,
+        "input_manifest_sha256": "c" * 64,
+    }
+    runtime = _runtime().model_dump(mode="json")
+    with service._command_lock:
+        service.store.acquire_writer()
+        # Stand in for an attempt that an earlier release recorded and left running.
+        for phase in ("prepared", "active"):
+            service._record_event(
+                EventKind.WORKER_ATTEMPT_RECORDED,
+                {
+                    "schema_version": "heartwood.worker-attempt.v1",
+                    "phase": phase,
+                    "intent": intent,
+                    **({"runtime": runtime} if phase == "active" else {}),
+                },
+            )
+    legacy = _record(service)
+    assert legacy.schema_version == "heartwood.worker-attempt.v1"
+    service.fence_worker_attempt(attempt_id=legacy.intent.attempt_id)
+    assert (_record(service).phase, _record(service).schema_version) == (
+        "fenced",
+        "heartwood.worker-attempt.v1",
+    )
+
+    def refuse(_record: WorkerAttemptRecord) -> WorkerRevocationEvidence:
+        raise WorkerControlPlaneError("synthetic unrecorded control plane")
+
+    with pytest.raises(WorkerControlPlaneError, match="unrecorded"):
+        service.revoke_worker(refuse)
+    assert _record(service).phase == "fenced"
+    service.revoke_worker(lambda record: _revocation(record.intent.attempt_id))
+    revoked = _record(service)
+    assert (revoked.phase, revoked.schema_version) == ("revoked", "heartwood.worker-attempt.v1")

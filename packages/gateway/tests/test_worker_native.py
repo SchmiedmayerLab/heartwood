@@ -10,13 +10,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import socket
+import subprocess
+import sys
 from collections.abc import Callable, Iterator
 from contextlib import ExitStack, contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import Thread
+from time import monotonic, sleep
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import Mock
@@ -32,6 +36,8 @@ from heartwood.core_adapter.worker_attempts import (
     WorkerAttemptIntent,
     WorkerAttemptLease,
     WorkerAttemptRecord,
+    WorkerControlPlane,
+    WorkerControlPlaneError,
     WorkerRuntimeBinding,
 )
 from heartwood.gateway import ProjectContext, ProjectStateError, worker_native
@@ -48,6 +54,7 @@ from heartwood.gateway.worker_sessions import WorkerSessionRequest
 from heartwood.gateway.worker_volumes import WorkerVolumes
 
 _GATEWAY_VERSION = "0.0.1+synthetic"
+_RUNTIME = "f" * 64
 
 
 @pytest.fixture
@@ -240,8 +247,12 @@ def _attempt(settings: OpenShellWorkerDeployment, project: ProjectContext) -> _N
         gateway_policy_sha256="c" * 64,
         sandbox_policy_sha256=settings.sandbox_policy_sha256,
         input_manifest_sha256="d" * 64,
+        control_plane=WorkerControlPlane(
+            control_plane_sha256="1" * 64, container_runtime_sha256=_RUNTIME
+        ),
     )
     attempt._intent = intent
+    attempt._creation_uncertain = False
     attempt._preparation = ExitStack()
     attempt._sandbox_id = "native-worker"
     attempt._generation = "generation-1"
@@ -535,6 +546,8 @@ class _Native:
             WorkerVolumes, "inspect_worker", lambda volumes, name: self._inspect(volumes, name)
         )
         monkeypatch.setattr(worker_native, "NativeWorkerForward", self._forward)
+        self.runtime = _RUNTIME
+        monkeypatch.setattr(worker_native, "container_runtime_sha256", lambda _: self.runtime)
         self.attempt = _NativeWorkerAttempt(
             settings,
             cast(
@@ -562,6 +575,7 @@ class _Native:
             gateway_policy_sha256="c" * 64,
             sandbox_policy_sha256=settings.sandbox_policy_sha256,
             input_manifest_sha256=self.attempt.plan().input_manifest_sha256,
+            control_plane=self.attempt.plan().control_plane,
         )
 
     platform_id = "terra"
@@ -923,13 +937,13 @@ def test_new_process_reconciles_an_attempt_its_owner_left_running(
     )
 
 
-def test_reconciliation_records_that_an_interrupted_launch_created_nothing(
+def test_reconciliation_never_records_absence_after_a_launch_left_unresolved(
     native: _Native,
 ) -> None:
     reconcile = worker_native.native_worker_reconciler(native.settings, native.project)
-    evidence = reconcile(native.record("fenced", None))
-    assert evidence.outcome == "not-created"
-    assert evidence.sandbox_id is None
+    # The ended process may have sent a creation the control plane has not recorded yet.
+    with pytest.raises(WorkerAttemptError, match="absence after an unresolved creation"):
+        reconcile(native.record("fenced", None))
     assert native.sandboxes.deleted == []
 
 
@@ -1088,3 +1102,201 @@ def test_managed_workers_require_a_declared_gateway_version(
         manifest["gateway_versions"] = declared
     with pytest.raises(ValidationError):
         OpenShellWorkerDeployment.model_validate(manifest)
+
+
+@pytest.mark.parametrize("change", ["control-plane", "container-runtime", "unrecorded"])
+def test_reconciliation_only_observes_the_infrastructure_that_ran_the_attempt(
+    native: _Native, change: str
+) -> None:
+    runtime = native.attempt.launch(native.intent)
+    record = native.record("fenced", runtime)
+    if change == "control-plane":
+        authority = native.settings.native_config_home / "openshell/gateways/synthetic/mtls/ca.crt"
+        authority.write_text("another synthetic authority, not key material")
+    elif change == "container-runtime":
+        native.runtime = "9" * 64
+    else:
+        record = WorkerAttemptRecord.model_validate(
+            {
+                "schema_version": "heartwood.worker-attempt.v1",
+                "phase": "fenced",
+                "intent": native.intent.model_copy(update={"control_plane": None}),
+                "runtime": runtime,
+            }
+        )
+    reconcile = worker_native.native_worker_reconciler(native.settings, native.project)
+    with pytest.raises(WorkerControlPlaneError):
+        reconcile(record)
+    # Nothing is observed or removed, so absence elsewhere is never recorded as revocation.
+    assert native.sandboxes.running
+    assert native.sandboxes.deleted == []
+    assert len(native.docker.volumes) == 2
+
+
+def test_launch_refuses_a_container_runtime_that_changed_after_preparation(
+    native: _Native,
+) -> None:
+    native.runtime = "9" * 64
+    with pytest.raises(WorkerAttemptError, match="outside reconciliation"):
+        native.attempt.launch(native.intent)
+    assert native.sandboxes.spec is None
+    assert native.docker.volumes == {}
+
+
+def _lose_creation_response(native: _Native, monkeypatch: pytest.MonkeyPatch) -> Callable[[], None]:
+    """Time out the creation request; the returned callable completes it in the control plane."""
+    create = native.sandboxes.create
+    pending: list[tuple[str, dict[str, str]]] = []
+
+    def lost_create(
+        *, workspace: str, name: str, spec: object, labels: dict[str, str]
+    ) -> SimpleNamespace:
+        assert workspace == native.settings.workspace
+        native.sandboxes.spec = spec
+        pending.append((name, labels))
+        raise TimeoutError("synthetic creation timeout")
+
+    def land() -> None:
+        name, labels = pending.pop()
+        create(
+            workspace=native.settings.workspace,
+            name=name,
+            spec=native.sandboxes.spec,
+            labels=labels,
+        )
+
+    monkeypatch.setattr(native.sandboxes, "create", lost_create)
+    return land
+
+
+@pytest.mark.parametrize("revocation", ["owner", "reconciliation"])
+def test_absence_after_an_uncertain_creation_keeps_the_attempt_fenced_until_it_appears(
+    native: _Native, monkeypatch: pytest.MonkeyPatch, revocation: str
+) -> None:
+    land = _lose_creation_response(native, monkeypatch)
+    with pytest.raises(WorkerAttemptError, match="outside reconciliation"):
+        native.attempt.launch(native.intent)
+    revoke = (
+        native.attempt.revoke
+        if revocation == "owner"
+        else worker_native.native_worker_reconciler(native.settings, native.project)
+    )
+    # The creation may still be queued: absence is never recorded as `not-created`.
+    for _ in range(3):
+        with pytest.raises(WorkerAttemptError, match="absence after an unresolved creation"):
+            revoke(native.record("fenced", None))
+    assert native.sandboxes.deleted == []
+    # The control plane completes the creation, and the next revocation deletes it.
+    land()
+    evidence = revoke(native.record("fenced", None))
+    assert evidence.outcome == "revoked"
+    assert evidence.sandbox_id == "sandbox-1"
+    assert native.sandboxes.deleted == ["hw-" + native.intent.attempt_id.hex[:16]]
+    assert not native.sandboxes.running
+
+
+@pytest.mark.parametrize(
+    ("status", "rejected"),
+    [
+        ("INVALID_ARGUMENT", True),
+        ("PERMISSION_DENIED", True),
+        ("UNAUTHENTICATED", True),
+        ("FAILED_PRECONDITION", False),
+        ("ALREADY_EXISTS", False),
+        ("INTERNAL", False),
+        ("UNAVAILABLE", False),
+        ("DEADLINE_EXCEEDED", False),
+    ],
+)
+def test_only_a_creation_rejected_before_any_record_resolves_from_absence(
+    native: _Native, monkeypatch: pytest.MonkeyPatch, status: str, rejected: bool
+) -> None:
+    def failed_create(**_request: object) -> SimpleNamespace:
+        raise native.sandboxes.error(getattr(native.sandboxes.grpc.StatusCode, status))
+
+    monkeypatch.setattr(native.sandboxes, "create", failed_create)
+    with pytest.raises(WorkerAttemptError, match="outside reconciliation"):
+        native.attempt.launch(native.intent)
+    if rejected:
+        assert native.attempt.revoke(native.record("fenced", None)).outcome == "not-created"
+    else:
+        with pytest.raises(WorkerAttemptError, match="absence after an unresolved creation"):
+            native.attempt.revoke(native.record("fenced", None))
+    # Without a recorded runtime, an ended process cannot tell which outcome it had.
+    reconcile = worker_native.native_worker_reconciler(native.settings, native.project)
+    with pytest.raises(WorkerAttemptError, match="absence after an unresolved creation"):
+        reconcile(native.record("fenced", None))
+    assert native.sandboxes.deleted == []
+
+
+def test_creation_rejection_statuses_were_checked_against_the_pinned_gateway() -> None:
+    root = Path(__file__).resolve().parents[3]
+    manifest = json.loads((root / "images/worker/candidate/gateway.json").read_text())
+    pinned = (
+        manifest["source"]["revision"],
+        tuple(patch["sha256"] for patch in manifest["patches"]),
+    )
+    assert pinned == worker_native._CREATION_REJECTED_GATEWAY, (
+        "the pinned sandbox gateway changed: recheck in its creation path that "
+        f"{worker_native._CREATION_REJECTED} are returned only before a sandbox is recorded "
+        "or requested, then update _CREATION_REJECTED and _CREATION_REJECTED_GATEWAY"
+    )
+
+
+_GATEWAY_PROCESS = """import sys, time
+from pathlib import Path
+from types import SimpleNamespace
+from heartwood.gateway.worker_control import NativeWorkerForward
+cli, home = Path(sys.argv[1]), Path(sys.argv[2])
+settings = SimpleNamespace(
+    openshell_cli=cli, gateway="synthetic", workspace="synthetic", native_config_home=home
+)
+control = SimpleNamespace(settings=settings, verify_configuration=lambda: None)
+forward = NativeWorkerForward(control, "unique-attempt")
+print(forward.start(), flush=True)
+time.sleep(60)
+"""
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def test_forwarder_does_not_outlive_the_gateway_process(
+    deployment: tuple[OpenShellWorkerDeployment, ProjectContext],
+) -> None:
+    settings, _project = deployment
+    _forwarder(
+        settings,
+        'echo $$ > "$XDG_CONFIG_HOME/forwarder.pid"\n'
+        'echo "Forwarding 127.0.0.1:43210 -> unique-attempt:8000"\nexec sleep 60\n',
+    )
+    gateway = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            _GATEWAY_PROCESS,
+            str(settings.openshell_cli),
+            str(settings.native_config_home),
+        ],
+        stdout=subprocess.PIPE,
+    )
+    try:
+        assert gateway.stdout is not None
+        assert gateway.stdout.readline().strip() == b"http://127.0.0.1:43210/"
+        forwarder = int((settings.native_config_home / "forwarder.pid").read_text())
+        assert _alive(forwarder)
+        # The gateway process ends without closing anything it owns.
+        gateway.kill()
+        gateway.wait(timeout=10)
+        deadline = monotonic() + 10
+        while _alive(forwarder) and monotonic() < deadline:
+            sleep(0.05)
+        assert not _alive(forwarder)
+    finally:
+        gateway.kill()
+        gateway.wait(timeout=10)

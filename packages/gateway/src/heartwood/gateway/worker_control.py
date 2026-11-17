@@ -13,8 +13,11 @@ import importlib
 import json
 import os
 import re
+import signal
 import subprocess
+import sys
 from collections import deque
+from contextlib import suppress
 from threading import Event, Thread
 from time import monotonic
 from typing import Any
@@ -94,6 +97,18 @@ class NativeWorkerControl:
         if self._snapshot() != self._fingerprints:
             raise WorkerAttemptError("native gateway identity changed during the worker attempt")
 
+    def control_plane_sha256(self) -> str:
+        """Identify the registered gateway by its name, endpoint and certificate authority."""
+        identity = json.dumps(
+            {
+                "gateway": self.settings.gateway,
+                "endpoint": self._endpoint,
+                "certificate_authority": self._fingerprints[1],
+            },
+            sort_keys=True,
+        )
+        return hashlib.sha256(identity.encode()).hexdigest()
+
     def connect(self) -> None:
         """Create the maintained SDK client and require a declared gateway version.
 
@@ -144,6 +159,20 @@ class NativeWorkerControl:
             self.client = None
 
 
+# Runs the forwarder in its own process group and ends that group when the gateway's end of
+# the standard input pipe closes, which happens when the gateway process ends for any reason.
+_FORWARD_SUPERVISOR = """import os,signal,subprocess,sys,threading
+def stop(*_):
+    os.killpg(os.getpgid(0),signal.SIGKILL)
+signal.signal(signal.SIGTERM,stop)
+child=subprocess.Popen(sys.argv[1:],stdin=subprocess.DEVNULL)
+threading.Thread(target=lambda:(child.wait(),stop()),daemon=True).start()
+while sys.stdin.buffer.read(4096):
+    pass
+stop()
+"""
+
+
 class NativeWorkerForward:
     """Own the native CLI forwarding process, retaining only a bounded output tail."""
 
@@ -169,6 +198,11 @@ class NativeWorkerForward:
         settings = self._control.settings
         self._process = subprocess.Popen(
             [
+                sys.executable,
+                "-I",
+                "-S",
+                "-c",
+                _FORWARD_SUPERVISOR,
                 str(settings.openshell_cli),
                 "forward",
                 "service",
@@ -187,9 +221,11 @@ class NativeWorkerForward:
             env={"PATH": os.defpath, "XDG_CONFIG_HOME": str(settings.native_config_home)},
             cwd=settings.native_config_home,
             bufsize=0,
-            stdin=subprocess.DEVNULL,
+            # Never written: the pipe only tells the supervisor that this process is alive.
+            stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
+            start_new_session=True,
         )
         self._reader = Thread(target=self._drain, daemon=True, name="worker-forward-output")
         self._reader.start()
@@ -215,12 +251,16 @@ class NativeWorkerForward:
     def close(self) -> None:
         """Stop only this adapter's forwarding process, retaining failures for reconciliation."""
         if self._process is not None and self._process.poll() is None:
+            # The supervisor ends its whole process group, including the forwarder.
             self._process.terminate()
             try:
                 self._process.wait(timeout=5)
             except subprocess.TimeoutExpired:
-                self._process.kill()
+                with suppress(ProcessLookupError):
+                    os.killpg(self._process.pid, signal.SIGKILL)
                 self._process.wait(timeout=5)
+        if self._process is not None and self._process.stdin is not None:
+            self._process.stdin.close()
         if self._reader is not None:
             self._reader.join(timeout=5)
             if self._reader.is_alive():

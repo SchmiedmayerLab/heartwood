@@ -1714,3 +1714,82 @@ def test_projection_discloses_evidence_gap_and_retention(mode: str) -> None:
     assert "pending" in projection.activity[0].detail.lower()
     assert ("blocked" in projection.activity[0].detail.lower()) == (mode == "required")
     assert "retained" in projection.activity[1].detail.lower()
+
+
+def _attempt_event(sequence: int, attempt_id: str, phase: str) -> SessionEvent:
+    return _event(
+        sequence,
+        EventKind.WORKER_ATTEMPT_RECORDED,
+        {"phase": phase, "intent": {"attempt_id": attempt_id}},
+    )
+
+
+def test_replacement_keeps_earlier_worker_usage_and_supersedes_its_unfinished_plan() -> None:
+    plan: dict[str, JsonValue] = {
+        "tasks": [
+            {"title": "Inspect the cohort", "status": "done"},
+            {"title": "Fit the model", "status": "in_progress"},
+            {"title": "Write the summary", "status": "todo"},
+        ]
+    }
+    earlier = (
+        _attempt_event(0, "attempt-1", "active"),
+        _event(1, EventKind.TASK_PLAN_UPDATED, plan),
+        _usage_event(2, "total", calls=3, prompt_tokens=150, completion_tokens=30),
+        _usage_event(3, "agent", calls=3, prompt_tokens=150, completion_tokens=30),
+        _attempt_event(4, "attempt-1", "fenced"),
+        _attempt_event(5, "attempt-1", "revoked"),
+    )
+    revoked = project_session(earlier, session_id="session-1")
+    assert revoked.researcher_notice is None
+    assert [task.status for task in revoked.task_plan] == ["done", "in-progress", "todo"]
+
+    replaced = (*earlier, _attempt_event(6, "attempt-2", "active"))
+    projection = project_session(replaced, session_id="session-1")
+    assert [(task.status, task.status_label) for task in projection.task_plan] == [
+        ("done", "Complete"),
+        ("superseded", "Superseded"),
+        ("superseded", "Superseded"),
+    ]
+    assert projection.usage is not None
+    assert projection.usage.call_count == 3
+    by_purpose = {usage.usage_id: usage for usage in projection.usage_by_purpose}
+    assert by_purpose["replaced-workers"].purpose_label == "Earlier Workers"
+    assert by_purpose["replaced-workers"].prompt_tokens == 150
+
+    # The successor reports from zero; the session total keeps what came before.
+    continued = project_session(
+        (
+            *replaced,
+            _usage_event(7, "total", calls=1, prompt_tokens=40, completion_tokens=8),
+            _usage_event(8, "agent", calls=1, prompt_tokens=40, completion_tokens=8),
+            _event(
+                9, EventKind.TASK_PLAN_UPDATED, {"tasks": [{"title": "Refit", "status": "todo"}]}
+            ),
+        ),
+        session_id="session-1",
+    )
+    assert continued.usage is not None
+    assert (continued.usage.call_count, continued.usage.prompt_tokens) == (4, 190)
+    assert continued.usage.completion_tokens == 38
+    by_purpose = {usage.usage_id: usage for usage in continued.usage_by_purpose}
+    assert by_purpose["agent"].prompt_tokens == 190
+    assert by_purpose["replaced-workers"].prompt_tokens == 150
+    assert [task.status for task in continued.task_plan] == ["todo"]
+    assert continued.execution_usage(elapsed_seconds=1).model_calls == 4
+
+
+def test_revoked_worker_with_an_unsettled_run_reports_the_replacement_blocker() -> None:
+    events = (
+        _attempt_event(0, "attempt-1", "active"),
+        _event(1, EventKind.AGENT_LIFECYCLE_UPDATED, {"status": "running"}),
+        _attempt_event(2, "attempt-1", "fenced"),
+    )
+    assert project_session(events, session_id="session-1").researcher_notice is None
+    projection = project_session(
+        (*events, _attempt_event(3, "attempt-1", "revoked")), session_id="session-1"
+    )
+    notice = projection.researcher_notice
+    assert notice is not None
+    assert (notice.code, notice.tone) == ("worker-replacement-unavailable", "attention")
+    assert "run did not settle" in notice.detail

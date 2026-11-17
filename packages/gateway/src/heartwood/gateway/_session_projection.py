@@ -25,6 +25,7 @@ from heartwood.core_adapter.external_results import (
     ExternalResultRecord,
     external_result_records,
 )
+from heartwood.core_adapter.session_activity import worker_replacement_blocker
 from heartwood.core_adapter.workflow_provenance import workflow_experiment_events
 from heartwood.core_adapter.workflow_runtime import workflow_controls, workflow_run
 from heartwood.schemas.execution import ExecutionBudget, ExecutionUsage, NativeTaskExecution
@@ -266,7 +267,7 @@ class ProjectionResearcherNotice(_ProjectionRecord):
     """A non-lifecycle outcome that every interface must present."""
 
     notice_id: str = Field(serialization_alias="noticeId")
-    code: Literal["request-not-applied"]
+    code: Literal["request-not-applied", "worker-replacement-unavailable"]
     label: str
     detail: str
     tone: Literal["attention", "danger"]
@@ -282,9 +283,14 @@ class ProjectionCommandOutcome(_ProjectionRecord):
     message: str | None = None
 
 
+# Usage reported by workers that a replacement took over, listed beside the session total.
+_REPLACED_USAGE_ID = "replaced-workers"
+
+
 class ProjectionTask(_ProjectionRecord):
     title: str
-    status: Literal["todo", "in-progress", "done"]
+    # `superseded` marks unfinished work planned by a worker that a replacement took over.
+    status: Literal["todo", "in-progress", "done", "superseded"]
     status_label: str = Field(serialization_alias="statusLabel")
 
 
@@ -501,6 +507,10 @@ class _SessionReduction:
     usage_by_purpose: dict[str, ProjectionUsage] = field(default_factory=dict)
     subagents: dict[str, ProjectionSubagent] = field(default_factory=dict)
     worker_attempts: set[str] = field(default_factory=set)
+    worker_revoked: bool = False
+    # Cumulative usage reported by the current worker, and the sum left by replaced ones.
+    attempt_usage: dict[str, ProjectionUsage] = field(default_factory=dict)
+    replaced_usage: dict[str, ProjectionUsage] = field(default_factory=dict)
 
 
 def project_session(
@@ -596,7 +606,12 @@ def project_session(
             error_recoverable=lifecycle_error_recoverable,
             latest_action_denied=_latest_action_was_denied(projected_actions),
         ),
-        researcher_notice=_researcher_notice(reduction.command_outcome),
+        researcher_notice=_researcher_notice(
+            reduction.command_outcome,
+            replacement_blocker=(
+                worker_replacement_blocker(events) if reduction.worker_revoked else None
+            ),
+        ),
         last_command_outcome=reduction.command_outcome,
         task_plan=reduction.tasks,
         usage=reduction.usage,
@@ -1003,10 +1018,46 @@ def _reduce_task_plan(reduction: _SessionReduction, event: SessionEvent) -> None
 def _reduce_model_usage(reduction: _SessionReduction, event: SessionEvent) -> None:
     usage_update = _usage(_mapping(event.payload.get("usage")))
     if usage_update is not None:
-        if usage_update.usage_id == "total":
-            reduction.usage = usage_update
+        reduction.attempt_usage[usage_update.usage_id] = usage_update
+        usage = _added_usage(reduction.replaced_usage.get(usage_update.usage_id), usage_update)
+        if usage.usage_id == "total":
+            reduction.usage = usage
         else:
-            reduction.usage_by_purpose[usage_update.usage_id] = usage_update
+            reduction.usage_by_purpose[usage.usage_id] = usage
+
+
+def _added_usage(earlier: ProjectionUsage | None, current: ProjectionUsage) -> ProjectionUsage:
+    """Add a replaced worker's cumulative usage to what its successor reports."""
+    if earlier is None:
+        return current
+    return current.model_copy(
+        update={
+            "call_count": earlier.call_count + current.call_count,
+            "prompt_tokens": earlier.prompt_tokens + current.prompt_tokens,
+            "completion_tokens": earlier.completion_tokens + current.completion_tokens,
+            "cache_read_tokens": earlier.cache_read_tokens + current.cache_read_tokens,
+            "cache_write_tokens": earlier.cache_write_tokens + current.cache_write_tokens,
+            "reasoning_tokens": earlier.reasoning_tokens + current.reasoning_tokens,
+            "accumulated_cost": earlier.accumulated_cost + current.accumulated_cost,
+        }
+    )
+
+
+def _replace_worker_usage(reduction: _SessionReduction) -> None:
+    """Retain a replaced worker's usage, which its successor's reports start again from zero."""
+    for usage_id, usage in reduction.attempt_usage.items():
+        reduction.replaced_usage[usage_id] = _added_usage(
+            reduction.replaced_usage.get(usage_id), usage
+        )
+    reduction.attempt_usage.clear()
+    replaced = reduction.replaced_usage.get("total")
+    if replaced is not None:
+        reduction.usage_by_purpose[_REPLACED_USAGE_ID] = replaced.model_copy(
+            update={
+                "usage_id": _REPLACED_USAGE_ID,
+                "purpose_label": _usage_purpose_label(_REPLACED_USAGE_ID),
+            }
+        )
 
 
 def _reduce_subagent(reduction: _SessionReduction, event: SessionEvent) -> None:
@@ -1017,8 +1068,16 @@ def _reduce_subagent(reduction: _SessionReduction, event: SessionEvent) -> None:
 
 def _reduce_worker_attempt(reduction: _SessionReduction, event: SessionEvent) -> None:
     attempt_id = _string(_mapping(event.payload.get("intent")).get("attempt_id"))
+    reduction.worker_revoked = event.payload.get("phase") == "revoked"
     if event.payload.get("phase") == "active" and attempt_id not in reduction.worker_attempts:
         if reduction.worker_attempts:
+            _replace_worker_usage(reduction)
+            reduction.tasks = tuple(
+                task
+                if task.status == "done"
+                else task.model_copy(update={"status": "superseded", "status_label": "Superseded"})
+                for task in reduction.tasks
+            )
             _append_message(
                 reduction.conversation,
                 event,
@@ -1028,7 +1087,9 @@ def _reduce_worker_attempt(reduction: _SessionReduction, event: SessionEvent) ->
                 detail=(
                     "The earlier sandboxed worker was stopped and removed. "
                     "This session's record is retained, but the new worker does not "
-                    "remember the earlier conversation and starts with an empty workspace."
+                    "remember the earlier conversation and starts with an empty workspace. "
+                    "Its unfinished plan is marked superseded, and its model usage is "
+                    "listed separately and included in the session total."
                 ),
             )
         reduction.worker_attempts.add(attempt_id)
@@ -1687,6 +1748,7 @@ def _usage_purpose_label(value: str) -> str:
         "condenser": "Context Management",
         "critic": "Response Review",
         "total": "Total Model Activity",
+        _REPLACED_USAGE_ID: "Earlier Workers",
     }.get(value, _display_identifier(value, fallback="Model Activity"))
 
 
@@ -1768,7 +1830,20 @@ def _researcher_status(
 
 def _researcher_notice(
     command_outcome: ProjectionCommandOutcome | None,
+    *,
+    replacement_blocker: str | None,
 ) -> ProjectionResearcherNotice | None:
+    if replacement_blocker is not None:
+        return ProjectionResearcherNotice(
+            notice_id="worker-replacement-unavailable",
+            code="worker-replacement-unavailable",
+            label="New Worker Unavailable",
+            detail=(
+                f"This session's worker was stopped, and a new worker cannot take over because "
+                f"{replacement_blocker}. Continue in a new session."
+            ),
+            tone="attention",
+        )
     if command_outcome is None or command_outcome.status != "rejected":
         return None
     return ProjectionResearcherNotice(

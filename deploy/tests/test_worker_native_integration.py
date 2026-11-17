@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -16,8 +17,8 @@ from collections.abc import Callable, Iterator, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Never
-from uuid import uuid4
+from typing import Any, Never, cast
+from uuid import UUID, uuid4
 
 import pytest
 from openhands.sdk.tool.client_tool import ClientToolSpec
@@ -79,7 +80,13 @@ def _retain_session_diagnostics(applications: Sequence[SessionGateway], path: Pa
     fields = ("reason", "code", "error_code", "status", "phase", "decision", "tool_name")
     sessions = []
     for application in applications:
-        for session_id, service in application._services.items():
+        with application._state_lock:
+            # A session whose close still fails is detached from the cache until a later stop.
+            releasing = {
+                session_id: service for session_id, (service, _) in application._releasing.items()
+            }
+            services = {**application._services, **releasing}
+        for session_id, service in services.items():
             events = []
             for event in service.replay_events():
                 record = event.payload.get("record")
@@ -91,7 +98,9 @@ def _retain_session_diagnostics(applications: Sequence[SessionGateway], path: Pa
                         **{name: details[name] for name in fields if name in details},
                     }
                 )
-            sessions.append({"session_id": session_id, "events": events})
+            sessions.append(
+                {"session_id": session_id, "releasing": session_id in releasing, "events": events}
+            )
     path.write_text(json.dumps(sessions, indent=2) + "\n")
 
 
@@ -241,7 +250,7 @@ def _application(
         assert project.protected_state is not None
         fixture.prepare_hostile(project.protected_state)
     if restarted:
-        assert application.reconcile_workers() == ()
+        assert application.reconcile_workers() == {}
     return application
 
 
@@ -276,7 +285,13 @@ def _stop(application: SessionGateway) -> None:
             application.stop()
             return
         except Exception:
-            service = application._service("composition")
+            # A close that still fails leaves its session detached and refused until a later
+            # stop retries it.
+            with application._state_lock:
+                released = application._releasing.get("composition")
+                cached = application._services.get("composition")
+            service = released[0] if released else cached
+            assert service is not None, "the stopped session is neither cached nor closing"
             attempt = service.worker_attempt()
             assert attempt is not None
             assert attempt.phase == "fenced"
@@ -914,3 +929,178 @@ def test_lost_create_retains_writer_until_native_revocation(
         )
     finally:
         _stop(application)
+
+
+def _settled_attempt(service: SessionService, phase: str) -> None:
+    deadline = time.monotonic() + 240
+    while time.monotonic() < deadline:
+        attempt = service.worker_attempt()
+        if attempt is not None and attempt.phase == phase:
+            return
+        time.sleep(0.5)
+    raise AssertionError(f"Native worker attempt did not reach {phase}")
+
+
+def test_native_revoked_worker_is_replaced_for_the_next_command(
+    infrastructure: NativeFixture,
+) -> None:
+    fixture = infrastructure
+    # Each worker's run finishes without an action, so no review the revoked worker
+    # proposed blocks its replacement.
+    fixture.provider.script = [
+        ("finish", {"message": "Synthetic task completed."}),
+        ("finish", {"message": "Synthetic task completed by the new worker."}),
+    ]
+    application = _application(fixture)
+    service = application._service("composition")
+    try:
+        _submit(application, CommandKind.CHAT, {"prompt": "Synthetic task before revocation."})
+        backend = service.backend
+        assert isinstance(backend, OpenHandsSdkBackend)
+        assert backend.wait_for_idle(60)
+        first = service.worker_attempt()
+        assert first is not None
+        assert first.phase == "active"
+        assert backend._worker_context is not None
+        # A failed runtime observation or exhausted budget fences in the same way.
+        backend._worker_context().workspace.attempt.fence()
+        _settled_attempt(service, "revoked")
+        _assert_absent(str(first.intent.attempt_id))
+
+        _submit(application, CommandKind.CHAT, {"prompt": "Synthetic task after revocation."})
+        replacement = application._services["composition"]
+        assert replacement is not service
+        assert not service.store.owns_writer
+        second = replacement.worker_attempt()
+        assert second is not None
+        assert second.phase == "active"
+        assert second.intent.attempt_id != first.intent.attempt_id
+        assert second.intent.conversation_id == first.intent.conversation_id
+        replacement_backend = replacement.backend
+        assert isinstance(replacement_backend, OpenHandsSdkBackend)
+        assert replacement_backend.wait_for_idle(60)
+        projection = application.session_projection(session_id="composition")
+        assert projection.researcher_notice is None
+        assert any("new worker" in message.content for message in projection.conversation)
+        _stop(application)
+        _assert_revoked(replacement)
+        (fixture.output / "evidence.json").write_text(
+            json.dumps(
+                {
+                    "drill_id": "native-revoked-worker-replacement.v1",
+                    "worker_image": fixture.worker,
+                    "gateway_image": fixture.gateway_image,
+                    "revoked_attempt_id": str(first.intent.attempt_id),
+                    "replacement_attempt_id": str(second.intent.attempt_id),
+                    "replaced_without_restart": True,
+                    "revoked_resources_absent": True,
+                    "sensitive_data_ready": False,
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+    finally:
+        _stop(application)
+
+
+def _group_running(group: int) -> bool:
+    """Return whether any process of a group still runs; an unreaped exit has ended."""
+    for stat in Path("/proc").glob("[0-9]*/stat"):
+        try:
+            fields = stat.read_text().rsplit(")", 1)[1].split()
+        except OSError:
+            continue
+        if int(fields[2]) == group and fields[0] != "Z":
+            return True
+    return False
+
+
+def test_native_forwarder_ends_with_the_gateway_process(infrastructure: NativeFixture) -> None:
+    fixture = infrastructure
+    reports, report_end = os.pipe()
+    gateway = os.fork()
+    if gateway == 0:
+        # The gateway process admits a worker, reports its forwarder and waits to be killed.
+        try:
+            os.close(reports)
+            application = _application(fixture)
+            service = application._service("composition")
+            _submit(
+                application, CommandKind.CHAT, {"prompt": "Synthetic forwarder lifetime check."}
+            )
+            backend = service.backend
+            assert isinstance(backend, OpenHandsSdkBackend)
+            assert backend.wait_for_idle(60)
+            plan = application._worker_sessions[id(service)]._plan
+            assert plan is not None
+            attempt = cast(_NativeWorkerAttempt, cast(Any, plan.launch).__self__)
+            forward = attempt._forward
+            assert forward is not None
+            assert forward._process is not None
+            record = service.worker_attempt()
+            assert record is not None
+            report = {
+                "supervisor": forward._process.pid,
+                "root": str(application.project.root),
+                "protected": str(application.project.protected_state),
+                "project": str(application.project.project_id),
+                "settings": attempt.settings.model_dump(mode="json"),
+                "attempt": str(record.intent.attempt_id),
+            }
+            os.write(report_end, (json.dumps(report) + "\n").encode())
+            time.sleep(600)
+        finally:
+            os._exit(1)
+    os.close(report_end)
+    try:
+        with os.fdopen(reports) as lines:
+            line = lines.readline()
+        assert line, "the gateway process admitted no worker"
+        report = json.loads(line)
+        supervisor = report["supervisor"]
+        assert _group_running(supervisor)
+        # Nothing but the gateway process is signalled, and it cannot clean up.
+        os.kill(gateway, signal.SIGKILL)
+        os.waitpid(gateway, 0)
+        gateway = 0
+        deadline = time.monotonic() + 15
+        while _group_running(supervisor) and time.monotonic() < deadline:
+            time.sleep(0.2)
+        assert not _group_running(supervisor)
+        # A later gateway revokes the attempt the killed process left.
+        project = ProjectContext(
+            Path(report["root"]),
+            protected_state=Path(report["protected"]),
+            project_id=UUID(report["project"]),
+        )
+        settings = OpenShellWorkerDeployment.model_validate(report["settings"])
+        successor = SessionGateway(
+            project=project,
+            worker_plan_factory=native_worker_plan_factory(settings, project),
+            worker_reconciler=native_worker_reconciler(settings, project),
+            env={},
+        )
+        fixture.applications.append(successor)
+        try:
+            assert successor.reconcile_workers() == {}
+        finally:
+            _stop(successor)
+        _assert_absent(report["attempt"])
+        (fixture.output / "evidence.json").write_text(
+            json.dumps(
+                {
+                    "drill_id": "native-forwarder-lifetime.v1",
+                    "worker_image": fixture.worker,
+                    "gateway_image": fixture.gateway_image,
+                    "forwarder_survived_gateway": False,
+                    "sensitive_data_ready": False,
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+    finally:
+        if gateway:
+            os.kill(gateway, signal.SIGKILL)
+            os.waitpid(gateway, 0)

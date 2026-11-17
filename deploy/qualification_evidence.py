@@ -57,6 +57,8 @@ EXPECTED_CASES = {
             _NATIVE + "test_native_unapproved_action_does_not_execute[denied]",
             _NATIVE + "test_native_unapproved_action_does_not_execute[shutdown-pending]",
             _NATIVE + "test_lost_create_retains_writer_until_native_revocation",
+            _NATIVE + "test_native_revoked_worker_is_replaced_for_the_next_command",
+            _NATIVE + "test_native_forwarder_ends_with_the_gateway_process",
             _EXTERNAL + "test_native_outside_effect_requires_retained_authorization[approved]",
             _EXTERNAL + "test_native_outside_effect_requires_retained_authorization[denied]",
             _EXTERNAL + "test_native_outside_effect_requires_retained_authorization[pending]",

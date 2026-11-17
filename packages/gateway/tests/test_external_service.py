@@ -37,7 +37,11 @@ from heartwood.core_adapter.external_actions import (
     ExternalActionRecord,
     external_action_records,
 )
-from heartwood.core_adapter.worker_attempts import WorkerAttemptIntent, WorkerRuntimeBinding
+from heartwood.core_adapter.worker_attempts import (
+    WorkerAttemptIntent,
+    WorkerControlPlane,
+    WorkerRuntimeBinding,
+)
 from heartwood.session import CommandKind, EventKind, SessionCommand
 
 if TYPE_CHECKING:
@@ -69,6 +73,11 @@ else:
     serve_records = _fixture.serve_records
 
 
+_CONTROL_PLANE = WorkerControlPlane(
+    control_plane_sha256="1" * 64, container_runtime_sha256="2" * 64
+)
+
+
 class ProposalWorker(DeterministicAgentBackend):
     def bind_runtime(self, *, event_sink: BackendEventSink, token_sink: TokenDeltaSink) -> None:
         super().bind_runtime(event_sink=event_sink, token_sink=token_sink)
@@ -88,6 +97,7 @@ def worker_session(
         image_digest="sha256:" + "b" * 64,
         sandbox_policy_sha256="c" * 64,
         input_manifest_sha256="d" * 64,
+        control_plane=_CONTROL_PLANE,
     )
     state.active = intent
     service.bind_worker_runtime(

@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -123,6 +124,48 @@ def _confining_security_option(option: object) -> bool:
     return False
 
 
+def _docker(settings: WorkerVolumeSettings, *args: str) -> bytes:
+    """Use the explicit local daemon without inherited Docker or proxy configuration."""
+    try:
+        with TemporaryDirectory(prefix="worker-docker-") as config:
+            result = subprocess.run(
+                [
+                    str(settings.docker_cli),
+                    "--config",
+                    config,
+                    "--host",
+                    settings.docker_host,
+                    *args,
+                ],
+                env={"PATH": os.defpath},
+                cwd=config,
+                capture_output=True,
+                timeout=60,
+                check=False,
+            )
+    except (OSError, subprocess.TimeoutExpired):
+        raise WorkerAttemptError("native Docker operation requires reconciliation") from None
+    if result.returncode or len(result.stdout) > 1024 * 1024:
+        raise WorkerAttemptError("native Docker operation requires reconciliation")
+    return result.stdout
+
+
+def container_runtime_sha256(settings: WorkerVolumeSettings) -> str:
+    """Identify the Docker daemon behind the configured socket by the identity it reports.
+
+    The daemon keeps its engine identity across restarts, so a socket re-pointed at another
+    daemon, or another daemon behind the same socket path, yields a different identity.
+    """
+    try:
+        daemon = json.loads(_docker(settings, "info", "--format", "{{json .ID}}"))
+    except (ValueError, UnicodeError):
+        daemon = None
+    if not isinstance(daemon, str) or not daemon or len(daemon) > 256:
+        raise WorkerAttemptError("container runtime identity was not observed")
+    identity = json.dumps({"docker_host": settings.docker_host, "daemon": daemon}, sort_keys=True)
+    return hashlib.sha256(identity.encode()).hexdigest()
+
+
 class WorkerVolumes:
     """Own only resources carrying the complete project and attempt identity."""
 
@@ -146,28 +189,7 @@ class WorkerVolumes:
 
     def command(self, *args: str) -> bytes:
         """Use the explicit local daemon without inherited Docker or proxy configuration."""
-        try:
-            with TemporaryDirectory(prefix="worker-docker-") as config:
-                result = subprocess.run(
-                    [
-                        str(self.settings.docker_cli),
-                        "--config",
-                        config,
-                        "--host",
-                        self.settings.docker_host,
-                        *args,
-                    ],
-                    env={"PATH": os.defpath},
-                    cwd=config,
-                    capture_output=True,
-                    timeout=60,
-                    check=False,
-                )
-        except (OSError, subprocess.TimeoutExpired):
-            raise WorkerAttemptError("native Docker operation requires reconciliation") from None
-        if result.returncode or len(result.stdout) > 1024 * 1024:
-            raise WorkerAttemptError("native Docker operation requires reconciliation")
-        return result.stdout
+        return _docker(self.settings, *args)
 
     def _label_arguments(self, *, role: str) -> list[str]:
         return [

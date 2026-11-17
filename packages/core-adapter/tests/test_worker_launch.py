@@ -10,6 +10,7 @@ from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Event
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -20,17 +21,22 @@ from heartwood.core_adapter.worker_attempts import (
     WorkerAttemptError,
     WorkerAttemptIntent,
     WorkerAttemptRecord,
+    WorkerControlPlane,
     WorkerRevocationEvidence,
     WorkerRuntimeBinding,
 )
 
+_CONTROL_PLANE = WorkerControlPlane(
+    control_plane_sha256="1" * 64, container_runtime_sha256="2" * 64
+)
 _IMAGE = "sha256:" + "a" * 64
 _POLICY = "b" * 64
 _INPUTS = "c" * 64
-_PLAN = {
+_PLAN: dict[str, Any] = {
     "image_digest": _IMAGE,
     "sandbox_policy_sha256": _POLICY,
     "input_manifest_sha256": _INPUTS,
+    "control_plane": _CONTROL_PLANE,
 }
 
 

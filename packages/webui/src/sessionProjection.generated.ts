@@ -398,7 +398,7 @@ export interface ProjectionApprovalGroup {
  * A non-lifecycle outcome that every interface must present.
  */
 export interface ProjectionResearcherNotice {
-  code: "request-not-applied";
+  code: "request-not-applied" | "worker-replacement-unavailable";
   detail: string;
   label: string;
   noticeId: string;
@@ -512,7 +512,7 @@ export interface ProjectionSuggestion {
     | "identify-next-step";
 }
 export interface ProjectionTask {
-  status: "todo" | "in-progress" | "done";
+  status: "todo" | "in-progress" | "done" | "superseded";
   statusLabel: string;
   title: string;
 }

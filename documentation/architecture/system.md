@@ -159,23 +159,40 @@ The lease reobserves the sandbox through OpenShell before admission, reusing a p
 Fencing closes HTTP, event, and callback admission at once, including responses already in flight.
 
 The gateway fences an attempt when it observes an exhausted response budget, a missed request deadline, a failed admission or runtime observation, execution reported without a recorded decision, or session close.
-Fencing starts revocation on its own short-lived thread, so no control-plane call runs under a session lock or on a transport thread.
+Fencing starts revocation on its own thread, so no control-plane call runs under a session lock or on a transport thread.
 Revocation does not wait for a session command whose worker request is in progress; it waits only for a control-plane launch of the same attempt to return, and is then bounded by the control-plane timeouts: 15 seconds to observe the sandbox, 90 seconds for the delete request, and 90 seconds to observe its absence.
 It deletes the sandbox through the control client connected at launch, stops the forwarder, rechecks the native configuration, requires Docker to report no attempt-owned worker container, and removes the attempt's volumes before the session records `revoked` with its evidence.
-Revocation is attempted once.
-If it fails, the attempt stays fenced and the writer stays owned, and the worker can keep running until the session closes, the gateway stops, or the next gateway start reconciles it.
+If revocation fails, the attempt stays fenced and the writer stays owned, and the worker can keep running until a retry succeeds: the managed session retries it, first after 15 seconds and then with the wait doubling up to 10 minutes, until revocation is observed, also after the session's service is closed, and the gateway stop and the next gateway start retry it too.
 A fence is raised only when the gateway observes the condition, so a worker the gateway is not exchanging data with is not detected by this path.
 
 A gateway that ends without revoking leaves its attempt in the journal.
 `heartwood gateway serve --deployment` calls `SessionGateway.reconcile_workers` before serving: it fences each unrevoked attempt, deletes the sandbox only when its name, labels, and any retained sandbox identity match, verifies absence, removes owned volumes, and records the evidence.
-Sessions whose revocation was not observed are reported and stay fenced until a later start.
-Reconciliation uses the control plane and Docker daemon named by the current manifest; an operator who points the manifest at other infrastructure must first remove the earlier worker, because absence on the new infrastructure would otherwise be recorded as revocation.
+It runs without the gateway state lock, so other sessions and settings do not wait for the control plane; a command to the session being reconciled is refused until it finishes.
+Sessions whose attempt remains fenced are reported, each with a stable diagnostic.
+A session whose revocation was not observed (`HW-WORKER-003`) is retried while the gateway runs, first after 30 seconds and then with the wait doubling up to 10 minutes, and its attempt remains fenced until revocation is observed.
+Until then the gateway caches no service for that session: a read returns its journal and a command is refused, so no command takes the session out of the retry, and the first command after the observed revocation can admit a replacement.
+
+Each attempt's launch intent records stable identities of the sandbox control plane and the container runtime it uses: the registered gateway's name, endpoint, and certificate authority, and the identity the Docker daemon behind the configured socket reports.
+Launch refuses to proceed when either identity changed after preparation.
+Reconciliation observes the infrastructure named by the current deployment manifest only when both identities match the attempt's record; otherwise the attempt stays fenced with `HW-WORKER-002` and nothing is observed or removed, because absence on other infrastructure is not evidence of revocation.
+Attempt records are versioned: records written before launches retained these identities remain readable, name no infrastructure, and are never reconciled against the current one.
+The qualified sandbox gateway answers a creation request with `INVALID_ARGUMENT`, `PERMISSION_DENIED` or `UNAUTHENTICATED` only before it records or requests the sandbox, so the gateway process that received such a rejection records later absence as `not-created`.
+After any other failed or unanswered creation request, absence of the sandbox is never recorded as `not-created`; reconciliation treats an attempt without a recorded runtime the same way, because the process that received the response has ended.
+The qualified sandbox gateway rejects deletion of a sandbox whose provisioning has not settled, but it does not report a creation request it has not recorded yet, so absence cannot show that such a request will not still create the sandbox.
+The attempt therefore stays fenced and its revocation keeps being retried; a sandbox that appears under the attempt's unique name with its full identity is deleted, and the attempt is recorded as revoked.
+Resolving such an attempt from absence requires a sandbox gateway that rejects or reports later creations under a name whose absence it confirmed.
+The native forwarder runs under a small supervisor in its own process group, which ends the whole group when the gateway's end of a pipe closes, so no forwarder outlives the gateway process, however that process ends.
 OpenShell deletion is name-scoped rather than conditional on a generation; unique attempt names and identity checks do not replace control-plane authorization.
 
 After a recorded revocation, a gateway configured to launch workers can start one replacement attempt with a new identity, key, placeholder, and response budget in a new sandbox.
 The replacement starts a new conversation in an empty workspace; the session projection marks where it became active.
+At that point the projection marks the earlier worker's unfinished tasks as superseded, and adds the earlier workers' reported model usage to the session total and lists it separately, because each new worker reports its usage from zero.
 Replacement is refused while the journal holds work only the revoked worker's conversation could finish: an unsettled run, an unended pause, an action awaiting review, an unrecoverable outcome, or a non-terminal outside operation or result release.
+While a revoked session is refused for one of these reasons, the shared projection carries the reason as a researcher notice, which the terminal, browser, and notebook present.
 A gateway without a worker configuration refuses commands for a revoked session instead of running it locally; the session stays readable.
+Once the journal records the revocation of the attempt a session's service launched, whichever path recorded it, a running gateway replaces that service at the session's next command, so the command can admit a replacement without a restart or configuration change.
+A read alone does not replace or close the service or start a worker.
+The revoked attempt's backend is closed with its service, and events that arrive from it after fencing are discarded.
 
 ### Budgets and Deadlines
 
@@ -197,15 +214,18 @@ A session's gateway memory for worker progress is therefore bounded by the retai
 A routine read transfers the status, whose reported usage grows with the number of model calls up to the 4 MiB response limit, and the new events.
 The event connection has no deadline of its own: it is idle while a session waits for its researcher, its handshake is limited to ten seconds, and keepalive closes a connection whose peer stops answering.
 Reconciliation reads the worker without holding the session command lock or the gateway state lock, including a session's first read, which opens the conversation and can launch the worker.
-First reads of one session run one at a time; launch reads Skill and configuration state outside the gateway lock, and a change to either replaces the session's service, which revokes an attempt launched from the earlier state and launches again on the next read.
+First reads of one session run one at a time, and a read that finds the session's worker preparation under way returns its journal instead of waiting; launch reads Skill and configuration state outside the gateway lock, and a change to either replaces the session's service, which revokes an attempt launched from the earlier state and launches again on the next read.
 A worker session's command runs without the gateway state and configuration locks and releases the session command lock while each of its requests to the worker is answered.
 Until the command's records are complete, no other command, read, or callback of that session journals, so its acceptance, events, and completion receipt stay together and a retried command waits and then replays its result instead of being sent again.
 Fencing and revocation journal during that wait; a worker answer that arrives after its attempt's admission closed is discarded, the command records that the worker stopped, and it sends no further request.
 A request waiting for its response ends as soon as its attempt is fenced, without waiting for the deadline.
 Closing a session waits for its command in progress and holds no lock that revocation needs.
-A close that finds a launch or a prompt revocation of the session's worker under way does not wait for the control plane: that launch or revocation finishes the close when it returns, revoking any attempt the launch created before it connects.
-Until then the session stays owned, a read returns its journal, and a command waits at most 10 seconds and is otherwise refused as retryable; a setting or Skill change is saved and reported at once.
-A close that cannot finish leaves the session owned, and a later reset or the gateway stop retries it; the stop waits at most 30 seconds for each close still under way.
+A worker session's close never asks the control plane on the caller's thread: once the session has prepared a worker, its revocation, preparation release and service close run on the managed session's own thread, after any preparation, launch or prompt revocation under way, and revoke any attempt a launch created before it connects.
+A setting or Skill change therefore saves the change under the gateway state lock and reports it at once; the services it replaces are detached, and no control-plane call runs under that lock.
+Until the close finishes, the session stays owned, a read returns its journal, and a command waits at most 10 seconds and is otherwise refused as retryable.
+While the attempt's revocation is not observed, the close retries it with the same backoff as a prompt revocation, so the session stays fenced and refused until the control plane answers and needs no reset or stop.
+A close that fails after revocation was recorded, such as in native client shutdown, caches the service again, and its next command replaces it.
+The gateway stop gives each close one more attempt and waits at most 30 seconds for each; a close that still fails leaves the session owned, and a later stop or the next gateway start retries it.
 A local session's commands keep the gateway locks, so a project setting change from another gateway waits for its turn; a worker session's command does not hold them, and a setting change applies to its next command.
 
 ### Response and Event Admission
