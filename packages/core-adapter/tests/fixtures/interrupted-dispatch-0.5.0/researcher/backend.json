@@ -1,0 +1,1 @@
+{"action_id":null,"affected_paths":[],"arguments":{},"kind":"other","project_path":null,"review_class":"other","risk":"low","summary":"run the synthetic aggregate no-op","tool_call_id":"session-legacy-toolcall-0","tool_name":"heartwood.synthetic.noop"}

@@ -69,6 +69,8 @@ class EventKind(StrEnum):
     the same turns. ``MODEL_CALL_DECISION_RECORDED`` records route authorization
     before task submission or a continuation that may call the model;
     ``POLICY_DECISION_RECORDED`` is reserved for other policy decisions.
+    ``ACTION_DISPATCH_STARTED`` is journaled before an approved action set is handed
+    to the backend; without its resolution, the set's outcome is unknown.
     """
 
     COMMAND_RECEIVED = "command.received"
@@ -79,6 +81,7 @@ class EventKind(StrEnum):
     AGENT_MESSAGE_EMITTED = "agent_message.emitted"
     TOOL_CALL_PROPOSED = "tool_call.proposed"
     CONFIRMATION_REQUESTED = "confirmation.requested"
+    ACTION_DISPATCH_STARTED = "action_dispatch.started"
     CONFIRMATION_RESOLVED = "confirmation.resolved"
     TOOL_EXECUTION_RECORDED = "tool.execution.recorded"
     AGENT_LIFECYCLE_UPDATED = "agent.lifecycle.updated"

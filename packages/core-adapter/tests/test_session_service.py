@@ -1251,9 +1251,10 @@ def test_interrupted_approval_receipt_recovers_without_repeating_tool_resolution
     assert backend.resolutions == [(_action_group_id(tool_call), True)]
 
 
-def test_approval_intent_recovers_when_interrupted_before_backend_transition(
+def test_approval_interrupted_inside_the_backend_call_is_never_sent_again(
     tmp_path: Path,
 ) -> None:
+    # The session cannot tell how far the backend got, so the outcome is unknown.
     tool_call = ProposedToolCall(
         tool_call_id="session-main-action",
         tool_name="file_editor",
@@ -1287,22 +1288,14 @@ def test_approval_intent_recovers_when_interrupted_before_backend_transition(
     with pytest.raises(OSError, match="before backend transition"):
         service.handle(approval)
     recovered = service.reconcile()
-    denied = service.handle(
-        _command(
-            CommandKind.DENY,
-            target_type="action-set",
-            target_id=_action_group_id(tool_call),
-        ).model_copy(update={"session_id": "session-main"})
-    )
     replayed = service.handle(approval)
 
     assert replayed.replayed
-    assert backend.resolutions == [(_action_group_id(tool_call), True)]
-    assert any(event.kind == EventKind.CONFIRMATION_RESOLVED.value for event in recovered)
-    assert denied.events[-1].kind == EventKind.ERROR_RECORDED.value
-    assert denied.events[-1].payload["reason"] == (
-        f"no matching pending action group: {_action_group_id(tool_call)}"
-    )
+    assert backend.resolutions == []
+    assert [event.payload.get("code") for event in recovered] == [
+        BackendErrorCode.ACTION_OUTCOME_UNKNOWN.value
+    ]
+    assert not service.store.unresolved_command_ids()
 
 
 def test_approval_intent_recovers_from_backend_state_after_interrupted_return(
@@ -1872,16 +1865,17 @@ def test_approved_action_records_tool_execution(tmp_path: Path) -> None:
     assert [event.kind for event in result.events] == [
         EventKind.COMMAND_RECEIVED.value,
         EventKind.APPROVAL_RECORDED.value,
+        EventKind.ACTION_DISPATCH_STARTED.value,
         EventKind.CONFIRMATION_RESOLVED.value,
         EventKind.TOOL_EXECUTION_RECORDED.value,
     ]
     assert result.events[1].payload["decision"] == "approved"
-    assert result.events[3].payload["exit_code"] == 0
-    assert result.events[3].payload["tool_call_id"] == "session-synthetic-001-toolcall-0"
-    assert result.events[3].payload["action_id"] is None
+    assert result.events[4].payload["exit_code"] == 0
+    assert result.events[4].payload["tool_call_id"] == "session-synthetic-001-toolcall-0"
+    assert result.events[4].payload["action_id"] is None
     assert project_audit_payload(
         EventKind.TOOL_EXECUTION_RECORDED,
-        result.events[3].payload,
+        result.events[4].payload,
     ) == {
         "backend_id": "deterministic-local",
         "tool_call_id": "session-synthetic-001-toolcall-0",
@@ -1889,6 +1883,44 @@ def test_approved_action_records_tool_execution(tmp_path: Path) -> None:
         "tool_name": "heartwood.synthetic.noop",
         "exit_code": 0,
     }
+
+
+@pytest.mark.parametrize("restart", [False, True])
+def test_deterministic_session_approves_consecutive_turns(
+    tmp_path: Path,
+    restart: bool,
+) -> None:
+    service = SessionService.synthetic_default(tmp_path)
+    executed: list[JsonValue] = []
+    group_ids: list[str] = []
+    for turn in range(2):
+        if restart and turn:
+            service.close()
+            service = SessionService.synthetic_default(tmp_path)
+        service.handle(
+            _command(CommandKind.CHAT, command_id=f"command-chat-{turn}", prompt="run again")
+        )
+        group_ids.append(_pending_group_id(service))
+        result = service.handle(
+            _command(
+                CommandKind.APPROVE,
+                command_id=f"command-approve-{turn}",
+                target_type="action-set",
+                target_id=group_ids[-1],
+            )
+        )
+        executed.extend(
+            event.payload["tool_call_id"]
+            for event in result.events
+            if event.kind == EventKind.TOOL_EXECUTION_RECORDED.value
+        )
+    service.close()
+
+    assert group_ids[0] != group_ids[1]
+    assert executed == [
+        "session-synthetic-001-toolcall-0",
+        "session-synthetic-001-toolcall-1",
+    ]
 
 
 def test_rejected_action_is_not_recorded_as_tool_execution(tmp_path: Path) -> None:
@@ -2700,6 +2732,9 @@ class _RecordingBackend:
     ) -> PendingActionGroup | None:
         self.pending_group_calls += 1
         return pending_action_group(self._pending_actions)
+
+    def conversation_readable(self, *, session_id: str) -> bool:  # noqa: ARG002
+        return True
 
     def submit_context(self, *, session_id: str, content: str) -> tuple[BackendEvent, ...]:
         """Use this backend's existing admission behavior for reviewed context."""

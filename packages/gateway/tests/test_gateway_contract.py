@@ -834,24 +834,20 @@ def test_fresh_gateway_reconciles_an_interrupted_approval_before_idle_replay(
 
     assert first == second
     assert first_events == second_events
-    if after_backend_transition:
-        assert first.lifecycle.status == "error"
-        assert first.lifecycle.can_steer is False
-        assert first.available_commands == ()
-        assert resolution_calls == 1
-        assert (
-            sum(
-                event.kind == EventKind.ERROR_RECORDED
-                and event.payload.get("code") == BackendErrorCode.ACTION_OUTCOME_UNKNOWN.value
-                for event in first_events
-            )
-            == 1
+    # Wherever the backend call was interrupted, the set may have run, so it is never sent again.
+    assert first.lifecycle.status == "error"
+    assert first.lifecycle.can_steer is False
+    assert first.available_commands == ()
+    assert resolution_calls == 1
+    assert (
+        sum(
+            event.kind == EventKind.ERROR_RECORDED
+            and event.payload.get("code") == BackendErrorCode.ACTION_OUTCOME_UNKNOWN.value
+            for event in first_events
         )
-    else:
-        assert first.lifecycle.status == "idle"
-        assert first.actions[0].state == "succeeded"
-        assert resolution_calls == 2
-        assert sum(event.kind == EventKind.TOOL_EXECUTION_RECORDED for event in first_events) == 1
+        == 1
+    )
+    assert sum(event.kind == EventKind.TOOL_EXECUTION_RECORDED for event in first_events) == 0
     reader.stop()
 
 

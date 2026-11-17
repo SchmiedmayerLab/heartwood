@@ -87,6 +87,11 @@ Every command has an opaque identifier and a durable receipt.
 An exact retry of a completed command returns its original event range without repeating a model call, confirmation callback, or tool action, and reusing the identifier with different content is rejected.
 If a process stops after accepting a command but before recording its completion, Heartwood refuses to execute that identifier again unless durable state establishes its exact outcome.
 An interrupted approval is completed automatically only when its recorded intent and OpenHands state prove whether the complete action set was resolved.
+After the decision's checkpoint boundary and before OpenHands receives an approved set, the session durably journals an `action_dispatch.started` record.
+An interrupted approval without that record never reached OpenHands: recovery sends it once if the pending set still matches, and withdraws an interrupted gateway decision that its rule no longer allows.
+An interrupted approval with that record but without its resolution has an unknown outcome (`HW-AGENT-006`) and is never sent again or withdrawn.
+Each `approval.recorded` event states that its dispatch is journaled; an interrupted approval without that statement was written before dispatch records existed, may have been sent, and is recovered the same way.
+OpenHands saves conversation state only when a step ends, so a conversation reloaded after a stop during an approved step can show the set as pending again although it ran.
 Otherwise the session rejects further mutation, so a second approval or task cannot repeat an uncertain side effect; verify the evidence and continue in a new session.
 
 Outside decisions distinguish authorization from dispatch: an `authorized` record proves the native call has not started, and a `submitting` record means its outcome may be uncertain.
@@ -139,6 +144,12 @@ An action is recorded as approved only when the session holds a recorded decisio
 A gateway decision under a [review mode](system.md#action-review-and-review-modes) is such a record: an accepted command and an `approval.recorded` event with the actor `gateway` and the applied mode and rule, followed by the same checkpoint boundary, digest check, and resolution events as a researcher decision.
 The projection labels an action as decided only from these records and names the rule for a gateway decision.
 If a backend reports executing an action without one, the session records an error and fences the worker attempt.
+A set with a recorded approval or a started dispatch may have run, so it refuses a further approval, rejection, or gateway decision from every interface.
+After a session owner starts, reconciliation checks whether OpenHands shows such a set as pending again, and records `HW-AGENT-006` for it once.
+The check ends with the first read of a readable conversation, and a set sent by the same session owner is not counted, because it can look pending until its step starts.
+A read that fails, or a conversation that cannot be opened yet, leaves the check for a later reconciliation, and reads and commands continue.
+A session in an isolated worker is not checked: only the session owner that launched its worker can read the worker's conversation, and a replacement worker starts with an empty conversation.
+Rejecting a pending set that was not approved remains available.
 
 Each OpenHands proposal becomes one `heartwood.action-record.v1` projection correlated by stable action and tool-call identifiers.
 The same record accumulates its group, decision, execution state, bounded result, and typed affected-path evidence across replay.

@@ -134,6 +134,8 @@ class _ApprovalIntent:
     group_id: str
     approved: bool
     tool_call_ids: tuple[str, ...]
+    # Whether the decision journals its dispatch; an older journal never did.
+    dispatch_journaled: bool = False
 
 
 _REVIEW_NOT_APPLIED = "not-applied"
@@ -271,7 +273,11 @@ class SessionService:
         self._worker_lease: WorkerAttemptLease | None = None
         self._worker_attempt_created = False
         self._worker_replacement_admitted = False
-        self._decision_dispatched = False
+        # Sets this process sent; a live read can still show one pending before its step starts.
+        self._sent_group_ids: set[str] = set()
+        self._reappearance_checked = False
+        # Sets a reloaded conversation could show again, read from the journal once.
+        self._reappearance_candidates: frozenset[str] | None = None
         self.backend.bind_runtime(
             event_sink=self._accept_unbound_backend_events,
             token_sink=self._accept_unbound_backend_token,
@@ -510,7 +516,6 @@ class SessionService:
                 command_hash=command_hash,
                 first_sequence=first_sequence,
             )
-            self._decision_dispatched = False
             try:
                 requested = self._handle_new_command(
                     command, unavailable_reason=None, automatic=True
@@ -518,11 +523,11 @@ class SessionService:
             except Exception:
                 # The operation that journaled the request has already succeeded. A decision the
                 # backend never received is withdrawn and the group waits for the researcher; once
-                # the decision was handed to the backend, a run may have started even if the group
-                # still looks pending, so the outcome is unknown and never "not applied".
+                # its dispatch is journaled, a run may have started even if the group still looks
+                # pending, so the outcome is unknown and never "not applied".
                 requested = (
                     self._record_review_not_applied(command.command_id, group.group_id)
-                    if not self._decision_dispatched
+                    if not _dispatch_started(self.replay_events(), command.command_id)
                     else self._record_unknown_approval_outcome(
                         _ApprovalIntent(
                             command_id=command.command_id,
@@ -1422,6 +1427,23 @@ class SessionService:
                     },
                 ),
             )
+        if self._approval_handed_over(pending_group.group_id):
+            # The backend may have run part of a set it received, even if a reloaded
+            # conversation shows it as pending again, so neither decision applies to it.
+            return (
+                self._record_event(
+                    EventKind.ERROR_RECORDED,
+                    {
+                        "command": _kind_value(command.kind),
+                        "reason": (
+                            "the action set was already approved and may have run; it is never "
+                            "sent again or recorded as rejected"
+                        ),
+                        "group_id": pending_group.group_id,
+                        "affects_lifecycle": False,
+                    },
+                ),
+            )
         review = self._automatic_review_locked(pending_group) if automatic else None
         if automatic and review is None:
             return (
@@ -1467,6 +1489,7 @@ class SessionService:
                     "actor_id": command.actor_id,
                     "group_id": pending_group.group_id,
                     "decision": decision,
+                    "dispatch_journaled": True,
                     **({"review": {"mode": review.mode, "rule": review.rule}} if review else {}),
                     **self._evidence_policy(),
                     "tool_call_ids": [action.tool_call_id for action in pending_group.actions],
@@ -1474,8 +1497,14 @@ class SessionService:
             )
         )
         events.extend(self._checkpoint_boundary(events[-1]))
-        # From here the backend may act on the decision, whatever its state looks like later.
-        self._decision_dispatched = True
+        if approved:
+            events.append(
+                self._record_dispatch_started(
+                    command.command_id,
+                    pending_group.group_id,
+                    tuple(action.tool_call_id for action in pending_group.actions),
+                )
+            )
         backend_events = self.backend.resolve_confirmation(
             session_id=command.session_id,
             action_group_id=action_group_id,
@@ -1977,7 +2006,14 @@ class SessionService:
                     and tuple(action.tool_call_id for action in pending_group.actions)
                     == intent.tool_call_ids
                 )
-                if (
+                if intent.approved and (
+                    not intent.dispatch_journaled or _dispatch_started(events, intent.command_id)
+                ):
+                    # A set the backend received can show as pending again after a restart
+                    # although it ran, so it is never sent again or withdrawn. An approval
+                    # journaled before dispatch records existed may have been sent as well.
+                    recovered.append(self._record_unknown_approval_outcome(intent))
+                elif (
                     matches
                     and pending_group is not None
                     and intent.command_id == f"automatic-review-{intent.group_id}"
@@ -1992,6 +2028,12 @@ class SessionService:
                         and event.payload.get("command_id") == intent.command_id
                     )
                     recovered.extend(self._checkpoint_boundary(boundary))
+                    if intent.approved:
+                        recovered.append(
+                            self._record_dispatch_started(
+                                intent.command_id, intent.group_id, intent.tool_call_ids
+                            )
+                        )
                     backend_events = self.backend.resolve_confirmation(
                         session_id=self.store.session_id,
                         action_group_id=intent.group_id,
@@ -2018,7 +2060,89 @@ class SessionService:
                 first_sequence=first_sequence,
                 last_sequence=last_sequence,
             )
+        if not self._reappearance_checked:
+            recovered.extend(self._record_reappeared_approval_locked())
         return tuple(recovered)
+
+    def _record_reappeared_approval_locked(self) -> tuple[SessionEvent, ...]:
+        """Record once that a set the backend shows as pending after it was sent may have run.
+
+        A conversation reloaded after a stop during an approved step reports the state it
+        last saved, which still shows the set as pending. The check ends with the first read
+        of a readable conversation; a set this service sent can also look pending until its
+        step starts and is not counted. A failed read or an unreadable conversation leaves
+        the check for a later recovery, and the decision guard refuses a second decision on
+        the set meanwhile. A session in an isolated worker is never checked: only the owner
+        that launched its worker reads the worker's conversation, and a replacement worker
+        starts with an empty one.
+        """
+        self._known_source_event_ids_locked()
+        if self._reappearance_candidates is None:
+            events = self.replay_events()
+            sent = frozenset(
+                group_id
+                for event in events
+                if event.kind in {EventKind.APPROVAL_RECORDED, EventKind.ACTION_DISPATCH_STARTED}
+                and isinstance((group_id := event.payload.get("group_id")), str)
+            )
+            if not sent or any(
+                event.kind == EventKind.ERROR_RECORDED
+                and backend_error_is_fatal(event.payload.get("code"))
+                for event in events
+            ):
+                self._reappearance_checked = True
+                return ()
+            self._reappearance_candidates = sent
+        if self._worker_record is not None:
+            self._reappearance_checked = True
+            return ()
+        try:
+            readable = self.backend.conversation_readable(session_id=self.store.session_id)
+            group = (
+                self.backend.pending_action_group(session_id=self.store.session_id)
+                if readable
+                else None
+            )
+        except Exception:
+            return ()
+        if group is None:
+            self._reappearance_checked = readable
+            return ()
+        self._reappearance_checked = True
+        if (
+            group.group_id not in self._reappearance_candidates
+            or group.group_id in self._sent_group_ids
+            or not self._approval_handed_over(group.group_id)
+        ):
+            return ()
+        events = self.replay_events()
+        if any(
+            event.kind == EventKind.ERROR_RECORDED
+            and event.payload.get("code") == BackendErrorCode.ACTION_OUTCOME_UNKNOWN.value
+            and event.payload.get("group_id") == group.group_id
+            for event in events
+        ):
+            return ()
+        command_id = next(
+            (
+                command_id
+                for event in reversed(events)
+                if event.kind in {EventKind.APPROVAL_RECORDED, EventKind.ACTION_DISPATCH_STARTED}
+                and event.payload.get("group_id") == group.group_id
+                and isinstance((command_id := event.payload.get("command_id")), str)
+            ),
+            "",
+        )
+        return (
+            self._record_unknown_approval_outcome(
+                _ApprovalIntent(
+                    command_id=command_id,
+                    group_id=group.group_id,
+                    approved=True,
+                    tool_call_ids=tuple(action.tool_call_id for action in group.actions),
+                )
+            ),
+        )
 
     def _recover_automatic_review_locked(
         self,
@@ -2040,10 +2164,40 @@ class SessionService:
         except Exception:
             recovered.append(self._record_review_not_applied(intent.command_id, intent.group_id))
             return
+        recovered.append(
+            self._record_dispatch_started(intent.command_id, intent.group_id, intent.tool_call_ids)
+        )
         backend_events = self.backend.resolve_confirmation(
             session_id=self.store.session_id, action_group_id=intent.group_id, approved=True
         )
         recovered.extend(self._translate_backend_events(backend_events))
+
+    def _record_dispatch_started(
+        self, command_id: str, group_id: str, tool_call_ids: tuple[str, ...]
+    ) -> SessionEvent:
+        """Journal that an approved set is about to reach the backend, which may then run it."""
+        event = self._record_event(
+            EventKind.ACTION_DISPATCH_STARTED,
+            {
+                "command_id": command_id,
+                "group_id": group_id,
+                "tool_call_ids": list(tool_call_ids),
+            },
+        )
+        self._sent_group_ids.add(group_id)
+        return event
+
+    def _approval_handed_over(self, group_id: str) -> bool:
+        """Return whether an approval of the set may already have reached the backend.
+
+        A recorded approval counts even without a dispatch record, because a journal can
+        predate that record; only a withdrawn gateway decision provably never reached it.
+        """
+        return self._approval_recorded(group_id) or any(
+            event.kind == EventKind.ACTION_DISPATCH_STARTED
+            and event.payload.get("group_id") == group_id
+            for event in self.replay_events()
+        )
 
     def _record_unknown_approval_outcome(self, intent: _ApprovalIntent) -> SessionEvent:
         return self._record_event(
@@ -2310,6 +2464,7 @@ def _approval_intent(
         group_id=group_id,
         approved=decision == "approved",
         tool_call_ids=tuple(cast(str, tool_call_id) for tool_call_id in raw_tool_call_ids),
+        dispatch_journaled=approval.payload.get("dispatch_journaled") is True,
     )
 
 
@@ -2338,6 +2493,14 @@ def _approval_intent_failed(
         and event.payload.get("code") == BackendErrorCode.ACTION_OUTCOME_UNKNOWN.value
         and event.payload.get("command_id") == intent.command_id
         and event.payload.get("group_id") == intent.group_id
+        for event in events
+    )
+
+
+def _dispatch_started(events: tuple[SessionEvent, ...], command_id: str) -> bool:
+    return any(
+        event.kind == EventKind.ACTION_DISPATCH_STARTED
+        and event.payload.get("command_id") == command_id
         for event in events
     )
 

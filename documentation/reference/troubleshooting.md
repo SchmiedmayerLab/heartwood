@@ -155,7 +155,8 @@ Review the active task or pending action set before trying the operation again.
 
 ### `HW-AGENT-006`: An Approved Action Has an Unknown Outcome
 
-Heartwood stopped after an action was approved but before OpenHands recorded whether it completed.
+Heartwood stopped, or the call that handed an approved action to OpenHands failed, before OpenHands recorded whether the action completed.
+The same applies when a restarted conversation shows an action that was already approved as waiting for review again.
 Do not approve or repeat the action blindly.
 Inspect the project files and Activity & audit, then continue in a new session once you understand the project state.
 

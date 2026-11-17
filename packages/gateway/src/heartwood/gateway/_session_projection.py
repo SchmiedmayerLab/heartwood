@@ -1978,6 +1978,7 @@ def _error_detail(*, reason: str, code: str) -> str:
 
 
 _ACTIVITY_LABELS = {
+    EventKind.ACTION_DISPATCH_STARTED.value: "Action set sent",
     EventKind.AGENT_LIFECYCLE_UPDATED.value: "Agent lifecycle",
     EventKind.AGENT_MESSAGE_EMITTED.value: "Agent message",
     EventKind.APPROVAL_RECORDED.value: "Approval recorded",

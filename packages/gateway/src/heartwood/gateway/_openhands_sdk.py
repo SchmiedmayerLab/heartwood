@@ -595,6 +595,14 @@ class OpenHandsSdkBackend:
             return None
         return self._unmatched_action_group(state.branch)
 
+    def conversation_readable(self, *, session_id: str) -> bool:  # noqa: ARG002
+        """Return whether the conversation can be opened, so no pending group means none."""
+        try:
+            self._get_conversation()
+        except Exception:
+            return False
+        return True
+
     def submit_turn(self, *, session_id: str, prompt: str) -> tuple[BackendEvent, ...]:
         """Submit a user task and start or steer the active OpenHands run."""
         return self._submit_message(session_id=session_id, prompt=prompt, sender="heartwood-user")

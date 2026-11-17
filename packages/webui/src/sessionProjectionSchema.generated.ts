@@ -40,6 +40,7 @@ export const sessionProjectionJsonSchema = {
         "agent_message.emitted",
         "tool_call.proposed",
         "confirmation.requested",
+        "action_dispatch.started",
         "confirmation.resolved",
         "tool.execution.recorded",
         "agent.lifecycle.updated",
