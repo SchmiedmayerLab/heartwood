@@ -72,7 +72,24 @@ jobs:
         run: npm run license:check
       - name: Audit npm dependencies
         working-directory: packages/webui
-        run: npm audit --omit=dev --audit-level=moderate
+        # GHSA-fc5q-39xc-vjpf affects every picomatch release. picomatch reaches the web UI only through
+        # @schmiedmayerlab/grove-design-system -> next-intl -> @parcel/watcher, which next-intl loads for its
+        # message extractor; the web UI never runs that extractor. Remove the exemption once picomatch publishes a fix.
+        env:
+          EXEMPT_ADVISORIES: GHSA-fc5q-39xc-vjpf
+        run: |
+          npm audit --omit=dev --json > "${RUNNER_TEMP}/npm-audit.json" || true
+          node - "${RUNNER_TEMP}/npm-audit.json" <<'EOF'
+          const report = JSON.parse(require('fs').readFileSync(process.argv[2], 'utf8'));
+          if (report.error || !report.vulnerabilities) throw new Error(`npm audit failed: ${JSON.stringify(report.error)}`);
+          const exempt = process.env.EXEMPT_ADVISORIES.split(',');
+          const findings = Object.values(report.vulnerabilities)
+            .flatMap((vulnerability) => vulnerability.via.filter((via) => typeof via === 'object'))
+            .filter((advisory) => ['moderate', 'high', 'critical'].includes(advisory.severity))
+            .filter((advisory) => !exempt.some((id) => advisory.url.endsWith(`/${id}`)));
+          for (const advisory of findings) console.error(`${advisory.severity} ${advisory.name}: ${advisory.title} ${advisory.url}`);
+          process.exit(findings.length ? 1 : 0);
+          EOF
       - name: Install Playwright Chromium
         working-directory: packages/webui
         run: npx playwright install --with-deps chromium
