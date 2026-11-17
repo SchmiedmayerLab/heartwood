@@ -125,7 +125,7 @@ docker run --rm -it \
   --user "$(id -u):$(id -g)" \
   --env HOME=/tmp \
   -v "$PWD:/workspace" \
-  ghcr.io/schmiedmayerlab/heartwood:0.5.0 \
+  ghcr.io/schmiedmayerlab/heartwood:0.5.1 \
   heartwood
 ```
 

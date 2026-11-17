@@ -45,8 +45,8 @@ Changing the CPU choice can reset the image or GPU selection, which is why the i
 
 | Model Route | Image | Starting Point |
 |---|---|---|
-| Stanford AI API Gateway or a hosted service | `ghcr.io/schmiedmayerlab/heartwood:0.5.0-terra` | 8 CPUs, 30 GB RAM, 50 GB persistent disk |
-| Run with Heartwood: Qwen3 Coder 30B AWQ | `ghcr.io/schmiedmayerlab/heartwood:0.5.0-terra-gpu-nvidia` | 32 CPUs, 120 GB RAM, two T4 GPUs with 16 GB each, 200 GB persistent disk |
+| Stanford AI API Gateway or a hosted service | `ghcr.io/schmiedmayerlab/heartwood:0.5.1-terra` | 8 CPUs, 30 GB RAM, 50 GB persistent disk |
+| Run with Heartwood: Qwen3 Coder 30B AWQ | `ghcr.io/schmiedmayerlab/heartwood:0.5.1-terra-gpu-nvidia` | 32 CPUs, 120 GB RAM, two T4 GPUs with 16 GB each, 200 GB persistent disk |
 
 A hosted model is the shortest first run.
 For a Heartwood-managed CPU model, whose catalog recommendation is 32 GB RAM, use 16 CPUs and 60 GB RAM instead.
