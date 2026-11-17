@@ -42,6 +42,7 @@ RETAINED = (
 )
 _NATIVE = "test_worker_native_integration::"
 _EXTERNAL = "test_worker_external_integration::"
+_LIFECYCLE = "test_worker_lifecycle_integration::"
 EXPECTED_CASES = {
     "synthetic-native": frozenset(
         {
@@ -65,6 +66,12 @@ EXPECTED_CASES = {
             _EXTERNAL + "test_native_contained_action_is_refused_after_revocation",
             "test_worker_pair_integration::"
             "test_two_native_workers_keep_authority_and_effects_separate",
+            _LIFECYCLE + "test_native_gateway_restart_reconciles_the_session[settled]",
+            _LIFECYCLE + "test_native_gateway_restart_reconciles_the_session[pending]",
+            _LIFECYCLE + "test_native_cancellation_settles_without_repeating_the_effect",
+            _LIFECYCLE + "test_native_new_worker_image_and_rotated_credential_after_restart",
+            _LIFECYCLE + "test_native_advisory_specialist_runs_inside_the_parent_worker",
+            _LIFECYCLE + "test_native_migrated_project_serves_through_the_operator_manifest",
         }
     ),
     "capable-model-native": frozenset({"test_worker_model_integration::test_native_capable_model"}),

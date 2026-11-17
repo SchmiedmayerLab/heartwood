@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import os
 import shutil
@@ -13,7 +14,7 @@ import stat
 import tomllib
 from contextlib import AbstractContextManager, ExitStack
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 from uuid import uuid4
 
 import tomli_w
@@ -352,7 +353,8 @@ def _copy_tree(source: Path, target: Path) -> None:
 def _copy_file(source: Path, target: Path) -> None:
     with source.open("rb") as reader, target.open("xb") as writer:
         os.fchmod(writer.fileno(), 0o600)
-        shutil.copyfileobj(reader, writer, length=1024 * 1024)
+        if not _clone(reader, writer):
+            shutil.copyfileobj(reader, writer, length=1024 * 1024)
         writer.flush()
         os.fsync(writer.fileno())
     with source.open("rb") as reader, target.open("rb") as copied:
@@ -361,6 +363,23 @@ def _copy_file(source: Path, target: Path) -> None:
             != hashlib.file_digest(copied, "sha256").digest()
         ):
             raise ProjectStateError("staged record differs from its original")
+
+
+def _clone(reader: BinaryIO, writer: BinaryIO) -> bool:
+    """Clone a record without a second copy of its bytes where the filesystem supports it.
+
+    Model artifacts are the large case. A clone is verified like a copy, never trusted as
+    a reference, and any refusal falls back to copying the bytes.
+    """
+    # FICLONE shares extents copy-on-write, so a later write to either file stays separate.
+    request = getattr(fcntl, "FICLONE", None)
+    if request is None:
+        return False
+    try:
+        fcntl.ioctl(writer.fileno(), request, reader.fileno())
+    except OSError:
+        return False
+    return True
 
 
 def _rebind_model(source: ProjectContext, target: ProjectContext, path: Path) -> None:

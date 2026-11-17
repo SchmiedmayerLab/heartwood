@@ -79,7 +79,10 @@ heartwood project migrate --deployment /etc/heartwood/project.toml --backup /srv
 ```
 
 The backup must be on the research directory's filesystem so that the original state can be retired atomically; the destination can be on another filesystem.
-Allocate space for a complete copy of the state, including model files.
+Model files move with the state, and no model download is performed.
+When the destination is on the research directory's Linux filesystem and that filesystem supports copy-on-write clones, such as Btrfs or XFS with reflinks, each file is cloned and shares storage with the original until either copy changes; elsewhere it is copied, so allocate space for a complete copy of the state, including model files.
+Every clone or copy is verified against the original's digest before activation.
+The protected state never refers to the backup or the research directory for a model: the backup is retained evidence that the operator may move or remove, and a reference into it would let a change there alter the active model.
 Migration verifies the session and audit chains, command receipts, preferences, experiment journal and installed Skill content before it activates the protected state, and stops on symbolic links, multiply linked files and special files.
 The complete original directory is retained as the backup, and relocation does not change the assurance of historical records.
 

@@ -143,6 +143,7 @@ def qualify(
         ROOT / "deploy/tests/test_worker_native_integration.py",
         ROOT / "deploy/tests/test_worker_external_integration.py",
         ROOT / "deploy/tests/test_worker_pair_integration.py",
+        ROOT / "deploy/tests/test_worker_lifecycle_integration.py",
         ROOT / "deploy/tests/external_service_fixture.py",
         ROOT / "deploy/tests/worker_native_fixture.py",
         ROOT / "deploy/tests/worker_telemetry.py",
@@ -150,6 +151,7 @@ def qualify(
         ROOT / "deploy/tests/worker_network_probe.py",
         ROOT / "deploy/tests/worker_network_qualification.py",
         ROOT / "images/worker/candidate/symlink-workspace.Dockerfile",
+        ROOT / "images/worker/candidate/replacement-worker.Dockerfile",
         ROOT / "images/worker/candidate/controller.Dockerfile",
         ROOT / "deploy/tests/checkpoint_records_integration.py",
         ROOT / "deploy/tests/checkpoint_transport_integration.py",
@@ -296,6 +298,24 @@ def qualify(
         ]
     )
     image_ids["symlink_workspace"] = (output / "symlink-workspace-image-id").read_text().strip()
+    run(
+        [
+            "docker",
+            "buildx",
+            "build",
+            "--load",
+            "--network",
+            "none",
+            "--file",
+            str(ROOT / "images/worker/candidate/replacement-worker.Dockerfile"),
+            "--build-arg",
+            "WORKER_IMAGE=" + worker_tag,
+            "--iidfile",
+            str(output / "replacement-worker-image-id"),
+            str(ROOT / "images/worker/candidate"),
+        ]
+    )
+    image_ids["replacement_worker"] = (output / "replacement-worker-image-id").read_text().strip()
     # Keep the alias with the retained images; removing its last tag could delete an input image.
     run(
         [
@@ -365,6 +385,7 @@ def qualify(
         "HW_QUALIFICATION_NETWORK": network,
         "HW_WORKER_IMAGE": image_ids["worker"],
         "HW_SYMLINK_WORKSPACE_IMAGE": image_ids["symlink_workspace"],
+        "HW_REPLACEMENT_WORKER_IMAGE": image_ids["replacement_worker"],
         "HW_GATEWAY_IMAGE": image_ids["gateway"],
         "HW_QUALIFICATION_OUTPUT": str(output),
         "OPENHANDS_SUPPRESS_BANNER": "1",
@@ -419,6 +440,7 @@ def qualify(
                     "/opt/qualification/tests/test_worker_native_integration.py",
                     "/opt/qualification/tests/test_worker_external_integration.py",
                     "/opt/qualification/tests/test_worker_pair_integration.py",
+                    "/opt/qualification/tests/test_worker_lifecycle_integration.py",
                 ]
             ),
         ]
