@@ -164,13 +164,19 @@ Native qualification runs against a gateway built only for qualification from th
 Its revocation and cleanup evidence depends on two behaviors of that build that the unmodified upstream release at the same revision lacks:
 
 - The Docker driver rejects deletion of a sandbox whose provisioning has not settled, instead of abandoning the provisioning task; without it, a container request already sent to Docker can produce a worker after the gateway reported the sandbox deleted and Heartwood recorded its absence.
+  The driver reports it as capability `openshell.compute.delete-awaits-provisioning`.
 - An explicit delete of a sandbox already marked as deleting calls the driver again; without it, a failed deletion stays marked as deleting, later requests are acknowledged without cleanup, and revocation times out without evidence of absence.
+  The gateway reports it as capability `openshell.compute.delete-retries-deleting` on its compute driver.
 
 A deployment's gateway must provide both behaviors before qualification results for revocation or cleanup apply to it.
-Declare each gateway version covered by such evidence in the manifest's `gateway_versions`; Heartwood stops with `HW-WORKER-001` when the gateway's `Health` API reports any other version.
-That check detects a replaced or misregistered gateway; it is not proof of behavior, because it compares a declaration with the gateway's own report.
-The qualification build reports `0.1.8+heartwood.2` from `openshell-gateway --version` and its `Health` API, and the `gateway_build` entry of the [qualification evidence](../architecture/testing.md#native-qualification-evidence) records its source revision and binary digests.
-Compare the deployed gateway with that record, or repeat native qualification against it and retain the evidence; a gateway that reports another version needs its own evidence for both behaviors.
+Before it serves, launches a worker or reconciles a retained attempt, Heartwood reads the registered gateway's info through the `GetGatewayInfo` API.
+It requires exactly one compute driver, implemented as `openshell/docker`, whose negotiated capabilities include both, and otherwise stops with `HW-WORKER-001` before any sandbox, volume or deletion request.
+The gateway version does not satisfy the check.
+The decision is retained, with the reported version, driver and capabilities, in each worker attempt's evidence: an accepted gateway in the runtime binding and revocation evidence, a refused launch in the evidence that recorded the attempt as not created.
+The check relies on the gateway's own report: a gateway that reports a capability it does not implement passes, and Heartwood does not test the deletion behavior of the registered gateway.
+Both capability names come from the qualification build's patches; no upstream release reports them, so an unmodified upstream gateway is refused.
+The qualification build also reports `0.1.8+heartwood.3`, a local version that no upstream release uses, and the `gateway_build` entry of the [qualification evidence](../architecture/testing.md#native-qualification-evidence) records that version, its source revision and binary digests.
+Compare the deployed gateway with that record, or repeat native qualification against it and retain the evidence.
 
 ### Sensitive Data
 

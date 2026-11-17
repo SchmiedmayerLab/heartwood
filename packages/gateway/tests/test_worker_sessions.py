@@ -37,6 +37,7 @@ from heartwood.core_adapter.worker_attempts import (
     WorkerAttemptRecord,
     WorkerControlPlane,
     WorkerControlPlaneError,
+    WorkerGatewayCapabilityError,
     WorkerRevocationEvidence,
     WorkerRuntimeBinding,
     current_worker_attempt,
@@ -1702,3 +1703,55 @@ def test_same_session_read_answers_during_a_stalled_worker_preparation(tmp_path:
         release.set()
         command.join(timeout=10)
         gateway.stop()
+
+
+def test_gateway_capability_refusal_at_launch_keeps_its_diagnostic(tmp_path: Path) -> None:
+    platform = Platform()
+    original = platform.prepare
+    gateway = configured_gateway(tmp_path, platform)
+    service = gateway._service("session-worker")
+
+    def prepare(request: WorkerSessionRequest) -> WorkerSessionPlan:
+        plan = original(request)
+
+        def launch(_intent: WorkerAttemptIntent) -> WorkerRuntimeBinding:
+            raise WorkerGatewayCapabilityError("synthetic gateway lacks a deletion capability")
+
+        return replace(plan, launch=launch)
+
+    gateway._worker_plan_factory = prepare
+    gateway._worker_sessions[id(service)]._prepare = prepare
+    try:
+        result = gateway.handle(
+            SessionCommand(
+                command_id="chat-refused-gateway",
+                session_id="session-worker",
+                kind=CommandKind.CHAT,
+                created_at="2026-01-01T00:00:00Z",
+                payload={"prompt": "Start the synthetic analysis."},
+            )
+        )
+        assert result.events[-1].kind == EventKind.ERROR_RECORDED
+        assert str(result.events[-1].payload["reason"]).startswith("HW-WORKER-001: ")
+        # Nothing was created, so the attempt is revoked without outside reconciliation.
+        assert _settles(service, "revoked")
+        errors = [e for e in service.replay_events() if e.kind == EventKind.ERROR_RECORDED]
+        # The first read's answer is discarded with its fenced attempt, so the command's
+        # refusal carries the diagnostic.
+        assert errors
+        assert all(str(e.payload["reason"]).startswith("HW-WORKER-001: ") for e in errors)
+        assert not any("reconciliation" in str(e.payload["reason"]) for e in errors)
+    finally:
+        gateway.stop()
+
+    # After the gateway is corrected, the next serving process replaces the refused attempt.
+    relaunch = Platform()
+    successor = _successor(gateway, None, relaunch)
+    try:
+        restored = successor._service("session-worker").backend
+        assert isinstance(restored, OpenHandsSdkBackend)
+        assert restored._worker_context is not None
+        restored._worker_context()
+        assert relaunch.calls == ["prepare", "launch", "connect"]
+    finally:
+        successor.stop()

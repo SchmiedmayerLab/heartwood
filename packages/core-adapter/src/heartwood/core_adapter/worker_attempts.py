@@ -37,6 +37,13 @@ class WorkerControlPlaneError(WorkerAttemptError):
     """An attempt cannot be reconciled against the infrastructure configured now."""
 
 
+class WorkerGatewayCapabilityError(WorkerAttemptError):
+    """The sandbox gateway did not report every deletion behavior worker evidence needs.
+
+    The launcher raises it before any sandbox, volume or deletion request.
+    """
+
+
 class _WorkerRecord(BaseModel):
     model_config = ConfigDict(
         extra="forbid", frozen=True, revalidate_instances="always", hide_input_in_errors=True
@@ -80,6 +87,29 @@ def gateway_policy_sha256(policy_profile: PolicyProfile) -> str:
     return hashlib.sha256(policy.encode()).hexdigest()
 
 
+_GatewayCapability = Annotated[
+    str, Field(max_length=128, pattern=r"^openshell(?:\.[a-z0-9-]+){2,}$")
+]
+
+
+class WorkerGatewayReport(_WorkerRecord):
+    """Sandbox gateway behavior reported to a trusted launcher, and its decision.
+
+    A refused report omits what the gateway did not report unambiguously.
+    """
+
+    decision: Literal["accepted", "refused"]
+    version: str | None = Field(default=None, min_length=1, max_length=128)
+    driver: str | None = Field(default=None, min_length=1, max_length=128)
+    capabilities: tuple[_GatewayCapability, ...] = Field(default=(), max_length=128)
+
+    @model_validator(mode="after")
+    def _accepted(self) -> Self:
+        if self.decision == "accepted" and (self.version is None or self.driver is None):
+            raise ValueError("an accepted gateway report requires its version and driver")
+        return self
+
+
 class WorkerRuntimeBinding(_WorkerRecord):
     """Runtime identity observed by the trusted launcher, never by the worker."""
 
@@ -88,12 +118,15 @@ class WorkerRuntimeBinding(_WorkerRecord):
     endpoint: AnyHttpUrl
     image_digest: ImageDigest
     sandbox_policy_sha256: Digest
+    gateway: WorkerGatewayReport | None = None
 
     @model_validator(mode="after")
     def _origin(self) -> Self:
         url = self.endpoint
         if url.username or url.password or url.path != "/" or url.query or url.fragment:
             raise ValueError("worker endpoint must be a complete origin without credentials")
+        if self.gateway is not None and self.gateway.decision != "accepted":
+            raise ValueError("a runtime can be bound only through an accepted gateway")
         return self
 
 
@@ -105,6 +138,7 @@ class WorkerRevocationEvidence(_WorkerRecord):
     observer_id: Reference
     evidence_sha256: Digest
     outcome: Literal["revoked", "not-created"]
+    gateway: WorkerGatewayReport | None = None
 
 
 class WorkerAttemptRecord(_WorkerRecord):

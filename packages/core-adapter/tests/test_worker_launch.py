@@ -14,7 +14,7 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
-from pydantic import AnyHttpUrl
+from pydantic import AnyHttpUrl, ValidationError
 
 from heartwood.core_adapter import SessionService
 from heartwood.core_adapter.worker_attempts import (
@@ -22,6 +22,8 @@ from heartwood.core_adapter.worker_attempts import (
     WorkerAttemptIntent,
     WorkerAttemptRecord,
     WorkerControlPlane,
+    WorkerGatewayCapabilityError,
+    WorkerGatewayReport,
     WorkerRevocationEvidence,
     WorkerRuntimeBinding,
 )
@@ -142,6 +144,32 @@ def test_uncertain_create_is_not_retried_or_declared_absent(
     with pytest.raises(WorkerAttemptError):
         service.launch_worker(launch, **_PLAN)
     assert calls == 1
+
+
+def test_gateway_capability_refusal_keeps_its_diagnostic(service: SessionService) -> None:
+    refusal = WorkerGatewayCapabilityError("synthetic gateway lacks a deletion capability")
+
+    def launch(_intent: WorkerAttemptIntent) -> WorkerRuntimeBinding:
+        raise refusal
+
+    with pytest.raises(WorkerGatewayCapabilityError) as failure:
+        service.launch_worker(launch, **_PLAN)
+    assert failure.value is refusal
+    record = service.worker_attempt()
+    assert record is not None
+    assert record.phase == "fenced"
+    assert record.revocation is None
+
+
+def test_runtime_binding_retains_only_an_accepted_gateway_report() -> None:
+    with pytest.raises(ValidationError):
+        WorkerGatewayReport(decision="accepted", version="0.0.1", capabilities=())
+    accepted = WorkerGatewayReport(decision="accepted", version="0.0.1", driver="synthetic")
+    refused = accepted.model_copy(update={"decision": "refused"})
+    binding = _runtime(None).model_dump()  # type: ignore[arg-type]
+    assert WorkerRuntimeBinding.model_validate({**binding, "gateway": accepted}).gateway == accepted
+    with pytest.raises(ValidationError):
+        WorkerRuntimeBinding.model_validate({**binding, "gateway": refused})
 
 
 def test_journal_failure_prevents_control_plane_call(

@@ -41,6 +41,7 @@ from heartwood.gateway import ProjectContext, SessionGateway
 from heartwood.gateway._model_settings import ModelProfile, ModelSettings
 from heartwood.gateway._openhands_sdk import OpenHandsSdkBackend
 from heartwood.gateway._workspace import WorkspaceInspector
+from heartwood.gateway.worker_control import REQUIRED_GATEWAY_CAPABILITIES
 from heartwood.gateway.worker_deployment import OpenShellWorkerDeployment
 from heartwood.gateway.worker_inputs import WorkerInputManifest
 from heartwood.gateway.worker_native import (
@@ -307,6 +308,15 @@ def _assert_revoked(service: SessionService) -> None:
     assert attempt.revocation is not None
     assert attempt.revocation.outcome == "revoked"
     assert attempt.revocation.sandbox_id is not None
+    # The qualified gateway build reports both deletion behaviors revocation depends on.
+    gateway = attempt.revocation.gateway
+    assert gateway is not None
+    assert (
+        gateway.version
+        == json.loads(Path("/opt/qualification/gateway.json").read_text())["version"]
+    )
+    assert REQUIRED_GATEWAY_CAPABILITIES.issubset(gateway.capabilities)
+    assert attempt.runtime is None or attempt.runtime.gateway == gateway
     assert not service.store.owns_writer
     _assert_absent(str(attempt.intent.attempt_id))
 

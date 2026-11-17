@@ -354,7 +354,7 @@ def test_gateway_cli_owns_the_evidence_client_and_binds_sessions(
         lambda *_args: lambda _request: pytest.fail("no worker should start during launch"),
     )
     monkeypatch.setattr(
-        "heartwood.gateway.worker_native.require_declared_gateway", lambda *_args: None
+        "heartwood.gateway.worker_native.require_gateway_capabilities", lambda *_args: None
     )
     observed = []
     served: list[object] = []

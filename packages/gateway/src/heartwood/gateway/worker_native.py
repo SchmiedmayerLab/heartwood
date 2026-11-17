@@ -29,6 +29,8 @@ from heartwood.core_adapter.worker_attempts import (
     WorkerAttemptRecord,
     WorkerControlPlane,
     WorkerControlPlaneError,
+    WorkerGatewayCapabilityError,
+    WorkerGatewayReport,
     WorkerRevocationEvidence,
     WorkerRuntimeBinding,
 )
@@ -59,8 +61,8 @@ _CREATION_REJECTED = ("INVALID_ARGUMENT", "PERMISSION_DENIED", "UNAUTHENTICATED"
 _CREATION_REJECTED_GATEWAY = (
     "f3d976590d3eb1379690a2abaf0f0e26c21d487d",
     (
-        "4dc6079ce4c131175dd8056a9bf0934cf51d9b4c0e04ef430e0b7465f7e8025e",
-        "f708cdf3e00e57b6bbda7dfcdbca46b47efc72aed20fc63c3aa767223debe493",
+        "f36989e0cddf843d79ee8d43376704c4358decc906ad3c92bf40db6c429534c1",
+        "206aab5e89fcb6f338781e3b51c2b54bb7502483a06fadca6f482aef9bcc41ee",
     ),
 )
 
@@ -91,8 +93,10 @@ def native_worker_plan_factory(
     return prepare
 
 
-def require_declared_gateway(settings: OpenShellWorkerDeployment, project: ProjectContext) -> None:
-    """Read the registered gateway's reported version once before serving managed sessions."""
+def require_gateway_capabilities(
+    settings: OpenShellWorkerDeployment, project: ProjectContext
+) -> None:
+    """Require the registered gateway's deletion capabilities once before serving sessions."""
     control = NativeWorkerControl(settings, project)
     try:
         control.connect()
@@ -132,7 +136,7 @@ def native_worker_reconciler(
             volumes.remove_after_revocation()
         finally:
             control.close()
-        return _revocation_evidence(settings, record, sandbox_id or retained)
+        return _revocation_evidence(settings, record, sandbox_id or retained, control.gateway)
 
     return reconcile
 
@@ -202,7 +206,10 @@ def _delete_sandbox(control: NativeWorkerControl, volumes: WorkerVolumes, sandbo
 
 
 def _revocation_evidence(
-    settings: OpenShellWorkerDeployment, record: WorkerAttemptRecord, sandbox_id: str | None
+    settings: OpenShellWorkerDeployment,
+    record: WorkerAttemptRecord,
+    sandbox_id: str | None,
+    gateway: WorkerGatewayReport | None,
 ) -> WorkerRevocationEvidence:
     payload = json.dumps(
         {
@@ -219,6 +226,7 @@ def _revocation_evidence(
         observer_id="native-" + settings.gateway,
         evidence_sha256=hashlib.sha256(payload.encode()).hexdigest(),
         outcome="revoked" if sandbox_id is not None else "not-created",
+        gateway=gateway,
     )
 
 
@@ -401,11 +409,15 @@ class _NativeWorkerAttempt:
                 endpoint=AnyHttpUrl(endpoint),
                 image_digest=self.settings.image_digest,
                 sandbox_policy_sha256=self.settings.sandbox_policy_sha256,
+                gateway=self.control.gateway,
             )
         except BaseException as error:
             self._stop_unadmitted()
             self._preparation.close()
             if not isinstance(error, Exception):
+                raise
+            if isinstance(error, WorkerGatewayCapabilityError):
+                # Refused before any sandbox or volume request; the refusal is the diagnostic.
                 raise
             raise WorkerAttemptError(
                 "native worker launch requires outside reconciliation"
@@ -602,4 +614,4 @@ print(json.dumps({'files':files,'uid':os.getuid(),
         if self._workspace is not None:
             self._workspace.reset_client()
         self.control.close()
-        return _revocation_evidence(self.settings, record, self._sandbox_id)
+        return _revocation_evidence(self.settings, record, self._sandbox_id, self.control.gateway)

@@ -121,8 +121,11 @@ Launch happens once per session service, on the session's first backend read:
 2. The gateway stages the manifest's `inputs` (at most 128 files, 16 MiB each and 64 MiB in total) and a [Skill projection](skills.md#worker-projection) into a private directory under the state root.
    One input identity digest binds the inputs, the Skill selection, the specialist catalog fingerprint, and any client-tool specifications.
 3. The session journals the attempt intent before any sandbox exists.
-4. The launcher connects to the registered OpenShell gateway with its mutual TLS identity and reads its reported version through the SDK health call.
-   A version outside the manifest's `gateway_versions` stops serving at start with `HW-WORKER-001`, and stops a later launch or reconciliation before any sandbox, volume, or deletion request.
+4. The launcher connects to the registered OpenShell gateway with its mutual TLS identity, reads its info, and requires exactly one Docker compute driver that reports both [deletion capabilities](../operate/platform-requirements.md#gateway-behavior-behind-native-qualification) revocation evidence depends on.
+   A missing capability or an unreadable report stops serving at start with `HW-WORKER-001`, and stops a later launch or reconciliation before any sandbox, volume, or deletion request.
+   A launch refused this way reports `HW-WORKER-001` in the session and is recorded as revoked without a created worker.
+   The decision and the reported gateway version, driver, and capabilities are retained with the attempt: an accepted report in its runtime binding and revocation evidence, a refused one in its revocation evidence.
+   The capabilities are the gateway's own report; Heartwood does not test the deletion behavior itself.
 5. A short-lived preparation container copies the staged snapshots into two attempt-owned Docker volumes.
    It runs only the image's `chmod` with no network, a read-only root filesystem, all capabilities dropped except `FOWNER`, and `no-new-privileges`.
 6. OpenShell creates the sandbox with the pinned image digest, the operator's policy, the provider attachment, CPU and memory limits, and attempt labels.
@@ -420,8 +423,8 @@ The application's default lock installs patched OpenHands and OpenShell SDK whee
 `deploy/build-worker-candidate.py --bootstrap` builds them there from immutable upstream archives and the reviewed patches in `images/worker/candidate/`, or verifies existing wheels against the digests in `sources.json`.
 The patches add the remote-event and configuration-admission hooks the trust boundary requires; the gateway refuses to construct a managed worker on an SDK without them.
 
-The OpenShell gateway is also built from pinned source with two deletion patches, as version `0.1.8+heartwood.2` with the purpose `qualification-only`.
-Heartwood ships no production OpenShell gateway: a deployment's gateway is checked only by its declared version, and it must separately provide the [behavior native qualification depends on](../operate/platform-requirements.md).
+The OpenShell gateway is also built from pinned source with two deletion patches, as version `0.1.8+heartwood.3` with the purpose `qualification-only`; each patch makes the gateway report its behavior as a compute driver capability.
+Heartwood ships no production OpenShell gateway: a deployment's gateway is checked only by the capabilities it reports, and it must separately provide the [behavior native qualification depends on](../operate/platform-requirements.md).
 
 Native qualification runs the installed application, worker image, and qualification gateway through the complete boundary and produces commit-bound, verifiable evidence; [Testing and Evidence](testing.md) describes the cases, evidence, and verification.
 Qualification uses synthetic data and does not establish sensitive-data readiness or institutional approval.

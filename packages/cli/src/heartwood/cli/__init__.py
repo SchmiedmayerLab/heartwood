@@ -1055,19 +1055,21 @@ def _handle_serve(
             )
         worker_plan_factory = worker_reconciler = None
         if deployment is not None and deployment.worker is not None:
-            from heartwood.core_adapter.worker_attempts import WorkerAttemptError
-            from heartwood.gateway.worker_control import WorkerGatewayVersionError
+            from heartwood.core_adapter.worker_attempts import (
+                WorkerAttemptError,
+                WorkerGatewayCapabilityError,
+            )
             from heartwood.gateway.worker_native import (
                 native_worker_plan_factory,
                 native_worker_reconciler,
-                require_declared_gateway,
+                require_gateway_capabilities,
             )
 
             worker_plan_factory = native_worker_plan_factory(deployment.worker, project)
             try:
-                require_declared_gateway(deployment.worker, project)
-            except WorkerGatewayVersionError as error:
-                code = diagnostic_for("worker-gateway-version").code
+                require_gateway_capabilities(deployment.worker, project)
+            except WorkerGatewayCapabilityError as error:
+                code = diagnostic_for("worker-gateway-capability").code
                 raise SystemExit(f"{code}: {error}") from error
             except (WorkerAttemptError, ProjectStateError) as error:
                 raise SystemExit(f"Managed worker control is unavailable: {error}") from error

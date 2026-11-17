@@ -21,6 +21,7 @@ from heartwood.core_adapter import (
     BackendErrorEvent,
     BackendEvent,
 )
+from heartwood.core_adapter.worker_attempts import WorkerGatewayCapabilityError
 from heartwood.gateway._openhands_persistence import OpenHandsSdkVersionError
 
 
@@ -69,6 +70,11 @@ def backend_error(
     if isinstance(error, OpenHandsSdkVersionError):
         return BackendErrorEvent(
             error_code=BackendErrorCode.SESSION_RUNTIME_INCOMPATIBLE,
+            source_event_id=source_event_id,
+        )
+    if isinstance(error, WorkerGatewayCapabilityError):
+        return BackendErrorEvent(
+            error_code=BackendErrorCode.WORKER_GATEWAY_INCAPABLE,
             source_event_id=source_event_id,
         )
     return BackendErrorEvent(

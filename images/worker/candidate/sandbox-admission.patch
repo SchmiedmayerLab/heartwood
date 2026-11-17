@@ -1,8 +1,17 @@
 diff --git a/README.md b/README.md
-index c35423d..e957e69 100644
+index c35423d..37c314b 100644
 --- a/README.md
 +++ b/README.md
-@@ -79,6 +79,13 @@ with SandboxClient.from_active_cluster() as client:
+@@ -62,6 +62,8 @@ with SandboxClient.from_active_cluster() as client:
+     print(f"Gateway version: {client.health().version}")
+ ```
+ 
++`client.gateway_info()` returns the gateway version and each initialized extension with its supported capabilities.
++
+ Pass `cluster="my-gateway"` to select a registered gateway by name. For OIDC gateways, the client refreshes expiring tokens and saves the updated token bundle by default.
+ 
+ ### List sandboxes
+@@ -79,6 +81,13 @@ with SandboxClient.from_active_cluster() as client:
  
  Use `client.list_all(workspace="default")` to collect every page into a list.
  
@@ -37,7 +46,7 @@ index c99c3b4..5b26378 100644
      "SandboxRef",
      "SandboxSession",
 diff --git a/src/openshell/sandbox.py b/src/openshell/sandbox.py
-index 0670f1d..218b156 100644
+index 0670f1d..6a09240 100644
 --- a/src/openshell/sandbox.py
 +++ b/src/openshell/sandbox.py
 @@ -515,6 +515,16 @@ class SandboxConditionRef:
@@ -67,7 +76,19 @@ index 0670f1d..218b156 100644
  
  
  class ServiceAuthorizationMode(IntEnum):
-@@ -2011,6 +2024,11 @@ def _sandbox_ref(
+@@ -922,6 +935,11 @@ class SandboxClient:
+     def health(self) -> openshell_pb2.HealthResponse:
+         return self._stub.Health(openshell_pb2.HealthRequest(), timeout=self._timeout)
+ 
++    def gateway_info(self) -> openshell_pb2.GetGatewayInfoResponse:
++        return self._stub.GetGatewayInfo(
++            openshell_pb2.GetGatewayInfoRequest(), timeout=self._timeout
++        )
++
+     def create(
+         self,
+         *,
+@@ -2011,6 +2029,11 @@ def _sandbox_ref(
      service_urls: Mapping[str, str] | None = None,
  ) -> SandboxRef:
      status = sandbox.status if sandbox.HasField("status") else None
@@ -79,7 +100,7 @@ index 0670f1d..218b156 100644
      provenance = (
          SandboxWorkloadTemplateProvenanceRef(
              name=sandbox.created_from_workload_template.name,
-@@ -2037,6 +2055,22 @@ def _sandbox_ref(
+@@ -2037,6 +2060,22 @@ def _sandbox_ref(
              if status is not None and status.HasField("main_process_started_time")
              else None,
              conditions=_sandbox_conditions(status),
@@ -103,7 +124,7 @@ index 0670f1d..218b156 100644
          labels=sandbox.metadata.labels if sandbox.metadata else {},
          created_from_workload_template=provenance,
 diff --git a/tests/sandbox_test.py b/tests/sandbox_test.py
-index 6c661b2..6a08e51 100644
+index 6c661b2..7db9baf 100644
 --- a/tests/sandbox_test.py
 +++ b/tests/sandbox_test.py
 @@ -21,6 +21,7 @@ import pytest
@@ -114,7 +135,7 @@ index 6c661b2..6a08e51 100644
  from openshell._proto import openshell_pb2, openshell_pb2_grpc
  from openshell.mutations import DeletionOutcome
  from openshell.sandbox import (
-@@ -2973,6 +2974,95 @@ def test_sandbox_ref_includes_conditions() -> None:
+@@ -2973,6 +2974,118 @@ def test_sandbox_ref_includes_conditions() -> None:
      assert ref.conditions == ref.status.conditions
  
  
@@ -205,6 +226,29 @@ index 6c661b2..6a08e51 100644
 +        proto.ClearField("status")
 +
 +    assert _sandbox_ref(proto).status.main_process_instance_id is None
++
++
++def test_gateway_info_returns_negotiated_extension_capabilities() -> None:
++    requests: list[object] = []
++    response = openshell_pb2.GetGatewayInfoResponse(
++        gateway_version="0.1.8",
++        extensions=[
++            openshell_pb2.NegotiatedExtensionInfo(
++                kind=openshell_pb2.EXTENSION_KIND_COMPUTE_DRIVER,
++                configured_name="docker",
++                supported_capabilities=["openshell.compute.contract"],
++            )
++        ],
++    )
++
++    def get_gateway_info(request: object, *, timeout: float) -> object:
++        requests.append((request, timeout))
++        return response
++
++    client = _client_with_fake_stub(SimpleNamespace(GetGatewayInfo=get_gateway_info))
++
++    assert client.gateway_info() == response
++    assert requests == [(openshell_pb2.GetGatewayInfoRequest(), 30.0)]
 +
 +
  def test_sandbox_ref_conditions_default_to_empty() -> None:

@@ -38,14 +38,16 @@ from heartwood.core_adapter.worker_attempts import (
     WorkerAttemptRecord,
     WorkerControlPlane,
     WorkerControlPlaneError,
+    WorkerGatewayCapabilityError,
+    WorkerGatewayReport,
     WorkerRuntimeBinding,
 )
 from heartwood.gateway import ProjectContext, ProjectStateError, worker_native
 from heartwood.gateway._deployment import validate_worker_deployment
 from heartwood.gateway.worker_control import (
+    REQUIRED_GATEWAY_CAPABILITIES,
     NativeWorkerControl,
     NativeWorkerForward,
-    WorkerGatewayVersionError,
 )
 from heartwood.gateway.worker_deployment import OpenShellWorkerDeployment
 from heartwood.gateway.worker_inputs import WorkerInputManifest
@@ -55,6 +57,7 @@ from heartwood.gateway.worker_volumes import WorkerVolumes
 
 _GATEWAY_VERSION = "0.0.1+synthetic"
 _RUNTIME = "f" * 64
+_GATEWAY_CAPABILITIES = ("openshell.compute.contract", *sorted(REQUIRED_GATEWAY_CAPABILITIES))
 
 
 @pytest.fixture
@@ -102,7 +105,6 @@ def deployment() -> Iterator[tuple[OpenShellWorkerDeployment, ProjectContext]]:
             settings = OpenShellWorkerDeployment(
                 driver="openshell-docker",
                 gateway="synthetic",
-                gateway_versions=(_GATEWAY_VERSION, "0.0.2+synthetic"),
                 native_config_home=home,
                 openshell_cli=cli,
                 docker_cli=cli,
@@ -262,7 +264,8 @@ def _attempt(settings: OpenShellWorkerDeployment, project: ProjectContext) -> _N
     )
     attempt._forward = Mock(active=True)
     attempt.control = Mock(
-        pb=SimpleNamespace(SANDBOX_PHASE_READY=2, CONFIGURATION_ADMISSION_STATE_ACCEPTED=3)
+        pb=SimpleNamespace(SANDBOX_PHASE_READY=2, CONFIGURATION_ADMISSION_STATE_ACCEPTED=3),
+        gateway=None,
     )
     attempt.control.client.get.return_value = SimpleNamespace(
         id="native-worker",
@@ -411,6 +414,9 @@ class _Sandboxes:
         }
         self.probe_output: str | None = None
         self.version: str | None = _GATEWAY_VERSION
+        self.drivers: list[tuple[str, tuple[str, ...]]] = [
+            ("openshell/docker", _GATEWAY_CAPABILITIES)
+        ]
         self.after_probe: Callable[[SimpleNamespace], None] = lambda _sandbox: None
 
     def place(self, name: str, labels: dict[str, str], *, sandbox_id: str = "sandbox-1") -> None:
@@ -429,10 +435,21 @@ class _Sandboxes:
             ),
         )
 
-    def health(self) -> SimpleNamespace:
+    def gateway_info(self) -> object:
         if self.version is None:
             raise self.error(self.grpc.StatusCode.UNAVAILABLE)
-        return SimpleNamespace(version=self.version)
+        return self.pb.GetGatewayInfoResponse(
+            gateway_version=self.version,
+            extensions=[
+                self.pb.NegotiatedExtensionInfo(
+                    kind=self.pb.EXTENSION_KIND_COMPUTE_DRIVER,
+                    configured_name="docker",
+                    implementation_name=name,
+                    supported_capabilities=capabilities,
+                )
+                for name, capabilities in self.drivers
+            ],
+        )
 
     def create(
         self, *, workspace: str, name: str, spec: object, labels: dict[str, str]
@@ -1062,44 +1079,114 @@ def test_forwarder_is_not_started_with_a_changed_gateway_identity(
     assert not (settings.native_config_home / "started").exists()
 
 
-@pytest.mark.parametrize("reported", ["0.0.1", "0.0.1+synthetic.1", "", None])
-def test_undeclared_or_unreadable_gateway_version_stops_launch_and_reconciliation(
-    native: _Native, reported: str | None
+_DELETE_RETRY = "openshell.compute.delete-retries-deleting"
+_DELETE_AWAITS_PROVISIONING = "openshell.compute.delete-awaits-provisioning"
+
+
+_UNREADABLE = WorkerGatewayReport(decision="refused")
+
+
+def _refused(driver: str | None, *capabilities: str) -> WorkerGatewayReport:
+    return WorkerGatewayReport(
+        decision="refused", version=_GATEWAY_VERSION, driver=driver, capabilities=capabilities
+    )
+
+
+@pytest.mark.parametrize(
+    ("drivers", "recorded"),
+    [
+        pytest.param(None, _UNREADABLE, id="unreadable"),
+        pytest.param([], _refused(None), id="no-driver"),
+        pytest.param(
+            [("openshell/docker", ())], _refused("openshell/docker"), id="no-capabilities"
+        ),
+        pytest.param(
+            [("openshell/docker", (_DELETE_RETRY,))],
+            _refused("openshell/docker", _DELETE_RETRY),
+            id="no-provisioning-wait",
+        ),
+        pytest.param(
+            [("openshell/docker", (_DELETE_AWAITS_PROVISIONING,))],
+            _refused("openshell/docker", _DELETE_AWAITS_PROVISIONING),
+            id="no-retry",
+        ),
+        pytest.param(
+            [("openshell/podman", _GATEWAY_CAPABILITIES)],
+            _refused("openshell/podman", *_GATEWAY_CAPABILITIES),
+            id="other-driver",
+        ),
+        pytest.param(
+            [("openshell/docker", _GATEWAY_CAPABILITIES)] * 2, _refused(None), id="ambiguous"
+        ),
+        pytest.param([("openshell/docker", ("OpenShell.Compute.X",))], _UNREADABLE, id="malformed"),
+    ],
+)
+def test_gateway_without_deletion_capabilities_stops_launch_and_reconciliation(
+    native: _Native,
+    drivers: list[tuple[str, tuple[str, ...]]] | None,
+    recorded: WorkerGatewayReport,
 ) -> None:
-    native.sandboxes.version = reported
-    with pytest.raises(WorkerGatewayVersionError, match="declared qualified version"):
-        worker_native.require_declared_gateway(native.settings, native.project)
+    if drivers is None:
+        native.sandboxes.version = None
+    else:
+        native.sandboxes.drivers = drivers
+    with pytest.raises(WorkerGatewayCapabilityError, match="required deletion capabilities"):
+        worker_native.require_gateway_capabilities(native.settings, native.project)
     assert native.sandboxes.closed
-    with pytest.raises(WorkerAttemptError, match="outside reconciliation"):
+    # The refusal keeps its diagnostic: nothing was created, so nothing needs reconciliation.
+    with pytest.raises(WorkerGatewayCapabilityError, match="required deletion capabilities"):
         native.attempt.launch(native.intent)
     assert native.attempt.control.client is None
     assert native.sandboxes.spec is None
     assert native.docker.volumes == {}
+    evidence = native.attempt.revoke(native.record("fenced", None))
+    assert evidence.outcome == "not-created"
+    assert evidence.gateway == recorded
 
     name = "hw-" + native.intent.attempt_id.hex[:16]
     native.sandboxes.place(name, {"heartwood.attempt": str(native.intent.attempt_id)})
     reconcile = worker_native.native_worker_reconciler(native.settings, native.project)
-    with pytest.raises(WorkerGatewayVersionError):
+    with pytest.raises(WorkerGatewayCapabilityError):
         reconcile(native.record("fenced", None))
     assert native.sandboxes.running
     assert native.sandboxes.deleted == []
 
 
-def test_each_declared_gateway_version_is_accepted(native: _Native) -> None:
-    native.sandboxes.version = "0.0.2+synthetic"
-    worker_native.require_declared_gateway(native.settings, native.project)
-    assert native.attempt.launch(native.intent).sandbox_id == "sandbox-1"
+def test_missing_capability_diagnostic_names_version_and_capability(native: _Native) -> None:
+    native.sandboxes.drivers = [("openshell/docker", (_DELETE_AWAITS_PROVISIONING,))]
+    with pytest.raises(WorkerGatewayCapabilityError) as raised:
+        worker_native.require_gateway_capabilities(native.settings, native.project)
+    assert str(raised.value).endswith(f"version {_GATEWAY_VERSION} lacks {_DELETE_RETRY}")
 
 
-@pytest.mark.parametrize("declared", [None, (), ("",), ("0.1 8",), ("v" * 65,)])
-def test_managed_workers_require_a_declared_gateway_version(
-    deployment: tuple[OpenShellWorkerDeployment, ProjectContext], declared: object
+@pytest.mark.parametrize("version", [_GATEWAY_VERSION, "9.9.9-unlisted"])
+def test_reported_capabilities_admit_any_gateway_version_and_are_recorded(
+    native: _Native, version: str
+) -> None:
+    native.sandboxes.version = version
+    worker_native.require_gateway_capabilities(native.settings, native.project)
+    expected = WorkerGatewayReport(
+        decision="accepted",
+        version=version,
+        driver="openshell/docker",
+        capabilities=_GATEWAY_CAPABILITIES,
+    )
+    runtime = native.attempt.launch(native.intent)
+    assert runtime.gateway == expected
+    evidence = native.attempt.revoke(native.record("fenced", runtime))
+    assert evidence.gateway == expected
+
+    reconciled = worker_native.native_worker_reconciler(native.settings, native.project)(
+        native.record("fenced", runtime)
+    )
+    assert reconciled.gateway == expected
+
+
+def test_managed_worker_manifest_has_no_declared_gateway_version(
+    deployment: tuple[OpenShellWorkerDeployment, ProjectContext],
 ) -> None:
     manifest = deployment[0].model_dump()
-    if declared is None:
-        del manifest["gateway_versions"]
-    else:
-        manifest["gateway_versions"] = declared
+    manifest["gateway_versions"] = [_GATEWAY_VERSION]
     with pytest.raises(ValidationError):
         OpenShellWorkerDeployment.model_validate(manifest)
 

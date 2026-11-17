@@ -220,7 +220,7 @@ Required:
 - Provider credentials, signing authority, launch capabilities, management sockets and peer-worker state outside worker access.
 - Authenticated admission bound to project, session, attempt and runtime identity, with a changed generation or configuration fencing the old attempt.
 - Revocation observed outside the worker before replacement or writer release, with reconciliation instead of duplicate execution when creation or deletion is uncertain.
-- A sandbox gateway that provides the [deletion behavior native qualification depends on](platform-requirements.md#gateway-behavior-behind-native-qualification), with its version declared in `gateway_versions`.
+- A sandbox gateway that provides the [deletion behavior native qualification depends on](platform-requirements.md#gateway-behavior-behind-native-qualification), and reports both deletion capabilities for its Docker compute driver.
 
 The reference adapter uses OpenShell on a local Docker engine with the native OpenHands remote conversation, workspace and event contracts.
 OpenShell names, policy objects and control credentials belong to that adapter, not to portable platform messages; another adapter must keep the same authority, lifecycle and evidence properties on its own infrastructure.
@@ -456,7 +456,7 @@ There is one open release review per operation, denial is final for it, and an i
 | Capability not offered | No advertised support | The choice is hidden in every interface |
 | Missing or invalid launch capability | Not applicable | [HW-INGRESS-003](../reference/troubleshooting.md#gateway-ingress) |
 | Request does not match the declared route | Not applicable | [HW-INGRESS-002](../reference/troubleshooting.md#gateway-ingress) |
-| Sandbox gateway version not declared | Its `Health` version | [HW-WORKER-001](../reference/troubleshooting.md#managed-workers) |
+| Sandbox gateway lacks a deletion capability | Its gateway info: version, compute driver and capabilities | [HW-WORKER-001](../reference/troubleshooting.md#managed-workers) |
 | Expired or rejected model credential | An authentication error | [HW-AGENT-008](../reference/troubleshooting.md#agent-runtime) |
 | Exhausted quota or budget | A quota error | HW-AGENT-009 |
 | Rate limit | A rate-limit error with a retry interval when known | HW-AGENT-010 |

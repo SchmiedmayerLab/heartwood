@@ -93,7 +93,7 @@ def test_gateway_launch_uses_external_binding_or_fails_closed(
     assert (state / "config.toml").exists() is not missing
 
 
-@pytest.mark.parametrize("outcome", ["serving", "unsupported", "undeclared-gateway"])
+@pytest.mark.parametrize("outcome", ["serving", "unsupported", "incapable-gateway"])
 def test_explicit_worker_selection_reaches_native_factory_without_local_fallback(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -102,7 +102,7 @@ def test_explicit_worker_selection_reaches_native_factory_without_local_fallback
 ) -> None:
     from unittest.mock import Mock
 
-    from heartwood.gateway.worker_control import WorkerGatewayVersionError
+    from heartwood.core_adapter.worker_attempts import WorkerGatewayCapabilityError
 
     available = outcome == "serving"
 
@@ -121,7 +121,6 @@ def test_explicit_worker_selection_reaches_native_factory_without_local_fallback
         {
             "driver": "openshell-docker",
             "gateway": "synthetic",
-            "gateway_versions": ["0.0.1+synthetic"],
             "native_config_home": str(tmp_path / "native"),
             "openshell_cli": str(tmp_path / "openshell"),
             "docker_cli": str(tmp_path / "docker"),
@@ -149,9 +148,11 @@ def test_explicit_worker_selection_reaches_native_factory_without_local_fallback
     if outcome == "unsupported":
         native_factory.side_effect = ProjectStateError("native runtime unsupported")
     gateway_check = Mock()
-    if outcome == "undeclared-gateway":
-        gateway_check.side_effect = WorkerGatewayVersionError("synthetic undeclared version")
-    monkeypatch.setattr("heartwood.gateway.worker_native.require_declared_gateway", gateway_check)
+    if outcome == "incapable-gateway":
+        gateway_check.side_effect = WorkerGatewayCapabilityError("synthetic missing capability")
+    monkeypatch.setattr(
+        "heartwood.gateway.worker_native.require_gateway_capabilities", gateway_check
+    )
     monkeypatch.setattr(
         "heartwood.gateway.worker_native.native_worker_plan_factory", native_factory
     )
@@ -197,7 +198,7 @@ def test_explicit_worker_selection_reaches_native_factory_without_local_fallback
         "--ingress-mode",
         "direct-loopback",
     ]
-    if outcome == "undeclared-gateway":
+    if outcome == "incapable-gateway":
         with pytest.raises(SystemExit, match=r"^HW-WORKER-001: "):
             main(arguments)
     else:

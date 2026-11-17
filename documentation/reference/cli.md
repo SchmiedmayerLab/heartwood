@@ -241,7 +241,7 @@ Workstations and Carina default to direct loopback and refuse a non-loopback bin
 A trusted identity assertion is a route marker, not a credential; the proxy must strip client-supplied forwarding and identity headers.
 See [Add a Platform](../operate/platform-integration.md#gateway-ingress).
 
-With a manifest that declares a `[worker]` table, `gateway serve` first checks the sandbox gateway's reported version against `gateway_versions` and stops with [`HW-WORKER-001`](troubleshooting.md#hw-worker-001-sandbox-gateway-version-is-not-declared-as-qualified) on a mismatch.
+With a manifest that declares a `[worker]` table, `gateway serve` first checks that the sandbox gateway reports both [deletion capabilities](../operate/platform-requirements.md#gateway-behavior-behind-native-qualification) and stops with [`HW-WORKER-001`](troubleshooting.md#hw-worker-001-sandbox-gateway-lacks-a-required-deletion-capability) when a capability is missing or the gateway's report cannot be read.
 It then reconciles worker attempts that an earlier gateway process for the same deployment left unrevoked, and prints one line for each session whose revocation was not observed; that attempt stays fenced and is retried at the next start.
 
 ## Project State Migration

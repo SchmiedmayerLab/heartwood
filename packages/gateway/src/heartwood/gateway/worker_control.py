@@ -23,15 +23,25 @@ from time import monotonic
 from typing import Any
 from urllib.parse import urlsplit
 
-from heartwood.core_adapter.worker_attempts import WorkerAttemptError
+from heartwood.core_adapter.worker_attempts import (
+    WorkerAttemptError,
+    WorkerGatewayCapabilityError,
+    WorkerGatewayReport,
+)
 from heartwood.gateway._deployment import validate_worker_deployment
 from heartwood.gateway._project import ProjectContext
 from heartwood.gateway.worker_deployment import OpenShellWorkerDeployment
 from heartwood.persistence import read_private_text
 
-
-class WorkerGatewayVersionError(WorkerAttemptError):
-    """The registered gateway did not report a version the operator declared as qualified."""
+# Revocation and cleanup evidence depends on these deletion behaviors of the gateway and its
+# Docker driver: deletion waits for provisioning to settle, and an explicit delete of a sandbox
+# already marked deleting calls the driver again.
+REQUIRED_GATEWAY_CAPABILITIES = frozenset(
+    {
+        "openshell.compute.delete-awaits-provisioning",
+        "openshell.compute.delete-retries-deleting",
+    }
+)
 
 
 class NativeWorkerControl:
@@ -84,6 +94,7 @@ class NativeWorkerControl:
                 "installed sandbox SDK lacks required admission observations"
             ) from None
         self.client: Any = None
+        self.gateway: WorkerGatewayReport | None = None
 
     def _snapshot(self) -> tuple[str, ...]:
         return tuple(
@@ -110,7 +121,7 @@ class NativeWorkerControl:
         return hashlib.sha256(identity.encode()).hexdigest()
 
     def connect(self) -> None:
-        """Create the maintained SDK client and require a declared gateway version.
+        """Create the maintained SDK client and require the gateway's deletion capabilities.
 
         Called only after the session retains launch intent or a fenced attempt to reconcile.
         """
@@ -128,14 +139,43 @@ class NativeWorkerControl:
             timeout=15,
         )
         try:
-            reported = self.client.health().version
+            self.gateway = self._gateway_report()
         except Exception:
-            reported = None
-        if reported not in self.settings.gateway_versions:
+            self.gateway = WorkerGatewayReport(decision="refused")
+        if self.gateway.decision != "accepted":
             self.close()
-            raise WorkerGatewayVersionError(
-                "registered sandbox gateway did not report a declared qualified version"
+            missing = REQUIRED_GATEWAY_CAPABILITIES.difference(self.gateway.capabilities)
+            detail = (
+                f": version {self.gateway.version} lacks {', '.join(sorted(missing))}"
+                if self.gateway.driver == "openshell/docker"
+                else ""
             )
+            raise WorkerGatewayCapabilityError(
+                "registered sandbox gateway did not report the required deletion capabilities"
+                + detail
+            )
+
+    def _gateway_report(self) -> WorkerGatewayReport:
+        """Decide on the one Docker compute driver's negotiated capabilities from the gateway."""
+        info = self.client.gateway_info()
+        drivers = [
+            extension
+            for extension in info.extensions
+            if extension.kind == self.pb.EXTENSION_KIND_COMPUTE_DRIVER
+        ]
+        driver = drivers[0] if len(drivers) == 1 else None
+        capabilities = tuple(driver.supported_capabilities) if driver is not None else ()
+        accepted = (
+            driver is not None
+            and driver.implementation_name == "openshell/docker"
+            and REQUIRED_GATEWAY_CAPABILITIES.issubset(capabilities)
+        )
+        return WorkerGatewayReport(
+            decision="accepted" if accepted else "refused",
+            version=info.gateway_version,
+            driver=driver.implementation_name if driver is not None else None,
+            capabilities=capabilities,
+        )
 
     def policy(self) -> object:
         """Parse the operator's native policy without introducing a second policy compiler."""

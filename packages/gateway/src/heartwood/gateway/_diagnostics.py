@@ -269,11 +269,11 @@ _DIAGNOSTICS: dict[str, DiagnosticDefinition] = {
         "/reference/troubleshooting/#hw-skill-002-bundled-skills-do-not-match-this-release",
         "path-sensitive",
     ),
-    "worker-gateway-version": DiagnosticDefinition(
+    "worker-gateway-capability": DiagnosticDefinition(
         "HW-WORKER-001",
-        "Sandbox gateway version is not declared as qualified",
-        "Register the qualified sandbox gateway or declare the version it reports.",
-        "/reference/troubleshooting/#hw-worker-001-sandbox-gateway-version-is-not-declared-as-qualified",
+        "Sandbox gateway lacks a required deletion capability",
+        "Register a sandbox gateway that reports both deletion capabilities.",
+        "/reference/troubleshooting/#hw-worker-001-sandbox-gateway-lacks-a-required-deletion-capability",
     ),
     "worker-control-plane": DiagnosticDefinition(
         "HW-WORKER-002",

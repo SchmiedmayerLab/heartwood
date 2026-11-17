@@ -296,13 +296,16 @@ Restart the gateway to apply the change under the operator's authority; restorin
 
 ## Managed Workers
 
-### `HW-WORKER-001`: Sandbox Gateway Version Is Not Declared as Qualified
+### `HW-WORKER-001`: Sandbox Gateway Lacks a Required Deletion Capability
 
-`heartwood gateway serve --deployment` could not read the version the registered sandbox gateway reports, or that version is not in the manifest's `gateway_versions`.
-Confirm that the gateway named in the manifest is running, reachable with its registered mutual TLS identity, and the one your qualification evidence covers.
-After an upgrade or replacement, obtain evidence for the [behavior native qualification depends on](../operate/platform-requirements.md#gateway-behavior-behind-native-qualification) before adding the reported version.
-Never add a version only to pass the check: it compares your declaration with the gateway's own report and proves nothing about its behavior.
-The same condition after start stops that worker launch or reconciliation and leaves the attempt fenced.
+`heartwood gateway serve --deployment` read the registered sandbox gateway's info, and it did not report exactly one Docker compute driver with both [deletion capabilities](../operate/platform-requirements.md#gateway-behavior-behind-native-qualification), or the info could not be read.
+The message names the reported gateway version and each missing capability when the gateway answered.
+Confirm that the gateway named in the manifest is running and reachable with its registered mutual TLS identity.
+An upstream gateway release that does not provide both deletion behaviors is refused; register a gateway build that reports them.
+The same condition after start stops the affected worker launch or reconciliation before any sandbox, volume or deletion request.
+A refused launch shows `HW-WORKER-001` in the session and needs no reconciliation: nothing was created, and the attempt is recorded as revoked together with what the gateway reported.
+The session cannot start another worker in the same gateway process; correct the gateway and restart `heartwood gateway serve`, which then replaces the attempt.
+A refused reconciliation leaves the attempt fenced until a later start-up succeeds.
 
 ### Managed Worker Control Is Unavailable
 
