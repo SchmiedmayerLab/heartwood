@@ -1072,9 +1072,74 @@ const ProjectReadinessSummary = ({
           </ul>
         </div>
       </details>
+      <EffectivePolicySummary policy={readiness.policy} />
     </section>
   );
 };
+
+type EffectivePolicy = ProjectReadiness["policy"];
+
+// Every reported policy dimension needs a label, so a field added to the gateway
+// contract fails type checking until the browser shows it.
+const effectivePolicyLabels: Record<
+  Exclude<keyof EffectivePolicy, "source" | "manifest" | "change_refused">,
+  { label: string; unset?: string }
+> = {
+  manifest_sha256: { label: "Manifest SHA-256", unset: "None" },
+  policy_id: { label: "Policy" },
+  platform_id: { label: "Platform" },
+  deny_egress_by_default: { label: "Unlisted egress denied" },
+  model_endpoints: { label: "Model endpoints" },
+  model_catalog_endpoints: { label: "Model catalog endpoints" },
+  capability_tiers: { label: "Capability tiers" },
+  action_review_modes: { label: "Review modes" },
+  credential_references: { label: "Credential names" },
+  credential_backends: { label: "Credential backends" },
+  checkpoint_signer_profiles: {
+    label: "Checkpoint signers",
+    unset: "Deployment registry",
+  },
+  data_destinations: { label: "Data destinations", unset: "Any" },
+  aggregate_count_floor: { label: "Aggregate count floor" },
+  isolated_worker: { label: "Isolated worker" },
+  checkpoint_evidence: { label: "Checkpoint evidence" },
+};
+
+const policyValue = (
+  value: EffectivePolicy[keyof typeof effectivePolicyLabels],
+  unset = "None",
+) => {
+  if (value === null) return unset;
+  if (Array.isArray(value)) return value.length > 0 ? value.join(", ") : "None";
+  if (typeof value === "boolean") return value ? "Yes" : "No";
+  return String(value);
+};
+
+const EffectivePolicySummary = ({ policy }: { policy: EffectivePolicy }) => (
+  <details className="effective-policy">
+    <summary>Effective policy</summary>
+    <div className="project-detail-content">
+      <small>
+        Source:{" "}
+        {policy.source === "deployment" ?
+          ["Operator deployment manifest", policy.manifest]
+            .filter(Boolean)
+            .join(" ")
+        : `Platform policy (${policy.platform_id})`}
+      </small>
+      {(
+        Object.keys(effectivePolicyLabels) as Array<
+          keyof typeof effectivePolicyLabels
+        >
+      ).map((name) => (
+        <small key={name}>
+          {effectivePolicyLabels[name].label}:{" "}
+          {policyValue(policy[name], effectivePolicyLabels[name].unset)}
+        </small>
+      ))}
+    </div>
+  </details>
+);
 
 const readinessStatus = (
   state: ProjectReadiness["state"],

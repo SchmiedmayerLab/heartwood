@@ -39,6 +39,7 @@ __all__ = [
     "CredentialSettingsResponse",
     "CredentialStoreAvailabilityResponse",
     "CustomLocalModelDownloadRequest",
+    "EffectivePolicyResponse",
     "GpuCapacityResponse",
     "GpuEnvironmentResponse",
     "LocalModelChoiceResponse",
@@ -467,6 +468,29 @@ class ReadinessCheckResponse(_ApiResponse):
     documentation_path: NotRequired[str]
 
 
+class EffectivePolicyResponse(_ApiResponse):
+    """The policy in force for a project and the trusted configuration that bounds it."""
+
+    source: Literal["deployment", "platform"]
+    manifest: str | None
+    manifest_sha256: str | None
+    policy_id: str
+    platform_id: str
+    deny_egress_by_default: bool
+    model_endpoints: list[str]
+    model_catalog_endpoints: list[str]
+    capability_tiers: list[CapabilityTier]
+    action_review_modes: list[ActionReviewMode]
+    credential_references: list[str]
+    credential_backends: list[Literal["process", "keyring", "mounted-file", "managed-identity"]]
+    checkpoint_signer_profiles: list[str] | None
+    data_destinations: list[DataDestination] | None
+    aggregate_count_floor: int
+    isolated_worker: Literal["required", "configured", "not-configured"]
+    checkpoint_evidence: Literal["required", "configured", "not-configured"]
+    change_refused: str | None
+
+
 class ProjectReadinessResponse(_ApiResponse):
     """Content-free project readiness projection."""
 
@@ -476,6 +500,7 @@ class ProjectReadinessResponse(_ApiResponse):
     state_root: str
     evidence: list[str]
     checks: list[ReadinessCheckResponse]
+    policy: EffectivePolicyResponse
 
 
 class PlatformCapabilitiesResponse(_ApiResponse):
@@ -643,7 +668,7 @@ class CredentialStoreAvailabilityResponse(_ApiResponse):
     """Credential-store capabilities without credential values."""
 
     backends: list[Literal["process", "keyring"]]
-    default_backend: Literal["process", "keyring"]
+    default_backend: Literal["process", "keyring", "deployment"]
     persistence_available: bool
     persistence_description: str
 

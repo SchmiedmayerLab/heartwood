@@ -13,6 +13,7 @@ import getpass
 import os
 import tempfile
 from pathlib import Path
+from typing import cast
 
 from heartwood.adapters.platform import select_platform_adapter
 from heartwood.cli._interactive import InteractionActivity
@@ -91,6 +92,32 @@ def _format_readiness(readiness: DeploymentReadiness) -> str:
         f"Readiness: {readiness.state}",
         "",
     ]
+    policy = readiness.policy.safe_dict()
+    lines[-1:-1] = [
+        "Policy source: "
+        + (
+            f"operator deployment manifest {policy['manifest']}"
+            if policy["source"] == "deployment" and policy["manifest"]
+            else "operator deployment policy"
+            if policy["source"] == "deployment"
+            else "platform adapter"
+        ),
+        f"Policy: {policy['policy_id']}",
+        f"Review modes: {', '.join(cast(list[str], policy['action_review_modes']))}",
+        f"Model endpoints: {_listed(policy['model_endpoints'])}",
+        f"Capability tiers: {', '.join(cast(list[str], policy['capability_tiers']))}",
+        f"Credential backends: {', '.join(cast(list[str], policy['credential_backends']))}",
+        "Checkpoint signers: "
+        + (
+            "deployment registry"
+            if policy["checkpoint_signer_profiles"] is None
+            else _listed(policy["checkpoint_signer_profiles"])
+        ),
+        "Data destinations: "
+        + ("any" if policy["data_destinations"] is None else _listed(policy["data_destinations"])),
+        f"Isolated worker: {policy['isolated_worker']}",
+        f"Checkpoint evidence: {policy['checkpoint_evidence']}",
+    ]
     markers = {"pass": "OK", "warning": "NOTE", "fail": "FAIL"}
     for check in readiness.checks:
         lines.append(f"[{markers[check.status]}] {check.summary}")
@@ -98,6 +125,11 @@ def _format_readiness(readiness: DeploymentReadiness) -> str:
             diagnostic = check.safe_dict()
             lines.append(f"       {diagnostic['code']} · {diagnostic['next_action']}")
     return "\n".join(lines)
+
+
+def _listed(values: object) -> str:
+    items = cast(list[str], values)
+    return ", ".join(items) if items else "none"
 
 
 def _handle_setup(

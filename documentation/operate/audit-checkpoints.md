@@ -97,6 +97,8 @@ The credential process runs without arguments from its own directory, with a fif
 A shared credentials file is read once per gateway lifetime, so use the credential process when credentials must refresh during a session.
 Ambient proxy, profile, endpoint, certificate, environment and metadata credentials are never used as fallbacks, and no credential reaches the worker.
 
+When the manifest policy lists `allowed_checkpoint_signer_profiles`, `signer_profile` must be one of them, and the same list bounds the profile a project may select for standalone checkpoints.
+Set `checkpoint_evidence = true` under `[requirements]` to make a manifest without required-mode evidence fail at launch.
 Restart the gateway after changing the signer profile, token or trust set, and confirm continuity before resuming work.
 Do not edit a retained scope's retention declaration; exact scope validation rejects that change.
 

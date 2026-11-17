@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from uuid import UUID, uuid4
 
+from heartwood.gateway._diagnostics import diagnostic_for
 from heartwood.persistence import (
     PERSISTENCE_MIGRATIONS,
     PROJECT_STATE_FORMATS,
@@ -33,6 +34,13 @@ _USAGE_SUMMARY_ID = re.compile(r"[0-9a-f]{32}\n")
 
 class ProjectStateError(ValueError):
     """Raised when a project or its Heartwood state boundary is invalid."""
+
+
+class ProjectMigrationIncompleteError(ProjectStateError):
+    """Raised while protected state is being staged, published or awaits recovery."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(f"{diagnostic_for('project-migration').code}: {message}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -302,13 +310,13 @@ class ProjectContext:
                 ):
                     raise ValueError("invalid completion receipt")
             except (OSError, ValueError) as error:
-                raise ProjectStateError(
+                raise ProjectMigrationIncompleteError(
                     "protected state migration requires operator recovery"
                 ) from error
         if self.protected_state is not None:
             legacy_marker = self.root / ".heartwood" / "state.json"
             if legacy_marker.exists() or legacy_marker.is_symlink():
-                raise ProjectStateError(
+                raise ProjectMigrationIncompleteError(
                     "project-local state requires migration before protected-state launch"
                 )
             if self.state_root.resolve() != self.protected_state:

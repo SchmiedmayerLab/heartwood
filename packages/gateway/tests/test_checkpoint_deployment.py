@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 import socket
 import subprocess
 import sys
@@ -39,7 +40,6 @@ from heartwood.gateway.checkpoint_deployment import (
     validate_evidence_deployment,
 )
 from heartwood.gateway.worker_deployment import OpenShellWorkerDeployment
-from heartwood.schemas import PolicyProfile
 from packages.audit.tests.tls_fixture import server_certificates
 from packages.gateway.tests import test_worker_native
 
@@ -262,9 +262,7 @@ def test_deployment_manifest_binds_evidence_and_requires_worker_isolation(
         "project_id": str(project.project_id),
         "workspace": str(project.root),
         "state_root": str(project.state_root),
-        "policy": PolicyProfile(policy_id="synthetic", platform_id="generic").model_dump(
-            exclude_none=True
-        ),
+        "policy": {"policy_id": "synthetic", "platform_id": "generic"},
         "worker": worker.model_dump(mode="json", exclude_none=True),
         "evidence": configured.model_dump(mode="json", exclude_none=True),
     }
@@ -317,6 +315,7 @@ def test_bound_factory_uses_fixed_scope_and_closes_client(
 def test_gateway_cli_owns_the_evidence_client_and_binds_sessions(
     worker_deployment: tuple[OpenShellWorkerDeployment, ProjectContext],
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     worker, project = worker_deployment
     project.state_root.parent.mkdir(mode=0o700)
@@ -329,9 +328,7 @@ def test_gateway_cli_owns_the_evidence_client_and_binds_sessions(
                 "project_id": str(project.project_id),
                 "workspace": str(project.root),
                 "state_root": str(project.state_root),
-                "policy": PolicyProfile(policy_id="synthetic", platform_id="generic").model_dump(
-                    exclude_none=True
-                ),
+                "policy": {"policy_id": "synthetic", "platform_id": "generic"},
                 "worker": worker.model_dump(mode="json", exclude_none=True),
                 "evidence": configured.model_dump(mode="json", exclude_none=True),
             }
@@ -360,6 +357,7 @@ def test_gateway_cli_owns_the_evidence_client_and_binds_sessions(
         "heartwood.gateway.worker_native.require_declared_gateway", lambda *_args: None
     )
     observed = []
+    served: list[object] = []
 
     def run(server: uvicorn.Server, **_kwargs: object) -> None:
         app = server.config.app
@@ -371,6 +369,7 @@ def test_gateway_cli_owns_the_evidence_client_and_binds_sessions(
         assert controller.records.scope.session_id == "synthetic-session"
         assert controller.mode == "required"
         observed.append(controller)
+        served.append(app.gateway.project_readiness()["policy"])
         app.gateway.stop()
 
     monkeypatch.setattr("heartwood.cli.uvicorn.Server.run", run)
@@ -398,6 +397,13 @@ def test_gateway_cli_owns_the_evidence_client_and_binds_sessions(
     assert len(observed) == 1
     assert client.closed
     assert not (project.root / ".heartwood").exists()
+    # Inspection builds no worker or evidence client yet reports the same controls.
+    capsys.readouterr()
+    assert main(["doctor", "--json", "--deployment", str(manifest)]) == 0
+    reported = json.loads(capsys.readouterr().out)["policy"]
+    assert reported["isolated_worker"] == "configured"
+    assert reported["checkpoint_evidence"] == "configured"
+    assert served == [reported]
 
 
 def test_credential_helper_timeout_is_bounded_and_output_is_private() -> None:

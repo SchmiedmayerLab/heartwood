@@ -50,7 +50,12 @@ from heartwood.gateway._model_settings import (
     model_settings_from_mapping,
 )
 from heartwood.gateway._project import ProjectContext
-from heartwood.model_policy import PolicyInputError, validate_policy_restriction
+from heartwood.model_policy import (
+    PolicyInputError,
+    inherited_fields,
+    restrict_policy,
+    validate_policy_restriction,
+)
 from heartwood.persistence import (
     PERSISTENCE_MIGRATIONS,
     PROJECT_CONFIG_KIND,
@@ -418,6 +423,13 @@ class ProjectConfig:
             *self.policy.allowed_action_review_modes,
         }:
             raise ProjectConfigError("action review mode is not allowed by the project policy")
+        signers = self.policy.allowed_checkpoint_signer_profiles
+        if (
+            signers is not None
+            and self.audit_settings.signer_profile is not None
+            and self.audit_settings.signer_profile not in signers
+        ):
+            raise ProjectConfigError("audit signer profile is not allowed by the project policy")
         if any(connection.source != "platform" for connection in self.additional_connections):
             raise ProjectConfigError("project connections must be platform-provided")
         connection_ids = [
@@ -480,6 +492,18 @@ class ProjectConfigStore:
             except PolicyInputError as error:
                 raise ProjectConfigError(str(error)) from error
 
+    def apply_deployment_policy(self, policy: PolicyProfile) -> None:
+        """Replace the operator ceiling after verifying the stored settings remain valid."""
+        previous = (self.default, self._deployment_policy)
+        self.default = replace(self.default, policy=policy)
+        self._deployment_policy = policy
+        try:
+            self._validate_config(self.default)
+            self.load()
+        except ProjectConfigError:
+            self.default, self._deployment_policy = previous
+            raise
+
     @property
     def configured(self) -> bool:
         """Return whether the project has a persisted configuration."""
@@ -497,34 +521,7 @@ class ProjectConfigStore:
             raise ProjectConfigError(f"unable to load .heartwood/config.toml: {error}") from error
         config = project_config_from_mapping(value, project=self.project)
         if self._deployment_policy is not None:
-            # The operator's review ceiling applies at every start and a project may only
-            # narrow it: the effective list is what both permit, never wider than the manifest.
-            permitted = self._deployment_policy.allowed_action_review_modes
-            both = tuple(
-                mode for mode in permitted if mode in config.policy.allowed_action_review_modes
-            )
-            # A destination list added to the manifest applies to existing projects the same
-            # way: a project without its own list takes the manifest's, and a project list keeps
-            # only what both permit. A project list the manifest no longer overlaps is refused.
-            destinations = self._deployment_policy.allowed_data_destinations
-            if destinations is not None:
-                requested = config.policy.allowed_data_destinations
-                destinations = tuple(
-                    destination
-                    for destination in destinations
-                    if requested is None or destination in requested
-                )
-            config = replace(
-                config,
-                policy=config.policy.model_copy(
-                    update={
-                        "allowed_action_review_modes": both or ("review-all",),
-                        "allowed_data_destinations": (
-                            destinations or config.policy.allowed_data_destinations
-                        ),
-                    }
-                ),
-            )
+            config = replace(config, policy=restrict_policy(config.policy, self._deployment_policy))
         self._validate_config(config)
         return config
 
@@ -568,21 +565,10 @@ class ProjectConfigStore:
         self._validate_config(config)
         payload = _config_mapping(config)
         policy = payload["policy"]
-        if (
-            self._deployment_policy is not None
-            and isinstance(policy, dict)
-            and config.policy.allowed_action_review_modes
-            == self._deployment_policy.allowed_action_review_modes
-        ):
+        if self._deployment_policy is not None and isinstance(policy, dict):
             # Only a narrower project list is stored, so a later manifest change still applies.
-            del policy["allowed_action_review_modes"]
-        if (
-            self._deployment_policy is not None
-            and isinstance(policy, dict)
-            and config.policy.allowed_data_destinations
-            == self._deployment_policy.allowed_data_destinations
-        ):
-            policy.pop("allowed_data_destinations", None)
+            for name in inherited_fields(config.policy, self._deployment_policy):
+                policy.pop(name, None)
         contents = tomli_w.dumps(payload)
         try:
             tomllib.loads(contents)

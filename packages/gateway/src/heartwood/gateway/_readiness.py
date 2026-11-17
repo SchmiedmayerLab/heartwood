@@ -18,6 +18,7 @@ from typing import Literal, assert_never
 
 import httpx
 
+from heartwood.adapters import PlatformAdapter
 from heartwood.adapters.platform import select_platform_adapter
 from heartwood.gateway._action_presentation import action_mode_label
 from heartwood.gateway._credential_isolation import assess_credential_isolation
@@ -52,7 +53,7 @@ from heartwood.gateway._subscriptions import (
     OpenHandsOpenAISubscription,
     SubscriptionError,
 )
-from heartwood.model_policy import ModelPolicyEngine
+from heartwood.model_policy import ModelPolicyEngine, policy_report, widen_route_fields
 from heartwood.persistence import NativeLockUnavailableError
 from heartwood.schemas import PolicyProfile
 from heartwood.skills import SkillArtifactStore, SkillStoreError
@@ -165,6 +166,34 @@ def model_source_for_connection(connection_id: str) -> ModelSource:
     raise ProjectConfigError(f"model connection has no setup source: {connection_id}")
 
 
+type DeploymentControl = Literal["required", "configured", "not-configured"]
+
+
+@dataclass(frozen=True, slots=True)
+class EffectivePolicy:
+    """The policy in force for a project and the trusted configuration that bounds it."""
+
+    source: Literal["deployment", "platform"]
+    policy: PolicyProfile
+    manifest: str | None = None
+    manifest_sha256: str | None = None
+    isolated_worker: DeploymentControl = "not-configured"
+    checkpoint_evidence: DeploymentControl = "not-configured"
+    change_refused: str | None = None
+
+    def safe_dict(self) -> dict[str, object]:
+        """Return the non-secret policy dimensions every interface reports."""
+        return {
+            "source": self.source,
+            "manifest": self.manifest,
+            "manifest_sha256": self.manifest_sha256,
+            **policy_report(self.policy),
+            "isolated_worker": self.isolated_worker,
+            "checkpoint_evidence": self.checkpoint_evidence,
+            "change_refused": self.change_refused,
+        }
+
+
 @dataclass(frozen=True, slots=True)
 class DeploymentReadiness:
     """Read-only readiness projection shared by every setup entrypoint."""
@@ -175,6 +204,7 @@ class DeploymentReadiness:
     state_root: str
     evidence: tuple[str, ...]
     checks: tuple[ReadinessCheck, ...]
+    policy: EffectivePolicy
 
     def safe_dict(self) -> dict[str, object]:
         """Return serializable diagnostics without secrets."""
@@ -185,6 +215,7 @@ class DeploymentReadiness:
             "state_root": self.state_root,
             "evidence": list(self.evidence),
             "checks": [check.safe_dict() for check in self.checks],
+            "policy": self.policy.safe_dict(),
         }
 
 
@@ -224,6 +255,7 @@ def inspect_deployment(
     *,
     bundled_skills_dir: Path | None = None,
     bundled_skill_digests: Mapping[str, str] = BUNDLED_SKILL_DIGESTS,
+    policy: EffectivePolicy | None = None,
 ) -> DeploymentReadiness:
     """Inspect project setup without creating files or calling external services."""
     active_env = dict(os.environ if env is None else env)
@@ -411,12 +443,20 @@ def inspect_deployment(
             )
         )
 
+    if policy is None:
+        policy = EffectivePolicy(
+            "platform", config.policy if config is not None else config_store.default.policy
+        )
+    if policy.change_refused is not None:
+        checks.append(ReadinessCheck("deployment-change", "fail", policy.change_refused))
     if config is not None:
         checks.append(
             ReadinessCheck(
                 "policy",
                 "pass",
-                "Deployment policy is valid",
+                "Policy from the operator deployment manifest is valid"
+                if policy.source == "deployment"
+                else f"Policy from the {adapter.adapter_id} platform is valid",
             )
         )
         action_mode = config.action_settings.review_mode
@@ -471,6 +511,7 @@ def inspect_deployment(
         state_root=str(project.state_root),
         evidence=detection.evidence,
         checks=tuple(checks),
+        policy=policy,
     )
 
 
@@ -563,24 +604,7 @@ def persist_deployment_profile(
         configured_connections = tuple(
             connection for connection in all_connections if connection.source == "platform"
         )
-        policy = PolicyProfile.model_validate(
-            {
-                "schema_version": "heartwood.policy-profile.v1",
-                "policy_id": f"{adapter.adapter_id}-stanford-ai-api-gateway",
-                "platform_id": adapter.adapter_id,
-                "deny_egress_by_default": True,
-                "allowed_model_endpoints": [
-                    f"{_STANFORD_ROOT}/chat/completions",
-                    f"{_STANFORD_ROOT}/responses",
-                ],
-                "allowed_model_catalog_endpoints": [f"{_STANFORD_ROOT}/models"],
-                "allowed_capability_tiers": ["supervised", "experimental"],
-                "allowed_action_review_modes": list(platform_policy.allowed_action_review_modes),
-                "credential_allowlist": ["STANFORD_AI_API_KEY"],
-                "aggregate_count_floor": 20,
-                "notes": "Stanford gateway route; data eligibility requires deployment approval.",
-            }
-        )
+        policy = _stanford_route_policy(platform_policy)
     elif model_source in {
         "anthropic",
         "custom",
@@ -615,6 +639,45 @@ def persist_deployment_profile(
 
     store.update(apply)
     return project.config_path
+
+
+def _stanford_route_policy(platform_policy: PolicyProfile) -> PolicyProfile:
+    return PolicyProfile(
+        policy_id=f"{platform_policy.platform_id}-stanford-ai-api-gateway",
+        platform_id=platform_policy.platform_id,
+        deny_egress_by_default=True,
+        allowed_model_endpoints=(
+            f"{_STANFORD_ROOT}/chat/completions",
+            f"{_STANFORD_ROOT}/responses",
+        ),
+        allowed_model_catalog_endpoints=(f"{_STANFORD_ROOT}/models",),
+        allowed_capability_tiers=("supervised", "experimental"),
+        allowed_action_review_modes=platform_policy.allowed_action_review_modes,
+        credential_allowlist=("STANFORD_AI_API_KEY",),
+        allowed_credential_backends=platform_policy.allowed_credential_backends,
+        aggregate_count_floor=20,
+        notes="Stanford gateway route; data eligibility requires deployment approval.",
+    )
+
+
+def platform_policy_ceiling(adapter: PlatformAdapter, requested: PolicyProfile) -> PolicyProfile:
+    """Return the widest route policy this platform's own setup could select.
+
+    A platform that offers Custom API lets its setup add any compatible endpoint and
+    credential name, so only platforms without that source restrict those lists.
+    """
+    platform_policy = adapter.default_policy_profile()
+    capabilities = adapter.capabilities()
+    routes = [
+        platform_policy.model_copy(update={"credential_allowlist": adapter.credential_allowlist()})
+    ]
+    if "stanford-ai-api-gateway" in capabilities.model_sources:
+        routes.append(_stanford_route_policy(platform_policy))
+    if "custom" in capabilities.model_sources:
+        routes.append(requested)
+    return widen_route_fields(platform_policy, routes).model_copy(
+        update={"allowed_credential_backends": capabilities.credential_backends}
+    )
 
 
 def _stanford_connection_manifest() -> dict[str, object]:

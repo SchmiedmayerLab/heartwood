@@ -163,6 +163,11 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", metavar="<command>")
     doctor = subparsers.add_parser("doctor", help="Inspect environment and setup readiness.")
     doctor.add_argument("--json", action="store_true", help="Print machine-readable diagnostics.")
+    doctor.add_argument(
+        "--deployment",
+        type=Path,
+        help="Absolute operator manifest whose effective policy to report for this project.",
+    )
     configure_experiments(
         subparsers.add_parser(
             "experiments", help="Record analyses and inspect experiment provenance."
@@ -455,7 +460,7 @@ def _main(argv: Sequence[str] | None = None) -> int:
             review_mode=args.review_mode,
         )
     if args.command == "doctor":
-        return _handle_doctor(project=project, as_json=args.json)
+        return _handle_doctor(project=project, as_json=args.json, deployment_path=args.deployment)
     if args.command == "experiments":
         return handle_experiments(args, project=project)
     if args.command == "usage":
@@ -641,8 +646,17 @@ def _main(argv: Sequence[str] | None = None) -> int:
         gateway.stop()
 
 
-def _handle_doctor(*, project: ProjectContext, as_json: bool) -> int:
-    gateway = SessionGateway(project=project)
+def _handle_doctor(
+    *, project: ProjectContext, as_json: bool, deployment_path: Path | None = None
+) -> int:
+    # Inspection reads the binding and its policy; it launches no worker or evidence client.
+    gateway = (
+        SessionGateway(
+            deployment=load_project_deployment(deployment_path, project_root=project.root)
+        )
+        if deployment_path is not None
+        else SessionGateway(project=project)
+    )
     readiness = gateway.deployment_readiness()
     gateway.stop()
     print(json.dumps(readiness.safe_dict(), indent=2) if as_json else _format_readiness(readiness))
@@ -1060,8 +1074,7 @@ def _handle_serve(
             worker_reconciler = native_worker_reconciler(deployment.worker, project)
         gateway = (
             SessionGateway(
-                project=project,
-                deployment_policy=deployment.policy,
+                deployment=deployment,
                 worker_plan_factory=worker_plan_factory,
                 worker_reconciler=worker_reconciler,
                 checkpoint_evidence_factory=checkpoint_evidence_factory,

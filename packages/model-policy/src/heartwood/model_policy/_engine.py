@@ -27,6 +27,10 @@ _VALID_CAPABILITY_TIERS = {"autonomous", "supervised", "experimental"}
 class PolicyInputError(ValueError):
     """Raised when a policy request cannot be represented safely."""
 
+    def __init__(self, message: str, *, field: str | None = None) -> None:
+        super().__init__(message)
+        self.field = field
+
 
 def normalize_endpoint(endpoint: str) -> str:
     """Normalize an endpoint for exact allowlist comparison."""
@@ -74,37 +78,6 @@ def filter_credentials(
     """Return only sanctioned credential environment variables."""
     allowed = set(credential_allowlist)
     return {key: value for key, value in env.items() if key in allowed}
-
-
-def validate_policy_restriction(profile: PolicyProfile, ceiling: PolicyProfile) -> None:
-    """Reject project rules that grant authority absent from a deployment policy.
-
-    The caller supplies the ceiling from trusted launch configuration. Neither a
-    project file nor a worker proposal can select or replace it.
-    """
-    if not ceiling.deny_egress_by_default or not profile.deny_egress_by_default:
-        raise PolicyInputError("deployment policy requires deny-by-default egress")
-    if profile.platform_id != ceiling.platform_id:
-        raise PolicyInputError("project policy platform differs from deployment policy")
-    for field in ("allowed_model_endpoints", "allowed_model_catalog_endpoints"):
-        allowed = {normalize_endpoint(value) for value in getattr(ceiling, field)}
-        requested = {normalize_endpoint(value) for value in getattr(profile, field)}
-        if not requested <= allowed:
-            raise PolicyInputError(f"project {field} exceeds deployment policy")
-    for field in (
-        "allowed_capability_tiers",
-        "allowed_action_review_modes",
-        "credential_allowlist",
-    ):
-        if not set(getattr(profile, field)) <= set(getattr(ceiling, field)):
-            raise PolicyInputError(f"project {field} exceeds deployment policy")
-    if ceiling.allowed_data_destinations is not None and (
-        profile.allowed_data_destinations is None
-        or not set(profile.allowed_data_destinations) <= set(ceiling.allowed_data_destinations)
-    ):
-        raise PolicyInputError("project allowed_data_destinations exceeds deployment policy")
-    if profile.aggregate_count_floor < ceiling.aggregate_count_floor:
-        raise PolicyInputError("project aggregate_count_floor weakens deployment policy")
 
 
 class ModelPolicyEngine:

@@ -6,6 +6,7 @@
 
 """Operator deployment bindings reach the actual gateway launch boundary."""
 
+import json
 import socket
 from pathlib import Path
 from uuid import uuid4
@@ -15,7 +16,8 @@ import tomli_w
 import uvicorn
 
 from heartwood.cli import main
-from heartwood.gateway import GatewayAsgiApp
+from heartwood.gateway import GatewayAsgiApp, SessionGateway, load_project_deployment
+from heartwood.notebook import NotebookSession
 from heartwood.schemas import PolicyProfile
 
 
@@ -35,7 +37,12 @@ def test_gateway_launch_uses_external_binding_or_fails_closed(
     web.mkdir()
     (web / "index.html").write_text("<main>Synthetic</main>")
     manifest = tmp_path / "deployment.toml"
-    policy = PolicyProfile(policy_id="deployment-test", platform_id="generic")
+    policy = PolicyProfile(
+        policy_id="deployment-test",
+        platform_id="generic",
+        allowed_action_review_modes=("review-all", "review-changes"),
+        allowed_credential_backends=("process", "keyring", "mounted-file"),
+    )
     if not missing:
         manifest.write_text(
             tomli_w.dumps(
@@ -201,3 +208,50 @@ def test_explicit_worker_selection_reaches_native_factory_without_local_fallback
     assert ("session-unobserved" in capsys.readouterr().err) is available
     assert started == ([True] if available else [])
     assert not (research / ".heartwood").exists()
+
+
+def test_doctor_browser_and_notebook_report_the_same_manifest_policy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    workspace = tmp_path / "research"
+    workspace.mkdir()
+    (tmp_path / "protected").mkdir(mode=0o700)
+    identity = str(uuid4())
+    manifest = tmp_path / "deployment.toml"
+    manifest.write_text(
+        tomli_w.dumps(
+            {
+                "schema_version": "heartwood.project-deployment.v1",
+                "project_id": identity,
+                "workspace": str(workspace),
+                "state_root": str(tmp_path / "protected" / identity),
+                "policy": {
+                    "policy_id": "site-policy",
+                    "platform_id": "generic",
+                    "allowed_action_review_modes": ["review-all"],
+                },
+            }
+        )
+    )
+    manifest.chmod(0o600)
+    monkeypatch.chdir(workspace)
+    monkeypatch.setenv("HEARTWOOD_PLATFORM", "generic")
+    assert main(["doctor", "--json", "--deployment", str(manifest)]) == 0
+    reported = json.loads(capsys.readouterr().out)["policy"]
+    assert reported["source"] == "deployment"
+    assert reported["manifest"] == str(manifest)
+    assert reported["action_review_modes"] == ["review-all"]
+    gateway = SessionGateway(
+        deployment=load_project_deployment(manifest, project_root=workspace),
+        backend_id="deterministic",
+    )
+    try:
+        assert gateway.project_readiness()["policy"] == reported
+        assert gateway.startup_plan(interface="web")["readiness"]["policy"] == reported
+        assert NotebookSession(gateway=gateway).project_readiness()["policy"] == reported
+    finally:
+        gateway.stop()
+    assert main(["doctor", "--json"]) == 0
+    local = json.loads(capsys.readouterr().out)["policy"]
+    assert local["source"] == "platform"
+    assert local["manifest"] is None

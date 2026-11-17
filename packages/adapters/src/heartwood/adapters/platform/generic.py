@@ -103,5 +103,6 @@ class GenericPlatformAdapter:
             allowed_capability_tiers=("supervised", "experimental"),
             allowed_action_review_modes=("review-all", "review-changes"),
             credential_allowlist=self.credential_allowlist(),
+            allowed_credential_backends=self.capabilities().credential_backends,
             notes="Generic local policy for synthetic development and replay.",
         )

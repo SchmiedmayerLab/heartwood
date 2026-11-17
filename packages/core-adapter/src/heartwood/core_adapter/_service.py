@@ -1344,6 +1344,13 @@ class SessionService:
             session_id=command.session_id,
             occurred_at=self.clock(),
         )
+        governing = {
+            "action_review_mode": self._review_mode_locked(sandboxed=self._sandboxed_locked()),
+            "policy_sha256": hashlib.sha256(
+                self.policy_profile.model_dump_json().encode()
+            ).hexdigest(),
+        }
+        changes = self._governing_change_events_locked(governing)
         policy_event = self._record_event(
             EventKind.MODEL_CALL_DECISION_RECORDED,
             {
@@ -1353,9 +1360,7 @@ class SessionService:
                     "backend_id": self.backend.backend_id,
                     "profile_id": self.backend.model_profile_id,
                     "capability_tier": self.backend.capability_tier,
-                    "action_review_mode": self._review_mode_locked(
-                        sandboxed=self._sandboxed_locked()
-                    ),
+                    **governing,
                     "data_handling": (
                         None
                         if self.model_data_handling is None
@@ -1368,6 +1373,7 @@ class SessionService:
         )
         if decision.decision != "allow":
             return False, [
+                *changes,
                 policy_event,
                 self._record_event(
                     EventKind.ERROR_RECORDED,
@@ -1377,7 +1383,40 @@ class SessionService:
                     },
                 ),
             ]
-        return True, [policy_event]
+        return True, [*changes, policy_event]
+
+    def _governing_change_events_locked(self, governing: dict[str, str]) -> list[SessionEvent]:
+        """Journal a policy or review-mode change since this session's last model dispatch.
+
+        A manifest or preference change made by any interface or process is recorded
+        before the next dispatch it governs, including across gateway restarts.
+        """
+        previous = next(
+            (
+                event.payload.get("model_profile")
+                for event in reversed(self.replay_events())
+                if event.kind == EventKind.MODEL_CALL_DECISION_RECORDED
+            ),
+            None,
+        )
+        if (
+            not isinstance(previous, dict)
+            or "policy_sha256" not in previous
+            or all(previous.get(name) == value for name, value in governing.items())
+        ):
+            return []
+        return [
+            self._record_event(
+                EventKind.POLICY_DECISION_RECORDED,
+                {
+                    "change": "governing-settings",
+                    "policy_profile_id": self.policy_profile.policy_id,
+                    **governing,
+                    "previous_policy_sha256": previous.get("policy_sha256"),
+                    "previous_action_review_mode": previous.get("action_review_mode"),
+                },
+            )
+        ]
 
     def _handle_action_decision(
         self, command: SessionCommand, *, automatic: bool = False

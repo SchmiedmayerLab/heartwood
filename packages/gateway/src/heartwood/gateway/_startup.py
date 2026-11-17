@@ -17,7 +17,7 @@ from typing import Literal
 from heartwood.adapters import PlatformCapabilities
 from heartwood.adapters.platform import select_platform_adapter
 from heartwood.gateway._project import ProjectContext
-from heartwood.gateway._readiness import DeploymentReadiness, inspect_deployment
+from heartwood.gateway._readiness import DeploymentReadiness, EffectivePolicy, inspect_deployment
 from heartwood.gateway._skill_settings import BUNDLED_SKILL_DIGESTS
 
 type InterfaceKind = Literal["terminal", "web", "notebook"]
@@ -67,6 +67,7 @@ def plan_startup(
     env: Mapping[str, str] | None = None,
     bundled_skills_dir: Path | None = None,
     bundled_skill_digests: Mapping[str, str] = BUNDLED_SKILL_DIGESTS,
+    policy: EffectivePolicy | None = None,
 ) -> StartupPlan:
     """Inspect a project and return the next product-level startup action."""
     if port < 1 or port > 65_535:
@@ -79,6 +80,7 @@ def plan_startup(
         active_env,
         bundled_skills_dir=bundled_skills_dir,
         bundled_skill_digests=bundled_skill_digests,
+        policy=policy,
     )
     supported = interface in capabilities.interfaces
     phase = _setup_phase(readiness)

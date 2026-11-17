@@ -83,6 +83,8 @@ class CredentialStore:
         ]
         self._env = dict(env)
         self._process_values: dict[str, str] = {}
+        # Without the process backend, only operator bindings in the launch environment resolve.
+        self._process_allowed = "process" in capabilities.credential_backends
         self._keyring = keyring_backend if "keyring" in capabilities.credential_backends else None
         if (
             self._keyring is None
@@ -95,6 +97,17 @@ class CredentialStore:
 
     def availability(self) -> CredentialStoreAvailability:
         """Describe safe storage options without accessing a secret."""
+        if not self._process_allowed:
+            return CredentialStoreAvailability(
+                backends=("keyring",) if self._keyring is not None else (),
+                default_backend="keyring" if self._keyring is not None else "deployment",
+                persistence_available=self._keyring is not None,
+                persistence_description=(
+                    "System credential store for this Heartwood environment"
+                    if self._keyring is not None
+                    else "Provided by the deployment only"
+                ),
+            )
         if self._keyring is not None:
             return CredentialStoreAvailability(
                 backends=("process", "keyring"),
@@ -114,6 +127,10 @@ class CredentialStore:
         normalized = _validate_binding(binding_id)
         if not value.strip():
             raise CredentialStoreError("credential must not be empty")
+        if not self._process_allowed and not remember:
+            raise CredentialStoreError(
+                "the deployment policy provides credentials only through its own bindings"
+            )
         if remember:
             if self._keyring is None:
                 raise CredentialStoreError(
@@ -129,7 +146,8 @@ class CredentialStore:
                 raise CredentialStoreError(
                     "the system credential store rejected the value"
                 ) from error
-        self._process_values[normalized] = value
+        if self._process_allowed:
+            self._process_values[normalized] = value
 
     def resolve(self, binding_id: str) -> str | None:
         """Resolve a credential in process, environment, then keyring order."""

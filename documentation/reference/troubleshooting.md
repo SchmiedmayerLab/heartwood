@@ -65,6 +65,13 @@ For a managed deployment, have the operator verify the manifest, project UUID an
 Heartwood refuses a filesystem root or home directory because that boundary is too broad.
 Create and enter a child folder, then run `heartwood doctor` again.
 
+### `HW-PROJECT-004`: Project State Migration Is Incomplete
+
+`heartwood gateway serve --deployment` found project-local state that has not been migrated, a migration that is still staging or publishing, or a published migration without its completion receipt.
+A gateway started while `heartwood project migrate` runs is refused this way and creates nothing.
+Wait for the migration command to finish and start the gateway again.
+If the migration was interrupted, run `heartwood project recover-migration --deployment` with the same manifest; do not delete the fence, the journal or either copy of the state.
+
 ## Configuration
 
 ### `HW-SETUP-001`: Project Configuration Needs Attention
@@ -258,6 +265,34 @@ In a source checkout, run `git submodule update --init` and discard local change
 Restoring tracked files does not remove git-ignored files inside a Skill folder, such as `__pycache__/` or `.DS_Store`, and any extra file changes the Skill's digest; list them with `git -C vendor/heartwood-skills status --ignored skills` and delete them.
 In a native installation, reinstall the same release; in a container, use the published image unchanged.
 A warning names entries in the bundled Skill directory that are not part of the release, such as `.DS_Store`; Heartwood never loads them, and you can delete them.
+
+## Deployment Manifests
+
+### `HW-DEPLOY-001`: Deployment Manifest Is Unavailable or Invalid
+
+The manifest passed with `--deployment` is missing, unreadable, not operator-owned and write-protected, outside the expected schema, or does not bind this research directory.
+Heartwood stops before creating any state and never falls back to project-local state.
+Have the operator correct the manifest and its file permissions, then start the gateway again.
+
+### `HW-DEPLOY-002`: Deployment Policy Is Wider Than the Platform Policy
+
+The manifest's `[policy]` table permits something the detected platform adapter does not: a review mode, capability tier, credential backend, credential name, model endpoint, a lower aggregate count floor, or a checkpoint signer the policy itself excludes.
+The message names the field.
+A manifest can only narrow the platform policy; remove the extra entry or run on a platform whose adapter permits it.
+`heartwood doctor --deployment` reports the policy that applies once the manifest is accepted.
+
+### `HW-DEPLOY-003`: Deployment Requirement Is Not Met
+
+The manifest's `[requirements]` table requires an isolated worker or required-mode checkpoint evidence, and the manifest does not configure it.
+Add the qualified `[worker]` or `[evidence]` section, or remove the requirement only after the operator decides the deployment no longer needs it.
+
+### `HW-DEPLOY-004`: Deployment Manifest Changed While Heartwood Was Running
+
+The gateway rereads the manifest before each command that can continue agent work.
+A change that only narrows the `[policy]` table applies immediately and is recorded in each session before its next model dispatch.
+Any other change, including a wider policy, a changed worker, evidence or project binding, or a narrower policy that excludes the project's stored review mode, stops further dispatch until the gateway restarts.
+Pausing and rejecting remain available.
+Restart the gateway to apply the change under the operator's authority; restoring the earlier manifest does not resume dispatch in the running gateway.
 
 ## Managed Workers
 

@@ -26,6 +26,7 @@ from heartwood.gateway import (
     outside_review_title,
 )
 from heartwood.notebook._view_model import NotebookViewModel
+from heartwood.schemas import ProjectReadinessResponse
 
 
 @dataclass(frozen=True, slots=True)
@@ -304,6 +305,34 @@ def _specialist_item(agent: ProjectionSubagent) -> str:
             for candidate in agent.review_proposals.candidates
         )
     return "\n".join(details)
+
+
+def build_policy_spec(readiness: ProjectReadinessResponse) -> WidgetSpec:
+    """Describe every dimension of the effective policy the gateway reports."""
+
+    def value(item: object) -> str:
+        if item is None:
+            return "not set"
+        if isinstance(item, list):
+            return ", ".join(str(entry) for entry in item) or "none"
+        return str(item)
+
+    return WidgetSpec(
+        "Effective Policy",
+        tuple(
+            f"{name.replace('_', ' ').capitalize()}: {value(item)}"
+            for name, item in readiness["policy"].items()
+        ),
+    )
+
+
+def render_policy(readiness: ProjectReadinessResponse) -> object:
+    """Render the effective policy if ``ipywidgets`` is installed, otherwise its specification."""
+    spec = build_policy_spec(readiness)
+    widgets = _load_widgets()
+    if widgets is None:
+        return spec
+    return _factory(widgets, "HTML")(value=_section_html(spec.title, spec.items))
 
 
 def render_widgets(view_model: NotebookViewModel) -> object:

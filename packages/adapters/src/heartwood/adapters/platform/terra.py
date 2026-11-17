@@ -95,6 +95,7 @@ class TerraPlatformAdapter:
             allowed_capability_tiers=("supervised", "experimental"),
             allowed_action_review_modes=("review-all", "review-changes"),
             credential_allowlist=self.credential_allowlist(),
+            allowed_credential_backends=self.capabilities().credential_backends,
             notes=(
                 "Terra baseline for loopback, OpenAI, and Anthropic model routes; workspace, "
                 "network, institutional, and deployment controls remain authoritative."
