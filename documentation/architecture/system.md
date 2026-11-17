@@ -190,6 +190,11 @@ A walk through paged history ends when a page identifier repeats or after 1,024 
 Exhausting the budget, missing a deadline, or returning a history that does not end fences the attempt.
 
 These limits bound what the gateway receives, about 70 MiB of peak memory for one response; they do not bound work inside the worker.
+The branch a session retains between reads is bounded like the snapshot that would carry it, 16 MiB of serialized events and 524,288 values, so the conversation can always be attached from one snapshot; a branch that would grow beyond that fences the attempt.
+The SDK keeps its own cache of every event it admits, including logged state updates, and at the end of each run reads the complete history again into that cache.
+Each such walk is bounded like any other, to 1,024 pages and 32 MiB of serialized events, and a walk beyond that fences the attempt, so a session whose complete history outgrows the walk bound is fenced at its next run end.
+A session's gateway memory for worker progress is therefore bounded by the retained branch, up to 16 MiB and 524,288 values; the SDK's cache, up to the 32 MiB its last complete walk admitted plus the events received over the event connection since then, which only the response budget's rate bounds until the run ends; and the response being admitted, at most about 70 MiB at the value limit.
+A routine read transfers the status, whose reported usage grows with the number of model calls up to the 4 MiB response limit, and the new events.
 The event connection has no deadline of its own: it is idle while a session waits for its researcher, its handshake is limited to ten seconds, and keepalive closes a connection whose peer stops answering.
 After the first backend read, which can launch the worker, reconciliation reads the worker without holding the session command lock or the gateway state lock.
 A command's own request to the worker still runs under both locks, within the request deadline.
@@ -208,6 +213,19 @@ A worker therefore cannot select the agent implementation, model route, analyzer
 The event connection permits only the origin's canonical conversation endpoint without credentials in the URL, query, or fragment, verifies TLS against bundled certificate authorities, limits messages to 4 MiB, and queues at most four frames.
 Binary messages and completion-log events are rejected.
 Admission errors never include worker response content.
+
+### Progress Reads
+
+Admitted event callbacks coalesce progress reads, token deltas do not request one, and a five-second fallback refresh and final reconciliation preserve progress and settled state.
+The first read of a conversation, at creation or attachment, is one native branch snapshot with the conversation identity, active events, execution status, and reported usage.
+Later reads first request the conversation's execution status and reported usage from the worker, admitted like any other response, and then only the history after the admitted leaf, starting at the leaf itself.
+The status the agent server reports is the state it last saved, and a change made during a step is saved only when the step releases the conversation, so that status can be older than the events; the state the SDK caches from its event connection is not used, because it can lag the worker.
+The agent server logs every status change as a state update when it makes the change, so the latest status logged in the history the gateway has read replaces the reported one, and a read never reports a status older than one already read.
+A read returns a status only with the events it describes; when concurrent reads overlap, a read that would return a later status than its own events returns the longer branch already retained.
+Each later read must begin with the admitted leaf unchanged, and each event after it must name the previous branch event as its parent; logged state updates name the branch tip but are not part of the branch.
+A repeated, missing, reordered, replaced, or forked event fences the attempt, as does a snapshot for another conversation or a branch that does not chain from its root.
+Admission parses and validates each response once, and the gateway's branch reads use those validated events.
+The adapter does not mutate the worker's context view; navigation to another branch is not supported, and pending-action recovery belongs to the worker runtime.
 
 A worker acknowledgement means a proposal was dispatched, not that an outside effect was authorized or completed.
 Admission failure does not stop the worker; revocation through the sandbox control plane does.
