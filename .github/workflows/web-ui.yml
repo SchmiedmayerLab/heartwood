@@ -75,7 +75,7 @@ jobs:
         # GHSA-fc5q-39xc-vjpf affects every picomatch release. picomatch reaches the web UI only through
         # @schmiedmayerlab/grove-design-system -> next-intl -> @parcel/watcher, which only next-intl's Next.js plugin
         # and message extractor load; the web UI is a Vite app and loads neither. The exemption holds only while
-        # @parcel/watcher is the sole dependent. Remove it once picomatch publishes a fix.
+        # npm audit lists @parcel/watcher as picomatch's sole dependent. Remove it once picomatch publishes a fix.
         env:
           EXEMPT_ADVISORIES: '{"GHSA-fc5q-39xc-vjpf": ["@parcel/watcher"]}'
         run: |
@@ -84,17 +84,21 @@ jobs:
           const report = JSON.parse(require('fs').readFileSync(process.argv[2], 'utf8'));
           if (report.error || !report.vulnerabilities) throw new Error(`npm audit failed: ${JSON.stringify(report.error)}`);
           const exempt = JSON.parse(process.env.EXEMPT_ADVISORIES);
-          const isExempt = (advisory) => {
-            const allowed = exempt[advisory.url.split('/').pop()];
-            return allowed !== undefined && report.vulnerabilities[advisory.name].effects.every((dependent) => allowed.includes(dependent));
-          };
-          const advisories = Object.values(report.vulnerabilities)
-            .flatMap((vulnerability) => vulnerability.via.filter((via) => typeof via === 'object'))
-            .filter((advisory) => ['moderate', 'high', 'critical'].includes(advisory.severity));
-          for (const advisory of advisories.filter(isExempt)) console.log(`::notice::Exempted ${advisory.name}: ${advisory.url}`);
-          const findings = advisories.filter((advisory) => !isExempt(advisory));
-          for (const advisory of findings) console.error(`${advisory.severity} ${advisory.name}: ${advisory.title} ${advisory.url}`);
-          process.exit(findings.length ? 1 : 0);
+          let failed = false;
+          for (const vulnerability of Object.values(report.vulnerabilities)) {
+            for (const advisory of vulnerability.via) {
+              if (typeof advisory !== 'object' || !['moderate', 'high', 'critical'].includes(advisory.severity)) continue;
+              const allowed = exempt[advisory.url.split('/').pop()];
+              const { isDirect, effects } = report.vulnerabilities[advisory.name];
+              if (Array.isArray(allowed) && !isDirect && effects.length > 0 && effects.every((dependent) => allowed.includes(dependent))) {
+                console.log(`::notice::Exempted ${advisory.name}: ${advisory.url}`);
+              } else {
+                console.error(`${advisory.severity} ${advisory.name}: ${advisory.title} ${advisory.url}`);
+                failed = true;
+              }
+            }
+          }
+          process.exit(failed ? 1 : 0);
           EOF
       - name: Install Playwright Chromium
         working-directory: packages/webui
