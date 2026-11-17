@@ -67,35 +67,25 @@ The Heartwood gateway decides which proposals wait for the researcher, records e
 flowchart TB
     subgraph Interfaces
         direction LR
-        CLI["Terminal"]
-        Web["Browser"]
-        Notebook["Notebook"]
+        CLI["Terminal"] ~~~ Web["Browser"] ~~~ Notebook["Notebook"]
     end
     subgraph Host["Gateway host"]
         direction LR
-        Manifest["Deployment manifest"]
-        Gateway["Heartwood gateway<br/>review, policy, records"]
-        State["Protected project state"]
+        Manifest["Deployment manifest"] --> Gateway["Heartwood gateway<br/>review, policy, records"] --> State["Protected project state"]
+    end
+    subgraph Services["Platform services"]
+        direction LR
+        Service["Outside service"] ~~~ Records["Records service and signer"]
     end
     subgraph Sandbox["OpenShell sandbox"]
         direction LR
-        Worker["OpenHands worker"]
-        Inputs["Read-only inputs and Skills"]
+        Worker["OpenHands worker"] --> Inputs["Read-only inputs and Skills"]
     end
-    subgraph Platform["Platform services"]
-        direction LR
-        Model["Model endpoint"]
-        Service["Outside service"]
-        Records["Records service and signer"]
-    end
-    Interfaces --> Gateway
-    Manifest --> Gateway
-    Gateway --> State
-    Gateway -- "admitted requests and events" --> Worker
-    Worker --> Inputs
-    Worker -- "inference" --> Model
-    Gateway -- "approved outside operations" --> Service
-    Gateway -- "signed checkpoints" --> Records
+    Model["Model endpoint"]
+    Interfaces --> Host
+    Host -- "approved outside operations,<br/>signed checkpoints" --> Services
+    Host -- "admitted requests<br/>and events" --> Sandbox
+    Sandbox -- "inference" --> Model
     classDef heartwood fill:#0b694d26,stroke:#2b8268
     classDef platform fill:#3f5b7426,stroke:#6f8fae
     class CLI,Web,Notebook,Gateway,State,Worker,Inputs heartwood
