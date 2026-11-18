@@ -84,6 +84,15 @@ def propose_external_action_locked(
     request = ExternalActionRequest.model_validate(adapter.prepare(tool_name, arguments))
     if request.tool_name != tool_name:
         raise ExternalActionError("service request changed the proposed tool")
+    # A lost reply or timeout may have caused an effect; reconcile it before another call.
+    if any(
+        item.proposal.request.service_id == request.service_id
+        and item.phase in {"submitting", "unknown"}
+        for item in external_action_records(events).values()
+    ):
+        raise ExternalActionError(
+            "an earlier operation on this service has an unknown outcome; reconcile it first"
+        )
     created_at = external_now(service.clock)
     proposal = ExternalActionProposal(
         operation_id=uuid4(),

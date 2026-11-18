@@ -87,7 +87,10 @@ def native_worker_plan_factory(
         return _NativeWorkerAttempt(
             settings,
             request,
-            client_tools=tuple(ClientToolSpec.model_validate_json(spec) for spec in specifications),
+            client_tools=(
+                *(ClientToolSpec.model_validate_json(spec) for spec in specifications),
+                *request.client_tools,
+            ),
         ).plan()
 
     return prepare

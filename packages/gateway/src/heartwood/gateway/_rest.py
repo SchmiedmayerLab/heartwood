@@ -27,6 +27,7 @@ from heartwood.gateway._gateway import SessionGateway
 from heartwood.gateway._lifecycle import GatewayClosedError
 from heartwood.gateway._local_model_contract import DEFAULT_LOCAL_CONTEXT_WINDOW
 from heartwood.gateway._local_models import ModelRepositoryError
+from heartwood.gateway._mcp_policy import McpServerError
 from heartwood.gateway._model_artifacts import ModelArtifactError
 from heartwood.gateway._model_catalog import ModelCatalogError
 from heartwood.gateway._model_settings import (
@@ -48,6 +49,10 @@ from heartwood.schemas import (
     CustomLocalModelDownloadRequest,
     JsonValue,
     LocalModelImportRequest,
+    McpServerAddRequest,
+    McpServerEnabledRequest,
+    McpServerTestRequest,
+    McpServerToolsRequest,
     ModelCatalogRequest,
     ModelConnectRequest,
     ModelDownloadRequest,
@@ -258,6 +263,14 @@ class RestGateway:
             except SkillSettingsError as error:
                 return _error(422, error)
             return RestResponse(status_code=200, body=_json_object(skill_settings))
+        if parts == ("settings", "mcp-servers") and request.method == "GET":
+            return RestResponse(
+                status_code=200, body=_json_object(self.gateway.mcp_server_settings())
+            )
+        if parts == ("settings", "mcp-servers") and request.method == "POST":
+            return self._handle_mcp_server_add(body=request.body)
+        if len(parts) >= 3 and parts[:2] == ("settings", "mcp-servers"):
+            return self._handle_mcp_server(parts[2], parts[3:], request)
         if parts == ("settings", "models", "artifacts") and request.method == "GET":
             return RestResponse(status_code=200, body=_json_object(self.gateway.model_artifacts()))
         if parts == ("settings", "models", "catalog") and request.method == "POST":
@@ -622,6 +635,43 @@ class RestGateway:
             return _error(422, error)
         return RestResponse(status_code=200, body=_json_object(model_settings))
 
+    def _handle_mcp_server_add(self, *, body: str) -> RestResponse:
+        payload = _request_body(McpServerAddRequest, body)
+        if isinstance(payload, RestResponse):
+            return payload
+        try:
+            settings = self.gateway.add_mcp_server(payload)
+        except (CredentialStoreError, ProjectConfigError, McpServerError) as error:
+            return _error(422, error)
+        return RestResponse(status_code=200, body=_json_object(settings))
+
+    def _handle_mcp_server(
+        self, server_id: str, rest: tuple[str, ...], request: RestRequest
+    ) -> RestResponse:
+        try:
+            if rest == () and request.method == "DELETE":
+                result: object = self.gateway.disconnect_mcp_server(server_id)
+            elif rest == ("test",) and request.method == "POST":
+                test = _request_body(McpServerTestRequest, request.body)
+                if isinstance(test, RestResponse):
+                    return test
+                result = self.gateway.test_mcp_server(server_id, test)
+            elif rest == ("tools",) and request.method == "PUT":
+                tools = _request_body(McpServerToolsRequest, request.body)
+                if isinstance(tools, RestResponse):
+                    return tools
+                result = self.gateway.select_mcp_tools(server_id, tools)
+            elif rest == ("enabled",) and request.method == "PUT":
+                enabled = _request_body(McpServerEnabledRequest, request.body)
+                if isinstance(enabled, RestResponse):
+                    return enabled
+                result = self.gateway.set_mcp_server_enabled(server_id, enabled)
+            else:
+                return _error(404, "unknown research service route")
+        except (CredentialStoreError, ProjectConfigError, McpServerError) as error:
+            return _error(422, error)
+        return RestResponse(status_code=200, body=_json_object(result))
+
     def _handle_skill_inspection(self, *, body: str) -> RestResponse:
         payload = _request_body(SkillInspectRequest, body)
         if isinstance(payload, RestResponse):
@@ -724,6 +774,10 @@ def _optional_int(value: str | None) -> int | None:
 
 
 def _error(status_code: int, reason: object) -> RestResponse:
+    if isinstance(reason, McpServerError):
+        return RestResponse(
+            status_code=status_code, body={"code": reason.code, "error": reason.detail}
+        )
     if isinstance(reason, ModelCatalogError) and reason.code is not None:
         # Clients show the stable code the same way as the terminal message does.
         return RestResponse(
