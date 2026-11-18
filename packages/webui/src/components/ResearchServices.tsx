@@ -279,13 +279,13 @@ export const ResearchServices = ({ client }: { client: ServicesClient }) => {
                   <pre>
                     {JSON.stringify(JSON.parse(tool.parameters), null, 2)}
                   </pre>
-                  <small>Definition SHA-256 {tool.sha256}</small>
                 </details>
                 <details>
                   <summary>Complete definition reviewed by digest</summary>
                   <pre>
                     {JSON.stringify(JSON.parse(tool.definition), null, 2)}
                   </pre>
+                  <small>Definition SHA-256 {tool.sha256}</small>
                 </details>
               </div>
             );

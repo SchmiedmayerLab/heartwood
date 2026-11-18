@@ -163,6 +163,15 @@ describe("ResearchServices", () => {
     ).toBeInTheDocument();
     expect(screen.getByLabelText("Select delete_records")).toBeDisabled();
     expect(
+      screen.getAllByText("Complete definition reviewed by digest"),
+    ).toHaveLength(2);
+    expect(
+      screen.getByText(/"description": "Find synthetic records\."/u),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(`Definition SHA-256 ${"a".repeat(64)}`),
+    ).toBeInTheDocument();
+    expect(
       screen.getByText(/The server offers resources; Heartwood does not use/),
     ).toBeInTheDocument();
     fireEvent.click(screen.getByLabelText("Select find_records"));

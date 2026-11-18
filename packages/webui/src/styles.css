@@ -2344,6 +2344,7 @@ summary:focus-visible {
   width: auto;
   min-width: 0;
   height: auto;
+  min-height: 28px;
   padding: 4px 10px;
 }
 
