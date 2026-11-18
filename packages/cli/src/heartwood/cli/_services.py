@@ -12,6 +12,8 @@ import argparse
 import sys
 from pathlib import Path
 
+from pydantic import ValidationError
+
 from heartwood.gateway import ProjectConfigError, SessionGateway
 from heartwood.gateway._credentials import CredentialStoreError
 from heartwood.gateway._mcp_policy import McpServerError
@@ -23,6 +25,7 @@ from heartwood.schemas import (
     McpServerTestRequest,
     McpServerTestResponse,
     McpServerToolsRequest,
+    McpToolChoice,
 )
 
 
@@ -44,16 +47,34 @@ def configure_services(services: argparse.ArgumentParser) -> None:
     test.add_argument("server_id")
     _token_arguments(test)
     select = commands.add_parser(
-        "select", help="Select reviewed tools from the latest test of a server."
+        "select", help="Select reviewed tool definitions; an empty list removes all."
     )
     select.add_argument("server_id")
-    select.add_argument("tools", nargs="*", metavar="TOOL")
+    select.add_argument(
+        "tools",
+        nargs="*",
+        metavar="TOOL=SHA256",
+        type=_tool_choice,
+        help="Tool name and the complete definition digest printed by `services test`.",
+    )
     for name, summary in (
         ("enable", "Offer the server's selected tools to new sessions."),
         ("disable", "Stop offering the server's tools; pending calls are refused."),
         ("disconnect", "Remove the server and forget its token."),
     ):
         commands.add_parser(name, help=summary).add_argument("server_id")
+
+
+def _tool_choice(value: str) -> McpToolChoice:
+    name, separator, digest = value.partition("=")
+    try:
+        if not separator:
+            raise ValueError
+        return McpToolChoice(name=name, sha256=digest.removeprefix("sha256:").lower())
+    except (ValueError, ValidationError):
+        raise argparse.ArgumentTypeError(
+            "expected TOOL=SHA256 with the complete digest from `services test`"
+        ) from None
 
 
 def _token_arguments(parser: argparse.ArgumentParser) -> None:
@@ -124,6 +145,10 @@ def handle_services(
             print("Completed remote work is not undone.")
         else:
             parser.error("choose a services command")
+    except ValidationError as error:
+        details = "; ".join(str(item["msg"]) for item in error.errors(include_url=False))
+        print(f"Research service request is invalid: {details}", file=sys.stderr)
+        return 1
     except (McpServerError, CredentialStoreError, ProjectConfigError) as error:
         print(f"Research service unavailable: {error}", file=sys.stderr)
         return 1
@@ -135,8 +160,13 @@ def format_mcp_servers(settings: McpServersResponse) -> str:
     lines = ["Heartwood research services", ""]
     if settings["availability"] == "unavailable":
         lines.extend((f"{settings['unavailable_code']}: {settings['unavailable_reason']}", ""))
-    origins = ", ".join(item["origin"] for item in settings["destinations"]) or "none"
-    lines.append(f"Approved origins: {origins}")
+    if not settings["destinations"]:
+        lines.append("Approved origins: none")
+    for item in settings["destinations"]:
+        lines.append(
+            f"Approved origin: {item['origin']}  service={item['service_id']}  "
+            f"token variable={item['credential_binding']}"
+        )
     if not settings["servers"]:
         return "\n".join((*lines, "No research services configured."))
     for server in settings["servers"]:
@@ -174,9 +204,11 @@ def format_mcp_test(result: McpServerTestResponse) -> str:
         ]
         if tool["changed"]:
             flags.append("changed since review")
-        lines.append(f"  {tool['name']}  sha256={tool['sha256'][:12]}  {'; '.join(flags)}")
+        lines.append(f"  {tool['name']}  {'; '.join(flags)}")
+        lines.append(f"      select as {tool['name']}={tool['sha256']}")
         if tool["description"]:
             lines.append(f"      {tool['description']}")
+        lines.append(f"      parameters: {tool['parameters']}")
     for name, capability in (("resources", result["resources"]), ("prompts", result["prompts"])):
         if capability["advertised"]:
             lines.append(f"The server advertises {name}; Heartwood does not use them.")

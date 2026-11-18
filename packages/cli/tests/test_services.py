@@ -79,8 +79,12 @@ def test_services_add_list_and_disconnect_through_the_gateway(
         assert "synthetic-opaque-token" not in listed
         # The command-line gateway has no worker, so sessions it would start get no tools.
         assert "HW-MCP-004" in listed
-        assert _run(gateway, "select", "catalog", "find_records") == 1
-        assert "HW-MCP-003" in capsys.readouterr().err
+        with pytest.raises(SystemExit):
+            _run(gateway, "select", "catalog", "find_records")
+        assert "TOOL=SHA256" in capsys.readouterr().err
+        # An empty selection removes every tool without contacting the server.
+        assert _run(gateway, "select", "catalog") == 0
+        assert "Enabled for new sessions: none" in capsys.readouterr().out
         assert _run(gateway, "disconnect", "catalog") == 0
         output = capsys.readouterr().out
         assert "No research services configured." in output
@@ -137,6 +141,7 @@ def test_test_output_marks_listing_as_not_authorization() -> None:
                     "name": "find_records",
                     "description": "Find synthetic records.",
                     "sha256": "a" * 64,
+                    "parameters": '{"properties":{"term":{"type":"string"}}}',
                     "annotations": annotations,
                     "allowed": True,
                     "accepts_operation_binding": True,
@@ -150,6 +155,8 @@ def test_test_output_marks_listing_as_not_authorization() -> None:
     )
     output = format_mcp_test(result)
     assert "not authorized by listing" in output
+    assert f"select as find_records={'a' * 64}" in output
+    assert '"term"' in output
     assert "changed since review" in output
     assert "The server advertises resources; Heartwood does not use them." in output
     assert "prompts;" not in output
