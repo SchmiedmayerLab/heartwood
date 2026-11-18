@@ -55,7 +55,12 @@ from heartwood.gateway._mcp_policy import (
 from heartwood.gateway._mcp_servers import McpOutsideAdapter, advance_outside_calls
 from heartwood.gateway._model_settings import ModelProfile, ModelSettings
 from heartwood.gateway._platform_planning import PlatformPlanningBinding
-from heartwood.gateway._session_projection import ProjectionActionRecord, project_session
+from heartwood.gateway._session_projection import (
+    ProjectionActionRecord,
+    ProjectionOutsideOperationActionDetails,
+    ProjectionPlatformOperation,
+    project_session,
+)
 from heartwood.gateway.platform_conformance import McpEndpoint
 from heartwood.gateway.platform_fakes import (
     BUDGETS_AUDIENCE,
@@ -166,7 +171,8 @@ class Platform:
     def tool(self, name: str) -> str:
         return next(item for item in self.adapter.tool_names if f"__{name}_" in item)
 
-    def call(self, name: str, arguments: dict[str, Any]) -> ExternalActionRecord:
+    def attempt(self, name: str, arguments: dict[str, Any]) -> ExternalActionRecord | None:
+        """Emit one worker call and return the review it opened, if any."""
         before = set(external_action_records(self.session.replay_events()))
         self.worker.call(self.tool(name), arguments)
         self.advance()
@@ -176,7 +182,12 @@ class Platform:
             if key not in before
         ]
         assert len(created) <= 1
-        return created[0] if created else None  # type: ignore[return-value]
+        return created[0] if created else None
+
+    def call(self, name: str, arguments: dict[str, Any]) -> ExternalActionRecord:
+        record = self.attempt(name, arguments)
+        assert record is not None
+        return record
 
     def advance(self) -> None:
         # A fresh interval each time, so status is read on every call.
@@ -351,6 +362,13 @@ def platform(
             gateway.stop()
 
 
+def _operation(action: ProjectionActionRecord) -> ProjectionPlatformOperation:
+    details = action.details
+    assert isinstance(details, ProjectionOutsideOperationActionDetails)
+    assert details.operation is not None
+    return details.operation
+
+
 def _observed(record: ExternalActionRecord) -> str:
     assert record.observation is not None
     return record.observation.operation.status
@@ -385,7 +403,8 @@ def test_discovery_reports_operations_permissions_and_unavailable_capabilities(
     }
     tools = {item["name"]: item for item in tested["tools"]}
     # Reading status or proposals is never a selectable permission to submit.
-    assert not tools["get_task"]["allowed"] and not tools["propose_task"]["allowed"]
+    assert not tools["get_task"]["allowed"]
+    assert not tools["propose_task"]["allowed"]
     assert tools["cancel_task"]["accepts_operation_binding"] is True
 
 
@@ -422,7 +441,9 @@ def test_a_submission_shows_limits_estimate_data_scope_and_destination(tmp_path:
         assert request.project_context_id == _LAUNCH.project_context_id
         assert json.loads(request.request_json) == _CPU
         review = request.operation
-        assert review is not None and review.proposal is not None and review.estimate is not None
+        assert review is not None
+        assert review.proposal is not None
+        assert review.estimate is not None
         assert review.proposal.runtime_profile_ref == "synthetic-batch-small"
         assert {item.metric: item.maximum for item in review.proposal.resource_limits} == {
             "cpu": "2",
@@ -451,7 +472,9 @@ def test_gpu_requests_show_type_and_count(tmp_path: Path) -> None:
         record = service.call("create_task", _GPU)
 
         review = record.proposal.request.operation
-        assert review is not None and review.proposal is not None and review.estimate is not None
+        assert review is not None
+        assert review.proposal is not None
+        assert review.estimate is not None
         assert ("gpu", "synthetic-gpu", "1") in {
             (item.metric, item.unit, item.maximum) for item in review.proposal.resource_limits
         }
@@ -481,7 +504,8 @@ def test_expired_and_missing_estimates_are_shown_as_such(tmp_path: Path, case: s
             )
         record = service.call("create_task", _CPU)
         review = record.proposal.request.operation
-        assert review is not None and review.estimate is not None
+        assert review is not None
+        assert review.estimate is not None
         lines = platform_operation_lines(service.action(record))
 
     expected = {
@@ -529,8 +553,9 @@ def test_a_missing_platform_proposal_cannot_be_approved(tmp_path: Path) -> None:
         record = service.call("create_task", _CPU)
         service.jobs.service_id = "synthetic-jobs"
         review = record.proposal.request.operation
-        assert review is not None and review.proposal is None
-        assert service.action(record).details.operation.diagnostic.startswith("HW-OPS-001")  # type: ignore[union-attr]
+        assert review is not None
+        assert review.proposal is None
+        assert (_operation(service.action(record)).diagnostic or "").startswith("HW-OPS-001")
 
         service.decide(record)
 
@@ -570,9 +595,7 @@ def test_a_lost_reply_is_reconciled_before_any_retry(tmp_path: Path) -> None:
             )
         )
         assert service.record(record).phase == "unknown"
-        unknown = service.action(record).details.operation  # type: ignore[union-attr]
-        assert unknown is not None and unknown.diagnostic is not None
-        assert unknown.diagnostic.startswith("HW-OPS-003")
+        assert (_operation(service.action(record)).diagnostic or "").startswith("HW-OPS-003")
         # No other operation on the service is proposed until the outcome is known.
         service.worker.call(service.tool("create_task"), _CPU)
         retry = service.session.replay_events()[-1]
@@ -659,10 +682,7 @@ def test_budget_denial_is_shown_after_the_researcher_approved(tmp_path: Path) ->
         assert _observed(service.record(record)) == "denied"
         action = service.action(record)
         assert action.decision == "approved"
-        assert action.details.operation is not None  # type: ignore[union-attr]
-        assert action.details.operation.diagnostic == (  # type: ignore[union-attr]
-            "HW-PLAN-006: The platform denied an operation"
-        )
+        assert _operation(action).diagnostic == "HW-PLAN-006: The platform denied an operation"
         planning = service.gateway.planning()
         revision = planning.plans[0].revisions[0]
         assert [item.status for item in revision.overview.authorizations] == ["denied"]
@@ -690,8 +710,7 @@ def test_a_job_that_fails_after_admission_is_shown_as_failed(tmp_path: Path) -> 
         service.jobs.advance(PROJECT_ID, str(record.proposal.operation_id), "EXECUTOR_ERROR")
         service.advance()
 
-        operation = service.action(record).details.operation  # type: ignore[union-attr]
-        assert operation is not None
+        operation = _operation(service.action(record))
         assert (operation.status, operation.diagnostic) == (
             "failed",
             "HW-OPS-002: A platform operation failed",
@@ -750,7 +769,7 @@ def test_cancellation_of_an_operation_this_session_did_not_send_is_refused(
             "text": "task-0001",
         }[target]
 
-        assert service.call("cancel_task", {"target_operation_id": named}) is None
+        assert service.attempt("cancel_task", {"target_operation_id": named}) is None
         assert service.jobs.task_count == 0
 
 
@@ -991,7 +1010,8 @@ def test_operation_profiles_keep_their_reading_tools_apart_from_selectable_ones(
         },
     }
     (destination,) = mcp_destinations_from_mapping([entry])
-    assert destination.cancels("cancel_task") and not destination.cancels("create_task")
+    assert destination.cancels("cancel_task")
+    assert not destination.cancels("create_task")
     for change in (
         {"proposal_tool": "get_task"},
         {"capabilities_tool": "create_task"},
