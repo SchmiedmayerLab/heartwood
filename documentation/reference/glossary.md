@@ -66,6 +66,9 @@ SPDX-License-Identifier: MIT
 **CUDA**
 : NVIDIA's software platform and application binary interface for GPU computing.
 
+**Data Repository Service (DRS)**
+: A GA4GH interface that addresses data objects by identifier and resolves them to checksums and access URLs.
+
 **Dependency lock**
 : A file recording exact dependency versions and artifact hashes; Heartwood uses `pylock.toml` to reconstruct Python analysis environments.
 
@@ -116,6 +119,9 @@ SPDX-License-Identifier: MIT
 
 **JSON Lines**
 : A text format that stores one JSON value on each line so records can be appended and processed incrementally.
+
+**JSON Web Token (JWT)**
+: A signed token that carries claims such as issuer, audience, subject and expiry; platform services verify it before acting on a request.
 
 **Key management service (KMS)**
 : A managed service that controls cryptographic keys and performs authorized operations such as checkpoint signing without exposing private key material to Heartwood.
@@ -248,6 +254,9 @@ SPDX-License-Identifier: MIT
 
 **Standard research environment**
 : One recorded combination of Heartwood release, platform base image, compute shape, model routes, storage layout, and update policy that a deployment supports for a group of researchers.
+
+**Task Execution Service (TES)**
+: A GA4GH interface for submitting a batch task to an executor, reading its state and cancelling it.
 
 **Tensor parallelism**
 : A runtime layout that divides one model across a fixed number of GPUs.

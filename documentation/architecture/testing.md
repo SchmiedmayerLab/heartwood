@@ -40,6 +40,7 @@ Outside-operation conformance uses the native SDK MCP client against an authenti
 The service verifies the token's signature, issuer, audience, and expiry, and separately checks project, researcher, worker attempt, policy, exact request, and input bytes; its record and operation identity are committed in one SQLite transaction.
 Tests discard a reply after the effect commits, restart the gateway and service, rotate the credential, and recover through status lookup without resubmission.
 These tests establish protocol and authorization behavior, not process isolation or deployed network policy.
+Platform-service tests run the [live endpoint checks](../operate/platform-contract.md#check-live-endpoints) and the contract's failure states against [in-process fakes](../operate/platform-contract.md#deterministic-service-fakes) of the inference, data, job and token services.
 
 ## Continuous Integration
 

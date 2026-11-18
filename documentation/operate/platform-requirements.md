@@ -209,7 +209,7 @@ Never include real research data or credentials in examples, tickets or qualific
 [Export the contract bundle](platform-contract.md#generate-and-review-the-current-artifacts) and distribute the complete directory with these requirements, the [Platform Contract](platform-contract.md), the [Gateway API reference](../reference/gateway-api.md) and the exact source revision or release digest.
 The bundle supports integration and access review; it does not assert that draft services are deployed.
 
-Check captured model and service responses with the [offline conformance checks](platform-contract.md#check-platform-service-responses), then qualify the artifact in the synthetic environment.
+Check captured model and service responses with the [offline conformance checks](platform-contract.md#check-platform-service-responses) and the inference and MCP endpoints with the [live endpoint checks](platform-contract.md#check-live-endpoints), then qualify the artifact in the synthetic environment.
 For each selected capability, return an authorized control and its rejected alternative; a failed request alone can indicate a broken service rather than effective policy.
 
 | Capability | Authorized control | Rejected or interrupted control |

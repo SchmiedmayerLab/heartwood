@@ -464,6 +464,11 @@ There is one open release review per operation, denial is final for it, and an i
 | Service temporarily unavailable | An unavailability error | HW-AGENT-012 |
 
 [Diagnostics and Troubleshooting](../reference/troubleshooting.md) gives each code's recovery steps.
+`fixtures/synthetic/platform-contract/failure-states.json` lists each coded state with the diagnostic Heartwood shows for it.
+Pull request tests produce the model failures through the [inference fake](#deterministic-service-fakes) and the agent runtime, and check that the terminal, browser and notebook show the state's diagnostic and no other code.
+The exception is an exhausted quota that the provider returns as a rate-limit response, which also shows HW-AGENT-010 after HW-AGENT-009, because the agent runtime records its own rate-limit classification of the same response.
+Gateway access refusals reach only clients of the gateway's HTTP routes: the browser shows the code and message the gateway returns, while the terminal and notebook connect to the gateway in process.
+A capability that is not offered has no diagnostic.
 Platform-operation failures have no runtime presentation because the operation profile is draft.
 
 ### Security Properties
@@ -563,6 +568,50 @@ Annotations and output schemas are optional upstream but required by this profil
 An empty catalog or tool list is valid for an identity with nothing available.
 The same checks are available in Python as `validate_model_catalog`, `validate_mcp_tools_list` and `validate_platform_message(schema_filename, response)` in `heartwood.adapters.service_conformance`, and `validate_mcp_task_exchange(request, response, server_capabilities=..., result_schema="platform-estimate.schema.json")` in `heartwood.adapters.mcp_tasks_conformance`.
 A passing check never makes a parsed `authorized` field, tool hint or decision record an authorization token.
+
+### Check Live Endpoints
+
+Run the same checks against the platform's own endpoints, with credentials it issued to a synthetic test identity:
+
+```bash
+uv run python packages/gateway/scripts/check_platform_endpoints.py \
+  --inference-url https://inference.example.org/v1 --inference-key-env PLATFORM_INFERENCE_KEY \
+  --mcp-profile data-service.json --mcp-token-env PLATFORM_DATA_TOKEN \
+  --mcp-profile job-service.json --mcp-token-env PLATFORM_JOB_TOKEN
+uv run python packages/gateway/scripts/check_platform_endpoints.py --fakes
+```
+
+Each `--mcp-profile` is a `heartwood.platform-mcp-service.v1` document, and each `--mcp-token-env` names the variable that holds the bearer token for the profile in the same position.
+`--fakes` runs the identical checks against the [deterministic service fakes](#deterministic-service-fakes).
+The script prints one JSON result per capability and exits with status 1 unless every result passed.
+It reads credentials from the named variables and never prints them.
+
+| Check | Validates | Does not validate |
+|---|---|---|
+| Inference | `model-catalog` checks on the model list, then one streamed Chat Completion with a tool definition that returns output and a finish reason | Model metadata, eligibility, Responses support, other pages |
+| Platform tools | A Streamable HTTP connection with the token, a negotiated MCP revision listed in the profile, and `mcp-tools` checks on the tool list | Tool calls, authorization decisions, safety claims |
+
+Inference and each service are checked independently, so an unavailable inference route does not stop the tool checks, and an unavailable service does not stop the inference check.
+An inference failure reports the diagnostic Heartwood shows for it, HW-AGENT-008 to HW-AGENT-012 in [Failure States](#failure-states), classified with the agent runtime's failure vocabulary.
+A platform tool failure reports `unavailable` without the server's response text.
+The same checks are available in Python as `run_platform_conformance`, `check_inference` and `check_mcp_service` in `heartwood.gateway.platform_conformance`.
+
+### Deterministic Service Fakes
+
+`heartwood.gateway.platform_fakes` serves fake platform services on loopback inside the test process, without credentials, a cluster or outside network access.
+Every pull request runs the endpoint checks, the failure states and the scenarios below against them.
+The fakes hold synthetic data only and are not reference implementations of a platform or of the GA4GH interfaces they are shaped after.
+
+| Fake | Shape | Covered behavior |
+|---|---|---|
+| Inference | OpenAI-compatible model list and streaming Chat Completions | A reply that completes an agent turn; a rejected credential, an exhausted quota, a rate limit, an unknown model and an unavailable service |
+| Token issuer | Exchanged, audience-restricted JWT access tokens with a project claim | Valid, expired, wrong-audience and wrong-project tokens |
+| Data service | MCP tools `list_objects`, `get_object` and `get_access_url`, returning DRS object and access URL fields | A selected object, an unselected object, another project's object, an expired access grant and an unavailable service |
+| Job service | MCP tools `create_task`, `get_task` and `cancel_task`, keyed by operation identifier and returning `heartwood.platform-operation-observation.v1` with the TES task identifier as backend reference and the TES state among its limitations | Submission, status, cancellation, a lost reply that reconciles to one task, a conflicting resubmission, a denied GPU request and a task that fails after it started |
+
+The data and job services verify each token's signature, issuer, audience and expiry before a tool runs, and refuse a token for another project in the tool.
+Their tools carry the four required annotations: submission and cancellation are not read-only, and cancellation is marked destructive.
+`running_platform_fakes()` starts the inference, data and job fakes with one token issuer and returns their endpoints and service profiles.
 
 ### Runtime Conformance
 
