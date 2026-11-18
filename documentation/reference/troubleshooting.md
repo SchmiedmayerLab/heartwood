@@ -195,8 +195,9 @@ Inspect the session replay and Activity & audit, then continue in a new session.
 
 ### `HW-AGENT-008`: Model Provider Authentication Failed
 
-The model provider rejected the credential configured for the active connection.
-Open model settings, update the credential through the supported secret mechanism, and validate the connection before retrying.
+The model provider rejected the credential configured for the active connection, during a task or while listing models.
+For a platform connection, the deployment supplies the credential; ask the operator to renew it.
+Otherwise open model settings, update the credential through the supported secret mechanism, and validate the connection before retrying.
 
 ### `HW-AGENT-009`: Model Provider Quota Exhausted
 
@@ -211,11 +212,13 @@ Wait briefly and retry the task without repeating any action whose outcome is un
 ### `HW-AGENT-011`: Model Configuration Is Invalid
 
 The selected model, endpoint, or provider configuration cannot serve the requested task.
-Open model settings, correct the connection, and validate it before retrying.
+Model setup reports the same code when the model is no longer in the connection's model list or the deployment declares no protocol Heartwood supports for it.
+A withdrawn model stays selected until you choose another; Heartwood does not replace it.
+Open model settings, choose or correct the connection, and validate it before retrying.
 
 ### `HW-AGENT-012`: Model Provider Is Unavailable
 
-The configured model service could not be reached or returned a temporary availability failure.
+The configured model service could not be reached or returned a temporary availability failure, during a task or while listing models.
 Check the connection and provider status, then retry the task.
 
 ### `HW-AGENT-013`: Session Runtime Is Incompatible

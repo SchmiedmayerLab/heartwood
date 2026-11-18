@@ -146,6 +146,7 @@ checkpoint_evidence = false
 | `[requirements]` | Optional; `isolated_worker` and `checkpoint_evidence` set to `true` stop the launch with `HW-DEPLOY-003` unless the manifest configures `[worker]` or required-mode `[evidence]` |
 | `[worker]` | Optional managed worker; see [Managed Worker](#managed-worker) |
 | `[evidence]` | Optional automatic checkpointing; requires `[worker]`; see [Configure Managed Evidence](../operate/audit-checkpoints.md#configure-managed-evidence) |
+| `[model_connections]`, `[model_metadata]` | Optional platform model connections and model declarations; see [Model Connections](#model-connections) |
 
 Any other key, at any level, is rejected.
 The manifest must be an absolute path that traverses no symbolic link, lie outside the research directory and the state root, be a regular file of at most 64 KiB owned by root or the gateway user, and not be writable by group or others.
@@ -209,6 +210,51 @@ The socket must be owned by root or the gateway user and not world-writable; a g
 Membership in the socket's group grants Docker control-plane authority; never add a worker identity to it.
 The registered sandbox gateway must report the two [deletion capabilities](../operate/platform-requirements.md#gateway-behavior-behind-native-qualification) native revocation depends on; the gateway version is not configured and does not satisfy the check.
 The inference endpoint must enforce approved models and tenant scope itself; the manifest adds no model router.
+
+### Model Connections
+
+The `[model_connections]` table supplies platform model connections in the [`heartwood.model-connections.v1`](../operate/platform-contract.md#contract-artifacts) format.
+The optional `[model_metadata]` table declares the protocol, limits and tool support of models in the `heartwood.platform-model-metadata.v1` format, for model aliases the OpenHands model table does not recognize.
+
+```toml
+[model_connections]
+schema_version = "heartwood.model-connections.v1"
+
+[[model_connections.connections]]
+connection_id = "research-models"
+label = "Research Models"
+protocol = "openai-compatible"
+model_prefix = "openai/"
+credential_kind = "file"
+api_key_file = "/run/secrets/research-models-key"
+base_url = "https://models.example.invalid/v1"
+catalog_endpoint = "https://models.example.invalid/v1/models"
+policy_endpoint = "https://models.example.invalid/v1/chat/completions"
+
+[model_connections.connections.data_handling]
+destination = "institution-managed"
+retention_authority = "institution"
+route = "Institution inference gateway, then the providers it routes to"
+
+[model_metadata]
+schema_version = "heartwood.platform-model-metadata.v1"
+
+[[model_metadata.models]]
+connection_id = "research-models"
+model_id = "research-coder"
+protocols = ["chat"]
+context_window_tokens = 131072
+max_output_tokens = 8192
+supports_tool_calls = true
+```
+
+Each connection appears with the institution-managed providers in model setup.
+Use a lowercase connection identifier: it becomes the project's model source once a model is selected.
+The gateway validates connections as described in [Inference](../operate/platform-contract.md#inference); a connection identifier must not repeat a built-in one.
+Each declaration must name a connection in `[model_connections]`, and `[model_metadata]` requires `[model_connections]`.
+`[policy]` must still permit each connection's endpoints, credential reference and data destination.
+Credential references name a variable or mounted file; the manifest never holds the credential.
+An invalid table stops the launch with [`HW-DEPLOY-001`](troubleshooting.md#hw-deploy-001-deployment-manifest-is-unavailable-or-invalid).
 
 ## Credential Binding Names
 

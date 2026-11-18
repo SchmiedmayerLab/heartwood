@@ -168,14 +168,19 @@ Required for isolated workers:
 
 Recommended:
 
-- The Responses API where the model supports it; Heartwood selects the protocol per model from the OpenHands model capabilities.
+- The Responses API where the model supports it; Heartwood selects the protocol per model from the deployment's declaration, or else from the OpenHands model capabilities.
 
 Optional:
 
 - Compute on which Heartwood [runs a managed model](../models/run-with-heartwood.md), and an approved process to [import verified model bundles](../models/offline.md).
 
 Heartwood discovers models through a policy-checked catalog endpoint and never implements a second provider proxy.
-The `heartwood.model-connections.v1` schema describes deployment-owned connections, but startup does not load a connection manifest, and the OpenHands model table does not recognize platform model aliases.
+A deployment supplies its connections in `heartwood.model-connections.v1` and its model declarations in `heartwood.platform-model-metadata.v1`, both inside the [deployment manifest](../reference/configuration.md#model-connections).
+The gateway loads them at start; a later change to either stops dispatch until the next start.
+The model list shows only the models the endpoint returns for the deployment's credential; a declaration never adds a model to it.
+Selecting a model from a platform connection rereads the list, so a withdrawn model cannot be selected.
+A selected model that the platform later withdraws stays selected, and its next model call fails.
+
 The draft model-metadata supplement declares, per model identity:
 
 | Field | Meaning | Level |
@@ -187,6 +192,13 @@ The draft model-metadata supplement declares, per model identity:
 | Data classes | Classes the route may receive under the platform's agreements | Required |
 | Deprecation | Whether the model is being withdrawn, so no model is silently substituted | Recommended |
 
+Heartwood uses a declaration in place of the OpenHands model table for that model.
+Protocols name the OpenHands API modes `chat` and `responses`.
+One declared mode is used for every request; with both, OpenHands chooses.
+A model whose declaration names neither is listed as unavailable and cannot be selected.
+The context window, input and output limits set the agent's token limits, and tool calling sets whether OpenHands uses native tool calls.
+Model setup shows the declared context window and tool support, and reports a value that is neither declared nor known to OpenHands as unknown.
+The data-class and deprecation fields are informational, and Heartwood does not act on them.
 #### Route Data Handling
 
 A connection's `data_handling` descriptor declares the `destination` of model requests, its `retention_authority` and a `route` description, such as an institution's gateway followed by the providers it routes to.
@@ -461,12 +473,16 @@ There is one open release review per operation, denial is final for it, and an i
 | Exhausted quota or budget | A quota error | HW-AGENT-009 |
 | Rate limit | A rate-limit error with a retry interval when known | HW-AGENT-010 |
 | Denied or misconfigured model | A model or authorization error | HW-AGENT-011 |
+| Model no longer authorized | A model list without the model | HW-AGENT-011 |
+| Unsupported model protocol | A declaration without a supported protocol | HW-AGENT-011 |
 | Service temporarily unavailable | An unavailability error | HW-AGENT-012 |
 
 [Diagnostics and Troubleshooting](../reference/troubleshooting.md) gives each code's recovery steps.
 `fixtures/synthetic/platform-contract/failure-states.json` lists each coded state with the diagnostic Heartwood shows for it.
 Pull request tests produce the model failures through the [inference fake](#deterministic-service-fakes) and the agent runtime, and check that the terminal, browser and notebook show the state's diagnostic and no other code.
 The exception is an exhausted quota that the provider returns as a rate-limit response, which also shows HW-AGENT-010 after HW-AGENT-009, because the agent runtime records its own rate-limit classification of the same response.
+Model setup in the terminal and browser reports a failed model list with the same diagnostic as a model call: a rejected or expired credential as HW-AGENT-008 and an unreachable service as HW-AGENT-012.
+The notebook bridge has no model setup and shows these states only through a session.
 Gateway access refusals reach only clients of the gateway's HTTP routes: the browser shows the code and message the gateway returns, while the terminal and notebook connect to the gateway in process.
 The gateway refuses a model connection the platform does not offer with HW-SETUP-004, and the terminal, browser and notebook show the same code and message.
 Platform-operation failures have no runtime presentation because the operation profile is draft.
@@ -514,7 +530,7 @@ The classes are not an ordered permission hierarchy, an allowance for one class 
 | `gateway.openapi.json` | Gateway routes, bodies, streams and the capability security scheme | Current |
 | `capabilities.schema.json` | The platform capability manifest served at `GET /project/capabilities` | Current |
 | `policy-profile.schema.json` | `heartwood.policy-profile.v1`, the policy in the deployment manifest, including permitted data destinations | Current |
-| `model-connections.schema.json` | `heartwood.model-connections.v1`, including data-handling descriptors; startup does not load it | Current |
+| `model-connections.schema.json` | `heartwood.model-connections.v1`, including data-handling descriptors | Current |
 | `usage-summary.schema.json` | `heartwood.project-usage-summary.v1`, content-free project counts and outcomes served at `GET /project/usage-summary` | Current |
 | `model-metadata.schema.json` | Model protocol, capability and eligibility declarations | Draft |
 | `data-classification.schema.json` | The data-class vocabulary | Draft |
