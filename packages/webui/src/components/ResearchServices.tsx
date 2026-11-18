@@ -221,7 +221,7 @@ export const ResearchServices = ({ client }: { client: ServicesClient }) => {
         <summary>Test with a new token</summary>
         <div className="advanced-section-content">
           <label>
-            Token for the next test
+            Token for this server's service
             <Input
               autoComplete="off"
               type="password"
@@ -230,8 +230,8 @@ export const ResearchServices = ({ client }: { client: ServicesClient }) => {
             />
           </label>
           <small>
-            The token is kept by the gateway for this server and never shown
-            again.
+            The gateway keeps the token for every server of the same service and
+            never shows it again.
           </small>
         </div>
       </details>
