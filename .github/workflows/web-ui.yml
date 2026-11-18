@@ -72,7 +72,42 @@ jobs:
         run: npm run license:check
       - name: Audit npm dependencies
         working-directory: packages/webui
-        run: npm audit --omit=dev --audit-level=moderate
+        # GHSA-fc5q-39xc-vjpf affects every picomatch release. picomatch reaches the web UI only through
+        # @schmiedmayerlab/grove-design-system -> next-intl -> @parcel/watcher, which only next-intl's Next.js plugin
+        # and message extractor load; the web UI is a Vite app and loads neither. The exemption holds only while
+        # npm audit lists @parcel/watcher as picomatch's sole dependent, and only until its review date, after which the
+        # audit fails again. Remove it once picomatch publishes a fix, or re-check the path and move the date.
+        env:
+          EXEMPT_ADVISORIES: '{"GHSA-fc5q-39xc-vjpf": {"dependents": ["@parcel/watcher"], "until": "2026-12-17"}}'
+        run: |
+          npm audit --omit=dev --json > "${RUNNER_TEMP}/npm-audit.json" || true
+          node - "${RUNNER_TEMP}/npm-audit.json" <<'EOF'
+          const report = JSON.parse(require('fs').readFileSync(process.argv[2], 'utf8'));
+          const { error, vulnerabilities } = report;
+          if (error || typeof vulnerabilities !== 'object' || vulnerabilities === null || Array.isArray(vulnerabilities)) {
+            throw new Error(`npm audit failed: ${JSON.stringify(error)}`);
+          }
+          const exempt = JSON.parse(process.env.EXEMPT_ADVISORIES);
+          let failed = false;
+          for (const vulnerability of Object.values(report.vulnerabilities)) {
+            for (const advisory of vulnerability.via) {
+              if (typeof advisory !== 'object' || !['moderate', 'high', 'critical'].includes(advisory.severity)) continue;
+              const { dependents, until } = exempt[advisory.url.split('/').pop()] ?? {};
+              const { isDirect, effects } = report.vulnerabilities[advisory.name];
+              const reviewDate = new Date(`${until}T23:59:59Z`);
+              const current = typeof until === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(until) && !Number.isNaN(reviewDate.getTime())
+                && reviewDate.toISOString().startsWith(until) && reviewDate >= new Date();
+              if (current && Array.isArray(dependents) && !isDirect && effects.length > 0 && effects.every((dependent) => dependents.includes(dependent))) {
+                console.log(`::notice::Exempted ${advisory.name} until ${until}: ${advisory.url}`);
+              } else {
+                if (until && !current) console.error(`Exemption for ${advisory.url} has passed or invalid review date ${until}; re-check it.`);
+                console.error(`${advisory.severity} ${advisory.name}: ${advisory.title} ${advisory.url}`);
+                failed = true;
+              }
+            }
+          }
+          process.exit(failed ? 1 : 0);
+          EOF
       - name: Install Playwright Chromium
         working-directory: packages/webui
         run: npx playwright install --with-deps chromium
