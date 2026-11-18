@@ -21,7 +21,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Never
+from typing import Any, Never, cast
 
 import pytest
 from pydantic import AnyHttpUrl
@@ -47,7 +47,11 @@ from heartwood.gateway import (
     SessionGateway,
     platform_operation_lines,
 )
-from heartwood.gateway._mcp_policy import McpDestination, McpOperationProfile
+from heartwood.gateway._mcp_policy import (
+    McpDestination,
+    McpOperationProfile,
+    mcp_destinations_from_mapping,
+)
 from heartwood.gateway._mcp_servers import McpOutsideAdapter, advance_outside_calls
 from heartwood.gateway._model_settings import ModelProfile, ModelSettings
 from heartwood.gateway._platform_planning import PlatformPlanningBinding
@@ -972,3 +976,31 @@ def test_operation_lines_use_the_browser_wording() -> None:
         "Approval is not admission. A reported balance or estimate does not reserve funds or "
         "guarantee that the platform admits work.",
     )
+
+
+def test_operation_profiles_keep_their_reading_tools_apart_from_selectable_ones() -> None:
+    entry: dict[str, object] = {
+        "service_id": "synthetic-jobs",
+        "origin": "https://jobs.example.org",
+        "tools": ["create_task", "cancel_task"],
+        "observation_tool": "get_task",
+        "operations": {
+            "capabilities_tool": "describe_operations",
+            "proposal_tool": "propose_task",
+            "cancel_tool": "cancel_task",
+        },
+    }
+    (destination,) = mcp_destinations_from_mapping([entry])
+    assert destination.cancels("cancel_task") and not destination.cancels("create_task")
+    for change in (
+        {"proposal_tool": "get_task"},
+        {"capabilities_tool": "create_task"},
+        {"capabilities_tool": "propose_task"},
+        {"cancel_tool": "remove_task"},
+        {"unknown": "value"},
+    ):
+        operations = {**cast(dict[str, str], entry["operations"]), **change}
+        with pytest.raises(ValueError, match="invalid MCP destination"):
+            mcp_destinations_from_mapping([{**entry, "operations": operations}])
+    with pytest.raises(ValueError, match="next to a submission tool"):
+        mcp_destinations_from_mapping([{**entry, "tools": ["cancel_task"]}])
