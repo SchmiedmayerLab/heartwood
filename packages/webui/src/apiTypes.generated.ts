@@ -688,6 +688,7 @@ export interface McpAuthenticationResponse {
  */
 export interface McpSelectedToolResponse {
   annotations: McpToolAnnotationsResponse;
+  definition: string;
   description: string;
   name: string;
   parameters: string;
@@ -722,6 +723,7 @@ export interface McpDestinationResponse {
   credential_binding: string;
   max_result_bytes: number;
   origin: string;
+  private_address: boolean;
   service_id: string;
   tools: string[];
 }
@@ -749,6 +751,7 @@ export interface McpDiscoveredToolResponse {
   allowed: boolean;
   annotations: McpToolAnnotationsResponse;
   changed: boolean;
+  definition: string;
   description: string;
   name: string;
   parameters: string;

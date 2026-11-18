@@ -22,7 +22,7 @@ from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, replace
 from datetime import datetime
-from threading import Lock
+from threading import Lock, RLock
 from typing import TYPE_CHECKING, Any, Literal, cast
 from urllib.parse import urlsplit
 
@@ -133,6 +133,8 @@ class McpServerManager:
         # Definitions from the latest test in this process, by server and tool name.
         self._discovered: dict[str, dict[str, str]] = {}
         self._lock = Lock()
+        # Serializes token saves with disconnect's check for other servers of a service.
+        self._token_lock = RLock()
 
     def _servers(self) -> tuple[McpServerSetting, ...]:
         return self._config_store.load().mcp_servers
@@ -181,9 +183,9 @@ class McpServerManager:
             )
 
     def _list_tools(
-        self, server: McpServerSetting, destination: McpDestination
+        self, server: McpServerSetting, destination: McpDestination, token: str | None
     ) -> tuple[dict[str, str], Any]:
-        with self.connect(server, destination) as client:
+        with self.connect(server, destination, token=token) as client:
             try:
                 tools = cast(
                     list[Any],
@@ -219,16 +221,21 @@ class McpServerManager:
                 raise McpServerError("mcp-unavailable", f"{server_id} is already configured")
             return server
 
-        self._change(server_id, insert)
-        self._save_token(destination, token, remember)
+        with self._token_lock:
+            self._change(server_id, insert)
+            self._save_token(destination, token, remember)
         return self.settings()
 
     def test(self, server_id: str, token: str | None, remember: bool) -> dict[str, object]:
-        """Connect, list tools and report each definition; discovery authorizes nothing."""
+        """Connect, list tools and report each definition; discovery authorizes nothing.
+
+        A token supplied here is kept only once the server accepted it.
+        """
         server = self._server(server_id)
         destination = destination_for(server.url, self._destinations)
-        self._save_token(destination, token, remember)
-        definitions, capabilities = self._list_tools(server, destination)
+        definitions, capabilities = self._list_tools(server, destination, _entered(token))
+        with self._token_lock:
+            self._save_token(destination, token, remember)
         selected = {tool.name: tool.sha256 for tool in server.tools}
         discovered = []
         for name, definition in sorted(definitions.items()):
@@ -240,6 +247,7 @@ class McpServerManager:
                     "description": str(parsed.get("description") or ""),
                     "sha256": digest,
                     "parameters": _parameters(parsed),
+                    "definition": definition,
                     "annotations": _annotations(parsed),
                     "allowed": name in destination.tools,
                     "accepts_operation_binding": binding_supported(parsed),
@@ -281,8 +289,7 @@ class McpServerManager:
         for name in names:
             if name not in destination.tools:
                 raise McpServerError("mcp-binding", f"the deployment does not allow {name}")
-        self._save_token(destination, token, remember)
-        definitions = self._list_tools(server, destination)[0] if reviewed else {}
+        definitions = self._list_tools(server, destination, _entered(token))[0] if reviewed else {}
         selections: list[McpToolSelection] = []
         for name, digest in reviewed:
             definition = definitions.get(name)
@@ -307,7 +314,10 @@ class McpServerManager:
                 raise McpServerError("mcp-binding", str(error)) from None
             return updated
 
-        self._change(server_id, select)
+        with self._token_lock:
+            self._change(server_id, select)
+            # A refused selection leaves the stored token as it was.
+            self._save_token(destination, token, remember)
         return self.settings()
 
     def set_enabled(self, server_id: str, enabled: bool) -> dict[str, object]:
@@ -330,13 +340,14 @@ class McpServerManager:
         """
         server = self._server(server_id)
         destination = self._destination(server)
-        # The token goes first, so a failure to forget it leaves the server listed.
-        if destination is not None and not any(
-            item.server_id != server_id and self._destination(item) == destination
-            for item in self._servers()
-        ):
-            self._credentials.forget(mcp_credential_binding(destination.service_id))
-        self._change(server_id, lambda _current: None)
+        with self._token_lock:
+            # The token goes first, so a failure to forget it leaves the server listed.
+            if destination is not None and not any(
+                item.server_id != server_id and self._destination(item) == destination
+                for item in self._servers()
+            ):
+                self._credentials.forget(mcp_credential_binding(destination.service_id))
+            self._change(server_id, lambda _current: None)
         with self._lock:
             self._discovered.pop(server_id, None)
         return self.settings()
@@ -355,6 +366,7 @@ class McpServerManager:
                     "tools": list(item.tools),
                     "max_result_bytes": item.max_result_bytes,
                     "credential_binding": mcp_credential_binding(item.service_id),
+                    "private_address": item.private_address,
                 }
                 for item in self._destinations
             ],
@@ -385,6 +397,7 @@ class McpServerManager:
                 "description": str(tool.parsed.get("description") or ""),
                 "sha256": tool.sha256,
                 "parameters": _parameters(tool.parsed),
+                "definition": tool.definition,
                 "annotations": _annotations(tool.parsed),
                 "status": _tool_status(tool, destination, discovered),
             }
@@ -459,7 +472,13 @@ class McpServerManager:
             raise ExternalActionError("the research service credential is expired")
 
     @contextmanager
-    def connect(self, server: McpServerSetting, destination: McpDestination) -> Iterator[MCPClient]:
+    def connect(
+        self,
+        server: McpServerSetting,
+        destination: McpDestination,
+        *,
+        token: str | None = None,
+    ) -> Iterator[MCPClient]:
         """Open a Streamable HTTP session; the client follows redirects only within the origin.
 
         The address check runs before the connection, and the client resolves the name
@@ -469,12 +488,14 @@ class McpServerManager:
         from fastmcp.client.transports import StreamableHttpTransport
         from openhands.sdk.mcp import MCPClient
 
-        token = self.token(destination)
+        token = self.token(destination) if token is None else token
         if token_authentication(token).status == "expired":
             raise McpServerError("mcp-credential", "the research service token is expired")
         parsed = urlsplit(server.url)
         check_resolved_host(
-            parsed.hostname or "", parsed.port or (443 if parsed.scheme == "https" else 80)
+            parsed.hostname or "",
+            parsed.port or (443 if parsed.scheme == "https" else 80),
+            private_address=destination.private_address,
         )
         client = MCPClient(  # type: ignore[no-untyped-call]
             StreamableHttpTransport(
@@ -496,6 +517,10 @@ class McpServerManager:
             yield client
         finally:
             client.sync_close()
+
+
+def _entered(token: str | None) -> str | None:
+    return token.strip() if token is not None and token.strip() else None
 
 
 def _parameters(definition: dict[str, Any]) -> str:

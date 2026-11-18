@@ -385,6 +385,36 @@ def test_resolved_private_addresses_are_refused(monkeypatch: pytest.MonkeyPatch)
     check_resolved_host("research.example.org", 443)
 
 
+def test_private_addresses_need_the_destinations_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
+    entry = {
+        "service_id": "cluster-catalog",
+        "tools": ["find_records"],
+        "observation_tool": "get_operation",
+    }
+    with pytest.raises(ValueError, match="opt-in"):
+        McpDestination.model_validate({**entry, "origin": "https://10.96.0.12"})
+    allowed = McpDestination.model_validate(
+        {**entry, "origin": "https://10.96.0.12", "private_address": True}
+    )
+    assert allowed.private_address is True
+    # Link-local and metadata addresses stay refused, and HTTPS stays required.
+    for origin in ("https://169.254.169.254", "https://[fd00:ec2::254]", "http://10.96.0.12"):
+        with pytest.raises(ValueError, match="origin"):
+            McpDestination.model_validate({**entry, "origin": origin, "private_address": True})
+
+    def resolve(address: str) -> Callable[..., list[tuple[object, ...]]]:
+        return lambda *_args, **_kwargs: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (address, 0))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", resolve("10.96.0.12"))
+    with pytest.raises(McpServerError):
+        check_resolved_host("catalog.platform.svc", 443)
+    check_resolved_host("catalog.platform.svc", 443, private_address=True)
+    monkeypatch.setattr(socket, "getaddrinfo", resolve("169.254.169.254"))
+    with pytest.raises(McpServerError) as refused:
+        check_resolved_host("catalog.platform.svc", 443, private_address=True)
+    assert refused.value.code == "HW-MCP-001"
+
+
 def test_offline_policy_refuses_every_server() -> None:
     with pytest.raises(McpServerError) as refused:
         destination_for("https://research.example.org/mcp", ())
@@ -545,6 +575,24 @@ def test_expired_credential_is_refused_before_any_request(tmp_path: Path) -> Non
             service.gateway.test_mcp_server("catalog", McpServerTestRequest())
         assert refused.value.code == "HW-MCP-002"
         service.gateway.test_mcp_server("catalog", McpServerTestRequest(token=service.token))
+
+
+def test_a_refused_token_does_not_replace_the_stored_one(tmp_path: Path) -> None:
+    with served(tmp_path) as service:
+        service.add()
+        reviewed = service.gateway.test_mcp_server("catalog", McpServerTestRequest())
+        assert all(tool["definition"] for tool in reviewed["tools"])
+        binding = "HEARTWOOD_MCP_TOKEN_SYNTHETIC_CATALOG"
+        foreign = FakeTokenIssuer().exchange(audience=_AUDIENCE)
+        with pytest.raises(McpServerError):
+            service.gateway.test_mcp_server("catalog", McpServerTestRequest(token=foreign))
+        with pytest.raises(McpServerError):
+            service.gateway.select_mcp_tools(
+                "catalog",
+                _choices(reviewed, ["find_records"]).model_copy(update={"token": foreign}),
+            )
+        assert service.gateway.credential_store.resolve(binding) == service.token
+        service.gateway.select_mcp_tools("catalog", _choices(reviewed, ["find_records"]))
 
 
 def test_a_redirect_to_another_origin_is_not_followed(tmp_path: Path) -> None:
@@ -883,6 +931,63 @@ def test_expired_proposals_are_replaced_by_a_fresh_review(tmp_path: Path) -> Non
             advance_outside_calls(session, adapter)
             phases = [item.phase for item in _records(session)]
             assert phases == ["expired", "proposed"]
+
+
+def test_cancellation_ends_only_the_gateways_wait_and_the_outcome_is_reconciled(
+    tmp_path: Path,
+) -> None:
+    """Heartwood cancels no remote work: it abandons a call at its timeout and reconciles.
+
+    Denying a review before dispatch sends nothing; that case is covered above. A pause
+    waits for a dispatch in progress, and the service may still complete the call.
+    """
+    with served(tmp_path) as service:
+        service.enable()
+        with outside_session(tmp_path, service) as (session, worker, adapter):
+            service.catalog.mode = "slow"
+            record = _call(session, worker, adapter)
+            approval = threading.Thread(target=_decide, args=(session, record, CommandKind.APPROVE))
+            approval.start()
+            deadline = datetime.now(UTC) + timedelta(seconds=5)
+            while not service.catalog.calls and datetime.now(UTC) < deadline:
+                threading.Event().wait(0.02)
+            session.handle(
+                SessionCommand(
+                    command_id=str(uuid.uuid4()),
+                    session_id=session.store.session_id,
+                    kind=CommandKind.PAUSE,
+                    actor_id="researcher",
+                    created_at=datetime.now(UTC).isoformat(),
+                    payload={},
+                )
+            )
+            approval.join(10)
+            # The pause ran after the dispatch ended; the client gave up at its timeout.
+            assert _records(session)[-1].phase == "unknown"
+            service.catalog.release.set()
+            service.catalog.mode = "normal"
+            advance_outside_calls(session, adapter, clock=lambda: 1e9)
+            observed = _records(session)[-1].observation
+            assert observed is not None
+            assert observed.operation.status == "completed"
+            assert service.catalog.calls == ["synthetic"]
+
+
+def test_snapshot_reads_open_review_through_the_session_adapter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with served(tmp_path) as service:
+        service.enable()
+        session = service.gateway._service("session-mcp")
+        adapter = service.gateway._mcp_adapters[id(session)]
+        followed: list[tuple[SessionService, McpOutsideAdapter]] = []
+        monkeypatch.setattr(session, "reconcile", lambda: ())
+        monkeypatch.setattr(
+            "heartwood.gateway._gateway.advance_outside_calls",
+            lambda current, bound: followed.append((current, bound)),
+        )
+        assert service.gateway._reconcile_before_lock("session-mcp") is session
+        assert followed == [(session, adapter)]
 
 
 # Configuration

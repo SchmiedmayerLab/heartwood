@@ -765,6 +765,7 @@ class McpSelectedToolResponse(_ApiResponse):
     description: str
     sha256: str
     parameters: str
+    definition: str
     annotations: McpToolAnnotationsResponse
     status: Literal["ready", "changed", "missing", "disallowed", "unsupported"]
 
@@ -792,6 +793,7 @@ class McpDestinationResponse(_ApiResponse):
     tools: list[str]
     max_result_bytes: int
     credential_binding: str
+    private_address: bool
 
 
 class McpServersResponse(_ApiResponse):
@@ -812,6 +814,7 @@ class McpDiscoveredToolResponse(_ApiResponse):
     description: str
     sha256: str
     parameters: str
+    definition: str
     annotations: McpToolAnnotationsResponse
     allowed: bool
     accepts_operation_binding: bool

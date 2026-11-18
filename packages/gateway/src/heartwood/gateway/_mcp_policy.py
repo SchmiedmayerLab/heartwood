@@ -40,6 +40,15 @@ _SERVICE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$")
 _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 _MAX_RESULT_BYTES = 32 * 1024
 _MAX_WORKER_TOOL_NAME = 64
+# RFC 1918 and unique local addresses, which cluster service networks use.
+_PRIVATE_NETWORKS = tuple(
+    ipaddress.ip_network(item)
+    for item in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7")
+)
+# Cloud instance metadata services outside link-local ranges.
+_METADATA_ADDRESSES = frozenset(
+    ipaddress.ip_address(item) for item in ("fd00:ec2::254", "100.100.100.200")
+)
 
 type McpAuthenticationStatus = Literal["missing", "valid", "expired", "unknown-expiry"]
 
@@ -64,11 +73,13 @@ class McpDestination(BaseModel):
     observation_tool: str = Field(pattern=_TOOL_NAME.pattern)
     max_result_bytes: int = Field(default=16 * 1024, ge=1024, le=_MAX_RESULT_BYTES)
     call_timeout_seconds: float = Field(default=30.0, ge=1.0, le=300.0)
+    # The operator's opt-in for a cluster or other private address at this exact origin.
+    private_address: bool = False
 
     @field_validator("origin")
     @classmethod
     def _exact_origin(cls, value: str) -> str:
-        return exact_origin(value)
+        return exact_origin(value, private_address=True)
 
     @field_validator("tools")
     @classmethod
@@ -83,6 +94,7 @@ class McpDestination(BaseModel):
     def _observation_is_separate(self) -> Self:
         if self.observation_tool in self.tools:
             raise ValueError("the observation tool cannot also be a selectable tool")
+        exact_origin(self.origin, private_address=self.private_address)
         return self
 
 
@@ -107,7 +119,7 @@ def mcp_destinations_from_mapping(value: object) -> tuple[McpDestination, ...]:
     return destinations
 
 
-def exact_origin(value: str) -> str:
+def exact_origin(value: str, *, private_address: bool = False) -> str:
     """Return a normalized origin, refusing paths, credentials and unsafe addresses."""
     parsed = urlsplit(value)
     host = (parsed.hostname or "").lower()
@@ -125,7 +137,7 @@ def exact_origin(value: str) -> str:
         or parsed.fragment
     ):
         raise ValueError("origin must be a scheme, host and optional port only")
-    check_host(parsed.scheme, host)
+    check_host(parsed.scheme, host, private_address=private_address)
     return _render_origin(parsed.scheme, host, port)
 
 
@@ -135,8 +147,12 @@ def _render_origin(scheme: str, host: str, port: int | None) -> str:
     return f"{scheme}://{rendered}" + (f":{port}" if port not in {None, default} else "")
 
 
-def check_host(scheme: str, host: str) -> None:
-    """Refuse plain HTTP beyond loopback and literal private, link-local or metadata hosts."""
+def check_host(scheme: str, host: str, *, private_address: bool = False) -> None:
+    """Refuse plain HTTP beyond loopback and literal private, link-local or metadata hosts.
+
+    With the deployment's opt-in, a private address is permitted; link-local and metadata
+    addresses never are.
+    """
     loopback = host in _LOOPBACK_HOSTS or _is_loopback_literal(host)
     if scheme != "https" and not loopback:
         raise ValueError("origins other than loopback must use HTTPS")
@@ -144,12 +160,17 @@ def check_host(scheme: str, host: str) -> None:
         address = ipaddress.ip_address(host)
     except ValueError:
         return
-    if not loopback and not _public(address):
-        raise ValueError("origins on private, link-local or metadata addresses are refused")
+    if not loopback and not _permitted(address, private_address=private_address):
+        raise ValueError(
+            "origins on private addresses need the destination's opt-in, and link-local "
+            "or metadata addresses are refused"
+        )
 
 
-def check_resolved_host(host: str, port: int) -> None:
-    """Resolve the host and refuse it unless every address is public, or all are loopback.
+def check_resolved_host(host: str, port: int, *, private_address: bool = False) -> None:
+    """Resolve the host and refuse it unless every address is permitted, or all are loopback.
+
+    Permitted addresses are public ones and, with the destination's opt-in, private ones.
 
     The check runs before each connection; the platform's egress controls still apply to
     the connection the client then opens.
@@ -170,10 +191,11 @@ def check_resolved_host(host: str, port: int) -> None:
         if not all(_unmapped(address).is_loopback for address in resolved):
             raise McpServerError("mcp-destination", "a loopback origin resolved beyond loopback")
         return
-    if not all(_public(address) for address in resolved):
+    if not all(_permitted(address, private_address=private_address) for address in resolved):
         raise McpServerError(
             "mcp-destination",
-            "the research service resolved to a private, link-local or metadata address",
+            "the research service resolved to a private, link-local or metadata address "
+            "the destination does not permit",
         )
 
 
@@ -192,9 +214,15 @@ def _unmapped(
     return address
 
 
-def _public(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+def _permitted(
+    address: ipaddress.IPv4Address | ipaddress.IPv6Address, *, private_address: bool
+) -> bool:
     address = _unmapped(address)
-    return address.is_global and not address.is_multicast
+    if address in _METADATA_ADDRESSES or address.is_link_local or address.is_multicast:
+        return False
+    if address.is_global:
+        return True
+    return private_address and any(address in network for network in _PRIVATE_NETWORKS)
 
 
 def server_url(value: str) -> str:
