@@ -2068,7 +2068,7 @@ class SessionGateway:
     @gateway_operation
     def save_model_profile(self, profile: ModelProfile) -> ModelSettingsResponse:
         """Add or replace a non-secret profile and reset active services."""
-        profile = align_model_profile_request_endpoint(profile)
+        profile = self._declared_request_endpoint(align_model_profile_request_endpoint(profile))
         self._require_listed_platform_model(profile)
         return self._save_model_profile(profile)
 
@@ -2978,6 +2978,23 @@ class SessionGateway:
             self.model_catalog_service.invalidate(connection_id)
         return dynamic
 
+    def _declared_request_endpoint(self, profile: ModelProfile) -> ModelProfile:
+        """Move a platform profile to the request path its model declaration selects."""
+        connection = self._model_connections.get(profile.profile_id)
+        if connection is None or connection.source != "platform":
+            return profile
+        try:
+            declared = replace(profile, policy_endpoint=connection.request_endpoint(profile.model))
+        except ModelCatalogError:
+            return profile
+        # Only the path suffix may change; another origin or route stays as saved.
+        return (
+            declared
+            if connection.matches_profile(declared)
+            and _same_route_base(profile.policy_endpoint, declared.policy_endpoint)
+            else profile
+        )
+
     def _require_listed_platform_model(self, profile: ModelProfile) -> None:
         """Refuse a platform route whose model the platform no longer lists for this identity."""
         connection = matching_model_connection(profile, self._model_connections.values())
@@ -3437,6 +3454,13 @@ def _review_mode_unavailable_reason(
             "a model credential is otherwise not isolated from the agent tool runtime."
         )
     return None
+
+
+def _same_route_base(first: str, second: str) -> bool:
+    def base(endpoint: str) -> str:
+        return endpoint.removesuffix("/chat/completions").removesuffix("/responses")
+
+    return base(first) == base(second)
 
 
 def _catalog_entry(catalog: ModelCatalog, model_id: str) -> ModelCatalogEntry:

@@ -927,7 +927,8 @@ def declared_input_limit(metadata: PlatformModelMetadata) -> int | None:
     if metadata.max_input_tokens is not None:
         return metadata.max_input_tokens
     if metadata.context_window_tokens is not None and metadata.max_output_tokens is not None:
-        return metadata.context_window_tokens - metadata.max_output_tokens
+        remainder = metadata.context_window_tokens - metadata.max_output_tokens
+        return remainder if remainder > 0 else None
     return None
 
 

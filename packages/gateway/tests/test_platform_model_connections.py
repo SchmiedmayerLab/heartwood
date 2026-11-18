@@ -17,6 +17,7 @@ import argparse
 import json
 import time
 from collections.abc import Iterator
+from dataclasses import replace
 from functools import partial
 from pathlib import Path
 from typing import cast
@@ -374,7 +375,32 @@ def test_declared_responses_protocol_sets_the_policy_endpoint_and_request_path(
     backend.close()
 
 
-@pytest.mark.parametrize("identity", ["Research", "custom", "stanford-ai-api-gateway"])
+def test_a_saved_profile_for_a_declared_model_keeps_the_declared_request_path(
+    tmp_path: Path, inference: tuple[FakeInference, str]
+) -> None:
+    _fake, base_url = inference
+    gateway = _gateway(_deployment(tmp_path, _record(tmp_path, base_url)))
+    try:
+        gateway.connect_model(_CONNECTION, "synthetic-responses")
+        saved = gateway.settings_store.load().profile(_CONNECTION)
+        gateway.save_model_profile(
+            replace(saved, policy_endpoint=f"{base_url}/chat/completions", description="Saved")
+        )
+        profile = gateway.settings_store.load().profile(_CONNECTION)
+        backend = gateway._backend(
+            model_settings=gateway.settings_store.load(),
+            selected_model=None,
+            session_id="saved-declared",
+        )
+    finally:
+        gateway.stop()
+
+    assert profile.policy_endpoint == f"{base_url}/responses"
+    assert isinstance(backend, OpenHandsSdkBackend)
+    assert backend.configuration_error is None
+
+
+@pytest.mark.parametrize("identity", ["Research", "Custom", "custom", "stanford-ai-api-gateway"])
 def test_connection_identifiers_must_be_usable_model_sources(tmp_path: Path, identity: str) -> None:
     record = _record(tmp_path, "https://models.example.invalid/v1")
     record.pop("model_metadata")
