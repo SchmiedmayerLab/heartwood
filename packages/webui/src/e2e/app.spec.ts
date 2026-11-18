@@ -1264,6 +1264,7 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
           tools: ["find_records"],
           max_result_bytes: 16384,
           credential_binding: "HEARTWOOD_MCP_TOKEN_SYNTHETIC_CATALOG",
+          private_address: false,
         },
       ],
       credential_store: {
@@ -1292,6 +1293,7 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
               description: "Find synthetic records.",
               sha256: "a".repeat(64),
               parameters: "{}",
+              definition: '{"name":"find_records"}',
               annotations: {
                 read_only: true,
                 destructive: false,

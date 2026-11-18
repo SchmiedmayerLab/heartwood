@@ -41,6 +41,7 @@ const settings = (servers: McpServer[] = [server()]): McpServers => ({
       tools: ["find_records"],
       max_result_bytes: 16384,
       credential_binding: "HEARTWOOD_MCP_TOKEN_SYNTHETIC_CATALOG",
+      private_address: false,
     },
   ],
   credential_store: {
@@ -68,6 +69,8 @@ const tested = (): McpServerTest => ({
       sha256: "a".repeat(64),
       parameters:
         '{"properties":{"term":{"type":"string"}},"required":["term"],"type":"object"}',
+      definition:
+        '{"name":"find_records","description":"Find synthetic records."}',
       annotations: hints,
       allowed: true,
       accepts_operation_binding: true,
@@ -79,6 +82,7 @@ const tested = (): McpServerTest => ({
       description: "Delete synthetic records.",
       sha256: "b".repeat(64),
       parameters: '{"properties":{},"required":[],"type":"object"}',
+      definition: '{"name":"delete_records"}',
       annotations: { ...hints, read_only: false },
       allowed: false,
       accepts_operation_binding: true,
@@ -111,6 +115,7 @@ const client = () => ({
             description: "Find synthetic records.",
             sha256: "a".repeat(64),
             parameters: "{}",
+            definition: '{"name":"find_records"}',
             annotations: hints,
             status: "ready",
           },
