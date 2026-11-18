@@ -318,6 +318,9 @@ An outside operation proceeds through these steps:
 5. The adapter's observation must name the same proposal, operation, project, and service.
    An uncertain dispatch is recorded as `unknown` and later resolved by status lookup, never by resubmission.
 
+A platform operation adds to the request the platform project context its observations must report, and the reviewed description of the work: for a submission, the platform's proposal and the estimate it refers to; for a cancellation, the earlier operation it names.
+The gateway proposes a cancellation only for an operation the session sent to the same service, and the identifier the service receives comes from that record ([Platform Job Operations](../operate/platform-contract.md#platform-job-operations)).
+
 Only an exact retry of the approval command that recorded an authorization can dispatch it; a status read, reconciliation, another command, or an automatic decision cannot.
 Denying the same review withdraws an undispatched authorization, and an authorization that outlives its interval is recorded as expired.
 

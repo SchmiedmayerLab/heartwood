@@ -207,6 +207,9 @@ SPDX-License-Identifier: MIT
 **Planning service**
 : A platform service that reports budget observations and produces cost estimates for workload predictions; the platform keeps the accounts and decides admission.
 
+**Platform job service**
+: A research MCP server that runs work, such as batch or GPU jobs, which the gateway proposes with the platform's description and estimate, sends after review, reconciles by operation identifier, and can cancel by naming an earlier operation.
+
 **Pilot evaluation**
 : A bounded trial in which a small group of researchers uses one standard research environment so the deployment can record installation, workflow, reproducibility, and support evidence before a wider rollout.
 

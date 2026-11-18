@@ -148,6 +148,7 @@ Before submission or delivery, the gateway rechecks the live worker attempt, cur
 The decision and dispatch intent are journaled before the service is contacted, and with managed evidence, retained outside the gateway first.
 An approved operation is sent only by an exact retry of its own approval command; reads, reconciliation and restarts never send it.
 A Heartwood approval is necessary, never sufficient: the destination service authenticates the caller and enforces its own authorization.
+For a [platform job](platform-contract.md#platform-job-operations), the platform's proposal is untrusted text shown as the platform's, and a cancellation reaches the service with the target identifier from the gateway's record of an operation the session sent, never from the worker's text.
 The [Platform Contract](platform-contract.md#outside-operation-admission) defines the embedding interface.
 
 ## Credentials

@@ -284,6 +284,27 @@ private_address = false
 | `call_timeout_seconds` | Optional limit for one request, from 1 to 300 seconds; default 30 |
 | `private_address` | Optional; `true` permits an RFC 1918 or unique local address for this exact origin, such as a cluster service; default `false`. Link-local and metadata addresses stay refused, and HTTPS stays required except on loopback. |
 
+A platform job service adds an `operations` table to its entry; see [Platform Job Operations](../operate/platform-contract.md#platform-job-operations).
+
+```toml
+[[mcp_destinations]]
+service_id = "research-jobs"
+origin = "https://jobs.example.invalid"
+tools = ["create_task", "cancel_task"]
+observation_tool = "get_task"
+
+[mcp_destinations.operations]
+capabilities_tool = "describe_operations"
+proposal_tool = "propose_task"
+cancel_tool = "cancel_task"
+```
+
+| Key | Requirement |
+|---|---|
+| `capabilities_tool` | Read-only tool that declares the service's operations, their permissions and its optional capabilities; not selectable |
+| `proposal_tool` | Read-only tool that describes a submission before review; not selectable |
+| `cancel_tool` | Optional; a selectable tool that cancels an earlier operation named by `target_operation_id`; every other selectable tool submits work |
+
 Each origin may appear once, and the section requires `[worker]`.
 Without the section, every research MCP server is refused.
 A changed destination list counts as a manifest change beyond its policy, which stops dispatch until the next start.

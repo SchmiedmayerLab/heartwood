@@ -35,6 +35,7 @@ Codes use `HW-{AREA}-{NNN}`.
 | `WORKER` | Managed worker sandbox gateway |
 | `MCP` | Research MCP server destinations, credentials and tool review |
 | `PLAN` | Research planning against platform budgets and estimates |
+| `OPS` | Platform job operations: proposals, outcomes and reconciliation |
 | `ENV` | Readiness checks without a more specific code |
 
 Numbers `001` to `899` are assigned in sequence within an area and never reused; `900` to `999` are generic fallbacks.
@@ -461,6 +462,31 @@ Review them before approving work, or revise the plan to a configuration the pla
 The platform denied or revoked authorization for a reviewed proposal, or denied an operation, even if the researcher approved it.
 Revise the plan, or request more allocation through the platform's own process.
 Heartwood never resubmits a denied operation automatically.
+
+## Platform Job Operations
+
+These conditions appear with a platform job in the session's agent actions and in its outside operation review in the terminal, browser and notebook.
+The platform runs and authorizes each job; see [Platform Job Operations](../operate/platform-contract.md#platform-job-operations).
+A job the platform denies, even after you approved it, shows [HW-PLAN-006](#hw-plan-006-the-platform-denied-an-operation).
+
+### `HW-OPS-001`: The Platform Did Not Describe the Operation
+
+The job service's proposal tool did not answer, refused the request, or returned a proposal for another service or tool.
+Without the platform's description of the limits, data scope and destination, the review cannot be approved.
+Reject the review, or let it expire; a new review of the same call asks the platform again.
+
+### `HW-OPS-002`: A Platform Operation Failed
+
+The platform admitted the job, and the job failed, for example because its executor reported an error.
+The operation shows the platform's report and its platform record.
+Read the platform record, revise the job, and let the agent propose it again; Heartwood never resubmits a job automatically.
+
+### `HW-OPS-003`: A Platform Operation Has an Unknown Outcome
+
+The reply to a submission or cancellation was lost or did not arrive within the destination's time limit, so the platform may or may not have received it.
+Heartwood asks the service's status tool about the same operation identifier until the platform reports it, and proposes or sends nothing else to that service meanwhile.
+An operation the platform never received is reported as failed.
+When the condition persists, check that the job service is reachable and that the token for it is valid.
 
 ## Managed Compute
 
