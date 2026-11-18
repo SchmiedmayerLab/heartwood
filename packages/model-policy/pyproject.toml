@@ -6,7 +6,7 @@
 
 [project]
 name = "heartwood-model-policy"
-version = "0.5.0"
+version = "0.5.1"
 description = "Deny-by-default model-call policy evaluation for Heartwood."
 readme = "README.md"
 requires-python = ">=3.12"

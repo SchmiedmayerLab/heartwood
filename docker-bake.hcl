@@ -17,7 +17,7 @@ variable "GIT_SHA" {
 }
 
 variable "HEARTWOOD_VERSION" {
-  default = "0.5.0"
+  default = "0.5.1"
 }
 
 variable "TERRA_BASE_IMAGE" {

@@ -7,7 +7,7 @@ SPDX-License-Identifier: MIT
 # Release Guide
 
 A release is created by the **Create Release** workflow from the exact current `main` commit after that commit's required checks pass.
-Versions use strict Semantic Versioning without a `v` prefix, such as `0.5.0` or `0.5.0-beta.1`.
+Versions use strict Semantic Versioning without a `v` prefix, such as `0.5.1` or `0.5.1-beta.1`.
 
 ## Prepare a Release
 
@@ -65,8 +65,8 @@ A prerelease is marked as a GitHub prerelease and never becomes `latest`.
 
 ## Stable and Preview Documentation
 
-A stable version such as `0.5.0` moves the `stable` alias and the documentation root to it.
-A prerelease such as `0.5.0-beta.1` moves the `preview` alias without changing the root.
+A stable version such as `0.5.1` moves the `stable` alias and the documentation root to it.
+A prerelease such as `0.5.1-beta.1` moves the `preview` alias without changing the root.
 Documentation is published only for the latest release of its channel, and republishing a version with different content is rejected.
 
 See [Support and Compatibility](../operate/support.md) for the maintained release line and pre-1.0 change policy.
