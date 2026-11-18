@@ -1,0 +1,58 @@
+{
+  "schema_version": "heartwood.synthetic-failure-states.v1",
+  "states": [
+    {
+      "condition": "Missing or invalid launch capability",
+      "code": "HW-INGRESS-003",
+      "surface": "gateway-response",
+      "diagnostic": "HW-INGRESS-003: Open Heartwood through the launch link printed by the terminal that started it."
+    },
+    {
+      "condition": "Request does not match the declared route",
+      "code": "HW-INGRESS-002",
+      "surface": "gateway-response",
+      "diagnostic": "HW-INGRESS-002: request path is outside the configured gateway base path"
+    },
+    {
+      "condition": "Sandbox gateway lacks a deletion capability",
+      "code": "HW-WORKER-001",
+      "surface": "session",
+      "diagnostic": "HW-WORKER-001: The sandbox gateway lacks a required deletion capability"
+    },
+    {
+      "condition": "Expired or rejected model credential",
+      "code": "HW-AGENT-008",
+      "surface": "session",
+      "inference_failure": "authentication",
+      "diagnostic": "HW-AGENT-008: The model provider rejected the configured credential"
+    },
+    {
+      "condition": "Exhausted quota or budget",
+      "code": "HW-AGENT-009",
+      "surface": "session",
+      "inference_failure": "quota",
+      "diagnostic": "HW-AGENT-009: The model provider reported an exhausted quota or budget"
+    },
+    {
+      "condition": "Rate limit",
+      "code": "HW-AGENT-010",
+      "surface": "session",
+      "inference_failure": "rate-limit",
+      "diagnostic": "HW-AGENT-010: The model provider temporarily limited requests"
+    },
+    {
+      "condition": "Denied or misconfigured model",
+      "code": "HW-AGENT-011",
+      "surface": "session",
+      "inference_failure": "model-denied",
+      "diagnostic": "HW-AGENT-011: The selected model connection is not configured correctly"
+    },
+    {
+      "condition": "Service temporarily unavailable",
+      "code": "HW-AGENT-012",
+      "surface": "session",
+      "inference_failure": "unavailable",
+      "diagnostic": "HW-AGENT-012: The model provider is temporarily unavailable"
+    }
+  ]
+}
