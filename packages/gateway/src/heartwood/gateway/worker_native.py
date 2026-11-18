@@ -90,7 +90,7 @@ def native_worker_plan_factory(
         )
         names = [spec.name for spec in client_tools]
         if len(names) != len(set(names)):
-            raise WorkerAttemptError("session client tools repeat a launcher client tool name")
+            raise WorkerAttemptError("worker client tool names must be unique")
         return _NativeWorkerAttempt(settings, request, client_tools=client_tools).plan()
 
     return prepare

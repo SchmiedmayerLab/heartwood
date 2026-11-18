@@ -392,7 +392,7 @@ def test_native_plan_captures_only_trusted_client_tool_specifications(
         "propose_record",
         "session_tool",
     ]
-    with pytest.raises(WorkerAttemptError, match="repeat"):
+    with pytest.raises(WorkerAttemptError, match="unique"):
         factory(cast(WorkerSessionRequest, SimpleNamespace(project=project, client_tools=(spec,))))
     with pytest.raises(ValueError, match="names must be unique"):
         native_worker_plan_factory(settings, project, client_tools=(spec, spec))

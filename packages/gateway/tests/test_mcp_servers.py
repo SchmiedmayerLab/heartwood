@@ -22,7 +22,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Never
+from typing import Any, Never, cast
 
 import pytest
 import tomli_w
@@ -415,6 +415,81 @@ def test_private_addresses_need_the_destinations_opt_in(monkeypatch: pytest.Monk
     assert refused.value.code == "HW-MCP-001"
 
 
+@pytest.mark.parametrize(
+    "answers",
+    [
+        ["93.184.215.14", "169.254.169.254"],
+        ["100.64.0.1"],
+        ["0.0.0.0"],
+        ["64:ff9b::a9fe:a9fe"],
+        ["::a9fe:a9fe"],
+        ["fd00:ec2::123"],
+    ],
+)
+def test_refused_answers_stay_refused_with_the_opt_in(
+    monkeypatch: pytest.MonkeyPatch, answers: list[str]
+) -> None:
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *_args, **_kwargs: _answers(answers))
+    for private_address in (False, True):
+        with pytest.raises(McpServerError) as refused:
+            check_resolved_host("catalog.platform.svc", 443, private_address=private_address)
+        assert refused.value.code == "HW-MCP-001"
+
+
+def test_nat64_answers_are_judged_by_their_ipv4_address(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        socket, "getaddrinfo", lambda *_args, **_kwargs: _answers(["64:ff9b::a00:1"])
+    )
+    with pytest.raises(McpServerError):
+        check_resolved_host("catalog.platform.svc", 443)
+    check_resolved_host("catalog.platform.svc", 443, private_address=True)
+
+
+def _answers(items: list[str]) -> list[tuple[object, ...]]:
+    return [
+        (socket.AF_INET6 if ":" in item else socket.AF_INET, socket.SOCK_STREAM, 6, "", (item, 0))
+        for item in items
+    ]
+
+
+def test_connections_apply_the_destinations_opt_in(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.96.0.12", 0))],
+    )
+    outcomes = {}
+    for private_address in (False, True):
+        destination = McpDestination(
+            service_id="cluster-catalog",
+            origin="https://catalog.platform.svc",
+            tools=("find_records",),
+            observation_tool="get_operation",
+            private_address=private_address,
+            call_timeout_seconds=1,
+        )
+        root = tmp_path / str(private_address)
+        root.mkdir()
+        gateway = _gateway(root, (destination,), Platform())
+        try:
+            gateway.add_mcp_server(
+                McpServerAddRequest(
+                    server_id="catalog", label="Cluster catalog", url=f"{destination.origin}/mcp"
+                )
+            )
+            with pytest.raises(McpServerError) as refused:
+                gateway.test_mcp_server("catalog", McpServerTestRequest())
+            outcomes[private_address] = refused.value.code
+        finally:
+            gateway.stop()
+    # Without the opt-in the address is refused; with it the connection is attempted.
+    assert outcomes == {False: "HW-MCP-001", True: "HW-MCP-005"}
+
+
 def test_offline_policy_refuses_every_server() -> None:
     with pytest.raises(McpServerError) as refused:
         destination_for("https://research.example.org/mcp", ())
@@ -593,6 +668,26 @@ def test_a_refused_token_does_not_replace_the_stored_one(tmp_path: Path) -> None
             )
         assert service.gateway.credential_store.resolve(binding) == service.token
         service.gateway.select_mcp_tools("catalog", _choices(reviewed, ["find_records"]))
+
+
+def test_a_token_is_not_kept_for_a_server_disconnected_meanwhile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with served(tmp_path) as service:
+        service.add(token="")
+        manager = service.gateway.mcp_servers
+        listing = manager._list_tools
+
+        def list_then_disconnect(*args: object) -> tuple[dict[str, str], object]:
+            result = listing(*args)  # type: ignore[arg-type]
+            manager.disconnect("catalog")
+            return result
+
+        monkeypatch.setattr(manager, "_list_tools", list_then_disconnect)
+        with pytest.raises(McpServerError, match="not kept"):
+            manager.test("catalog", service.token, False)
+        binding = "HEARTWOOD_MCP_TOKEN_SYNTHETIC_CATALOG"
+        assert service.gateway.credential_store.resolve(binding) is None
 
 
 def test_a_redirect_to_another_origin_is_not_followed(tmp_path: Path) -> None:
@@ -938,7 +1033,7 @@ def test_cancellation_ends_only_the_gateways_wait_and_the_outcome_is_reconciled(
 ) -> None:
     """Heartwood cancels no remote work: it abandons a call at its timeout and reconciles.
 
-    Denying a review before dispatch sends nothing; that case is covered above. A pause
+    Denying a review before dispatch sends nothing (`test_a_denied_call_sends_nothing`). A pause
     waits for a dispatch in progress, and the service may still complete the call.
     """
     with served(tmp_path) as service:
@@ -951,7 +1046,8 @@ def test_cancellation_ends_only_the_gateways_wait_and_the_outcome_is_reconciled(
             deadline = datetime.now(UTC) + timedelta(seconds=5)
             while not service.catalog.calls and datetime.now(UTC) < deadline:
                 threading.Event().wait(0.02)
-            session.handle(
+            assert approval.is_alive()
+            paused = session.handle(
                 SessionCommand(
                     command_id=str(uuid.uuid4()),
                     session_id=session.store.session_id,
@@ -961,9 +1057,20 @@ def test_cancellation_ends_only_the_gateways_wait_and_the_outcome_is_reconciled(
                     payload={},
                 )
             )
-            approval.join(10)
-            # The pause ran after the dispatch ended; the client gave up at its timeout.
+            # The pause waited for the dispatch to end; the client gave up at its timeout.
+            assert not approval.is_alive()
             assert _records(session)[-1].phase == "unknown"
+            events = session.replay_events()
+            unknown_at = max(
+                event.sequence
+                for event in events
+                if event.kind == EventKind.EXTERNAL_ACTION_RECORDED
+                and cast(dict[str, object], event.payload["record"])["phase"] == "unknown"
+            )
+            assert any(
+                event.kind == EventKind.SESSION_PAUSED and event.sequence > unknown_at
+                for event in paused.events
+            )
             service.catalog.release.set()
             service.catalog.mode = "normal"
             advance_outside_calls(session, adapter, clock=lambda: 1e9)

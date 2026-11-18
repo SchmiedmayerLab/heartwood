@@ -46,9 +46,9 @@ _PRIVATE_NETWORKS = tuple(
     for item in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7")
 )
 # Cloud instance metadata services outside link-local ranges.
-_METADATA_ADDRESSES = frozenset(
-    ipaddress.ip_address(item) for item in ("fd00:ec2::254", "100.100.100.200")
-)
+_METADATA_NETWORKS = (ipaddress.ip_network("fd00:ec2::/32"),)
+# Translation prefixes whose last 32 bits carry an IPv4 address: NAT64 and IPv4-compatible.
+_EMBEDDED_IPV4 = (ipaddress.ip_network("64:ff9b::/96"), ipaddress.ip_network("::/96"))
 
 type McpAuthenticationStatus = Literal["missing", "valid", "expired", "unknown-expiry"]
 
@@ -209,8 +209,13 @@ def _is_loopback_literal(host: str) -> bool:
 def _unmapped(
     address: ipaddress.IPv4Address | ipaddress.IPv6Address,
 ) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
-    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
-        return address.ipv4_mapped
+    if isinstance(address, ipaddress.IPv6Address):
+        if address.ipv4_mapped is not None:
+            return address.ipv4_mapped
+        if address not in {ipaddress.IPv6Address("::"), ipaddress.IPv6Address("::1")} and any(
+            address in network for network in _EMBEDDED_IPV4
+        ):
+            return ipaddress.IPv4Address(int(address) & 0xFFFFFFFF)
     return address
 
 
@@ -218,7 +223,11 @@ def _permitted(
     address: ipaddress.IPv4Address | ipaddress.IPv6Address, *, private_address: bool
 ) -> bool:
     address = _unmapped(address)
-    if address in _METADATA_ADDRESSES or address.is_link_local or address.is_multicast:
+    if (
+        any(address in network for network in _METADATA_NETWORKS)
+        or address.is_link_local
+        or address.is_multicast
+    ):
         return False
     if address.is_global:
         return True

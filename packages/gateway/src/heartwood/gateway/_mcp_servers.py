@@ -22,7 +22,7 @@ from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, replace
 from datetime import datetime
-from threading import Lock, RLock
+from threading import Lock
 from typing import TYPE_CHECKING, Any, Literal, cast
 from urllib.parse import urlsplit
 
@@ -134,7 +134,7 @@ class McpServerManager:
         self._discovered: dict[str, dict[str, str]] = {}
         self._lock = Lock()
         # Serializes token saves with disconnect's check for other servers of a service.
-        self._token_lock = RLock()
+        self._token_lock = Lock()
 
     def _servers(self) -> tuple[McpServerSetting, ...]:
         return self._config_store.load().mcp_servers
@@ -181,6 +181,25 @@ class McpServerManager:
             self._credentials.save(
                 mcp_credential_binding(destination.service_id), token.strip(), remember=remember
             )
+
+    def _keep_token(
+        self,
+        server: McpServerSetting,
+        destination: McpDestination,
+        token: str | None,
+        remember: bool,
+    ) -> None:
+        """Keep an accepted token while the server it was entered for is still configured."""
+        with self._token_lock:
+            current = next(
+                (item for item in self._servers() if item.server_id == server.server_id), None
+            )
+            if current is None or current.url != server.url:
+                raise McpServerError(
+                    "mcp-unavailable",
+                    f"{server.server_id} changed meanwhile; the token was not kept",
+                )
+            self._save_token(destination, token, remember)
 
     def _list_tools(
         self, server: McpServerSetting, destination: McpDestination, token: str | None
@@ -234,8 +253,7 @@ class McpServerManager:
         server = self._server(server_id)
         destination = destination_for(server.url, self._destinations)
         definitions, capabilities = self._list_tools(server, destination, _entered(token))
-        with self._token_lock:
-            self._save_token(destination, token, remember)
+        self._keep_token(server, destination, token, remember)
         selected = {tool.name: tool.sha256 for tool in server.tools}
         discovered = []
         for name, definition in sorted(definitions.items()):
@@ -314,10 +332,10 @@ class McpServerManager:
                 raise McpServerError("mcp-binding", str(error)) from None
             return updated
 
-        with self._token_lock:
-            self._change(server_id, select)
-            # A refused selection leaves the stored token as it was.
-            self._save_token(destination, token, remember)
+        self._change(server_id, select)
+        # A token is kept only when it listed the tools; a refused selection keeps the old one.
+        if reviewed:
+            self._keep_token(server, destination, token, remember)
         return self.settings()
 
     def set_enabled(self, server_id: str, enabled: bool) -> dict[str, object]:
