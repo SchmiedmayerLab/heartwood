@@ -164,6 +164,7 @@ def test_test_output_marks_listing_as_not_authorization() -> None:
     assert "not authorized by listing" in output
     assert f"select as find_records={'a' * 64}" in output
     assert '"term"' in output
+    assert 'definition: {"name":"find_records"}' in output
     assert "changed since review" in output
     assert "The server advertises resources; Heartwood does not use them." in output
     assert "prompts;" not in output
