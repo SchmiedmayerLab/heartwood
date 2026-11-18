@@ -1,0 +1,3355 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Auditable agentic coding for biomedical research environments">
+      
+      
+      
+        <link rel="canonical" href="https://schmiedmayerlab.github.io/heartwood/0.5.1/operate/platform-requirements/">
+      
+      
+        <link rel="prev" href="../platform-contract/">
+      
+      
+        <link rel="next" href="../audit-checkpoints/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/brand/heartwood-favicon.svg">
+      <meta name="generator" content="zensical-0.0.52">
+    
+    
+      
+        <title>Platform API and Access Requirements - Heartwood</title>
+      
+    
+    
+      
+        
+      
+      <link rel="stylesheet" href="../../assets/stylesheets/modern/main.8b3b5a67.min.css">
+      
+        
+          
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/modern/palette.dfe2e883.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Inter:300,300i,400,400i,500,500i,700,700i%7CJetBrains+Mono:400,400i,700,700i&amp;display=fallback">
+        <style>:root{--md-text-font:"Inter";--md-code-font:"JetBrains Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_scope.pathname.endsWith("/")||(__md_scope=new URL(__md_scope.pathname+"/",location)),__md_hash=e=>[...e].reduce(((e,t)=>(e<<5)-e+t.charCodeAt(0)),0),__md_get=(e,t=localStorage,_=__md_scope)=>JSON.parse(t.getItem(_.pathname+"."+e)),__md_set=(e,t,_=localStorage,a=__md_scope)=>{try{_.setItem(a.pathname+"."+e,JSON.stringify(t))}catch(e){}},document.documentElement.setAttribute("data-platform",navigator.platform)</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer" aria-label="Navigation"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#platform-api-and-access-requirements" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="Heartwood" class="md-header__button md-logo" aria-label="Heartwood" data-md-component="logo">
+      
+  <img src="../../assets/brand/heartwood-mark.svg" alt="Heartwood">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer" aria-label="Navigation">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-menu" viewBox="0 0 24 24"><path d="M4 5h16M4 12h16M4 19h16"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Heartwood
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Platform API and Access Requirements
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Use light appearance"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Use light appearance" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-sun-moon" viewBox="0 0 24 24"><path d="M12 2v2M14.837 16.385a6 6 0 1 1-7.223-7.222c.624-.147.97.66.715 1.248a4 4 0 0 0 5.26 5.259c.589-.255 1.396.09 1.248.715M16 12a4 4 0 0 0-4-4M19 5l-1.256 1.256M20 12h2"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="custom" data-md-color-accent="custom"  aria-label="Use dark appearance"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Use dark appearance" for="__palette_2" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="custom" data-md-color-accent="custom"  aria-label="Follow system appearance"  type="radio" name="__palette" id="__palette_2">
+    
+      <label class="md-header__button md-icon" title="Follow system appearance" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-moon" viewBox="0 0 24 24"><path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search" aria-label="Search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-search" viewBox="0 0 24 24"><path d="m21 21-4.34-4.34"/><circle cx="11" cy="11" r="8"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog" aria-label="Search">
+  <button type="button" class="md-search__button">
+    Search
+  </button>
+</div>
+      
+    
+    <div class="md-header__source">
+      
+        <a href="https://github.com/SchmiedmayerLab/heartwood" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.3.1 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2026 Fonticons, Inc.--><path fill="currentColor" d="M216.5 362.5c-66-8-112.5-55.5-112.5-117 0-25 9-52 24-70-6.5-16.5-5.5-51.5 2-66 20-2.5 47 8 63 22.5 19-6 39-9 63.5-9s44.5 3 62.5 8.5c15.5-14 43-24.5 63-22 7 13.5 8 48.5 1.5 65.5 16 19 24.5 44.5 24.5 70.5 0 61.5-46.5 108-113.5 116.5 17 11 28.5 35 28.5 62.5v52c0 15 12.5 23.5 27.5 17.5C441 459.5 512 369 512 257 512 115.5 397 0 255.5 0S0 115.5 0 257c0 111 70.5 203 165.5 237.5 13.5 5 26.5-4 26.5-17.5v-40c-7 3-16 5-24 5-33 0-52.5-18-66.5-51.5-5.5-13.5-11.5-21.5-23-23-6-.5-8-3-8-6 0-6 10-10.5 20-10.5 14.5 0 27 9 40 27.5 10 14.5 20.5 21 33 21s20.5-4.5 32-16c8.5-8.5 15-16 21-21"/></svg>
+  </div>
+  <div class="md-source__repository">
+    SchmiedmayerLab/heartwood
+  </div>
+</a>
+      
+    </div>
+  </nav>
+  
+    
+      
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+      
+      
+        
+          
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../start/" class="md-tabs__link">
+          
+  
+  Get Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+      
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../use/" class="md-tabs__link">
+          
+  
+  Work With Heartwood
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+      
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../models/" class="md-tabs__link">
+          
+  
+  Models
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+      
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../platforms/" class="md-tabs__link">
+          
+  
+  Platforms
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+      
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../" class="md-tabs__link">
+          
+  
+  Operate Heartwood
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+      
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../architecture/" class="md-tabs__link">
+          
+  
+  Architecture
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+      
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../reference/gateway-api/" class="md-tabs__link">
+          
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+      
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../contribute/" class="md-tabs__link">
+          
+  
+  Contribute
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+    
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="Heartwood" class="md-nav__button md-logo" aria-label="Heartwood" data-md-component="logo">
+      
+  <img src="../../assets/brand/heartwood-mark.svg" alt="Heartwood">
+
+    </a>
+    Heartwood
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/SchmiedmayerLab/heartwood" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.3.1 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2026 Fonticons, Inc.--><path fill="currentColor" d="M216.5 362.5c-66-8-112.5-55.5-112.5-117 0-25 9-52 24-70-6.5-16.5-5.5-51.5 2-66 20-2.5 47 8 63 22.5 19-6 39-9 63.5-9s44.5 3 62.5 8.5c15.5-14 43-24.5 63-22 7 13.5 8 48.5 1.5 65.5 16 19 24.5 44.5 24.5 70.5 0 61.5-46.5 108-113.5 116.5 17 11 28.5 35 28.5 62.5v52c0 15 12.5 23.5 27.5 17.5C441 459.5 512 369 512 257 512 115.5 397 0 255.5 0S0 115.5 0 257c0 111 70.5 203 165.5 237.5 13.5 5 26.5-4 26.5-17.5v-40c-7 3-16 5-24 5-33 0-52.5-18-66.5-51.5-5.5-13.5-11.5-21.5-23-23-6-.5-8-3-8-6 0-6 10-10.5 20-10.5 14.5 0 27 9 40 27.5 10 14.5 20.5 21 33 21s20.5-4.5 32-16c8.5-8.5 15-16 21-21"/></svg>
+  </div>
+  <div class="md-source__repository">
+    SchmiedmayerLab/heartwood
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Home
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../start/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Get Started
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_2" id="__nav_2_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+  Get Started
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../start/install/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Install Heartwood
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../start/project/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Projects and Private State
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../use/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Work With Heartwood
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3" id="__nav_3_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+  Work With Heartwood
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../use/research-workflows/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Research Workflows
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../use/terminal/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Terminal
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../use/browser/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Browser
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../use/notebooks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Notebooks
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../use/actions-audit/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Actions and Audit History
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../use/skills/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Research Skills
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../use/specialists/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Research Specialists
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../models/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Models
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_4" id="__nav_4_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+  Models
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../models/connections/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Hosted and Managed Models
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../models/choose-managed/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Choose a Heartwood-Managed Model
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../models/run-with-heartwood/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Run a Model With Heartwood
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../models/offline/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Move a Model Offline
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../platforms/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Platforms
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_5" id="__nav_5_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+  Platforms
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../platforms/containers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Containers
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../platforms/native-linux/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Native Linux
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../platforms/terra/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Terra
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../platforms/carina/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Stanford Carina
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" checked>
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Operate Heartwood
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_6" id="__nav_6_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+  Operate Heartwood
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../platform-contract/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Platform Contract
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Platform API and Access Requirements
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="././" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Platform API and Access Requirements
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+
+<nav class="md-nav md-nav--secondary" aria-label="On this page">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      On this page
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#select-the-integration-scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Select the Integration Scope
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#hosting-and-researcher-access" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Hosting and Researcher Access
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#inference-access" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Inference Access
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#research-service-apis-and-permissions" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Research Service APIs and Permissions
+      </span>
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Research Service APIs and Permissions">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#terra" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Terra
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#seven-bridges" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Seven Bridges
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#audit-and-records-access" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Audit and Records Access
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#worker-and-sensitive-data-controls" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Worker and Sensitive-Data Controls
+      </span>
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Worker and Sensitive-Data Controls">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#gateway-behavior-behind-native-qualification" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Gateway Behavior Behind Native Qualification
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sensitive-data" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Sensitive Data
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#information-to-return" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Information to Return
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#contract-bundle-and-acceptance" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Contract Bundle and Acceptance
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../audit-checkpoints/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Audit Checkpoints and Retention
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../parallel-reviews/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Qualify Parallel Reviews
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../support/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Support and Compatibility
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../security/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Security and Controlled Data
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../platform-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Add a Platform
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../architecture/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Architecture
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_7" id="__nav_7_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+  Architecture
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/system/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  System Architecture
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/skills/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Skill Trust and Distribution
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/sessions-audit/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Sessions and Audit
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/experiments/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Experiment Records
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Testing and Evidence
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" >
+        
+          
+          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Reference
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+  Reference
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/gateway-api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Gateway API
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/cli/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Command Reference
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Configuration and State
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/capabilities/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Platform Capabilities
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/gpu-compatibility/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  GPU Compatibility
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Diagnostics and Troubleshooting
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/glossary/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Glossary
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_9" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../contribute/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Contribute
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_9" id="__nav_9_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_9">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+  Contribute
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contribute/development/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Development Guide
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contribute/skills/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Contribute Research Skills
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contribute/documentation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Documentation Guide
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contribute/visual-identity/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Visual Identity
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contribute/releases/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Release Guide
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  
+                    
+                    
+                    
+                      
+                    
+                    
+                      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+                      <div class="md-sidebar-button__wrapper">
+                        <label class="md-sidebar-button" for="__toc"></label>
+                      </div>
+                    
+                  
+                  <div class="md-sidebar__inner">
+                    
+
+
+<nav class="md-nav md-nav--secondary" aria-label="On this page">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      On this page
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#select-the-integration-scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Select the Integration Scope
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#hosting-and-researcher-access" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Hosting and Researcher Access
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#inference-access" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Inference Access
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#research-service-apis-and-permissions" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Research Service APIs and Permissions
+      </span>
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Research Service APIs and Permissions">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#terra" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Terra
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#seven-bridges" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Seven Bridges
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#audit-and-records-access" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Audit and Records Access
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#worker-and-sensitive-data-controls" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Worker and Sensitive-Data Controls
+      </span>
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Worker and Sensitive-Data Controls">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#gateway-behavior-behind-native-qualification" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Gateway Behavior Behind Native Qualification
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sensitive-data" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Sensitive Data
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#information-to-return" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Information to Return
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#contract-bundle-and-acceptance" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Contract Bundle and Acceptance
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+                
+
+
+
+  
+
+
+  <nav class="md-path" aria-label="Navigation" >
+    <ol class="md-path__list">
+      
+        
+  
+  
+    <li class="md-path__item">
+      <a href="../.." class="md-path__link">
+        
+  
+  <span class="md-ellipsis">
+    Home
+  </span>
+
+      </a>
+    </li>
+  
+
+      
+      
+        
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-path__item">
+        <a href="../" class="md-path__link">
+          
+  
+  <span class="md-ellipsis">
+    Operate Heartwood
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ol>
+  </nav>
+
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+  
+  
+
+
+<!--
+This source file is part of the Heartwood open-source project
+SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+SPDX-License-Identifier: MIT
+-->
+
+<h1 id="platform-api-and-access-requirements">Platform API and Access Requirements<a class="headerlink" href="#platform-api-and-access-requirements" title="Permanent link">&para;</a></h1>
+<p>These are the APIs, access and deployment controls a platform team such as Terra or Seven Bridges provides to integrate Heartwood.
+The <a href="../platform-contract/">Platform Contract</a> defines the message semantics, versioning and conformance checks behind each request.</p>
+<h2 id="select-the-integration-scope">Select the Integration Scope<a class="headerlink" href="#select-the-integration-scope" title="Permanent link">&para;</a></h2>
+<p>Hosting, isolated workers, inference and research services are independent capabilities; select only what the integration needs and start with a synthetic project.</p>
+<table>
+<thead>
+<tr>
+<th>Capability</th>
+<th>Requested from the platform</th>
+<th>Heartwood status</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Run the application</td>
+<td>A release artifact, durable storage and an authenticated researcher route</td>
+<td>Current; interfaces depend on the platform adapter</td>
+</tr>
+<tr>
+<td>Isolate complete workers</td>
+<td>A Docker engine and sandbox gateway under operator control, protected state, selected read-only inputs, bounded writable storage and enforced egress</td>
+<td>Current for the OpenShell Docker reference adapter; qualified only against the qualification-only gateway build</td>
+</tr>
+<tr>
+<td>Use approved inference</td>
+<td>Authorized model discovery and an inference endpoint with streaming and native tool calls</td>
+<td>Current through built-in and configured routes; connection-manifest startup unavailable</td>
+</tr>
+<tr>
+<td>Inspect research metadata</td>
+<td>Authorized project, dataset, file and workflow descriptions</td>
+<td>Draft profile and offline checks; no built-in connector</td>
+</tr>
+<tr>
+<td>Execute research workflows</td>
+<td>Native submission, status, results and cancellation with independent authorization</td>
+<td>Draft profile; the trusted Python <a href="../platform-contract/#outside-operation-admission">outside operation</a> interface requires a platform-specific adapter</td>
+</tr>
+<tr>
+<td>Estimate work and inspect budgets</td>
+<td>Platform-owned estimates, observed spend and allocation constraints</td>
+<td>Draft schemas only</td>
+</tr>
+</tbody>
+</table>
+<p>The service requests below describe an integration target; no Terra workflow or Seven Bridges connector is installed.
+The Terra image supports the documented terminal and notebook paths.</p>
+<h2 id="hosting-and-researcher-access">Hosting and Researcher Access<a class="headerlink" href="#hosting-and-researcher-access" title="Permanent link">&para;</a></h2>
+<p>Provide one authorized research directory and persistent canonical state on storage with native advisory locks that preserves the project UUID across restart and restore; an object-store mount is not sufficient because it exposes files.
+For a managed project, bind state outside the research directory with an operator-owned <a href="../../reference/configuration/#deployment-manifest">deployment manifest</a> and keep it inaccessible to workers.
+The manifest is read only by <code>heartwood gateway serve --deployment</code>, <code>heartwood project migrate</code> and <code>heartwood project recover-migration</code>; qualify each interface against the gateway it binds.</p>
+<p>Provide, without secret values:</p>
+<ul>
+<li>the artifact digest, architecture and execution shape;</li>
+<li>the research directory, state location and the operator responsible for their binding;</li>
+<li>the authenticated public origin, exact base path, proxy source ranges and TLS termination;</li>
+<li>the secret-manager reference or protected descriptor source for the gateway capability;</li>
+<li>gateway lifecycle, session expiry, backup and restoration arrangements; and</li>
+<li>the available interfaces and the synthetic environment used to qualify them.</li>
+</ul>
+<p>The proxy authenticates and authorizes the researcher, strips client-supplied forwarding and identity headers, supports unbuffered streaming and WebSocket upgrades, and prevents direct access to the gateway.
+Use one gateway per researcher and project, and separate authenticated origins for mutually untrusted projects.
+Heartwood does not verify OpenID Connect identities or exchange platform tokens.
+The <a href="../../reference/gateway-api/">Gateway API reference</a> and the generated <code>gateway.openapi.json</code> define every route.</p>
+<h2 id="inference-access">Inference Access<a class="headerlink" href="#inference-access" title="Permanent link">&para;</a></h2>
+<p>For a compatible inference service, provide the API base URL, the authenticated model-list endpoint and the approved model identifiers.
+The model list returns only the caller's authorized models.
+The minimum profile is Chat Completions with streaming and native tool calls; declare Responses support separately.
+State context and output limits, tool support, rate limits, quota behavior, permitted data classes, retention terms and region restrictions where known; missing declarations stay unknown.
+Declare each connection's <a href="../platform-contract/#route-data-handling">data handling</a>: the destination class of the complete route, including any gateway and its ultimate providers, and the authority that governs retention.
+A deployment that must keep content within a boundary lists the permitted destinations in its policy's <code>allowed_data_destinations</code>; a profile without external egress lists only <code>same-compute</code>.</p>
+<p>For isolated workers, the outside inference transport holds the real credential and gives the worker only a placeholder.
+The reference adapter uses the OpenShell inference transport; an institutional gateway can remain the provider endpoint behind it.
+Enforce model and tenant restrictions at the provider or an authorized inference gateway, because a hostname allowlist does not constrain which account, model or request a compromised worker sends there.
+State whether the credential authorizes one model or an approved set, and demonstrate revocation separately from rotation, including existing connections.
+A Heartwood-managed local model server is not reachable from an isolated worker; local compute for a worker needs a separately authenticated outside route.</p>
+<h2 id="research-service-apis-and-permissions">Research Service APIs and Permissions<a class="headerlink" href="#research-service-apis-and-permissions" title="Permanent link">&para;</a></h2>
+<p>Select each capability individually; inspection does not imply permission to execute, export or change membership.
+Credentials belong to the trusted outside adapter, and the platform checks the caller's permission on every request.
+Never give raw platform credentials or unrestricted API tools to a worker.</p>
+<table>
+<thead>
+<tr>
+<th>Capability</th>
+<th>Required API behavior</th>
+<th>Minimum access to request</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Project discovery</td>
+<td>Resolve an authorized project and its stable identifier</td>
+<td>Read selected project metadata</td>
+</tr>
+<tr>
+<td>Dataset and file discovery</td>
+<td>Return identifiers, metadata, versions or checksums, and access restrictions</td>
+<td>Read metadata for selected resources</td>
+</tr>
+<tr>
+<td>Input access</td>
+<td>Resolve authorized content or scoped retrieval references</td>
+<td>Read only the selected data</td>
+</tr>
+<tr>
+<td>Workflow discovery</td>
+<td>Retrieve the immutable workflow or app revision, input schema and resources</td>
+<td>Read approved workflow definitions</td>
+</tr>
+<tr>
+<td>Submission</td>
+<td>Submit the exact reviewed native request and return an operation identifier</td>
+<td>Execute only in the selected project and billing context</td>
+</tr>
+<tr>
+<td>Monitoring</td>
+<td>Read status, outputs and permitted logs by operation identifier</td>
+<td>Observe the authorized operation</td>
+</tr>
+<tr>
+<td>Cancellation</td>
+<td>Request cancellation and observe the terminal outcome</td>
+<td>Cancel the authorized operation only</td>
+</tr>
+<tr>
+<td>Output publication</td>
+<td>Write reviewed outputs to an authorized destination</td>
+<td>Destination-scoped write or export permission</td>
+</tr>
+<tr>
+<td>Budget observation</td>
+<td>Return timestamped allocation and spending, including unknown or delayed values</td>
+<td>Read the relevant allocation; no billing-administrator role</td>
+</tr>
+</tbody>
+</table>
+<p>State which APIs accept idempotency keys or support lookup after a lost response; a native POST is not assumed safe to retry.
+Cancellation acknowledgement does not prove that work or charges stopped, and data retrieval, logging and export can incur cost under read-only permissions.
+An MCP service for these capabilities follows the <a href="../platform-contract/#service-discovery">service discovery profile</a>.</p>
+<h3 id="terra">Terra<a class="headerlink" href="#terra" title="Permanent link">&para;</a></h3>
+<p>These requirements apply to the Google Cloud Terra workspace integration; confirm the deployment and cloud first.
+Terra workflows use WDL and Cromwell; provide the approved workflow revision and configured inputs. See <a href="https://support.terra.bio/hc/en-us/articles/360036379771-Overview-Running-workflows-in-Terra">Terra workflow execution</a>.</p>
+<p>Request a synthetic workspace, an authorized principal and a declared permission set.
+Request Reader for inspection, and Writer with Can-compute for workflow or interactive-compute launch.
+Writer also permits changes to workspace tables and method configurations; use a dedicated integration workspace when that authority is unacceptable.
+Owner and sharing permissions are not required.
+Workspace charges use its Terra billing project, and some read or copy operations incur transfer costs. See <a href="https://support.terra.bio/hc/en-us/articles/360025851892-Sharing-data-and-tools-with-workspace-access-controls">Terra workspace access controls</a>.</p>
+<p>The <a href="https://api.firecloud.org/">Terra API specification</a> defines these routes relative to <code>/api/workspaces/{workspaceNamespace}/{workspaceName}</code>:</p>
+<table>
+<thead>
+<tr>
+<th>Operation</th>
+<th>Native method and path</th>
+<th>Requested access</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Inspect data-table types</td>
+<td><code>GET /entities</code></td>
+<td>Selected workspace metadata</td>
+</tr>
+<tr>
+<td>Inspect workflow configurations</td>
+<td><code>GET /methodconfigs</code></td>
+<td>Approved configuration metadata</td>
+</tr>
+<tr>
+<td>Inspect submission history</td>
+<td><code>GET /submissions</code></td>
+<td>Authorized workflow history</td>
+</tr>
+<tr>
+<td>Submit the reviewed configuration</td>
+<td><code>POST /submissions</code></td>
+<td>Writer with Can-compute</td>
+</tr>
+<tr>
+<td>Monitor the submission</td>
+<td><code>GET /submissions/{submissionId}</code></td>
+<td>Authorized submission state</td>
+</tr>
+<tr>
+<td>Read workflow execution metadata</td>
+<td><code>GET /submissions/{submissionId}/workflows/{workflowId}</code></td>
+<td>Authorized metadata; outputs may need storage access</td>
+</tr>
+<tr>
+<td>Request abort</td>
+<td><code>DELETE /submissions/{submissionId}</code></td>
+<td>Abort permission; observe terminal status afterward</td>
+</tr>
+</tbody>
+</table>
+<p>Use the native specification for request bodies and validation.
+Confirm bucket and object access and controlled-data entitlements separately from workspace metadata access.
+Include the Terra Data Repository <a href="https://support.terra.bio/hc/en-us/articles/4407244155931-How-to-authenticate-troubleshoot-Swagger-for-TDR">API</a> only when the selected datasets require it.
+Use a least-privilege user or service identity following <a href="https://support.terra.bio/hc/en-us/articles/360031023592-Best-practices-for-using-service-accounts-in-Terra">Terra's service-account guidance</a>, and never mount a researcher's cloud credential directory into a worker.</p>
+<h3 id="seven-bridges">Seven Bridges<a class="headerlink" href="#seven-bridges" title="Permanent link">&para;</a></h3>
+<p>Confirm the deployment and regional API base: the public Platform documents <code>https://api.sbgenomics.com/v2</code> (AWS US) and <code>https://eu-api.sbgenomics.com/v2</code> (AWS EU).
+The API authenticates with <code>X-SBG-Auth-Token</code>; keep the token in the outside adapter. See the <a href="https://docs.sevenbridges.com/docs/the-api">Seven Bridges API overview</a>.</p>
+<p>Request a synthetic project, its identifier and an approved app revision.
+Use the native project, file and app APIs for discovery; file identifiers select inputs.
+The task lifecycle is:</p>
+<table>
+<thead>
+<tr>
+<th>Operation</th>
+<th>Native API relative to <code>/v2</code></th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Create a draft task</td>
+<td><code>POST /tasks</code></td>
+<td><a href="https://docs.sevenbridges.com/reference/create-a-new-task">Create a draft task</a></td>
+</tr>
+<tr>
+<td>Start the reviewed task</td>
+<td><code>POST /tasks/{task_id}/actions/run</code></td>
+<td><a href="https://docs.sevenbridges.com/docs/api-quickstart">API task workflow</a></td>
+</tr>
+<tr>
+<td>Read status and outputs</td>
+<td><code>GET /tasks/{task_id}</code></td>
+<td><a href="https://docs.sevenbridges.com/reference/get-details-of-a-task">Get task details</a></td>
+</tr>
+<tr>
+<td>Request cancellation</td>
+<td><code>POST /tasks/{task_id}/actions/abort</code></td>
+<td><a href="https://docs.sevenbridges.com/reference/abort-a-task">Abort a task</a></td>
+</tr>
+</tbody>
+</table>
+<p>Read covers names, metadata and workflows; Copy covers content access and downloads; Execute covers running and aborting tasks; Write covers changes to files and workflows.
+Admin, membership and funding-source permissions are not required. See <a href="https://docs.sevenbridges.com/docs/projects-and-members">Seven Bridges project permissions</a>.
+These permissions apply per project, so use a dedicated project when the required authority must be narrower than a platform role.
+The platform keeps the project billing binding, and a download URL or copied file is not approval to export controlled data.</p>
+<h2 id="audit-and-records-access">Audit and Records Access<a class="headerlink" href="#audit-and-records-access" title="Permanent link">&para;</a></h2>
+<p>Provide the signer endpoint, its authentication mechanism, the approved deployment identifier, public verification keys with key versions, and the retention policy.
+The signer implements <code>POST /v1/checkpoints/sign</code> as described in <a href="../platform-contract/#audit-and-records">Audit and Records</a>; it is an outside service, not a gateway route.</p>
+<p>For managed evidence, also provide the records service origin, versioning and Object Lock retention, authorized publishers and readers, and the restore procedure, with these principals:</p>
+<table>
+<thead>
+<tr>
+<th>Principal</th>
+<th>Authority</th>
+<th>Boundary</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Gateway</td>
+<td>Stage candidate audit and experiment records, read retained history, request signing for its scope</td>
+<td>No checkpoint publication, signing key or policy administration</td>
+</tr>
+<tr>
+<td>Signing service</td>
+<td>Authorize the fixed scope, read candidates and retained history, sign and conditionally publish checkpoints</td>
+<td>Private key stays in the service or its KMS or HSM; no retention bypass or deletion</td>
+</tr>
+<tr>
+<td>Independent verifier</td>
+<td>Read retained versions, signatures and retention metadata</td>
+<td>No write, signing or key administration</td>
+</tr>
+<tr>
+<td>Worker</td>
+<td>None</td>
+<td>No credentials for or network route to these services</td>
+</tr>
+</tbody>
+</table>
+<p><a href="../audit-checkpoints/#records-permissions-and-retention">Records Permissions and Retention</a> maps these roles to S3 actions.
+A signing endpoint that returns a valid signature without retaining the checkpoint first does not satisfy managed evidence.
+Define how loss of signing, retention or telemetry is detected and which work stops.</p>
+<h2 id="worker-and-sensitive-data-controls">Worker and Sensitive-Data Controls<a class="headerlink" href="#worker-and-sensitive-data-controls" title="Permanent link">&para;</a></h2>
+<p>The complete worker, including its model client, tools and subprocesses, belongs inside the externally enforced boundary; the gateway keeps policy, approvals and canonical records outside it.
+Request mandatory filesystem and process controls, resource limits and default-deny networking with exact approved routes.
+Qualification must cover private and metadata addresses, alternate routes, redirects, peer workers, management endpoints and process inheritance on the selected infrastructure.
+No Docker socket, infrastructure credential, research-directory mount or state mount belongs in the worker.
+The reference adapter needs an operator-controlled Docker engine; it does not hand Docker administration to the researcher or agent.</p>
+<h3 id="gateway-behavior-behind-native-qualification">Gateway Behavior Behind Native Qualification<a class="headerlink" href="#gateway-behavior-behind-native-qualification" title="Permanent link">&para;</a></h3>
+<p>Heartwood does not distribute a production sandbox gateway.
+Native qualification runs against a gateway built only for qualification from the upstream OpenShell revision and the two patches recorded in <code>images/worker/candidate/gateway.json</code>.
+Its revocation and cleanup evidence depends on two behaviors of that build that the unmodified upstream release at the same revision lacks:</p>
+<ul>
+<li>The Docker driver rejects deletion of a sandbox whose provisioning has not settled, instead of abandoning the provisioning task; without it, a container request already sent to Docker can produce a worker after the gateway reported the sandbox deleted and Heartwood recorded its absence.
+  The driver reports it as capability <code>openshell.compute.delete-awaits-provisioning</code>.</li>
+<li>An explicit delete of a sandbox already marked as deleting calls the driver again; without it, a failed deletion stays marked as deleting, later requests are acknowledged without cleanup, and revocation times out without evidence of absence.
+  The gateway reports it as capability <code>openshell.compute.delete-retries-deleting</code> on its compute driver.</li>
+</ul>
+<p>A deployment's gateway must provide both behaviors before qualification results for revocation or cleanup apply to it.
+Before it serves, launches a worker or reconciles a retained attempt, Heartwood reads the registered gateway's info through the <code>GetGatewayInfo</code> API.
+It requires exactly one compute driver, implemented as <code>openshell/docker</code>, whose negotiated capabilities include both, and otherwise stops with <code>HW-WORKER-001</code> before any sandbox, volume or deletion request.
+The gateway version does not satisfy the check.
+The decision is retained, with the reported version, driver and capabilities, in each worker attempt's evidence: an accepted gateway in the runtime binding and revocation evidence, a refused launch in the evidence that recorded the attempt as not created.
+The check relies on the gateway's own report: a gateway that reports a capability it does not implement passes, and Heartwood does not test the deletion behavior of the registered gateway.
+Both capability names come from the qualification build's patches; no upstream release reports them, so an unmodified upstream gateway is refused.
+The qualification build also reports <code>0.1.8+heartwood.3</code>, a local version that no upstream release uses, and the <code>gateway_build</code> entry of the <a href="../../architecture/testing/#native-qualification-evidence">qualification evidence</a> records that version, its source revision and binary digests.
+Compare the deployed gateway with that record, or repeat native qualification against it and retain the evidence.</p>
+<h3 id="sensitive-data">Sensitive Data<a class="headerlink" href="#sensitive-data" title="Permanent link">&para;</a></h3>
+<p>Sensitive-data use requires institution-approved data eligibility, provider agreements, residency, retention, monitoring and output-release controls for the exact deployment.
+Heartwood provides selected-input staging and read-only mounts, not quarantine or steward-approved release.
+Managed evidence in <code>required</code> mode blocks a reviewed action while signing or retained-history verification is unavailable; <code>buffered</code> mode lets ordinary work continue with a visible gap, but outside operations and result releases still wait for retained evidence.
+A successful synthetic sandbox run is not sensitive-data approval.</p>
+<h2 id="information-to-return">Information to Return<a class="headerlink" href="#information-to-return" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Requested information</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Scope</td>
+<td>Hosting, isolation, inference, metadata, workflow execution, output publication and budget capabilities, each selected independently</td>
+</tr>
+<tr>
+<td>Environment</td>
+<td>Deployment, cloud, region, synthetic project identifier and technical contact</td>
+</tr>
+<tr>
+<td>Identity</td>
+<td>Principal type, audience and scopes, project permissions, token lifetime, secret reference and revocation mechanism</td>
+</tr>
+<tr>
+<td>APIs</td>
+<td>Base URLs, specification versions, selected operations, request limits, pagination, retry and error semantics</td>
+</tr>
+<tr>
+<td>Inference</td>
+<td>Model identifiers and protocols, permitted model set, data eligibility, declared data handling per connection, permitted data destinations, quota and retention terms</td>
+</tr>
+<tr>
+<td>Storage</td>
+<td>Research and state locations, project identity binding, locking, backup and restore, input and output controls</td>
+</tr>
+<tr>
+<td>Network</td>
+<td>Proxy origin and base path, gateway access restrictions, approved egress and its enforcement</td>
+</tr>
+<tr>
+<td>Compute</td>
+<td>Worker architecture, isolation mechanism, sandbox gateway version, image policy and resource limits</td>
+</tr>
+<tr>
+<td>Operations</td>
+<td>Workflow or app revisions, billing binding, status and cancellation behavior, lost-response reconciliation</td>
+</tr>
+<tr>
+<td>Records</td>
+<td>Signer endpoint and identity, verification keys, retention destination and policy, publisher and verifier permissions, restore procedure</td>
+</tr>
+<tr>
+<td>Evidence</td>
+<td>Synthetic test procedure, audit correlation, revocation checks, known limitations and the institutional approval owner</td>
+</tr>
+</tbody>
+</table>
+<p>Send identifiers and secret-manager references through the integration documentation and credentials through the approved secret channel.
+Never include real research data or credentials in examples, tickets or qualification artifacts.</p>
+<h2 id="contract-bundle-and-acceptance">Contract Bundle and Acceptance<a class="headerlink" href="#contract-bundle-and-acceptance" title="Permanent link">&para;</a></h2>
+<p><a href="../platform-contract/#generate-and-review-the-current-artifacts">Export the contract bundle</a> and distribute the complete directory with these requirements, the <a href="../platform-contract/">Platform Contract</a>, the <a href="../../reference/gateway-api/">Gateway API reference</a> and the exact source revision or release digest.
+The bundle supports integration and access review; it does not assert that draft services are deployed.</p>
+<p>Check captured model and service responses with the <a href="../platform-contract/#check-platform-service-responses">offline conformance checks</a>, then qualify the artifact in the synthetic environment.
+For each selected capability, return an authorized control and its rejected alternative; a failed request alone can indicate a broken service rather than effective policy.</p>
+<table>
+<thead>
+<tr>
+<th>Capability</th>
+<th>Authorized control</th>
+<th>Rejected or interrupted control</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Gateway access</td>
+<td>The owning researcher reaches the declared route and reconnects to the event stream</td>
+<td>Another principal, an invalid capability, a wrong origin or a direct upstream connection is refused</td>
+</tr>
+<tr>
+<td>Inference</td>
+<td>The approved model and identity complete a bounded synthetic tool call</td>
+<td>A disallowed model or tenant, direct credential access and a revoked worker route fail</td>
+</tr>
+<tr>
+<td>Data access</td>
+<td>A selected synthetic input is readable through its staging route</td>
+<td>Unselected resources, writes to read-only inputs and unauthorized export fail</td>
+</tr>
+<tr>
+<td>Workflow execution</td>
+<td>The exact reviewed request yields a correlated native operation</td>
+<td>Changed inputs or project, expired approval and conflicting replay fail; a lost reply reconciles without resubmission</td>
+</tr>
+<tr>
+<td>Retained evidence</td>
+<td>An authorized checkpoint is readable and verifies after restore</td>
+<td>Wrong-scope signing, unauthorized publication, replacement and deletion fail; a <code>required</code>-mode outage prevents dispatch</td>
+</tr>
+<tr>
+<td>Worker lifecycle</td>
+<td>The outside controller admits and then revokes the exact attempt</td>
+<td>The worker cannot reach protected state or management authority; uncertain deletion does not release ownership</td>
+</tr>
+</tbody>
+</table>
+<p>For capabilities without a Heartwood runtime integration, platform-side evidence establishes only the native service behavior.
+Record the result against the deployment following <a href="../platform-contract/#validate-a-platform">Validate a Platform</a>.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-circle-arrow-up" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m16 12-4-4-4 4M12 16V8"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../platform-contract/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Platform Contract">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-arrow-left" viewBox="0 0 24 24"><path d="m12 19-7-7 7-7M19 12H5"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Platform Contract
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../audit-checkpoints/" class="md-footer__link md-footer__link--next" aria-label="Next: Audit Checkpoints and Retention">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Audit Checkpoints and Retention
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-arrow-right" viewBox="0 0 24 24"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Copyright Stanford University and the Heartwood project authors
+    </div>
+  
+  
+    Made with
+    <a href="https://zensical.org/" target="_blank" rel="noopener">
+      Zensical
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate":null,"base":"../..","features":["content.code.copy","navigation.footer","navigation.indexes","navigation.path","navigation.sections","navigation.tabs","navigation.tabs.sticky","navigation.top","search.highlight","toc.follow"],"search":"../../assets/javascripts/workers/search.7d14d953.min.js","tags":null,"translations":{"clipboard.copied":"Copied to clipboard","clipboard.copy":"Copy to clipboard","search.result.more.one":"1 more on this page","search.result.more.other":"# more on this page","search.result.none":"No matching documents","search.result.one":"1 matching document","search.result.other":"# matching documents","search.result.placeholder":"Type to start searching","search.result.term.missing":"Missing","select.version":"Select version"},"version":{"alias":true,"provider":"mike"}}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.ed145cee.min.js"></script>
+      
+    
+  </body>
+</html>
