@@ -634,20 +634,21 @@ Their tools carry the four required annotations: submission and cancellation are
 ### MCP Client Behavior
 
 `packages/gateway/tests/test_mcp_compatibility.py` runs OpenHands' public MCP client against explicitly configured Streamable HTTP servers built on these fakes.
-It records what the client does with such a server; Heartwood itself still configures no MCP server.
+It records what the client does with such a server.
+Heartwood configures no MCP server in its OpenHands settings.
 Tests marked as expected failures state behavior that Heartwood requires and the client does not provide.
 
 | Area | Client behavior |
 |---|---|
-| Discovery | Lists tools with their annotations. Never reads resources or prompts. |
+| Discovery | Lists tools with their annotations. Never reads resources or prompts. Refuses a redirect to another origin before sending a request there. |
 | Tool-set changes | A change announced with `notifications/tools/list_changed` reaches a client that the gateway owns through its `on_tools_reconciled` callback. An agent configured with `mcp_config` registers the announced tools at once. |
-| Credentials | A rejected credential fails discovery with the same generic error as an unavailable service. Persisted conversation state stores configured headers redacted. |
+| Credentials | A rejected credential fails discovery with the same generic error as an unavailable service. With a bearer header configured, the session journal, the audit log and the persisted conversation files contain no credential. |
 | Results | A result reaches the agent as text, without a size limit. Heartwood truncates the result it records in the session. |
 | Errors | A `ToolError` message from the server reaches the agent unchanged. A malformed result or an unavailable service becomes an error observation. No call is retried. |
-| Timeouts | A client timeout sends `notifications/cancelled`. A stateless server cannot receive it and completes the call. The session records the call as failed. |
+| Timeouts | When the tool executor's timeout expires, the client sends `notifications/cancelled`. A server with a session stops the call; a stateless server cannot receive the notification and completes it. When the per-request timeout of the server entry expires, the session records the call as failed. |
 | Pausing | Pausing a session does not cancel a running MCP request. The call continues and the session records it as interrupted. |
 | Arguments | References such as `$NAME` in tool arguments are replaced with values from the conversation's secret registry before the call. |
-| Review | Under Heartwood's confirmation policy every MCP call waits for review, including calls to read-only tools. A client tool only acknowledges the call; the gateway submits it to the service after outside review. |
+| Review | Under Heartwood's confirmation policy every MCP call waits for review, including calls to read-only tools. A client tool only acknowledges the call. Outside operation review holds the proposal, and a trusted adapter calls the service through the MCP client only after approval. |
 
 ### Runtime Conformance
 
