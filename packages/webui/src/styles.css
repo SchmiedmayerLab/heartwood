@@ -2261,6 +2261,10 @@ summary:focus-visible {
   align-items: center;
 }
 
+.model-choice-capability {
+  grid-column: 2;
+}
+
 .activity-list {
   display: grid;
   padding: 10px 0 24px;

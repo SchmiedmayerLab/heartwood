@@ -2559,6 +2559,11 @@ describe("App", () => {
       "Models available from Research AI Service",
     );
     expect(modelSelect).toHaveTextContent("Provider Coder");
+    expect(
+      screen.getByText(
+        "Context window: 128,000 tokens; native tool calls: supported",
+      ),
+    ).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Use model" }));
     await waitFor(() =>
       expect(client.modelConnectionRequest).toEqual({
