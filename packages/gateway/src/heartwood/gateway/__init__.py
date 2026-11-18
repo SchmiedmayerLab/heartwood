@@ -152,7 +152,6 @@ from heartwood.gateway._model_catalog import (
     ProviderModel,
     custom_model_connection,
     custom_model_connection_requires_token,
-    load_model_connections,
     model_connections_from_mapping,
 )
 from heartwood.gateway._model_settings import (
@@ -448,7 +447,6 @@ __all__ = [
     "inspect_project_deployment",
     "load_checkpoint_signer_registry",
     "load_model_artifact_catalog",
-    "load_model_connections",
     "load_model_snapshot_catalog",
     "load_project_deployment",
     "local_checkpoint_signer_socket",

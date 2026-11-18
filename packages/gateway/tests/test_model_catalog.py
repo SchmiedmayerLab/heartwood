@@ -6,7 +6,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 from collections.abc import Mapping
 from dataclasses import replace
@@ -30,7 +29,7 @@ from heartwood.gateway import (
     SubscriptionDeviceLogin,
     SubscriptionError,
     custom_model_connection,
-    load_model_connections,
+    model_connections_from_mapping,
 )
 from heartwood.gateway._model_catalog import _model_compatibility, active_model_connections
 from heartwood.schemas import PolicyProfile
@@ -246,34 +245,26 @@ def test_subscription_gateway_fails_closed_at_the_openhands_boundary(
     assert subscription["credential_status"] == "missing"
 
 
-def test_platform_connection_manifest_supports_multi_model_research_service(
-    tmp_path: Path,
-) -> None:
-    path = tmp_path / "connections.json"
-    path.write_text(
-        json.dumps(
+def test_platform_connection_manifest_supports_multi_model_research_service() -> None:
+    manifest = {
+        "schema_version": "heartwood.model-connections.v1",
+        "connections": [
             {
-                "schema_version": "heartwood.model-connections.v1",
-                "connections": [
-                    {
-                        "connection_id": "research-ai",
-                        "label": "Research AI Service",
-                        "protocol": "static",
-                        "model_prefix": "litellm_proxy/",
-                        "source": "platform",
-                        "credential_kind": "managed-identity",
-                        "policy_endpoint": "https://models.example/v1/chat/completions",
-                        "catalog_endpoint": None,
-                        "description": "Models authorized by the research environment.",
-                        "static_models": ["coding-large", "coding-small"],
-                    }
-                ],
+                "connection_id": "research-ai",
+                "label": "Research AI Service",
+                "protocol": "static",
+                "model_prefix": "litellm_proxy/",
+                "source": "platform",
+                "credential_kind": "managed-identity",
+                "policy_endpoint": "https://models.example/v1/chat/completions",
+                "catalog_endpoint": None,
+                "description": "Models authorized by the research environment.",
+                "static_models": ["coding-large", "coding-small"],
             }
-        ),
-        encoding="utf-8",
-    )
+        ],
+    }
 
-    connections = load_model_connections(path)
+    connections = model_connections_from_mapping(manifest)
     research = next(item for item in connections if item.connection_id == "research-ai")
 
     assert research.label == "Research AI Service"
@@ -303,43 +294,33 @@ def test_platform_connection_manifest_supports_multi_model_research_service(
     ],
 )
 def test_connection_manifest_rejects_invalid_or_secret_state(
-    tmp_path: Path,
     payload: object,
     message: str,
 ) -> None:
-    path = tmp_path / "connections.json"
-    path.write_text(json.dumps(payload), encoding="utf-8")
-
     with pytest.raises(ModelCatalogError, match=message):
-        load_model_connections(path)
+        model_connections_from_mapping(payload)
 
 
-def test_connection_manifest_accepts_only_platform_sources(tmp_path: Path) -> None:
-    path = tmp_path / "connections.json"
-    path.write_text(
-        json.dumps(
+def test_connection_manifest_accepts_only_platform_sources() -> None:
+    manifest = {
+        "schema_version": "heartwood.model-connections.v1",
+        "connections": [
             {
-                "schema_version": "heartwood.model-connections.v1",
-                "connections": [
-                    {
-                        "connection_id": "misclassified",
-                        "label": "Misclassified Service",
-                        "protocol": "static",
-                        "model_prefix": "openai/",
-                        "source": "user",
-                        "credential_kind": "managed-identity",
-                        "policy_endpoint": "https://models.example/v1/chat/completions",
-                        "catalog_endpoint": None,
-                        "static_models": ["model"],
-                    }
-                ],
+                "connection_id": "misclassified",
+                "label": "Misclassified Service",
+                "protocol": "static",
+                "model_prefix": "openai/",
+                "source": "user",
+                "credential_kind": "managed-identity",
+                "policy_endpoint": "https://models.example/v1/chat/completions",
+                "catalog_endpoint": None,
+                "static_models": ["model"],
             }
-        ),
-        encoding="utf-8",
-    )
+        ],
+    }
 
     with pytest.raises(ModelCatalogError, match="source: Input should be 'platform'"):
-        load_model_connections(path)
+        model_connections_from_mapping(manifest)
 
 
 def test_active_model_connections_share_filtering_and_validation() -> None:
@@ -509,13 +490,14 @@ def test_provider_failures_are_content_minimized() -> None:
         _connection: ModelConnection,
         _api_key: str | None,
     ) -> tuple[ProviderModel, ...]:
-        raise AuthenticationFailureError("response included a secret")
+        raise AuthenticationFailureError("Error code: 401 - response included a secret")
 
     service = ModelCatalogService(openai_lister=fail)
 
     with pytest.raises(ModelCatalogError, match="rejected") as caught:
         service.discover(_openai_connection(), api_key="private-token")
 
+    assert caught.value.code == "HW-AGENT-008"
     assert "secret" not in str(caught.value)
     assert "private-token" not in str(caught.value)
 
@@ -674,7 +656,7 @@ def test_custom_api_manual_fallback_reuses_the_authorized_runtime_credential(
     )
     base_url = "https://custom.example/v1"
 
-    with pytest.raises(ModelCatalogError, match="catalog is unavailable"):
+    with pytest.raises(ModelCatalogError, match="HW-AGENT-012"):
         gateway.discover_models(
             "custom-api",
             token="transient-custom-secret",
@@ -1023,13 +1005,7 @@ def test_model_connection_resolves_environment_file_and_managed_credentials(
     assert managed.resolve_api_key({}) is None
 
 
-def test_manifest_rejects_unreadable_duplicate_and_malformed_connections(
-    tmp_path: Path,
-) -> None:
-    missing = tmp_path / "missing.json"
-    with pytest.raises(ModelCatalogError, match="unable to load"):
-        load_model_connections(missing)
-
+def test_manifest_rejects_duplicate_and_malformed_connections() -> None:
     def manifest(connection: object) -> dict[str, object]:
         return {
             "schema_version": "heartwood.model-connections.v1",
@@ -1057,11 +1033,9 @@ def test_manifest_rejects_unreadable_duplicate_and_malformed_connections(
         (manifest({**base, "description": 7}), "description"),
         (manifest({**base, "connection_id": "heartwood"}), "ids must be unique"),
     )
-    for index, (payload, message) in enumerate(cases):
-        path = tmp_path / f"invalid-{index}.json"
-        path.write_text(json.dumps(payload), encoding="utf-8")
+    for payload, message in cases:
         with pytest.raises(ModelCatalogError, match=message):
-            load_model_connections(path)
+            model_connections_from_mapping(payload)
 
 
 def test_compatibility_uses_openhands_and_litellm_metadata(

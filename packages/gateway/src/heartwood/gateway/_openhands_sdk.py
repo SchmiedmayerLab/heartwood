@@ -301,6 +301,7 @@ class OpenHandsSdkBackend:
         env: Mapping[str, str] | None = None,
         llm_extra_body: Mapping[str, object] | None = None,
         native_tool_calling: bool | None = None,
+        api_mode: Literal["chat", "responses"] | None = None,
         conversation_factory: ConversationFactory | None = None,
         worker_context: Callable[[], WorkerConversationContext] | None = None,
         structured_task_outcomes: bool = False,
@@ -319,6 +320,7 @@ class OpenHandsSdkBackend:
         self.env = env
         self._llm_extra_body = dict(llm_extra_body or {})
         self._native_tool_calling = native_tool_calling
+        self._api_mode = api_mode
         self._security_analyzer: SecurityAnalyzerBase | None = None
         if conversation_factory is not None and worker_context is not None:
             raise OpenHandsSdkError("Choose one conversation factory")
@@ -879,6 +881,7 @@ class OpenHandsSdkBackend:
             api_key=managed_api_key or self.profile.resolve_api_key(self.env),
             extra_body=self._llm_extra_body,
             native_tool_calling=self._native_tool_calling,
+            api_mode=self._api_mode,
             managed_inference=self._managed_inference,
         )
         if self.profile.auth_type == "subscription":
@@ -1001,6 +1004,7 @@ class OpenHandsSdkBackend:
             api_key=placeholder,
             extra_body=self._llm_extra_body,
             native_tool_calling=self._native_tool_calling,
+            api_mode=self._api_mode,
         )
         options["api_key"] = placeholder
         agent = self._build_agent(
@@ -2220,6 +2224,7 @@ def _llm_options(
     api_key: str | None,
     extra_body: Mapping[str, object],
     native_tool_calling: bool | None = None,
+    api_mode: Literal["chat", "responses"] | None = None,
     managed_inference: bool = False,
 ) -> dict[str, Any]:
     """Build the complete OpenHands LLM configuration for one model profile."""
@@ -2242,6 +2247,7 @@ def _llm_options(
         "stream": True,
         "litellm_extra_body": dict(extra_body) or None,
         "native_tool_calling": native_tool_calling,
+        "api_mode": api_mode,
         **_llm_resilience_options(profile),
     }
     if managed_inference:

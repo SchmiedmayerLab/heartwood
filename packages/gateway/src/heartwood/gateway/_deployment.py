@@ -9,19 +9,25 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import stat
 import tomllib
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from urllib.parse import urlsplit
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from heartwood.adapters.platform import select_platform_adapter
 from heartwood.gateway._diagnostics import diagnostic_for
+from heartwood.gateway._model_catalog import (
+    ModelCatalogError,
+    ModelConnection,
+    model_connections_from_mapping,
+)
 from heartwood.gateway._project import ProjectContext, ProjectStateError
 from heartwood.gateway._project_config import ProjectConfig, ProjectConfigStore
 from heartwood.gateway._readiness import (
@@ -42,11 +48,11 @@ from heartwood.model_policy import (
     validate_policy_restriction,
 )
 from heartwood.persistence import read_private_text
-from heartwood.schemas import PolicyProfile
+from heartwood.schemas import PlatformModelMetadataManifest, PolicyProfile
 
 _SCHEMA = "heartwood.project-deployment.v1"
 _FIELDS = {"schema_version", "project_id", "workspace", "state_root", "policy"}
-_OPTIONAL_FIELDS = {"worker", "evidence", "requirements"}
+_OPTIONAL_FIELDS = {"worker", "evidence", "requirements", "model_connections", "model_metadata"}
 
 
 class DeploymentError(ProjectStateError):
@@ -76,6 +82,8 @@ class ProjectDeployment:
     worker: OpenShellWorkerDeployment | None = None
     evidence: CheckpointEvidenceDeployment | None = None
     requirements: DeploymentRequirements = field(default_factory=DeploymentRequirements)
+    # Platform connections, with any model declarations, that the manifest supplies.
+    model_connections: tuple[ModelConnection, ...] = ()
     manifest: Path | None = None
     manifest_sha256: str | None = None
 
@@ -116,7 +124,13 @@ def inspect_project_deployment(
         manifest_sha256=deployment.manifest_sha256,
         **deployment.controls(),
     )
-    return inspect_deployment(deployment.project, env, policy=policy, config_store=store)
+    return inspect_deployment(
+        deployment.project,
+        env,
+        policy=policy,
+        config_store=store,
+        deployment_connections=deployment.model_connections,
+    )
 
 
 def load_project_deployment(
@@ -238,8 +252,58 @@ def _read_manifest(
         worker=worker,
         evidence=evidence,
         requirements=requirements,
+        model_connections=_model_connections(
+            record.get("model_connections"), record.get("model_metadata")
+        ),
         manifest=resolved,
         manifest_sha256=hashlib.sha256(content.encode()).hexdigest(),
+    )
+
+
+def _model_connections(connections: object, metadata: object) -> tuple[ModelConnection, ...]:
+    """Load the manifest's platform connections and attach each model declaration."""
+    if connections is None:
+        if metadata is not None:
+            raise DeploymentError(
+                "deployment-manifest", "model metadata requires model connections"
+            )
+        return ()
+    try:
+        loaded = tuple(
+            connection
+            for connection in model_connections_from_mapping(connections)
+            if connection.source == "platform"
+        )
+        # The schema is a JSON document; TOML dates and times become ISO 8601 strings.
+        declared = (
+            PlatformModelMetadataManifest.model_validate_json(
+                json.dumps(metadata, default=lambda value: value.isoformat())
+            ).models
+            if metadata is not None
+            else ()
+        )
+    except ModelCatalogError as error:
+        raise DeploymentError("deployment-manifest", str(error)) from None
+    except ValidationError as error:
+        details = "; ".join(
+            f"{'.'.join(str(part) for part in item['loc']) or 'manifest'}: {item['msg']}"
+            for item in error.errors(include_input=False, include_url=False)
+        )
+        raise DeploymentError("deployment-manifest", f"invalid model metadata: {details}") from None
+    identities = {connection.connection_id for connection in loaded}
+    if unknown := sorted({item.connection_id for item in declared} - identities):
+        raise DeploymentError(
+            "deployment-manifest",
+            f"model metadata names undeclared connections: {', '.join(unknown)}",
+        )
+    return tuple(
+        replace(
+            connection,
+            model_metadata=tuple(
+                item for item in declared if item.connection_id == connection.connection_id
+            ),
+        )
+        for connection in loaded
     )
 
 

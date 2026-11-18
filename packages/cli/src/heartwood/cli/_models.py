@@ -358,6 +358,9 @@ def _format_model_settings(settings: ModelSettingsResponse) -> str:
     return "\n".join(lines)
 
 
+_TOOL_SUPPORT = {None: "unknown", True: "supported", False: "not supported"}
+
+
 def _format_model_catalog(catalog: ModelCatalogResponse) -> str:
     connection = catalog["connection"]
     lines = [f"Models available from {connection['label']}", ""]
@@ -370,6 +373,13 @@ def _format_model_catalog(catalog: ModelCatalogResponse) -> str:
         label = model_id if display_name in {None, model_id} else f"{display_name} ({model_id})"
         lines.append(f"  {label}  [{item['availability']}]")
         lines.append(f"    {item['reason']}")
+        window = item["context_window"]
+        lines.append(
+            "    Context window: "
+            + ("unknown" if window is None else f"{window:,} tokens")
+            + "; native tool calls: "
+            + _TOOL_SUPPORT[item["supports_tools"]]
+        )
     lines.extend(
         (
             "",
