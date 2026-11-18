@@ -317,9 +317,13 @@ def served(
         async def redirect(_request: Request) -> Response:
             return RedirectResponse(f"{elsewhere}/mcp", status_code=307)
 
+        async def same_origin(request: Request) -> Response:
+            return RedirectResponse(str(request.url.replace(path="/catalog/mcp")), status_code=307)
+
         app = Starlette(
             routes=[
                 Route("/moved/mcp", redirect, methods=["GET", "POST"]),
+                Route("/renamed/mcp", same_origin, methods=["GET", "POST"]),
                 Mount("/catalog", app=catalog.app),
             ],
             lifespan=catalog.app.router.lifespan_context,
@@ -733,6 +737,20 @@ def test_a_redirect_to_another_origin_is_not_followed(tmp_path: Path) -> None:
             service.gateway.test_mcp_server("moved", McpServerTestRequest())
         assert refused.value.code == "HW-MCP-005"
         assert service.redirected == []
+
+
+def test_a_redirect_within_the_origin_is_followed(tmp_path: Path) -> None:
+    with served(tmp_path) as service:
+        service.gateway.add_mcp_server(
+            McpServerAddRequest(
+                server_id="renamed",
+                label="Renamed",
+                url=f"{service.origin}/renamed/mcp",
+                token=service.token,
+            )
+        )
+        result = service.gateway.test_mcp_server("renamed", McpServerTestRequest())
+        assert "find_records" in {tool["name"] for tool in result["tools"]}
 
 
 def test_disconnect_forgets_the_credential_and_removes_the_tools(tmp_path: Path) -> None:
