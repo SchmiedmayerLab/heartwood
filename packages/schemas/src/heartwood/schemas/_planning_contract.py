@@ -441,6 +441,74 @@ class PlatformOperationObservation(_PlanningRecord):
     limitations: tuple[Text, ...] = ()
 
 
+class PlatformOperationProposal(_PlanningRecord):
+    """What the platform would run for exact operation arguments; it authorizes nothing.
+
+    The platform derives it from the arguments it would receive. Resource limits use
+    ``duration`` in seconds for the run time limit and ``gpu`` with the GPU type as unit.
+    """
+
+    schema_version: Literal["heartwood.platform-operation-proposal.v1"] = (
+        "heartwood.platform-operation-proposal.v1"
+    )
+    service_id: Text
+    tool: Text
+    description: Text
+    runtime_profile_ref: Text | None = None
+    resource_limits: tuple[OperationResourceLimit, ...] = ()
+    data_scope: Text
+    destination: Text
+    limitations: tuple[Text, ...] = ()
+
+    @model_validator(mode="after")
+    def unique_limits(self) -> Self:
+        """Keep each resource limit unambiguous."""
+        _unique([item.metric for item in self.resource_limits], "proposal resource limits")
+        return self
+
+
+class PlatformOperationCapability(_PlanningRecord):
+    """One operation a service offers and the permission the platform requires for it."""
+
+    tool: Text
+    operation: Literal["submit", "status", "cancel", "proposal"]
+    required_permission: Text
+    permitted: bool | None = None
+
+
+class PlatformOptionalCapability(_PlanningRecord):
+    """An optional capability the service declares for the calling project."""
+
+    capability: Literal["gpu-resources", "dataset-attachment", "application-discovery"]
+    status: Literal["available", "not-permitted"]
+    reason: Text | None = None
+
+
+class PlatformOperationCapabilities(_PlanningRecord):
+    """Operations and optional capabilities a service declares; discovery authorizes nothing.
+
+    ``permitted`` reports whether the calling project holds a permission when the platform
+    discloses it. The platform checks every call again, and read access never implies
+    permission to allocate resources or attach data. An optional capability that is not
+    listed is unavailable.
+    """
+
+    schema_version: Literal["heartwood.platform-operation-capabilities.v1"] = (
+        "heartwood.platform-operation-capabilities.v1"
+    )
+    service_id: Text
+    operations: tuple[PlatformOperationCapability, ...] = Field(min_length=1)
+    optional_capabilities: tuple[PlatformOptionalCapability, ...] = ()
+    limitations: tuple[Text, ...] = ()
+
+    @model_validator(mode="after")
+    def unique_entries(self) -> Self:
+        """Describe each tool and each optional capability once."""
+        _unique([item.tool for item in self.operations], "declared operations")
+        _unique([item.capability for item in self.optional_capabilities], "optional capabilities")
+        return self
+
+
 class PlanningOverview(_PlanningRecord):
     """One project/plan revision's linked view; neither an accounting nor approval engine."""
 

@@ -47,10 +47,15 @@ from heartwood.schemas import (
     ElementEstimate,
     EstimatedCost,
     FocusEvidenceReference,
+    OperationResourceLimit,
     PlatformEstimate,
     PlatformLaunchContext,
     PlatformMcpServiceProfile,
+    PlatformOperationCapabilities,
+    PlatformOperationCapability,
     PlatformOperationObservation,
+    PlatformOperationProposal,
+    PlatformOptionalCapability,
     WorkloadElement,
     WorkloadPrediction,
 )
@@ -365,19 +370,27 @@ class FakeDataService(_Service):
 
 
 class JobResources(_Wire):
-    """TES task resources, with GPU type and count for the platform's GPU node pool."""
+    """TES task resources, with GPU type and count for the platform's GPU node pool.
+
+    ``max_runtime_seconds`` stands in for the platform's run time limit, which TES leaves
+    to the implementation.
+    """
 
     cpu_cores: int = 1
     ram_gb: float = 1.0
     gpu_type: str | None = None
     gpu_count: int = 0
+    max_runtime_seconds: int = 3600
 
 
 @dataclass(slots=True)
 class _Task:
     task_id: str | None
     request_sha256: str
-    state: TesState | Literal["DENIED"]
+    state: TesState | Literal["DENIED", "NOT_RECEIVED", "CANCEL"]
+    reason: str | None = None
+    # The operation a cancellation names.
+    target: str | None = None
 
 
 @dataclass(slots=True)
@@ -390,8 +403,11 @@ class FakeJobService(_Service):
     """Job submission, status and cancellation shaped after TES, keyed by operation identifier.
 
     A repeated operation identifier with the same request returns the existing task, and a
-    different request under the same identifier is a conflict. GPU requests are denied for
-    projects without a GPU entitlement. Tests move tasks between states with ``advance``.
+    different request under the same identifier is a conflict. Status for an identifier the
+    service never received reports it as failed and refuses that identifier afterwards.
+    Cancellation is its own operation that names an earlier one. GPU requests are denied
+    for projects without a GPU entitlement, and submissions are denied while a project's
+    budget is exhausted. Tests move tasks between states with ``advance``.
     """
 
     service_id = "synthetic-jobs"
@@ -402,25 +418,131 @@ class FakeJobService(_Service):
         issuer: FakeTokenIssuer,
         gpu_projects: frozenset[str] = frozenset(),
         clock: Callable[[], datetime] = lambda: _EPOCH,
+        contexts: dict[str, str] | None = None,
     ) -> None:
-        """Accept GPU requests only for ``gpu_projects``, observing time with ``clock``."""
+        """Accept GPU requests only for ``gpu_projects``, observing time with ``clock``.
+
+        ``contexts`` maps a platform project to the project context its records carry; a
+        project without an entry uses its own identifier.
+        """
         super().__init__(issuer, "Synthetic job service")
         self.gpu_projects = gpu_projects
         self.clock = clock
+        self.contexts = dict(contexts or {})
+        # Projects whose budget admits no more work, as other work or an administrator left it.
+        self.exhausted_projects: set[str] = set()
+        # Projects whose access the platform revoked; every call for them is refused.
+        self.revoked_projects: set[str] = set()
         self._state = _Tasks()
         self._drop_after_submit = False
+        self._delay_after_submit = 0.0
         self.server.tool(self.create_task, annotations=_SUBMIT)
         self.server.tool(self.get_task, annotations=_READ_ONLY)
         self.server.tool(self.cancel_task, annotations=_CANCEL)
+        self.server.tool(self.describe_operations, annotations=_READ_ONLY)
+        self.server.tool(self.propose_task, annotations=_READ_ONLY)
 
     def drop_next_submission_reply(self) -> None:
         """Lose the reply of the next submission after the task was recorded."""
         self._drop_after_submit = True
 
+    def delay_next_submission_reply(self, seconds: float) -> None:
+        """Hold the reply of the next submission after the task was recorded."""
+        self._delay_after_submit = seconds
+
     @property
     def task_count(self) -> int:
         """Return how many tasks the service started."""
         return self._state.submitted
+
+    def describe_operations(self, project_id: str) -> PlatformOperationCapabilities:
+        """Declare the operations, their permissions and the optional capabilities."""
+        self._admit(project_id)
+        gpu = project_id in self.gpu_projects
+        return PlatformOperationCapabilities(
+            service_id=self.service_id,
+            operations=(
+                PlatformOperationCapability(
+                    tool="create_task",
+                    operation="submit",
+                    required_permission="jobs:submit",
+                    permitted=True,
+                ),
+                PlatformOperationCapability(
+                    tool="get_task",
+                    operation="status",
+                    required_permission="jobs:read",
+                    permitted=True,
+                ),
+                PlatformOperationCapability(
+                    tool="cancel_task",
+                    operation="cancel",
+                    required_permission="jobs:cancel",
+                    permitted=True,
+                ),
+                PlatformOperationCapability(
+                    tool="propose_task",
+                    operation="proposal",
+                    required_permission="jobs:read",
+                    permitted=True,
+                ),
+            ),
+            optional_capabilities=(
+                PlatformOptionalCapability(
+                    capability="gpu-resources",
+                    status="available" if gpu else "not-permitted",
+                    reason=None if gpu else "The project holds no GPU entitlement.",
+                ),
+            ),
+        )
+
+    def propose_task(
+        self, project_id: str, tool: str, arguments: dict[str, Any]
+    ) -> PlatformOperationProposal:
+        """Describe what ``create_task`` would run for these arguments; nothing is submitted."""
+        self._admit(project_id)
+        if tool != "create_task":
+            raise ToolError("no proposal for this tool")
+        try:
+            name, command = str(arguments["name"]), [str(item) for item in arguments["command"]]
+            resources = JobResources.model_validate(arguments.get("resources") or {})
+            inputs = [str(item) for item in arguments.get("inputs") or []]
+        except (KeyError, TypeError, ValueError):
+            raise ToolError("invalid task arguments") from None
+        limits = [
+            OperationResourceLimit(metric="cpu", unit="core", maximum=str(resources.cpu_cores)),
+            OperationResourceLimit(metric="memory", unit="GB", maximum=f"{resources.ram_gb:g}"),
+            OperationResourceLimit(
+                metric="duration", unit="s", maximum=str(resources.max_runtime_seconds)
+            ),
+        ]
+        limitations = ["Admission checks the project's budget and policy at submission."]
+        if resources.gpu_count:
+            limits.append(
+                OperationResourceLimit(
+                    metric="gpu",
+                    unit=resources.gpu_type or "any",
+                    maximum=str(resources.gpu_count),
+                )
+            )
+            if project_id not in self.gpu_projects:
+                limitations.append("The project holds no GPU entitlement, so admission denies it.")
+        return PlatformOperationProposal(
+            service_id=self.service_id,
+            tool=tool,
+            description=f"Run task {name}: {' '.join(command)}"[:512],
+            runtime_profile_ref=(
+                "synthetic-batch-gpu" if resources.gpu_count else "synthetic-batch-small"
+            ),
+            resource_limits=tuple(limits),
+            data_scope=(
+                "Project objects " + ", ".join(f"drs://data.synthetic.invalid/{i}" for i in inputs)
+                if inputs
+                else "No project data"
+            ),
+            destination=f"Project results prefix results/{project_id}/{name}/",
+            limitations=tuple(limitations),
+        )
 
     def create_task(
         self,
@@ -429,20 +551,29 @@ class FakeJobService(_Service):
         name: str,
         command: list[str],
         resources: JobResources,
+        inputs: list[str] | None = None,
     ) -> PlatformOperationObservation:
         """Submit a task once per operation identifier and return its observed status."""
-        self._authorize(project_id)
+        self._admit(project_id)
         digest = hashlib.sha256(
-            json.dumps([name, command, resources.model_dump(mode="json")], sort_keys=True).encode()
+            json.dumps(
+                [name, command, resources.model_dump(mode="json"), inputs or []], sort_keys=True
+            ).encode()
         ).hexdigest()
         with self._lock:
             key = (project_id, operation_id)
             task = self._state.tasks.get(key)
+            if task is not None and task.state == "NOT_RECEIVED":
+                raise ToolError("operation identifier was reported as not received")
             if task is not None and task.request_sha256 != digest:
                 raise ToolError("operation identifier conflict")
             if task is None:
                 if resources.gpu_count and project_id not in self.gpu_projects:
-                    task = _Task(None, digest, "DENIED")
+                    task = _Task(None, digest, "DENIED", "GPU request is outside the entitlement")
+                elif project_id in self.exhausted_projects:
+                    task = _Task(
+                        None, digest, "DENIED", "Budget budget-compute has no availability"
+                    )
                 else:
                     self._state.submitted += 1
                     task = _Task(f"task-{self._state.submitted:04d}", digest, "QUEUED")
@@ -450,53 +581,79 @@ class FakeJobService(_Service):
             if self._drop_after_submit:
                 self._drop_after_submit = False
                 self._gate.drop_reply = True
-            return self._observation(project_id, operation_id, task)
+            delay, self._delay_after_submit = self._delay_after_submit, 0.0
+            observation = self._observation(project_id, operation_id, task)
+        time.sleep(delay)
+        return observation
 
     def get_task(self, project_id: str, operation_id: str) -> PlatformOperationObservation:
-        """Return the observed status of an existing operation without submitting."""
-        self._authorize(project_id)
+        """Report an operation; an identifier never received is reported failed for good."""
+        self._admit(project_id)
         with self._lock:
-            return self._observation(project_id, operation_id, self._task(project_id, operation_id))
-
-    def cancel_task(self, project_id: str, operation_id: str) -> PlatformOperationObservation:
-        """Cancel queued or running work and report the observed result."""
-        self._authorize(project_id)
-        with self._lock:
-            task = self._task(project_id, operation_id)
-            if task.state in {"QUEUED", "RUNNING"}:
-                task.state = "CANCELED"
+            key = (project_id, operation_id)
+            task = self._state.tasks.get(key)
+            if task is None:
+                task = self._state.tasks[key] = _Task(None, "", "NOT_RECEIVED")
             return self._observation(project_id, operation_id, task)
+
+    def cancel_task(
+        self, project_id: str, operation_id: str, target_operation_id: str
+    ) -> PlatformOperationObservation:
+        """Cancel the named operation's queued or running work and report what was observed."""
+        self._admit(project_id)
+        with self._lock:
+            key = (project_id, operation_id)
+            existing = self._state.tasks.get(key)
+            if existing is not None and existing.state == "NOT_RECEIVED":
+                raise ToolError("operation identifier was reported as not received")
+            if existing is not None and existing.target != target_operation_id:
+                raise ToolError("operation identifier conflict")
+            target = self._state.tasks.get((project_id, target_operation_id))
+            if target is None or target.state in {"NOT_RECEIVED", "CANCEL"}:
+                raise ToolError("operation not found")
+            if existing is None:
+                if target.state in {"QUEUED", "RUNNING"}:
+                    target.state = "CANCELED"
+                existing = self._state.tasks[key] = _Task(
+                    None, target_operation_id, "CANCEL", target=target_operation_id
+                )
+            return self._observation(project_id, operation_id, existing)
 
     def advance(self, project_id: str, operation_id: str, state: TesState) -> None:
         """Move a task to the next backend state, as the executor would."""
         with self._lock:
-            task = self._task(project_id, operation_id)
-            if task.state == "DENIED":
+            task = self._state.tasks.get((project_id, operation_id))
+            if task is None or task.task_id is None:
                 raise ValueError("a denied operation has no task")
             task.state = state
 
-    def _task(self, project_id: str, operation_id: str) -> _Task:
-        task = self._state.tasks.get((project_id, operation_id))
-        if task is None:
-            raise ToolError("operation not found")
-        return task
+    def _admit(self, project_id: str) -> None:
+        self._authorize(project_id)
+        if project_id in self.revoked_projects:
+            raise ToolError("project authorization revoked")
 
     def _observation(
         self, project_id: str, operation_id: str, task: _Task
     ) -> PlatformOperationObservation:
+        reference, status, limitation = task.task_id or operation_id, "denied", task.reason
+        if task.state == "NOT_RECEIVED":
+            status, limitation = "failed", "The service never received this operation."
+        elif task.state == "CANCEL":
+            assert task.target is not None
+            target = self._state.tasks[(project_id, task.target)]
+            reference, status = target.task_id or task.target, "completed"
+            limitation = f"Cancellation of {task.target} observed TES state {target.state}"
+        elif task.state != "DENIED":
+            status, limitation = _TES_STATUS[task.state], f"TES state {task.state}"
         return PlatformOperationObservation(
-            project_context_id=project_id,
+            project_context_id=self.contexts.get(project_id, project_id),
             operation_id=operation_id,
             service_id=self.service_id,
-            backend_operation_ref=task.task_id or operation_id,
+            backend_operation_ref=reference,
             observed_at=self.clock(),
-            status="denied" if task.state == "DENIED" else _TES_STATUS[task.state],
+            status=cast(Any, status),
             platform_record_ref=f"synthetic-audit:{operation_id}",
-            limitations=(
-                ("GPU request is outside the project's entitlement",)
-                if task.state == "DENIED"
-                else (f"TES state {task.state}",)
-            ),
+            limitations=() if limitation is None else (limitation,),
         )
 
 
@@ -945,7 +1102,11 @@ def running_platform_fakes(*, gpu_projects: frozenset[str] = frozenset()) -> Ite
     issuer = FakeTokenIssuer()
     inference = FakeInference()
     data = FakeDataService(issuer)
-    jobs = FakeJobService(issuer, gpu_projects=gpu_projects)
+    jobs = FakeJobService(
+        issuer,
+        gpu_projects=gpu_projects,
+        contexts={item.project_id: item.project_context_id for item in SYNTHETIC_LAUNCH_CONTEXTS},
+    )
     budgets = FakeBudgetService(issuer)
     with (
         serve(inference.app) as inference_origin,
