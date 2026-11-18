@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import cast
 from urllib.parse import parse_qs, urlsplit
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from heartwood.core_adapter import (
     CommandConflictError,
@@ -35,6 +35,7 @@ from heartwood.gateway._model_settings import (
     model_profile_from_mapping,
 )
 from heartwood.gateway._model_transfer import ModelTransferError
+from heartwood.gateway._platform_planning import PlanningNotOfferedError, PlanningRecordError
 from heartwood.gateway._project import ProjectStateError
 from heartwood.gateway._project_activity import ProjectOwnershipError
 from heartwood.gateway._project_config import ProjectConfigError
@@ -45,7 +46,6 @@ from heartwood.gateway._workspace import WorkspaceInspectionError
 from heartwood.persistence import NativeLockUnavailableError
 from heartwood.schemas import (
     ActionReviewRequest,
-    ApiRequest,
     CustomLocalModelDownloadRequest,
     JsonValue,
     LocalModelImportRequest,
@@ -72,8 +72,17 @@ from heartwood.schemas import (
     SkillRefreshRequest,
     SubscriptionDeviceLoginRequest,
     SubscriptionDevicePollRequest,
+    WorkloadPrediction,
 )
+from heartwood.schemas.planning import PlanningEstimateRequest
 from heartwood.session import SessionCommand, validate_session_id
+
+_PLANNING_ROUTES = {
+    ("GET", ("project", "planning")): "view",
+    ("POST", ("project", "planning", "refresh")): "refresh",
+    ("POST", ("project", "planning", "predictions")): "prediction",
+    ("POST", ("project", "planning", "estimates")): "estimate",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -241,6 +250,8 @@ class RestGateway:
                 )
             except ValueError:
                 return _error(409, "Experiment records require integrity recovery")
+        if (request.method, parts) in _PLANNING_ROUTES:
+            return self._handle_planning(_PLANNING_ROUTES[request.method, parts], request.body)
         if parts == ("settings", "specialists") and request.method == "GET":
             try:
                 specialist_settings = self.gateway.specialist_settings()
@@ -445,6 +456,28 @@ class RestGateway:
                 },
             )
         return _error(405, "method is not allowed for gateway route")
+
+    def _handle_planning(self, route: str, body: str) -> RestResponse:
+        try:
+            if route == "view":
+                projection = self.gateway.planning()
+            elif route == "refresh":
+                projection = self.gateway.refresh_planning()
+            elif route == "prediction":
+                prediction = _request_body(WorkloadPrediction, body)
+                if isinstance(prediction, RestResponse):
+                    return prediction
+                projection = self.gateway.record_plan_prediction(prediction)
+            else:
+                estimate = _request_body(PlanningEstimateRequest, body)
+                if isinstance(estimate, RestResponse):
+                    return estimate
+                projection = self.gateway.request_plan_estimate(estimate)
+        except PlanningNotOfferedError as error:
+            return _error(404, error)
+        except PlanningRecordError as error:
+            return _error(422, error)
+        return RestResponse(status_code=200, body=_json_object(projection.model_dump(mode="json")))
 
     def _handle_session_creation(self, *, body: str) -> RestResponse:
         payload = _request_body(SessionCreateRequest, body or "{}")
@@ -732,7 +765,7 @@ class RestGateway:
         return RestResponse(status_code=200, body=_json_object(skill_settings))
 
 
-def _request_body[RequestT: ApiRequest](
+def _request_body[RequestT: BaseModel](
     request_type: type[RequestT],
     body: str,
 ) -> RequestT | RestResponse:

@@ -335,6 +335,42 @@ _DIAGNOSTICS: dict[str, DiagnosticDefinition] = {
         "Restore the sandbox control plane; the gateway retries revocation while it runs.",
         "/reference/troubleshooting/#hw-worker-003-worker-revocation-was-not-observed",
     ),
+    "planning-unavailable": DiagnosticDefinition(
+        "HW-PLAN-001",
+        "Platform planning information is unavailable",
+        "Retry later; recorded plans and estimates stay available.",
+        "/reference/troubleshooting/#hw-plan-001-platform-planning-information-is-unavailable",
+    ),
+    "planning-refused": DiagnosticDefinition(
+        "HW-PLAN-002",
+        "The platform refused the planning request",
+        "Confirm the project's platform access with the platform administrator.",
+        "/reference/troubleshooting/#hw-plan-002-the-platform-refused-the-planning-request",
+    ),
+    "planning-estimate-expired": DiagnosticDefinition(
+        "HW-PLAN-003",
+        "The platform estimate has expired",
+        "Request a new estimate before approving work.",
+        "/reference/troubleshooting/#hw-plan-003-the-platform-estimate-has-expired",
+    ),
+    "planning-budget-changed": DiagnosticDefinition(
+        "HW-PLAN-004",
+        "A platform budget changed after the estimate",
+        "Compare the plan with the current budgets and revise it if needed.",
+        "/reference/troubleshooting/#hw-plan-004-a-platform-budget-changed-after-the-estimate",
+    ),
+    "planning-estimate-incomplete": DiagnosticDefinition(
+        "HW-PLAN-005",
+        "The platform estimate is incomplete",
+        "Review the elements without a complete estimate; their cost is unknown, not zero.",
+        "/reference/troubleshooting/#hw-plan-005-the-platform-estimate-is-incomplete",
+    ),
+    "planning-denied": DiagnosticDefinition(
+        "HW-PLAN-006",
+        "The platform denied an operation",
+        "Revise the plan, or request more allocation through the platform's process.",
+        "/reference/troubleshooting/#hw-plan-006-the-platform-denied-an-operation",
+    ),
 }
 
 _FALLBACK_DIAGNOSTIC = DiagnosticDefinition(

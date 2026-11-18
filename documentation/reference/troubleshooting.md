@@ -34,6 +34,7 @@ Codes use `HW-{AREA}-{NNN}`.
 | `TERRA` | Terra-specific project and compute requirements |
 | `WORKER` | Managed worker sandbox gateway |
 | `MCP` | Research MCP server destinations, credentials and tool review |
+| `PLAN` | Research planning against platform budgets and estimates |
 | `ENV` | Readiness checks without a more specific code |
 
 Numbers `001` to `899` are assigned in sequence within an area and never reused; `900` to `999` are generic fallbacks.
@@ -418,6 +419,48 @@ Inspect its record and continue in a new session.
 | `review-outside-effects` without an admitted sandbox worker | Available only under a deployment manifest with a `[worker]` table; a local launch never runs one, so the mode is always unavailable there |
 | Reduced review outside a sandbox worker with a credential-backed model route | See [`HW-CREDENTIAL-002`](#hw-credential-002-model-credential-isolation-is-unavailable) |
 | A session is active and the selection asks less often than the current mode | Finish or resolve the active session work; a stricter mode is always accepted |
+
+## Research Planning
+
+These conditions appear in the planning overview of the terminal, browser and notebook.
+The platform owns budgets, prices and admission; see [Launch Context, Budgets and Estimates](../operate/platform-contract.md#launch-context-budgets-and-estimates).
+
+### `HW-PLAN-001`: Platform Planning Information Is Unavailable
+
+The platform's planning service could not be reached, did not accept the gateway's credential, or returned a response that did not match the contract or the launch context.
+Plans, estimates and budget observations recorded earlier stay visible with their observation times.
+Retry later; when the condition persists, ask the platform administrator to check the planning service and the credential the deployment issued for it.
+
+### `HW-PLAN-002`: The Platform Refused the Planning Request
+
+The planning service answered, and refused the request.
+Typical causes are a platform project the gateway's identity may not use, or a prediction the service does not accept.
+Heartwood does not show the service's text.
+Confirm the project's platform access with the platform administrator.
+
+### `HW-PLAN-003`: The Platform Estimate Has Expired
+
+The latest estimate for these plan elements is past its validity time.
+An expired estimate stays in the plan's history.
+Request a new estimate before approving work; the platform decides admission with its current prices and budgets either way.
+
+### `HW-PLAN-004`: A Platform Budget Changed After the Estimate
+
+A budget observation read after the estimate differs from the one read before it, for example because other work spent from the same allocation or an administrator changed it.
+Compare the plan with the current budgets and revise it if needed.
+A reported balance never guarantees that the platform admits work.
+
+### `HW-PLAN-005`: The Platform Estimate Is Incomplete
+
+The estimate's coverage is partial or unknown, for example because the platform does not estimate one kind of work or has no price for a runtime profile.
+The elements without a complete cost show their limitations; their cost is unknown, not zero.
+Review them before approving work, or revise the plan to a configuration the platform estimates.
+
+### `HW-PLAN-006`: The Platform Denied an Operation
+
+The platform denied or revoked authorization for a reviewed proposal, or denied an operation, even if the researcher approved it.
+Revise the plan, or request more allocation through the platform's own process.
+Heartwood never resubmits a denied operation automatically.
 
 ## Managed Compute
 
