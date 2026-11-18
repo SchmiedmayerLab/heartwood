@@ -51,4 +51,4 @@ It does not contact the server, establish transition history, or authenticate th
 
 `failure-states.json` lists each coded failure state of the platform contract with the diagnostic Heartwood shows for it.
 The gateway tests produce these states, using the deterministic service fakes for the model failures, and check the terminal and notebook presentation; the browser tests render the same file.
-Entries with the `model-discovery` surface are failures of model setup, which the terminal and browser report and the notebook bridge does not offer.
+Entries with the `model-discovery` surface are failures of model setup, which the terminal, browser and notebook report.

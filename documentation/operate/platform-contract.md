@@ -178,8 +178,8 @@ Heartwood discovers models through a policy-checked catalog endpoint and never i
 A deployment supplies its connections in `heartwood.model-connections.v1` and its model declarations in `heartwood.platform-model-metadata.v1`, both inside the [deployment manifest](../reference/configuration.md#model-connections).
 The gateway loads them at start; a later change to either stops dispatch until the next start.
 The model list shows only the models the endpoint returns for the deployment's credential; a declaration never adds a model to it.
-Selecting a model from a platform connection rereads the list, so a withdrawn model cannot be selected.
-A selected model that the platform later withdraws stays selected, and its next model call fails.
+Choosing, selecting or saving a model on a platform connection rereads the list, so a withdrawn model cannot be chosen again.
+A selected model that the platform later withdraws stays selected, and its next model call fails with the platform's model error.
 
 The draft model-metadata supplement declares, per model identity:
 
@@ -193,12 +193,15 @@ The draft model-metadata supplement declares, per model identity:
 | Deprecation | Whether the model is being withdrawn, so no model is silently substituted | Recommended |
 
 Heartwood uses a declaration in place of the OpenHands model table for that model.
+A declared model with a supported protocol is listed as available and selected at the `supervised` capability tier, as a model the OpenHands SDK verifies would be.
 Protocols name the OpenHands API modes `chat` and `responses`.
-One declared mode is used for every request; with both, OpenHands chooses.
+One declared mode selects the request path, and the policy-checked endpoint, for every request; with both, OpenHands chooses.
 A model whose declaration names neither is listed as unavailable and cannot be selected.
-The context window, input and output limits set the agent's token limits, and tool calling sets whether OpenHands uses native tool calls.
-Model setup shows the declared context window and tool support, and reports a value that is neither declared nor known to OpenHands as unknown.
-The data-class and deprecation fields are informational, and Heartwood does not act on them.
+The declared input limit, or else the context window less the output limit, sets the agent's input limit; the output limit sets its output limit; OpenHands resolves a limit that is not declared.
+Tool calling sets whether OpenHands uses native tool calls.
+Model setup shows the declared context window and tool support, and reports an undeclared value as unknown.
+The data classes in a declaration are informational, and Heartwood does not act on them.
+
 #### Route Data Handling
 
 A connection's `data_handling` descriptor declares the `destination` of model requests, its `retention_authority` and a `route` description, such as an institution's gateway followed by the providers it routes to.
@@ -481,8 +484,7 @@ There is one open release review per operation, denial is final for it, and an i
 `fixtures/synthetic/platform-contract/failure-states.json` lists each coded state with the diagnostic Heartwood shows for it.
 Pull request tests produce the model failures through the [inference fake](#deterministic-service-fakes) and the agent runtime, and check that the terminal, browser and notebook show the state's diagnostic and no other code.
 The exception is an exhausted quota that the provider returns as a rate-limit response, which also shows HW-AGENT-010 after HW-AGENT-009, because the agent runtime records its own rate-limit classification of the same response.
-Model setup in the terminal and browser reports a failed model list with the same diagnostic as a model call: a rejected or expired credential as HW-AGENT-008 and an unreachable service as HW-AGENT-012.
-The notebook bridge has no model setup and shows these states only through a session.
+Model setup in the terminal, browser and notebook reports a failed model list with the diagnostic of the matching failure state: a rejected or expired credential, including an HTTP 403 response, as HW-AGENT-008 and an unreachable service as HW-AGENT-012.
 Gateway access refusals reach only clients of the gateway's HTTP routes: the browser shows the code and message the gateway returns, while the terminal and notebook connect to the gateway in process.
 The gateway refuses a model connection the platform does not offer with HW-SETUP-004, and the terminal, browser and notebook show the same code and message.
 Platform-operation failures have no runtime presentation because the operation profile is draft.

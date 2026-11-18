@@ -17,6 +17,7 @@ import argparse
 import json
 import time
 from collections.abc import Iterator
+from functools import partial
 from pathlib import Path
 from typing import cast
 from uuid import uuid4
@@ -28,6 +29,7 @@ import heartwood.gateway._openhands_sdk as openhands_sdk_module
 from heartwood.cli._models import _handle_models, configure_models
 from heartwood.core_adapter import SessionService
 from heartwood.gateway import (
+    ModelCatalogError,
     OpenHandsSdkBackend,
     ProjectStateError,
     RestGateway,
@@ -37,6 +39,7 @@ from heartwood.gateway import (
 )
 from heartwood.gateway._deployment import ProjectDeployment
 from heartwood.gateway.platform_fakes import INFERENCE_API_KEY, FakeInference, serve
+from heartwood.notebook import NotebookSession
 from heartwood.session import CommandKind, EventKind, SessionCommand
 
 _ROOT = Path(__file__).resolve().parents[3]
@@ -45,7 +48,7 @@ _STATES = json.loads(
 )["states"]
 _KEY = "HEARTWOOD_SYNTHETIC_PLATFORM_KEY"
 _CONNECTION = "synthetic-platform"
-_MODELS = ("synthetic-alias", "synthetic-open", "synthetic-unsupported")
+_MODELS = ("synthetic-alias", "synthetic-open", "synthetic-responses", "synthetic-unsupported")
 
 
 @pytest.fixture(autouse=True)
@@ -79,7 +82,7 @@ def _record(tmp_path: Path, base_url: str) -> dict[str, object]:
         "policy": {
             "policy_id": "synthetic-platform",
             "platform_id": "generic",
-            "allowed_model_endpoints": [f"{base_url}/chat/completions"],
+            "allowed_model_endpoints": [f"{base_url}/chat/completions", f"{base_url}/responses"],
             "allowed_model_catalog_endpoints": [f"{base_url}/models"],
             "allowed_capability_tiers": ["supervised", "experimental"],
             "allowed_action_review_modes": ["review-all"],
@@ -123,6 +126,13 @@ def _record(tmp_path: Path, base_url: str) -> dict[str, object]:
                     "connection_id": _CONNECTION,
                     "model_id": "synthetic-unsupported",
                     "protocols": ["synthetic-protocol"],
+                },
+                {
+                    "connection_id": _CONNECTION,
+                    "model_id": "synthetic-responses",
+                    "protocols": ["responses"],
+                    "context_window_tokens": 40_960,
+                    "max_output_tokens": 1_024,
                 },
                 {
                     "connection_id": _CONNECTION,
@@ -303,23 +313,75 @@ def test_discovery_failures_show_the_failure_state_diagnostic(
         browser = RestGateway(gateway).handle(
             RestRequest(method="POST", path=path, body=json.dumps(body))
         )
+        notebook = NotebookSession(gateway=gateway)
+        notebook_call = (
+            partial(notebook.discover_models, _CONNECTION, refresh=True)
+            if failure in {"authentication", "unavailable"}
+            else partial(notebook.connect_model, _CONNECTION, model)
+        )
+        with pytest.raises(ModelCatalogError) as caught:
+            notebook_call()
+        if failure == "withdrawn":
+            # Choosing the saved profile again rereads the list as well.
+            with pytest.raises(ModelCatalogError) as reselected:
+                gateway.select_model_profile(_CONNECTION)
+            assert str(reselected.value) == state["diagnostic"]
         settings = gateway.model_settings()
     finally:
         gateway.stop()
 
     assert state["diagnostic"] in terminal
+    assert str(caught.value) == state["diagnostic"]
     assert browser.status_code == 422
     assert f"{browser.body['code']}: {browser.body['error']}" == state["diagnostic"]
     assert INFERENCE_API_KEY not in terminal
     assert INFERENCE_API_KEY not in json.dumps(browser.body)
-    # A withdrawn model stays selected, unchanged, until the researcher chooses another;
-    # its next model call fails with the contract's denied-model state.
+    # A withdrawn model stays selected, unchanged, until the researcher chooses another.
     if failure == "withdrawn":
         assert settings["active_profile"] == _CONNECTION
         profiles = cast(list[dict[str, object]], settings["profiles"])
         assert profiles[0]["model"] == f"openai/{model}"
     else:
         assert settings["active_profile"] is None
+
+
+def test_declared_responses_protocol_sets_the_policy_endpoint_and_request_path(
+    tmp_path: Path, inference: tuple[FakeInference, str]
+) -> None:
+    _fake, base_url = inference
+    gateway = _gateway(_deployment(tmp_path, _record(tmp_path, base_url)))
+    try:
+        settings = gateway.connect_model(_CONNECTION, "synthetic-responses")
+        validation = gateway.validate_model_profile()
+        backend = gateway._backend(
+            model_settings=gateway.settings_store.load(),
+            selected_model=None,
+            session_id="declared-responses",
+        )
+    finally:
+        gateway.stop()
+
+    profiles = cast(list[dict[str, object]], settings["profiles"])
+    assert profiles[0]["policy_endpoint"] == f"{base_url}/responses"
+    assert validation["policy_decision"]["decision"] == "allow"
+    assert isinstance(backend, OpenHandsSdkBackend)
+    assert backend.configuration_error is None
+    llm = backend._get_conversation().state.agent.llm
+    assert llm.uses_responses_api()
+    # Only a window and an output limit are declared, so input gets the remainder.
+    assert (llm.max_input_tokens, llm.max_output_tokens) == (39_936, 1_024)
+    assert llm.native_tool_calling is True
+    backend.close()
+
+
+@pytest.mark.parametrize("identity", ["Research", "custom", "stanford-ai-api-gateway"])
+def test_connection_identifiers_must_be_usable_model_sources(tmp_path: Path, identity: str) -> None:
+    record = _record(tmp_path, "https://models.example.invalid/v1")
+    record.pop("model_metadata")
+    connections = cast(dict[str, list[dict[str, object]]], record["model_connections"])
+    connections["connections"][0]["connection_id"] = identity
+    with pytest.raises(ProjectStateError, match=f"model sources: {identity}"):
+        _deployment(tmp_path, record)
 
 
 @pytest.mark.parametrize(
@@ -365,6 +427,18 @@ def test_discovery_failures_show_the_failure_state_diagnostic(
                 }
             },
             "invalid model metadata: models.0.protocols",
+        ),
+        (
+            {
+                "model_metadata": {
+                    "schema_version": "heartwood.platform-model-metadata.v1",
+                    "models": [
+                        {"connection_id": _CONNECTION, "model_id": model, "protocols": ["chat"]}
+                        for model in ("synthetic-alias", "openai/synthetic-alias")
+                    ],
+                }
+            },
+            "model metadata declares one model more than once",
         ),
     ],
 )

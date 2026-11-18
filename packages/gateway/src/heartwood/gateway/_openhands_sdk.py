@@ -374,6 +374,7 @@ class OpenHandsSdkBackend:
             request_endpoint = request_endpoint_for_model(
                 self.profile.model,
                 self.profile.policy_endpoint,
+                api_mode=self._api_mode,
             )
         except OpenHandsModelError:
             return "OpenHands could not inspect the active model request path"

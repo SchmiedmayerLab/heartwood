@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import stat
 import tomllib
 from collections.abc import Mapping
@@ -31,6 +32,7 @@ from heartwood.gateway._model_catalog import (
 from heartwood.gateway._project import ProjectContext, ProjectStateError
 from heartwood.gateway._project_config import ProjectConfig, ProjectConfigStore
 from heartwood.gateway._readiness import (
+    MODEL_SOURCE_OPTIONS,
     DeploymentControl,
     DeploymentReadiness,
     EffectivePolicy,
@@ -291,6 +293,32 @@ def _model_connections(connections: object, metadata: object) -> tuple[ModelConn
         )
         raise DeploymentError("deployment-manifest", f"invalid model metadata: {details}") from None
     identities = {connection.connection_id for connection in loaded}
+    # A platform connection identifier becomes the project's model source when selected.
+    reserved = {
+        identity
+        for option in MODEL_SOURCE_OPTIONS
+        for identity in (option.source_id, option.connection_id)
+    }
+    if invalid := sorted(
+        identity
+        for identity in identities
+        if identity in reserved or re.fullmatch(r"[a-z0-9][a-z0-9_-]*", identity) is None
+    ):
+        raise DeploymentError(
+            "deployment-manifest",
+            "model connection identifiers must be lowercase and unused by Heartwood's model "
+            f"sources: {', '.join(invalid)}",
+        )
+    declared_models = [
+        (item.connection_id, item.model_id.removeprefix(connection.model_prefix))
+        for connection in loaded
+        for item in declared
+        if item.connection_id == connection.connection_id
+    ]
+    if len(declared_models) != len(set(declared_models)):
+        raise DeploymentError(
+            "deployment-manifest", "model metadata declares one model more than once"
+        )
     if unknown := sorted({item.connection_id for item in declared} - identities):
         raise DeploymentError(
             "deployment-manifest",

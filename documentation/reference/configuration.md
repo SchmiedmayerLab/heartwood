@@ -248,10 +248,11 @@ max_output_tokens = 8192
 supports_tool_calls = true
 ```
 
-Each connection appears with the institution-managed providers in model setup.
-Use a lowercase connection identifier: it becomes the project's model source once a model is selected.
-The gateway validates connections as described in [Inference](../operate/platform-contract.md#inference); a connection identifier must not repeat a built-in one.
-Each declaration must name a connection in `[model_connections]`, and `[model_metadata]` requires `[model_connections]`.
+Each connection appears with the institution-managed providers in browser settings and `heartwood models list`.
+A connection identifier must use lowercase letters, digits, hyphens and underscores and must differ from Heartwood's built-in connection and model-source identifiers, because it becomes the project's model source once a model is selected.
+A declared model with a supported protocol is selected at the `supervised` capability tier.
+The gateway validates connections as described in [Inference](../operate/platform-contract.md#inference).
+Each declaration must name a connection in `[model_connections]` and declare its model once, and `[model_metadata]` requires `[model_connections]`.
 `[policy]` must still permit each connection's endpoints, credential reference and data destination.
 Credential references name a variable or mounted file; the manifest never holds the credential.
 An invalid table stops the launch with [`HW-DEPLOY-001`](troubleshooting.md#hw-deploy-001-deployment-manifest-is-unavailable-or-invalid).

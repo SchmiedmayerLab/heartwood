@@ -51,8 +51,9 @@ See the [Stanford AI API Gateway service page](https://uit.stanford.edu/service/
 
 A managed deployment can supply its own model connections, which appear with the institution-managed providers in setup.
 The deployment provides their credentials and declares their data handling.
-The model list shows the models the service returns for the deployment's credential, with the context window and tool support that the deployment declares or OpenHands knows; any other value is shown as unknown.
-A model the platform withdraws stays selected until you choose another, and its next model call fails with [`HW-AGENT-011`](../reference/troubleshooting.md#hw-agent-011-model-configuration-is-invalid).
+The model list shows the models the service returns for the deployment's credential.
+For a model the deployment declares, it shows the declared context window and tool support; for other models, the values OpenHands knows; any other value is shown as unknown.
+A model the platform withdraws stays selected until you choose another, and its next model call fails with the platform's model error, [`HW-AGENT-011`](../reference/troubleshooting.md#hw-agent-011-model-configuration-is-invalid) for a model-not-found response.
 Operators configure these connections in the [deployment manifest](../reference/configuration.md#model-connections).
 
 ## OpenAI API or Anthropic API

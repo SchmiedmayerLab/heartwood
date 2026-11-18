@@ -246,8 +246,13 @@ class ModelConnection:
             raise ModelCatalogError("model connection does not define a request endpoint")
         if self.protocol not in {"openai", "openai-compatible"}:
             return self.policy_endpoint
+        declared = self.declared_model(execution_model)
         try:
-            return request_endpoint_for_model(execution_model, self.policy_endpoint)
+            return request_endpoint_for_model(
+                execution_model,
+                self.policy_endpoint,
+                api_mode=None if declared is None else declared_api_mode(declared),
+            )
         except OpenHandsModelError as error:
             raise ModelCatalogError(str(error)) from error
 
@@ -904,7 +909,7 @@ def _model_compatibility(
 def _declared_compatibility(
     metadata: PlatformModelMetadata,
 ) -> tuple[ModelAvailability, str, int | None, bool | None]:
-    context_window = metadata.context_window_tokens or metadata.max_input_tokens
+    context_window = metadata.context_window_tokens
     if not _API_MODES.intersection(metadata.protocols):
         return (
             "unsupported",
@@ -913,7 +918,17 @@ def _declared_compatibility(
             context_window,
             metadata.supports_tool_calls,
         )
+    # The operator's declaration stands in for OpenHands verification of the model.
     return "available", "Declared by the deployment", context_window, metadata.supports_tool_calls
+
+
+def declared_input_limit(metadata: PlatformModelMetadata) -> int | None:
+    """Return the declared input limit, or the window less the output limit when both are known."""
+    if metadata.max_input_tokens is not None:
+        return metadata.max_input_tokens
+    if metadata.context_window_tokens is not None and metadata.max_output_tokens is not None:
+        return metadata.context_window_tokens - metadata.max_output_tokens
+    return None
 
 
 def declared_api_mode(metadata: PlatformModelMetadata) -> ApiMode | None:
