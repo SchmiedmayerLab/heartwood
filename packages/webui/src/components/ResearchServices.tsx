@@ -210,21 +210,31 @@ export const ResearchServices = ({ client }: { client: ServicesClient }) => {
             </article>
           ))
         : <p className="panel-empty">No research services configured</p>}
-        <label>
-          Token for the next test (optional)
-          <Input
-            autoComplete="off"
-            type="password"
-            value={testToken}
-            onChange={(event) => setTestToken(event.target.value)}
-          />
-        </label>
+
         <small>
           Disconnecting removes the server and its token. Completed remote work
           is not undone.
         </small>
       </section>
 
+      <details className="advanced-section">
+        <summary>Test with a new token</summary>
+        <div className="advanced-section-content">
+          <label>
+            Token for the next test
+            <Input
+              autoComplete="off"
+              type="password"
+              value={testToken}
+              onChange={(event) => setTestToken(event.target.value)}
+            />
+          </label>
+          <small>
+            The token is kept by the gateway for this server and never shown
+            again.
+          </small>
+        </div>
+      </details>
       {test ?
         <section className="panel-section skill-review" aria-live="polite">
           <h3>Review tools from {test.server.label}</h3>
@@ -234,35 +244,44 @@ export const ResearchServices = ({ client }: { client: ServicesClient }) => {
           {test.tools.map((tool) => {
             const selectable = tool.allowed && tool.accepts_operation_binding;
             return (
-              <label className="checkbox-control" key={tool.name}>
-                <Checkbox
-                  aria-label={`Select ${tool.name}`}
-                  checked={selection.includes(tool.name)}
-                  disabled={!selectable || busy}
-                  onCheckedChange={(checked) =>
-                    setSelection((current) =>
-                      checked === true ?
-                        [...current, tool.name]
-                      : current.filter((name) => name !== tool.name),
-                    )
-                  }
-                />
-                <span>
-                  <strong>{tool.name}</strong> {tool.description}
-                  <small>
-                    {tool.allowed ? "" : "Not allowed by the deployment. "}
-                    {tool.accepts_operation_binding ?
-                      ""
-                    : "Does not accept a project and operation identifier. "}
-                    {tool.changed ? "Changed since your review. " : ""}
-                    Read-only hint:{" "}
-                    {tool.annotations.read_only === null ?
-                      "not given"
-                    : String(tool.annotations.read_only)}
-                    . Definition {tool.sha256.slice(0, 12)}
-                  </small>
-                </span>
-              </label>
+              <div className="service-tool" key={tool.name}>
+                <label className="checkbox-control">
+                  <Checkbox
+                    aria-label={`Select ${tool.name}`}
+                    checked={selection.includes(tool.name)}
+                    disabled={!selectable || busy}
+                    onCheckedChange={(checked) =>
+                      setSelection((current) =>
+                        checked === true ?
+                          [...current, tool.name]
+                        : current.filter((name) => name !== tool.name),
+                      )
+                    }
+                  />
+                  <span>
+                    <strong>{tool.name}</strong> {tool.description}
+                  </span>
+                </label>
+                <small>
+                  {tool.allowed ? "" : "Not allowed by the deployment. "}
+                  {tool.accepts_operation_binding ?
+                    ""
+                  : "Does not accept a project and operation identifier. "}
+                  {tool.changed ? "Changed since your review. " : ""}
+                  Read-only hint:{" "}
+                  {tool.annotations.read_only === null ?
+                    "not given"
+                  : String(tool.annotations.read_only)}
+                  .
+                </small>
+                <details>
+                  <summary>Parameters the agent fills in</summary>
+                  <pre>
+                    {JSON.stringify(JSON.parse(tool.parameters), null, 2)}
+                  </pre>
+                  <small>Definition SHA-256 {tool.sha256}</small>
+                </details>
+              </div>
             );
           })}
           {test.resources.advertised || test.prompts.advertised ?
@@ -281,7 +300,16 @@ export const ResearchServices = ({ client }: { client: ServicesClient }) => {
             disabled={busy}
             onClick={() =>
               void run(
-                () => client.selectMcpTools(test.server.server_id, selection),
+                () =>
+                  client.selectMcpTools(
+                    test.server.server_id,
+                    test.tools
+                      .filter((tool) => selection.includes(tool.name))
+                      .map((tool) => ({
+                        name: tool.name,
+                        sha256: tool.sha256,
+                      })),
+                  ),
                 (value) => {
                   setSettings(value);
                   setTest(null);

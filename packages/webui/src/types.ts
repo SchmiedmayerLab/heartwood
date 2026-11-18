@@ -81,6 +81,7 @@ export type {
   McpServerEnabledRequest,
   McpServerTestRequest,
   McpServerToolsRequest,
+  McpToolChoice,
   ModelCatalogRequest,
   ModelConnectRequest,
   ModelDownloadRequest,

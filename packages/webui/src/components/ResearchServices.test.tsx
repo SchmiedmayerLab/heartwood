@@ -40,6 +40,7 @@ const settings = (servers: McpServer[] = [server()]): McpServers => ({
       origin: "https://catalog.example.org",
       tools: ["find_records"],
       max_result_bytes: 16384,
+      credential_binding: "HEARTWOOD_MCP_TOKEN_SYNTHETIC_CATALOG",
     },
   ],
   credential_store: {
@@ -65,6 +66,8 @@ const tested = (): McpServerTest => ({
       name: "find_records",
       description: "Find synthetic records.",
       sha256: "a".repeat(64),
+      parameters:
+        '{"properties":{"term":{"type":"string"}},"required":["term"],"type":"object"}',
       annotations: hints,
       allowed: true,
       accepts_operation_binding: true,
@@ -75,6 +78,7 @@ const tested = (): McpServerTest => ({
       name: "delete_records",
       description: "Delete synthetic records.",
       sha256: "b".repeat(64),
+      parameters: '{"properties":{},"required":[],"type":"object"}',
       annotations: { ...hints, read_only: false },
       allowed: false,
       accepts_operation_binding: true,
@@ -106,6 +110,7 @@ const client = () => ({
             worker_tool: "catalog__find_records_aaaaaaaa",
             description: "Find synthetic records.",
             sha256: "a".repeat(64),
+            parameters: "{}",
             annotations: hints,
             status: "ready",
           },
@@ -161,7 +166,7 @@ describe("ResearchServices", () => {
     );
     await waitFor(() =>
       expect(api.selectMcpTools).toHaveBeenCalledWith("catalog", [
-        "find_records",
+        { name: "find_records", sha256: "a".repeat(64) },
       ]),
     );
     expect(

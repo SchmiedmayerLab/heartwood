@@ -34,6 +34,7 @@ import type {
   McpServerTestRequest,
   McpServerToolsRequest,
   McpServerTest,
+  McpToolChoice,
   ModelCatalog,
   ModelCatalogRequest,
   ModelConnectRequest,
@@ -188,7 +189,7 @@ export interface HeartwoodClient {
     token: string | null,
     remember: boolean,
   ): Promise<McpServerTest>;
-  selectMcpTools(serverId: string, tools: string[]): Promise<McpServers>;
+  selectMcpTools(serverId: string, tools: McpToolChoice[]): Promise<McpServers>;
   setMcpServerEnabled(serverId: string, enabled: boolean): Promise<McpServers>;
   disconnectMcpServer(serverId: string): Promise<McpServers>;
 }
@@ -865,7 +866,10 @@ export class GatewayClient implements HeartwoodClient {
     );
   }
 
-  async selectMcpTools(serverId: string, tools: string[]): Promise<McpServers> {
+  async selectMcpTools(
+    serverId: string,
+    tools: McpToolChoice[],
+  ): Promise<McpServers> {
     return this.sendMcp<McpServers>(
       `/${encodeURIComponent(serverId)}/tools`,
       "PUT",

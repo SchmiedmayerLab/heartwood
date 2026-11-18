@@ -2340,6 +2340,26 @@ summary:focus-visible {
   gap: 6px;
 }
 
+.service-tool {
+  display: grid;
+  gap: 4px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.service-tool small {
+  color: var(--color-muted-foreground);
+  font-size: 0.73rem;
+  overflow-wrap: anywhere;
+}
+
+.service-tool pre {
+  max-height: 16rem;
+  overflow: auto;
+  font-size: 0.73rem;
+  white-space: pre-wrap;
+}
+
 .panel-section-heading {
   display: flex;
   align-items: center;
