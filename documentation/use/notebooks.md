@@ -152,6 +152,21 @@ print(exported.sha256)
 It can contain sensitive paths and metadata; handle it as project data, not as an anonymized or signed record.
 See [Experiment Records](../architecture/experiments.md).
 
+Where the deployment connects a planning service, the same [planning projection](research-workflows.md#plan-against-platform-budgets) is available:
+
+```python
+from heartwood.notebook import render_planning
+from heartwood.schemas import PlanningReference
+from heartwood.schemas.planning import PlanningEstimateRequest
+
+session.refresh_planning()
+reference = PlanningReference(record_id="cohort-prediction", revision=1)
+projection = session.request_plan_estimate(PlanningEstimateRequest(prediction=reference))
+render_planning(projection)
+```
+
+`session.record_plan_prediction(prediction)` records a `WorkloadPrediction` revision first.
+
 The project views are read-only and use the same limits as the terminal and browser:
 
 ```python

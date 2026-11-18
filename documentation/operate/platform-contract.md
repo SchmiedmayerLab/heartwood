@@ -29,7 +29,7 @@ A schema describes a message; it does not enable a service, authorize a request,
 | [Agent isolation](#agent-isolation) of the complete worker | Current for the OpenShell Docker reference adapter; qualified only against the qualification-only sandbox gateway build |
 | [Controlled data](#controlled-data) controls | Selected read-only inputs current; quarantine and steward-approved release unavailable |
 | [Audit and records](#audit-and-records) | Signed checkpoints and deployment-bound evidence current; signer and records-service qualification is the platform's |
-| [Platform services](#platform-services) over MCP, outside operations, launch context and budgets | Draft; the content-bound [outside operation](#outside-operation-admission) authorization and [research MCP servers](#research-mcp-servers) are current |
+| [Platform services](#platform-services) over MCP, outside operations, launch context and budgets | Draft; the content-bound [outside operation](#outside-operation-admission) authorization, [research MCP servers](#research-mcp-servers) and [planning against platform budgets](#planning-against-platform-budgets) are current, but built-in launchers install no planning service |
 | Hosted per-project gateways with verified OpenID Connect identity | Unavailable |
 | Realtime voice | Unavailable |
 
@@ -370,6 +370,19 @@ A draft `heartwood.platform-launch-context.v1` document carries the platform-own
 Keep it outside agent-writable state; possession of a copy does not authenticate its issuer.
 It is separate from the deployment manifest, which binds only the research directory, state and policy.
 
+A planning service offers budget observations and estimates to Heartwood.
+
+Required:
+
+- Derive the project context and billing attribution of every record from the caller's authenticated project, never from a value in the request.
+- Produce estimates from the platform's own prices for a whole plan or for named elements, and report work it does not estimate as unknown cost with a limitation.
+- Return a new estimate identity for each quote.
+
+Optional:
+
+- Serve both capabilities as MCP tools annotated read-only: `get_budgets` with argument `project_id`, returning `{"budgets": [...]}` budget observations, and `estimate_workload` with `project_id`, `scope`, `prediction` and `element_ids`, returning one estimate.
+  Heartwood's MCP planning client calls a tool only when the server lists it with `readOnlyHint` true; an estimate that persists data, charges or reserves follows the [operation](#operations-that-change-platform-state) path instead.
+
 `fixtures/synthetic/platform-contract/` contains a complete exchange for an exploration, a batch and an inference workload, plus `mcp-tasks.json` with immediate and deferred estimates and a cancellation followed by continued backend work.
 Read each exchange in this order:
 
@@ -466,6 +479,34 @@ Approval requires current disclosure policy, the live worker lease and an idle c
 The release reaches the model as a user-role message whose JSON envelope labels it as an outside result; that label is not an instruction boundary.
 There is one open release review per operation, denial is final for it, and an interrupted delivery is never retried automatically.
 
+### Planning Against Platform Budgets
+
+A trusted Python embedding connects a planning service by passing `SessionGateway(platform_planning=PlatformPlanningBinding(launch, client))`.
+`launch` is the platform's launch context and `client` a `PlanningServiceClient`, such as `McpPlanningClient` for the MCP tools above.
+The gateway requires protected state for it, and `heartwood gateway serve` and the other built-in launchers install none.
+Without a binding, the planning projection reports that planning is not offered, and every interface hides it.
+
+The gateway does the following and nothing more:
+
+- **Discovery:** each refresh lists the service's capabilities and reads budgets only when the service offers them; an estimate is requested only when estimates are offered.
+- **Plan revisions:** a workload prediction for the launch context is recorded once per revision; a changed revision under the same identity is refused, and a superseded revision must be recorded first.
+- **Estimates:** the platform estimates a recorded revision as a whole plan or for named elements, and an answer for another project context, revision or scope is discarded.
+- **Linked records:** `PlatformPlanning.link_operation_set` and `link_platform_record` attach the exact reviewed proposal bytes, researcher decisions with their session audit references, platform authorizations and operation observations to the revision they belong to; the contract overview's validator checks every link.
+- **Projection:** `GET /project/planning`, `/plan` in the terminal and `NotebookSession.planning()` show one `heartwood.planning-projection.v1` document per project.
+
+The projection holds the latest observation of each budget and, for each revision, the contract overview, each element's review state and each estimate's freshness.
+An element's review state comes from researcher decisions on reviewed proposals that contain it; agreeing to one proposal does not approve elements outside it.
+An element that is unchanged since an approval in an earlier revision is shown as such, and a changed or new element requires review.
+Platform authorization is shown separately for each element.
+The comparison lists the complete-plan estimates of every revision with their runtime profiles, and marks an estimate in another denomination as not comparable; amounts are never converted or summed across estimates.
+The outcomes in [Failure States](#failure-states) cover the plan's latest revision and its latest estimate for each scope.
+
+Plans, estimates and linked records are kept in `planning.jsonl` in protected state.
+They are observations and decisions, and Heartwood derives no balance, reservation or spending total from them.
+A reported balance or estimate never guarantees that the platform admits work, and a researcher's approval neither raises a limit nor reserves funds.
+Heartwood submits nothing for a plan and retries nothing after a denial; operations follow the [outside operation](#outside-operation-admission) path.
+Cost figures reported by a worker are not planning records.
+
 ### Failure States
 
 | Condition | The platform returns | Heartwood shows |
@@ -495,7 +536,8 @@ The exception is an exhausted quota that the provider returns as a rate-limit re
 Model setup in the terminal, browser and notebook reports a failed model list with the diagnostic of the matching failure state: a rejected or expired credential, including an HTTP 403 response, as HW-AGENT-008 and an unreachable service as HW-AGENT-012.
 Gateway access refusals reach only clients of the gateway's HTTP routes: the browser shows the code and message the gateway returns, while the terminal and notebook connect to the gateway in process.
 The gateway refuses a model connection the platform does not offer with HW-SETUP-004, and the terminal, browser and notebook show the same code and message.
-Platform-operation failures have no runtime presentation because the operation profile is draft.
+Planning outcomes appear in the planning projection, and the terminal, browser and notebook show their diagnostics.
+Other platform-operation failures have no runtime presentation because the operation profile is draft.
 
 ### Security Properties
 
@@ -633,11 +675,12 @@ The fakes hold synthetic data only and are not reference implementations of a pl
 | Inference | OpenAI-compatible model list and streaming Chat Completions | A reply that completes an agent turn; a rejected credential, an exhausted quota, a rate limit, an unknown model and an unavailable service |
 | Token issuer | Exchanged, audience-restricted JWT access tokens with a project claim | Valid, expired, wrong-audience and wrong-project tokens |
 | Data service | MCP tools `list_objects`, `get_object` and `get_access_url`, returning DRS object and access URL fields | A selected object, an unselected object, another project's object, an expired access grant and an unavailable service |
+| Budget service | MCP tools `get_budgets` and `estimate_workload`, returning `heartwood.budget-observation.v1` and `heartwood.platform-estimate.v1` priced from a synthetic price sheet | Allocations changed by other work or an administrator, estimates for a whole plan or for named elements, unsupported workload kinds and unpriced runtime profiles reported as unknown cost, a prediction for another project context and an unavailable service |
 | Job service | MCP tools `create_task`, `get_task` and `cancel_task`, keyed by operation identifier and returning `heartwood.platform-operation-observation.v1` with the TES task identifier as backend reference and the TES state among its limitations | Submission, status, cancellation, a lost reply that reconciles to one task, a conflicting resubmission, a denied GPU request and a task that fails after it started |
 
-The data and job services verify each token's signature, issuer, audience and expiry before a tool runs, and refuse a token for another project in the tool.
+The data, job and budget services verify each token's signature, issuer, audience and expiry before a tool runs, and refuse a token for another project in the tool.
 Their tools carry the four required annotations: submission and cancellation are not read-only, and cancellation is marked destructive.
-`running_platform_fakes()` starts the inference, data and job fakes with one token issuer and returns their endpoints and service profiles.
+`running_platform_fakes()` starts the inference, data, job and budget fakes with one token issuer and returns their endpoints and service profiles.
 
 ### Research MCP Servers
 

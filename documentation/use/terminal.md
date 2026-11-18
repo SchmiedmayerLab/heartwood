@@ -81,6 +81,7 @@ In a project without Git, it shows only successful file changes from typed file-
 | `/workflows` | List the [research workflows](research-workflows.md) |
 | `/workflow` | Set up a research workflow or show its current stage and next commands |
 | `/experiments` | Show the experiment records of this session |
+| `/plan` | Where the deployment connects a planning service, show [plans, estimates and budgets](research-workflows.md#plan-against-platform-budgets); `/plan refresh`, `/plan record FILE` and `/plan estimate PREDICTION REVISION [ELEMENT ...]` update them |
 | `/files [DIRECTORY]` | List the project tree |
 | `/show FILE` | Show one UTF-8 project file |
 | `/changes [FILE]` | List changed paths or show one read-only diff |
