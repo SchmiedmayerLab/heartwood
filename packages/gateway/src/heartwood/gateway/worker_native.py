@@ -84,14 +84,14 @@ def native_worker_plan_factory(
     def prepare(request: WorkerSessionRequest) -> WorkerSessionPlan:
         if request.project != project:
             raise WorkerAttemptError("native worker deployment belongs to another project")
-        return _NativeWorkerAttempt(
-            settings,
-            request,
-            client_tools=(
-                *(ClientToolSpec.model_validate_json(spec) for spec in specifications),
-                *request.client_tools,
-            ),
-        ).plan()
+        client_tools = (
+            *(ClientToolSpec.model_validate_json(spec) for spec in specifications),
+            *request.client_tools,
+        )
+        names = [spec.name for spec in client_tools]
+        if len(names) != len(set(names)):
+            raise WorkerAttemptError("session client tools repeat a launcher client tool name")
+        return _NativeWorkerAttempt(settings, request, client_tools=client_tools).plan()
 
     return prepare
 
