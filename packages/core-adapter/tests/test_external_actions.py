@@ -53,6 +53,8 @@ from heartwood.core_adapter.external_actions import (
     ExternalActionRecord,
     ExternalActionRequest,
     ExternalInputReference,
+    ExternalOperationEstimate,
+    ExternalOperationReview,
     canonical_request,
     external_action_records,
 )
@@ -622,6 +624,48 @@ def test_review_digest_binds_content_scope_and_validity(setup: Setup) -> None:
     assert proposal.review_call.arguments
     with pytest.raises(ValidationError):
         proposal.request.request_json = "{}"  # type: ignore[misc]
+
+
+def test_operation_fields_are_bound_and_absent_ones_keep_the_recorded_digest(
+    setup: Setup,
+) -> None:
+    service, worker, _ = setup
+    proposal = propose(service, worker).proposal
+    recorded = proposal.model_dump(mode="json")
+    # A proposal without the optional fields serializes, and hashes, as before they existed.
+    assert set(recorded["request"]) == {
+        "service_id",
+        "tool_name",
+        "destination",
+        "summary",
+        "request_json",
+        "inputs",
+    }
+    content = json.dumps(recorded, sort_keys=True, separators=(",", ":"))
+    assert proposal.sha256 == hashlib.sha256(content.encode()).hexdigest()
+    estimate = ExternalOperationEstimate(state="not-offered")
+    variants = [
+        proposal.request.model_copy(update={"project_context_id": "launch-synthetic-1"}),
+        proposal.request.model_copy(
+            update={"operation": ExternalOperationReview(kind="submit", estimate=estimate)}
+        ),
+        proposal.request.model_copy(
+            update={
+                "operation": ExternalOperationReview(kind="cancel"),
+                "target_operation_id": uuid4(),
+            }
+        ),
+    ]
+    for request in variants:
+        changed = proposal.model_copy(update={"request": request})
+        assert changed.sha256 != proposal.sha256
+        assert changed.group_id != proposal.group_id
+    with pytest.raises(ValidationError, match="only a cancellation names a target"):
+        ExternalActionRequest.model_validate(
+            {**proposal.request.model_dump(mode="json"), "target_operation_id": str(uuid4())}
+        )
+    with pytest.raises(ValidationError, match="states its estimate"):
+        ExternalOperationReview(kind="submit")
 
 
 def test_journal_rejects_repeated_decision_and_duplicate_operation_source(setup: Setup) -> None:
