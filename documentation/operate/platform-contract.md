@@ -631,6 +631,24 @@ The data and job services verify each token's signature, issuer, audience and ex
 Their tools carry the four required annotations: submission and cancellation are not read-only, and cancellation is marked destructive.
 `running_platform_fakes()` starts the inference, data and job fakes with one token issuer and returns their endpoints and service profiles.
 
+### MCP Client Behavior
+
+`packages/gateway/tests/test_mcp_compatibility.py` runs OpenHands' public MCP client against explicitly configured Streamable HTTP servers built on these fakes.
+It records what the client does with such a server; Heartwood itself still configures no MCP server.
+Tests marked as expected failures state behavior that Heartwood requires and the client does not provide.
+
+| Area | Client behavior |
+|---|---|
+| Discovery | Lists tools with their annotations. Never reads resources or prompts. |
+| Tool-set changes | A change announced with `notifications/tools/list_changed` reaches a client that the gateway owns through its `on_tools_reconciled` callback. An agent configured with `mcp_config` registers the announced tools at once. |
+| Credentials | A rejected credential fails discovery with the same generic error as an unavailable service. Persisted conversation state stores configured headers redacted. |
+| Results | A result reaches the agent as text, without a size limit. Heartwood truncates the result it records in the session. |
+| Errors | A `ToolError` message from the server reaches the agent unchanged. A malformed result or an unavailable service becomes an error observation. No call is retried. |
+| Timeouts | A client timeout sends `notifications/cancelled`. A stateless server cannot receive it and completes the call. The session records the call as failed. |
+| Pausing | Pausing a session does not cancel a running MCP request. The call continues and the session records it as interrupted. |
+| Arguments | References such as `$NAME` in tool arguments are replaced with values from the conversation's secret registry before the call. |
+| Review | Under Heartwood's confirmation policy every MCP call waits for review, including calls to read-only tools. A client tool only acknowledges the call; the gateway submits it to the service after outside review. |
+
 ### Runtime Conformance
 
 Offline checks do not establish runtime controls.
