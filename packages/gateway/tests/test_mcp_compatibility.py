@@ -20,7 +20,7 @@ import json
 import threading
 import time
 import uuid
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -39,15 +39,23 @@ from openhands.sdk.conversation import BaseConversation
 from openhands.sdk.event import Event as OpenHandsEvent
 from openhands.sdk.event import ObservationEvent
 from openhands.sdk.llm import LLMStreamChunk, Message, MessageToolCall, TextContent
-from openhands.sdk.mcp import MCPClient, MCPServer, MCPToolDefinition, create_mcp_tools
-from openhands.sdk.mcp.client import ToolsReconciledCallback
-from openhands.sdk.mcp.definition import MCPToolObservation
-from openhands.sdk.security import AlwaysConfirm
+from openhands.sdk.mcp import (
+    MCPClient,
+    MCPServer,
+    MCPToolDefinition,
+    MCPToolExecutor,
+    MCPToolObservation,
+    create_mcp_tools,
+)
 from openhands.sdk.settings import OpenHandsAgentSettings
 from openhands.sdk.testing import TestLLM
-from openhands.sdk.tool.client_tool import ClientToolSpec, register_client_tools
+from openhands.sdk.tool import ClientToolSpec, register_client_tools
 from openhands.tools import TerminalTool
 from pydantic import AnyHttpUrl, SecretStr
+from starlette.applications import Starlette
+from starlette.requests import Request
+from starlette.responses import RedirectResponse, Response
+from starlette.routing import Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 from starlette.types import Message as AsgiMessage
 
@@ -75,7 +83,8 @@ from heartwood.core_adapter.external_actions import (
 from heartwood.core_adapter.worker_attempts import WorkerControlPlane, WorkerRuntimeBinding
 from heartwood.gateway import ModelProfile, OpenHandsSdkBackend
 from heartwood.gateway._openhands_persistence import ContentMinimizedLocalFileStore
-from heartwood.gateway._openhands_sdk import _agent_context
+from heartwood.gateway._openhands_sdk import _agent_context, _security_configuration
+from heartwood.gateway._remote_workspace import _admit_client_tools, _client_tool_contract
 from heartwood.gateway.platform_fakes import (
     DATA_AUDIENCE,
     JOBS_AUDIENCE,
@@ -122,22 +131,30 @@ class _Recorder:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
-        chunks: list[bytes] = []
         corrupt: list[object] = []
+        # Read the whole request first, so requests the app refuses unread are recorded too.
+        buffered: list[AsgiMessage] = []
+        if scope["method"] == "POST":
+            chunks: list[bytes] = []
+            while True:
+                message = await receive()
+                buffered.append(message)
+                if message["type"] != "http.request":
+                    break
+                chunks.append(message.get("body", b""))
+                if not message.get("more_body"):
+                    break
+            if body := b"".join(chunks):
+                request = json.loads(body)
+                self.methods.append(request.get("method", ""))
+                if request.get("method") == "tools/call":
+                    name = request["params"]["name"]
+                    self.calls.append((name, request["params"].get("arguments", {})))
+                    if name == self.malformed_tool:
+                        corrupt.append(request["id"])
 
         async def receiving() -> AsgiMessage:
-            message = await receive()
-            if message["type"] == "http.request":
-                chunks.append(message.get("body", b""))
-                if not message.get("more_body") and (body := b"".join(chunks)):
-                    request = json.loads(body)
-                    self.methods.append(request.get("method", ""))
-                    if request.get("method") == "tools/call":
-                        name = request["params"]["name"]
-                        self.calls.append((name, request["params"].get("arguments", {})))
-                        if name == self.malformed_tool:
-                            corrupt.append(request["id"])
-            return message
+            return buffered.pop(0) if buffered else await receive()
 
         async def sending(message: AsgiMessage) -> None:
             if not corrupt:
@@ -290,7 +307,8 @@ def _server(url: str, token: str) -> MCPServer:
 
 @contextmanager
 def discovered(
-    server: MCPServer, on_tools_reconciled: ToolsReconciledCallback | None = None
+    server: MCPServer,
+    on_tools_reconciled: Callable[[MCPClient, Sequence[MCPToolDefinition]], None] | None = None,
 ) -> Iterator[tuple[MCPClient, dict[str, MCPToolDefinition]]]:
     client = create_mcp_tools(
         {"research": server}, timeout=10, on_tools_reconciled=on_tools_reconciled
@@ -323,19 +341,24 @@ def test_discovery_reports_each_tool_with_its_annotations() -> None:
         for origin, token in zip((data_origin, jobs_origin), tokens, strict=True):
             with discovered(_server(f"{origin}/mcp", token)) as (_client, tools):
                 found.update(tools)
-    # One configured server exposes its tools under their own names.
+    # With a single configured server, each tool keeps the name the server gives it.
     hints = {
-        name: (tool.annotations.readOnlyHint, tool.annotations.destructiveHint)
+        name: (
+            tool.annotations.readOnlyHint,
+            tool.annotations.destructiveHint,
+            tool.annotations.idempotentHint,
+            tool.annotations.openWorldHint,
+        )
         for name, tool in found.items()
         if tool.annotations is not None
     }
     assert hints == {
-        "list_objects": (True, False),
-        "get_object": (True, False),
-        "get_access_url": (True, False),
-        "create_task": (False, False),
-        "get_task": (True, False),
-        "cancel_task": (False, True),
+        "list_objects": (True, False, True, False),
+        "get_object": (True, False, True, False),
+        "get_access_url": (True, False, True, False),
+        "create_task": (False, False, True, False),
+        "get_task": (True, False, True, False),
+        "cancel_task": (False, True, True, False),
     }
     assert found["create_task"].mcp_tool.input_schema["required"] == [
         "project_id",
@@ -358,7 +381,7 @@ def test_discovery_with_a_refused_credential_creates_no_tools(token: dict[str, A
     ):
         create_mcp_tools({"research": _server(f"{origin}/mcp", credential)}, timeout=10)
     assert credential not in str(refused.value)
-    assert recorder.calls == []
+    assert "tools/list" not in recorder.methods
 
 
 def _discovery_error(*, expired: bool, available: bool) -> str:
@@ -380,6 +403,23 @@ def test_a_refused_credential_is_reported_apart_from_an_unavailable_service() ->
     assert _discovery_error(expired=True, available=True) != _discovery_error(
         expired=False, available=False
     )
+
+
+def test_discovery_refuses_a_redirect_to_another_origin() -> None:
+    issuer = FakeTokenIssuer()
+    data = FakeDataService(issuer)
+    target = _Recorder(data.app)
+    credential = issuer.exchange(audience=DATA_AUDIENCE)
+    with serve(target) as target_origin:
+
+        async def redirect(_request: Request) -> Response:
+            return RedirectResponse(f"{target_origin}/mcp", status_code=307)
+
+        redirecting = Starlette(routes=[Route("/mcp", redirect, methods=["GET", "POST"])])
+        with serve(redirecting) as origin, pytest.raises(McpProtocolError):
+            create_mcp_tools({"research": _server(f"{origin}/mcp", credential)}, timeout=10)
+    # The other origin never receives a request, so it never sees the credential.
+    assert target.methods == []
 
 
 def test_discovery_lists_tools_and_never_reads_resources_or_prompts() -> None:
@@ -430,8 +470,11 @@ def test_unavailable_service_becomes_an_error_observation_without_retry() -> Non
     with data_endpoint() as (data, endpoint), discovered(endpoint.server) as (_, tools):
         data.available = False
         observation = call(tools["list_objects"], project_id=PROJECT_ID)
+        # The recorder sits in front of the outage, so it sees every attempt.
+        assert len(endpoint.recorder.tool_calls("list_objects")) == 1
         data.available = True
         recovered = call(tools["list_objects"], project_id=PROJECT_ID)
+    assert len(endpoint.recorder.tool_calls("list_objects")) == 2
     assert observation.is_error
     assert texts(observation) == [
         "Error calling MCP tool list_objects: Server returned an error response"
@@ -453,9 +496,7 @@ def test_timeout_cancels_the_request_without_retrying(stateless: bool, remote_ou
         research_endpoint(stateless=stateless) as (service, endpoint),
         discovered(endpoint.server) as (_, tools),
     ):
-        executor = tools["slow_lookup"].executor
-        assert executor is not None
-        executor.timeout = 0.5  # type: ignore[attr-defined]
+        cast(MCPToolExecutor, tools["slow_lookup"].executor).timeout = 0.5
         observation = call(tools["slow_lookup"], term="alpha")
         deadline = time.monotonic() + 5
         while (
@@ -463,6 +504,10 @@ def test_timeout_cancels_the_request_without_retrying(stateless: bool, remote_ou
             and time.monotonic() < deadline
         ):
             time.sleep(0.02)
+        if not stateless:
+            # Let the cancellation reach the tool before the test releases it.
+            while not service.outcomes and time.monotonic() < deadline:
+                time.sleep(0.02)
         service.release.set()
         while not service.outcomes and time.monotonic() < deadline:
             time.sleep(0.02)
@@ -635,8 +680,10 @@ def _mcp_session(
             visualizer=None,
             delete_on_close=False,
         )
-        # Heartwood's agent settings confirm every action before it runs.
-        conversation.set_confirmation_policy(AlwaysConfirm())
+        # The same analyzers and confirm-every-action policy as Heartwood's backend.
+        analyzer, policy = _security_configuration()
+        conversation.set_security_analyzer(analyzer)
+        conversation.set_confirmation_policy(policy)
         return conversation
 
     backend = OpenHandsSdkBackend(
@@ -743,6 +790,11 @@ def test_action_review_holds_a_read_only_mcp_call_until_the_researcher_decides(
             _decide(service, group, decision)
             events = _settle(service)
             executions = _executions(events, "list_objects")
+            assert [
+                event.payload["decision"]
+                for event in events
+                if event.kind == EventKind.APPROVAL_RECORDED
+            ] == ["approved" if decision == CommandKind.APPROVE else "denied"]
             if decision == CommandKind.APPROVE:
                 assert len(endpoint.recorder.tool_calls("list_objects")) == 1
                 assert [item["exit_code"] for item in executions] == [0]
@@ -818,6 +870,7 @@ def test_failures_and_large_results_are_recorded_as_bounded_tool_executions(
 )
 def test_a_timed_out_mcp_call_is_recorded_as_an_uncertain_outcome(tmp_path: Path) -> None:
     with research_endpoint() as (service_fake, endpoint):
+        # fastmcp's per-request timeout, in milliseconds.
         server = endpoint.server.model_copy(update={"timeout": 500})
         service = _mcp_session(
             tmp_path,
@@ -842,7 +895,7 @@ def test_a_timed_out_mcp_call_is_recorded_as_an_uncertain_outcome(tmp_path: Path
             service.close()
 
 
-def _stop_during_slow_call(
+def _pause_during_slow_call(
     tmp_path: Path, *, stateless: bool
 ) -> tuple[tuple[SessionEvent, ...], tuple[SessionEvent, ...], list[str]]:
     """Approve a slow MCP call, pause the session while it runs, then release the service."""
@@ -873,10 +926,10 @@ def _codes(events: tuple[SessionEvent, ...]) -> list[JsonValue]:
     return [event.payload["code"] for event in events if event.kind == EventKind.ERROR_RECORDED]
 
 
-def test_stopping_the_session_during_an_mcp_call_leaves_the_remote_call_running(
+def test_pausing_the_session_during_an_mcp_call_leaves_the_remote_call_running(
     tmp_path: Path,
 ) -> None:
-    paused, events, outcomes = _stop_during_slow_call(tmp_path, stateless=True)
+    paused, events, outcomes = _pause_during_slow_call(tmp_path, stateless=True)
     # The pause waits for a run boundary that the blocked call does not reach.
     assert _codes(paused) == [BackendErrorCode.WORKER_STOPPED.value]
     assert outcomes == ["completed"]
@@ -896,8 +949,8 @@ def test_stopping_the_session_during_an_mcp_call_leaves_the_remote_call_running(
     "MCPToolExecutor ignores the conversation's cancellation, so the service never "
     "receives notifications/cancelled and completes the call.",
 )
-def test_stopping_the_session_cancels_the_in_flight_mcp_request(tmp_path: Path) -> None:
-    paused, _events, outcomes = _stop_during_slow_call(tmp_path, stateless=False)
+def test_pausing_the_session_cancels_the_in_flight_mcp_request(tmp_path: Path) -> None:
+    paused, _events, outcomes = _pause_during_slow_call(tmp_path, stateless=False)
     assert outcomes == ["cancelled"]
     assert BackendErrorCode.WORKER_STOPPED.value not in _codes(paused)
 
@@ -938,6 +991,8 @@ def test_client_tool_from_discovery_runs_nothing_inside_the_conversation(tmp_pat
         with discovered(server) as (_, tools):
             spec = _client_spec(tools["create_task"], "submit_synthetic_job")
         assert set(spec.parameters["properties"]) == {"name", "command"}
+        # Heartwood's worker contract admits the derived specification unchanged.
+        _admit_client_tools([spec.model_dump(mode="json")], _client_tool_contract([spec]))
         arguments: dict[str, JsonValue] = {
             "name": "synthetic-job",
             "command": ["echo", "synthetic"],
@@ -951,6 +1006,7 @@ def test_client_tool_from_discovery_runs_nothing_inside_the_conversation(tmp_pat
                         _assistant_message("Proposed the job."),
                     ]
                 ),
+                # Registers a stateless resolver under this unique name for the process.
                 tools=register_client_tools([spec]),
                 agent_context=_agent_context([]),
             ).create_agent(),
@@ -1102,6 +1158,7 @@ def outside_session(
                     sandbox_policy_sha256=intent.sandbox_policy_sha256,
                 ),
             )
+            # Stands in for the worker projection of the client-tool call shown above.
             worker.emit(
                 (
                     BackendToolCallEvent(
