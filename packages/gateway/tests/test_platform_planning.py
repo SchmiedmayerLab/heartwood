@@ -15,6 +15,7 @@ from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from threading import Thread
 from typing import Any, Literal, cast
 from uuid import uuid4
 
@@ -29,6 +30,8 @@ from heartwood.gateway import (
     PlanningDiscovery,
     PlanningRecordError,
     PlanningServiceError,
+    PlanningStateError,
+    PlatformPlanning,
     ProjectContext,
     SessionGateway,
 )
@@ -167,7 +170,7 @@ def test_complete_plan_and_element_estimates_stay_linked_without_double_counting
     assert (whole.scope, whole.total.coverage, whole.total.expected) == ("plan", "complete", "24.7")
     assert (whole.total.lower, whole.total.upper) == ("18.54", "37.05")
     assert set(whole.covered_element_ids) == {"exploration", "batch", "inference"}
-    # Breakdowns are part of the total, so they add up to it rather than to more.
+    # Breakdowns are part of the total, so together they equal it.
     assert all(item.included_in_total for item in whole.element_estimates)
     assert sum(float(item.cost.expected or 0) for item in whole.element_estimates) == 24.7
     assert (batch.scope, batch.covered_element_ids, batch.total.expected) == (
@@ -766,3 +769,307 @@ def test_browser_example_is_the_gateway_projection(
     example = json.loads((_EXAMPLES / "planning-projection.json").read_text("utf-8"))
 
     assert projection.model_dump(mode="json") == example
+
+
+def _revised(prediction: WorkloadPrediction, revision: int) -> WorkloadPrediction:
+    return prediction.model_copy(
+        update={
+            "prediction": prediction.prediction.model_copy(update={"revision": revision}),
+            "plan": prediction.plan.model_copy(update={"revision": revision}),
+            "supersedes": prediction.prediction,
+        }
+    )
+
+
+def _approve(gateway: SessionGateway, estimate: PlatformEstimate, **decision: object) -> str:
+    document = _proposal(estimate, {"op-explore": ("exploration",)})
+    planning = gateway.platform_planning
+    assert planning is not None
+    planning.link_operation_set(document, reference="project://proposals/cohort.json")
+    digest = hashlib.sha256(document).hexdigest()
+    planning.link_platform_record(
+        _record(
+            ResearcherDecision,
+            **{
+                "project_context_id": _LAUNCH.project_context_id,
+                "decision_id": "decision-1",
+                "proposal": {"record_id": "cohort-proposal", "revision": 1},
+                "document_sha256": digest,
+                "decision": "approved",
+                "decided_at": "2026-07-01T00:05:00Z",
+                "actor_ref": "synthetic-researcher",
+                "audit_ref": "session:planning/audit/42",
+                **decision,
+            },
+        )
+    )
+    return digest
+
+
+def test_an_approval_carries_through_every_unchanged_revision(gateway: SessionGateway) -> None:
+    gateway.record_plan_prediction(_prediction(1))
+    estimate = _estimate(gateway, 1).plans[0].revisions[0].overview.estimates[0]
+    _approve(gateway, estimate)
+    gateway.record_plan_prediction(_prediction(2))
+    third = _revised(_prediction(2), 3)
+    gateway.record_plan_prediction(third)
+
+    revisions = gateway.planning().plans[0].revisions
+
+    exploration = [
+        next(item for item in revision.elements if item.element_id == "exploration")
+        for revision in revisions
+    ]
+    assert [item.review for item in exploration] == [
+        "approved",
+        "unchanged-since-approval",
+        "unchanged-since-approval",
+    ]
+    assert exploration[2].approved_in == _prediction(1).prediction
+
+
+def test_a_withdrawn_approval_requires_review_again(gateway: SessionGateway) -> None:
+    gateway.record_plan_prediction(_prediction(1))
+    estimate = _estimate(gateway, 1).plans[0].revisions[0].overview.estimates[0]
+    digest = _approve(gateway, estimate)
+    planning = gateway.platform_planning
+    assert planning is not None
+    planning.link_platform_record(
+        _record(
+            ResearcherDecision,
+            project_context_id=_LAUNCH.project_context_id,
+            decision_id="decision-2",
+            proposal={"record_id": "cohort-proposal", "revision": 1},
+            document_sha256=digest,
+            decision="withdrawn",
+            decided_at="2026-07-01T00:07:00Z",
+            actor_ref="synthetic-researcher",
+            audit_ref="session:planning/audit/43",
+        )
+    )
+
+    elements = gateway.planning().plans[0].revisions[0].elements
+    assert next(item for item in elements if item.element_id == "exploration").review == (
+        "requires-review"
+    )
+
+
+def test_a_later_authorization_replaces_an_earlier_denial(gateway: SessionGateway) -> None:
+    gateway.record_plan_prediction(_prediction(1))
+    estimate = _estimate(gateway, 1).plans[0].revisions[0].overview.estimates[0]
+    digest = _approve(gateway, estimate)
+    planning = gateway.platform_planning
+    assert planning is not None
+    for identity, status, observed in (
+        ("authorization-1", "denied", "2026-07-01T00:06:00Z"),
+        ("authorization-2", "authorized", "2026-07-01T00:08:00Z"),
+    ):
+        planning.link_platform_record(
+            _record(
+                PlatformAuthorization,
+                project_context_id=_LAUNCH.project_context_id,
+                authorization_id=identity,
+                proposal={"record_id": "cohort-proposal", "revision": 1},
+                document_sha256=digest,
+                status=status,
+                observed_at=observed,
+                reason="Synthetic platform decision.",
+                platform_record_ref=f"synthetic-audit:{identity}",
+            )
+        )
+
+    projection = gateway.planning()
+    elements = projection.plans[0].revisions[0].elements
+    assert next(item for item in elements if item.element_id == "exploration").platform == (
+        "authorized"
+    )
+    assert projection.outcomes == ()
+    lines = InteractiveSession(gateway, session_id="planning").submit("/plan").message or ""
+    assert "Platform authorization authorization-2 on proposal cohort-proposal revision 1" in lines
+    assert "audit session:planning/audit/42" in lines
+
+
+def test_each_launch_context_keeps_its_own_planning_records(
+    tmp_path: Path, fakes: RunningFakes, clock: _Clock
+) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    identity = uuid4()
+    project = ProjectContext(
+        root, protected_state=tmp_path / "protected" / str(identity), project_id=identity
+    )
+    first = SessionGateway(
+        project=project,
+        env={},
+        platform_planning=PlatformPlanningBinding(_LAUNCH, _client(fakes), clock),
+    )
+    try:
+        first.refresh_planning()
+        first.record_plan_prediction(_prediction(1))
+        expected = _estimate(first, 1)
+    finally:
+        first.stop()
+    later = _LAUNCH.model_copy(update={"project_context_id": "launch-synthetic-3"})
+    observation = expected.budgets[0].model_copy(
+        update={"project_context_id": "launch-synthetic-3"}
+    )
+    second = SessionGateway(
+        project=project,
+        env={},
+        platform_planning=PlatformPlanningBinding(
+            later, _ScriptedClient(observations=(observation,)), clock
+        ),
+    )
+    try:
+        refreshed = second.refresh_planning()
+    finally:
+        second.stop()
+    third = SessionGateway(
+        project=project,
+        env={},
+        platform_planning=PlatformPlanningBinding(_LAUNCH, _client(fakes), clock),
+    )
+    try:
+        restored = third.planning()
+    finally:
+        third.stop()
+
+    assert refreshed.plans == ()
+    assert [item.project_context_id for item in refreshed.budgets] == ["launch-synthetic-3"]
+    assert restored.plans == expected.plans
+
+
+def test_an_estimate_naming_unknown_elements_is_discarded(
+    tmp_path: Path, fakes: RunningFakes, clock: _Clock
+) -> None:
+    gateway = _gateway(tmp_path, PlatformPlanningBinding(_LAUNCH, _client(fakes), clock))
+    try:
+        gateway.record_plan_prediction(_prediction(1))
+        genuine = _estimate(gateway, 1).plans[0].revisions[0].overview.estimates[0]
+    finally:
+        gateway.stop()
+    wire = genuine.model_dump(mode="json")
+    wire["estimate_id"] = "est-ghost"
+    wire["element_estimates"].append(
+        {
+            "element_ids": ["ghost"],
+            "cost": {"denomination": {"kind": "currency", "unit": "USD"}, "coverage": "complete"}
+            | {"expected": "1"},
+            "included_in_total": False,
+        }
+    )
+    client = _ScriptedClient(answer=PlatformEstimate.model_validate_json(json.dumps(wire)))
+    scripted = _gateway(tmp_path / "scripted", PlatformPlanningBinding(_LAUNCH, client, clock))
+    try:
+        scripted.record_plan_prediction(_prediction(1))
+        projection = _estimate(scripted, 1)
+    finally:
+        scripted.stop()
+
+    assert projection.plans[0].revisions[0].overview.estimates == ()
+    assert _codes(projection) == ["HW-PLAN-001"]
+
+
+def test_an_expired_platform_token_reports_unavailable_planning(
+    tmp_path: Path, fakes: RunningFakes, clock: _Clock
+) -> None:
+    token = fakes.issuer.exchange(audience=BUDGETS_AUDIENCE, lifetime_seconds=-3600)
+    client = McpPlanningClient(McpEndpoint(fakes.budgets_profile, token), project_id=PROJECT_ID)
+    gateway = _gateway(tmp_path, PlatformPlanningBinding(_LAUNCH, client, clock))
+    try:
+        projection = gateway.refresh_planning()
+    finally:
+        gateway.stop()
+
+    assert projection.services is not None
+    assert (projection.services.budgets, projection.services.estimates) == (
+        "unavailable",
+        "unavailable",
+    )
+    assert [(item.code, item.subject) for item in projection.outcomes] == [
+        ("HW-PLAN-001", "planning service")
+    ]
+
+
+def test_a_refused_budget_read_stays_reported_after_a_later_estimate(
+    gateway: SessionGateway, fakes: RunningFakes
+) -> None:
+    gateway.record_plan_prediction(_prediction(1))
+    planning = gateway.platform_planning
+    assert planning is not None
+    estimating = planning.client
+    planning.client = _client(fakes, project_id=OTHER_PROJECT_ID)
+    gateway.refresh_planning()
+    planning.client = estimating
+
+    projection = _estimate(gateway, 1)
+
+    assert projection.services is not None
+    assert (projection.services.budgets, projection.services.estimates) == (
+        "refused",
+        "available",
+    )
+    assert [(item.code, item.subject) for item in projection.outcomes] == [
+        ("HW-PLAN-002", "budget service")
+    ]
+
+
+def test_damaged_planning_records_need_recovery_in_every_interface(
+    gateway: SessionGateway,
+) -> None:
+    gateway.record_plan_prediction(_prediction(1))
+    journal = gateway.project.state_root / "planning.jsonl"
+    journal.write_text(journal.read_text("utf-8").replace("cohort-analysis", "cohort-a", 1))
+    with journal.open("a", encoding="utf-8") as file:
+        file.write('{"schema_version": "heartwood.planning-entry.v1", "kind": "unknown"}\n')
+
+    with pytest.raises(PlanningStateError):
+        gateway.planning()
+    response = RestGateway(gateway).handle(RestRequest("GET", "/project/planning"))
+    terminal = InteractiveSession(gateway, session_id="planning").submit("/plan")
+
+    assert response.status_code == 409
+    assert terminal.error
+    assert terminal.message == "Persisted planning record is invalid"
+
+
+def test_concurrent_writers_record_one_version_of_a_revision(tmp_path: Path, clock: _Clock) -> None:
+    path = tmp_path / "planning.jsonl"
+    binding = PlatformPlanningBinding(_LAUNCH, _ScriptedClient(), clock)
+    writers = [PlatformPlanning(binding, journal_path=path) for _ in range(4)]
+    versions = [
+        _prediction(1).model_copy(update={"uncertainty": f"Synthetic writer {index}."})
+        for index in range(4)
+    ]
+    outcomes: list[str] = []
+
+    def write(index: int) -> None:
+        try:
+            writers[index].record_prediction(versions[index])
+            outcomes.append("recorded")
+        except PlanningRecordError:
+            outcomes.append("refused")
+
+    threads = [Thread(target=write, args=(index,)) for index in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert sorted(outcomes) == ["recorded", "refused", "refused", "refused"]
+    assert len(writers[0].projection().plans[0].revisions) == 1
+
+
+def test_revisions_must_name_their_predecessor_and_keep_their_plan(
+    gateway: SessionGateway,
+) -> None:
+    gateway.record_plan_prediction(_prediction(1))
+    unchained = _revised(_prediction(1), 2).model_copy(update={"supersedes": None})
+    other_plan = _revised(_prediction(1), 2).model_copy(
+        update={"plan": _prediction(1).plan.model_copy(update={"record_id": "other-plan"})}
+    )
+
+    with pytest.raises(PlanningRecordError, match="must name"):
+        gateway.record_plan_prediction(unchained)
+    with pytest.raises(PlanningRecordError, match="keep its plan"):
+        gateway.record_plan_prediction(other_plan)

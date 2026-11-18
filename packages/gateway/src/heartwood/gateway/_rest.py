@@ -35,7 +35,11 @@ from heartwood.gateway._model_settings import (
     model_profile_from_mapping,
 )
 from heartwood.gateway._model_transfer import ModelTransferError
-from heartwood.gateway._platform_planning import PlanningNotOfferedError, PlanningRecordError
+from heartwood.gateway._platform_planning import (
+    PlanningNotOfferedError,
+    PlanningRecordError,
+    PlanningStateError,
+)
 from heartwood.gateway._project import ProjectStateError
 from heartwood.gateway._project_activity import ProjectOwnershipError
 from heartwood.gateway._project_config import ProjectConfigError
@@ -477,6 +481,8 @@ class RestGateway:
             return _error(404, error)
         except PlanningRecordError as error:
             return _error(422, error)
+        except PlanningStateError as error:
+            return _error(409, error)
         return RestResponse(status_code=200, body=_json_object(projection.model_dump(mode="json")))
 
     def _handle_session_creation(self, *, body: str) -> RestResponse:

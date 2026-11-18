@@ -121,6 +121,7 @@ from heartwood.schemas._planning_contract import (
     ReviewedOperationSet,
     WorkloadElement,
     WorkloadPrediction,
+    WorkloadQuantity,
     reviewed_operation_set,
     verify_reviewed_operation_set,
 )
@@ -286,6 +287,7 @@ __all__ = [
     "SubscriptionDevicePollRequest",
     "WorkloadElement",
     "WorkloadPrediction",
+    "WorkloadQuantity",
     "WorkspaceChangeResponse",
     "WorkspaceChangesResponse",
     "WorkspaceDiffResponse",

@@ -21,28 +21,33 @@ type Revision = NonNullable<
   PlanningProjection["plans"]
 >[number]["revisions"][number];
 type Element = Revision["elements"][number];
+type Quantity =
+  Revision["overview"]["prediction"]["elements"][number]["quantities"][number];
 
-const platformLabels: Record<Element["platform"], string> = {
-  authorized: "authorized",
-  denied: "denied",
-  pending: "pending",
-  unknown: "unknown",
-  revoked: "revoked",
-  "not-requested": "not requested",
-};
+// The terminal and notebook show the same notice from the gateway's shared lines.
+export const admissionNotice =
+  "A reported balance or estimate does not reserve funds or guarantee that the platform admits work.";
 
 const amount = (value: string | null | undefined, unit: string) =>
   value === null || value === undefined ? "unknown" : `${value} ${unit}`;
 
+const range = (
+  lower: string | null | undefined,
+  upper: string | null | undefined,
+  unit: string,
+) =>
+  (lower ?? null) === null && (upper ?? null) === null ?
+    ""
+  : ` (from ${amount(lower, unit)} to ${amount(upper, unit)})`;
+
 export const costLabel = (cost: EstimatedCost) => {
   const unit = cost.denomination.unit;
   if (cost.coverage === "unknown") return "unknown cost";
-  const bounds =
-    (cost.lower ?? null) === null && (cost.upper ?? null) === null ?
-      ""
-    : ` (from ${amount(cost.lower, unit)} to ${amount(cost.upper, unit)})`;
-  return `${amount(cost.expected, unit)}${bounds}, ${cost.coverage} coverage`;
+  return `${amount(cost.expected, unit)}${range(cost.lower, cost.upper, unit)}, ${cost.coverage} coverage`;
 };
+
+const quantityLabel = (item: Quantity) =>
+  `${displaySafeText(item.metric)}: expected ${amount(item.expected, item.unit)}${range(item.lower, item.upper, item.unit)}; ${displaySafeText(item.uncertainty)}`;
 
 const reviewLabel = (element: Element) => {
   switch (element.review) {
@@ -57,6 +62,129 @@ const reviewLabel = (element: Element) => {
   }
 };
 
+const TextList = ({
+  label,
+  items,
+}: {
+  label: string;
+  items: string[] | undefined;
+}) =>
+  // A repeated line adds nothing, so each distinct text is shown once.
+  [...new Set(items ?? [])].map((item) => (
+    <p key={item}>
+      {label}: {displaySafeText(item)}
+    </p>
+  ));
+
+const RevisionView = ({
+  revision,
+  latest,
+  canEstimate,
+  busy,
+  onEstimate,
+}: {
+  revision: Revision;
+  latest: boolean;
+  canEstimate: boolean;
+  busy: boolean;
+  onEstimate: (prediction: Revision["overview"]["prediction"]) => void;
+}) => {
+  const overview = revision.overview;
+  const prediction = overview.prediction;
+  const states = new Map(
+    revision.estimates.map((item) => [item.estimate_id, item]),
+  );
+  return (
+    <section aria-label={`Revision ${prediction.plan.revision}`}>
+      <h5>Revision {prediction.plan.revision}</h5>
+      <p>Uncertainty: {displaySafeText(prediction.uncertainty)}</p>
+      <TextList label="Assumption" items={prediction.assumptions} />
+      <ul>
+        {prediction.elements.map((element, index) => {
+          const review = revision.elements[index];
+          return (
+            <li key={element.element_id}>
+              {displaySafeText(element.element_id)} ({element.kind},{" "}
+              {displaySafeText(element.runtime_profile_ref)})
+              {review ?
+                `: ${reviewLabel(review)}; platform authorization ${review.platform.replace("-", " ")}`
+              : null}
+              {element.quantities.map((item) => (
+                <p key={item.metric}>{quantityLabel(item)}</p>
+              ))}
+              <TextList label="Assumption" items={element.assumptions} />
+            </li>
+          );
+        })}
+      </ul>
+      <ul>
+        {(overview.researcher_decisions ?? []).map((item) => (
+          <li key={item.decision_id}>
+            Researcher decision {displaySafeText(item.decision_id)} on proposal{" "}
+            {displaySafeText(item.proposal.record_id)} revision{" "}
+            {item.proposal.revision}: {item.decision}, {item.decided_at}; audit{" "}
+            {displaySafeText(item.audit_ref)}
+          </li>
+        ))}
+        {(overview.authorizations ?? []).map((item) => (
+          <li key={item.authorization_id}>
+            Platform authorization {displaySafeText(item.authorization_id)} on
+            proposal {displaySafeText(item.proposal.record_id)} revision{" "}
+            {item.proposal.revision}: {item.status}; budget{" "}
+            {displaySafeText(item.budget_id ?? "not reported")}, reservation{" "}
+            {displaySafeText(item.reservation_ref ?? "none reported")}; observed{" "}
+            {item.observed_at}
+          </li>
+        ))}
+        {(overview.operations ?? []).map((item) => (
+          <li key={item.operation_id}>
+            {`Operation ${displaySafeText(item.operation_id)}: ${item.status}; observed ${item.observed_at}`}
+          </li>
+        ))}
+      </ul>
+      <ul>
+        {(overview.estimates ?? []).map((estimate) => {
+          const state = states.get(estimate.estimate_id);
+          return (
+            <li key={estimate.estimate_id}>
+              Estimate <code>{displaySafeText(estimate.estimate_id)}</code> for{" "}
+              {estimate.scope === "plan" ?
+                "whole plan"
+              : `elements ${estimate.covered_element_ids.map(displaySafeText).join(", ")}`
+              }
+              : {costLabel(estimate.total)}; created {estimate.created_at},
+              valid until {estimate.valid_until}; {state?.state ?? "unknown"}
+              {state?.budget_changed ? "; a budget changed since" : ""}
+              {(estimate.element_estimates ?? []).map((item) => (
+                <p key={item.element_ids.join(" ")}>
+                  {item.included_in_total ? "Part" : "In addition"}:{" "}
+                  {item.element_ids.map(displaySafeText).join(", ")}:{" "}
+                  {costLabel(item.cost)}
+                </p>
+              ))}
+              <TextList label="Limitation" items={estimate.total.limitations} />
+              <TextList label="Excludes" items={estimate.exclusions} />
+              <TextList
+                label="Pricing assumption"
+                items={estimate.pricing_assumptions}
+              />
+            </li>
+          );
+        })}
+      </ul>
+      {latest && canEstimate ?
+        <Button
+          variant="outline"
+          disabled={busy}
+          onClick={() => onEstimate(prediction)}
+        >
+          Request Plan Estimate
+        </Button>
+      : null}
+    </section>
+  );
+};
+
 export const PlanningOverview = ({
   projection,
   busy,
@@ -67,6 +195,7 @@ export const PlanningOverview = ({
   onEstimate: (prediction: Revision["overview"]["prediction"]) => void;
 }) => (
   <>
+    <p>{admissionNotice}</p>
     {(projection.outcomes ?? []).map((outcome) => (
       <div key={`${outcome.code} ${outcome.subject}`}>
         <p role="alert">{outcome.diagnostic}</p>
@@ -121,9 +250,8 @@ export const PlanningOverview = ({
                 {amount(budget.allocated, unit)}, reserved{" "}
                 {amount(budget.reserved, unit)}, spent{" "}
                 {amount(budget.spent, unit)}; observed {budget.observed_at}
-                {(budget.limitations ?? []).map((item) => (
-                  <p key={item}>Limitation: {displaySafeText(item)}</p>
-                ))}
+                <TextList label="Constraint" items={budget.constraints} />
+                <TextList label="Limitation" items={budget.limitations} />
               </li>
             );
           })}
@@ -133,59 +261,16 @@ export const PlanningOverview = ({
     {(projection.plans ?? []).map((plan) => (
       <section key={plan.plan_id} aria-label={`Plan ${plan.plan_id}`}>
         <h4>Plan {displaySafeText(plan.plan_id)}</h4>
-        {plan.revisions.map((revision, index) => {
-          const prediction = revision.overview.prediction;
-          const states = new Map(
-            revision.estimates.map((item) => [item.estimate_id, item]),
-          );
-          const latest = index === plan.revisions.length - 1;
-          return (
-            <section
-              key={`${prediction.prediction.record_id} ${prediction.prediction.revision}`}
-              aria-label={`Revision ${prediction.plan.revision}`}
-            >
-              <h5>Revision {prediction.plan.revision}</h5>
-              <ul>
-                {revision.elements.map((element) => (
-                  <li key={element.element_id}>
-                    {displaySafeText(element.element_id)} ({element.kind},{" "}
-                    {displaySafeText(element.runtime_profile_ref)}):{" "}
-                    {reviewLabel(element)}; platform authorization{" "}
-                    {platformLabels[element.platform]}
-                  </li>
-                ))}
-              </ul>
-              <ul>
-                {(revision.overview.estimates ?? []).map((estimate) => {
-                  const state = states.get(estimate.estimate_id);
-                  return (
-                    <li key={estimate.estimate_id}>
-                      Estimate <code>{estimate.estimate_id}</code> for{" "}
-                      {estimate.scope === "plan" ?
-                        "whole plan"
-                      : `elements ${estimate.covered_element_ids.join(", ")}`}
-                      : {costLabel(estimate.total)}; valid until{" "}
-                      {estimate.valid_until}; {state?.state ?? "unknown"}
-                      {state?.budget_changed ? "; a budget changed since" : ""}
-                      {(estimate.total.limitations ?? []).map((item) => (
-                        <p key={item}>Limitation: {displaySafeText(item)}</p>
-                      ))}
-                    </li>
-                  );
-                })}
-              </ul>
-              {latest && projection.services?.estimates !== "not-offered" ?
-                <Button
-                  variant="outline"
-                  disabled={busy}
-                  onClick={() => onEstimate(prediction)}
-                >
-                  Request Plan Estimate
-                </Button>
-              : null}
-            </section>
-          );
-        })}
+        {plan.revisions.map((revision, index) => (
+          <RevisionView
+            key={`${revision.overview.prediction.prediction.record_id} ${revision.overview.prediction.prediction.revision}`}
+            revision={revision}
+            latest={index === plan.revisions.length - 1}
+            canEstimate={projection.services?.estimates !== "not-offered"}
+            busy={busy}
+            onEstimate={onEstimate}
+          />
+        ))}
         {plan.comparison.length > 0 ?
           <section aria-label="Estimate comparison">
             <h5>Comparison</h5>
@@ -220,14 +305,19 @@ export const ProjectPlanning = ({ client }: { client: PlanningClient }) => {
       .then((value) => {
         if (active) setProjection(value);
       })
-      .catch(() => {
-        // Without a planning projection the section stays hidden.
+      .catch((caught: unknown) => {
+        if (active)
+          setError(
+            caught instanceof Error ? caught.message : "Planning unavailable",
+          );
       });
     return () => {
       active = false;
     };
   }, [client]);
-  if (!projection?.offered) return null;
+  // Only a deployment without a planning service hides the section.
+  if (projection === null && error === null) return null;
+  if (projection !== null && !projection.offered) return null;
   const run = (request: () => Promise<PlanningProjection>) => {
     setBusy(true);
     setError(null);
@@ -243,37 +333,37 @@ export const ProjectPlanning = ({ client }: { client: PlanningClient }) => {
   return (
     <details className="research-provenance project-planning">
       <summary>Research Planning</summary>
-      <p>
-        Platform estimates and budgets. A reported balance or estimate does not
-        reserve funds or guarantee that the platform admits work.
-      </p>
-      <div className="research-controls">
-        <Button
-          variant="outline"
-          disabled={busy}
-          onClick={() => run(() => client.refreshPlanning())}
-        >
-          {busy ?
-            <LoaderCircle className="animate-spin" size={16} />
-          : <RefreshCw size={16} />}
-          Refresh Budgets
-        </Button>
-      </div>
+      {projection !== null ?
+        <div className="research-controls">
+          <Button
+            variant="outline"
+            disabled={busy}
+            onClick={() => run(() => client.refreshPlanning())}
+          >
+            {busy ?
+              <LoaderCircle className="animate-spin" size={16} />
+            : <RefreshCw size={16} />}
+            Refresh Budgets
+          </Button>
+        </div>
+      : null}
       {error !== null ?
         <p role="alert">{error}</p>
       : null}
-      <PlanningOverview
-        projection={projection}
-        busy={busy}
-        onEstimate={(prediction) =>
-          run(() =>
-            client.requestPlanEstimate({
-              prediction: prediction.prediction,
-              scope: "plan",
-            }),
-          )
-        }
-      />
+      {projection !== null ?
+        <PlanningOverview
+          projection={projection}
+          busy={busy}
+          onEstimate={(prediction) =>
+            run(() =>
+              client.requestPlanEstimate({
+                prediction: prediction.prediction,
+                scope: "plan",
+              }),
+            )
+          }
+        />
+      : null}
     </details>
   );
 };

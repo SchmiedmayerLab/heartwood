@@ -200,7 +200,7 @@
               {
                 "schema_version": "heartwood.platform-estimate.v1",
                 "project_context_id": "launch-synthetic-1",
-                "estimate_id": "est-ddaeb16ced19eeb0",
+                "estimate_id": "est-fd5a28fae8fd16a5",
                 "scope": "plan",
                 "prediction": {
                   "record_id": "cohort-prediction",
@@ -298,7 +298,7 @@
               {
                 "schema_version": "heartwood.platform-estimate.v1",
                 "project_context_id": "launch-synthetic-1",
-                "estimate_id": "est-03932f6816b97bab",
+                "estimate_id": "est-bd37e0f0de714af2",
                 "scope": "elements",
                 "prediction": {
                   "record_id": "cohort-prediction",
@@ -431,12 +431,12 @@
           ],
           "estimates": [
             {
-              "estimate_id": "est-ddaeb16ced19eeb0",
+              "estimate_id": "est-fd5a28fae8fd16a5",
               "state": "current",
               "budget_changed": true
             },
             {
-              "estimate_id": "est-03932f6816b97bab",
+              "estimate_id": "est-bd37e0f0de714af2",
               "state": "current",
               "budget_changed": true
             }
@@ -584,7 +584,7 @@
               {
                 "schema_version": "heartwood.platform-estimate.v1",
                 "project_context_id": "launch-synthetic-1",
-                "estimate_id": "est-496f7da4c03c662d",
+                "estimate_id": "est-95f588caaccd6582",
                 "scope": "plan",
                 "prediction": {
                   "record_id": "cohort-prediction",
@@ -753,7 +753,7 @@
           ],
           "estimates": [
             {
-              "estimate_id": "est-496f7da4c03c662d",
+              "estimate_id": "est-95f588caaccd6582",
               "state": "current",
               "budget_changed": true
             }
@@ -766,7 +766,7 @@
             "record_id": "cohort-prediction",
             "revision": 1
           },
-          "estimate_id": "est-ddaeb16ced19eeb0",
+          "estimate_id": "est-fd5a28fae8fd16a5",
           "runtime_profile_refs": [
             "synthetic-batch-small",
             "synthetic-coder",
@@ -791,7 +791,7 @@
             "record_id": "cohort-prediction",
             "revision": 2
           },
-          "estimate_id": "est-496f7da4c03c662d",
+          "estimate_id": "est-95f588caaccd6582",
           "runtime_profile_refs": [
             "synthetic-batch-gpu",
             "synthetic-coder",
@@ -819,7 +819,7 @@
       "code": "HW-PLAN-004",
       "title": "A platform budget changed after the estimate",
       "next_action": "Compare the plan with the current budgets and revise it if needed.",
-      "subject": "estimate est-496f7da4c03c662d",
+      "subject": "estimate est-95f588caaccd6582",
       "diagnostic": "HW-PLAN-004: A platform budget changed after the estimate"
     }
   ]

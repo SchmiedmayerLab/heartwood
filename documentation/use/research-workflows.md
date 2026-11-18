@@ -116,7 +116,7 @@ The repository's `fixtures/synthetic/platform-contract/research-plan.r1.predicti
 4. Record a revised prediction that supersedes the earlier one and estimate it again.
    The comparison lists the complete-plan estimate of each revision with its runtime profiles.
 
-Each estimate shows its coverage, range, limitations, creation time and validity.
+Each estimate shows its coverage, range, cost components, limitations, exclusions, pricing assumptions, creation time and validity.
 An unknown cost is shown as unknown and never counted as zero.
 Each budget shows its allocation, reservations, spending and availability with the time the platform observed them.
 Each element shows whether you approved a reviewed proposal that contains it, whether it is unchanged since an approval in an earlier revision, and the platform's authorization.

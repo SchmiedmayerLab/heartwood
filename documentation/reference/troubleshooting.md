@@ -453,7 +453,7 @@ A reported balance never guarantees that the platform admits work.
 ### `HW-PLAN-005`: The Platform Estimate Is Incomplete
 
 The estimate's coverage is partial or unknown, for example because the platform does not estimate one kind of work or has no price for a runtime profile.
-The elements without a complete cost show their limitations; their cost is unknown, not zero.
+The elements without a complete cost show their limitations; their cost stays unknown.
 Review them before approving work, or revise the plan to a configuration the platform estimates.
 
 ### `HW-PLAN-006`: The Platform Denied an Operation

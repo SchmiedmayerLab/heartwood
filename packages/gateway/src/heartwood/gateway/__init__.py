@@ -196,6 +196,7 @@ from heartwood.gateway._platform_planning import (
     PlanningRecordError,
     PlanningServiceClient,
     PlanningServiceError,
+    PlanningStateError,
     PlatformPlanning,
     PlatformPlanningBinding,
 )
@@ -372,6 +373,7 @@ __all__ = [
     "PlanningRecordError",
     "PlanningServiceClient",
     "PlanningServiceError",
+    "PlanningStateError",
     "PlatformPlanning",
     "PlatformPlanningBinding",
     "ProjectConfig",

@@ -611,6 +611,7 @@ class FakeBudgetService(_Service):
         self.clock = clock
         self.contexts = {item.project_id: item for item in SYNTHETIC_LAUNCH_CONTEXTS}
         self.budgets = {item.budget_id: item for item in _synthetic_budgets()}
+        self._quotes = 0
         self.server.tool(self.get_budgets, annotations=_READ_ONLY)
         self.server.tool(self.estimate_workload, annotations=_READ_ONLY)
 
@@ -679,10 +680,11 @@ class FakeBudgetService(_Service):
         components = tuple(self._element_estimate(by_id[item]) for item in selected)
         total = _total(tuple(item.cost for item in components))
         created = self.clock()
-        # Each quote is new; repeating a request later yields another estimate identity.
-        request = json.dumps(
-            [project_id, scope, prediction, selected, created.isoformat()], sort_keys=True
-        )
+        # Each quote is new, so a repeated request yields another estimate identity.
+        with self._lock:
+            self._quotes += 1
+            quote = self._quotes
+        request = json.dumps([project_id, scope, prediction, selected, quote], sort_keys=True)
         return PlatformEstimate(
             project_context_id=parsed.project_context_id,
             estimate_id=f"est-{hashlib.sha256(request.encode()).hexdigest()[:16]}",

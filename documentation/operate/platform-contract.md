@@ -491,7 +491,8 @@ The gateway does the following and nothing more:
 - **Discovery:** each refresh lists the service's capabilities and reads budgets only when the service offers them; an estimate is requested only when estimates are offered.
 - **Plan revisions:** a workload prediction for the launch context is recorded once per revision; a changed revision under the same identity is refused, and a superseded revision must be recorded first.
 - **Estimates:** the platform estimates a recorded revision as a whole plan or for named elements, and an answer for another project context, revision or scope is discarded.
-- **Linked records:** `PlatformPlanning.link_operation_set` and `link_platform_record` attach the exact reviewed proposal bytes, researcher decisions with their session audit references, platform authorizations and operation observations to the revision they belong to; the contract overview's validator checks every link.
+- **Linked records:** `PlatformPlanning.link_operation_set` and `link_platform_record` attach the exact reviewed proposal bytes, researcher decisions with their session audit references, platform authorizations and operation observations to the revision they belong to.
+  The contract overview's validator checks every link; the embedding is responsible for passing only records it obtained from the session's action review or from the platform.
 - **Projection:** `GET /project/planning`, `/plan` in the terminal and `NotebookSession.planning()` show one `heartwood.planning-projection.v1` document per project.
 
 The projection holds the latest observation of each budget and, for each revision, the contract overview, each element's review state and each estimate's freshness.
@@ -499,9 +500,10 @@ An element's review state comes from researcher decisions on reviewed proposals 
 An element that is unchanged since an approval in an earlier revision is shown as such, and a changed or new element requires review.
 Platform authorization is shown separately for each element.
 The comparison lists the complete-plan estimates of every revision with their runtime profiles, and marks an estimate in another denomination as not comparable; amounts are never converted or summed across estimates.
-The outcomes in [Failure States](#failure-states) cover the plan's latest revision and its latest estimate for each scope.
+The outcomes in [Failure States](#failure-states) cover each failed service capability, the plan's latest revision, its latest estimate for each scope and the latest platform authorization of each proposal.
+A damaged journal stops the projection in every interface, and the routes answer `409`.
 
-Plans, estimates and linked records are kept in `planning.jsonl` in protected state.
+Plans, estimates and linked records are kept in `planning.jsonl` in protected state, and each launch context sees only its own records.
 They are observations and decisions, and Heartwood derives no balance, reservation or spending total from them.
 A reported balance or estimate never guarantees that the platform admits work, and a researcher's approval neither raises a limit nor reserves funds.
 Heartwood submits nothing for a plan and retries nothing after a denial; operations follow the [outside operation](#outside-operation-admission) path.

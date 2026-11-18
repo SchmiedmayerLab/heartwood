@@ -9,24 +9,20 @@
 from __future__ import annotations
 
 from heartwood.gateway._action_presentation import display_safe_text
-from heartwood.schemas import EstimatedCost
+from heartwood.schemas import EstimatedCost, WorkloadQuantity
 from heartwood.schemas.planning import ElementReview, PlanningProjection
 
-_PLATFORM = {
-    "authorized": "authorized",
-    "denied": "denied",
-    "pending": "pending",
-    "unknown": "unknown",
-    "revoked": "revoked",
-    "not-requested": "not requested",
-}
+ADMISSION_NOTICE = (
+    "A reported balance or estimate does not reserve funds or guarantee "
+    "that the platform admits work."
+)
 
 
 def planning_lines(projection: PlanningProjection) -> tuple[str, ...]:
     """Describe plans, estimates, budgets and outcomes; unknown values stay unknown."""
     if not projection.offered:
         return ("Platform planning is not offered by this deployment.",)
-    lines: list[str] = []
+    lines: list[str] = [ADMISSION_NOTICE]
     if projection.launch is not None:
         launch = projection.launch
         lines.extend(
@@ -52,6 +48,7 @@ def planning_lines(projection: PlanningProjection) -> tuple[str, ...]:
             f"reserved {_amount(budget.reserved, unit)}, spent {_amount(budget.spent, unit)}; "
             f"observed {budget.observed_at}"
         )
+        lines.extend(f"  Constraint: {item}" for item in budget.constraints)
         lines.extend(f"  Limitation: {item}" for item in budget.limitations)
     for plan in projection.plans:
         lines.append(f"Plan {plan.plan_id}")
@@ -61,7 +58,34 @@ def planning_lines(projection: PlanningProjection) -> tuple[str, ...]:
                 f"  Revision {prediction.plan.revision}: prediction "
                 f"{prediction.prediction.record_id} revision {prediction.prediction.revision}"
             )
-            lines.extend(f"    {_review(item)}" for item in revision.elements)
+            lines.append(f"    Uncertainty: {prediction.uncertainty}")
+            lines.extend(f"    Assumption: {item}" for item in prediction.assumptions)
+            for element, review in zip(prediction.elements, revision.elements, strict=True):
+                lines.append(f"    {_review(review)}")
+                lines.extend(
+                    f"      {item.metric}: {_quantity(item)}; {item.uncertainty}"
+                    for item in element.quantities
+                )
+                lines.extend(f"      Assumption: {item}" for item in element.assumptions)
+            overview = revision.overview
+            lines.extend(
+                f"    Researcher decision {item.decision_id} on proposal "
+                f"{item.proposal.record_id} revision {item.proposal.revision}: {item.decision}, "
+                f"{item.decided_at}; audit {item.audit_ref}"
+                for item in overview.researcher_decisions
+            )
+            lines.extend(
+                f"    Platform authorization {item.authorization_id} on proposal "
+                f"{item.proposal.record_id} revision {item.proposal.revision}: {item.status}; "
+                f"budget {item.budget_id or 'not reported'}, "
+                f"reservation {item.reservation_ref or 'none reported'}; "
+                f"observed {item.observed_at}"
+                for item in overview.authorizations
+            )
+            lines.extend(
+                f"    Operation {item.operation_id}: {item.status}; observed {item.observed_at}"
+                for item in overview.operations
+            )
             states = {item.estimate_id: item for item in revision.estimates}
             for estimate in revision.overview.estimates:
                 state = states[estimate.estimate_id]
@@ -83,6 +107,9 @@ def planning_lines(projection: PlanningProjection) -> tuple[str, ...]:
                 )
                 lines.extend(f"      Limitation: {item}" for item in estimate.total.limitations)
                 lines.extend(f"      Excludes: {item}" for item in estimate.exclusions)
+                lines.extend(
+                    f"      Pricing assumption: {item}" for item in estimate.pricing_assumptions
+                )
         for row in plan.comparison:
             denomination = "" if row.comparable else "; another denomination, not comparable"
             lines.append(
@@ -97,6 +124,15 @@ def planning_lines(projection: PlanningProjection) -> tuple[str, ...]:
 
 def _amount(value: str | None, unit: str) -> str:
     return "unknown" if value is None else f"{value} {unit}"
+
+
+def _quantity(item: WorkloadQuantity) -> str:
+    bounds = (
+        ""
+        if item.lower is None and item.upper is None
+        else f" (from {_amount(item.lower, item.unit)} to {_amount(item.upper, item.unit)})"
+    )
+    return f"expected {_amount(item.expected, item.unit)}{bounds}"
 
 
 def _cost(cost: EstimatedCost) -> str:
@@ -123,8 +159,8 @@ def _review(element: ElementReview) -> str:
     }[element.review]
     return (
         f"{element.element_id} ({element.kind}, {element.runtime_profile_ref}): {review}; "
-        f"platform authorization {_PLATFORM[element.platform]}"
+        f"platform authorization {element.platform.replace('-', ' ')}"
     )
 
 
-__all__ = ["planning_lines"]
+__all__ = ["ADMISSION_NOTICE", "planning_lines"]

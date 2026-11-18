@@ -20,6 +20,7 @@ from collections.abc import Awaitable, Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from threading import Lock
 from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 
 from pydantic import BaseModel, ValidationError
@@ -95,6 +96,10 @@ class PlanningServiceError(Exception):
 
 class PlanningRecordError(ValueError):
     """A plan record conflicts with recorded planning state or the launch context."""
+
+
+class PlanningStateError(RuntimeError):
+    """The local planning journal is damaged and needs integrity recovery."""
 
 
 class PlanningNotOfferedError(RuntimeError):
@@ -189,7 +194,7 @@ class McpPlanningClient:
         if result.is_error:
             raise PlanningServiceError("refused")
         content = result.structured_content
-        if not isinstance(content, dict) or len(json.dumps(content)) > _MAX_RESULT_BYTES:
+        if not isinstance(content, dict) or len(json.dumps(content).encode()) > _MAX_RESULT_BYTES:
             raise PlanningServiceError("unavailable")
         return content
 
@@ -247,7 +252,7 @@ class PlanningJournal:
         try:
             return _entries(self._store.read_objects())
         except DurableFileError:
-            raise PlanningRecordError("Planning records require integrity recovery") from None
+            raise PlanningStateError("Planning records require integrity recovery") from None
 
     def append(self, record: _Record, check: Callable[[tuple[_Entry, ...]], bool]) -> None:
         """Append ``record`` when ``check`` accepts it; ``check`` returns False for a repeat."""
@@ -267,7 +272,7 @@ class PlanningJournal:
         except _RepeatError:
             return
         except DurableFileError:
-            raise PlanningRecordError("Planning records require integrity recovery") from None
+            raise PlanningStateError("Planning records require integrity recovery") from None
 
 
 def _entries(objects: tuple[dict[str, Any], ...]) -> tuple[_Entry, ...]:
@@ -275,11 +280,11 @@ def _entries(objects: tuple[dict[str, Any], ...]) -> tuple[_Entry, ...]:
     for sequence, item in enumerate(objects, 1):
         model = _KINDS.get(str(item.get("kind")))
         if item.get("schema_version") != "heartwood.planning-entry.v1" or model is None:
-            raise PlanningRecordError("Persisted planning record is invalid")
+            raise PlanningStateError("Persisted planning record is invalid")
         try:
             record = model.model_validate_json(json.dumps(item.get("record")))
         except ValidationError:
-            raise PlanningRecordError("Persisted planning record is invalid") from None
+            raise PlanningStateError("Persisted planning record is invalid") from None
         entries.append(_Entry(sequence, cast(_Record, record)))
     return tuple(entries)
 
@@ -299,7 +304,11 @@ class PlatformPlanningBinding:
 
 
 class PlatformPlanning:
-    """Gateway-owned planning state for one project and launch context."""
+    """Gateway-owned planning state for one project and launch context.
+
+    Platform calls run without the gateway's state lock; the journal serializes appends
+    across threads and processes, and this object's lock guards the service status.
+    """
 
     def __init__(self, binding: PlatformPlanningBinding, *, journal_path: Path) -> None:
         """Keep planning records in ``journal_path``; the binding's clock judges validity."""
@@ -307,9 +316,9 @@ class PlatformPlanning:
         self.client = binding.client
         self.journal = PlanningJournal(journal_path)
         self.clock = binding.clock
+        self._lock = Lock()
         self._discovery: PlanningDiscovery | None = None
         self._services = PlanningServices(budgets="unchecked", estimates="unchecked")
-        self._service_failure: ServiceFailure | None = None
 
     def refresh(self) -> None:
         """Discover the offered capabilities and read the current budgets."""
@@ -319,14 +328,14 @@ class PlatformPlanning:
         try:
             observations = self.client.budgets()
         except PlanningServiceError as error:
-            self._failed("budgets", error.failure)
+            self._set("budgets", error.failure)
             return
         if any(item.project_context_id != self.launch.project_context_id for item in observations):
-            self._failed("budgets", "unavailable")
+            self._set("budgets", "unavailable")
             return
         for observation in observations:
-            self.journal.append(observation, _new_budget(observation))
-        self._succeeded("budgets")
+            self.journal.append(observation, self._scoped(_new_budget(observation)))
+        self._set("budgets", "available")
 
     def record_prediction(self, prediction: WorkloadPrediction) -> None:
         """Record one immutable prediction revision for this launch context."""
@@ -340,15 +349,29 @@ class PlatformPlanning:
                 if predictions[key] != prediction:
                     raise PlanningRecordError("This prediction revision is already recorded")
                 return False
-            if prediction.supersedes is not None and _key(prediction.supersedes) not in predictions:
+            if prediction.supersedes is None:
+                if prediction.prediction.revision != 1:
+                    raise PlanningRecordError(
+                        "A later prediction revision must name the one it supersedes"
+                    )
+                return True
+            superseded = predictions.get(_key(prediction.supersedes))
+            if superseded is None:
                 raise PlanningRecordError("The superseded prediction revision is not recorded")
+            if (
+                superseded.plan.record_id != prediction.plan.record_id
+                or superseded.plan.revision > prediction.plan.revision
+            ):
+                raise PlanningRecordError(
+                    "A revision must keep its plan and must not lower the plan revision"
+                )
             return True
 
-        self.journal.append(prediction, check)
+        self.journal.append(prediction, self._scoped(check))
 
     def request_estimate(self, request: PlanningEstimateRequest) -> None:
         """Ask the platform to estimate a recorded prediction and record its answer."""
-        prediction = _predictions(self.journal.entries()).get(_key(request.prediction))
+        prediction = _predictions(self._entries()).get(_key(request.prediction))
         if prediction is None:
             raise PlanningRecordError("The prediction revision is not recorded")
         elements = {item.element_id for item in prediction.elements}
@@ -358,7 +381,10 @@ class PlatformPlanning:
             raise PlanningRecordError(
                 "Name existing elements for an element estimate, and none for a plan estimate"
             )
-        discovery = self._discover()
+        with self._lock:
+            discovery = self._discovery
+        if discovery is None:
+            discovery = self._discover()
         if discovery is None or not discovery.estimates:
             return
         try:
@@ -366,27 +392,30 @@ class PlatformPlanning:
                 prediction, scope=request.scope, element_ids=request.element_ids
             )
         except PlanningServiceError as error:
-            self._failed("estimates", error.failure)
+            self._set("estimates", error.failure)
             return
         if not _answers(estimate, prediction, request):
-            self._failed("estimates", "unavailable")
+            self._set("estimates", "unavailable")
             return
 
         def check(entries: tuple[_Entry, ...]) -> bool:
             recorded = _of(entries, PlatformEstimate)
+            if estimate in recorded:
+                return False
             if any(item.estimate_id == estimate.estimate_id for item in recorded):
-                if estimate in recorded:
-                    return False
-                raise PlanningRecordError("The platform reused an estimate identity")
-            _overview((*entries, _Entry(len(entries) + 1, estimate)), prediction)
+                raise _InvalidAnswerError
+            try:
+                _overview((*entries, _Entry(_next(entries), estimate)), prediction)
+            except ValueError:
+                raise _InvalidAnswerError from None
             return True
 
         try:
-            self.journal.append(estimate, check)
-        except ValueError:
-            self._failed("estimates", "unavailable")
+            self.journal.append(estimate, self._scoped(check))
+        except _InvalidAnswerError:
+            self._set("estimates", "unavailable")
             return
-        self._succeeded("estimates")
+        self._set("estimates", "available")
 
     def link_operation_set(self, document: bytes, *, reference: str) -> None:
         """Link the exact proposal document a researcher reviews to its plan revision."""
@@ -399,100 +428,60 @@ class PlatformPlanning:
     def link_platform_record(
         self, record: ResearcherDecision | PlatformAuthorization | PlatformOperationObservation
     ) -> None:
-        """Link a researcher decision or a platform authorization or operation observation."""
+        """Link a researcher decision or a platform authorization or operation observation.
+
+        The caller is the trusted embedding that obtained the record from the session's
+        action review or from the platform; Heartwood checks its links, not its origin.
+        """
         self._link(record)
 
     def projection(self) -> PlanningProjection:
         """Return plans, estimates, budgets and outcomes as of now."""
-        entries = self.journal.entries()
+        entries = self._entries()
         now = self.clock()
         budgets = _latest_budgets(entries)
         plans: dict[str, list[WorkloadPrediction]] = {}
         for prediction in _predictions(entries).values():
             plans.setdefault(prediction.plan.record_id, []).append(prediction)
-        outcomes: list[PlanningOutcome] = []
-        if self._service_failure is not None:
-            outcomes.append(
-                _outcome(
-                    "planning-unavailable"
-                    if self._service_failure == "unavailable"
-                    else "planning-refused",
-                    "service",
-                )
-            )
+        with self._lock:
+            services = self._services
+        outcomes = _service_outcomes(services)
         projected: list[PlanProjection] = []
         for plan_id in sorted(plans):
             revisions = sorted(
                 plans[plan_id],
                 key=lambda item: (item.plan.revision, _key(item.prediction)),
             )
-            views = tuple(
-                self._revision(entries, revisions, index, now) for index in range(len(revisions))
-            )
+            views: list[PlanRevision] = []
+            for prediction in revisions:
+                views.append(_revision(entries, prediction, views, now))
             outcomes.extend(_revision_outcomes(views[-1]))
             projected.append(
-                PlanProjection(plan_id=plan_id, revisions=views, comparison=_comparison(views))
+                PlanProjection(
+                    plan_id=plan_id, revisions=tuple(views), comparison=_comparison(views)
+                )
             )
         return PlanningProjection(
             offered=True,
             launch=self.launch,
-            services=self._services,
+            services=services,
             budgets=tuple(budgets[key] for key in sorted(budgets)),
             plans=tuple(projected),
             outcomes=tuple(outcomes),
         )
 
-    def _revision(
-        self,
-        entries: tuple[_Entry, ...],
-        revisions: Sequence[WorkloadPrediction],
-        index: int,
-        now: datetime,
-    ) -> PlanRevision:
-        prediction = revisions[index]
-        overview = _overview(entries, prediction)
-        reviews = _element_reviews(overview)
-        earlier = [(item, _element_reviews(_overview(entries, item))) for item in revisions[:index]]
-        elements: list[ElementReview] = []
-        for element in prediction.elements:
-            review = reviews[element.element_id]
-            if review.review == "requires-review":
-                for previous, previous_reviews in reversed(earlier):
-                    match = next(
-                        (
-                            item
-                            for item in previous.elements
-                            if item.element_id == element.element_id
-                        ),
-                        None,
-                    )
-                    if match is None:
-                        continue
-                    approved = previous_reviews[element.element_id]
-                    if match == element and approved.review in {
-                        "approved",
-                        "unchanged-since-approval",
-                    }:
-                        review = review.model_copy(
-                            update={
-                                "review": "unchanged-since-approval",
-                                "approved_in": approved.approved_in,
-                            }
-                        )
-                    break
-            elements.append(review)
-        return PlanRevision(
-            overview=overview,
-            elements=tuple(elements),
-            estimates=tuple(
-                EstimateState(
-                    estimate_id=item.estimate_id,
-                    state="expired" if now >= item.valid_until else "current",
-                    budget_changed=_budget_changed(entries, item),
-                )
-                for item in overview.estimates
-            ),
-        )
+    def _entries(self) -> tuple[_Entry, ...]:
+        return self._scope(self.journal.entries())
+
+    def _scope(self, entries: tuple[_Entry, ...]) -> tuple[_Entry, ...]:
+        """Keep the records of this launch context; another launch keeps its own."""
+        context = self.launch.project_context_id
+        return tuple(item for item in entries if _context(item.record) == context)
+
+    def _scoped(
+        self, check: Callable[[tuple[_Entry, ...]], bool]
+    ) -> Callable[[tuple[_Entry, ...]], bool]:
+        return lambda entries: check(self._scope(entries))
 
     def _link(
         self,
@@ -501,50 +490,132 @@ class PlatformPlanning:
         | PlatformAuthorization
         | PlatformOperationObservation,
     ) -> None:
+        if _context(record) != self.launch.project_context_id:
+            raise PlanningRecordError("The record belongs to another platform project context")
+
         def check(entries: tuple[_Entry, ...]) -> bool:
             if any(_identity(item.record) == _identity(record) for item in entries):
                 if any(item.record == record for item in entries):
                     return False
                 raise PlanningRecordError("A different record with this identity is linked")
-            extended = (*entries, _Entry(len(entries) + 1, record))
+            extended = (*entries, _Entry(_next(entries), record))
             prediction = _prediction_for(extended, record)
             if prediction is None:
                 raise PlanningRecordError("The record does not belong to a recorded plan revision")
-            _overview(extended, prediction)
+            try:
+                _overview(extended, prediction)
+            except ValueError:
+                raise PlanningRecordError(
+                    "The record is inconsistent with its plan revision"
+                ) from None
             return True
 
-        try:
-            self.journal.append(record, check)
-        except PlanningRecordError:
-            raise
-        except ValueError:
-            raise PlanningRecordError("The record is inconsistent with its plan revision") from None
+        self.journal.append(record, self._scoped(check))
 
     def _discover(self) -> PlanningDiscovery | None:
         try:
-            self._discovery = self.client.discover()
+            discovery = self.client.discover()
         except PlanningServiceError as error:
-            self._discovery = None
-            self._service_failure = error.failure
-            self._services = PlanningServices(
-                budgets=error.failure, estimates=error.failure, checked_at=self.clock()
-            )
+            with self._lock:
+                self._discovery = None
+                self._services = PlanningServices(
+                    budgets=error.failure, estimates=error.failure, checked_at=self.clock()
+                )
             return None
-        self._service_failure = None
-        self._services = PlanningServices(
-            budgets=_offered(self._discovery.budgets),
-            estimates=_offered(self._discovery.estimates),
-            checked_at=self.clock(),
-        )
-        return self._discovery
+        with self._lock:
+            self._discovery = discovery
+            self._services = PlanningServices(
+                budgets=_offered(discovery.budgets),
+                estimates=_offered(discovery.estimates),
+                checked_at=self.clock(),
+            )
+        return discovery
 
-    def _failed(self, capability: Literal["budgets", "estimates"], failure: ServiceFailure) -> None:
-        self._service_failure = failure
-        self._services = self._services.model_copy(update={capability: failure})
+    def _set(
+        self, capability: Literal["budgets", "estimates"], status: PlanningServiceStatus
+    ) -> None:
+        with self._lock:
+            self._services = self._services.model_copy(update={capability: status})
 
-    def _succeeded(self, capability: Literal["budgets", "estimates"]) -> None:
-        self._service_failure = None
-        self._services = self._services.model_copy(update={capability: "available"})
+
+class _InvalidAnswerError(Exception):
+    """The platform's answer does not fit the recorded plan; it is discarded."""
+
+
+def _context(record: _Record) -> str:
+    if isinstance(record, ReviewedOperationSet):
+        return record.proposal.project_context_id
+    return record.project_context_id
+
+
+def _next(entries: tuple[_Entry, ...]) -> int:
+    return entries[-1].sequence + 1 if entries else 1
+
+
+def _revision(
+    entries: tuple[_Entry, ...],
+    prediction: WorkloadPrediction,
+    earlier: Sequence[PlanRevision],
+    now: datetime,
+) -> PlanRevision:
+    """Project one revision; an unchanged element keeps the approval of its last revision."""
+    overview = _overview(entries, prediction)
+    reviews = _element_reviews(overview)
+    previous = earlier[-1] if earlier else None
+    elements: list[ElementReview] = []
+    for element in prediction.elements:
+        review = reviews[element.element_id]
+        if review.review == "requires-review" and previous is not None:
+            before = next(
+                (
+                    (item, state)
+                    for item, state in zip(
+                        previous.overview.prediction.elements, previous.elements, strict=True
+                    )
+                    if item.element_id == element.element_id
+                ),
+                None,
+            )
+            if (
+                before is not None
+                and before[0] == element
+                and before[1].review in {"approved", "unchanged-since-approval"}
+            ):
+                review = review.model_copy(
+                    update={
+                        "review": "unchanged-since-approval",
+                        "approved_in": before[1].approved_in,
+                    }
+                )
+        elements.append(review)
+    return PlanRevision(
+        overview=overview,
+        elements=tuple(elements),
+        estimates=tuple(
+            EstimateState(
+                estimate_id=item.estimate_id,
+                state="expired" if now >= item.valid_until else "current",
+                budget_changed=_budget_changed(entries, item),
+            )
+            for item in overview.estimates
+        ),
+    )
+
+
+def _service_outcomes(services: PlanningServices) -> list[PlanningOutcome]:
+    """Report each failed capability; one failure of the whole service is reported once."""
+    failed = {
+        name: status
+        for name, status in (("budget", services.budgets), ("estimate", services.estimates))
+        if status in {"unavailable", "refused"}
+    }
+    outcomes: list[PlanningOutcome] = []
+    for status in dict.fromkeys(failed.values()):
+        names = [name for name, value in failed.items() if value == status]
+        subject = "planning service" if len(names) == 2 else f"{names[0]} service"
+        check = "planning-unavailable" if status == "unavailable" else "planning-refused"
+        outcomes.append(_outcome(check, subject))
+    return outcomes
 
 
 def _new_budget(observation: BudgetObservation) -> Callable[[tuple[_Entry, ...]], bool]:
@@ -569,7 +640,13 @@ def _predictions(entries: Iterable[_Entry]) -> dict[tuple[str, int], WorkloadPre
 
 
 def _latest_budgets(entries: Iterable[_Entry]) -> dict[str, BudgetObservation]:
-    return {item.budget_id: item for item in _of(entries, BudgetObservation)}
+    """Keep each budget's newest observation; a late older one does not replace it."""
+    latest: dict[str, BudgetObservation] = {}
+    for item in _of(entries, BudgetObservation):
+        current = latest.get(item.budget_id)
+        if current is None or item.observed_at >= current.observed_at:
+            latest[item.budget_id] = item
+    return latest
 
 
 def _identity(record: _Record) -> tuple[str, ...]:
@@ -582,15 +659,12 @@ def _identity(record: _Record) -> tuple[str, ...]:
     if isinstance(record, PlatformOperationObservation):
         # Each observation of an operation is kept; the latest one is shown.
         return ("operation", record.operation_id, record.observed_at.isoformat(), record.status)
-    return ("other", type(record).__name__)
-
-
-def _operation_sets(entries: Iterable[_Entry]) -> list[ReviewedOperationSet]:
-    return _of(entries, ReviewedOperationSet)
+    # Predictions, estimates and budgets have their own repeat checks.
+    return ("unlinked",)
 
 
 def _prediction_for(entries: tuple[_Entry, ...], record: _Record) -> WorkloadPrediction | None:
-    sets = _operation_sets(entries)
+    sets = _of(entries, ReviewedOperationSet)
     reviewed: ReviewedOperationSet | None
     if isinstance(record, ReviewedOperationSet):
         reviewed = record
@@ -617,7 +691,9 @@ def _prediction_for(entries: tuple[_Entry, ...], record: _Record) -> WorkloadPre
 def _overview(entries: tuple[_Entry, ...], prediction: WorkloadPrediction) -> PlanningOverview:
     """Build the contract overview for one revision; its validator checks every link."""
     key = _key(prediction.prediction)
-    sets = [item for item in _operation_sets(entries) if _key(item.proposal.prediction) == key]
+    sets = [
+        item for item in _of(entries, ReviewedOperationSet) if _key(item.proposal.prediction) == key
+    ]
     proposals = {_key(item.proposal.proposal) for item in sets}
     operations = {op.operation_id for item in sets for op in item.proposal.operations}
     latest: dict[str, PlatformOperationObservation] = {}
@@ -752,7 +828,12 @@ def _revision_outcomes(revision: PlanRevision) -> list[PlanningOutcome]:
             outcomes.append(_outcome("planning-budget-changed", subject))
         if estimates[state.estimate_id].total.coverage != "complete":
             outcomes.append(_outcome("planning-estimate-incomplete", subject))
-    for authorization in revision.overview.authorizations:
+    authorizations: dict[tuple[str, int], PlatformAuthorization] = {}
+    for authorization in sorted(
+        revision.overview.authorizations, key=lambda item: item.observed_at
+    ):
+        authorizations[_key(authorization.proposal)] = authorization
+    for authorization in authorizations.values():
         if authorization.status in {"denied", "revoked"}:
             outcomes.append(
                 _outcome("planning-denied", f"authorization {authorization.authorization_id}")
@@ -818,6 +899,7 @@ __all__ = [
     "PlanningRecordError",
     "PlanningServiceClient",
     "PlanningServiceError",
+    "PlanningStateError",
     "PlatformPlanning",
     "PlatformPlanningBinding",
     "not_offered_projection",

@@ -1536,15 +1536,16 @@ class SessionGateway:
         return ExperimentExport(sha256=hashlib.sha256(content).hexdigest(), jsonl=content.decode())
 
     @gateway_operation
-    @_serialized_state
     def planning(self) -> PlanningProjection:
-        """Return plans, platform estimates, budget observations and planning outcomes."""
+        """Return plans, platform estimates, budget observations and planning outcomes.
+
+        Planning holds no gateway state lock, so a slow platform delays no other operation.
+        """
         if self._planning is None:
             return not_offered_projection()
         return self._planner().projection()
 
     @gateway_operation
-    @_serialized_state
     def refresh_planning(self) -> PlanningProjection:
         """Discover the platform's planning capabilities and read its current budgets."""
         planner = self._planner()
@@ -1552,7 +1553,6 @@ class SessionGateway:
         return planner.projection()
 
     @gateway_operation
-    @_serialized_state
     def record_plan_prediction(self, prediction: WorkloadPrediction) -> PlanningProjection:
         """Record one immutable workload prediction revision for the launch context."""
         planner = self._planner()
@@ -1560,7 +1560,6 @@ class SessionGateway:
         return planner.projection()
 
     @gateway_operation
-    @_serialized_state
     def request_plan_estimate(self, request: PlanningEstimateRequest) -> PlanningProjection:
         """Ask the platform to estimate a recorded prediction; nothing is reserved or run."""
         planner = self._planner()

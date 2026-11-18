@@ -362,7 +362,7 @@ _DIAGNOSTICS: dict[str, DiagnosticDefinition] = {
     "planning-estimate-incomplete": DiagnosticDefinition(
         "HW-PLAN-005",
         "The platform estimate is incomplete",
-        "Review the elements without a complete estimate; their cost is unknown, not zero.",
+        "Review the elements without a complete estimate; their cost stays unknown.",
         "/reference/troubleshooting/#hw-plan-005-the-platform-estimate-is-incomplete",
     ),
     "planning-denied": DiagnosticDefinition(

@@ -16,6 +16,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
+from pydantic import ValidationError
+
 from heartwood.cli._workspace_presentation import (
     format_workspace_changes,
     format_workspace_diff,
@@ -29,6 +31,7 @@ from heartwood.gateway import (
     ActionSettingsError,
     ModelSettingsError,
     PlanningRecordError,
+    PlanningStateError,
     ProjectionActionRecord,
     ProjectionApprovalGroup,
     SessionGateway,
@@ -502,8 +505,12 @@ class InteractiveSession:
                 )
             else:
                 return InteractionResult(message=usage, error=True)
-        except PlanningRecordError as error:
+        except (PlanningRecordError, PlanningStateError) as error:
             return InteractionResult(message=terminal_safe_text(str(error)), error=True)
+        except ValidationError:
+            return InteractionResult(
+                message="The file is not a valid workload prediction.", error=True
+            )
         except (OSError, ValueError):
             return InteractionResult(message=usage, error=True)
         return InteractionResult(

@@ -11,7 +11,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import example from "../../../../fixtures/synthetic/platform-contract/planning-projection.json";
 import type { HeartwoodClient } from "../client";
 import type { PlanningProjection } from "../types";
-import { ProjectPlanning } from "./ProjectPlanning";
+import { admissionNotice, ProjectPlanning } from "./ProjectPlanning";
 
 // The gateway tests check that this file is the projection the gateway produces.
 const projection = example as PlanningProjection;
@@ -67,6 +67,38 @@ describe("project planning", () => {
       "batch (batch, synthetic-batch-gpu): requires review; platform authorization not requested",
     );
     expect(revised).toHaveTextContent("a budget changed since");
+    expect(revised).toHaveTextContent(
+      "Uncertainty: Batch duration depends on input sizes not yet measured at full scale.",
+    );
+    expect(revised).toHaveTextContent(
+      "duration_per_task: expected 20 seconds (from 15 seconds to 30 seconds)",
+    );
+    expect(revised).toHaveTextContent("created 2026-07-01T00:00:00Z");
+    expect(revised).toHaveTextContent(
+      "Part: batch: 17.6 USD (from 13.2 USD to 26.4 USD), complete coverage",
+    );
+    expect(revised).toHaveTextContent(
+      "Pricing assumption: Synthetic list prices; no discounts or commitments apply.",
+    );
+    expect(
+      screen.getAllByText(
+        "Constraint: Reported availability does not reserve funds or admit work.",
+      ),
+    ).toHaveLength(2);
+    expect(screen.getByText(admissionNotice)).toBeInTheDocument();
+  });
+
+  it("reports a failed read instead of hiding the section", async () => {
+    const api = client();
+    api.getPlanning.mockRejectedValue(
+      new Error("Persisted planning record is invalid"),
+    );
+    render(<ProjectPlanning client={api} />);
+    fireEvent.click(await screen.findByText("Research Planning"));
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Persisted planning record is invalid",
+    );
   });
 
   it("refreshes budgets and requests an estimate for the latest revision", async () => {

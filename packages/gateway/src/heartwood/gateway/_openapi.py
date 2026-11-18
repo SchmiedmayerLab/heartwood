@@ -176,7 +176,7 @@ _REST_OPERATIONS = (
         "/project/planning/refresh",
         "Read the platform's planning capabilities and budgets",
         PlanningProjection,
-        errors=(404, 422),
+        errors=(404, 409),
     ),
     _Operation(
         "POST",
@@ -184,7 +184,7 @@ _REST_OPERATIONS = (
         "Record a workload prediction revision",
         PlanningProjection,
         api.WorkloadPrediction,
-        errors=(404, 422),
+        errors=(404, 409, 422),
     ),
     _Operation(
         "POST",
@@ -192,7 +192,7 @@ _REST_OPERATIONS = (
         "Request a platform estimate",
         PlanningProjection,
         PlanningEstimateRequest,
-        errors=(404, 422),
+        errors=(404, 409, 422),
     ),
     _Operation(
         "GET",
