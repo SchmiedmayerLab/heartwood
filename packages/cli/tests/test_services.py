@@ -148,6 +148,7 @@ def test_test_output_marks_listing_as_not_authorization() -> None:
                     "description": "Find synthetic records.",
                     "sha256": "a" * 64,
                     "parameters": '{"properties":{"term":{"type":"string"}}}',
+                    "definition": '{"name":"find_records"}',
                     "annotations": annotations,
                     "allowed": True,
                     "accepts_operation_binding": True,
@@ -174,44 +175,50 @@ def test_services_test_then_select_by_reviewed_digest(
     monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
     issuer = FakeTokenIssuer()
     jobs = FakeJobService(issuer)
+    root = tmp_path / "project"
+    root.mkdir()
+    identity = uuid4()
     with serve(jobs.app) as origin:
-        root = tmp_path / "project"
-        root.mkdir()
-        identity = uuid4()
-        gateway = SessionGateway(
-            project=ProjectContext(
-                root, protected_state=tmp_path / "protected" / str(identity), project_id=identity
-            ),
-            mcp_destinations=(
-                McpDestination(
-                    service_id="synthetic-jobs",
-                    origin=origin,
-                    tools=("create_task",),
-                    observation_tool="get_task",
-                ),
-            ),
-            env={},
+        destination = McpDestination(
+            service_id="synthetic-jobs",
+            origin=origin,
+            tools=("create_task",),
+            observation_tool="get_task",
         )
-        try:
-            gateway.config_store.save(gateway.config_store.load())
-            token = issuer.exchange(audience=JOBS_AUDIENCE, project_id=str(identity))
-            monkeypatch.setattr("sys.stdin", io.StringIO(token + "\n"))
-            assert (
-                _run(gateway, "add", "jobs", f"{origin}/mcp", "--label", "Jobs", "--token-stdin")
-                == 0
+
+        def command(*argv: str, token: str = "") -> int:
+            # Each command is a new process with a new gateway and no remembered token.
+            gateway = SessionGateway(
+                project=ProjectContext(
+                    root,
+                    protected_state=tmp_path / "protected" / str(identity),
+                    project_id=identity,
+                ),
+                mcp_destinations=(destination,),
+                env={},
             )
-            capsys.readouterr()
-            assert _run(gateway, "test", "jobs") == 0
-            tested = capsys.readouterr().out
-            (choice,) = [
-                line.split("select as ", 1)[1]
-                for line in tested.splitlines()
-                if "select as create_task=" in line
-            ]
-            assert _run(gateway, "select", "jobs", choice) == 0
-            selected = capsys.readouterr().out
-            assert "create_task  status=ready" in selected
-            assert token not in tested + selected
-            assert jobs.task_count == 0
-        finally:
-            gateway.stop()
+            try:
+                gateway.config_store.save(gateway.config_store.load())
+                monkeypatch.setattr("sys.stdin", io.StringIO(token + "\n"))
+                return _run(gateway, *argv)
+            finally:
+                gateway.stop()
+
+        token = issuer.exchange(audience=JOBS_AUDIENCE, project_id=str(identity))
+        assert command("add", "jobs", f"{origin}/mcp", "--label", "Jobs") == 0
+        capsys.readouterr()
+        assert command("test", "jobs", "--token-stdin", token=token) == 0
+        tested = capsys.readouterr().out
+        (choice,) = [
+            line.split("select as ", 1)[1]
+            for line in tested.splitlines()
+            if "select as create_task=" in line
+        ]
+        # Without a token the new process cannot list the tools again.
+        assert command("select", "jobs", choice) == 1
+        assert "HW-MCP-005" in capsys.readouterr().err
+        assert command("select", "jobs", choice, "--token-stdin", token=token) == 0
+        selected = capsys.readouterr().out
+        assert "create_task  status=ready" in selected
+        assert token not in tested + selected
+        assert jobs.task_count == 0

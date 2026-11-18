@@ -170,6 +170,7 @@ def format_mcp_servers(settings: McpServersResponse) -> str:
         lines.append(
             f"Approved origin: {item['origin']}  service={item['service_id']}  "
             f"token variable={item['credential_binding']}"
+            + ("  private address permitted" if item["private_address"] else "")
         )
     if not settings["servers"]:
         return "\n".join((*lines, "No research services configured."))
@@ -213,6 +214,7 @@ def format_mcp_test(result: McpServerTestResponse) -> str:
         if tool["description"]:
             lines.append(f"      {tool['description']}")
         lines.append(f"      parameters: {tool['parameters']}")
+        lines.append(f"      definition: {tool['definition']}")
     for name, capability in (("resources", result["resources"]), ("prompts", result["prompts"])):
         if capability["advertised"]:
             lines.append(f"The server advertises {name}; Heartwood does not use them.")
