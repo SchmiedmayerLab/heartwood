@@ -723,6 +723,15 @@ def test_cancellation_names_the_earlier_operation_from_the_gateways_record(
         )
         assert _observed(service.record(job)) == "cancelled"
         assert service.jobs.task_count == 1
+        audit = [
+            item.payload
+            for item in service.session.audit_log.read()
+            if item.event_type == "external_action.recorded"
+            and item.payload["operation_id"] == str(cancel.proposal.operation_id)
+        ]
+        assert audit[-1]["target_operation_id"] == operation_id
+        assert audit[-1]["platform_record_ref"] == f"synthetic-audit:{cancel.proposal.operation_id}"
+        assert "synthetic-analysis" not in json.dumps(audit)
 
 
 @pytest.mark.parametrize("target", ["unsent", "unknown-identifier", "text"])
