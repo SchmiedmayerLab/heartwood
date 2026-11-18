@@ -83,7 +83,10 @@ jobs:
           npm audit --omit=dev --json > "${RUNNER_TEMP}/npm-audit.json" || true
           node - "${RUNNER_TEMP}/npm-audit.json" <<'EOF'
           const report = JSON.parse(require('fs').readFileSync(process.argv[2], 'utf8'));
-          if (report.error || !report.vulnerabilities) throw new Error(`npm audit failed: ${JSON.stringify(report.error)}`);
+          const { error, vulnerabilities } = report;
+          if (error || typeof vulnerabilities !== 'object' || vulnerabilities === null || Array.isArray(vulnerabilities)) {
+            throw new Error(`npm audit failed: ${JSON.stringify(error)}`);
+          }
           const exempt = JSON.parse(process.env.EXEMPT_ADVISORIES);
           let failed = false;
           for (const vulnerability of Object.values(report.vulnerabilities)) {
@@ -91,7 +94,9 @@ jobs:
               if (typeof advisory !== 'object' || !['moderate', 'high', 'critical'].includes(advisory.severity)) continue;
               const { dependents, until } = exempt[advisory.url.split('/').pop()] ?? {};
               const { isDirect, effects } = report.vulnerabilities[advisory.name];
-              const current = /^\d{4}-\d{2}-\d{2}$/.test(until) && new Date(`${until}T23:59:59Z`) >= new Date();
+              const reviewDate = new Date(`${until}T23:59:59Z`);
+              const current = typeof until === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(until) && !Number.isNaN(reviewDate.getTime())
+                && reviewDate.toISOString().startsWith(until) && reviewDate >= new Date();
               if (current && Array.isArray(dependents) && !isDirect && effects.length > 0 && effects.every((dependent) => dependents.includes(dependent))) {
                 console.log(`::notice::Exempted ${advisory.name} until ${until}: ${advisory.url}`);
               } else {
