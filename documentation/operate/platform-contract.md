@@ -481,6 +481,12 @@ There is one open release review per operation, denial is final for it, and an i
 | Model no longer authorized | A model list without the model | HW-AGENT-011 |
 | Unsupported model protocol | A declaration without a supported protocol | HW-AGENT-011 |
 | Service temporarily unavailable | An unavailability error | HW-AGENT-012 |
+| Planning service unavailable, or a response outside the contract or launch context | An unavailability error or an invalid record | [HW-PLAN-001](../reference/troubleshooting.md#research-planning) |
+| Planning request refused | A tool error | HW-PLAN-002 |
+| Expired estimate | An estimate past its validity time | HW-PLAN-003 |
+| Budget changed after the estimate | A later budget observation with other amounts | HW-PLAN-004 |
+| Partial or unknown estimate coverage | An estimate with limitations | HW-PLAN-005 |
+| Denied operation | A denied or revoked authorization, or a denied operation observation | HW-PLAN-006 |
 
 [Diagnostics and Troubleshooting](../reference/troubleshooting.md) gives each code's recovery steps.
 `fixtures/synthetic/platform-contract/failure-states.json` lists each coded state with the diagnostic Heartwood shows for it.

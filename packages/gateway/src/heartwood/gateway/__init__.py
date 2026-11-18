@@ -188,6 +188,7 @@ from heartwood.gateway._model_transfer import (
     import_model_bundle,
     inspect_model_bundle,
 )
+from heartwood.gateway._planning_presentation import planning_lines
 from heartwood.gateway._platform_planning import (
     McpPlanningClient,
     PlanningDiscovery,
@@ -491,6 +492,7 @@ __all__ = [
     "persist_deployment_profile",
     "plan_local_context_window",
     "plan_startup",
+    "planning_lines",
     "project_session",
     "retained_approval",
     "retained_approval_notice",

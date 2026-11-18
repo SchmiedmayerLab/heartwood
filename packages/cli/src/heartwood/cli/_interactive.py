@@ -13,6 +13,7 @@ import shlex
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import cast
 
 from heartwood.cli._workspace_presentation import (
@@ -27,6 +28,7 @@ from heartwood.gateway import (
     SPECIALIST_TASK_LABEL,
     ActionSettingsError,
     ModelSettingsError,
+    PlanningRecordError,
     ProjectionActionRecord,
     ProjectionApprovalGroup,
     SessionGateway,
@@ -43,6 +45,7 @@ from heartwood.gateway import (
     approval_retry_unavailable_reason,
     outside_review_lines,
     outside_review_title,
+    planning_lines,
     retained_approval,
     retained_approval_notice,
     retained_approval_sendable,
@@ -53,12 +56,15 @@ from heartwood.gateway import (
 )
 from heartwood.schemas import (
     ActionSettingsResponse,
+    PlanningReference,
     SpecialistSettingsResponse,
+    WorkloadPrediction,
     WorkspaceChangesResponse,
     WorkspaceDiffResponse,
     WorkspaceFileResponse,
     WorkspaceTreeResponse,
 )
+from heartwood.schemas.planning import PlanningEstimateRequest
 from heartwood.schemas.review import ResearchCorrectionRun, ResearchReviewRun
 from heartwood.schemas.workflows import (
     WorkflowCatalog,
@@ -459,9 +465,50 @@ class InteractiveSession:
                     error=True,
                 )
             return InteractionResult(message=format_action_settings(settings))
+        if directive == "/plan" and self.gateway.platform_planning is not None:
+            return self._plan(parts[1:])
         if directive == "/help" and len(parts) == 1:
-            return InteractionResult(message=command_help())
+            return InteractionResult(
+                message=command_help(planning=self.gateway.platform_planning is not None)
+            )
         return InteractionResult(message=f"Unknown command: {terminal_safe_text(directive)}")
+
+    def _plan(self, arguments: list[str]) -> InteractionResult:
+        """Show or update gateway-owned planning; nothing here submits platform work."""
+        usage = (
+            "Use /plan, /plan refresh, /plan record FILE, "
+            "or /plan estimate PREDICTION REVISION [ELEMENT ...]."
+        )
+        try:
+            if not arguments:
+                projection = self.gateway.planning()
+            elif arguments == ["refresh"]:
+                projection = self.gateway.refresh_planning()
+            elif len(arguments) == 2 and arguments[0] == "record":
+                path = self.gateway.project.require_project_path(Path(arguments[1]))
+                projection = self.gateway.record_plan_prediction(
+                    WorkloadPrediction.model_validate_json(path.read_bytes())
+                )
+            elif len(arguments) >= 3 and arguments[0] == "estimate":
+                elements = tuple(arguments[3:])
+                projection = self.gateway.request_plan_estimate(
+                    PlanningEstimateRequest(
+                        prediction=PlanningReference(
+                            record_id=arguments[1], revision=int(arguments[2])
+                        ),
+                        scope="elements" if elements else "plan",
+                        element_ids=elements,
+                    )
+                )
+            else:
+                return InteractionResult(message=usage, error=True)
+        except PlanningRecordError as error:
+            return InteractionResult(message=terminal_safe_text(str(error)), error=True)
+        except (OSError, ValueError):
+            return InteractionResult(message=usage, error=True)
+        return InteractionResult(
+            message="\n".join(("Research planning", *planning_lines(projection)))
+        )
 
     def _decision_target(self, requested_id: str | None) -> str | None:
         approval = self.pending_approval()
@@ -512,12 +559,13 @@ class InteractiveSession:
         )
 
 
-def command_help() -> str:
-    """Return the commands common to terminal clients."""
+def command_help(*, planning: bool = False) -> str:
+    """Return the commands common to terminal clients; /plan only where planning is offered."""
     return (
         "/allow  /reject  /retry  /permissions  /pause  /resume  /status  "
-        "/specialists  /workflows  /workflow  /experiments  /files  /show  /changes  "
-        "/replay  /audit-export  /help  /exit"
+        "/specialists  /workflows  /workflow  /experiments  "
+        + ("/plan  " if planning else "")
+        + "/files  /show  /changes  /replay  /audit-export  /help  /exit"
     )
 
 

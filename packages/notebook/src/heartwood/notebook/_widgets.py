@@ -28,11 +28,13 @@ from heartwood.gateway import (
     action_tool_label,
     display_safe_text,
     outside_review_lines,
+    planning_lines,
     retained_approval_notice,
     specialist_review_lines,
 )
 from heartwood.notebook._view_model import NotebookViewModel
 from heartwood.schemas import ProjectReadinessResponse
+from heartwood.schemas.planning import PlanningProjection
 
 
 @dataclass(frozen=True, slots=True)
@@ -316,6 +318,20 @@ def build_policy_spec(readiness: ProjectReadinessResponse) -> WidgetSpec:
             for name, item in readiness["policy"].items()
         ),
     )
+
+
+def build_planning_spec(projection: PlanningProjection) -> WidgetSpec:
+    """Describe plans, estimates, budgets and outcomes with the terminal's lines."""
+    return WidgetSpec("Research Planning", planning_lines(projection))
+
+
+def render_planning(projection: PlanningProjection) -> object:
+    """Render planning if ``ipywidgets`` is installed, otherwise its specification."""
+    spec = build_planning_spec(projection)
+    widgets = _load_widgets()
+    if widgets is None:
+        return spec
+    return _factory(widgets, "HTML")(value=_section_html(spec.title, spec.items))
 
 
 def render_policy(readiness: ProjectReadinessResponse) -> object:

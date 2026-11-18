@@ -10,11 +10,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from uuid import uuid4
 
 import pytest
@@ -22,6 +23,7 @@ from fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel
 
+from heartwood.cli._interactive import InteractiveSession
 from heartwood.gateway import (
     McpPlanningClient,
     PlanningDiscovery,
@@ -42,6 +44,7 @@ from heartwood.gateway.platform_fakes import (
     running_platform_fakes,
     serve,
 )
+from heartwood.notebook import NotebookSession, build_planning_spec
 from heartwood.schemas import (
     BudgetObservation,
     PlatformAuthorization,
@@ -56,6 +59,7 @@ from heartwood.schemas.planning import PlanningEstimateRequest, PlanningProjecti
 _EXAMPLES = Path(__file__).parents[3] / "fixtures/synthetic/platform-contract"
 _LAUNCH = SYNTHETIC_LAUNCH_CONTEXTS[0]
 _START = datetime(2026, 7, 1, tzinfo=UTC)
+_STATES = json.loads((_EXAMPLES / "failure-states.json").read_text("utf-8"))["states"]
 
 
 def _prediction(revision: int) -> WorkloadPrediction:
@@ -644,3 +648,100 @@ def test_planning_requires_protected_state(tmp_path: Path, clock: _Clock) -> Non
             env={},
             platform_planning=PlatformPlanningBinding(_LAUNCH, _ScriptedClient(), clock),
         )
+
+
+def _produce(
+    code: str, gateway: SessionGateway, fakes: RunningFakes, clock: _Clock
+) -> PlanningProjection:
+    """Bring the plan into the state that reports ``code``."""
+    gateway.record_plan_prediction(_prediction(1))
+    if code == "HW-PLAN-001":
+        fakes.budgets.available = False
+        return gateway.refresh_planning()
+    planning = gateway.platform_planning
+    assert planning is not None
+    if code == "HW-PLAN-002":
+        # The token is for project A; the platform refuses a request naming project B.
+        planning.client = _client(fakes, project_id=OTHER_PROJECT_ID)
+        return gateway.refresh_planning()
+    if code == "HW-PLAN-005":
+        fakes.budgets.estimate_kinds = frozenset({"exploration", "batch"})
+        return _estimate(gateway, 1)
+    gateway.refresh_planning()
+    estimate = _estimate(gateway, 1).plans[0].revisions[0].overview.estimates[0]
+    if code == "HW-PLAN-003":
+        clock.now += timedelta(hours=2)
+        return gateway.planning()
+    if code == "HW-PLAN-004":
+        fakes.budgets.set_allocation("budget-compute", "25")
+        return gateway.refresh_planning()
+    document = _proposal(estimate, {"op-batch": ("batch",)})
+    planning.link_operation_set(document, reference="project://proposals/cohort-1.json")
+    planning.link_platform_record(
+        _record(
+            PlatformAuthorization,
+            project_context_id=_LAUNCH.project_context_id,
+            authorization_id="authorization-1",
+            proposal={"record_id": "cohort-proposal", "revision": 1},
+            document_sha256=hashlib.sha256(document).hexdigest(),
+            status="denied",
+            observed_at="2026-07-01T00:06:00Z",
+            reason="Synthetic allocation is committed to other work.",
+            platform_record_ref="synthetic-audit:authorization-1",
+        )
+    )
+    return gateway.planning()
+
+
+@pytest.mark.parametrize(
+    "state",
+    [item for item in _STATES if item["surface"] == "planning"],
+    ids=lambda item: item["code"],
+)
+def test_planning_outcomes_show_the_same_diagnostic_in_every_interface(
+    gateway: SessionGateway, fakes: RunningFakes, clock: _Clock, state: dict[str, str]
+) -> None:
+    projection = _produce(state["code"], gateway, fakes, clock)
+    browser = RestGateway(gateway).handle(RestRequest("GET", "/project/planning")).body
+    terminal = InteractiveSession(gateway, session_id="planning").submit("/plan")
+    notebook = build_planning_spec(NotebookSession(gateway=gateway).planning())
+
+    assert [item.diagnostic for item in projection.outcomes] == [state["diagnostic"]]
+    assert [item["diagnostic"] for item in cast(list[Any], browser["outcomes"])] == [
+        state["diagnostic"]
+    ]
+    shown = {"terminal": (terminal.message or "").splitlines(), "notebook": notebook.items}
+    for interface, lines in shown.items():
+        assert set(re.findall(r"HW-[A-Z]+-\d{3}", "\n".join(lines))) == {state["code"]}, interface
+        assert any(line.startswith(f"{state['diagnostic']} (") for line in lines), interface
+
+
+def test_terminal_plan_commands_record_estimate_and_hide_without_planning(
+    tmp_path: Path, gateway: SessionGateway
+) -> None:
+    (gateway.project.root / "plan.json").write_bytes(
+        (_EXAMPLES / "research-plan.r1.prediction.json").read_bytes()
+    )
+    terminal = InteractiveSession(gateway, session_id="planning")
+
+    recorded = terminal.submit("/plan record plan.json")
+    estimated = terminal.submit("/plan estimate cohort-prediction 1 batch")
+    outside = terminal.submit("/plan record ../outside.json")
+    malformed = terminal.submit("/plan estimate cohort-prediction one")
+
+    assert not recorded.error
+    assert "Revision 1: prediction cohort-prediction revision 1" in (recorded.message or "")
+    assert "for elements batch: 19.8 USD (from 15.84 USD to 29.7 USD), complete coverage" in (
+        estimated.message or ""
+    )
+    assert outside.error
+    assert malformed.error
+    assert "/plan" in (terminal.submit("/help").message or "")
+
+    plain = _gateway(tmp_path / "plain", None)
+    try:
+        hidden = InteractiveSession(plain, session_id="planning")
+        assert "/plan" not in (hidden.submit("/help").message or "")
+        assert (hidden.submit("/plan").message or "").startswith("Unknown command")
+    finally:
+        plain.stop()

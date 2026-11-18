@@ -885,7 +885,10 @@ def _interactive_chat(gateway: SessionGateway, *, session_id: str, plain: bool =
         from heartwood.cli._tui import run_terminal
 
         return run_terminal(session)
-    print(f"Heartwood agent. Commands: {command_help()}.")
+    print(
+        "Heartwood agent. Commands: "
+        f"{command_help(planning=gateway.platform_planning is not None)}."
+    )
     displayed_group_id: str | None = None
     while True:
         try:
