@@ -745,3 +745,24 @@ def test_terminal_plan_commands_record_estimate_and_hide_without_planning(
         assert (hidden.submit("/plan").message or "").startswith("Unknown command")
     finally:
         plain.stop()
+
+
+def _browser_example(gateway: SessionGateway, fakes: RunningFakes) -> PlanningProjection:
+    gateway.refresh_planning()
+    gateway.record_plan_prediction(_prediction(1))
+    _estimate(gateway, 1)
+    _estimate(gateway, 1, "batch")
+    gateway.record_plan_prediction(_prediction(2))
+    _estimate(gateway, 2)
+    fakes.budgets.record_spending("budget-compute", "30")
+    return gateway.refresh_planning()
+
+
+def test_browser_example_is_the_gateway_projection(
+    gateway: SessionGateway, fakes: RunningFakes
+) -> None:
+    # The browser tests render this file, so it must stay what the gateway produces.
+    projection = _browser_example(gateway, fakes)
+    example = json.loads((_EXAMPLES / "planning-projection.json").read_text("utf-8"))
+
+    assert projection.model_dump(mode="json") == example

@@ -20,6 +20,9 @@ export type PythonEnvironmentSnapshot = Api.PythonEnvironmentSnapshot;
 export type ExperimentCollection = Api.ExperimentCollection;
 export type ExperimentExport = Api.ExperimentExport;
 export type ExperimentRun = Api.ExperimentRun;
+export type PlanningProjection = Api.PlanningProjection;
+export type PlanningEstimateRequest = Api.PlanningEstimateRequest;
+export type EstimatedCost = Api.EstimatedCost;
 export type WorkflowRequest =
   | Api.WorkflowStart
   | Api.WorkflowTransition
