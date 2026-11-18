@@ -133,7 +133,8 @@ class McpServerManager:
         # Definitions from the latest test in this process, by server and tool name.
         self._discovered: dict[str, dict[str, str]] = {}
         self._lock = Lock()
-        # Serializes token saves with disconnect's check for other servers of a service.
+        # Serializes token saves, and the check that their server is still configured,
+        # with disconnect's check for other servers of the same service.
         self._token_lock = Lock()
 
     def _servers(self) -> tuple[McpServerSetting, ...]:

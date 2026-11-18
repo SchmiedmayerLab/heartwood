@@ -27,6 +27,7 @@ from typing import Any, Never, cast
 import pytest
 import tomli_w
 from fastmcp import FastMCP
+from fastmcp.client.transports import StreamableHttpTransport
 from fastmcp.exceptions import ToolError
 from fastmcp.server.dependencies import get_access_token
 from mcp.types import ToolAnnotations
@@ -423,6 +424,7 @@ def test_private_addresses_need_the_destinations_opt_in(monkeypatch: pytest.Monk
         ["0.0.0.0"],
         ["64:ff9b::a9fe:a9fe"],
         ["::a9fe:a9fe"],
+        ["::ffff:0:a9fe:a9fe"],
         ["fd00:ec2::123"],
     ],
 )
@@ -462,7 +464,18 @@ def test_connections_apply_the_destinations_opt_in(
         "getaddrinfo",
         lambda *_args, **_kwargs: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.96.0.12", 0))],
     )
-    outcomes = {}
+    reached: list[str] = []
+
+    class UnreachableError(Exception):
+        pass
+
+    def no_client(transport: StreamableHttpTransport, **_kwargs: object) -> Never:
+        # Stands in for the MCP client, so nothing leaves this process.
+        reached.append(str(transport.url))
+        raise UnreachableError
+
+    monkeypatch.setattr("openhands.sdk.mcp.MCPClient", no_client)
+    outcomes: dict[bool, object] = {}
     for private_address in (False, True):
         destination = McpDestination(
             service_id="cluster-catalog",
@@ -481,13 +494,24 @@ def test_connections_apply_the_destinations_opt_in(
                     server_id="catalog", label="Cluster catalog", url=f"{destination.origin}/mcp"
                 )
             )
-            with pytest.raises(McpServerError) as refused:
+            with pytest.raises((McpServerError, UnreachableError)) as refused:
                 gateway.test_mcp_server("catalog", McpServerTestRequest())
-            outcomes[private_address] = refused.value.code
+            outcomes[private_address] = getattr(refused.value, "code", "client reached")
         finally:
             gateway.stop()
-    # Without the opt-in the address is refused; with it the connection is attempted.
-    assert outcomes == {False: "HW-MCP-001", True: "HW-MCP-005"}
+    # Without the opt-in the address is refused; with it the client is built for the server.
+    assert outcomes == {False: "HW-MCP-001", True: "client reached"}
+    assert reached == ["https://catalog.platform.svc/mcp"]
+
+
+def test_translated_loopback_is_not_loopback(monkeypatch: pytest.MonkeyPatch) -> None:
+    for host in ("[64:ff9b::7f00:1]", "[::7f00:1]"):
+        with pytest.raises(ValueError, match="HTTPS"):
+            exact_origin(f"http://{host}")
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *_args, **_kwargs: _answers(["::7f00:1"]))
+    with pytest.raises(McpServerError) as refused:
+        check_resolved_host("localhost", 80)
+    assert refused.value.code == "HW-MCP-001"
 
 
 def test_offline_policy_refuses_every_server() -> None:
@@ -668,6 +692,9 @@ def test_a_refused_token_does_not_replace_the_stored_one(tmp_path: Path) -> None
             )
         assert service.gateway.credential_store.resolve(binding) == service.token
         service.gateway.select_mcp_tools("catalog", _choices(reviewed, ["find_records"]))
+        # An empty selection lists nothing, so the token it carries is not kept.
+        service.gateway.select_mcp_tools("catalog", McpServerToolsRequest(tools=[], token=foreign))
+        assert service.gateway.credential_store.resolve(binding) == service.token
 
 
 def test_a_token_is_not_kept_for_a_server_disconnected_meanwhile(
@@ -1058,6 +1085,7 @@ def test_cancellation_ends_only_the_gateways_wait_and_the_outcome_is_reconciled(
                 )
             )
             # The pause waited for the dispatch to end; the client gave up at its timeout.
+            approval.join(5)
             assert not approval.is_alive()
             assert _records(session)[-1].phase == "unknown"
             events = session.replay_events()

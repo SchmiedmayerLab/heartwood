@@ -48,7 +48,11 @@ _PRIVATE_NETWORKS = tuple(
 # Cloud instance metadata services outside link-local ranges.
 _METADATA_NETWORKS = (ipaddress.ip_network("fd00:ec2::/32"),)
 # Translation prefixes whose last 32 bits carry an IPv4 address: NAT64 and IPv4-compatible.
-_EMBEDDED_IPV4 = (ipaddress.ip_network("64:ff9b::/96"), ipaddress.ip_network("::/96"))
+_EMBEDDED_IPV4 = (
+    ipaddress.ip_network("64:ff9b::/96"),
+    ipaddress.ip_network("::/96"),
+    ipaddress.ip_network("::ffff:0:0:0/96"),
+)
 
 type McpAuthenticationStatus = Literal["missing", "valid", "expired", "unknown-expiry"]
 
@@ -188,7 +192,7 @@ def check_resolved_host(host: str, port: int, *, private_address: bool = False) 
         raise McpServerError("mcp-unavailable", "the research service could not be resolved")
     loopback = host in _LOOPBACK_HOSTS or _is_loopback_literal(host)
     if loopback:
-        if not all(_unmapped(address).is_loopback for address in resolved):
+        if not all(_loopback(address) for address in resolved):
             raise McpServerError("mcp-destination", "a loopback origin resolved beyond loopback")
         return
     if not all(_permitted(address, private_address=private_address) for address in resolved):
@@ -201,9 +205,16 @@ def check_resolved_host(host: str, port: int, *, private_address: bool = False) 
 
 def _is_loopback_literal(host: str) -> bool:
     try:
-        return _unmapped(ipaddress.ip_address(host)).is_loopback
+        return _loopback(ipaddress.ip_address(host))
     except ValueError:
         return False
+
+
+def _loopback(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """Treat only literal and IPv4-mapped loopback as loopback; translated forms leave the host."""
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        return address.ipv4_mapped.is_loopback
+    return address.is_loopback
 
 
 def _unmapped(
