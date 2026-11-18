@@ -350,6 +350,7 @@ def test_inference_keeps_working_while_platform_tools_are_down(
     # through the inference fake while the kit observes both services as unavailable.
     fakes.data.available = False
     fakes.jobs.available = False
+    fakes.budgets.available = False
     service = _service(tmp_path, fakes)
     try:
         events = _chat(service)
@@ -357,7 +358,7 @@ def test_inference_keeps_working_while_platform_tools_are_down(
         service.close()
     tools = run_platform_conformance(None, fakes.endpoints()[1])
 
-    assert [result.status for result in tools] == ["unavailable", "unavailable"]
+    assert [result.status for result in tools] == ["unavailable", "unavailable", "unavailable"]
     assert not any(event.kind == EventKind.ERROR_RECORDED for event in events)
     assert [
         event.payload.get("content")

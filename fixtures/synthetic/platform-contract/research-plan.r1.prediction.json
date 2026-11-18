@@ -1,0 +1,132 @@
+{
+  "schema_version": "heartwood.workload-prediction.v1",
+  "project_context_id": "launch-synthetic-1",
+  "prediction": {
+    "record_id": "cohort-prediction",
+    "revision": 1
+  },
+  "plan": {
+    "record_id": "cohort-analysis",
+    "revision": 1
+  },
+  "created_at": "2026-07-01T00:00:00Z",
+  "elements": [
+    {
+      "element_id": "exploration",
+      "kind": "exploration",
+      "description": "Bounded interactive exploration of the synthetic cohort extract",
+      "runtime_profile_ref": "synthetic-exploration-small",
+      "quantities": [
+        {
+          "metric": "duration",
+          "unit": "seconds",
+          "expected": "7200",
+          "lower": "3600",
+          "upper": "10800",
+          "uncertainty": "Researcher estimate from a synthetic pilot; no calibrated confidence."
+        }
+      ],
+      "assumptions": [
+        "One interactive session; the researcher stops it after at most three hours."
+      ],
+      "evidence_ids": [
+        "researcher-scope"
+      ]
+    },
+    {
+      "element_id": "batch",
+      "kind": "batch",
+      "description": "Bootstrap resampling batch over the synthetic cohort",
+      "runtime_profile_ref": "synthetic-batch-small",
+      "quantities": [
+        {
+          "metric": "tasks",
+          "unit": "count",
+          "expected": "200",
+          "lower": null,
+          "upper": null,
+          "uncertainty": "Fixed by the analysis design."
+        },
+        {
+          "metric": "duration_per_task",
+          "unit": "seconds",
+          "expected": "300",
+          "lower": "240",
+          "upper": "450",
+          "uncertainty": "Measured on a ten-task synthetic sample; larger inputs may take longer."
+        },
+        {
+          "metric": "retry_allowance",
+          "unit": "count",
+          "expected": "20",
+          "lower": null,
+          "upper": null,
+          "uncertainty": "Allowance for failed tasks; actual retries are unknown."
+        }
+      ],
+      "assumptions": [
+        "Each task reads the same synthetic extract.",
+        "Tasks run independently on the declared runtime profile."
+      ],
+      "evidence_ids": [
+        "sample-run"
+      ]
+    },
+    {
+      "element_id": "inference",
+      "kind": "inference",
+      "description": "Model-assisted summaries of the batch results",
+      "runtime_profile_ref": "synthetic-coder",
+      "quantities": [
+        {
+          "metric": "input_tokens",
+          "unit": "tokens",
+          "expected": "2000000",
+          "lower": "1500000",
+          "upper": "3000000",
+          "uncertainty": "Researcher estimate from a synthetic pilot; no calibrated confidence."
+        },
+        {
+          "metric": "output_tokens",
+          "unit": "tokens",
+          "expected": "200000",
+          "lower": "100000",
+          "upper": "300000",
+          "uncertainty": "Researcher estimate from a synthetic pilot; no calibrated confidence."
+        }
+      ],
+      "assumptions": [
+        "Model synthetic-coder through the platform's managed inference route.",
+        "About forty summary requests of fifty thousand input tokens each."
+      ],
+      "evidence_ids": [
+        "researcher-scope"
+      ]
+    }
+  ],
+  "assumptions": [
+    "Synthetic data only."
+  ],
+  "uncertainty": "Batch duration depends on input sizes not yet measured at full scale.",
+  "evidence": [
+    {
+      "evidence_id": "researcher-scope",
+      "project_context_id": "launch-synthetic-1",
+      "kind": "researcher-input",
+      "reference": "project://notes/plan-scope",
+      "description": "Researcher-supplied scope and session limits.",
+      "observed_at": "2026-07-01T00:00:00Z",
+      "content_sha256": null
+    },
+    {
+      "evidence_id": "sample-run",
+      "project_context_id": "launch-synthetic-1",
+      "kind": "sample-run",
+      "reference": "project://results/sample-run",
+      "description": "Ten-task synthetic sample on the small batch profile.",
+      "observed_at": "2026-07-01T00:00:00Z",
+      "content_sha256": null
+    }
+  ],
+  "supersedes": null
+}
