@@ -120,7 +120,7 @@ See [Move a Model Into an Offline Environment](../models/offline.md) for the bun
 
 Pass `--deployment PATH` before the subcommand, as in `heartwood services --deployment PATH list`; its `mcp_destinations` list the allowed origins, and without it every server is refused.
 `--token-stdin` reads the bearer token from the first line of standard input.
-A token entered with `test` or `select` is kept only after the server accepted it; `add` keeps its token without contacting the server.
+A token entered with `test` or `select` is kept only after the server accepted it, and `select` without tools keeps none; `add` keeps its token without contacting the server.
 Without `--remember`, it lasts only for the command; keep it with `--remember` where the deployment allows the system credential store, or have the operator set the variable named by `services list`.
 Tools reach sessions started by `heartwood gateway serve --deployment` with an isolated worker; see [Research MCP Servers](../operate/platform-contract.md#research-mcp-servers).
 
