@@ -34,6 +34,7 @@ from heartwood.gateway import (
     PlatformPlanning,
     ProjectContext,
     SessionGateway,
+    planning_lines,
 )
 from heartwood.gateway._platform_planning import PlatformPlanningBinding
 from heartwood.gateway._rest import RestGateway, RestRequest
@@ -1079,3 +1080,25 @@ def test_revisions_must_name_their_predecessor_and_keep_their_plan(
         gateway.record_plan_prediction(unchained)
     with pytest.raises(PlanningRecordError, match="keep its plan"):
         gateway.record_plan_prediction(other_plan)
+
+
+def test_shared_lines_repeat_what_each_revision_and_estimate_states() -> None:
+    projection = PlanningProjection.model_validate_json(
+        (_EXAMPLES / "planning-projection.json").read_text("utf-8")
+    )
+
+    lines = planning_lines(projection)
+
+    second = lines[lines.index("  Revision 2: prediction cohort-prediction revision 2") :]
+    uncertainty = (
+        "    Uncertainty: Batch duration depends on input sizes not yet measured at full scale."
+    )
+    assert lines.count(uncertainty) == 2
+    assert uncertainty in second
+    assert any(line.startswith("      duration: expected 7200 seconds") for line in second)
+    assert (
+        lines.count(
+            "      Pricing assumption: Synthetic list prices; no discounts or commitments apply."
+        )
+        == 3
+    )

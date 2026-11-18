@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 from heartwood.gateway._action_presentation import display_safe_text
 from heartwood.schemas import EstimatedCost, WorkloadQuantity
 from heartwood.schemas.planning import ElementReview, PlanningProjection
@@ -48,8 +50,8 @@ def planning_lines(projection: PlanningProjection) -> tuple[str, ...]:
             f"reserved {_amount(budget.reserved, unit)}, spent {_amount(budget.spent, unit)}; "
             f"observed {budget.observed_at}"
         )
-        lines.extend(f"  Constraint: {item}" for item in budget.constraints)
-        lines.extend(f"  Limitation: {item}" for item in budget.limitations)
+        lines.extend(_texts("  Constraint", budget.constraints))
+        lines.extend(_texts("  Limitation", budget.limitations))
     for plan in projection.plans:
         lines.append(f"Plan {plan.plan_id}")
         for revision in plan.revisions:
@@ -59,14 +61,14 @@ def planning_lines(projection: PlanningProjection) -> tuple[str, ...]:
                 f"{prediction.prediction.record_id} revision {prediction.prediction.revision}"
             )
             lines.append(f"    Uncertainty: {prediction.uncertainty}")
-            lines.extend(f"    Assumption: {item}" for item in prediction.assumptions)
+            lines.extend(_texts("    Assumption", prediction.assumptions))
             for element, review in zip(prediction.elements, revision.elements, strict=True):
                 lines.append(f"    {_review(review)}")
                 lines.extend(
                     f"      {item.metric}: {_quantity(item)}; {item.uncertainty}"
                     for item in element.quantities
                 )
-                lines.extend(f"      Assumption: {item}" for item in element.assumptions)
+                lines.extend(_texts("      Assumption", element.assumptions))
             overview = revision.overview
             lines.extend(
                 f"    Researcher decision {item.decision_id} on proposal "
@@ -105,11 +107,9 @@ def planning_lines(projection: PlanningProjection) -> tuple[str, ...]:
                     f"{', '.join(item.element_ids)}: {_cost(item.cost)}"
                     for item in estimate.element_estimates
                 )
-                lines.extend(f"      Limitation: {item}" for item in estimate.total.limitations)
-                lines.extend(f"      Excludes: {item}" for item in estimate.exclusions)
-                lines.extend(
-                    f"      Pricing assumption: {item}" for item in estimate.pricing_assumptions
-                )
+                lines.extend(_texts("      Limitation", estimate.total.limitations))
+                lines.extend(_texts("      Excludes", estimate.exclusions))
+                lines.extend(_texts("      Pricing assumption", estimate.pricing_assumptions))
         for row in plan.comparison:
             denomination = "" if row.comparable else "; another denomination, not comparable"
             lines.append(
@@ -119,8 +119,12 @@ def planning_lines(projection: PlanningProjection) -> tuple[str, ...]:
     lines.extend(
         f"{item.diagnostic} ({item.subject}). {item.next_action}" for item in projection.outcomes
     )
-    # A repeated line adds nothing; the browser shows each distinct text once as well.
-    return tuple(display_safe_text(line) for line in dict.fromkeys(lines))
+    return tuple(display_safe_text(line) for line in lines)
+
+
+def _texts(label: str, items: Iterable[str]) -> list[str]:
+    """Show each distinct text of one list once, as the browser does."""
+    return [f"{label}: {item}" for item in dict.fromkeys(items)]
 
 
 def _amount(value: str | None, unit: str) -> str:
