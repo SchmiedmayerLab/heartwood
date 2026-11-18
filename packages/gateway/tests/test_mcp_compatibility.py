@@ -50,6 +50,7 @@ from openhands.sdk.mcp import (
 from openhands.sdk.settings import OpenHandsAgentSettings
 from openhands.sdk.testing import TestLLM
 from openhands.sdk.tool import ClientToolSpec, register_client_tools
+from openhands.sdk.tool.client_tool import extract_client_tool_specs
 from openhands.tools import TerminalTool
 from pydantic import AnyHttpUrl, SecretStr
 from starlette.applications import Starlette
@@ -415,10 +416,13 @@ def test_discovery_refuses_a_redirect_to_another_origin() -> None:
         async def redirect(_request: Request) -> Response:
             return RedirectResponse(f"{target_origin}/mcp", status_code=307)
 
-        redirecting = Starlette(routes=[Route("/mcp", redirect, methods=["GET", "POST"])])
+        redirecting = _Recorder(
+            Starlette(routes=[Route("/mcp", redirect, methods=["GET", "POST"])])
+        )
         with serve(redirecting) as origin, pytest.raises(McpProtocolError):
             create_mcp_tools({"research": _server(f"{origin}/mcp", credential)}, timeout=10)
-    # The other origin never receives a request, so it never sees the credential.
+    # The client reached the redirecting server and did not follow it.
+    assert redirecting.methods == ["initialize"]
     assert target.methods == []
 
 
@@ -991,8 +995,12 @@ def test_client_tool_from_discovery_runs_nothing_inside_the_conversation(tmp_pat
         with discovered(server) as (_, tools):
             spec = _client_spec(tools["create_task"], "submit_synthetic_job")
         assert set(spec.parameters["properties"]) == {"name", "command"}
-        # Heartwood's worker contract admits the derived specification unchanged.
-        _admit_client_tools([spec.model_dump(mode="json")], _client_tool_contract([spec]))
+        worker_tools = register_client_tools([spec])
+        # The specification the worker conversation carries passes the gateway's admission.
+        _admit_client_tools(
+            [item.model_dump(mode="json") for item in extract_client_tool_specs(worker_tools)],
+            _client_tool_contract([spec]),
+        )
         arguments: dict[str, JsonValue] = {
             "name": "synthetic-job",
             "command": ["echo", "synthetic"],
@@ -1007,7 +1015,7 @@ def test_client_tool_from_discovery_runs_nothing_inside_the_conversation(tmp_pat
                     ]
                 ),
                 # Registers a stateless resolver under this unique name for the process.
-                tools=register_client_tools([spec]),
+                tools=worker_tools,
                 agent_context=_agent_context([]),
             ).create_agent(),
             workspace=tmp_path,
