@@ -14,9 +14,15 @@ import {
   actionStateLabel,
   actionToolLabel,
   modelProposedOperation,
+  platformOperationLines,
+  platformStatusLines,
   specialistModelFields,
 } from "./actionPresentation";
-import { syntheticAction, syntheticOutsideOperation } from "./test/fixtures";
+import {
+  syntheticAction,
+  syntheticOutsideOperation,
+  syntheticPlatformJob,
+} from "./test/fixtures";
 import type { ActionPresentation } from "./types";
 
 const presentation: ActionPresentation = {
@@ -132,6 +138,70 @@ describe("action presentation", () => {
     expect(modelProposedOperation(syntheticOutsideOperation())).toBeNull();
     expect(actionArgumentsLabel(syntheticOutsideOperation())).toBe(
       "Complete reviewed proposal prepared by the gateway",
+    );
+  });
+
+  it("describes a platform job with the gateway's wording", () => {
+    expect(platformOperationLines(syntheticOutsideOperation())).toEqual([]);
+    expect(platformOperationLines(syntheticPlatformJob())).toEqual([
+      "Platform proposal: Run task synthetic-analysis: python analysis.py",
+      "Runtime profile: synthetic-batch-small",
+      "Resource limits: cpu 2 core, duration 1800 s, gpu 1 synthetic-gpu",
+      "Data scope: Project objects drs://data.synthetic.invalid/obj-cohort",
+      "Results destination: Project results prefix results/synthetic/",
+      "Estimate est-synthetic for element batch of plan cohort-plan revision 1: 19.8 USD, complete coverage, current when proposed, valid until 2026-07-01T01:00:00+00:00",
+      "Platform project context: launch-synthetic-1",
+      "Approval is not admission. A reported balance or estimate does not reserve funds or guarantee that the platform admits work.",
+    ]);
+    const denied = syntheticPlatformJob({
+      status: "denied",
+      backendOperationRef: "op-1",
+      platformRecordRef: "synthetic-audit:op-1",
+      observedLimitations: ["Budget budget-compute has no availability"],
+      diagnostic: "HW-PLAN-006: The platform denied an operation",
+    });
+    expect(platformStatusLines(denied)).toEqual([
+      "Platform status: Denied; platform reference op-1; platform record synthetic-audit:op-1",
+      "Platform report: Budget budget-compute has no availability",
+      "Diagnostic: HW-PLAN-006: The platform denied an operation",
+    ]);
+    const cancel = syntheticPlatformJob({
+      kind: "cancel",
+      proposal: null,
+      estimate: null,
+      targetOperationId: "op-1",
+      targetSummary: "Call create_task on Synthetic jobs",
+    });
+    expect(platformOperationLines(cancel).slice(0, 2)).toEqual([
+      "Cancels operation op-1: Call create_task on Synthetic jobs",
+      "Cancellation does not undo completed work or incurred charges.",
+    ]);
+    expect(
+      platformOperationLines(
+        syntheticPlatformJob({
+          proposal: null,
+          estimate: {
+            state: "missing",
+            elementId: null,
+            planId: null,
+            planRevision: null,
+            estimateId: null,
+            coverage: null,
+            expected: null,
+            lower: null,
+            upper: null,
+            unit: null,
+            validUntil: null,
+            limitation: "No estimate covers this plan element.",
+          },
+        }),
+      ),
+    ).toEqual(
+      expect.arrayContaining([
+        "Platform proposal: none returned; this review cannot be approved",
+        "Estimate: none recorded",
+        "Estimate note: No estimate covers this plan element.",
+      ]),
     );
   });
 });

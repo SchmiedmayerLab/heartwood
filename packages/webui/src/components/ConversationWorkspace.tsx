@@ -33,6 +33,8 @@ import {
   actionStateLabel,
   actionToolLabel,
   modelProposedOperation,
+  platformOperationLines,
+  platformStatusLines,
   retainedApprovalSendable,
   specialistModelFields,
   specialistResultLabel,
@@ -503,6 +505,7 @@ const ActionHistory = ({
                       </span>
                     : null}
                   </div>
+                  <PlatformLines lines={platformStatusLines(action)} />
                   {action.affectedPaths.length > 0 ?
                     <p>
                       {displaySafeText(
@@ -682,9 +685,20 @@ const OutsideReview = ({ action }: { action: ProjectionActionRecord }) => {
       <pre tabIndex={0} aria-label={copy.contentLabel}>
         {displaySafeText(content.preview)}
       </pre>
+      <PlatformLines lines={platformOperationLines(action)} />
     </div>
   );
 };
+
+/** List a platform operation's description and status; platform text is labelled. */
+const PlatformLines = ({ lines }: { lines: string[] }) =>
+  lines.length === 0 ?
+    null
+  : <ul className="platform-operation" aria-label="Platform operation">
+      {lines.map((line) => (
+        <li key={line}>{displaySafeText(line)}</li>
+      ))}
+    </ul>;
 
 const RuntimeStatus = ({
   projection,

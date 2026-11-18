@@ -191,6 +191,72 @@ describe("ResearchServices", () => {
     ).toBeInTheDocument();
   });
 
+  it("shows the operations and optional capabilities a platform service declares", async () => {
+    const api = client();
+    api.testMcpServer.mockResolvedValue({
+      ...tested(),
+      operations: {
+        status: "available",
+        operations: [
+          {
+            tool: "create_task",
+            operation: "submit",
+            required_permission: "jobs:submit",
+            permitted: true,
+            listed: true,
+            read_only: false,
+            consistent: true,
+          },
+          {
+            tool: "get_task",
+            operation: "status",
+            required_permission: "jobs:read",
+            permitted: null,
+            listed: false,
+            read_only: null,
+            consistent: false,
+          },
+        ],
+        capabilities: [
+          {
+            capability: "gpu-resources",
+            status: "not-permitted",
+            reason: "The project holds no GPU entitlement.",
+          },
+          {
+            capability: "dataset-attachment",
+            status: "unavailable",
+            reason: null,
+          },
+        ],
+        limitations: ["Synthetic platform note."],
+      },
+    });
+    renderPanel(api);
+    fireEvent.click(await screen.findByRole("button", { name: "Test" }));
+
+    const declared = await screen.findByRole("list", {
+      name: "Declared operations",
+    });
+    expect(declared).toHaveTextContent(
+      "create_task: submit; requires jobs:submit; permitted",
+    );
+    expect(declared).toHaveTextContent(
+      "get_task: status; requires jobs:read; permission not disclosed; not listed; differs from the deployment or its read-only hint",
+    );
+    const optional = screen.getByRole("list", {
+      name: "Optional capabilities",
+    });
+    expect(optional).toHaveTextContent(
+      "gpu-resources: not permitted (The project holds no GPU entitlement.)",
+    );
+    expect(optional).toHaveTextContent("dataset-attachment: unavailable");
+    expect(screen.getByText(/Discovery authorizes nothing/u)).toBeVisible();
+    expect(
+      screen.getByText("Platform note: Synthetic platform note."),
+    ).toBeVisible();
+  });
+
   it("adds a disabled server and disconnects it", async () => {
     const api = client();
     renderPanel(api);

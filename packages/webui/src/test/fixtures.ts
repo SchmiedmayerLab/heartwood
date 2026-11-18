@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+import type { ProjectionPlatformOperation } from "../sessionProjection.generated";
 import type {
   CredentialIsolation,
   PlatformCapabilities,
@@ -169,6 +170,60 @@ export const syntheticOutsideOperation =
         operation: null,
       },
     });
+
+/** A platform job submission with the platform's proposal and the plan's estimate. */
+export const syntheticPlatformJob = (
+  operation: Partial<ProjectionPlatformOperation> = {},
+): SessionProjection["actions"][number] => {
+  const action = syntheticOutsideOperation();
+  if (action.details.kind !== "outside-operation") throw new Error("fixture");
+  return {
+    ...action,
+    summary: "Call create_task on Synthetic jobs",
+    details: {
+      ...action.details,
+      serviceId: "synthetic-jobs",
+      operation: {
+        kind: "submit",
+        proposal: {
+          description: "Run task synthetic-analysis: python analysis.py",
+          runtimeProfile: "synthetic-batch-small",
+          resourceLimits: [
+            { metric: "cpu", unit: "core", maximum: "2" },
+            { metric: "duration", unit: "s", maximum: "1800" },
+            { metric: "gpu", unit: "synthetic-gpu", maximum: "1" },
+          ],
+          dataScope: "Project objects drs://data.synthetic.invalid/obj-cohort",
+          destination: "Project results prefix results/synthetic/",
+          limitations: [],
+        },
+        estimate: {
+          state: "current",
+          elementId: "batch",
+          planId: "cohort-plan",
+          planRevision: 1,
+          estimateId: "est-synthetic",
+          coverage: "complete",
+          expected: "19.8",
+          lower: null,
+          upper: null,
+          unit: "USD",
+          validUntil: "2026-07-01T01:00:00+00:00",
+          limitation: null,
+        },
+        projectContextId: "launch-synthetic-1",
+        targetOperationId: null,
+        targetSummary: null,
+        status: null,
+        backendOperationRef: null,
+        platformRecordRef: null,
+        observedLimitations: [],
+        diagnostic: null,
+        ...operation,
+      },
+    },
+  };
+};
 
 export const emptyProjection = (
   sessionId = "session-test",

@@ -14,6 +14,7 @@ it after review, reconciles uncertain outcomes and links the records to planning
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -25,7 +26,7 @@ from typing import Any, Never
 import pytest
 from pydantic import AnyHttpUrl
 
-from heartwood.cli._interactive import format_action_record_lines
+from heartwood.cli._interactive import format_action_record_lines, format_projection_lines
 from heartwood.core_adapter import (
     BackendEventSink,
     BackendToolCallEvent,
@@ -847,3 +848,118 @@ def test_terminal_and_notebook_show_each_operation_state(tmp_path: Path) -> None
         assert f"platform record synthetic-audit:{record.proposal.operation_id}" in terminal
         assert status in notebook
     assert "HW-PLAN-006: The platform denied an operation" in notebook
+
+
+_FAILURES = [
+    item
+    for item in json.loads((_EXAMPLES / "failure-states.json").read_text("utf-8"))["states"]
+    if item["surface"] == "operation"
+]
+
+
+@pytest.mark.parametrize("state", _FAILURES, ids=lambda item: item["code"])
+def test_operation_failures_show_one_diagnostic_in_the_terminal_and_notebook(
+    tmp_path: Path, state: dict[str, str]
+) -> None:
+    with platform(tmp_path) as service:
+        code = state["code"]
+        if code == "HW-OPS-001":
+            service.jobs.service_id = "another-service"
+        if code == "HW-PLAN-006":
+            service.jobs.exhausted_projects.add(PROJECT_ID)
+        if code == "HW-OPS-003":
+            service.jobs.drop_next_submission_reply()
+        record = service.call("create_task", _CPU)
+        if code != "HW-OPS-001":
+            service.session.handle(
+                SessionCommand(
+                    command_id=str(uuid.uuid4()),
+                    session_id=service.session.store.session_id,
+                    kind=CommandKind.APPROVE,
+                    actor_id="researcher",
+                    created_at=datetime.now(UTC).isoformat(),
+                    payload={"target_type": "action-set", "target_id": record.proposal.group_id},
+                )
+            )
+        if code == "HW-OPS-002":
+            service.jobs.advance(PROJECT_ID, str(record.proposal.operation_id), "EXECUTOR_ERROR")
+            service.advance()
+        projection = project_session(
+            service.session.replay_events(), session_id=service.session.store.session_id
+        )
+
+    shown = {
+        "terminal": format_projection_lines(projection),
+        "notebook": tuple(
+            line
+            for spec in build_widget_spec(NotebookViewModel(projection))
+            for item in spec.items
+            for line in item.splitlines()
+        ),
+    }
+    for interface, lines in shown.items():
+        text = "\n".join(lines)
+        assert set(re.findall(r"HW-[A-Z]+-\d{3}", text)) == {state["code"]}, interface
+        assert f"Diagnostic: {state['diagnostic']}" in text, interface
+
+
+def test_operation_lines_use_the_browser_wording() -> None:
+    action = ProjectionActionRecord.model_validate(
+        {
+            "tool_call_id": "outside-operation-synthetic",
+            "action_id": "outside-operation-synthetic",
+            "tool_name": "synthetic-analysis",
+            "risk": "unknown",
+            "summary": "Call create_task on Synthetic jobs",
+            "details": {
+                "kind": "outside-operation",
+                "service_id": "synthetic-jobs",
+                "destination": "synthetic-results",
+                "expires_at": "2026-01-01T00:05:00+00:00",
+                "request": {"preview": "{}", "size_bytes": 2, "sha256": "a" * 64},
+                "operation": {
+                    "kind": "submit",
+                    "proposal": {
+                        "description": "Run task synthetic-analysis: python analysis.py",
+                        "runtime_profile": "synthetic-batch-small",
+                        "resource_limits": [
+                            {"metric": "cpu", "unit": "core", "maximum": "2"},
+                            {"metric": "duration", "unit": "s", "maximum": "1800"},
+                            {"metric": "gpu", "unit": "synthetic-gpu", "maximum": "1"},
+                        ],
+                        "data_scope": "Project objects drs://data.synthetic.invalid/obj-cohort",
+                        "destination": "Project results prefix results/synthetic/",
+                    },
+                    "estimate": {
+                        "state": "current",
+                        "element_id": "batch",
+                        "plan_id": "cohort-plan",
+                        "plan_revision": 1,
+                        "estimate_id": "est-synthetic",
+                        "coverage": "complete",
+                        "expected": "19.8",
+                        "unit": "USD",
+                        "valid_until": "2026-07-01T01:00:00+00:00",
+                    },
+                    "project_context_id": "launch-synthetic-1",
+                },
+            },
+            "state": "awaiting-review",
+            "proposed_sequence": 4,
+            "updated_sequence": 5,
+        }
+    )
+
+    # The browser's actionPresentation test expects the same lines for the same record.
+    assert platform_operation_lines(action) == (
+        "Platform proposal: Run task synthetic-analysis: python analysis.py",
+        "Runtime profile: synthetic-batch-small",
+        "Resource limits: cpu 2 core, duration 1800 s, gpu 1 synthetic-gpu",
+        "Data scope: Project objects drs://data.synthetic.invalid/obj-cohort",
+        "Results destination: Project results prefix results/synthetic/",
+        "Estimate est-synthetic for element batch of plan cohort-plan revision 1: 19.8 USD, "
+        "complete coverage, current when proposed, valid until 2026-07-01T01:00:00+00:00",
+        "Platform project context: launch-synthetic-1",
+        "Approval is not admission. A reported balance or estimate does not reserve funds or "
+        "guarantee that the platform admits work.",
+    )

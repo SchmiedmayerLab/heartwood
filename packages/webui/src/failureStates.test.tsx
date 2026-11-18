@@ -14,7 +14,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { GatewayClient } from "./client";
 import { ConversationWorkspace } from "./components/ConversationWorkspace";
 import { PlanningOverview } from "./components/ProjectPlanning";
-import { emptyProjection } from "./test/fixtures";
+import { emptyProjection, syntheticPlatformJob } from "./test/fixtures";
 
 interface FailureState {
   condition: string;
@@ -152,6 +152,36 @@ describe("platform contract failure states in the browser", () => {
       );
 
       expect(screen.getByRole("alert")).toHaveTextContent(diagnostic);
+    },
+  );
+
+  it.each(states.filter((state) => state.surface === "operation"))(
+    "shows $code from a platform operation",
+    ({ diagnostic }) => {
+      const action = {
+        ...syntheticPlatformJob({ diagnostic }),
+        state: "failed" as const,
+      };
+      render(
+        <ConversationWorkspace
+          conversationEndRef={createRef<HTMLDivElement>()}
+          actionPresentation={null}
+          modelConfigured
+          modelMessage=""
+          projection={{ ...emptyProjection(), actions: [action] }}
+          prompt=""
+          requestActivity={null}
+          requestStatus="idle"
+          onDecision={vi.fn()}
+          onRetryApproval={null}
+          onOpenSettings={vi.fn()}
+          onPauseToggle={vi.fn()}
+          onPrompt={vi.fn()}
+          onSubmit={vi.fn()}
+        />,
+      );
+
+      expect(screen.getByText(`Diagnostic: ${diagnostic}`)).toBeInTheDocument();
     },
   );
 
