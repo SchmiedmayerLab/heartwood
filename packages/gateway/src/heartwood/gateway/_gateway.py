@@ -2347,7 +2347,10 @@ class SessionGateway:
         return api_response(
             McpServersResponse,
             self.mcp_servers.select_tools(
-                server_id, [(item.name, item.sha256) for item in request.tools]
+                server_id,
+                [(item.name, item.sha256) for item in request.tools],
+                token=request.token,
+                remember=request.remember,
             ),
         )
 

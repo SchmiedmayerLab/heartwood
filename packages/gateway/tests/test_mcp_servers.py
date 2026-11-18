@@ -811,6 +811,10 @@ def test_a_call_refused_before_any_effect_is_reconciled_as_failed(tmp_path: Path
             assert observed is not None
             assert observed.operation.status == "failed"
             # The service is usable again, and the reported identifier stays refused.
+            refused = _records(session)[-1]
+            with pytest.raises(ExternalActionError):
+                adapter.submit(refused.proposal, refused.decision, ())  # type: ignore[arg-type]
+            assert service.catalog.tombstones
             record = _call(session, worker, adapter)
             assert record.phase == "proposed"
             assert service.catalog.calls == []

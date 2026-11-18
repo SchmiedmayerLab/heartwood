@@ -1250,6 +1250,8 @@ export interface McpServerTestRequest {
  * Select reviewed tool definitions of one research MCP server.
  */
 export interface McpServerToolsRequest {
+  remember?: boolean;
+  token?: string | null;
   /**
    * @maxItems 64
    */

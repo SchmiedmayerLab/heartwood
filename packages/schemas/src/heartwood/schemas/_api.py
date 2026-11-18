@@ -346,6 +346,8 @@ class McpServerToolsRequest(ApiRequest):
     """Select reviewed tool definitions of one research MCP server."""
 
     tools: list[McpToolChoice] = Field(max_length=64)
+    token: str | None = None
+    remember: bool = False
 
 
 class McpServerEnabledRequest(ApiRequest):

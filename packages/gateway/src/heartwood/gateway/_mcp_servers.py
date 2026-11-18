@@ -261,7 +261,12 @@ class McpServerManager:
         }
 
     def select_tools(
-        self, server_id: str, reviewed: Sequence[tuple[str, str]]
+        self,
+        server_id: str,
+        reviewed: Sequence[tuple[str, str]],
+        *,
+        token: str | None = None,
+        remember: bool = False,
     ) -> dict[str, object]:
         """Record the researcher's review of exact definitions, listed again now.
 
@@ -276,6 +281,7 @@ class McpServerManager:
         for name in names:
             if name not in destination.tools:
                 raise McpServerError("mcp-binding", f"the deployment does not allow {name}")
+        self._save_token(destination, token, remember)
         definitions = self._list_tools(server, destination)[0] if reviewed else {}
         selections: list[McpToolSelection] = []
         for name, digest in reviewed:
@@ -323,14 +329,16 @@ class McpServerManager:
         Completed remote work is not undone.
         """
         server = self._server(server_id)
+        destination = self._destination(server)
+        # The token goes first, so a failure to forget it leaves the server listed.
+        if destination is not None and not any(
+            item.server_id != server_id and self._destination(item) == destination
+            for item in self._servers()
+        ):
+            self._credentials.forget(mcp_credential_binding(destination.service_id))
         self._change(server_id, lambda _current: None)
         with self._lock:
             self._discovered.pop(server_id, None)
-        destination = self._destination(server)
-        if destination is not None and not any(
-            self._destination(item) == destination for item in self._servers()
-        ):
-            self._credentials.forget(mcp_credential_binding(destination.service_id))
         return self.settings()
 
     def settings(self) -> dict[str, object]:
