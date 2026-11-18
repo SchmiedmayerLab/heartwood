@@ -25,6 +25,7 @@ from datetime import datetime
 from threading import Lock
 from typing import TYPE_CHECKING, Any, Literal, cast
 from urllib.parse import urlsplit
+from uuid import UUID
 
 from heartwood.core_adapter.external_actions import (
     ExternalActionDecision,
@@ -34,6 +35,8 @@ from heartwood.core_adapter.external_actions import (
     ExternalActionRecord,
     ExternalActionRequest,
     ExternalInputReference,
+    ExternalOperationEstimate,
+    ExternalOperationReview,
     canonical_request,
     external_action_records,
 )
@@ -41,6 +44,7 @@ from heartwood.core_adapter.external_results import external_result_records
 from heartwood.gateway._credentials import CredentialStore
 from heartwood.gateway._mcp_policy import (
     GATEWAY_FIELDS,
+    TARGET_FIELD,
     McpDestination,
     McpServerError,
     McpServerSetting,
@@ -57,7 +61,14 @@ from heartwood.gateway._mcp_policy import (
     worker_parameters,
     worker_tool_name,
 )
-from heartwood.schemas import JsonValue, PlatformOperationObservation
+from heartwood.gateway._platform_operations import (
+    call_structured,
+    link_operations,
+    operations_report,
+    request_proposal,
+)
+from heartwood.gateway._platform_planning import PlanningStateError
+from heartwood.schemas import JsonValue, PlatformOperationObservation, PlatformOperationProposal
 from heartwood.session import EventKind
 
 if TYPE_CHECKING:
@@ -65,6 +76,7 @@ if TYPE_CHECKING:
     from openhands.sdk.tool.client_tool import ClientToolSpec
 
     from heartwood.core_adapter import SessionService
+    from heartwood.gateway._platform_planning import PlatformPlanning
     from heartwood.gateway._project_config import ProjectConfig, ProjectConfigStore
 
 type McpToolStatus = Literal["ready", "changed", "missing", "disallowed", "unsupported"]
@@ -125,8 +137,12 @@ class McpServerManager:
         credential_store: CredentialStore,
         destinations: Sequence[McpDestination],
         worker_available: bool,
+        project_id: str | None = None,
     ) -> None:
         self._config_store = config_store
+        # The project the gateway names to services: the platform project of the launch
+        # context, or this project's identifier.
+        self.project_id = project_id
         self._credentials = credential_store
         self._destinations = tuple(destinations)
         self._worker_available = worker_available
@@ -255,6 +271,15 @@ class McpServerManager:
         destination = destination_for(server.url, self._destinations)
         definitions, capabilities = self._list_tools(server, destination, _entered(token))
         self._keep_token(server, destination, token, remember)
+        operations: dict[str, object] | None = None
+        if destination.operations is not None:
+            try:
+                with self.connect(server, destination, token=_entered(token)) as client:
+                    operations = operations_report(
+                        client, destination, self.project_id, definitions
+                    )
+            except McpServerError:
+                operations = operations_report(None, destination, None, definitions)
         selected = {tool.name: tool.sha256 for tool in server.tools}
         discovered = []
         for name, definition in sorted(definitions.items()):
@@ -269,7 +294,9 @@ class McpServerManager:
                     "definition": definition,
                     "annotations": _annotations(parsed),
                     "allowed": name in destination.tools,
-                    "accepts_operation_binding": binding_supported(parsed),
+                    "accepts_operation_binding": binding_supported(
+                        parsed, cancel=destination.cancels(name)
+                    ),
                     "selected": name in selected,
                     "changed": name in selected and selected[name] != digest,
                 }
@@ -285,6 +312,7 @@ class McpServerManager:
                 "advertised": bool(capabilities is not None and capabilities.prompts),
                 "support": "unsupported",
             },
+            "operations": operations,
         }
 
     def select_tools(
@@ -316,10 +344,11 @@ class McpServerManager:
                 raise McpServerError(
                     "mcp-tool-changed", f"{name} differs from the reviewed definition"
                 )
-            if not binding_supported(json.loads(definition)):
+            if not binding_supported(json.loads(definition), cancel=destination.cancels(name)):
                 raise McpServerError(
                     "mcp-binding",
-                    f"{name} does not accept a project and operation identifier",
+                    f"{name} does not accept a project and operation identifier"
+                    + (" and the operation it cancels" if destination.cancels(name) else ""),
                 )
             selections.append(McpToolSelection(name=name, definition=definition))
 
@@ -570,7 +599,7 @@ def _tool_status(
 ) -> McpToolStatus:
     if destination is None or tool.name not in destination.tools:
         return "disallowed"
-    if not binding_supported(tool.parsed):
+    if not binding_supported(tool.parsed, cancel=destination.cancels(tool.name)):
         return "unsupported"
     if discovered is not None:
         if tool.name not in discovered:
@@ -588,12 +617,31 @@ class McpOutsideAdapter:
     enforces the binding: it scopes each call to the project its credential allows, and
     a repeated operation identifier never causes a second effect. The deployment names
     the read-only tool that reports an operation by identifier.
+
+    With a launch context, calls name its platform project and observations must carry
+    its project context. A destination with an operation profile also describes each
+    submission before review, and a cancellation names an earlier operation of the
+    session, which the gateway sends from its own record.
     """
 
-    def __init__(self, manager: McpServerManager, bound: Sequence[McpBoundTool]) -> None:
+    def __init__(
+        self,
+        manager: McpServerManager,
+        bound: Sequence[McpBoundTool],
+        *,
+        planning: PlatformPlanning | None = None,
+    ) -> None:
         self._manager = manager
         self._bound = {item.worker_name: item for item in bound}
+        self._planning = planning
         self.last_reconciled = 0.0
+        # The last session event whose platform operation records were linked to planning.
+        self.linked_sequence = 0
+
+    @property
+    def planning(self) -> PlatformPlanning | None:
+        """Return the planning state that reviewed operations are linked to, if any."""
+        return self._planning
 
     @property
     def client_tools(self) -> tuple[ClientToolSpec, ...]:
@@ -619,8 +667,24 @@ class McpOutsideAdapter:
             raise ExternalActionError("worker tool has no research service binding")
         return bound
 
+    def _context(self) -> str | None:
+        return None if self._planning is None else self._planning.launch.project_context_id
+
+    def _project(self, proposal: ExternalActionProposal) -> str:
+        """Return the project a call names: the launch context's platform project, if any."""
+        context = proposal.request.project_context_id
+        if context is None:
+            return str(proposal.worker.project_id)
+        if self._planning is None or context != self._planning.launch.project_context_id:
+            raise ExternalActionError("the operation belongs to another launch context")
+        return self._planning.launch.project_id
+
     def prepare(self, tool_name: str, arguments: dict[str, JsonValue]) -> ExternalActionRequest:
-        """Bind the worker's exact arguments to the server; contacts nothing."""
+        """Bind the worker's exact arguments to the server.
+
+        A submission to an operation service also asks the service to describe it, which
+        has no effect at the service, and records the estimate it refers to.
+        """
         bound = self._tool(tool_name)
         schema = worker_parameters(bound.tool.parsed)
         properties = set(schema["properties"])
@@ -634,13 +698,63 @@ class McpOutsideAdapter:
         destination = (parsed.hostname or bound.server.server_id) + (
             f":{parsed.port}" if parsed.port is not None else ""
         )
+        sent = dict(arguments)
+        target: UUID | None = None
+        review: ExternalOperationReview | None = None
+        if bound.destination.cancels(bound.tool.name):
+            target = _target(sent.pop(TARGET_FIELD, None))
+            review = ExternalOperationReview(kind="cancel")
+        elif bound.destination.operations is not None:
+            proposal = self._proposal(bound, sent)
+            review = ExternalOperationReview(
+                kind="submit", proposal=proposal, estimate=self._estimate(proposal)
+            )
         return ExternalActionRequest(
             service_id=bound.destination.service_id,
             tool_name=tool_name,
             destination=destination,
-            summary=f"Call {bound.tool.name} on {bound.server.label}"[:512],
-            request_json=canonical_request(json.dumps(arguments)),
+            summary=(
+                f"Cancel operation {target} on {bound.server.label}"
+                if target is not None
+                else f"Call {bound.tool.name} on {bound.server.label}"
+            )[:512],
+            request_json=canonical_request(json.dumps(sent)),
+            project_context_id=self._context(),
+            target_operation_id=target,
+            operation=review,
         )
+
+    def _proposal(
+        self, bound: McpBoundTool, arguments: dict[str, JsonValue]
+    ) -> PlatformOperationProposal | None:
+        project = (
+            self._planning.launch.project_id
+            if self._planning is not None
+            else self._manager.project_id
+        )
+        if project is None:
+            return None
+        try:
+            with self._manager.connect(bound.server, bound.destination) as client:
+                return request_proposal(
+                    client, bound.destination, bound.tool.name, project, arguments
+                )
+        except McpServerError:
+            return None
+
+    def _estimate(self, proposal: PlatformOperationProposal | None) -> ExternalOperationEstimate:
+        if self._planning is None:
+            return ExternalOperationEstimate(state="not-offered")
+        if proposal is None or proposal.runtime_profile_ref is None:
+            return ExternalOperationEstimate(
+                state="missing", limitation="The platform named no runtime profile."
+            )
+        try:
+            return self._planning.operation_estimate(proposal.runtime_profile_ref)
+        except PlanningStateError:
+            return ExternalOperationEstimate(
+                state="missing", limitation="Planning records need integrity recovery."
+            )
 
     def check_policy(
         self,
@@ -650,13 +764,18 @@ class McpOutsideAdapter:
     ) -> None:
         """Refuse dispatch once the server, its credential or the tool definition changed.
 
-        Listing tools has no effect on the service; a refusal here keeps the review open
-        and records no dispatch, so nothing is left with an unknown outcome.
+        A submission whose platform proposal is missing, or whose launch context changed,
+        is refused too. Listing tools has no effect on the service; a refusal here keeps
+        the review open and records no dispatch, so nothing is left with an unknown outcome.
         """
         bound = self._tool(proposal.request.tool_name)
         self._manager.require_current(bound)
         if not proposal.created_at <= now < proposal.expires_at:
             raise ExternalActionError("outside proposal is expired")
+        self._project(proposal)
+        review = proposal.request.operation
+        if review is not None and review.kind == "submit" and review.proposal is None:
+            raise ExternalActionError("the platform returned no proposal for this operation")
         try:
             with self._manager.connect(bound.server, bound.destination) as client:
                 self._verify_definition(client, bound)
@@ -677,6 +796,7 @@ class McpOutsideAdapter:
         bound = self._tool(proposal.request.tool_name)
         self._manager.require_current(bound)
         arguments = json.loads(proposal.request.request_json)
+        target = proposal.request.target_operation_id
         with self._manager.connect(bound.server, bound.destination) as client:
             self._verify_definition(client, bound)
             operation = self._call(
@@ -685,7 +805,8 @@ class McpOutsideAdapter:
                 bound.tool.name,
                 {
                     **arguments,
-                    "project_id": str(proposal.worker.project_id),
+                    **({} if target is None else {TARGET_FIELD: str(target)}),
+                    "project_id": self._project(proposal),
                     "operation_id": str(proposal.operation_id),
                 },
             )
@@ -700,7 +821,7 @@ class McpOutsideAdapter:
                 bound,
                 bound.destination.observation_tool,
                 {
-                    "project_id": str(proposal.worker.project_id),
+                    "project_id": self._project(proposal),
                     "operation_id": str(proposal.operation_id),
                 },
             )
@@ -740,25 +861,18 @@ class McpOutsideAdapter:
     def _call(
         client: MCPClient, bound: McpBoundTool, name: str, arguments: dict[str, Any]
     ) -> PlatformOperationObservation:
-        from mcp.types import CallToolResult
+        content = call_structured(client, bound.destination, name, arguments)
+        return PlatformOperationObservation.model_validate_json(json.dumps(content))
 
-        result = cast(
-            CallToolResult,
-            client.call_async_from_sync(
-                client.call_tool_mcp,
-                name,
-                arguments,
-                timeout=bound.destination.call_timeout_seconds,
-            ),
-        )
-        size = len(result.model_dump_json(by_alias=True, exclude_none=True).encode())
-        if size > bound.destination.max_result_bytes:
-            raise ExternalActionError("the research service result exceeds its size limit")
-        if result.is_error or result.structured_content is None:
-            raise ExternalActionError("the research service did not report an operation")
-        return PlatformOperationObservation.model_validate_json(
-            json.dumps(result.structured_content)
-        )
+
+def _target(value: JsonValue | None) -> UUID:
+    """Parse the operation a worker names; the gateway's records decide whether it exists."""
+    try:
+        if not isinstance(value, str):
+            raise ValueError
+        return UUID(value)
+    except ValueError:
+        raise ExternalActionError("a cancellation must name an operation identifier") from None
 
 
 def advance_outside_calls(
@@ -770,10 +884,22 @@ def advance_outside_calls(
     """Open outside review for new worker calls and result review for finished ones.
 
     Called after the gateway reconciles a session. Opening review of a call contacts
-    nothing. Observing operations and reading results contacts the service, so it runs
-    at most once per interval. A refusal leaves the session as it was; the next read
-    tries again.
+    nothing, except that a submission to an operation service asks the service to
+    describe it. Observing operations and reading results contacts the service, so it
+    runs at most once per interval. A refusal leaves the session as it was; the next
+    read tries again. With planning, the operation records are then linked to it.
     """
+    _advance(service, adapter, clock)
+    if adapter.planning is not None:
+        with suppress(ValueError):
+            adapter.linked_sequence = link_operations(
+                service, adapter.planning, after_sequence=adapter.linked_sequence
+            )
+
+
+def _advance(
+    service: SessionService, adapter: McpOutsideAdapter, clock: Callable[[], float]
+) -> None:
     try:
         _propose_calls(service, adapter)
         if clock() - adapter.last_reconciled < _RECONCILE_INTERVAL_SECONDS:

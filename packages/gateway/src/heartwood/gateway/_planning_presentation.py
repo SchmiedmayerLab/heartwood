@@ -10,14 +10,9 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from heartwood.gateway._action_presentation import display_safe_text
+from heartwood.gateway._action_presentation import ADMISSION_NOTICE, display_safe_text
 from heartwood.schemas import EstimatedCost, WorkloadQuantity
 from heartwood.schemas.planning import ElementReview, PlanningProjection
-
-ADMISSION_NOTICE = (
-    "A reported balance or estimate does not reserve funds or guarantee "
-    "that the platform admits work."
-)
 
 
 def planning_lines(projection: PlanningProjection) -> tuple[str, ...]:

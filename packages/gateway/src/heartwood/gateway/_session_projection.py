@@ -18,7 +18,7 @@ from typing import Annotated, ClassVar, Literal, cast
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 from heartwood.core_adapter.action_review import AUTOMATIC_REVIEW_ACTOR
-from heartwood.core_adapter.external_actions import ExternalActionProposal, ExternalActionRecord
+from heartwood.core_adapter.external_actions import ExternalActionRecord
 from heartwood.core_adapter.external_results import (
     ExternalResultProposal,
     ExternalResultRecord,
@@ -31,6 +31,7 @@ from heartwood.core_adapter.session_activity import (
 )
 from heartwood.core_adapter.workflow_provenance import workflow_experiment_events
 from heartwood.core_adapter.workflow_runtime import workflow_controls, workflow_run
+from heartwood.gateway._diagnostics import diagnostic_for
 from heartwood.schemas.execution import ExecutionBudget, ExecutionUsage, NativeTaskExecution
 from heartwood.schemas.experiments import ExperimentRun, reduce_experiment_events
 from heartwood.schemas.project_paths import ProjectPathError, project_relative_path
@@ -136,6 +137,79 @@ class ProjectionOutsideInput(_ProjectionRecord):
     size_bytes: int = Field(ge=0, serialization_alias="sizeBytes")
 
 
+class ProjectionResourceLimit(_ProjectionRecord):
+    """One hard limit the platform states for an operation; the platform enforces it."""
+
+    metric: str
+    unit: str
+    maximum: str
+
+
+class ProjectionOperationProposal(_ProjectionRecord):
+    """What the platform reported it would run; platform text, never an instruction."""
+
+    description: str
+    runtime_profile: str | None = Field(serialization_alias="runtimeProfile")
+    resource_limits: tuple[ProjectionResourceLimit, ...] = Field(
+        serialization_alias="resourceLimits"
+    )
+    data_scope: str = Field(serialization_alias="dataScope")
+    destination: str
+    limitations: tuple[str, ...] = ()
+
+
+class ProjectionOperationEstimate(_ProjectionRecord):
+    """The estimate an operation refers to, as recorded when the operation was proposed."""
+
+    state: Literal["current", "expired", "missing", "not-offered"]
+    element_id: str | None = Field(default=None, serialization_alias="elementId")
+    plan_id: str | None = Field(default=None, serialization_alias="planId")
+    plan_revision: int | None = Field(default=None, serialization_alias="planRevision")
+    estimate_id: str | None = Field(default=None, serialization_alias="estimateId")
+    coverage: Literal["complete", "partial", "unknown"] | None = None
+    expected: str | None = None
+    lower: str | None = None
+    upper: str | None = None
+    unit: str | None = None
+    valid_until: str | None = Field(default=None, serialization_alias="validUntil")
+    limitation: str | None = None
+
+
+class ProjectionPlatformOperation(_ProjectionRecord):
+    """A platform operation's reviewed description and what the platform reported for it.
+
+    ``status`` is absent until the gateway sent the operation.
+    """
+
+    kind: Literal["submit", "cancel"]
+    proposal: ProjectionOperationProposal | None = None
+    estimate: ProjectionOperationEstimate | None = None
+    project_context_id: str | None = Field(default=None, serialization_alias="projectContextId")
+    target_operation_id: str | None = Field(default=None, serialization_alias="targetOperationId")
+    target_summary: str | None = Field(default=None, serialization_alias="targetSummary")
+    status: (
+        Literal[
+            "submitted",
+            "queued",
+            "running",
+            "completed",
+            "failed",
+            "cancelled",
+            "denied",
+            "unknown",
+        ]
+        | None
+    ) = None
+    backend_operation_ref: str | None = Field(
+        default=None, serialization_alias="backendOperationRef"
+    )
+    platform_record_ref: str | None = Field(default=None, serialization_alias="platformRecordRef")
+    observed_limitations: tuple[str, ...] = Field(
+        default=(), serialization_alias="observedLimitations"
+    )
+    diagnostic: str | None = None
+
+
 class ProjectionOutsideOperationActionDetails(_ProjectionRecord):
     """A gateway-issued operation that leaves the sandbox for a deployment service."""
 
@@ -145,6 +219,7 @@ class ProjectionOutsideOperationActionDetails(_ProjectionRecord):
     request: ProjectionOutsideContent
     inputs: tuple[ProjectionOutsideInput, ...] = ()
     expires_at: str = Field(serialization_alias="expiresAt")
+    operation: ProjectionPlatformOperation | None = None
 
 
 class ProjectionOutsideResultActionDetails(_ProjectionRecord):
@@ -740,7 +815,7 @@ def _reduce_outside_record(reduction: _SessionReduction, event: SessionEvent) ->
     reduction.actions[outside_proposal.action_id] = outside_action.model_copy(
         update={
             "summary_source": "gateway",
-            "details": _outside_details(outside_proposal),
+            "details": _outside_details(outside, reduction.actions),
             "group_id": outside_proposal.group_id,
             "state": state,
             "decision": decision,
@@ -1313,8 +1388,10 @@ def _outside_content(canonical_json: str) -> ProjectionOutsideContent:
 
 
 def _outside_details(
-    proposal: ExternalActionProposal | ExternalResultProposal,
+    record: ExternalActionRecord | ExternalResultRecord,
+    actions: dict[str, ProjectionActionRecord],
 ) -> ProjectionOutsideOperationActionDetails | ProjectionOutsideResultActionDetails:
+    proposal = record.proposal
     expires_at = proposal.expires_at.isoformat()
     if isinstance(proposal, ExternalResultProposal):
         return ProjectionOutsideResultActionDetails(
@@ -1336,6 +1413,87 @@ def _outside_details(
             for item in request.inputs
         ),
         expires_at=expires_at,
+        operation=(
+            None
+            if not isinstance(record, ExternalActionRecord)
+            else _platform_operation(record, actions)
+        ),
+    )
+
+
+def _platform_operation(
+    record: ExternalActionRecord, actions: dict[str, ProjectionActionRecord]
+) -> ProjectionPlatformOperation | None:
+    request = record.proposal.request
+    review = request.operation
+    if review is None:
+        return None
+    observed = None if record.observation is None else record.observation.operation
+    status = (
+        observed.status
+        if observed is not None
+        else "unknown"
+        if record.phase in {"submitting", "unknown"}
+        else None
+    )
+    check = {"denied": "planning-denied", "failed": "operation-failed"}.get(
+        status or "", "operation-unknown" if status == "unknown" else None
+    )
+    if review.kind == "submit" and review.proposal is None and record.phase == "proposed":
+        check = "operation-proposal-missing"
+    target = request.target_operation_id
+    target_action = None if target is None else actions.get(f"outside-operation-{target}")
+    estimate = review.estimate
+    platform = review.proposal
+    return ProjectionPlatformOperation(
+        kind=review.kind,
+        proposal=(
+            None
+            if platform is None
+            else ProjectionOperationProposal(
+                description=platform.description,
+                runtime_profile=platform.runtime_profile_ref,
+                resource_limits=tuple(
+                    ProjectionResourceLimit(
+                        metric=item.metric, unit=item.unit, maximum=item.maximum
+                    )
+                    for item in platform.resource_limits
+                ),
+                data_scope=platform.data_scope,
+                destination=platform.destination,
+                limitations=platform.limitations,
+            )
+        ),
+        estimate=(
+            None
+            if estimate is None
+            else ProjectionOperationEstimate(
+                state=estimate.state,
+                element_id=estimate.element_id,
+                plan_id=None if estimate.plan is None else estimate.plan.record_id,
+                plan_revision=None if estimate.plan is None else estimate.plan.revision,
+                estimate_id=estimate.estimate_id,
+                coverage=None if estimate.total is None else estimate.total.coverage,
+                expected=None if estimate.total is None else estimate.total.expected,
+                lower=None if estimate.total is None else estimate.total.lower,
+                upper=None if estimate.total is None else estimate.total.upper,
+                unit=None if estimate.total is None else estimate.total.denomination.unit,
+                valid_until=None
+                if estimate.valid_until is None
+                else estimate.valid_until.isoformat(),
+                limitation=estimate.limitation,
+            )
+        ),
+        project_context_id=request.project_context_id,
+        target_operation_id=None if target is None else str(target),
+        target_summary=None if target_action is None else target_action.summary,
+        status=status,
+        backend_operation_ref=None if observed is None else observed.backend_operation_ref,
+        platform_record_ref=None if observed is None else observed.platform_record_ref,
+        observed_limitations=() if observed is None else observed.limitations,
+        diagnostic=None
+        if check is None
+        else f"{diagnostic_for(check).code}: {diagnostic_for(check).title}",
     )
 
 

@@ -92,6 +92,7 @@ const tested = (): McpServerTest => ({
   ],
   resources: { advertised: true, support: "unsupported" },
   prompts: { advertised: false, support: "unsupported" },
+  operations: null,
 });
 
 const client = () => ({

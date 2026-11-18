@@ -166,6 +166,7 @@ export const syntheticOutsideOperation =
           sizeBytes: 22,
           sha256: "a".repeat(64),
         },
+        operation: null,
       },
     });
 

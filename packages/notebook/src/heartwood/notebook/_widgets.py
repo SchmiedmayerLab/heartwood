@@ -29,6 +29,7 @@ from heartwood.gateway import (
     display_safe_text,
     outside_review_lines,
     planning_lines,
+    platform_status_lines,
     retained_approval_notice,
     specialist_review_lines,
 )
@@ -245,6 +246,7 @@ def _action_items(view_model: NotebookViewModel) -> tuple[str, ...]:
             else ""
         )
         lines = [f"{action_state_label(action.state)}: {label}{outcome}{truncated}"]
+        lines.extend(platform_status_lines(action))
         if action.automatic_rule is not None:
             lines.append(f"Allowed automatically (rule {action.automatic_rule})")
         elif action.group_id is not None:

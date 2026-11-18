@@ -371,6 +371,24 @@ _DIAGNOSTICS: dict[str, DiagnosticDefinition] = {
         "Revise the plan, or request more allocation through the platform's process.",
         "/reference/troubleshooting/#hw-plan-006-the-platform-denied-an-operation",
     ),
+    "operation-proposal-missing": DiagnosticDefinition(
+        "HW-OPS-001",
+        "The platform did not describe the operation",
+        "Reject the review, or let it expire; a new review asks the platform again.",
+        "/reference/troubleshooting/#hw-ops-001-the-platform-did-not-describe-the-operation",
+    ),
+    "operation-failed": DiagnosticDefinition(
+        "HW-OPS-002",
+        "A platform operation failed",
+        "Read the operation's platform record, then revise the job before submitting it again.",
+        "/reference/troubleshooting/#hw-ops-002-a-platform-operation-failed",
+    ),
+    "operation-unknown": DiagnosticDefinition(
+        "HW-OPS-003",
+        "A platform operation has an unknown outcome",
+        "Wait while Heartwood asks the platform; nothing else is sent to that service meanwhile.",
+        "/reference/troubleshooting/#hw-ops-003-a-platform-operation-has-an-unknown-outcome",
+    ),
 }
 
 _FALLBACK_DIAGNOSTIC = DiagnosticDefinition(

@@ -211,6 +211,7 @@ export interface ProjectionOutsideOperationActionDetails {
   expiresAt: string;
   inputs: ProjectionOutsideInput[];
   kind: "outside-operation";
+  operation: ProjectionPlatformOperation | null;
   request: ProjectionOutsideContent;
   serviceId: string;
 }
@@ -221,6 +222,71 @@ export interface ProjectionOutsideInput {
   reference: string;
   sha256: string;
   sizeBytes: number;
+}
+/**
+ * A platform operation's reviewed description and what the platform reported for it.
+ *
+ * ``status`` is absent until the gateway sent the operation.
+ */
+export interface ProjectionPlatformOperation {
+  backendOperationRef: string | null;
+  diagnostic: string | null;
+  estimate: ProjectionOperationEstimate | null;
+  kind: "submit" | "cancel";
+  observedLimitations: string[];
+  platformRecordRef: string | null;
+  projectContextId: string | null;
+  proposal: ProjectionOperationProposal | null;
+  status:
+    | (
+        | "submitted"
+        | "queued"
+        | "running"
+        | "completed"
+        | "failed"
+        | "cancelled"
+        | "denied"
+        | "unknown"
+      )
+    | null;
+  targetOperationId: string | null;
+  targetSummary: string | null;
+}
+/**
+ * The estimate an operation refers to, as recorded when the operation was proposed.
+ */
+export interface ProjectionOperationEstimate {
+  coverage: ("complete" | "partial" | "unknown") | null;
+  elementId: string | null;
+  estimateId: string | null;
+  expected: string | null;
+  limitation: string | null;
+  lower: string | null;
+  planId: string | null;
+  planRevision: number | null;
+  state: "current" | "expired" | "missing" | "not-offered";
+  unit: string | null;
+  upper: string | null;
+  validUntil: string | null;
+}
+/**
+ * What the platform reported it would run; platform text, never an instruction.
+ */
+export interface ProjectionOperationProposal {
+  dataScope: string;
+  description: string;
+  destination: string;
+  limitations: string[];
+  resourceLimits: ProjectionResourceLimit[];
+  runtimeProfile: string | null;
+}
+/**
+ * One hard limit the platform states for an operation; the platform enforces it.
+ */
+export interface ProjectionResourceLimit {
+  maximum: string;
+  metric: string;
+  unit: string;
 }
 /**
  * Exact JSON that leaves the session: its identity and a bounded leading preview.

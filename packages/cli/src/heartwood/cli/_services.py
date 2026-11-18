@@ -14,7 +14,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from heartwood.gateway import ProjectConfigError, SessionGateway
+from heartwood.gateway import ProjectConfigError, SessionGateway, display_safe_text
 from heartwood.gateway._credentials import CredentialStoreError
 from heartwood.gateway._mcp_policy import McpServerError
 from heartwood.schemas import (
@@ -218,4 +218,38 @@ def format_mcp_test(result: McpServerTestResponse) -> str:
     for name, capability in (("resources", result["resources"]), ("prompts", result["prompts"])):
         if capability["advertised"]:
             lines.append(f"The server advertises {name}; Heartwood does not use them.")
+    lines.extend(display_safe_text(line) for line in _operation_lines(result))
     return "\n".join(lines)
+
+
+def _operation_lines(result: McpServerTestResponse) -> list[str]:
+    """Describe what a platform operation service declares; service text is escaped."""
+    operations = result["operations"]
+    lines: list[str] = []
+    if operations is not None:
+        lines.extend(("", "Platform operations (declared; the platform checks every call):"))
+        if operations["status"] == "unavailable":
+            lines.append("  The service did not declare its operations.")
+        for item in operations["operations"]:
+            permitted = {
+                True: "permitted",
+                False: "not permitted",
+                None: "permission not disclosed",
+            }
+            flags = [
+                item["operation"],
+                f"requires {item['required_permission']}",
+                permitted[item["permitted"]],
+            ]
+            if not item["listed"]:
+                flags.append("not listed")
+            if not item["consistent"]:
+                flags.append("differs from the deployment or its read-only hint")
+            lines.append(f"  {item['tool']}  {'; '.join(flags)}")
+        lines.append("Optional capabilities:")
+        for capability in operations["capabilities"]:
+            reason = f" ({capability['reason']})" if capability["reason"] else ""
+            status = capability["status"].replace("-", " ")
+            lines.append(f"  {capability['capability']}: {status}{reason}")
+        lines.extend(f"Platform note: {item}" for item in operations["limitations"])
+    return lines

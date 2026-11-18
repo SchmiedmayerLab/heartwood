@@ -49,6 +49,7 @@ from heartwood.gateway import (
     outside_review_lines,
     outside_review_title,
     planning_lines,
+    platform_status_lines,
     retained_approval,
     retained_approval_notice,
     retained_approval_sendable,
@@ -834,6 +835,7 @@ def format_runtime_lines(projection: SessionProjection) -> tuple[str, ...]:
 def format_action_record_lines(action: ProjectionActionRecord) -> tuple[str, ...]:
     """Render one correlated action record without reconstructing its state."""
     lines = [f"  [{action_state_label(action.state)}] {action_heading(action)}"]
+    lines.extend(f"    {line}" for line in platform_status_lines(action))
     if action.automatic_rule is not None:
         lines.append(
             "    allowed automatically (rule " + terminal_safe_text(action.automatic_rule) + ")"
