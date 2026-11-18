@@ -19,6 +19,12 @@ from heartwood.cli import main
 from heartwood.cli._services import configure_services, format_mcp_test, handle_services
 from heartwood.gateway import ProjectContext, SessionGateway
 from heartwood.gateway._mcp_policy import McpDestination
+from heartwood.gateway.platform_fakes import (
+    JOBS_AUDIENCE,
+    FakeJobService,
+    FakeTokenIssuer,
+    serve,
+)
 from heartwood.schemas import McpServerTestResponse, api_response
 
 
@@ -160,3 +166,52 @@ def test_test_output_marks_listing_as_not_authorization() -> None:
     assert "changed since review" in output
     assert "The server advertises resources; Heartwood does not use them." in output
     assert "prompts;" not in output
+
+
+def test_services_test_then_select_by_reviewed_digest(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
+    issuer = FakeTokenIssuer()
+    jobs = FakeJobService(issuer)
+    with serve(jobs.app) as origin:
+        root = tmp_path / "project"
+        root.mkdir()
+        identity = uuid4()
+        gateway = SessionGateway(
+            project=ProjectContext(
+                root, protected_state=tmp_path / "protected" / str(identity), project_id=identity
+            ),
+            mcp_destinations=(
+                McpDestination(
+                    service_id="synthetic-jobs",
+                    origin=origin,
+                    tools=("create_task",),
+                    observation_tool="get_task",
+                ),
+            ),
+            env={},
+        )
+        try:
+            gateway.config_store.save(gateway.config_store.load())
+            token = issuer.exchange(audience=JOBS_AUDIENCE, project_id=str(identity))
+            monkeypatch.setattr("sys.stdin", io.StringIO(token + "\n"))
+            assert (
+                _run(gateway, "add", "jobs", f"{origin}/mcp", "--label", "Jobs", "--token-stdin")
+                == 0
+            )
+            capsys.readouterr()
+            assert _run(gateway, "test", "jobs") == 0
+            tested = capsys.readouterr().out
+            (choice,) = [
+                line.split("select as ", 1)[1]
+                for line in tested.splitlines()
+                if "select as create_task=" in line
+            ]
+            assert _run(gateway, "select", "jobs", choice) == 0
+            selected = capsys.readouterr().out
+            assert "create_task  status=ready" in selected
+            assert token not in tested + selected
+            assert jobs.task_count == 0
+        finally:
+            gateway.stop()

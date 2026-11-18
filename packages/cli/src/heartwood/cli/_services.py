@@ -57,6 +57,7 @@ def configure_services(services: argparse.ArgumentParser) -> None:
         type=_tool_choice,
         help="Tool name and the complete definition digest printed by `services test`.",
     )
+    _token_arguments(select)
     for name, summary in (
         ("enable", "Offer the server's selected tools to new sessions."),
         ("disable", "Stop offering the server's tools; pending calls are refused."),
@@ -128,7 +129,10 @@ def handle_services(
             print(
                 format_mcp_servers(
                     gateway.select_mcp_tools(
-                        args.server_id, McpServerToolsRequest(tools=list(args.tools))
+                        args.server_id,
+                        McpServerToolsRequest(
+                            tools=list(args.tools), token=token, remember=remember
+                        ),
                     )
                 )
             )
