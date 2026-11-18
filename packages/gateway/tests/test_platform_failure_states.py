@@ -195,8 +195,8 @@ def test_fixture_covers_each_coded_failure_state_in_the_contract() -> None:
                 pytest.mark.xfail(
                     strict=True,
                     reason=(
-                        "OpenHands classifies the run's rate-limit exception after Heartwood "
-                        "classifies the quota detail, so the last outcome reads HW-AGENT-010"
+                        "OpenHands also records its rate-limit classification of the quota "
+                        "response, so every interface shows HW-AGENT-010 beside HW-AGENT-009"
                     ),
                 )
                 if state["inference_failure"] == "quota"

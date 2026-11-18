@@ -239,8 +239,9 @@ def test_services_refuse_expired_wrong_audience_and_wrong_project_tokens(
     issued = fakes.issuer.exchange(**{"audience": audience, **token})
     # The verifier answers 401 before a tool runs; the tool refuses another project's token.
     refusal = PermissionError if "project_id" in token else McpProtocolError
+    message = "project authorization denied" if "project_id" in token else None
 
-    with pytest.raises(refusal):
+    with pytest.raises(refusal, match=message):
         _call(profile, issued, tool, project_id=PROJECT_ID, **arguments)
     assert fakes.jobs.task_count == 0
 
@@ -420,6 +421,7 @@ def test_script_runs_the_same_checks_against_the_fakes(
     ("arguments", "message"),
     [
         ((), "give either --fakes or endpoint options"),
+        (("--model", "synthetic-coder"), "give --inference-url with inference options"),
         (("--fakes", "--model", "synthetic-coder"), "give either --fakes or endpoint options"),
         (
             ("--inference-url", "http://127.0.0.1:9/v1", "--inference-key-env", "UNSET_KEY"),

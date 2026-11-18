@@ -597,8 +597,9 @@ def serve(app: ASGIApp) -> Iterator[str]:
         finally:
             server.should_exit = True
             thread.join(5)
-            if thread.is_alive():
-                raise RuntimeError("synthetic platform service did not stop")
+        # Checked after a clean exit only, so an error raised in the body stays visible.
+        if thread.is_alive():
+            raise RuntimeError("synthetic platform service did not stop")
 
 
 @dataclass(frozen=True, slots=True)

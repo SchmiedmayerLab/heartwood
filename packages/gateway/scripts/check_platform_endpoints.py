@@ -64,6 +64,10 @@ def main() -> None:
         with running_platform_fakes() as fakes:
             results = run_platform_conformance(*fakes.endpoints())
     else:
+        if arguments.inference_url is None and (
+            arguments.inference_key_env or arguments.model or not arguments.mcp_profile
+        ):
+            parser.error("give --inference-url with inference options, or --mcp-profile")
         try:
             profiles = [
                 PlatformMcpServiceProfile.model_validate_json(path.read_bytes())
