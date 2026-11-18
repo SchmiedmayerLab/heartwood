@@ -661,24 +661,26 @@ It holds no credential and no credential reference.
 
 | Control | Behavior |
 |---|---|
-| Destinations | Only exact listed origins. HTTPS is required except on loopback. Literal and resolved private, link-local and metadata addresses are refused before each connection. A manifest without destinations refuses every server. |
-| Redirects | The client follows none. |
-| Credentials | A bearer token is entered through the gateway and kept in its credential store under a binding derived from the server identifier, or supplied by the operator in the environment variable of that name. The deployment's credential backends apply. The token never reaches the worker, model context, session records or exports. |
+| Destinations | Only exact listed origins. HTTPS is required except on loopback. Literal and resolved private, link-local and metadata addresses are refused before each connection; the client resolves the name again, so the platform's egress controls bound the connection itself. A manifest without destinations refuses every server. |
+| Redirects | The client follows a redirect only within the same origin and sends no request to another origin. |
+| Credentials | A bearer token is entered through the gateway and kept in its credential store under a binding derived from the destination's `service_id`, or supplied by the operator in the environment variable of that name, so a token is sent only to its own service. The deployment's credential backends apply. The token never reaches the worker, model context, session records or exports. |
 | Authentication state | The gateway reads the token's expiry and refuses an expired token before sending it. The service still verifies the token. |
-| Tools | A tool must be listed for its origin and accept `project_id` and `operation_id`. The researcher selects tools from the latest test. |
+| Tools | A tool must be listed for its origin and accept `project_id` and `operation_id`. The researcher selects a tool together with the digest of the definition shown by a test, and the gateway lists the tools again and refuses a selection whose definition differs. |
 | Tool changes | Each selected tool keeps the SHA-256 of its reviewed definition. A test that lists a different definition removes the tool from the enabled set, and the gateway compares the definition again before it sends a call. A changed definition needs a new selection. |
-| Result size | A result larger than the destination's `max_result_bytes`, at most 32 KiB, is refused. |
+| Result size | A result larger than the destination's `max_result_bytes`, at most 32 KiB, is refused after it is read. Event-stream frames are limited during transfer. |
 | Resources and prompts | Not used. A test reports whether the server advertises them. |
 | Sessions | Tools are bound to sessions with an isolated worker only. Other sessions get none. |
 
 A service on this path must enforce Heartwood's operation binding, as the [adapter contract](#outside-operation-admission) requires.
 It scopes each call to the project its credential allows, treats a repeated `operation_id` as the same operation, and returns `heartwood.platform-operation-observation.v1` as structured content.
 A read-only tool named as the destination's `observation_tool` reports an operation by `project_id` and `operation_id`.
+For an identifier it never received, it reports the status `failed` and refuses any later call with that identifier, so an operation whose request never arrived can be settled.
 
 Every call needs an outside operation review and a separate result release review; no review mode decides either.
 Disabling or disconnecting a server, changing its tools, or an expired token refuses pending calls, and completed remote work is not undone.
 A call whose reply is lost or times out is recorded with an unknown outcome.
-The gateway reconciles it through the observation tool before it opens review of another call to the same service.
+The gateway reconciles it through the observation tool, and until then it neither opens review of another call to the same service nor sends one already reviewed.
+An operation reported as submitted, queued or running is observed again until it finishes, and its result release is offered then.
 
 ### MCP Client Behavior
 

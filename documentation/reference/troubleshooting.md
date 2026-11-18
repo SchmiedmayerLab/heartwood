@@ -310,8 +310,8 @@ Heartwood reads the expiry from the token; the service still verifies the token 
 
 ### `HW-MCP-003`: Research Service Tool Changed After Review
 
-A tool's definition differs from the definition you selected, or the server was not tested since the gateway started.
-The tool is removed from the enabled set, and a pending call to it is not sent.
+A tool's definition differs from the definition you reviewed.
+A test that lists a changed definition removes the tool from the enabled set, a pending call to it is not sent, and a selection with an outdated digest is refused.
 Test the server, compare the listed tools, and select them again.
 
 ### `HW-MCP-004`: Research Services Require an Isolated Worker
@@ -322,8 +322,8 @@ Start the gateway with a deployment manifest that configures an isolated worker 
 
 ### `HW-MCP-005`: Research Service Is Unavailable or Refused the Request
 
-The server did not answer, refused the credential, answered with a redirect, or did not list its tools.
-Heartwood does not follow redirects.
+The server did not answer, refused the credential, redirected to another origin, or did not list its tools.
+Heartwood follows redirects only within the same origin.
 The MCP client reports a refused credential and an unavailable service the same way, so check both the URL and the token.
 
 ### `HW-MCP-006`: Research Service Tool Cannot Be Selected
