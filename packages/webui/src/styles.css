@@ -2333,6 +2333,13 @@ summary:focus-visible {
   border-bottom: 1px solid var(--color-border);
 }
 
+.service-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
 .panel-section-heading {
   display: flex;
   align-items: center;
