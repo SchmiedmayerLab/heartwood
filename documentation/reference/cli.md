@@ -107,6 +107,21 @@ Use `--approve-license` only in automation that already presented and approved t
 `heartwood models forget openai-subscription` signs the current operating-system user out of ChatGPT; the project keeps its non-secret profile until another connection is selected.
 See [Move a Model Into an Offline Environment](../models/offline.md) for the bundle workflow.
 
+## Research Services
+
+| Command | Purpose |
+|---|---|
+| `heartwood services list` | Servers, token state, reviewed tools and the tools enabled for new sessions |
+| `heartwood services add --label TEXT [--token-stdin] [--remember] ID URL` | Add a server at a deployment-approved origin; it stays disabled |
+| `heartwood services test [--token-stdin] [--remember] ID` | Connect and list the server's tools; listing authorizes nothing |
+| `heartwood services select ID [TOOL ...]` | Select reviewed tools from the latest test |
+| `heartwood services enable ID`, `disable ID` | Offer or stop offering the selected tools to new sessions |
+| `heartwood services disconnect ID` | Remove the server and forget its token; completed remote work is not undone |
+
+Every command accepts `--deployment PATH`, whose `mcp_destinations` list the allowed origins; without it every server is refused.
+`--token-stdin` reads the bearer token from the first line of standard input.
+Tools reach sessions started by `heartwood gateway serve --deployment` with an isolated worker; see [Research MCP Servers](../operate/platform-contract.md#research-mcp-servers).
+
 ## Skills
 
 | Command | Purpose |

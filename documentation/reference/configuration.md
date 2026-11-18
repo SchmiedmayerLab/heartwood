@@ -48,6 +48,7 @@ The file never contains a raw credential.
 | `[audit]` | Optional `signer_profile` approved by the deployment signer registry |
 | `[models]` | Non-secret model profiles and `active_profile` |
 | `[[connections]]` | Platform-provided model connections |
+| `[[mcp_servers]]` | Research MCP servers: identifier, label, URL, enabled state and the reviewed definition of each selected tool; no credential |
 | `[local_model]` | Selected Heartwood-managed model artifact with its path, source, license, runtime settings, and qualification record |
 | `[policy]` | Project policy; see [Policy Fields](#policy-fields) |
 
@@ -147,6 +148,7 @@ checkpoint_evidence = false
 | `[worker]` | Optional managed worker; see [Managed Worker](#managed-worker) |
 | `[evidence]` | Optional automatic checkpointing; requires `[worker]`; see [Configure Managed Evidence](../operate/audit-checkpoints.md#configure-managed-evidence) |
 | `[model_connections]`, `[model_metadata]` | Optional platform model connections and model declarations; see [Model Connections](#model-connections) |
+| `[[mcp_destinations]]` | Optional origins for research MCP servers; requires `[worker]`; see [MCP Destinations](#mcp-destinations) |
 
 Any other key, at any level, is rejected.
 The manifest must be an absolute path that traverses no symbolic link, lie outside the research directory and the state root, be a regular file of at most 64 KiB owned by root or the gateway user, and not be writable by group or others.
@@ -257,9 +259,37 @@ Each declaration must name a connection in `[model_connections]` and declare its
 Credential references name a variable or mounted file; the manifest never holds the credential.
 An invalid table stops the launch with [`HW-DEPLOY-001`](troubleshooting.md#hw-deploy-001-deployment-manifest-is-unavailable-or-invalid).
 
+### MCP Destinations
+
+Each `[[mcp_destinations]]` entry allows one origin for [research MCP servers](../operate/platform-contract.md#research-mcp-servers).
+
+```toml
+[[mcp_destinations]]
+service_id = "research-catalog"
+origin = "https://catalog.example.invalid"
+tools = ["find_records"]
+observation_tool = "get_operation"
+max_result_bytes = 16384
+call_timeout_seconds = 30
+```
+
+| Key | Requirement |
+|---|---|
+| `service_id` | The service identity the service reports in its operation observations |
+| `origin` | Scheme, host and optional port only; HTTPS except on loopback; no private, link-local or metadata address |
+| `tools` | Tools researchers may select on servers at this origin |
+| `observation_tool` | Read-only tool that reports an operation by `project_id` and `operation_id`; not selectable |
+| `max_result_bytes` | Optional result limit from 1024 to 32768 bytes; default 16384 |
+| `call_timeout_seconds` | Optional limit for one request, from 1 to 300 seconds; default 30 |
+
+Each origin may appear once, and the section requires `[worker]`.
+Without the section, every research MCP server is refused.
+A changed destination list counts as a manifest change beyond its policy, which stops dispatch until the next start.
+
 ## Credential Binding Names
 
 Built-in connections use binding names such as `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `STANFORD_AI_API_KEY`, and `HEARTWOOD_CUSTOM_MODEL_API_KEY`.
+A research MCP server's token uses `HEARTWOOD_MCP_TOKEN_` followed by its identifier in upper case with hyphens as underscores, such as `HEARTWOOD_MCP_TOKEN_RESEARCH_CATALOG`.
 A binding name identifies a secret source; it is not the secret.
 On a workstation, a value saved with `--remember-credential` is stored in the operating-system keyring under a project-scoped account.
 Containers and platform adapters use process entry, a mounted secret file, or a managed identity.

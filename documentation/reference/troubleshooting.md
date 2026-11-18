@@ -293,6 +293,7 @@ A warning names entries in the bundled Skill directory that are not part of the 
 ## Research Services
 
 Research MCP servers are managed in the browser's Research services panel or with `heartwood services`.
+[Research MCP Servers](../operate/platform-contract.md#research-mcp-servers) describes how calls are reviewed.
 
 ### `HW-MCP-001`: Research Service Destination Is Not Allowed
 

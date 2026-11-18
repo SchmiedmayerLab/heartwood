@@ -32,7 +32,7 @@ Heartwood does not:
 - discover, authorize, or validate a real biomedical dataset;
 - determine whether a provider or platform may process a particular data class, or claim readiness for sensitive data;
 - replace operating-system, container, scheduler, or cloud isolation; the local backend runs tools with the researcher's identity and isolates nothing;
-- ship a production OpenShell gateway or outside-service adapter;
+- ship a production OpenShell gateway, or an outside-service adapter other than the one for research MCP servers;
 - guarantee model output, code correctness, statistical validity, or reproducibility;
 - approve third-party Skills or model licenses on behalf of an institution;
 - provide a multi-user authentication service for the browser; or
