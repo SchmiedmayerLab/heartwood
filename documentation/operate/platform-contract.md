@@ -443,6 +443,7 @@ The adapter's contract:
 
 `SessionService.propose_external_action` turns a retained worker proposal into a review with a gateway-issued operation identifier, the complete request, input digests, destination, worker identity, policy revision and a five-minute validity interval.
 The approve and deny commands bind the full proposal digest.
+While another operation on the same service is being submitted or has an unknown outcome, the gateway neither proposes nor sends another one; reconciliation through `observe` comes first.
 Immediately before submission the gateway rechecks the live worker attempt, project, policy, actor entitlement, validity and input contents, and submits the verified bytes without reopening worker paths.
 
 The decision and submission intent are journaled before the service is contacted; with managed evidence, the authorization is retained outside first, even in buffered mode.
@@ -680,7 +681,7 @@ Every call needs an outside operation review and a separate result release revie
 Disabling or disconnecting a server, changing its tools, or an expired token refuses pending calls, and completed remote work is not undone.
 A call whose reply is lost or times out is recorded with an unknown outcome.
 The gateway reconciles it through the observation tool, and until then it neither opens review of another call to the same service nor sends one already reviewed.
-An operation reported as submitted, queued or running is observed again until it finishes, and its result release is offered then.
+An operation reported as submitted, queued or running is observed again until it finishes, and its result release is offered on the next check after that.
 
 ### MCP Client Behavior
 
