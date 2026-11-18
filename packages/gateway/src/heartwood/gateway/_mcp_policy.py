@@ -47,7 +47,8 @@ _PRIVATE_NETWORKS = tuple(
 )
 # Cloud instance metadata services outside link-local ranges.
 _METADATA_NETWORKS = (ipaddress.ip_network("fd00:ec2::/32"),)
-# Translation prefixes whose last 32 bits carry an IPv4 address: NAT64 and IPv4-compatible.
+# Prefixes whose last 32 bits carry an IPv4 address: NAT64, IPv4-compatible and
+# IPv4-translated (RFC 2765).
 _EMBEDDED_IPV4 = (
     ipaddress.ip_network("64:ff9b::/96"),
     ipaddress.ip_network("::/96"),

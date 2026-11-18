@@ -505,13 +505,15 @@ def test_connections_apply_the_destinations_opt_in(
 
 
 def test_translated_loopback_is_not_loopback(monkeypatch: pytest.MonkeyPatch) -> None:
-    for host in ("[64:ff9b::7f00:1]", "[::7f00:1]"):
+    for host in ("64:ff9b::7f00:1", "::7f00:1", "::ffff:0:7f00:1"):
         with pytest.raises(ValueError, match="HTTPS"):
-            exact_origin(f"http://{host}")
-    monkeypatch.setattr(socket, "getaddrinfo", lambda *_args, **_kwargs: _answers(["::7f00:1"]))
-    with pytest.raises(McpServerError) as refused:
-        check_resolved_host("localhost", 80)
-    assert refused.value.code == "HW-MCP-001"
+            exact_origin(f"http://[{host}]")
+        monkeypatch.setattr(
+            socket, "getaddrinfo", lambda *_args, answer=host, **_kwargs: _answers([answer])
+        )
+        with pytest.raises(McpServerError) as refused:
+            check_resolved_host("localhost", 80)
+        assert refused.value.code == "HW-MCP-001"
 
 
 def test_offline_policy_refuses_every_server() -> None:
