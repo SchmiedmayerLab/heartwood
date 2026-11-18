@@ -662,11 +662,11 @@ It holds no credential and no credential reference.
 
 | Control | Behavior |
 |---|---|
-| Destinations | Only exact listed origins. HTTPS is required except on loopback. Literal and resolved private, link-local and metadata addresses are refused before each connection; the client resolves the name again, so the platform's egress controls bound the connection itself. A manifest without destinations refuses every server. |
+| Destinations | Only exact listed origins. HTTPS is required except on loopback. Literal and resolved private, link-local and metadata addresses are refused before each connection, except private addresses at an origin whose destination sets `private_address`, such as a cluster service; link-local and metadata addresses are always refused; the client resolves the name again, so the platform's egress controls bound the connection itself. A manifest without destinations refuses every server. |
 | Redirects | The client follows a redirect only within the same origin and sends no request to another origin. |
 | Credentials | A bearer token is entered through the gateway and kept in its credential store under a binding derived from the destination's `service_id`, or supplied by the operator in the environment variable of that name, so a token is sent only to its own service. The deployment's credential backends apply. The token never reaches the worker, model context, session records or exports. |
-| Authentication state | The gateway reads the token's expiry and refuses an expired token before sending it. The service still verifies the token. |
-| Tools | A tool must be listed for its origin and accept `project_id` and `operation_id`. The researcher selects a tool together with the digest of the definition shown by a test, and the gateway lists the tools again and refuses a selection whose definition differs. |
+| Authentication state | The gateway reads the token's expiry and refuses an expired token before sending it. A token entered with a test or a selection is kept only after the server accepted it. The service still verifies the token. |
+| Tools | A tool must be listed for its origin and accept `project_id` and `operation_id`. A test shows each tool's complete definition, the parameters the agent fills in and the definition's digest. The researcher selects a tool together with that digest, and the gateway lists the tools again and refuses a selection whose definition differs. |
 | Tool changes | Each selected tool keeps the SHA-256 of its reviewed definition. A test that lists a different definition removes the tool from the enabled set, and the gateway compares the definition again before it sends a call. A changed definition needs a new selection. |
 | Result size | A result larger than the destination's `max_result_bytes`, at most 32 KiB, is refused after it is read. Event-stream frames are limited during transfer. |
 | Resources and prompts | Not used. A test reports whether the server advertises them. |
@@ -682,6 +682,12 @@ Disabling or disconnecting a server, changing its tools, or an expired token ref
 A call whose reply is lost or times out is recorded with an unknown outcome.
 The gateway reconciles it through the observation tool, and until then it neither opens review of another call to the same service nor sends one already reviewed.
 An operation reported as submitted, queued or running is observed again until it finishes, and its result release is offered on the next check after that.
+
+Heartwood cancels no remote work.
+Denying a review sends nothing.
+A call still running at the destination's `call_timeout_seconds` is abandoned and recorded with an unknown outcome, and the service may still complete it.
+Pausing the session waits for a call in progress to end.
+The service's own cancel tool can be selected like any other tool, but it receives the new call's `operation_id`, so it cannot name an earlier operation.
 
 ### MCP Client Behavior
 

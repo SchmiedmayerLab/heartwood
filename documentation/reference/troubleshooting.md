@@ -300,6 +300,7 @@ Research MCP servers are managed in the browser's Research services panel or wit
 The server URL is not at an origin listed in the deployment manifest's `mcp_destinations`, or it resolves to a private, link-local or metadata address.
 Without a deployment manifest, or with no listed destinations, every research service is refused.
 Plain HTTP is accepted only on loopback.
+A private address, such as a cluster service, is accepted only when the operator sets `private_address` for that destination; link-local and metadata addresses never are.
 Ask the operator to add the exact origin, or use a server at an approved origin.
 
 ### `HW-MCP-002`: Research Service Credential Is Expired

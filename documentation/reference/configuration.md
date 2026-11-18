@@ -271,16 +271,18 @@ tools = ["find_records"]
 observation_tool = "get_operation"
 max_result_bytes = 16384
 call_timeout_seconds = 30
+private_address = false
 ```
 
 | Key | Requirement |
 |---|---|
 | `service_id` | The service identity the service reports in its operation observations; it also names the token binding |
-| `origin` | Scheme, host and optional port only; HTTPS except on loopback; no private, link-local or metadata address |
+| `origin` | Scheme, host and optional port only; HTTPS except on loopback; no private address without `private_address`, and never a link-local or metadata address |
 | `tools` | Tools researchers may select on servers at this origin |
 | `observation_tool` | Read-only tool that reports an operation by `project_id` and `operation_id`, and an identifier it never received as `failed`; not selectable |
 | `max_result_bytes` | Optional result limit from 1024 to 32768 bytes; default 16384 |
 | `call_timeout_seconds` | Optional limit for one request, from 1 to 300 seconds; default 30 |
+| `private_address` | Optional; `true` permits an RFC 1918 or unique local address for this exact origin, such as a cluster service; default `false`. Link-local and metadata addresses stay refused, and HTTPS stays required. |
 
 Each origin may appear once, and the section requires `[worker]`.
 Without the section, every research MCP server is refused.
