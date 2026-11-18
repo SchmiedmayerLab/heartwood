@@ -489,9 +489,13 @@ class InteractiveSession:
                 projection = self.gateway.refresh_planning()
             elif len(arguments) == 2 and arguments[0] == "record":
                 path = self.gateway.project.require_project_path(Path(arguments[1]))
-                projection = self.gateway.record_plan_prediction(
-                    WorkloadPrediction.model_validate_json(path.read_bytes())
-                )
+                try:
+                    prediction = WorkloadPrediction.model_validate_json(path.read_bytes())
+                except ValidationError:
+                    return InteractionResult(
+                        message="The file is not a valid workload prediction.", error=True
+                    )
+                projection = self.gateway.record_plan_prediction(prediction)
             elif len(arguments) >= 3 and arguments[0] == "estimate":
                 elements = tuple(arguments[3:])
                 projection = self.gateway.request_plan_estimate(
@@ -507,10 +511,6 @@ class InteractiveSession:
                 return InteractionResult(message=usage, error=True)
         except (PlanningRecordError, PlanningStateError) as error:
             return InteractionResult(message=terminal_safe_text(str(error)), error=True)
-        except ValidationError:
-            return InteractionResult(
-                message="The file is not a valid workload prediction.", error=True
-            )
         except (OSError, ValueError):
             return InteractionResult(message=usage, error=True)
         return InteractionResult(

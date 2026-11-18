@@ -731,6 +731,9 @@ def test_terminal_plan_commands_record_estimate_and_hide_without_planning(
     estimated = terminal.submit("/plan estimate cohort-prediction 1 batch")
     outside = terminal.submit("/plan record ../outside.json")
     malformed = terminal.submit("/plan estimate cohort-prediction one")
+    zero = terminal.submit("/plan estimate cohort-prediction 0")
+    (gateway.project.root / "broken.json").write_text("{}")
+    broken = terminal.submit("/plan record broken.json")
 
     assert not recorded.error
     assert "Revision 1: prediction cohort-prediction revision 1" in (recorded.message or "")
@@ -739,6 +742,9 @@ def test_terminal_plan_commands_record_estimate_and_hide_without_planning(
     )
     assert outside.error
     assert malformed.error
+    assert zero.error
+    assert (zero.message or "").startswith("Use /plan")
+    assert broken.message == "The file is not a valid workload prediction."
     assert "/plan" in (terminal.submit("/help").message or "")
 
     plain = _gateway(tmp_path / "plain", None)

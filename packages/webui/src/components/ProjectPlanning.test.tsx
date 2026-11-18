@@ -99,6 +99,11 @@ describe("project planning", () => {
     expect(screen.getByRole("alert")).toHaveTextContent(
       "Persisted planning record is invalid",
     );
+    fireEvent.click(screen.getByRole("button", { name: /Refresh Budgets/ }));
+    expect(await screen.findByText("research-project-a")).toBeInTheDocument();
+    expect(
+      screen.queryByText("Persisted planning record is invalid"),
+    ).not.toBeInTheDocument();
   });
 
   it("refreshes budgets and requests an estimate for the latest revision", async () => {

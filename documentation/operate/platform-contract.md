@@ -488,7 +488,7 @@ Without a binding, the planning projection reports that planning is not offered,
 
 The gateway does the following and nothing more:
 
-- **Discovery:** each refresh lists the service's capabilities and reads budgets only when the service offers them; an estimate is requested only when estimates are offered.
+- **Discovery:** each refresh lists the service's capabilities and reads budgets only when the service offers them; an estimate is requested only when the last discovery found estimates offered, and a change in the service shows after the next refresh.
 - **Plan revisions:** a workload prediction for the launch context is recorded once per revision; a changed revision under the same identity is refused, and a superseded revision must be recorded first.
 - **Estimates:** the platform estimates a recorded revision as a whole plan or for named elements, and an answer for another project context, revision or scope is discarded.
 - **Linked records:** `PlatformPlanning.link_operation_set` and `link_platform_record` attach the exact reviewed proposal bytes, researcher decisions with their session audit references, platform authorizations and operation observations to the revision they belong to.

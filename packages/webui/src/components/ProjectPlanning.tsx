@@ -333,20 +333,18 @@ export const ProjectPlanning = ({ client }: { client: PlanningClient }) => {
   return (
     <details className="research-provenance project-planning">
       <summary>Research Planning</summary>
-      {projection !== null ?
-        <div className="research-controls">
-          <Button
-            variant="outline"
-            disabled={busy}
-            onClick={() => run(() => client.refreshPlanning())}
-          >
-            {busy ?
-              <LoaderCircle className="animate-spin" size={16} />
-            : <RefreshCw size={16} />}
-            Refresh Budgets
-          </Button>
-        </div>
-      : null}
+      <div className="research-controls">
+        <Button
+          variant="outline"
+          disabled={busy}
+          onClick={() => run(() => client.refreshPlanning())}
+        >
+          {busy ?
+            <LoaderCircle className="animate-spin" size={16} />
+          : <RefreshCw size={16} />}
+          Refresh Budgets
+        </Button>
+      </div>
       {error !== null ?
         <p role="alert">{error}</p>
       : null}

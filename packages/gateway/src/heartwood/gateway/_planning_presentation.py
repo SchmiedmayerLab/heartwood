@@ -119,7 +119,8 @@ def planning_lines(projection: PlanningProjection) -> tuple[str, ...]:
     lines.extend(
         f"{item.diagnostic} ({item.subject}). {item.next_action}" for item in projection.outcomes
     )
-    return tuple(display_safe_text(line) for line in lines)
+    # A repeated line adds nothing; the browser shows each distinct text once as well.
+    return tuple(display_safe_text(line) for line in dict.fromkeys(lines))
 
 
 def _amount(value: str | None, unit: str) -> str:
