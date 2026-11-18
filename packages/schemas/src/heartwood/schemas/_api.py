@@ -58,6 +58,7 @@ __all__ = [
     "McpServerToolsRequest",
     "McpServersResponse",
     "McpToolAnnotationsResponse",
+    "McpToolChoice",
     "ModelArtifactResponse",
     "ModelArtifactsResponse",
     "ModelCatalogEntryResponse",
@@ -334,10 +335,17 @@ class McpServerTestRequest(ApiRequest):
     remember: bool = False
 
 
-class McpServerToolsRequest(ApiRequest):
-    """Select reviewed tools from the latest test of one research MCP server."""
+class McpToolChoice(ApiRequest):
+    """One tool and the digest of the definition the researcher reviewed."""
 
-    tools: list[str] = Field(max_length=64)
+    name: str = Field(min_length=1, max_length=40)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class McpServerToolsRequest(ApiRequest):
+    """Select reviewed tool definitions of one research MCP server."""
+
+    tools: list[McpToolChoice] = Field(max_length=64)
 
 
 class McpServerEnabledRequest(ApiRequest):
@@ -754,6 +762,7 @@ class McpSelectedToolResponse(_ApiResponse):
     worker_tool: str
     description: str
     sha256: str
+    parameters: str
     annotations: McpToolAnnotationsResponse
     status: Literal["ready", "changed", "missing", "disallowed", "unsupported"]
 
@@ -780,6 +789,7 @@ class McpDestinationResponse(_ApiResponse):
     origin: str
     tools: list[str]
     max_result_bytes: int
+    credential_binding: str
 
 
 class McpServersResponse(_ApiResponse):
@@ -799,6 +809,7 @@ class McpDiscoveredToolResponse(_ApiResponse):
     name: str
     description: str
     sha256: str
+    parameters: str
     annotations: McpToolAnnotationsResponse
     allowed: bool
     accepts_operation_binding: bool
@@ -1198,6 +1209,7 @@ type PublicApiContract = (
     | McpServerEnabledRequest
     | McpServerTestRequest
     | McpServerToolsRequest
+    | McpToolChoice
     | ModelCatalogRequest
     | ModelConnectRequest
     | ModelDownloadRequest

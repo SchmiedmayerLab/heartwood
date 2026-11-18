@@ -26,6 +26,7 @@ export type HeartwoodApiContract =
   | McpServerEnabledRequest
   | McpServerTestRequest
   | McpServerToolsRequest
+  | McpToolChoice
   | ModelCatalogRequest
   | ModelConnectRequest
   | ModelDownloadRequest
@@ -689,6 +690,7 @@ export interface McpSelectedToolResponse {
   annotations: McpToolAnnotationsResponse;
   description: string;
   name: string;
+  parameters: string;
   sha256: string;
   status: "ready" | "changed" | "missing" | "disallowed" | "unsupported";
   worker_tool: string;
@@ -717,6 +719,7 @@ export interface McpServersResponse {
  * One deployment-approved origin and the tools researchers may select there.
  */
 export interface McpDestinationResponse {
+  credential_binding: string;
   max_result_bytes: number;
   origin: string;
   service_id: string;
@@ -748,6 +751,7 @@ export interface McpDiscoveredToolResponse {
   changed: boolean;
   description: string;
   name: string;
+  parameters: string;
   selected: boolean;
   sha256: string;
 }
@@ -1243,13 +1247,20 @@ export interface McpServerTestRequest {
   token?: string | null;
 }
 /**
- * Select reviewed tools from the latest test of one research MCP server.
+ * Select reviewed tool definitions of one research MCP server.
  */
 export interface McpServerToolsRequest {
   /**
    * @maxItems 64
    */
-  tools: string[];
+  tools: McpToolChoice[];
+}
+/**
+ * One tool and the digest of the definition the researcher reviewed.
+ */
+export interface McpToolChoice {
+  name: string;
+  sha256: string;
 }
 /**
  * Discover models from one configured connection.

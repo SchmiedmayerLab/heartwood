@@ -19,7 +19,7 @@ import hashlib
 import json
 import time
 from collections.abc import Callable, Iterator, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, replace
 from datetime import datetime
 from threading import Lock
@@ -134,11 +134,6 @@ class McpServerManager:
         self._discovered: dict[str, dict[str, str]] = {}
         self._lock = Lock()
 
-    @property
-    def destinations(self) -> tuple[McpDestination, ...]:
-        """Return the deployment-approved destinations."""
-        return self._destinations
-
     def _servers(self) -> tuple[McpServerSetting, ...]:
         return self._config_store.load().mcp_servers
 
@@ -154,47 +149,40 @@ class McpServerManager:
         except McpServerError:
             return None
 
-    def _replace(self, server: McpServerSetting | None, server_id: str) -> None:
+    def _change(
+        self,
+        server_id: str,
+        transform: Callable[[McpServerSetting | None], McpServerSetting | None],
+    ) -> None:
+        """Apply one change to the stored server under the configuration lock, in place."""
+
         def apply(current: ProjectConfig) -> ProjectConfig:
-            kept = tuple(item for item in current.mcp_servers if item.server_id != server_id)
-            return replace(current, mcp_servers=kept if server is None else (*kept, server))
+            servers = list(current.mcp_servers)
+            index = next((i for i, item in enumerate(servers) if item.server_id == server_id), None)
+            changed = transform(None if index is None else servers[index])
+            if index is None and changed is not None:
+                servers.append(changed)
+            elif index is not None and changed is None:
+                del servers[index]
+            elif index is not None and changed is not None:
+                servers[index] = changed
+            return replace(current, mcp_servers=tuple(servers))
 
         self._config_store.update(apply)
 
-    def token(self, server: McpServerSetting) -> str | None:
-        """Resolve the server's bearer token in the gateway; never stored in project files."""
-        return self._credentials.resolve(server.credential_binding)
+    def token(self, destination: McpDestination) -> str | None:
+        """Resolve a destination's bearer token in the gateway; never in project files."""
+        return self._credentials.resolve(mcp_credential_binding(destination.service_id))
 
-    def _save_token(self, server_id: str, token: str | None, remember: bool) -> None:
+    def _save_token(self, destination: McpDestination, token: str | None, remember: bool) -> None:
         if token is not None and token.strip():
             self._credentials.save(
-                mcp_credential_binding(server_id), token.strip(), remember=remember
+                mcp_credential_binding(destination.service_id), token.strip(), remember=remember
             )
 
-    # Shared operations
-
-    def add(
-        self, server_id: str, label: str, url: str, token: str | None, remember: bool
-    ) -> dict[str, object]:
-        """Record a server at an approved destination; nothing is contacted or enabled."""
-        server = McpServerSetting(server_id=server_id, label=label.strip(), url=server_url(url))
-        try:
-            server.validate()
-        except ValueError as error:
-            raise McpServerError("mcp-destination", str(error)) from None
-        destination_for(server.url, self._destinations)
-        with self._lock:
-            if any(item.server_id == server_id for item in self._servers()):
-                raise McpServerError("mcp-unavailable", f"{server_id} is already configured")
-            self._save_token(server_id, token, remember)
-            self._replace(server, server_id)
-        return self.settings()
-
-    def test(self, server_id: str, token: str | None, remember: bool) -> dict[str, object]:
-        """Connect, list tools and report each definition; discovery authorizes nothing."""
-        server = self._server(server_id)
-        destination = destination_for(server.url, self._destinations)
-        self._save_token(server_id, token, remember)
+    def _list_tools(
+        self, server: McpServerSetting, destination: McpDestination
+    ) -> tuple[dict[str, str], Any]:
         with self.connect(server, destination) as client:
             try:
                 tools = cast(
@@ -208,24 +196,55 @@ class McpServerManager:
                     "mcp-unavailable", "the research service did not list its tools"
                 ) from None
             initialized = client.initialize_result
-            capabilities = None if initialized is None else initialized.capabilities
         definitions = {str(tool.name): tool_definition(tool) for tool in tools}
         with self._lock:
-            self._discovered[server_id] = definitions
+            self._discovered[server.server_id] = definitions
+        return definitions, None if initialized is None else initialized.capabilities
+
+    # Shared operations
+
+    def add(
+        self, server_id: str, label: str, url: str, token: str | None, remember: bool
+    ) -> dict[str, object]:
+        """Record a server at an approved destination; nothing is contacted or enabled."""
+        server = McpServerSetting(server_id=server_id, label=label.strip(), url=server_url(url))
+        try:
+            server.validate()
+        except ValueError as error:
+            raise McpServerError("mcp-destination", str(error)) from None
+        destination = destination_for(server.url, self._destinations)
+
+        def insert(current: McpServerSetting | None) -> McpServerSetting:
+            if current is not None:
+                raise McpServerError("mcp-unavailable", f"{server_id} is already configured")
+            return server
+
+        self._change(server_id, insert)
+        self._save_token(destination, token, remember)
+        return self.settings()
+
+    def test(self, server_id: str, token: str | None, remember: bool) -> dict[str, object]:
+        """Connect, list tools and report each definition; discovery authorizes nothing."""
+        server = self._server(server_id)
+        destination = destination_for(server.url, self._destinations)
+        self._save_token(destination, token, remember)
+        definitions, capabilities = self._list_tools(server, destination)
         selected = {tool.name: tool.sha256 for tool in server.tools}
         discovered = []
         for name, definition in sorted(definitions.items()):
             parsed = json.loads(definition)
+            digest = definition_digest(definition)
             discovered.append(
                 {
                     "name": name,
                     "description": str(parsed.get("description") or ""),
-                    "sha256": definition_digest(definition),
+                    "sha256": digest,
+                    "parameters": _parameters(parsed),
                     "annotations": _annotations(parsed),
                     "allowed": name in destination.tools,
                     "accepts_operation_binding": binding_supported(parsed),
                     "selected": name in selected,
-                    "changed": name in selected and selected[name] != definition_digest(definition),
+                    "changed": name in selected and selected[name] != digest,
                 }
             )
         return {
@@ -241,54 +260,77 @@ class McpServerManager:
             },
         }
 
-    def select_tools(self, server_id: str, names: Sequence[str]) -> dict[str, object]:
-        """Record the researcher's review of the exact definitions from the latest test."""
+    def select_tools(
+        self, server_id: str, reviewed: Sequence[tuple[str, str]]
+    ) -> dict[str, object]:
+        """Record the researcher's review of exact definitions, listed again now.
+
+        Each choice names a tool and the digest of the definition the researcher reviewed;
+        a definition that differs from the server's current one is refused.
+        """
         server = self._server(server_id)
         destination = destination_for(server.url, self._destinations)
-        with self._lock:
-            discovered = self._discovered.get(server_id)
-        if discovered is None:
-            raise McpServerError(
-                "mcp-tool-changed", "test the research service before selecting tools"
-            )
+        names = [name for name, _ in reviewed]
         if len(set(names)) != len(names):
             raise McpServerError("mcp-binding", "each tool can be selected once")
-        selections: list[McpToolSelection] = []
         for name in names:
-            definition = discovered.get(name)
-            if definition is None:
-                raise McpServerError("mcp-tool-changed", f"{name} was not listed by the last test")
             if name not in destination.tools:
                 raise McpServerError("mcp-binding", f"the deployment does not allow {name}")
+        definitions = self._list_tools(server, destination)[0] if reviewed else {}
+        selections: list[McpToolSelection] = []
+        for name, digest in reviewed:
+            definition = definitions.get(name)
+            if definition is None or definition_digest(definition) != digest:
+                raise McpServerError(
+                    "mcp-tool-changed", f"{name} differs from the reviewed definition"
+                )
             if not binding_supported(json.loads(definition)):
                 raise McpServerError(
                     "mcp-binding",
                     f"{name} does not accept a project and operation identifier",
                 )
             selections.append(McpToolSelection(name=name, definition=definition))
-        updated = replace(server, tools=tuple(selections))
-        try:
-            updated.validate()
-        except ValueError as error:
-            raise McpServerError("mcp-binding", str(error)) from None
-        self._replace(updated, server_id)
+
+        def select(current: McpServerSetting | None) -> McpServerSetting:
+            if current is None or current.url != server.url:
+                raise McpServerError("mcp-unavailable", f"{server_id} changed meanwhile")
+            updated = replace(current, tools=tuple(selections))
+            try:
+                updated.validate()
+            except ValueError as error:
+                raise McpServerError("mcp-binding", str(error)) from None
+            return updated
+
+        self._change(server_id, select)
         return self.settings()
 
     def set_enabled(self, server_id: str, enabled: bool) -> dict[str, object]:
         """Enable or disable a server for sessions that start afterwards."""
-        server = self._server(server_id)
-        if enabled:
-            destination_for(server.url, self._destinations)
-        self._replace(replace(server, enabled=enabled), server_id)
+
+        def toggle(current: McpServerSetting | None) -> McpServerSetting:
+            if current is None:
+                raise McpServerError("mcp-unavailable", f"unknown research service: {server_id}")
+            if enabled:
+                destination_for(current.url, self._destinations)
+            return replace(current, enabled=enabled)
+
+        self._change(server_id, toggle)
         return self.settings()
 
     def disconnect(self, server_id: str) -> dict[str, object]:
-        """Remove a server and forget its token; completed remote work is not undone."""
+        """Remove a server, and its token unless another server uses the same service.
+
+        Completed remote work is not undone.
+        """
         server = self._server(server_id)
-        self._credentials.forget(server.credential_binding)
+        self._change(server_id, lambda _current: None)
         with self._lock:
             self._discovered.pop(server_id, None)
-        self._replace(None, server_id)
+        destination = self._destination(server)
+        if destination is not None and not any(
+            self._destination(item) == destination for item in self._servers()
+        ):
+            self._credentials.forget(mcp_credential_binding(destination.service_id))
         return self.settings()
 
     def settings(self) -> dict[str, object]:
@@ -304,6 +346,7 @@ class McpServerManager:
                     "origin": item.origin,
                     "tools": list(item.tools),
                     "max_result_bytes": item.max_result_bytes,
+                    "credential_binding": mcp_credential_binding(item.service_id),
                 }
                 for item in self._destinations
             ],
@@ -333,6 +376,7 @@ class McpServerManager:
                 "worker_tool": worker_tool_name(server.server_id, tool),
                 "description": str(tool.parsed.get("description") or ""),
                 "sha256": tool.sha256,
+                "parameters": _parameters(tool.parsed),
                 "annotations": _annotations(tool.parsed),
                 "status": _tool_status(tool, destination, discovered),
             }
@@ -351,14 +395,16 @@ class McpServerManager:
             "service_id": None if destination is None else destination.service_id,
             "destination": "allowed" if destination is not None else "refused",
             "enabled": server.enabled,
-            "authentication": token_authentication(self._safe_token(server)).safe_dict(),
+            "authentication": token_authentication(
+                None if destination is None else self._safe_token(destination)
+            ).safe_dict(),
             "tools": tools,
             "enabled_tools": enabled,
         }
 
-    def _safe_token(self, server: McpServerSetting) -> str | None:
+    def _safe_token(self, destination: McpDestination) -> str | None:
         try:
-            return self.token(server)
+            return self.token(destination)
         except ValueError:
             return None
 
@@ -401,16 +447,21 @@ class McpServerManager:
         """Refuse a call whose server, selection, destination or credential no longer holds."""
         if self.live_identity(bound) is None:
             raise ExternalActionError("the research service tool is no longer enabled")
-        if token_authentication(self.token(bound.server)).status == "expired":
+        if token_authentication(self.token(bound.destination)).status == "expired":
             raise ExternalActionError("the research service credential is expired")
 
     @contextmanager
     def connect(self, server: McpServerSetting, destination: McpDestination) -> Iterator[MCPClient]:
-        """Open a Streamable HTTP session that follows no redirect and sends no stored file."""
+        """Open a Streamable HTTP session; the client follows redirects only within the origin.
+
+        The address check runs before the connection, and the client resolves the name
+        again; the platform's egress controls bound the connection itself.
+        """
+        from fastmcp.client.auth.bearer import BearerAuth
         from fastmcp.client.transports import StreamableHttpTransport
         from openhands.sdk.mcp import MCPClient
 
-        token = self.token(server)
+        token = self.token(destination)
         if token_authentication(token).status == "expired":
             raise McpServerError("mcp-credential", "the research service token is expired")
         parsed = urlsplit(server.url)
@@ -420,7 +471,7 @@ class McpServerManager:
         client = MCPClient(  # type: ignore[no-untyped-call]
             StreamableHttpTransport(
                 server.url,
-                auth=token or None,
+                auth=BearerAuth(token) if token else None,
                 max_sse_event_size=destination.max_result_bytes + 16 * 1024,
             ),
             timeout=destination.call_timeout_seconds,
@@ -437,6 +488,11 @@ class McpServerManager:
             yield client
         finally:
             client.sync_close()
+
+
+def _parameters(definition: dict[str, Any]) -> str:
+    """Return the input schema the worker sees, as canonical JSON for review."""
+    return json.dumps(worker_parameters(definition), sort_keys=True, separators=(",", ":"))
 
 
 def _annotations(definition: dict[str, Any]) -> dict[str, bool | None]:
@@ -661,22 +717,69 @@ def advance_outside_calls(
 ) -> None:
     """Open outside review for new worker calls and result review for finished ones.
 
-    Called after the gateway reconciles a session. A call whose earlier operation on the
-    same service has an unknown outcome waits until reconciliation establishes it.
+    Called after the gateway reconciles a session. Opening review of a call contacts
+    nothing. Observing operations and reading results contacts the service, so it runs
+    at most once per interval. A refusal leaves the session as it was; the next read
+    tries again.
     """
-    events = service.replay_events()
-    records = external_action_records(events)
-    if (
-        any(record.phase in {"submitting", "unknown"} for record in records.values())
-        and clock() - adapter.last_reconciled >= _RECONCILE_INTERVAL_SECONDS
-    ):
+    try:
+        _propose_calls(service, adapter)
+        if clock() - adapter.last_reconciled < _RECONCILE_INTERVAL_SECONDS:
+            return
+        records = external_action_records(service.replay_events())
+        settling = any(
+            record.phase in {"submitting", "unknown"}
+            or (record.observation is not None and not record.terminal)
+            for record in records.values()
+        )
+        released = {
+            release.proposal.operation_id
+            for release in external_result_records(service.replay_events()).values()
+            if release.phase != "expired"
+        }
+        finished = [
+            record.proposal.operation_id
+            for record in records.values()
+            if record.terminal
+            and record.observation is not None
+            and record.proposal.request.tool_name in adapter.tool_names
+            and record.proposal.operation_id not in released
+        ]
+        if not settling and not finished:
+            return
         adapter.last_reconciled = clock()
-        service.reconcile_external_actions()
-        events = service.replay_events()
-        records = external_action_records(events)
+        if settling:
+            service.reconcile_external_actions()
+            _propose_calls(service, adapter)
+            released = {
+                release.proposal.operation_id
+                for release in external_result_records(service.replay_events()).values()
+                if release.phase != "expired"
+            }
+            finished = [
+                record.proposal.operation_id
+                for record in external_action_records(service.replay_events()).values()
+                if record.terminal
+                and record.observation is not None
+                and record.proposal.request.tool_name in adapter.tool_names
+                and record.proposal.operation_id not in released
+            ]
+        for operation_id in finished:
+            with suppress(ValueError):
+                service.propose_external_result(operation_id)
+    except ValueError:
+        # Outside records, a closing session and a replaced worker refuse with ValueError.
+        return
+
+
+def _propose_calls(service: SessionService, adapter: McpOutsideAdapter) -> None:
+    events = service.replay_events()
+    reviewed = {
+        record.proposal.source_event_id: record
+        for record in external_action_records(events).values()
+    }
     attempt = service.worker_attempt()
     current = None if attempt is None else str(attempt.intent.attempt_id)
-    reviewed = {record.proposal.source_event_id: record for record in records.values()}
     for event in events:
         if (
             event.kind != EventKind.TOOL_CALL_PROPOSED
@@ -687,24 +790,6 @@ def advance_outside_calls(
         existing = reviewed.get(event.event_id)
         if existing is not None and existing.phase != "proposed":
             continue
-        try:
-            # An expired review is closed and replaced; an open one is left alone.
+        # An expired review is closed and replaced; an open one is left alone.
+        with suppress(ValueError):
             service.propose_external_action(event.event_id)
-        except ExternalActionError:
-            continue
-    released = {
-        release.proposal.operation_id
-        for release in external_result_records(service.replay_events()).values()
-        if release.phase != "expired"
-    }
-    for record in external_action_records(service.replay_events()).values():
-        if (
-            record.terminal
-            and record.observation is not None
-            and record.proposal.request.tool_name in adapter.tool_names
-            and record.proposal.operation_id not in released
-        ):
-            try:
-                service.propose_external_result(record.proposal.operation_id)
-            except ExternalActionError:
-                continue

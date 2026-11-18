@@ -126,7 +126,7 @@ _REQUEST_EXAMPLES: dict[str, dict[str, Any]] = {
         "url": "https://research.example.org/mcp",
     },
     "McpServerTestRequest": {},
-    "McpServerToolsRequest": {"tools": ["lookup"]},
+    "McpServerToolsRequest": {"tools": [{"name": "lookup", "sha256": "a" * 64}]},
     "McpServerEnabledRequest": {"enabled": True},
     "SkillInstallRequest": {
         "name": "synthetic",

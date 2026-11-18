@@ -2345,7 +2345,10 @@ class SessionGateway:
     ) -> McpServersResponse:
         """Record the researcher's review of tool definitions from the latest test."""
         return api_response(
-            McpServersResponse, self.mcp_servers.select_tools(server_id, request.tools)
+            McpServersResponse,
+            self.mcp_servers.select_tools(
+                server_id, [(item.name, item.sha256) for item in request.tools]
+            ),
         )
 
     @gateway_operation

@@ -101,6 +101,9 @@ def mcp_destinations_from_mapping(value: object) -> tuple[McpDestination, ...]:
     origins = [item.origin for item in destinations]
     if len(origins) != len(set(origins)):
         raise ValueError("each MCP destination origin must be listed once")
+    bindings = [mcp_credential_binding(item.service_id) for item in destinations]
+    if len(bindings) != len(set(bindings)):
+        raise ValueError("MCP destination service identifiers must have distinct credential names")
     return destinations
 
 
@@ -123,8 +126,13 @@ def exact_origin(value: str) -> str:
     ):
         raise ValueError("origin must be a scheme, host and optional port only")
     check_host(parsed.scheme, host)
+    return _render_origin(parsed.scheme, host, port)
+
+
+def _render_origin(scheme: str, host: str, port: int | None) -> str:
     rendered = f"[{host}]" if ":" in host else host
-    return f"{parsed.scheme}://{rendered}" + (f":{port}" if port is not None else "")
+    default = {"http": 80, "https": 443}[scheme]
+    return f"{scheme}://{rendered}" + (f":{port}" if port not in {None, default} else "")
 
 
 def check_host(scheme: str, host: str) -> None:
@@ -211,9 +219,7 @@ def server_url(value: str) -> str:
 def url_origin(url: str) -> str:
     """Return the origin of a validated server URL."""
     parsed = urlsplit(url)
-    host = (parsed.hostname or "").lower()
-    rendered = f"[{host}]" if ":" in host else host
-    return f"{parsed.scheme}://{rendered}" + (f":{parsed.port}" if parsed.port is not None else "")
+    return _render_origin(parsed.scheme, (parsed.hostname or "").lower(), parsed.port)
 
 
 def destination_for(url: str, destinations: Sequence[McpDestination]) -> McpDestination:
@@ -236,7 +242,12 @@ def tool_definition(tool: BaseModel) -> str:
     value = tool.model_dump(mode="json", by_alias=True, exclude_none=True)
     for key in ("_meta", "meta", "icons"):
         value.pop(key, None)
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    try:
+        return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    except ValueError:
+        raise McpServerError(
+            "mcp-unavailable", "the research service listed a tool definition that is not JSON"
+        ) from None
 
 
 def definition_digest(definition: str) -> str:
@@ -340,20 +351,19 @@ class McpServerSetting:
             if len(worker_tool_name(self.server_id, tool)) > _MAX_WORKER_TOOL_NAME:
                 raise ValueError("MCP server and tool names are too long together")
 
-    @property
-    def credential_binding(self) -> str:
-        """Return the gateway credential binding this server's token resolves from."""
-        return mcp_credential_binding(self.server_id)
-
 
 def worker_tool_name(server_id: str, tool: McpToolSelection) -> str:
     """Return the client-tool name; a changed definition gets a new, stable name."""
     return f"{server_id.replace('-', '_')}__{tool.name}_{tool.sha256[:8]}"
 
 
-def mcp_credential_binding(server_id: str) -> str:
-    """Return the environment-style binding name for one server's bearer token."""
-    return "HEARTWOOD_MCP_TOKEN_" + server_id.upper().replace("-", "_")
+def mcp_credential_binding(service_id: str) -> str:
+    """Return the binding for a destination's bearer token.
+
+    The binding follows the deployment's service identity, so a token entered or
+    provided for one approved service is never sent to another approved origin.
+    """
+    return "HEARTWOOD_MCP_TOKEN_" + re.sub(r"[^A-Za-z0-9]", "_", service_id).upper()
 
 
 def mcp_server_from_mapping(value: object) -> McpServerSetting:

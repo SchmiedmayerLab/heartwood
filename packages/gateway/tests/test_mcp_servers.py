@@ -69,13 +69,16 @@ from heartwood.gateway._mcp_policy import (
 )
 from heartwood.gateway._mcp_servers import McpOutsideAdapter, advance_outside_calls
 from heartwood.gateway._model_settings import ModelProfile, ModelSettings
+from heartwood.gateway._rest import RestGateway, RestRequest
 from heartwood.gateway.platform_fakes import FakeTokenIssuer, serve
 from heartwood.gateway.worker_sessions import WorkerSessionPlan, WorkerSessionRequest
 from heartwood.schemas import (
     McpServerAddRequest,
     McpServerEnabledRequest,
     McpServerTestRequest,
+    McpServerTestResponse,
     McpServerToolsRequest,
+    McpToolChoice,
     PlatformOperationObservation,
     PolicyProfile,
 )
@@ -109,6 +112,8 @@ class Catalog:
             on_duplicate="replace",
         )
         self.operations: dict[tuple[str, str], str] = {}
+        # Identifiers reported as never received; a later call with one is refused.
+        self.tombstones: set[tuple[str, str]] = set()
         self.calls: list[str] = []
         self.mode = "normal"
         self.release = threading.Event()
@@ -134,7 +139,11 @@ class Catalog:
             service_id=_SERVICE_ID,
             backend_operation_ref=f"search-{operation_id[:8]}",
             observed_at=datetime(2026, 7, 1, tzinfo=UTC),
-            status="failed" if status == "failed" else "completed",
+            status="failed"
+            if status in {"failed", "not-received"}
+            else "running"
+            if status == "running"
+            else "completed",
             platform_record_ref=f"synthetic-audit:{operation_id}",
             limitations=(_INJECTION if self.mode == "injection" else "3 synthetic records",),
         )
@@ -144,6 +153,10 @@ class Catalog:
     ) -> PlatformOperationObservation:
         """Find synthetic records that mention a term."""
         self._authorize(project_id)
+        if (project_id, operation_id) in self.tombstones:
+            raise ToolError("operation identifier was reported as not received")
+        if self.mode == "refuse":
+            raise ToolError("synthetic refusal before any effect")
         self.calls.append(term)
         self.operations.setdefault((project_id, operation_id), self.mode)
         if self.mode == "slow":
@@ -158,10 +171,12 @@ class Catalog:
         return self._observation(project_id, operation_id)
 
     def get_operation(self, project_id: str, operation_id: str) -> PlatformOperationObservation:
-        """Report an earlier search by operation identifier."""
+        """Report an operation; an identifier never received is reported failed for good."""
         self._authorize(project_id)
-        if (project_id, operation_id) not in self.operations:
-            raise ToolError("operation not found")
+        key = (project_id, operation_id)
+        if key not in self.operations:
+            self.tombstones.add(key)
+            self.operations[key] = "not-received"
         return self._observation(project_id, operation_id)
 
     def delete_records(self, project_id: str, operation_id: str, term: str) -> str:
@@ -236,11 +251,16 @@ class Served:
 
     def enable(self, tools: list[str] | None = None) -> None:
         self.add()
-        self.gateway.test_mcp_server("catalog", McpServerTestRequest())
-        self.gateway.select_mcp_tools(
-            "catalog", McpServerToolsRequest(tools=tools or ["find_records"])
-        )
+        result = self.gateway.test_mcp_server("catalog", McpServerTestRequest())
+        self.gateway.select_mcp_tools("catalog", _choices(result, tools or ["find_records"]))
         self.gateway.set_mcp_server_enabled("catalog", McpServerEnabledRequest(enabled=True))
+
+
+def _choices(result: McpServerTestResponse, names: list[str]) -> McpServerToolsRequest:
+    digests = {tool["name"]: tool["sha256"] for tool in result["tools"]}
+    return McpServerToolsRequest(
+        tools=[McpToolChoice(name=name, sha256=digests.get(name, "0" * 64)) for name in names]
+    )
 
 
 def _gateway(
@@ -445,15 +465,23 @@ def test_test_lists_tools_and_shows_resources_and_prompts_as_unsupported(tmp_pat
 def test_only_allowed_tools_that_accept_the_binding_can_be_selected(tmp_path: Path) -> None:
     with served(tmp_path) as service:
         service.add()
-        with pytest.raises(McpServerError, match="test"):
-            service.gateway.select_mcp_tools(
-                "catalog", McpServerToolsRequest(tools=["find_records"])
-            )
-        service.gateway.test_mcp_server("catalog", McpServerTestRequest())
+        result = service.gateway.test_mcp_server("catalog", McpServerTestRequest())
         for denied in ("delete_records", "unbound_lookup", "get_operation"):
             with pytest.raises(McpServerError) as refused:
-                service.gateway.select_mcp_tools("catalog", McpServerToolsRequest(tools=[denied]))
+                service.gateway.select_mcp_tools("catalog", _choices(result, [denied]))
             assert refused.value.code == "HW-MCP-006"
+
+
+def test_a_selection_must_match_the_reviewed_definition(tmp_path: Path) -> None:
+    with served(tmp_path) as service:
+        service.add()
+        reviewed = service.gateway.test_mcp_server("catalog", McpServerTestRequest())
+        # The definition changes after the researcher reviewed it and before selection.
+        service.catalog.change_find_records()
+        with pytest.raises(McpServerError) as refused:
+            service.gateway.select_mcp_tools("catalog", _choices(reviewed, ["find_records"]))
+        assert refused.value.code == "HW-MCP-003"
+        assert service.gateway.config_store.load().mcp_servers[0].tools == ()
 
 
 def test_enabled_tools_reach_new_worker_sessions_as_client_tools(tmp_path: Path) -> None:
@@ -496,7 +524,7 @@ def test_changed_tool_definition_requires_renewed_review(tmp_path: Path) -> None
         (server,) = service.gateway.mcp_server_settings()["servers"]
         assert server["tools"][0]["status"] == "changed"
         assert server["enabled_tools"] == []
-        service.gateway.select_mcp_tools("catalog", McpServerToolsRequest(tools=["find_records"]))
+        service.gateway.select_mcp_tools("catalog", _choices(result, ["find_records"]))
         (server,) = service.gateway.mcp_server_settings()["servers"]
         assert server["tools"][0]["status"] == "ready"
         assert server["enabled_tools"] != []
@@ -543,7 +571,10 @@ def test_disconnect_forgets_the_credential_and_removes_the_tools(tmp_path: Path)
         before = adapter.policy_sha256
         service.gateway.disconnect_mcp_server("catalog")
         assert service.gateway.mcp_server_settings()["servers"] == []
-        assert service.gateway.credential_store.resolve("HEARTWOOD_MCP_TOKEN_CATALOG") is None
+        assert (
+            service.gateway.credential_store.resolve("HEARTWOOD_MCP_TOKEN_SYNTHETIC_CATALOG")
+            is None
+        )
         assert adapter.policy_sha256 != before
         with pytest.raises(ExternalActionError):
             service.gateway.mcp_servers.require_current(bound[0])
@@ -767,6 +798,61 @@ def test_a_partial_failure_is_reconciled_from_the_service(tmp_path: Path) -> Non
             assert service.catalog.calls == ["synthetic"]
 
 
+def test_a_call_refused_before_any_effect_is_reconciled_as_failed(tmp_path: Path) -> None:
+    with served(tmp_path) as service:
+        service.enable()
+        with outside_session(tmp_path, service) as (session, worker, adapter):
+            service.catalog.mode = "refuse"
+            _decide(session, _call(session, worker, adapter), CommandKind.APPROVE)
+            assert _records(session)[-1].phase == "unknown"
+            service.catalog.mode = "normal"
+            advance_outside_calls(session, adapter, clock=lambda: 1e9)
+            observed = _records(session)[-1].observation
+            assert observed is not None
+            assert observed.operation.status == "failed"
+            # The service is usable again, and the reported identifier stays refused.
+            record = _call(session, worker, adapter)
+            assert record.phase == "proposed"
+            assert service.catalog.calls == []
+
+
+def test_a_running_operation_is_observed_until_it_finishes(tmp_path: Path) -> None:
+    with served(tmp_path) as service:
+        service.enable()
+        with outside_session(tmp_path, service) as (session, worker, adapter):
+            service.catalog.mode = "running"
+            _decide(session, _call(session, worker, adapter), CommandKind.APPROVE)
+            observed = _records(session)[-1].observation
+            assert observed is not None
+            assert observed.operation.status == "running"
+            advance_outside_calls(session, adapter, clock=lambda: 1e9)
+            assert external_result_records(session.replay_events()) == {}
+            key = next(iter(service.catalog.operations))
+            service.catalog.operations[key] = "normal"
+            advance_outside_calls(session, adapter, clock=lambda: 2e9)
+            finished = _records(session)[-1].observation
+            assert finished is not None
+            assert finished.operation.status == "completed"
+            (release,) = external_result_records(session.replay_events()).values()
+            assert release.phase == "proposed"
+
+
+def test_an_open_review_is_not_sent_while_another_call_is_unknown(tmp_path: Path) -> None:
+    with served(tmp_path) as service:
+        service.enable()
+        with outside_session(tmp_path, service) as (session, worker, adapter):
+            first = _call(session, worker, adapter)
+            second = _call(session, worker, adapter)
+            service.catalog.mode = "slow"
+            _decide(session, first, CommandKind.APPROVE)
+            assert _records(session)[0].phase == "unknown"
+            service.catalog.release.set()
+            service.catalog.mode = "normal"
+            _decide(session, second, CommandKind.APPROVE)
+            assert _records(session)[1].phase == "proposed"
+            assert service.catalog.calls == ["synthetic"]
+
+
 def test_results_with_instructions_wait_for_a_separate_release_review(tmp_path: Path) -> None:
     with served(tmp_path) as service:
         service.enable()
@@ -845,3 +931,48 @@ def test_project_configuration_keeps_reviewed_definitions_and_no_credentials(
         service.gateway.project.config_path.write_text(tampered)
         with pytest.raises(ProjectConfigError, match="canonical definition"):
             service.gateway.config_store.load()
+
+
+def test_rest_routes_report_research_service_diagnostics(tmp_path: Path) -> None:
+    with served(tmp_path) as service:
+        rest = RestGateway(service.gateway)
+        refused = rest.handle(
+            RestRequest(
+                "POST",
+                "/settings/mcp-servers",
+                json.dumps(
+                    {
+                        "server_id": "elsewhere",
+                        "label": "Elsewhere",
+                        "url": "https://elsewhere.example.org/mcp",
+                    }
+                ),
+            )
+        )
+        assert refused.status_code == 422
+        assert refused.body["code"] == "HW-MCP-001"
+        added = rest.handle(
+            RestRequest(
+                "POST",
+                "/settings/mcp-servers",
+                json.dumps(
+                    {
+                        "server_id": "catalog",
+                        "label": "Synthetic catalog",
+                        "url": service.url,
+                        "token": service.token,
+                    }
+                ),
+            )
+        )
+        assert added.status_code == 200
+        assert service.token not in json.dumps(added.body)
+        tested = rest.handle(RestRequest("POST", "/settings/mcp-servers/catalog/test", "{}"))
+        assert tested.status_code == 200
+        unknown = rest.handle(
+            RestRequest("PUT", "/settings/mcp-servers/other/enabled", '{"enabled": true}')
+        )
+        assert unknown.status_code == 422
+        assert unknown.body["code"] == "HW-MCP-005"
+        missing = rest.handle(RestRequest("GET", "/settings/mcp-servers/catalog/other", ""))
+        assert missing.status_code == 404

@@ -84,15 +84,6 @@ def propose_external_action_locked(
     request = ExternalActionRequest.model_validate(adapter.prepare(tool_name, arguments))
     if request.tool_name != tool_name:
         raise ExternalActionError("service request changed the proposed tool")
-    # A lost reply or timeout may have caused an effect; reconcile it before another call.
-    if any(
-        item.proposal.request.service_id == request.service_id
-        and item.phase in {"submitting", "unknown"}
-        for item in external_action_records(events).values()
-    ):
-        raise ExternalActionError(
-            "an earlier operation on this service has an unknown outcome; reconcile it first"
-        )
     created_at = external_now(service.clock)
     proposal = ExternalActionProposal(
         operation_id=uuid4(),
@@ -525,6 +516,16 @@ def _check_external_authority(service: SessionService, proposal: ExternalActionP
         or not proposal.created_at <= external_now(service.clock) < proposal.expires_at
     ):
         raise ExternalActionError("outside operation authority is stale or unavailable")
+    # A lost reply or timeout may have caused an effect; reconcile it before another call.
+    if any(
+        item.proposal.operation_id != proposal.operation_id
+        and item.proposal.request.service_id == proposal.request.service_id
+        and item.phase in {"submitting", "unknown"}
+        for item in external_action_records(service.replay_events()).values()
+    ):
+        raise ExternalActionError(
+            "an earlier operation on this service has an unknown outcome; reconcile it first"
+        )
 
 
 def _check_result_authority(service: SessionService, proposal: ExternalResultProposal) -> None:
