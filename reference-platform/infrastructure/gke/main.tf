@@ -41,8 +41,8 @@ resource "google_compute_subnetwork" "platform" {
   }
 }
 
-# Nodes run as a dedicated service account that may only write logs and metrics.
-# No service account key is created.
+# Nodes run as a dedicated service account with GKE's node role, which covers logs and
+# metrics. No service account key is created.
 resource "google_service_account" "nodes" {
   account_id   = "${var.cluster_name}-nodes"
   display_name = "Nodes of ${var.cluster_name}"
@@ -51,15 +51,8 @@ resource "google_service_account" "nodes" {
 }
 
 resource "google_project_iam_member" "nodes" {
-  for_each = toset([
-    "roles/logging.logWriter",
-    "roles/monitoring.metricWriter",
-    "roles/monitoring.viewer",
-    "roles/stackdriver.resourceMetadata.writer",
-  ])
-
   project = var.project_id
-  role    = each.value
+  role    = "roles/container.defaultNodeServiceAccount"
   member  = google_service_account.nodes.member
 }
 
@@ -87,8 +80,12 @@ resource "google_container_cluster" "platform" {
     channel = "REGULAR"
   }
 
-  # Without initial_node_count and node_config the cluster has no default node pool;
-  # every node belongs to the node pools below.
+  # Without initial_node_count and node_config the cluster has no default node pool,
+  # which GKE supports from this version on; every node belongs to the node pools below.
+  min_master_version = "1.36.4-gke.1469000"
+
+  # Nodes have public addresses to pull images from GHCR without Cloud NAT, and the
+  # control plane endpoint accepts authenticated requests from any address.
 
   # The documented removal procedure deletes the cluster with `tofu destroy`.
   deletion_protection = false
@@ -149,7 +146,14 @@ resource "google_container_node_pool" "gpu" {
     service_account = google_service_account.nodes.email
     oauth_scopes    = ["https://www.googleapis.com/auth/cloud-platform"]
 
-    # GKE installs the driver and taints the nodes with nvidia.com/gpu=present:NoSchedule.
+    # GKE installs the driver. GKE adds this taint itself only when another node pool
+    # exists first, so the pool sets it explicitly.
+    taint {
+      key    = "nvidia.com/gpu"
+      value  = "present"
+      effect = "NO_SCHEDULE"
+    }
+
     guest_accelerator {
       type  = "nvidia-l4"
       count = 1

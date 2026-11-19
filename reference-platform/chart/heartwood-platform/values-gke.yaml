@@ -10,7 +10,7 @@
 # GKE's default Persistent Disk CSI storage class.
 storageClassName: standard-rwo
 
-# Placement of GPU pods on the spot NVIDIA L4 node pool, which GKE taints with
+# Placement of GPU pods on the spot NVIDIA L4 node pool, whose nodes carry the taint
 # nvidia.com/gpu=present:NoSchedule.
 gpu:
   nodeSelector:
