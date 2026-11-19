@@ -240,7 +240,7 @@ Request bodies are limited to 1 MiB of UTF-8.
 Browser responses set a restrictive content security policy, same-origin framing, no referrer, MIME-sniffing protection, and a permissions policy that disables camera, geolocation and microphone.
 In `identity-proxy` mode the forwarded client, host, protocol, port and prefix headers are optional.
 The host, the first protocol value, the first port value and the prefix must match the external origin and base path when present; `X-Real-IP` and `X-Forwarded-Server` are accepted and unused.
-A top-level `GET` navigation may arrive from another site in that mode, because a sign-in returns through the identity provider.
+A top-level `GET` navigation to the gateway's root, `identity/login` or `oauth_callback` may arrive from another site in that mode, because a sign-in returns through the identity provider.
 Heartwood does not terminate public TLS.
 Outside `identity-proxy` mode Heartwood does not authenticate end users; the platform proxy must do so and strip client-supplied forwarding and identity headers.
 
@@ -263,13 +263,16 @@ With `identity-proxy` ingress the gateway is a confidential OpenID Connect clien
 It replaces the launch link: every API request, server-sent event stream and WebSocket needs a sign-in capability or an access token, and a request with neither receives `HW-INGRESS-004`.
 
 A browser that opens the gateway's URL is redirected to `identity/login` and from there to the provider's authorization endpoint with a `state`, a `nonce` and a PKCE challenge.
-The provider returns the browser to `oauth_callback`, where the gateway redeems the code with its client secret and verifies the ID token.
+The gateway seals these values into the `heartwood-sign-in` cookie with a key that exists only in its process, and keeps no record of a sign-in in progress.
+The provider returns the browser to `oauth_callback`, which accepts the request only with that cookie, unaltered, at most ten minutes old, with a `state` equal to the sealed one and not used before.
+The gateway then redeems the code with its client secret, verifies the ID token and removes the cookie.
 The gateway accepts RS256 and ES256 signatures made with the provider's published keys, and requires the configured issuer, an audience that names its client, an unexpired lifetime, the `nonce` of this sign-in and the bound subject.
 An access token that is a JSON Web Token must carry the same issuer and subject and name the client as audience or authorized party.
 The browser then receives a one-time launch token in the URL fragment and exchanges it at `POST /launch` for a capability of that sign-in, which it sends as in the [launch capability](#launch-capability) flow.
 A sign-in ends when its refresh token expires, when the provider reports that time, and otherwise when its access token expires.
 
 Other clients send `Authorization: Bearer` with an access token of the same issuer whose `aud` contains the gateway's client and whose `sub` is the bound subject.
+A token that carries a `nonce`, `at_hash` or `c_hash` claim, or a `typ` claim of `ID`, is an identity token and is refused as a bearer token.
 Every accepted command records the verified subject as its actor.
 
 The gateway keeps the researcher's access and refresh tokens, the client secret, authorization codes and capabilities in process memory.
@@ -277,12 +280,15 @@ They are not written to project files, protected state, events, audit exports or
 
 - One gateway accepts one subject; a token of any other person is refused.
 - A restart of the gateway ends every sign-in, and the researcher signs in again.
-- The gateway holds at most eight sign-ins and 256 unfinished sign-in attempts, and drops the oldest beyond that.
+- The gateway holds at most eight sign-ins and drops the oldest beyond that.
+- A sign-in completes only in the browser that started it; a second sign-in started in the same browser replaces the first.
 - The `heartwood-login` cookie that the callback sets for one minute authorizes nothing; it lets the page load once so that it can exchange the launch token.
+- The launch token in the URL fragment and the capability in the browser's session storage are readable by every script on the gateway's origin, and static responses allow framing from that origin.
+- Gateways of several researchers that share one origin under different paths are therefore separated only while nothing else on that origin serves pages a researcher controls.
+- An event stream or WebSocket that was opened with a sign-in's capability keeps delivering events after that sign-in ends, until the connection closes.
 - An unsigned token, a token signed with a shared secret, and a token signed with a key the provider does not publish are refused.
-- The gateway cannot tell an ID token from an access token when both name its client as audience, so the provider must issue ID tokens for the gateway's client only to the gateway.
 - With `allow_plain_http` the client secret and the tokens cross the network to the provider unencrypted.
-- When the provider cannot be reached or answers with an unusable document, the request receives `HW-INGRESS-005` without the provider's text.
+- When the provider cannot be reached or answers with an unusable document, the request receives `HW-INGRESS-005` without the provider's text, and the gateway asks the provider for its discovery document or keys again after five seconds at the earliest.
 
 ## Model Content
 

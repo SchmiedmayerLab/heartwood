@@ -586,7 +586,9 @@ Open the gateway's URL in the browser and sign in as the researcher the gateway 
 A sign-in ends with its tokens and at every gateway restart; reload the page to sign in again.
 
 A sign-in is refused when the account is another person's, when the sign-in attempt is older than ten minutes or was already completed, or when the provider rejects the gateway's client secret or redirect URI.
+It is also refused when the callback arrives in another browser than the one that started the sign-in, when the browser blocks the gateway's cookies, or when the gateway restarted in between.
 An access token is refused unless the configured issuer signed it, it is unexpired, its `aud` contains the gateway's client and its `sub` is the bound researcher.
+An access token signed with an algorithm other than RS256 or ES256, or without a key identifier, and an identity token are refused as well.
 Operators compare the manifest's [`[identity]` table](configuration.md#identity) with the provider's client: issuer, client identifier, secret, subject and the redirect URI `<public origin><base path>/oauth_callback`.
 
 ### `HW-INGRESS-005`: Identity Provider Is Unavailable
