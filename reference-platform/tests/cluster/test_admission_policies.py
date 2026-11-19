@@ -202,6 +202,11 @@ def session(cluster: Cluster, staging_image: str) -> Iterator[None]:
             name="heartwood-session-gateway",
         ),
         _binding("view", _account("default", _NAMESPACE), name="foreign"),
+        _binding(
+            "heartwood-session-control",
+            _account("heartwood-control", "heartwood-platform"),
+            name="heartwood-session-control",
+        ),
         wider,
         wider_binding,
         empty,
@@ -555,6 +560,62 @@ def test_control_scope_refuses_removing_a_foreign_node_reader_subject(cluster: C
         released = _node_reader()
         del released["subjects"]
         administrator(released)
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {
+            "ownerReferences": [
+                {"apiVersion": "v1", "kind": "Namespace", "name": "default", "uid": "0"}
+            ]
+        },
+        {"finalizers": ["example.test/block"]},
+        {"labels": {"app.kubernetes.io/managed-by": "other"}},
+        {"annotations": {"example.test/note": "x"}},
+    ],
+    ids=lambda metadata: next(iter(metadata)),
+)
+def test_control_scope_refuses_metadata_changes_of_the_node_reader_binding(
+    cluster: Cluster, metadata: dict[str, Any]
+) -> None:
+    binding = _node_reader(_OPENSHELL)
+    binding["metadata"].update(metadata)
+
+    _expect(cluster, CONTROL, "apply", binding, _CONTROL_SCOPE, _NODE_READER)
+
+
+_SERVICES = "ValidatingAdmissionPolicy 'heartwood-session-services'"
+_SERVICE = "has the type ClusterIP and no external address"
+
+
+def _service(**spec: Any) -> dict[str, Any]:  # noqa: ANN401
+    service = _named("Service", "case", _NAMESPACE)
+    service["spec"] = {"selector": {"app": "case"}, "ports": [{"port": 8080}], **spec}
+    return service
+
+
+@pytest.mark.parametrize(
+    ("document", "message"),
+    [
+        pytest.param(_service(), None, id="cluster-ip"),
+        pytest.param(_service(clusterIP="None"), None, id="headless"),
+        pytest.param(_service(externalIPs=["203.0.113.7"]), _SERVICE, id="external-address"),
+        pytest.param(_service(type="NodePort"), _SERVICE, id="node-port"),
+        pytest.param(_service(type="LoadBalancer"), _SERVICE, id="load-balancer"),
+        pytest.param(
+            {**_service(), "spec": {"type": "ExternalName", "externalName": "example.test"}},
+            _SERVICE,
+            id="external-name",
+        ),
+    ],
+)
+def test_session_services_stay_inside_the_cluster_network(
+    cluster: Cluster, document: dict[str, Any], message: str | None
+) -> None:
+    # The control service holds the right to create Services in a session namespace
+    # once its role is bound there, as the fixture does for this test.
+    _expect(cluster, CONTROL, "create", document, _SERVICES, message)
 
 
 def test_control_service_may_review_tokens(cluster: Cluster) -> None:

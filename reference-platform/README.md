@@ -58,13 +58,13 @@ The platform is for synthetic and open data only.
 | versitygw | S3-compatible object store with one bucket `hw-project-<id>` for each entry in `projects` |
 | Platform certificate authority | Secret `platform-ca` with the key, and ConfigMap `platform-ca` with the certificate |
 | Session roles | Six fixed ClusterRoles for session namespaces, and the ServiceAccount and rights of the control service |
-| Admission policies | `heartwood-control-scope` and `heartwood-staging-shape` |
+| Admission policies | `heartwood-control-scope`, `heartwood-staging-shape` and `heartwood-session-services` |
 | OpenShell objects | `files/openshell-session.json`, the objects of one session namespace |
 
 Every image is pinned by digest in `values.yaml`, and `values.schema.json` rejects an image reference without a digest.
 Helm generates every credential at the first installation and keeps the existing value on an upgrade.
 The chart renders no credential from a fixed value.
-PostgreSQL and Keycloak keep the credentials of the first installation on their volumes, so a new installation after `helm uninstall` needs the volume claims of the old one deleted first.
+PostgreSQL keeps the credentials of the first installation and the Keycloak realm on its volume, so a new installation after `helm uninstall` needs the volume claims of the old one deleted first.
 
 ### Keycloak Realm
 
@@ -85,7 +85,7 @@ versitygw accepts connections from its bootstrap Job.
 
 Session namespaces are named `hw-s-<session>`.
 The control service binds the fixed ClusterRoles inside one session namespace with RoleBindings, and no principal creates Roles.
-RBAC cannot name namespaces that are created at run time, so two ValidatingAdmissionPolicies with failure policy `Fail` confine the two principals that act in them.
+RBAC cannot name namespaces that are created at run time, so ValidatingAdmissionPolicies with failure policy `Fail` confine the principals that act in them.
 
 `heartwood-control-scope` applies to the ServiceAccount `heartwood-control`:
 
@@ -101,7 +101,7 @@ RBAC cannot name namespaces that are created at run time, so two ValidatingAdmis
   | `heartwood-session-gateway` | ServiceAccount `hw-gw-<session>` in `heartwood-sessions` |
   | `heartwood-session-control` | ServiceAccount `heartwood-control` |
 
-- A change to `heartwood-openshell-node-reader` adds or removes only ServiceAccounts named `openshell` in session namespaces.
+- A change to `heartwood-openshell-node-reader` adds or removes only ServiceAccounts named `openshell` in session namespaces, and changes no label, annotation, owner or finalizer.
 
 `heartwood-staging-shape` applies to every ServiceAccount `hw-gw-*` in `heartwood-sessions`:
 
@@ -111,13 +111,15 @@ RBAC cannot name namespaces that are created at run time, so two ValidatingAdmis
 - An exec session opens only into pods named `hw-staging-*`. Attach and port-forward requests are denied.
 
 An empty `sessions.stagingImage` denies every pod.
-A defect in `heartwood-control-scope` would let the control service bind the fixed ClusterRoles, which include pod creation, in other namespaces.
+
+`heartwood-session-services` applies to every Service in a namespace that carries the label `heartwood.platform/session`:
+the Service has the type `ClusterIP` and no external address.
 
 ### OpenShell Objects
 
 `tools/render_openshell.py` renders the OpenShell chart 0.1.9, pinned by the SHA-256 digest of its archive, with the values in `tools/openshell-values.yaml`, and writes `files/openshell-session.json`.
 The chart's RBAC creation is switched off, and the tool removes the Role and RoleBinding of the certificate Job.
-Every object carries a namespace placeholder, and both gateway containers carry an image placeholder.
+Every object carries a namespace placeholder, and the containers of the gateway and of the certificate Job carry an image placeholder.
 The tool fails when the chart renders another object kind, another image, or the namespace in a new place.
 
 ```bash
@@ -167,5 +169,5 @@ The reachable control then runs again, and after the policies are deleted both b
 The script writes `network-policy-controls.json` and exits with an error unless every control has its expected result.
 
 `install-chart.sh` installs the chart with `values-kind.yaml` and waits until every component is ready.
-The cluster tests send each admission policy one admitted request and one denied request for each condition, including each ClusterRole with a subject other than its own, as the confined ServiceAccount.
+The cluster tests send each admission policy admitted requests and one denied request for each condition, including each ClusterRole with a subject other than its own, as the confined ServiceAccount.
 They also check which connections the network policies allow.

@@ -96,6 +96,10 @@ spec:
         variables.resource != 'clusterrolebindings'
         || (request.operation == 'UPDATE' && variables.requestName == 'heartwood-openshell-node-reader'
         && object.roleRef == oldObject.roleRef
+        && object.metadata.?labels == oldObject.metadata.?labels
+        && object.metadata.?annotations == oldObject.metadata.?annotations
+        && object.metadata.?ownerReferences == oldObject.metadata.?ownerReferences
+        && object.metadata.?finalizers == oldObject.metadata.?finalizers
         && (variables.newSubjects.filter(s, !(s in variables.oldSubjects))
         + variables.oldSubjects.filter(s, !(s in variables.newSubjects))).all(s,
         s.kind == 'ServiceAccount' && s.name == 'openshell'

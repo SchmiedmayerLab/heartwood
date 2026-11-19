@@ -138,7 +138,9 @@ def test_control_service_binds_only_the_fixed_cluster_roles(
     assert "subjects" not in binding
 
 
-@pytest.mark.parametrize("name", ["heartwood-control-scope", "heartwood-staging-shape"])
+@pytest.mark.parametrize(
+    "name", ["heartwood-control-scope", "heartwood-staging-shape", "heartwood-session-services"]
+)
 def test_admission_policies_fail_closed_and_deny(objects: list[dict[str, Any]], name: str) -> None:
     assert _named(objects, "ValidatingAdmissionPolicy", name)["spec"]["failurePolicy"] == "Fail"
     binding = _named(objects, "ValidatingAdmissionPolicyBinding", name)
@@ -204,3 +206,12 @@ def test_release_must_use_the_platform_namespace() -> None:
     )
     assert result.returncode != 0
     assert "heartwood-platform" in result.stderr
+
+
+@pytest.mark.parametrize("namespace", ["heartwood-platform", "hw-s-hub"])
+def test_sessions_namespace_is_neither_the_platform_nor_a_session_namespace(namespace: str) -> None:
+    result = subprocess.run(
+        [*_TEMPLATE, "--set", f"sessions.namespace={namespace}"], capture_output=True, text=True
+    )
+    assert result.returncode != 0
+    assert "/sessions/namespace" in result.stderr

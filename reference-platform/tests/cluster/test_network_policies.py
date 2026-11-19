@@ -109,6 +109,7 @@ def test_sessions_namespace_reaches_keycloak(cluster: Cluster) -> None:
 def test_other_connections_to_platform_components_are_blocked(
     cluster: Cluster, namespace: str, target: str
 ) -> None:
-    # The allowed connection shows that the probe and the name resolution work.
+    # Allowed connections show that both probes and the name resolution work.
     assert _reachable(cluster, "heartwood-sessions", _KEYCLOAK)
+    assert _reachable(cluster, namespace, "kubernetes.default.svc.cluster.local:443")
     assert not _reachable(cluster, namespace, target)

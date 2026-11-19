@@ -58,7 +58,7 @@
       "additionalProperties": false,
       "required": ["namespace", "stagingImage", "attemptStorageClass"],
       "properties": {
-        "namespace": {"allOf": [{"$ref": "#/$defs/identifier"}, {"not": {"const": "heartwood-platform"}}]},
+        "namespace": {"allOf": [{"$ref": "#/$defs/identifier"}, {"not": {"pattern": "^(heartwood-platform$|hw-s-)"}}]},
         "stagingImage": {"anyOf": [{"const": ""}, {"$ref": "#/$defs/image"}]},
         "attemptStorageClass": {
           "type": "object",
