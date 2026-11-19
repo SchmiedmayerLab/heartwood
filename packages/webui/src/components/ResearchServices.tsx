@@ -480,8 +480,10 @@ const PlatformOperations = ({
         </li>
       ))}
     </ul>
-    {operations.limitations.map((item) => (
-      <small key={item}>Platform note: {displaySafeText(item)}</small>
+    {operations.limitations.map((item, index) => (
+      // Platform text can repeat, so the position identifies each note.
+      // eslint-disable-next-line @eslint-react/no-array-index-key
+      <small key={index}>Platform note: {displaySafeText(item)}</small>
     ))}
   </div>
 );

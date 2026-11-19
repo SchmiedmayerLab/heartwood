@@ -695,8 +695,10 @@ const PlatformLines = ({ lines }: { lines: string[] }) =>
   lines.length === 0 ?
     null
   : <ul className="platform-operation" aria-label="Platform operation">
-      {lines.map((line) => (
-        <li key={line}>{displaySafeText(line)}</li>
+      {lines.map((line, index) => (
+        // Platform text can repeat, so the position identifies each line.
+        // eslint-disable-next-line @eslint-react/no-array-index-key
+        <li key={index}>{displaySafeText(line)}</li>
       ))}
     </ul>;
 
