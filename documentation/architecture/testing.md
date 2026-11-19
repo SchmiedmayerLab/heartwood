@@ -346,7 +346,7 @@ It describes one kind cluster with one node; it does not transfer to another clu
 
 ## Agent Safety Drills
 
-Each native case that exercises a safety property records a drill identifier with a version in its evidence.
+Each qualification case that exercises a safety property records a drill identifier with a version in its evidence.
 A drill's version changes whenever its scenario or expected outcome changes, so results under one identifier remain comparable.
 
 | Drill | Native case | Expected safe outcome |
@@ -374,12 +374,12 @@ The [Kubernetes driver qualification](#kubernetes-driver-qualification) records 
 
 | Drill | Kubernetes case | Expected safe outcome |
 |---|---|---|
-| `kubernetes-gateway-credential.v1` | `test_kubernetes_gateway_credential_is_confined` | The gateway's credential is refused every request outside staging, by its role, by the staging admission policy or by Pod Security, and creates nothing |
-| `kubernetes-workflow.v1` | `test_kubernetes_workflow_boundary_and_revocation` | Only the approved actions run in an admitted worker that reaches its model route alone; every container runs its image by digest from the cluster's registry; after revocation no object of the attempt remains |
-| `kubernetes-delete-conflict.v1` | `test_kubernetes_conflicting_deletion_is_retried_until_absence` | A deletion that collides with other writers is sent again, at most seven times, and the attempt is revoked only after the cluster shows no object |
+| `kubernetes-gateway-credential.v1` | `test_kubernetes_gateway_credential_is_confined` | Each probed request outside staging is refused by the gateway credential's role, by the staging admission policy or by Pod Security, and creates nothing |
+| `kubernetes-workflow.v1` | `test_kubernetes_workflow_boundary_and_revocation` | Only the approved actions run in an admitted worker that reaches its model route alone; every container runs the digest reference it pulled from the cluster's registry; after revocation no object of the attempt remains |
+| `kubernetes-delete-conflict.v1` | `test_kubernetes_conflicting_deletion_is_retried_until_absence` | A deletion that collides with other writers is sent again, at most seven times in all, and the attempt is revoked only after the cluster shows no object |
 | `kubernetes-unsent-creation.v1` | `test_kubernetes_unsent_creation_is_confirmed_absent` | A creation that never arrived is recorded as not created on the gateway's word, and the name cannot be created later |
-| `kubernetes-admission-image-digest.v1` | `test_kubernetes_admission_refuses_another_supervisor_image` | A supervisor pod that runs another digest than the manifest pins is refused and deleted before any model request |
-| `kubernetes-admission-added-policy.v1` | `test_kubernetes_admission_refuses_an_added_network_policy` | A worker whose pods a further NetworkPolicy allows egress is refused and deleted before any model request |
+| `kubernetes-admission-image-digest.v1` | `test_kubernetes_admission_refuses_another_supervisor_image` | A supervisor pod whose image digest differs from the one the manifest pins is refused and deleted before any model request |
+| `kubernetes-admission-added-policy.v1` | `test_kubernetes_admission_refuses_an_added_network_policy` | A worker whose pods an added NetworkPolicy allows egress is refused and deleted before any model request |
 | `kubernetes-staging-default-deny.v1` | `test_kubernetes_staging_requires_the_default_deny_policy` | Without the default-deny policy, staging creates nothing |
 | `kubernetes-staging-transfer.v1` | `test_kubernetes_staging_transfers_a_large_input_within_the_request_limit` | A 64 MiB input is staged within the time one cluster request may take, and its claims are removed |
 
