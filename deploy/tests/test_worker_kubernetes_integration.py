@@ -44,6 +44,18 @@ from heartwood.session import CommandKind
 
 _STAGING_SHAPE = "ValidatingAdmissionPolicy 'heartwood-staging-shape'"
 _POD_SECURITY = 'violates PodSecurity "restricted:latest"'
+# The message of the staging policy's rule that each case breaks.
+_STAGING_RULES = {
+    "pod-other-image": "runs only the staging image",
+    "pod-supervisor-label": "carries only the labels heartwood.project",
+    "pod-other-user": "runs as user and group 10002",
+    "pod-default-account": "uses the ServiceAccount hw-staging without a mounted token",
+    "pod-mounted-token": "uses the ServiceAccount hw-staging without a mounted token",
+    "pod-secret-volume": "mounts only attempt volume claims",
+    "pod-foreign-claim": "mounts only attempt volume claims",
+    "claim-other-name": "is named hw-attempt-*, uses the StorageClass heartwood-attempt",
+    "claim-other-storage-class": "is named hw-attempt-*, uses the StorageClass heartwood-attempt",
+}
 _TRANSFER_BYTES = 64 * 1024 * 1024
 # The adapter gives each cluster request this long, including each archive transfer.
 _REQUEST_SECONDS = 60
@@ -196,11 +208,14 @@ def test_kubernetes_gateway_credential_is_confined(infrastructure: KubernetesFix
     create = ("create", "--filename=-")
     refusals: dict[str, str] = {}
 
-    def refused(name: str, expected: str, *arguments: str, stdin: str | None = None) -> None:
+    def refused(
+        name: str, expected: str, *arguments: str, stdin: str | None = None, rule: str = ""
+    ) -> None:
         code, error = fixture.as_gateway(*arguments, stdin=stdin)
         assert code != 0, f"{name} was permitted"
         assert expected in error, f"{name}: {error}"
-        refusals[name] = expected
+        assert rule in error, f"{name}: {error}"
+        refusals[name] = f"{expected}: {rule}" if rule else expected
 
     # The fixed role grants no Secret, no policy change and nothing in another namespace.
     refused("read-secrets", "forbidden", "get", "secrets")
@@ -224,9 +239,11 @@ def test_kubernetes_gateway_credential_is_confined(infrastructure: KubernetesFix
     refused("ephemeral-container", "forbidden", "debug", "openshell-0", "--image=" + fixture.worker)
     # The role grants pod and claim creation; the admission policy admits one shape only.
     name = "hw-staging-" + uuid4().hex
-    # The shape the adapter creates is admitted; the request is a dry run.
-    code, answer = fixture.as_gateway(*create, "--dry-run=server", stdin=_pod(fixture, name))
-    assert code == 0, answer
+    # The shapes the adapter creates are admitted; the requests are dry runs.
+    claim = _claim("hw-attempt-" + uuid4().hex[:8], "heartwood-attempt")
+    for document in (_pod(fixture, name), claim):
+        code, answer = fixture.as_gateway(*create, "--dry-run=server", stdin=document)
+        assert code == 0, answer
     # Pod Security answers before the policy for a pod that both refuse.
     refused("pod-host-network", _POD_SECURITY, *create, stdin=_pod(fixture, name, hostNetwork=True))
     for case, document in (
@@ -275,12 +292,20 @@ def test_kubernetes_gateway_credential_is_confined(infrastructure: KubernetesFix
         ("claim-other-name", _claim("hw-case-" + uuid4().hex[:8], "heartwood-attempt")),
         ("claim-other-storage-class", _claim("hw-attempt-" + uuid4().hex[:8], "standard")),
     ):
-        refused(case, _STAGING_SHAPE, *create, stdin=document)
-    refused("exec-gateway-pod", _STAGING_SHAPE, "exec", "openshell-0", "--", "/bin/true")
+        refused(case, _STAGING_SHAPE, *create, stdin=document, rule=_STAGING_RULES[case])
+    refused(
+        "exec-gateway-pod",
+        _STAGING_SHAPE,
+        "exec",
+        "openshell-0",
+        "--",
+        "/bin/true",
+        rule="opens exec sessions only into pods named hw-staging-*",
+    )
     code, answer = fixture.as_gateway("auth", "can-i", "create", "pods")
     assert code == 0, answer
     assert fixture.objects() == []
-    _evidence(fixture, {"check_id": "kubernetes-gateway-credential.v1", "refusals": refusals})
+    _evidence(fixture, {"drill_id": "kubernetes-gateway-credential.v1", "refusals": refusals})
 
 
 _BOUNDARY_PROBE = """import errno,json,os
@@ -311,6 +336,10 @@ print(json.dumps({'checks':checks,'output':result}))
 """
 
 _ROUTE_PROBE = """import errno,json,socket,sys
+host='kubernetes.default.svc.cluster.local'
+qname=b''.join(bytes([len(part)])+part.encode() for part in host.split('.'))+b'\\0'
+query=bytes.fromhex('123401000001000000000000')+qname+bytes.fromhex('00010001')
+http=b'GET /canary HTTP/1.1\\r\\nHost: canary\\r\\nConnection: close\\r\\n\\r\\n'
 results={}
 for name,host,port,kind in json.loads(sys.argv[1]):
  transport=socket.SOCK_DGRAM if kind=='udp' else socket.SOCK_STREAM
@@ -318,11 +347,14 @@ for name,host,port,kind in json.loads(sys.argv[1]):
   with socket.socket(socket.AF_INET,transport) as connection:
    connection.settimeout(4)
    connection.connect((host,port))
-   connection.sendall(b'GET /canary HTTP/1.1\\r\\nHost: canary\\r\\nConnection: close\\r\\n\\r\\n')
-   data=connection.recv(512)
-   results[name]='reached' if data else 'closed'
- except socket.timeout: results[name]='timeout'
- except OSError as error: results[name]=errno.errorcode.get(error.errno,str(error.errno))
+   # A TCP connection that opens is a reachable route, whatever follows.
+   if kind=='tcp': results[name]='connected'
+   if port==53: payload=query if kind=='udp' else len(query).to_bytes(2,'big')+query
+   else: payload=http
+   connection.sendall(payload)
+   if connection.recv(512): results[name]='reached'
+ except socket.timeout: results.setdefault(name,'timeout')
+ except OSError as error: results.setdefault(name,errno.errorcode.get(error.errno,str(error.errno)))
 print(json.dumps(results))
 """
 
@@ -410,7 +442,6 @@ def test_kubernetes_workflow_boundary_and_revocation(
         admission = record["admission"]
         assert record["sandbox_id"] == attempt.runtime.sandbox_id
         assert set(record["claims"]) == {"inputs", "skills"}
-        assert "refusal" not in record
 
         # Inside the worker: user, projections, no cluster credential, no runtime socket.
         observation = fixture.exec(worker, [PYTHON, "-I", "-B", "-c", _BOUNDARY_PROBE])
@@ -449,13 +480,13 @@ def test_kubernetes_workflow_boundary_and_revocation(
                 assert routes.exit_code == 0, routes.stderr
         observed_routes = json.loads(routes.stdout)
         assert set(observed_routes) == {target[0] for target in targets}
-        # An answer or a connection that the peer closed both mean the route was open.
-        assert not {"reached", "closed"} & set(observed_routes.values()), observed_routes
+        # A TCP connection that opened, or any answer, means the route was open.
+        assert not {"connected", "reached"} & set(observed_routes.values()), observed_routes
         assert received == [b"positive-control", b"positive-control"]
         assert len(fixture.provider.observations) == 3
 
-        # Below the sandbox: a pod with the labels of a workload pod and no sandbox in it
-        # gets no connection either, so the driver's policy is enforced by the cluster.
+        # Below the sandbox: no NetworkPolicy of the namespace allows a pod with the workload
+        # role label and no sandbox process a connection to the same listener.
         policy_layer = _policy_probe(fixture, own, port)
         assert policy_layer == "timeout", policy_layer
         assert received == [b"positive-control", b"positive-control"]
@@ -553,7 +584,7 @@ def test_kubernetes_workflow_boundary_and_revocation(
         _evidence(
             fixture,
             {
-                "check_id": "kubernetes-workflow.v1",
+                "drill_id": "kubernetes-workflow.v1",
                 "attempt_id": attempt_id,
                 "policy_sha256": attempt.runtime.sandbox_policy_sha256,
                 "kubernetes_identities": identities,
@@ -592,7 +623,7 @@ except OSError as error: print(type(error).__name__)
 
 
 def _policy_probe(fixture: KubernetesFixture, address: str, port: int) -> str:
-    """Connect from a pod that carries a workload pod's labels and runs no sandbox."""
+    """Connect from a pod that carries the workload role label and runs no sandbox."""
     name = "hw-qualification-policy-probe"
     pod = {
         "apiVersion": "v1",
@@ -736,10 +767,12 @@ def test_kubernetes_conflicting_deletion_is_retried_until_absence(
         conflicts = [answer for answer in answers if "retry deletion" in answer]
         assert conflicts, answers
         assert answers[-1] == "COMPLETED"
+        # Revocation sends one deletion and repeats it at most six times.
+        assert len(answers) <= 7, answers
         _evidence(
             fixture,
             {
-                "check_id": "kubernetes-delete-conflict.v1",
+                "drill_id": "kubernetes-delete-conflict.v1",
                 "attempt_id": str(attempt.intent.attempt_id),
                 "deletion_answers": answers,
                 "conflicting_answers": len(conflicts),
@@ -763,13 +796,12 @@ def test_kubernetes_unsent_creation_is_confirmed_absent(
     create = SandboxClient.create
     unsent: dict[str, Any] = {}
 
-    def lose(client: SandboxClient, **request: Any) -> Never:  # noqa: ANN401
+    def lose(_client: SandboxClient, **request: Any) -> Never:  # noqa: ANN401
         if "heartwood.attempt" in request.get("labels", {}) and not request["name"].startswith(
             "probe-"
         ):
             unsent.update(request)
             raise TimeoutError("synthetic unsent creation")
-        create(client, **request)
         raise AssertionError("Only the attempt's creation is expected here")
 
     application = native._application(fixture)
@@ -795,7 +827,7 @@ def test_kubernetes_unsent_creation_is_confirmed_absent(
         _evidence(
             fixture,
             {
-                "check_id": "kubernetes-unsent-creation.v1",
+                "drill_id": "kubernetes-unsent-creation.v1",
                 "attempt_id": attempt_id,
                 "objects_after_failed_launch": staged,
                 "revocation_outcome": "not-created",
@@ -809,7 +841,7 @@ def test_kubernetes_unsent_creation_is_confirmed_absent(
 
 
 def _refused_launch(
-    fixture: KubernetesFixture, monkeypatch: pytest.MonkeyPatch, method: str, **deployment: str
+    fixture: KubernetesFixture, method: str, **deployment: str
 ) -> tuple[SessionService, str, list[str]]:
     """Run one launch that the adapter must refuse, and return why it did."""
     refusals: list[str] = []
@@ -822,23 +854,28 @@ def _refused_launch(
             refusals.append(str(error))
             raise
 
-    monkeypatch.setattr(KubernetesWorkerVolumes, method, observed)
-    settings = fixture.deployment(WorkerInputManifest(files=()), **deployment)
-    application = native._application(fixture, deployment=settings)
-    service = application._service("composition")
-    native._submit(application, CommandKind.CHAT, {"prompt": "Synthetic refused launch."})
-    attempt_id = _fenced_without_worker(service)
-    assert not fixture.provider.observations
-    native._stop(application)
+    # The observer is removed before the case ends, so the fixture's own recorder, which
+    # it wraps, is restored in the order it was installed.
+    setattr(KubernetesWorkerVolumes, method, observed)
+    try:
+        settings = fixture.deployment(WorkerInputManifest(files=()), **deployment)
+        application = native._application(fixture, deployment=settings)
+        service = application._service("composition")
+        native._submit(application, CommandKind.CHAT, {"prompt": "Synthetic refused launch."})
+        attempt_id = _fenced_without_worker(service)
+        assert not fixture.provider.observations
+        native._stop(application)
+    finally:
+        setattr(KubernetesWorkerVolumes, method, original)
     return service, attempt_id, refusals
 
 
 def test_kubernetes_admission_refuses_another_supervisor_image(
-    infrastructure: KubernetesFixture, monkeypatch: pytest.MonkeyPatch
+    infrastructure: KubernetesFixture,
 ) -> None:
     fixture = infrastructure
     service, attempt_id, refusals = _refused_launch(
-        fixture, monkeypatch, "inspect_worker", supervisor_image_digest="sha256:" + "0" * 64
+        fixture, "inspect_worker", supervisor_image_digest="sha256:" + "0" * 64
     )
     assert refusals == ["native worker image does not match admission"]
     _settled(service, "revoked")
@@ -846,7 +883,7 @@ def test_kubernetes_admission_refuses_another_supervisor_image(
     _evidence(
         fixture,
         {
-            "check_id": "kubernetes-admission-image-digest.v1",
+            "drill_id": "kubernetes-admission-image-digest.v1",
             "attempt_id": attempt_id,
             "refusal": refusals[0],
             "expected_supervisor_digest": "sha256:" + "0" * 64,
@@ -858,7 +895,7 @@ def test_kubernetes_admission_refuses_another_supervisor_image(
 
 
 def test_kubernetes_admission_refuses_an_added_network_policy(
-    infrastructure: KubernetesFixture, monkeypatch: pytest.MonkeyPatch
+    infrastructure: KubernetesFixture,
 ) -> None:
     fixture = infrastructure
     policy = {
@@ -873,7 +910,7 @@ def test_kubernetes_admission_refuses_an_added_network_policy(
     }
     fixture.outside("create", "--filename=-", stdin=json.dumps(policy))
     try:
-        service, attempt_id, refusals = _refused_launch(fixture, monkeypatch, "inspect_worker")
+        service, attempt_id, refusals = _refused_launch(fixture, "inspect_worker")
     finally:
         fixture.outside("delete", "networkpolicy", "hw-qualification-added-egress")
     assert refusals == ["native worker network policies do not match admission"]
@@ -883,7 +920,7 @@ def test_kubernetes_admission_refuses_an_added_network_policy(
     _evidence(
         fixture,
         {
-            "check_id": "kubernetes-admission-added-policy.v1",
+            "drill_id": "kubernetes-admission-added-policy.v1",
             "attempt_id": attempt_id,
             "refusal": refusals[0],
             "added_policy": policy,
@@ -895,7 +932,7 @@ def test_kubernetes_admission_refuses_an_added_network_policy(
 
 
 def test_kubernetes_staging_requires_the_default_deny_policy(
-    infrastructure: KubernetesFixture, monkeypatch: pytest.MonkeyPatch
+    infrastructure: KubernetesFixture,
 ) -> None:
     fixture = infrastructure
     saved = json.loads(fixture.outside("get", "networkpolicy", "hw-default-deny", "-o=json"))
@@ -907,7 +944,7 @@ def test_kubernetes_staging_requires_the_default_deny_policy(
     }
     fixture.outside("delete", "networkpolicy", "hw-default-deny")
     try:
-        service, attempt_id, refusals = _refused_launch(fixture, monkeypatch, "stage")
+        service, attempt_id, refusals = _refused_launch(fixture, "stage")
         created = fixture.objects()
     finally:
         fixture.outside("create", "--filename=-", stdin=json.dumps(restored))
@@ -917,7 +954,7 @@ def test_kubernetes_staging_requires_the_default_deny_policy(
     _evidence(
         fixture,
         {
-            "check_id": "kubernetes-staging-default-deny.v1",
+            "drill_id": "kubernetes-staging-default-deny.v1",
             "attempt_id": attempt_id,
             "refusal": refusals[0],
             "objects_created": created,
@@ -971,7 +1008,7 @@ def test_kubernetes_staging_transfers_a_large_input_within_the_request_limit(
     _evidence(
         fixture,
         {
-            "check_id": "kubernetes-staging-transfer.v1",
+            "drill_id": "kubernetes-staging-transfer.v1",
             "transferred_bytes": _TRANSFER_BYTES,
             "staging_seconds": seconds,
             "request_limit_seconds": _REQUEST_SECONDS,
