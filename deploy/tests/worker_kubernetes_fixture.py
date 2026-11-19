@@ -132,6 +132,7 @@ class KubernetesFixture:
         self.gateway_image = os.environ["HW_GATEWAY_IMAGE"]
         self.supervisor_image = os.environ["HW_SUPERVISOR_IMAGE"]
         self.sandbox_image = os.environ["HW_SANDBOX_IMAGE"]
+        self.symlink_image = os.environ["HW_SYMLINK_WORKSPACE_IMAGE"]
         self.endpoint = os.environ["HW_OPENSHELL_ENDPOINT"]
         self.provider_host = os.environ["HW_PROVIDER_HOST"]
         self.base_url = f"https://{self.provider_host}:{_PROVIDER_PORT}/v1"
@@ -291,6 +292,10 @@ class KubernetesFixture:
             landlock=policy_pb.LandlockPolicy(compatibility="hard_requirement"),
             process=policy_pb.ProcessPolicy(run_as_user="10001", run_as_group="10001"),
         )
+
+    def keep_credential(self) -> None:
+        """Let the later cases of the run use a provider credential this case rotated."""
+        _run["credential"] = self.provider.credential
 
     def _create_provider(self) -> None:
         """Register the synthetic model route and its credential with the sandbox gateway."""

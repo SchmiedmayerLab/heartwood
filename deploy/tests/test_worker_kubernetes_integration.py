@@ -46,7 +46,7 @@ _STAGING_SHAPE = "ValidatingAdmissionPolicy 'heartwood-staging-shape'"
 _POD_SECURITY = 'violates PodSecurity "restricted:latest"'
 # The message of the staging policy's rule that each case breaks.
 _STAGING_RULES = {
-    "pod-other-image": "runs only the staging image",
+    "pod-other-image": "runs only a staging image",
     "pod-supervisor-label": "carries only the labels heartwood.project",
     "pod-other-user": "runs as user and group 10002",
     "pod-default-account": "uses the ServiceAccount hw-staging without a mounted token",
@@ -66,6 +66,18 @@ def _absent(attempt_id: str) -> None:
     fixture = _current[0]
     assert fixture.objects(attempt_id=attempt_id) == []
     assert fixture.objects(attempt_id=attempt_id.replace("-", "")) == []
+
+
+def _running_image(fixture: KubernetesFixture, worker: str, sandbox_id: str) -> str:
+    """Return the digest the worker's agent container runs, as the manifest names it."""
+    pod = json.loads(fixture.outside("get", "pod", f"{WORKSPACE}--{worker}", "--output=json"))
+    assert pod["metadata"]["labels"]["openshell.ai/boundary-pair"] == sandbox_id.lower()
+    (container,) = [item for item in pod["spec"]["containers"] if item["name"] == "agent"]
+    (status,) = [item for item in pod["status"]["containerStatuses"] if item["name"] == "agent"]
+    repository, _, digest = container["image"].partition("@")
+    assert repository == fixture.worker.partition("@")[0]
+    assert status["imageID"] == container["image"]
+    return digest
 
 
 def _read(fixture: KubernetesFixture, worker: str, path: str) -> str:
@@ -88,10 +100,11 @@ def infrastructure(
     private.mkdir(mode=0o700)
     fixture = KubernetesFixture(private, output)
     _current[:] = [fixture]
-    # The shared cases reach a worker and observe absence through these three helpers.
+    # The shared cases reach a worker and observe absence through these four helpers.
     monkeypatch.setattr(native, "_assert_absent", _absent)
     monkeypatch.setattr(lifecycle, "_absent", _absent)
     monkeypatch.setattr(lifecycle, "_read", _read)
+    monkeypatch.setattr(lifecycle, "_running_image", _running_image)
     try:
         fixture.start()
         yield fixture
@@ -172,6 +185,7 @@ def _pod(fixture: KubernetesFixture, name: str, **changes: Any) -> str:  # noqa:
             "runAsUser": 10002,
             "runAsGroup": 10002,
             "fsGroup": 10002,
+            "supplementalGroupsPolicy": "Strict",
             "seccompProfile": {"type": "RuntimeDefault"},
         },
         "containers": [container],
@@ -265,6 +279,7 @@ def test_kubernetes_gateway_credential_is_confined(infrastructure: KubernetesFix
                     "runAsUser": 10001,
                     "runAsGroup": 10002,
                     "fsGroup": 10002,
+                    "supplementalGroupsPolicy": "Strict",
                     "seccompProfile": {"type": "RuntimeDefault"},
                 },
             ),
@@ -1057,6 +1072,80 @@ def test_kubernetes_cancellation_settles_without_repeating_the_effect(
     infrastructure: KubernetesFixture,
 ) -> None:
     lifecycle.test_native_cancellation_settles_without_repeating_the_effect(infrastructure)
+
+
+_SYMLINK_PROBE = """import json,os
+from pathlib import Path
+workspace,link=Path('/workspace'),Path('/workspace-link')
+print(json.dumps({'workspace_is_directory':workspace.is_dir() and not workspace.is_symlink(),
+ 'workspace_is_mount':os.path.ismount(workspace),
+ 'link_resolves_to_workspace':link.is_symlink() and link.resolve()==workspace,
+ 'sandbox_is_mount':os.path.ismount('/sandbox')}))
+"""
+
+
+def test_kubernetes_symlink_workspace_image_runs_without_its_working_directory(
+    infrastructure: KubernetesFixture,
+) -> None:
+    """The driver gives every worker the same workspace mount, whatever the image names."""
+    fixture = infrastructure
+    # The same provider, policy and limits admit the parent image.
+    accepted_policy = fixture.qualify_policy()
+    name, sandbox_id = fixture.create_probe(fixture.symlink_image)
+    try:
+        ready = fixture.control.wait_ready(name, workspace=WORKSPACE, timeout_seconds=240)
+        assert ready.id == sandbox_id
+        # The driver does not read the image's working directory: it mounts its workspace
+        # claim at /sandbox and registers /sandbox as the main process's working directory,
+        # so the link selects nothing.
+        pod = json.loads(fixture.outside("get", "pod", f"{WORKSPACE}--{name}", "--output=json"))
+        (agent,) = [item for item in pod["spec"]["containers"] if item["name"] == "agent"]
+        mounts = {mount["mountPath"]: mount["name"] for mount in agent["volumeMounts"]}
+        (claim,) = [
+            volume["persistentVolumeClaim"]["claimName"]
+            for volume in pod["spec"]["volumes"]
+            if volume["name"] == "workspace"
+        ]
+        assert mounts["/sandbox"] == "workspace"
+        assert claim == f"workspace-{WORKSPACE}--{name}"
+        assert not {"/workspace", "/workspace-link"} & set(mounts)
+        assert "workingDir" not in agent
+        observation = fixture.exec(name, [PYTHON, "-I", "-B", "-c", _SYMLINK_PROBE])
+        assert observation.exit_code == 0, observation.stderr
+        checks = json.loads(observation.stdout)
+        # /workspace is the image's own directory, where the worker launcher changes to.
+        assert checks == {
+            "workspace_is_directory": True,
+            "workspace_is_mount": False,
+            "link_resolves_to_workspace": True,
+            "sandbox_is_mount": True,
+        }, checks
+        assert not fixture.provider.observations
+        _evidence(
+            fixture,
+            {
+                "drill_id": "kubernetes-workspace-symlink.v1",
+                "symlink_image": fixture.symlink_image,
+                "sandbox_id": sandbox_id,
+                "positive_control_policy_sha256": accepted_policy,
+                "agent_mounts": mounts,
+                "agent_working_directory": agent.get("workingDir"),
+                "workspace_claim": {"claim": claim, "mount_path": "/sandbox"},
+                "worker_checks": checks,
+                "provider_requests": 0,
+            },
+        )
+    finally:
+        fixture.revoke_probes()
+
+
+def test_kubernetes_new_worker_image_and_rotated_credential_after_restart(
+    infrastructure: KubernetesFixture,
+) -> None:
+    try:
+        lifecycle.test_native_new_worker_image_and_rotated_credential_after_restart(infrastructure)
+    finally:
+        infrastructure.keep_credential()
 
 
 def test_kubernetes_migrated_project_serves_through_the_operator_manifest(

@@ -72,6 +72,8 @@ _SOURCES = (
     "deploy/tests/checkpoint_transport_integration.py",
     "packages/audit/tests/tls_fixture.py",
     "images/worker/candidate/kubernetes-controller.Dockerfile",
+    "images/worker/candidate/symlink-workspace.Dockerfile",
+    "images/worker/candidate/replacement-worker.Dockerfile",
     "reference-platform/cluster/push-image.sh",
 )
 _LAUNCH = """import json,sys,urllib.error,urllib.request
@@ -167,6 +169,54 @@ def images(arguments: argparse.Namespace) -> None:
         ]
     )
     identifiers["controller"] = (output / "controller-image-id").read_text().strip()
+    # The two derived worker images of the Docker qualification: a workspace that is a
+    # symbolic link, and a distinct image identity with unchanged contents.
+    for name, dockerfile, context in (
+        ("symlink_workspace", "symlink-workspace.Dockerfile", ROOT),
+        ("replacement_worker", "replacement-worker.Dockerfile", ROOT / "images/worker/candidate"),
+    ):
+        native.run(
+            [
+                "docker",
+                "buildx",
+                "build",
+                "--load",
+                "--network",
+                "none",
+                "--file",
+                str(ROOT / "images/worker/candidate" / dockerfile),
+                "--build-arg",
+                "WORKER_IMAGE=" + arguments.worker_image,
+                "--iidfile",
+                str(output / f"{name}-image-id"),
+                str(context),
+            ]
+        )
+        identifiers[name] = (output / f"{name}-image-id").read_text().strip()
+    configured = json.loads(
+        _output(["docker", "image", "inspect", identifiers["symlink_workspace"]])
+    )
+    symlink = _output(
+        [
+            "docker",
+            "run",
+            "--rm",
+            "--network",
+            "none",
+            "--read-only",
+            "--cap-drop",
+            "ALL",
+            "--entrypoint",
+            _PYTHON,
+            identifiers["symlink_workspace"],
+            "-I",
+            "-c",
+            "from pathlib import Path;p=Path('/workspace-link');"
+            "assert p.is_symlink() and p.resolve()==Path('/workspace');print('symlink')",
+        ]
+    ).strip()
+    if configured[0]["Config"]["WorkingDir"] != "/workspace-link" or symlink != "symlink":
+        raise RuntimeError("The symbolic link workspace image has no linked working directory")
     interpreter = _output(
         [
             "docker",
@@ -192,6 +242,9 @@ def images(arguments: argparse.Namespace) -> None:
         ("worker", "heartwood-worker"),
         ("gateway", "openshell-gateway"),
         ("controller", "heartwood-qualification-controller"),
+        ("symlink_workspace", "heartwood-symlink-workspace"),
+        # The replacement shares the worker's repository, as a new image of one deployment.
+        ("replacement_worker", "heartwood-worker"),
     ):
         # The registry names a repository after the image, so each image gets its own tag.
         tag = f"{repository}:qualification-{identifiers[name].removeprefix('sha256:')[:12]}"
@@ -504,6 +557,11 @@ def _fixture_objects(cluster: Cluster, launched: dict[str, Any], built: dict[str
                     "HW_GATEWAY_IMAGE": built["image_references"]["gateway"],
                     "HW_SUPERVISOR_IMAGE": built["image_references"]["supervisor"],
                     "HW_SANDBOX_IMAGE": built["image_references"]["sandbox"],
+                    "HW_SYMLINK_WORKSPACE_IMAGE": built["image_references"]["symlink_workspace"],
+                    # The manifest names a worker image by its digest in the worker's repository.
+                    "HW_REPLACEMENT_WORKER_IMAGE": built["image_references"][
+                        "replacement_worker"
+                    ].partition("@")[2],
                     "HW_OPENSHELL_ENDPOINT": launched["openshell_endpoint"],
                     "HW_PROVIDER_HOST": host,
                     "HW_WORKER_INTERPRETER": built["worker_interpreter"],

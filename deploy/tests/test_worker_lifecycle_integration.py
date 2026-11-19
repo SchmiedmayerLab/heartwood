@@ -100,6 +100,14 @@ def _worker(application: SessionGateway) -> tuple[str, str]:
     return str(attempt.intent.attempt_id), "hw-" + attempt.intent.attempt_id.hex[:16]
 
 
+def _running_image(_fixture: NativeFixture, worker: str, sandbox_id: str) -> str:
+    """Return the image identifier of the worker's container."""
+    observed = json.loads(
+        command(["docker", "inspect", f"openshell-default--{worker}-{sandbox_id}"])
+    )[0]
+    return str(observed["Image"])
+
+
 def _read(fixture: NativeFixture, worker: str, path: str) -> str:
     observed = fixture.control.exec(
         worker,
@@ -317,10 +325,7 @@ def test_native_new_worker_image_and_rotated_credential_after_restart(
     assert attempt.runtime is not None
     replacement, worker = _worker(restarted)
     assert replacement != earlier
-    observed = json.loads(
-        command(["docker", "inspect", f"openshell-default--{worker}-{attempt.runtime.sandbox_id}"])
-    )[0]
-    assert observed["Image"] == replacement_image
+    assert _running_image(fixture, worker, attempt.runtime.sandbox_id) == replacement_image
     _approve(restarted, _pending(restarted))
     _settle(restarted)
     assert _read(fixture, worker, "/workspace/step.txt") == "second"

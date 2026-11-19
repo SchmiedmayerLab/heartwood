@@ -303,7 +303,8 @@ Unattested evidence shows internal consistency, not origin.
 `deploy/qualify-kubernetes-worker.py` runs the managed worker on the OpenShell Kubernetes driver of the kind cluster that the Kubernetes qualification workflow creates.
 The workflow builds the worker and runtime images with the script the Docker qualification uses, and packages the gateway from the same verified build artifacts.
 It pushes the worker, gateway and controller images to the cluster's registry and copies the supervisor and sandbox runtime images of the OpenShell release there under their digests, and the cluster pulls each by digest.
-The platform chart is installed with that gateway image, with that registry as `images.openshellRepository`, and with the worker image as the staging image.
+It also builds the symbolic link workspace and replacement worker images of the Docker qualification from the worker image and pushes them there.
+The platform chart is installed with that gateway image, with that registry as `images.openshellRepository`, and with the worker and replacement worker images as `sessions.stagingImages`.
 
 The run launches one session through the platform's control service, which provisions the session namespace, its sandbox gateway and the gateway ServiceAccount.
 The cases run in a controller pod that stands in for the session's Heartwood gateway pod.
@@ -323,7 +324,8 @@ One provider registration and one policy probe serve every case of a run, and ea
 | `test_kubernetes_admission_refuses_an_added_network_policy` | A further NetworkPolicy that allows workload pods egress is refused at admission, and the worker is deleted |
 | `test_kubernetes_staging_requires_the_default_deny_policy` | Without the default-deny policy, staging creates nothing |
 | `test_kubernetes_staging_transfers_a_large_input_within_the_request_limit` | Staging of one 64 MiB input completes within the 60 seconds that one cluster request may take |
-| Restart, cancellation, replacement and migration cases | The Docker qualification's case functions `test_native_gateway_restart_reconciles_the_session`, `test_native_cancellation_settles_without_repeating_the_effect`, `test_native_revoked_worker_is_replaced_for_the_next_command` and `test_native_migrated_project_serves_through_the_operator_manifest`, run on this driver with absence read from the cluster |
+| `test_kubernetes_symlink_workspace_image_runs_without_its_working_directory` | A worker image whose working directory is a symbolic link to `/workspace` starts with the policy that admits the parent image, because this driver does not read the image's working directory. The workload container mounts the driver's workspace claim at `/sandbox` and nothing at `/workspace` or `/workspace-link`, and `/workspace` is the image's own directory, which the worker launcher uses as its working directory. The Docker driver refuses such an image, because there the image's working directory is the workspace |
+| Restart, cancellation, replacement, image change and migration cases | The Docker qualification's case functions `test_native_gateway_restart_reconciles_the_session`, `test_native_cancellation_settles_without_repeating_the_effect`, `test_native_revoked_worker_is_replaced_for_the_next_command`, `test_native_new_worker_image_and_rotated_credential_after_restart` and `test_native_migrated_project_serves_through_the_operator_manifest`, run on this driver with absence read from the cluster and the running image read from the workload pod |
 
 The run writes `qualification.json` with the fields of the [native qualification evidence](#native-qualification-evidence) and these differences:
 
@@ -332,7 +334,7 @@ The run writes `qualification.json` with the fields of the [native qualification
 | `qualification_kind`, `driver` | `synthetic-kubernetes` and `openshell-kubernetes` |
 | `cluster` | Kubernetes version, network plugin image, and each node's architecture, kernel, operating system image, container runtime and kubelet version |
 | `kubernetes_identities` | The session, its namespace with its UID, the UID of `kube-system`, and the gateway ServiceAccount |
-| `image_references` | The registry references, by digest, under which the cluster pulled the worker, gateway, controller, supervisor and sandbox runtime images |
+| `image_references` | The registry references, by digest, under which the cluster pulled the worker, gateway, controller, supervisor and sandbox runtime images, and the symbolic link workspace and replacement worker images |
 | `session_removed` | Whether the session namespace was gone after the run |
 | `platform_requirements` | Each value the Docker run reads from the worker container that a pod does not show, with the platform requirement that takes its place |
 | `cases_not_run` | The cases of the Docker run that this run does not repeat, each with the reason |
@@ -382,6 +384,7 @@ The [Kubernetes driver qualification](#kubernetes-driver-qualification) records 
 | `kubernetes-admission-added-policy.v1` | `test_kubernetes_admission_refuses_an_added_network_policy` | A worker whose pods an added NetworkPolicy allows egress is refused and deleted before any model request |
 | `kubernetes-staging-default-deny.v1` | `test_kubernetes_staging_requires_the_default_deny_policy` | Without the default-deny policy, staging creates nothing |
 | `kubernetes-staging-transfer.v1` | `test_kubernetes_staging_transfers_a_large_input_within_the_request_limit` | A 64 MiB input is staged within the time one cluster request may take, and its claims are removed |
+| `kubernetes-workspace-symlink.v1` | `test_kubernetes_symlink_workspace_image_runs_without_its_working_directory` | A symbolic-link working directory in the image selects no workspace: the driver mounts its workspace claim at `/sandbox`, nothing is mounted at the link or at `/workspace`, and the link resolves to the image's own `/workspace` |
 
 Two prompt-injection drills run outside native qualification:
 

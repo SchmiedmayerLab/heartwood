@@ -126,17 +126,19 @@ jobs:
           {
             echo "GATEWAY_IMAGE=$(jq --raw-output .image_references.gateway "${images}")"
             echo "WORKER_IMAGE=$(jq --raw-output .image_references.worker "${images}")"
+            echo "STAGING_IMAGES=$(jq --compact-output \
+              '[.image_references.worker, .image_references.replacement_worker]' "${images}")"
             echo "OPENSHELL_REPOSITORY=$(jq --raw-output .openshell_repository "${images}")"
           } >> "${GITHUB_ENV}"
       # Sessions run the built gateway, their pods pull the OpenShell release images from
-      # the cluster's registry, and staging pods run the worker image by digest.
+      # the cluster's registry, and staging pods run the worker image or its replacement.
       - name: Install the platform chart
         run: >-
           bash reference-platform/cluster/install-chart.sh heartwood
           --set "images.platformServices=${PLATFORM_SERVICES_IMAGE}"
           --set "images.openshellGateway=${GATEWAY_IMAGE}"
           --set "images.openshellRepository=${OPENSHELL_REPOSITORY}"
-          --set "sessions.stagingImage=${WORKER_IMAGE}"
+          --set-json "sessions.stagingImages=${STAGING_IMAGES}"
       - name: Test the installed chart
         working-directory: reference-platform/services
         run: |

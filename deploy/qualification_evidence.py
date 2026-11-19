@@ -112,6 +112,8 @@ EXPECTED_CASES = {
             "test_kubernetes_gateway_restart_reconciles_the_session[settled]",
             "test_kubernetes_gateway_restart_reconciles_the_session[pending]",
             "test_kubernetes_cancellation_settles_without_repeating_the_effect",
+            "test_kubernetes_symlink_workspace_image_runs_without_its_working_directory",
+            "test_kubernetes_new_worker_image_and_rotated_credential_after_restart",
             "test_kubernetes_migrated_project_serves_through_the_operator_manifest",
         )
     ),
@@ -148,9 +150,6 @@ KUBERNETES_CASES_NOT_RUN = {
     "hostile approved action, expired provider credential and telemetry outage": (
         "sandbox supervisor behavior that does not depend on the compute driver; "
         "the Docker run qualifies it"
-    ),
-    "symlink workspace image and replacement worker image": (
-        "need further images in the cluster registry"
     ),
     "outside effects, two workers and advisory specialist": (
         "gateway behavior that does not depend on the compute driver; the Docker run qualifies it"
