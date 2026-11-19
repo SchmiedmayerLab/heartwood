@@ -101,6 +101,8 @@ This section describes the worker of the Docker reference driver, `driver = "ope
 The worker is the OpenHands agent server from the Heartwood worker image, started by `images/worker/launch.py` as user `10001`.
 Before starting the server it registers the image's own verified advisory specialists.
 It runs in an OpenShell sandbox created through OpenShell's Docker or Kubernetes driver, with `/inputs` and `/skills` mounted read-only and `/workspace` as its working directory.
+With `openshell-kubernetes`, the driver mounts the sandbox's workspace claim at `/sandbox`, and `/workspace` is the image's own directory on the container's writable layer.
+Files the worker writes to `/workspace` on this driver are lost when the container restarts.
 The sandbox has no network of its own (`network=none`); its only routes are those the OpenShell policy and supervisor permit.
 
 The gateway reaches the worker through an `openshell forward service` tunnel on loopback and authenticates every request with a per-attempt `SESSION_API_KEY`.

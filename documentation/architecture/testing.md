@@ -340,7 +340,8 @@ The run writes `qualification.json` with the fields of the [native qualification
 | `cases_not_run` | The cases of the Docker run that this run does not repeat, each with the reason |
 
 The fields `records_build`, `controller_socket_group`, `network_retained` and `records_service` are absent.
-Each worker case retains `worker-pods.json` in place of `worker-container.json`: the driver name, the sandbox identifier, the UIDs of the attempt's volume claims, and the pod, policy and namespace values that admission read, recorded before admission decided.
+A worker case in which the adapter inspected a worker retains `worker-pods.json` in place of `worker-container.json`: the driver name, the sandbox identifier, the UIDs of the attempt's volume claims, and the pod, policy and namespace values that admission read, recorded before admission decided, so a refused worker is recorded too.
+The other cases retain none: they launch no worker or end before admission, start the symbolic link image as a probe sandbox outside the adapter, or, in the migration case, run the gateway as a separate process.
 `cluster.json` holds the cluster record, the namespace labels, the names of the NetworkPolicies and the image pull events of the session namespace.
 A run passes under the conditions of the Docker run that apply to it, and only when the session namespace was removed.
 The evidence of this run is retained with the workflow run and is not attested.

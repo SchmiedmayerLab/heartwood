@@ -4,11 +4,14 @@
 
 """Run the native-worker cases on the Kubernetes driver of a kind cluster.
 
-`images` verifies the gateway artifacts, builds the gateway and controller images and
-pushes them and the worker image to the cluster's registry, and copies the supervisor and
-sandbox runtime images of the OpenShell release there under their digests. The platform
-chart is then installed with the references and the repository that `images` wrote to
-`images.json`.
+`images` verifies the gateway artifacts, builds the gateway and controller images and the
+two derived worker images of the Docker qualification (a symbolic link workspace image and
+a replacement worker image), and checks that the symbolic link image's working directory is
+a link to `/workspace`. It pushes these images and the worker image to the cluster's
+registry, the replacement worker image into the worker's repository, and copies the
+supervisor and sandbox runtime images of the OpenShell release there under their digests.
+The platform chart is then installed with the references and the repository that `images`
+wrote to `images.json`.
 `run` launches one session through the platform's control service, runs the cases in a
 pod that holds that session's gateway credentials, and retains the evidence.
 """

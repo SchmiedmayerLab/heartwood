@@ -161,6 +161,7 @@ The reference adapter needs an operator-controlled Docker engine; it does not ha
 
 With `driver = "openshell-kubernetes"`, the worker of a session runs as pods that the OpenShell Kubernetes driver creates in one namespace.
 Heartwood reads those pods, their NetworkPolicies and the namespace through the Kubernetes API before it admits a worker; the [accepted values](../architecture/system.md#kubernetes-worker-admission) are listed with the Docker values.
+The worker's `/workspace` on this driver does not persist across a container restart ([Managed Native Worker](../architecture/system.md#managed-native-worker)).
 The platform provides what follows.
 The reference platform chart in `reference-platform/chart` provides each namespace and gateway item for a session, and the [Kubernetes driver qualification](../architecture/testing.md#kubernetes-driver-qualification) runs against it on a kind cluster.
 
