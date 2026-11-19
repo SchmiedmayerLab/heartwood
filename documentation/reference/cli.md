@@ -224,8 +224,7 @@ heartwood identity token \
 | `--issuer URL` | OpenID Connect issuer; its discovery document must name a device authorization endpoint and a token endpoint on the same origin |
 | `--client-id ID` | The public client registered for this command |
 | `--scope SCOPE` | Scope to request; repeat for several. The project's scope adds the gateway's client to the token's audience |
-| `--ca-file PATH` | PEM certificate authorities that replace the system trust store |
-| `--allow-plain-http` | Permit an `http` issuer beyond loopback; the token then crosses the network unencrypted |
+| `--ca-file PATH` | PEM certificate authorities, such as the platform CA, that replace the default certificate bundle |
 | `--timeout SECONDS` | Longest wait for the sign-in; default 600, and the provider's code lifetime also applies |
 
 The command prints the verification address and the user code on standard error, polls at the interval the provider names, and prints the access token alone on standard output.

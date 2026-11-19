@@ -24,12 +24,12 @@ from contextlib import contextmanager
 from typing import Any
 from urllib.parse import parse_qs, quote, urlencode, urljoin, urlsplit
 
-from kube import Cluster
+from kube import PROBE_CA, Cluster
 
 SESSIONS = "heartwood-sessions"
 PLATFORM = "heartwood-platform"
 CONTROL = "http://heartwood-control.heartwood-platform.svc.cluster.local:8080"
-KEYCLOAK = "http://keycloak.heartwood-platform.svc.cluster.local:8080"
+KEYCLOAK = "https://keycloak.heartwood-platform.svc.cluster.local:8443"
 REALM = f"{KEYCLOAK}/realms/heartwood/protocol/openid-connect"
 FIRST = "6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0001"
 SECOND = "6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0002"
@@ -60,10 +60,16 @@ def probe(cluster: Cluster, name: str, image: str) -> Iterator[str]:
                         "allowPrivilegeEscalation": False,
                         "capabilities": {"drop": ["ALL"]},
                     },
-                    "volumeMounts": [{"name": "scratch", "mountPath": "/scratch"}],
+                    "volumeMounts": [
+                        {"name": "scratch", "mountPath": "/scratch"},
+                        {"name": "platform-ca", "mountPath": "/etc/platform-ca"},
+                    ],
                 }
             ],
-            "volumes": [{"name": "scratch", "emptyDir": {"medium": "Memory"}}],
+            "volumes": [
+                {"name": "scratch", "emptyDir": {"medium": "Memory"}},
+                {"name": "platform-ca", "configMap": {"name": PROBE_CA}},
+            ],
         },
     }
     account = {
@@ -127,6 +133,9 @@ def curl(cluster: Cluster, pod: str, *arguments: str, text_input: str = "") -> s
         "--show-error",
         "--max-time",
         "60",
+        # Keycloak is verified against the platform CA alone.
+        "--cacert",
+        "/etc/platform-ca/ca.crt",
         *arguments,
         text_input=text_input,
     )

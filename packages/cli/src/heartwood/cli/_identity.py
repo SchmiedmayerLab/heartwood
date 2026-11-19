@@ -56,12 +56,6 @@ def configure_identity(parser: argparse.ArgumentParser) -> None:
     )
     token.add_argument("--ca-file", type=Path, help="PEM certificate authorities for the provider.")
     token.add_argument(
-        "--allow-plain-http",
-        action="store_true",
-        help="Permit an http issuer beyond loopback; the token then crosses the network "
-        "unencrypted.",
-    )
-    token.add_argument(
         "--timeout",
         type=float,
         default=600.0,
@@ -79,7 +73,6 @@ def handle_identity(args: argparse.Namespace) -> int:
                 client_id=args.client_id,
                 scopes=args.scope,
                 timeout_seconds=args.timeout,
-                allow_plain_http=args.allow_plain_http,
             )
     except IdentityTokenError as error:
         print(f"Sign-in failed: {error}", file=sys.stderr)
@@ -105,7 +98,6 @@ def device_access_token(
     client_id: str,
     scopes: list[str],
     timeout_seconds: float,
-    allow_plain_http: bool = False,
 ) -> str:
     """Return an access token after the person approves the device code in a browser."""
     parts = urlsplit(issuer)
@@ -118,13 +110,10 @@ def device_access_token(
         or parts.fragment
     ):
         raise IdentityTokenError("the issuer is an http(s) URL without credentials or query")
-    if not allow_plain_http:
-        try:
-            require_protected_transport(issuer)
-        except ValueError:
-            raise IdentityTokenError(
-                "the issuer must use HTTPS or loopback unless --allow-plain-http is given"
-            ) from None
+    try:
+        require_protected_transport(issuer)
+    except ValueError:
+        raise IdentityTokenError("the issuer must use HTTPS or loopback") from None
     origin = f"{parts.scheme}://{parts.netloc}".lower()
     document = _json(http, "GET", f"{issuer.rstrip('/')}/.well-known/openid-configuration")
     if document.get("issuer") != issuer:

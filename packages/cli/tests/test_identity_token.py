@@ -221,8 +221,6 @@ def test_device_sign_in_reports_unusable_provider_answers(
         ("http://id.example.test/realms/research", (), "HTTPS or loopback"),
         ("ftp://id.example.test", (), "http(s) URL"),
         ("https://user:secret@id.example.test", (), "http(s) URL"),
-        # With the opt-in the request is made; the synthetic provider names its own issuer.
-        ("http://id.example.test/realms/research", ("--allow-plain-http",), "another issuer"),
     ],
 )
 def test_device_sign_in_requires_a_protected_issuer(
