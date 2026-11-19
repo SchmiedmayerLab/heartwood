@@ -217,7 +217,7 @@ The inference endpoint must enforce approved models and tenant scope itself; the
 
 #### Kubernetes Driver
 
-With `driver = "openshell-kubernetes"` the table omits the three `docker_` keys, adds five keys, and limits the length of `workspace`:
+With `driver = "openshell-kubernetes"` the table omits the three `docker_` keys, adds six keys, and limits the length of `workspace`:
 
 ```toml
 [worker]
@@ -225,6 +225,7 @@ driver = "openshell-kubernetes"
 kubectl_cli = "/opt/heartwood/bin/kubectl"
 kubeconfig = "/etc/heartwood/native/kubeconfig"
 namespace = "research-sandboxes"
+image_repository = "registry.example.invalid/heartwood/worker"
 supervisor_image_digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
 sandbox_image_digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
 ```
@@ -234,6 +235,7 @@ sandbox_image_digest = "sha256:0000000000000000000000000000000000000000000000000
 | `kubectl_cli` | Absolute executable path of `kubectl` |
 | `kubeconfig` | Absolute path of the `kubectl` configuration for the cluster; accessible by its owner only |
 | `namespace` | Namespace in which the sandbox gateway creates the session's pods; lowercase letters, digits, and hyphens |
+| `image_repository` | Registry repository of the worker image, with its registry host and without a tag or digest; pods reference the image as `<image_repository>@<image_digest>` |
 | `supervisor_image_digest` | `sha256:` digest of the OpenShell supervisor image |
 | `sandbox_image_digest` | `sha256:` digest of the OpenShell sandbox runtime image |
 | `workspace` | At most 19 characters, the limit of the OpenShell command-line tool with this driver |

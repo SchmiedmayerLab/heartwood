@@ -91,11 +91,15 @@ It differs from Docker inspection in these points:
   The driver sets none on the init containers and the supervisor pod.
 - Admission reads the pods once.
   A principal with `pods/ephemeralcontainers`, `pods/exec`, or `pods/attach` in the namespace, or one that can patch pods, can change or enter a pod afterwards.
+- [Staging](../architecture/system.md#kubernetes-worker-staging) runs in a pod, which cannot disable its own network.
+  The gateway requires NetworkPolicies that select the staging pod, cover ingress and egress, and allow nothing, and it relies on the cluster's network plugin to enforce them.
+- The staging pod runs as user `10001` with every capability dropped, where the Docker preparation container runs as user `0` with `FOWNER`.
 - Admission does not compare container commands, node placement, or tolerations.
 - The attempt key is a plain environment value in the workload pod and in its Sandbox resource.
   Every principal that can read them can read the key, as with `docker inspect` on Docker.
 
 The platform must therefore provide an enforcing network plugin, a kubelet process limit, nodes on cgroup version 2 with a default AppArmor or SELinux confinement for containers, and access rules for the sandbox namespace.
+For staging it must also provide, in the sandbox namespace, a service account `hw-staging` without permissions, a storage class `heartwood-attempt`, and NetworkPolicies that deny the staging pods all traffic.
 
 An uncertain revocation keeps the attempt fenced and the session's writer ownership retained until outside reconciliation observes that its resources are gone.
 After a recorded revocation, the next task can start a replacement worker in a new sandbox; it shares no credential, placeholder, conversation memory or workspace file with the revoked worker.
