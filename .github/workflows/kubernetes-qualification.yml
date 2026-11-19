@@ -58,27 +58,34 @@ jobs:
     env:
       KIND_VERSION: v0.33.0
       KIND_SHA256: aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d
+      KUBECTL_VERSION: v1.37.0
+      KUBECTL_SHA256: 6129359f4e1f3848a5572ccb0b26cf28b8ca08cef38c95a765b2f64a2c961a2f
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
         with:
           persist-credentials: false
           submodules: true
-      - name: Install kind
+      - name: Install kind and kubectl
         run: |
           mkdir -p "${RUNNER_TEMP}/bin"
           curl --fail --silent --show-error --location --retry 3 --output "${RUNNER_TEMP}/bin/kind" \
             "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64"
-          echo "${KIND_SHA256}  ${RUNNER_TEMP}/bin/kind" | sha256sum --check
-          chmod +x "${RUNNER_TEMP}/bin/kind"
+          curl --fail --silent --show-error --location --retry 3 --output "${RUNNER_TEMP}/bin/kubectl" \
+            "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+          printf '%s  %s\n' "${KIND_SHA256}" "${RUNNER_TEMP}/bin/kind" \
+            "${KUBECTL_SHA256}" "${RUNNER_TEMP}/bin/kubectl" | sha256sum --check
+          chmod +x "${RUNNER_TEMP}/bin/kind" "${RUNNER_TEMP}/bin/kubectl"
           echo "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
       - name: Create the kind cluster with Calico and Agent Sandbox
         run: bash reference-platform/cluster/create-cluster.sh heartwood
-      # Every later cluster result counts only when both controls pass.
       - name: Require network policy enforcement
         run: >-
           bash reference-platform/cluster/network-policy-controls.sh heartwood
           test-results/kubernetes-qualification
+      - name: Export cluster logs
+        if: failure()
+        run: kind export logs test-results/kubernetes-qualification/kind-logs --name heartwood
       - name: Retain the cluster evidence
         if: always()
         uses: actions/upload-artifact@v7
