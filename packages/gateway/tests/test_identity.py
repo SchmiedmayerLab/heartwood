@@ -32,6 +32,7 @@ from cryptography.hazmat.primitives.asymmetric import ec, rsa
 from cryptography.x509.oid import NameOID
 from pydantic import ValidationError
 
+from heartwood.core_adapter.external_actions import ExternalActionError
 from heartwood.gateway import (
     GatewayAsgiApp,
     IdentityAccess,
@@ -51,11 +52,14 @@ from heartwood.gateway._access import (
     TokenExchangeRefusedError,
 )
 from heartwood.gateway._mcp_policy import McpDestination, McpServerError
+from heartwood.gateway._mcp_servers import McpServerManager
 from heartwood.gateway.platform_fakes import (
     DATA_AUDIENCE,
+    JOBS_AUDIENCE,
     OTHER_PROJECT_ID,
     PROJECT_ID,
     FakeDataService,
+    FakeJobService,
     FakeTokenIssuer,
     serve,
 )
@@ -1796,6 +1800,53 @@ def test_a_research_service_receives_the_exchanged_token_of_its_own_project_and_
     stored = b"".join(path.read_bytes() for path in workspace.rglob("*") if path.is_file())
     for secret in (*provider.issued, entered):
         assert secret.encode() not in stored
+
+
+def test_a_reviewed_call_waits_for_the_sign_in_its_service_token_needs(tmp_path: Path) -> None:
+    provider = _Provider()
+    issuer = FakeTokenIssuer()
+    provider.exchanged = lambda _audience: issuer.exchange(
+        audience=JOBS_AUDIENCE, project_id=PROJECT_ID, subject=_SUBJECT
+    )
+    clock = _Clock()
+    access = _access(tmp_path, provider, clock=clock)
+    workspace = tmp_path / "research"
+    workspace.mkdir()
+    gateway = SessionGateway(project=ProjectContext(workspace), env={}, backend_id="deterministic")
+
+    with serve(FakeJobService(issuer).app) as origin:
+        destination = _destination(
+            origin, service_id="synthetic-jobs", tools=["create_task"], observation_tool="get_task"
+        )
+        servers = McpServerManager(
+            config_store=gateway.config_store,
+            credential_store=gateway.credential_store,
+            destinations=(destination,),
+            worker_available=True,
+            service_tokens=access.service_token,
+        )
+        try:
+            _sign_in(access, provider)
+            servers.add("jobs", "Synthetic jobs", f"{origin}/mcp", None, False)
+            tested = cast(dict[str, Any], servers.test("jobs", None, False))
+            digest = next(
+                tool["sha256"] for tool in tested["tools"] if tool["name"] == "create_task"
+            )
+            servers.select_tools("jobs", [("create_task", digest)])
+            servers.set_enabled("jobs", True)
+            (bound,) = servers.bound_tools()
+            servers.require_current(bound)
+
+            # The provider refuses the next exchange, then the sign-in ends.
+            clock.now += 100
+            provider.services.clear()
+            with pytest.raises(ExternalActionError, match=r"issued no token"):
+                servers.require_current(bound)
+            clock.now += 3600
+            with pytest.raises(ExternalActionError, match=r"waits until the researcher signs in"):
+                servers.require_current(bound)
+        finally:
+            gateway.stop()
 
 
 def test_a_destination_with_a_token_exchange_has_no_token_without_identity(tmp_path: Path) -> None:

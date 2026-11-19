@@ -300,6 +300,9 @@ SPDX-License-Identifier: MIT
 **The Update Framework (TUF)**
 : A signed metadata system that protects software distribution against repository compromise, rollback, freeze, and artifact-substitution attacks.
 
+**Token exchange**
+: An OAuth grant in which a client presents one token and receives another for a named audience; a hosted gateway uses it to obtain a platform service's token for the signed-in researcher.
+
 **uv**
 : A Python package and environment manager used by Heartwood to install locked analysis dependencies in a separate environment.
 

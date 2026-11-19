@@ -351,6 +351,28 @@ private_address = false
 | `max_result_bytes` | Optional result limit from 1024 to 32768 bytes; default 16384 |
 | `call_timeout_seconds` | Optional limit for one request, from 1 to 300 seconds; default 30 |
 | `private_address` | Optional; `true` permits an RFC 1918 or unique local address for this exact origin, such as a cluster service; default `false`. Link-local and metadata addresses stay refused, and HTTPS stays required except on loopback. |
+| `token_exchange` | Optional table with `scope` and `audience`; the gateway then obtains this service's token by exchange for the signed-in researcher's token; requires `[identity]` |
+
+A destination with a `token_exchange` table takes no entered, stored or operator-supplied token.
+
+```toml
+[[mcp_destinations]]
+service_id = "research-data"
+origin = "https://data.example.invalid"
+tools = ["get_object"]
+observation_tool = "get_operation"
+
+[mcp_destinations.token_exchange]
+scope = "svc-data"
+audience = "heartwood-data"
+```
+
+| Key | Requirement |
+|---|---|
+| `scope` | The one scope the identity provider requires for this service |
+| `audience` | The service's audience at the identity provider |
+
+[Service Tokens](../operate/security.md#service-tokens) describes the exchange.
 
 A platform job service adds an `operations` table to its entry; see [Platform Job Operations](../operate/platform-contract.md#platform-job-operations).
 

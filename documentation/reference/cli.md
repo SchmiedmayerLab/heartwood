@@ -201,11 +201,36 @@ These commands never show private project state and exit nonzero for unavailable
 | `heartwood audit verify-checkpoint [--public-key KEY] BUNDLE` | Verify a bundle with the active signer profile or an independently trusted key |
 | `heartwood signer init-local [--directory DIR] [--profile ID] [--key-version V]` | Create the local fallback signer outside the project; defaults `local-development` and `v1` |
 | `heartwood signer serve-local [--registry PATH] [--profile ID] [--private-key PATH]` | Run that signer on its owner-only Unix socket |
+| `heartwood identity token --issuer URL --client-id ID [--scope SCOPE ...]` | Sign in with a device code and print an access token for a hosted gateway |
 
 Checkpoints never replace an existing output, and private signing keys are never command arguments or project state.
 See [Audit Checkpoints and Retention](../operate/audit-checkpoints.md).
 
 The operator deployment manifest that `gateway serve --deployment` and the migration commands read is specified in [Deployment Manifest](configuration.md#deployment-manifest).
+
+### Identity Token
+
+`heartwood identity token` signs a person in from a terminal with the OAuth device authorization grant, as a public client of the identity provider.
+
+```bash
+heartwood identity token \
+  --issuer https://id.example.org/realms/research \
+  --client-id heartwood-cli \
+  --scope openid --scope project-demo
+```
+
+| Option | Meaning |
+|---|---|
+| `--issuer URL` | OpenID Connect issuer; its discovery document must name a device authorization endpoint and a token endpoint on the same origin |
+| `--client-id ID` | The public client registered for this command |
+| `--scope SCOPE` | Scope to request; repeat for several. The project's scope adds the gateway's client to the token's audience |
+| `--ca-file PATH` | PEM certificate authorities that replace the system trust store |
+| `--allow-plain-http` | Permit an `http` issuer beyond loopback; the token then crosses the network unencrypted |
+| `--timeout SECONDS` | Longest wait for the sign-in; default 600, and the provider's code lifetime also applies |
+
+The command prints the verification address and the user code on standard error, polls at the interval the provider names, and prints the access token alone on standard output.
+It stores nothing, reads no project, and exits `1` without a token when the sign-in is denied, expires or the provider cannot be used.
+Send the token to a gateway with [`identity-proxy` ingress](../operate/security.md#researcher-identity) as `Authorization: Bearer`.
 
 ### Runtime Start
 

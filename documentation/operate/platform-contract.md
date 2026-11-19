@@ -293,6 +293,23 @@ Required:
 - Annotate each tool with explicit boolean `readOnlyHint`, `destructiveHint`, `idempotentHint` and `openWorldHint` values.
 - Enforce identity, quotas and dataset entitlements on every call, independently of Heartwood's approval.
 - Accept delegated or platform-held credentials that never reach model context, tool environments or exports.
+- For a hosted gateway, accept the [exchanged service token](#service-tokens) and derive the project from it.
+
+#### Service Tokens
+
+A gateway with [`identity-proxy` ingress](security.md#researcher-identity) obtains the token for a platform service by OAuth token exchange, when the service's [destination](../reference/configuration.md#mcp-destinations) declares one.
+The gateway authenticates as the project's client and sends the researcher's access token as the subject token, with the scope and the audience the manifest names for that service.
+
+| Claim | Value | The service checks |
+|---|---|---|
+| `iss` | The identity provider | Equal to its configured issuer, with the provider's signature |
+| `aud` | One audience, the service's own | Equal to its own audience |
+| `azp` | The project's client, `hw-proj-<project>` | The project it acts for, derived from this claim and never from a request field |
+| `sub` | The researcher | Membership and entitlement in that project |
+| `exp` | No later than the researcher's token | Unexpired |
+
+The service does not forward the token.
+The identity provider decides which client may request which scope and audience; a scope without its audience, an audience without its scope and another project's client are refused there.
 
 Annotations are hints from the server, not authorization, and a changed tool set requires a new review.
 
@@ -585,6 +602,8 @@ The worker proposes, the researcher decides, and the platform runs and authorize
 |---|---|---|
 | Capability not offered | No advertised support | The choice is hidden in every interface; a stored or requested choice shows [HW-SETUP-004](../reference/troubleshooting.md#hw-setup-004-capability-is-not-offered-on-this-platform) |
 | Missing or invalid launch capability | Not applicable | [HW-INGRESS-003](../reference/troubleshooting.md#gateway-ingress) |
+| Missing or refused identity with `identity-proxy` ingress | Not applicable | [HW-INGRESS-004](../reference/troubleshooting.md#gateway-ingress) |
+| Identity provider unreachable or unusable | An error, an unusable document or no answer | [HW-INGRESS-005](../reference/troubleshooting.md#gateway-ingress) |
 | Request does not match the declared route | Not applicable | [HW-INGRESS-002](../reference/troubleshooting.md#gateway-ingress) |
 | Sandbox gateway lacks a deletion capability | Its gateway info: version, compute driver and capabilities | [HW-WORKER-001](../reference/troubleshooting.md#managed-workers) |
 | Expired or rejected model credential | An authentication error | [HW-AGENT-008](../reference/troubleshooting.md#agent-runtime) |
@@ -749,12 +768,13 @@ The fakes hold synthetic data only and are not reference implementations of a pl
 | Fake | Shape | Covered behavior |
 |---|---|---|
 | Inference | OpenAI-compatible model list and streaming Chat Completions | A reply that completes an agent turn; a rejected credential, an exhausted quota, a rate limit, an unknown model and an unavailable service |
-| Token issuer | Exchanged, audience-restricted JWT access tokens with a project claim | Valid, expired, wrong-audience and wrong-project tokens |
+| Token issuer | Exchanged JWT access tokens with one audience, the project's client `hw-proj-<project>` as authorized party and the researcher as subject | Valid, expired, wrong-audience and wrong-project tokens |
 | Data service | MCP tools `list_objects`, `get_object` and `get_access_url`, returning DRS object and access URL fields | A selected object, an unselected object, another project's object, an expired access grant and an unavailable service |
 | Budget service | MCP tools `get_budgets` and `estimate_workload`, returning `heartwood.budget-observation.v1` and `heartwood.platform-estimate.v1` priced from a synthetic price sheet | Allocations changed by other work or an administrator, estimates for a whole plan or for named elements, unsupported workload kinds and unpriced runtime profiles reported as unknown cost, a prediction for another project context and an unavailable service |
 | Job service | MCP tools `create_task`, `get_task`, `cancel_task`, `describe_operations` and `propose_task`, keyed by operation identifier and returning `heartwood.platform-operation-observation.v1` with the TES task identifier as backend reference and the TES state among its limitations, the declared operations, and the proposal for a submission | Submission, status, cancellation of a named operation, status of an identifier the service never received, a lost or delayed reply that reconciles to one task, a conflicting resubmission, a denied GPU request, an exhausted budget, revoked access and a task that fails after it started |
 
-The data, job and budget services verify each token's signature, issuer, audience and expiry before a tool runs, and refuse a token for another project in the tool.
+The data, job and budget services verify each token's signature, issuer, audience and expiry before a tool runs.
+Each tool derives the project from the token's authorized party and refuses a token of another project's client.
 Their tools carry the four required annotations: submission and cancellation are not read-only, and cancellation is marked destructive.
 `running_platform_fakes()` starts the inference, data, job and budget fakes with one token issuer and returns their endpoints and service profiles.
 
@@ -789,7 +809,7 @@ It holds no credential and no credential reference.
 |---|---|
 | Destinations | Only exact listed origins. HTTPS is required except on loopback. Literal and resolved private, link-local and metadata addresses are refused before each connection, including their NAT64, IPv4-compatible and IPv4-translated forms. Private addresses are permitted only at an origin whose destination sets `private_address`, such as a cluster service. Only public addresses, and private ones with the opt-in, are permitted; link-local addresses and `fd00:ec2::/32` are always refused. Public metadata addresses, such as `168.63.129.16`, are not recognized. The client resolves the name again, so the platform's egress controls bound the connection itself. A manifest without destinations refuses every server. |
 | Redirects | The client follows a redirect only within the same origin and sends no request to another origin. |
-| Credentials | A bearer token is entered through the gateway and kept in its credential store under a binding derived from the destination's `service_id`, or supplied by the operator in the environment variable of that name, so a token is sent only to its own service. The deployment's credential backends apply. The token never reaches the worker, model context, session records or exports. |
+| Credentials | A bearer token is entered through the gateway and kept in its credential store under a binding derived from the destination's `service_id`, or supplied by the operator in the environment variable of that name, so a token is sent only to its own service. The deployment's credential backends apply. A destination that declares a `token_exchange` takes the [exchanged service token](#service-tokens) of the signed-in researcher and refuses an entered or stored token. The token never reaches the worker, model context, session records or exports. |
 | Authentication state | The gateway reads the token's expiry and refuses an expired token before sending it. A token entered with a test or a selection is kept only after the server accepted it. The service still verifies the token. |
 | Tools | A tool must be listed for its origin and accept `project_id` and `operation_id`. A test shows each tool's complete definition, the parameters the agent fills in and the definition's digest. The researcher selects a tool together with that digest, and the gateway lists the tools again and refuses a selection whose definition differs. |
 | Tool changes | Each selected tool keeps the SHA-256 of its reviewed definition. A test that lists a different definition removes the tool from the enabled set, and the gateway compares the definition again before it sends a call. A changed definition needs a new selection. |
