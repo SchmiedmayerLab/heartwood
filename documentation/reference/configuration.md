@@ -178,11 +178,10 @@ subject = "7c9e6679-7425-40de-944b-e07fc1f90ae7"
 | `subject` | The only `sub` value the gateway accepts: a letter or digit followed by at most 127 letters, digits, `_`, `.`, `:` or `-`; `gateway`, `human` and `deployment-operator` are reserved |
 | `provider_url` | Optional base URL where the gateway itself reaches the provider's discovery document, token endpoint and keys; default `issuer` |
 | `ca_file` | Optional absolute PEM file of certificate authorities that replaces the default certificate bundle for requests to the provider |
-| `allow_plain_http` | Optional; `true` permits `http` URLs to hosts other than loopback; default `false` |
 
 `issuer` and `provider_url` are `http` or `https` URLs without credentials, query or fragment.
-Both use `https`, or `http` to a loopback address, unless `allow_plain_http` is `true`.
-With `allow_plain_http`, the client secret, authorization codes and tokens cross the network between the gateway and `provider_url` unencrypted.
+Both use `https`, or `http` to a loopback address.
+A provider whose certificate comes from a private authority, such as a platform CA, is trusted through `ca_file`.
 The gateway reads `<provider_url>/.well-known/openid-configuration`, and the document's `issuer` must equal the configured `issuer`.
 The document's endpoints must lie on the origin of `issuer` or of `provider_url`.
 The gateway sends the browser to the authorization endpoint on the `issuer` origin and requests tokens and keys on the `provider_url` origin.

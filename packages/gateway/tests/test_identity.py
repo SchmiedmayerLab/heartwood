@@ -1023,11 +1023,11 @@ def test_keys_are_fetched_again_for_an_unknown_key_at_a_bounded_rate(tmp_path: P
 
 
 def test_the_gateway_reaches_the_provider_at_its_own_url(tmp_path: Path) -> None:
-    internal = "http://provider.identity.svc:8080/realms/research"
+    internal = "https://provider.identity.svc:8443/realms/research"
     provider = _Provider(provider_url=internal)
     # The provider advertises its browser-facing endpoints.
     provider.advertised = _ISSUER
-    access = _access(tmp_path, provider, provider_url=internal, allow_plain_http=True)
+    access = _access(tmp_path, provider, provider_url=internal)
 
     started = _get(access, "/identity/login")
 
@@ -1347,7 +1347,7 @@ def test_access_reads_the_client_secret_and_certificate_authority(tmp_path: Path
         {"subject": "deployment-operator"},
         {"client_secret_file": "relative/secret"},
         {"ca_file": "relative/ca.pem"},
-        {"allow_plain_http": "true"},
+        {"allow_plain_http": True},
         {"client_secret": _CLIENT_SECRET},
     ],
 )
@@ -1358,14 +1358,14 @@ def test_identity_table_rejects_unsafe_or_malformed_fields(
         _deployment(tmp_path, **fields)
 
 
-def test_identity_table_accepts_loopback_and_explicit_plain_http(tmp_path: Path) -> None:
-    internal = "http://provider.identity.svc:8080/realms/research"
+def test_identity_table_accepts_https_and_loopback_only(tmp_path: Path) -> None:
+    internal = "https://provider.identity.svc:8443/realms/research"
 
     assert _deployment(tmp_path).provider == _ISSUER
     assert _deployment(tmp_path, issuer="http://localhost:8080/realms/research").provider
-    plain = _deployment(tmp_path, provider_url=internal, allow_plain_http=True)
-    assert plain.provider == internal
-    assert "client-secret" not in repr(plain)
+    deployment = _deployment(tmp_path, provider_url=internal)
+    assert deployment.provider == internal
+    assert "client-secret" not in repr(deployment)
 
 
 def _manifest(tmp_path: Path, identity: dict[str, Any]) -> tuple[Path, Path]:

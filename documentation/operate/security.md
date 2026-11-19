@@ -291,7 +291,6 @@ A deployment with `[identity]` should therefore also configure a worker.
 - With an `http` public origin, the authorization code, the launch token, the capability, bearer tokens that clients present and the cookies cross the network between the client and the proxy unencrypted, and the cookies carry no `Secure` attribute.
 - An event stream or WebSocket that was opened with a sign-in's capability keeps delivering events after that sign-in ends, until the connection closes.
 - An unsigned token, a token signed with a shared secret, and a token signed with a key the provider does not publish are refused.
-- With `allow_plain_http` the client secret and the tokens cross the network to the provider unencrypted.
 - When the provider cannot be reached or answers with an unusable document, the request receives `HW-INGRESS-005` without the provider's text, and the gateway asks the provider for its discovery document or keys again after five seconds at the earliest.
 
 ## Model Content
