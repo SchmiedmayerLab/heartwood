@@ -364,12 +364,14 @@ def test_a_deletion_that_keeps_conflicting_leaves_the_attempt_fenced(
 ) -> None:
     runtime = kubernetes.attempt.launch(kubernetes.intent)
     requests = kubernetes.answer_deletions(
-        monkeypatch, *(kubernetes.error("INTERNAL", _CONFLICT) for _ in range(5))
+        monkeypatch, *(kubernetes.error("INTERNAL", _CONFLICT) for _ in range(7))
     )
     with pytest.raises(WorkerAttemptError, match="deletion requires reconciliation"):
         kubernetes.attempt.revoke(kubernetes.record("fenced", runtime))
-    assert len(requests) == 5
-    assert kubernetes.pauses == [0.5, 1, 2, 4]
+    assert len(requests) == 7
+    assert kubernetes.pauses == [0.5, 1, 2, 4, 8, 16]
+    # The pauses leave most of the deletion's 90 seconds to the requests themselves.
+    assert sum(kubernetes.pauses) < 45
     assert kubernetes.sandboxes.running
     assert kubernetes.removed == []
     # A later reconciliation runs the same deletion and completes it.

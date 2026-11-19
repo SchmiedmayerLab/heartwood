@@ -72,8 +72,9 @@ from heartwood.gateway.worker_volumes import (
 # gateway source revision and patch digests; recheck on any change.
 _CREATION_REJECTED = ("INVALID_ARGUMENT", "PERMISSION_DENIED", "UNAUTHENTICATED")
 # A deletion the sandbox gateway cannot complete yet is sent again after each of these pauses,
-# in seconds, inside the deletion's time limit.
-_DELETION_RETRY_PAUSES = (0.5, 1, 2, 4)
+# in seconds, inside the deletion's time limit: seven requests, the last one 31.5 seconds
+# of pauses after the first.
+_DELETION_RETRY_PAUSES = (0.5, 1, 2, 4, 8, 16)
 _DELETION_SECONDS = 90
 _CREATION_REJECTED_GATEWAY = (
     "ce58cf8e9b953281352d98a637e41616295b1318",

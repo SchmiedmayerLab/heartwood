@@ -237,7 +237,7 @@ The gateway fences an attempt when it observes an exhausted response budget, a m
 Fencing starts revocation on its own thread, so no control-plane call runs under a session lock or on a transport thread.
 Revocation does not wait for a session command whose worker request is in progress; it waits only for a control-plane launch of the same attempt to return, and is then bounded by the control-plane timeouts: 15 seconds to observe the sandbox, 90 seconds for the delete request, and 90 seconds to observe its absence.
 It deletes the sandbox through the control client connected at launch, stops the forwarder, rechecks the native configuration, requires Docker to report no attempt-owned worker container, and removes the attempt's volumes before the session records `revoked` with its evidence.
-With the Kubernetes driver, a deletion that the sandbox gateway could not complete is sent again, up to five times within the 90 seconds of the delete request, after pauses of 0.5, 1, 2, and 4 seconds.
+With the Kubernetes driver, a deletion that the sandbox gateway could not complete is sent again, up to seven times within the 90 seconds of the delete request, after pauses of 0.5, 1, 2, 4, 8, and 16 seconds.
 Only three answers are retried: an `INTERNAL` error that starts with `delete sandbox failed:`, which includes a concurrent change of the Sandbox resource, `FAILED_PRECONDITION`, which reports a pending operation, and `UNAVAILABLE`.
 Before each retry the sandbox's name, labels, and identity are read again.
 The cluster must then show neither the Sandbox resource nor any pod of the attempt, for which revocation waits up to 90 seconds, before the [claims are removed](#kubernetes-worker-staging).
