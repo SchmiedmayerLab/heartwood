@@ -423,6 +423,12 @@ def test_kubernetes_workflow_boundary_and_revocation(
         assert received == [b"positive-control", b"positive-control"]
         assert len(fixture.provider.observations) == 3
 
+        # Below the sandbox: a pod with the labels of a workload pod and no sandbox in it
+        # gets no connection either, so the driver's policy is enforced by the cluster.
+        policy_layer = _policy_probe(fixture, own, port)
+        assert policy_layer == "timeout", policy_layer
+        assert received == [b"positive-control", b"positive-control"]
+
         # The gateway's credential opens no session into the worker's pods.
         connections = {}
         for name, arguments in (
@@ -495,6 +501,7 @@ def test_kubernetes_workflow_boundary_and_revocation(
                 "worker_checks": boundary["checks"],
                 "output": boundary["output"],
                 "route_probes": observed_routes,
+                "unsandboxed_workload_pod_probe": policy_layer,
                 "route_targets": {
                     name: f"{host}:{port}/{kind}" for name, host, port, kind in targets
                 },
@@ -511,6 +518,59 @@ def test_kubernetes_workflow_boundary_and_revocation(
         )
     finally:
         native._stop(application)
+
+
+_POLICY_PROBE = """import socket,sys
+try:
+ socket.create_connection((sys.argv[1],int(sys.argv[2])),timeout=6).close()
+ print('reached')
+except socket.timeout: print('timeout')
+except OSError as error: print(type(error).__name__)
+"""
+
+
+def _policy_probe(fixture: KubernetesFixture, address: str, port: int) -> str:
+    """Connect from a pod that carries a workload pod's labels and runs no sandbox."""
+    name = "hw-qualification-policy-probe"
+    pod = {
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "metadata": {"name": name, "labels": {"openshell.ai/boundary-role": "workload"}},
+        "spec": {
+            "restartPolicy": "Never",
+            "automountServiceAccountToken": False,
+            "terminationGracePeriodSeconds": 1,
+            "securityContext": {
+                "runAsNonRoot": True,
+                "runAsUser": 10001,
+                "seccompProfile": {"type": "RuntimeDefault"},
+            },
+            "containers": [
+                {
+                    "name": "probe",
+                    "image": fixture.worker,
+                    "command": [PYTHON, "-I", "-c", _POLICY_PROBE, address, str(port)],
+                    "securityContext": {
+                        "allowPrivilegeEscalation": False,
+                        "capabilities": {"drop": ["ALL"]},
+                    },
+                    "resources": {"limits": {"cpu": "250m", "memory": "128Mi"}},
+                }
+            ],
+        },
+    }
+    fixture.outside("create", "--filename=-", stdin=json.dumps(pod))
+    try:
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline:
+            phase = fixture.outside("get", "pod", name, "--output=jsonpath={.status.phase}")
+            if phase in {"Succeeded", "Failed"}:
+                break
+            time.sleep(1)
+        assert phase == "Succeeded", phase
+        return fixture.outside("logs", name).strip()
+    finally:
+        fixture.outside("delete", "pod", name, "--wait")
 
 
 class _Writers:

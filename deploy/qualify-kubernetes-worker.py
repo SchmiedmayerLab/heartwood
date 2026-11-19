@@ -382,7 +382,8 @@ def _fixture_objects(cluster: Cluster, launched: dict[str, Any], built: dict[str
             "metadata": {"name": _FIXTURE, "namespace": _SESSIONS},
         },
         # The outside observer of the cases: it reads the session's objects, patches the
-        # Sandbox resource for the injected conflict, and adds and removes policies.
+        # Sandbox resource for the injected conflict, adds and removes policies, and
+        # runs one probe pod.
         {
             "apiVersion": f"{rbac}/v1",
             "kind": "Role",
@@ -393,6 +394,9 @@ def _fixture_objects(cluster: Cluster, launched: dict[str, Any], built: dict[str
                     "resources": ["pods", "persistentvolumeclaims", "events"],
                     "verbs": ["get", "list"],
                 },
+                # One probe pod with a workload pod's labels, and its output.
+                {"apiGroups": [""], "resources": ["pods"], "verbs": ["create", "delete"]},
+                {"apiGroups": [""], "resources": ["pods/log"], "verbs": ["get"]},
                 {
                     "apiGroups": ["agents.x-k8s.io"],
                     "resources": ["sandboxes"],
