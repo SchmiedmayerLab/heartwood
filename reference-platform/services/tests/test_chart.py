@@ -23,6 +23,9 @@ _CHART = Path(__file__).resolve().parents[2] / "chart" / "heartwood-platform"
 _DIGEST = re.compile(r"^[a-z0-9][a-z0-9._/:-]*@sha256:[0-9a-f]{64}$")
 _TEMPLATE = ["helm", "template", "heartwood-platform", str(_CHART)]
 _TEMPLATE += ["--namespace", "heartwood-platform"]
+# The platform services image has no default.
+_SERVICES = "images.platformServices=registry.example.test/services@sha256:" + "0" * 64
+_TEMPLATE += ["--set", _SERVICES]
 _FIXED_ROLES = {
     "heartwood-openshell-sandbox",
     "heartwood-openshell-peer",
@@ -64,7 +67,16 @@ def _pod_specs(objects: list[dict[str, Any]]) -> Iterator[tuple[str, dict[str, A
 @pytest.mark.parametrize("values", ["values-kind.yaml", "values-gke.yaml"])
 def test_chart_passes_lint(values: str) -> None:
     subprocess.run(
-        ["helm", "lint", str(_CHART), "--strict", "--values", str(_CHART / values)],
+        [
+            "helm",
+            "lint",
+            str(_CHART),
+            "--strict",
+            "--values",
+            str(_CHART / values),
+            "--set",
+            _SERVICES,
+        ],
         check=True,
         capture_output=True,
     )
@@ -92,7 +104,7 @@ def test_schema_rejects_an_image_without_a_digest() -> None:
 
 def test_pods_meet_the_restricted_pod_security_standard(objects: list[dict[str, Any]]) -> None:
     for name, spec in _pod_specs(objects):
-        assert spec["automountServiceAccountToken"] is False, name
+        assert spec["automountServiceAccountToken"] is (name == "heartwood-control"), name
         assert spec["securityContext"]["runAsNonRoot"] is True, name
         assert spec["securityContext"]["seccompProfile"] == {"type": "RuntimeDefault"}, name
         for container in spec["containers"] + spec.get("initContainers", []):
@@ -159,6 +171,8 @@ def test_credentials_are_generated_for_each_installation() -> None:
 
     first, second = secrets(_render("values-kind.yaml")), secrets(_render("values-kind.yaml"))
     assert len(first) >= 6
+    configuration = _named(_render("values-kind.yaml"), "ConfigMap", "heartwood-control")
+    assert not set(first.values()) & set(configuration["data"]["configuration.json"].split('"'))
     assert [key for key in first if first[key] == second[key]] == []
 
 
@@ -215,3 +229,31 @@ def test_sessions_namespace_is_neither_the_platform_nor_a_session_namespace(name
     )
     assert result.returncode != 0
     assert "/sessions/namespace" in result.stderr
+
+
+def test_installation_needs_the_platform_services_image() -> None:
+    command = [argument for argument in _TEMPLATE if argument not in {"--set", _SERVICES}]
+    result = subprocess.run(command, capture_output=True, text=True)
+    assert result.returncode != 0
+    assert "/images/platformServices" in result.stderr
+
+
+def test_control_service_configuration_holds_the_registry(objects: list[dict[str, Any]]) -> None:
+    config = _named(objects, "ConfigMap", "heartwood-control")
+    configuration = json.loads(config["data"]["configuration.json"])
+    assert configuration["audience"] == "heartwood-control"
+    assert configuration["keycloak"]["issuer"].endswith("/realms/heartwood")
+    assert configuration["service_callers"] == ["system:serviceaccount:heartwood-sessions:hub"]
+    ingress = _named(objects, "NetworkPolicy", "heartwood-control")["spec"]["ingress"]
+    assert ingress == [
+        {
+            "from": [
+                {
+                    "namespaceSelector": {
+                        "matchLabels": {"kubernetes.io/metadata.name": "heartwood-sessions"}
+                    }
+                }
+            ],
+            "ports": [{"protocol": "TCP", "port": 8080}],
+        }
+    ]

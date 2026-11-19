@@ -3,7 +3,15 @@
   "title": "Values of the Heartwood reference platform chart",
   "type": "object",
   "additionalProperties": false,
-  "required": ["images", "projects", "postgresql", "keycloak", "versitygw", "sessions"],
+  "required": [
+    "images",
+    "projects",
+    "postgresql",
+    "keycloak",
+    "versitygw",
+    "sessions",
+    "control"
+  ],
   "$defs": {
     "image": {
       "description": "An image reference pinned by digest.",
@@ -13,60 +21,151 @@
     "identifier": {
       "type": "string",
       "pattern": "^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$"
+    },
+    "reference": {
+      "type": "string",
+      "pattern": "^\\S{1,512}$"
     }
   },
   "properties": {
     "images": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["postgresql", "keycloak", "versitygw"],
+      "required": [
+        "postgresql",
+        "keycloak",
+        "versitygw",
+        "platformServices"
+      ],
       "properties": {
-        "postgresql": {"$ref": "#/$defs/image"},
-        "keycloak": {"$ref": "#/$defs/image"},
-        "versitygw": {"$ref": "#/$defs/image"}
+        "postgresql": {
+          "$ref": "#/$defs/image"
+        },
+        "keycloak": {
+          "$ref": "#/$defs/image"
+        },
+        "versitygw": {
+          "$ref": "#/$defs/image"
+        },
+        "platformServices": {
+          "$ref": "#/$defs/image"
+        }
       }
     },
-    "storageClassName": {"type": "string"},
+    "storageClassName": {
+      "type": "string"
+    },
     "projects": {
       "type": "array",
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id"],
-        "properties": {"id": {"$ref": "#/$defs/identifier"}}
+        "required": [
+          "id",
+          "billingAttributionRef",
+          "policyRef"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/identifier"
+          },
+          "billingAttributionRef": {
+            "$ref": "#/$defs/reference"
+          },
+          "policyRef": {
+            "$ref": "#/$defs/reference"
+          },
+          "members": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9-]{1,64}$"
+            }
+          }
+        }
       }
     },
     "postgresql": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["storage"],
-      "properties": {"storage": {"type": "string"}}
+      "required": [
+        "storage"
+      ],
+      "properties": {
+        "storage": {
+          "type": "string"
+        }
+      }
     },
     "keycloak": {
       "type": "object",
       "additionalProperties": false,
-      "properties": {"url": {"type": "string", "pattern": "^(https?://[^/]+)?$"}}
+      "properties": {
+        "url": {
+          "type": "string",
+          "pattern": "^(https?://[^/]+)?$"
+        }
+      }
     },
     "versitygw": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["storage"],
-      "properties": {"storage": {"type": "string"}}
+      "required": [
+        "storage"
+      ],
+      "properties": {
+        "storage": {
+          "type": "string"
+        }
+      }
     },
     "sessions": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["namespace", "stagingImage", "attemptStorageClass"],
+      "required": [
+        "namespace",
+        "stagingImage",
+        "attemptStorageClass"
+      ],
       "properties": {
-        "namespace": {"allOf": [{"$ref": "#/$defs/identifier"}, {"not": {"pattern": "^(heartwood-platform$|hw-s-)"}}]},
-        "stagingImage": {"anyOf": [{"const": ""}, {"$ref": "#/$defs/image"}]},
+        "namespace": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/identifier"
+            },
+            {
+              "not": {
+                "pattern": "^(heartwood-platform$|hw-s-)"
+              }
+            }
+          ]
+        },
+        "stagingImage": {
+          "anyOf": [
+            {
+              "const": ""
+            },
+            {
+              "$ref": "#/$defs/image"
+            }
+          ]
+        },
         "attemptStorageClass": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["provisioner"],
+          "required": [
+            "provisioner"
+          ],
           "properties": {
-            "provisioner": {"type": "string"},
-            "parameters": {"type": "object", "additionalProperties": {"type": "string"}}
+            "provisioner": {
+              "type": "string"
+            },
+            "parameters": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
           }
         }
       }
@@ -75,8 +174,47 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "nodeSelector": {"type": "object", "additionalProperties": {"type": "string"}},
-        "tolerations": {"type": "array", "items": {"type": "object"}}
+        "nodeSelector": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "tolerations": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "control": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "platformId",
+        "storage",
+        "serviceCallers",
+        "redirectUriTemplate"
+      ],
+      "properties": {
+        "platformId": {
+          "$ref": "#/$defs/reference"
+        },
+        "storage": {
+          "type": "string"
+        },
+        "serviceCallers": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^system:serviceaccount:[a-z0-9-]+:[a-z0-9-]+$"
+          }
+        },
+        "redirectUriTemplate": {
+          "type": "string",
+          "pattern": "^https?://[^{}\\s]+/[^\\s]*\\{subject\\}[^\\s]*\\{project\\}[^\\s]*$"
+        }
       }
     }
   }

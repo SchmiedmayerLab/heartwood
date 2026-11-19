@@ -18,6 +18,7 @@ _PLATFORM = "heartwood-platform.svc.cluster.local"
 _KEYCLOAK = f"keycloak.{_PLATFORM}:8080"
 _POSTGRESQL = f"postgresql.{_PLATFORM}:5432"
 _VERSITYGW = f"versitygw.{_PLATFORM}:7070"
+_CONTROL = f"heartwood-control.{_PLATFORM}:8080"
 # Consecutive timeouts that count as blocked, as in network-policy-controls.sh.
 _BLOCKED_AFTER = 3
 
@@ -92,8 +93,11 @@ def _reachable(cluster: Cluster, namespace: str, target: str) -> bool:
     pytest.fail(f"no conclusive result for {target} from {namespace}")
 
 
-def test_sessions_namespace_reaches_keycloak(cluster: Cluster) -> None:
-    assert _reachable(cluster, "heartwood-sessions", _KEYCLOAK)
+@pytest.mark.parametrize("target", [_KEYCLOAK, _CONTROL])
+def test_sessions_namespace_reaches_keycloak_and_the_control_service(
+    cluster: Cluster, target: str
+) -> None:
+    assert _reachable(cluster, "heartwood-sessions", target)
 
 
 @pytest.mark.parametrize(
@@ -104,6 +108,7 @@ def test_sessions_namespace_reaches_keycloak(cluster: Cluster) -> None:
         ("default", _KEYCLOAK),
         ("default", _POSTGRESQL),
         ("default", _VERSITYGW),
+        ("default", _CONTROL),
     ],
 )
 def test_other_connections_to_platform_components_are_blocked(
