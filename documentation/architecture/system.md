@@ -170,21 +170,25 @@ The table lists the accepted values next to the values Docker inspection accepts
 | Capabilities | `CapAdd` is empty and `CapDrop` contains `ALL` | `capabilities.drop` contains `ALL` and `capabilities.add` has no entry, on every container |
 | Privilege escalation | `no-new-privileges` is set | `allowPrivilegeEscalation` is false on every container |
 | Seccomp | No option that replaces the default profile | Pod `seccompProfile.type` is `RuntimeDefault`; a container profile, when set, is the same |
-| AppArmor and SELinux | Only AppArmor `docker-default` or an SELinux `container_t` label with individual categories | Not inspected |
+| AppArmor and SELinux | Only AppArmor `docker-default` or an SELinux `container_t` label with individual categories | No `appArmorProfile`, AppArmor annotation, or `seLinuxOptions` on a pod or container, so the node's default applies; the effective profile is not reported |
+| Other security settings | Not applicable | No security context field other than those in this table, `readOnlyRootFilesystem`, `fsGroupChangePolicy`, and `supplementalGroupsPolicy`; no sysctl other than `net.ipv4.ip_unprivileged_port_start`; no `runtimeClassName`; no host port; no restart policy on a container |
+| Environment | Not inspected | No `envFrom` and no `valueFrom` entry, so no Secret or ConfigMap reaches a container through its environment |
 | Process and IPC namespaces | `PidMode` and `IpcMode` are private | `hostPID` and `hostIPC` are false; `shareProcessNamespace` is false on the workload pod |
 | User namespace | `UsernsMode` is empty | `hostUsers` is true |
 | Cgroup namespace | `CgroupnsMode` is `private` | Not reported |
 | User | Checked by the probe inside the worker | `runAsUser` and `runAsGroup` are `10001` and `runAsNonRoot` is true on every container and on the workload pod, whose `fsGroup` is `10001` and which adds no other supplemental group |
 | Service account token | Not applicable | `automountServiceAccountToken` is false on both pods; the supervisor pod's projected token has audience `openshell-gateway` |
 | Devices | `Devices`, `DeviceRequests`, and `DeviceCgroupRules` are empty | No `volumeDevices`; requests and limits name only `cpu` and `memory` on every container and pod; no resource claim |
-| CPU and memory | `NanoCpus` and `Memory` equal the manifest's `cpu` and `memory` | The limits of `agent` equal the manifest's `cpu` and `memory`, and its requests equal its limits |
+| CPU and memory | `NanoCpus` and `Memory` equal the manifest's `cpu` and `memory` | The limits of `agent` equal the manifest's `cpu` and `memory`, and its requests equal its limits; `resources` is present on every container |
 | Process limit | `PidsLimit` is positive | Not reported |
-| Volumes | No bind mount; only Docker volumes; no mount source that overlaps a withheld host location | Workload pod: exactly the volumes `inputs`, `skills`, and `workspace` (persistent volume claims), `openshell-runtime`, `openshell-runtime-state`, and `openshell-run` (`emptyDir`), `openshell-pod-identity` (`downwardAPI`), and `openshell-sandbox-bootstrap` (the sandbox's bootstrap Secret, mounted only by the init container of the same name); supervisor pod: only `emptyDir`, Secret, and projected service account token volumes |
-| Inputs and Skills | Exactly one read-only attempt volume at each of `/inputs` and `/skills` | Exactly one mount at each of `/inputs` and `/skills` in `agent`; its claim is the attempt's claim, read-only on the volume and on every mount |
-| Namespace | Not applicable | Label `pod-security.kubernetes.io/enforce` is `restricted`, and the namespace is active |
+| Volumes | No bind mount; only Docker volumes; no mount source that overlaps a withheld host location | Workload pod: exactly the volumes `inputs`, `skills`, and `workspace` (persistent volume claims), `openshell-runtime`, `openshell-runtime-state`, and `openshell-run` (`emptyDir`), `openshell-pod-identity` (`downwardAPI`), and `openshell-sandbox-bootstrap` (the sandbox's bootstrap Secret, mounted only by the init container of the same name); supervisor pod: only `emptyDir` volumes, the sandbox's `os-supervisor-<sandbox id>-` Secret, the gateway certificate Secret `openshell-client-tls`, and projected service account token volumes |
+| Inputs and Skills | Exactly one read-only attempt volume at each of `/inputs` and `/skills` | Exactly one mount at each of `/inputs` and `/skills` in `agent`, without a sub-path or mount propagation; its claim is the attempt's claim, read-only on the volume and on every mount; every mount path in the pod is absolute and normalized |
+| Namespace | Not applicable | Label `pod-security.kubernetes.io/enforce` is `restricted`, label `pod-security.kubernetes.io/enforce-version` is `latest` or absent, and the namespace is active |
 
-The Kubernetes API server omits `hostNetwork`, `hostPID`, `hostIPC`, `privileged`, and `hostUsers` from a pod when they have their default value, so these five fields are accepted when absent.
-It also omits a list without entries, so `capabilities.add`, `volumeDevices`, `ephemeralContainers`, supplemental groups, and resource claims are accepted when absent or empty.
+The Kubernetes API server omits `hostNetwork`, `hostPID`, `hostIPC`, `privileged`, and `hostUsers` from a pod when they are unset, so these five fields are accepted when absent.
+It also omits a list without entries, so `capabilities.add`, `volumeDevices`, `ephemeralContainers`, supplemental groups, resource claims, container ports, and the supervisor pod's init containers are accepted when absent or empty.
+A setting the table excludes, such as `appArmorProfile` or `runtimeClassName`, must be absent.
+Pod-level `resources` and a container's own `seccompProfile` are optional.
 Every other listed field must be present with its accepted value.
 
 `admission_record` in `heartwood.gateway.worker_kubernetes` returns the inspected values of both pods, both policies, and the namespace for qualification evidence, without environment, commands, labels, or annotations.

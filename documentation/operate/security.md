@@ -83,13 +83,15 @@ It differs from Docker inspection where a pod does not report a property:
 - The cgroup namespace is not reported.
   Container runtimes on cgroup version 2 give each container a private one.
 - The driver sets no AppArmor profile and no SELinux options, so the node's defaults apply.
-  The `restricted` Pod Security level that admission requires on the namespace rejects a pod that selects an unconfined profile.
+  Admission refuses a pod that sets either, and the pod does not report the profile in effect.
+  The `restricted` Pod Security level is the namespace's label; exemptions configured in the API server and pods created before the label was set are not visible to admission.
 - A persistent volume claim can be backed by a host path.
   Only the cluster-scoped PersistentVolume shows that, and admission compares the claim names in the pod.
 - CPU and memory limits are compared with the manifest for the `agent` container only.
   The driver sets none on the init containers and the supervisor pod.
 - Admission reads the pods once.
-  A principal with `pods/ephemeralcontainers`, `pods/exec`, or `pods/attach` in the namespace can change or enter a pod afterwards.
+  A principal with `pods/ephemeralcontainers`, `pods/exec`, or `pods/attach` in the namespace, or one that can patch pods, can change or enter a pod afterwards.
+- Admission does not compare container commands, node placement, or tolerations.
 - The attempt key is a plain environment value in the workload pod and in its Sandbox resource.
   Every principal that can read them can read the key, as with `docker inspect` on Docker.
 
