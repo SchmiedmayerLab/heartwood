@@ -20,6 +20,7 @@ path = [
     "reference-platform/services/.python-version",
     "reference-platform/services/uv.lock",
     "reference-platform/infrastructure/gke/.terraform.lock.hcl",
+    "reference-platform/chart/heartwood-platform/values.schema.json",
     "agents/**/*.md",
     "images/gpu/vllm-requirements.txt",
     "images/worker/config.json",
@@ -71,4 +72,11 @@ SPDX-License-Identifier = "MIT"
 path = ["images/worker/candidate/sandbox-admission.patch", "images/worker/candidate/docker-provisioning.patch", "images/worker/candidate/gateway-delete-retry.patch", "images/worker/candidate/kubernetes-delete-conflict.patch", "images/worker/candidate/gateway-create-after-absence.patch"]
 precedence = "aggregate"
 SPDX-FileCopyrightText = ["2025-2026 NVIDIA CORPORATION & AFFILIATES", "2026 Stanford University and the project authors (see CONTRIBUTORS.md)"]
+SPDX-License-Identifier = "Apache-2.0"
+
+# The built-in client scopes of the pinned Keycloak release, as it exports them.
+[[annotations]]
+path = ["reference-platform/chart/heartwood-platform/files/keycloak-client-scopes.json"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "Red Hat, Inc. and/or its affiliates and other contributors"
 SPDX-License-Identifier = "Apache-2.0"
