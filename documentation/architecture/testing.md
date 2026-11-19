@@ -80,6 +80,8 @@ Each carried patch stays until a pinned upstream release provides its behavior a
 | `sandbox-admission.patch` (OpenShell Python SDK) | Exposes the configuration-admission record, activation and process identity already on the wire, and the gateway info call with negotiated driver capabilities | None filed | The released SDK exposes neither; reading them through its private stub is not an acceptable basis for an admission check | A pinned OpenShell Python SDK release whose public interface returns these fields and the gateway's driver capabilities |
 | `docker-provisioning.patch` (OpenShell gateway, qualification only) | Rejects deletion until Docker provisioning settles, and reports it as a driver capability | None filed | Without it a container can appear after deletion was reported, see [gateway behavior](../operate/platform-requirements.md#gateway-behavior-behind-native-qualification) | An OpenShell gateway release whose Docker driver provides the behavior and reports `openshell.compute.delete-awaits-provisioning`. A release that reports it under another name also changes the capabilities the managed-worker launcher requires |
 | `gateway-delete-retry.patch` (OpenShell gateway, qualification only) | Calls the driver again for an explicit delete of a sandbox already marked deleting, and reports it as a compute capability | None filed | Without it a failed deletion never converges and revocation has no evidence of absence | An OpenShell gateway release that provides the behavior and reports `openshell.compute.delete-retries-deleting`. A release that reports it under another name also changes the capabilities the managed-worker launcher requires |
+| `kubernetes-delete-conflict.patch` (OpenShell gateway, qualification only) | Reports a conflict on the delete of a Kubernetes Sandbox resource as an error, and reports the Kubernetes driver's deletion behavior as a driver capability | None filed | The release treats the conflict as absence, so a deletion can be reported while the Sandbox resource and its pods still exist | An OpenShell gateway release whose Kubernetes driver returns an error for a conflicting delete and reports `openshell.compute.delete-awaits-provisioning` |
+| `gateway-create-after-absence.patch` (OpenShell gateway, qualification only) | Records a sandbox name that a deletion found absent, rejects a creation under that name for 24 hours, and reports it as a compute capability | None filed | Without it a creation request still in flight can produce a sandbox after a deletion reported its name absent, see [gateway behavior](../operate/platform-requirements.md#gateway-behavior-behind-native-qualification) | An OpenShell gateway release that provides the behavior and reports `openshell.compute.create-rejects-deleted-name` |
 
 A patch, or one unit of it, is removed only when all of these hold:
 
@@ -105,8 +107,10 @@ The worker candidate workflow builds each twice and requires identical build rec
 The worker and runtime images use the shared `images/Dockerfile` with `HEARTWOOD_DEPENDENCY_PROFILE=candidate` and a `worker-qualification-artifacts` build context holding the SDK wheels under `sdk/` and the application build under `application/`.
 The image retains both build records in `/opt/heartwood/qualification/`, and its revision label must name the application commit.
 
-The OpenShell gateway is built from the pinned source and the two deletion patches recorded in `images/worker/candidate/gateway.json`, whose purpose is `qualification-only`.
-Each patch also makes the gateway report its behavior as a compute driver capability, which the managed-worker launcher requires:
+The OpenShell gateway is built from the pinned source and the deletion patches recorded in `images/worker/candidate/gateway.json`, whose purpose is `qualification-only`.
+The patches are applied in the recorded order; `gateway-create-after-absence.patch` applies only after `gateway-delete-retry.patch`.
+Each patch also makes the gateway report its behavior as a compute driver capability.
+The managed-worker launcher requires `openshell.compute.delete-awaits-provisioning` and `openshell.compute.delete-retries-deleting`:
 
 ```bash
 uv run --no-project --python 3.12.15 deploy/build-worker-candidate.py \
@@ -115,7 +119,7 @@ uv run --no-project --python 3.12.15 deploy/build-worker-candidate.py \
 
 The binary is built with the Docker and Kubernetes compute drivers, and the image is built from the upstream `Dockerfile.gateway` of the pinned source.
 A gateway with more than one driver and no `compute_driver` setting selects a driver by detection, so every gateway configuration in this repository sets `compute_driver`.
-`--gateway-tests` runs the upstream deletion regressions first and needs 12 GiB of container memory; a failed or empty test run prevents packaging.
+`--gateway-tests` first runs the gateway's deletion tests and the library tests of the Kubernetes driver crate, which include the tests of the patches, and needs 12 GiB of container memory; a failed or empty test run prevents packaging.
 The cache keeps source archives and the Cargo registry; compiled objects are keyed by the manifest, and Cargo rebuilds them when the enabled features change.
 The record binds source, manifest, lockfile, enabled features, binary, and image identities; it establishes build provenance, not byte-identical gateway builds.
 These artifacts are qualification inputs, not a supported production gateway; an operator's gateway must provide the [behavior qualification depends on](../operate/platform-requirements.md).
