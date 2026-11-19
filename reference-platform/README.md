@@ -230,6 +230,7 @@ bash reference-platform/cluster/delete-cluster.sh heartwood
 
 `create-cluster.sh` installs Calico and the Agent Sandbox controller from pinned manifests whose SHA-256 digests it verifies.
 It also starts a registry on the kind network.
+The nodes reach it as `<name>-registry.internal`, a host name with a dot, which the worker deployment requires of an image repository.
 `push-image.sh` pushes a local image to that registry and prints the reference by digest under which the cluster pulls it.
 Given a repository as a third argument, it copies an image named by digest from a remote registry to that repository in the cluster's registry, with every platform of its index, and prints the reference under the same digest.
 `network-policy-controls.sh` runs a reachable-connection control and two blocked-connection controls, one denied by an ingress policy and one by an egress policy.
