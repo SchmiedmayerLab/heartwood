@@ -238,7 +238,7 @@ sandbox_image_digest = "sha256:0000000000000000000000000000000000000000000000000
 | `image_repository` | Registry repository of the worker image, with its registry host and without a tag or digest; pods reference the image as `<image_repository>@<image_digest>` |
 | `supervisor_image_digest` | `sha256:` digest of the OpenShell supervisor image |
 | `sandbox_image_digest` | `sha256:` digest of the OpenShell sandbox runtime image |
-| `workspace` | At most 19 characters, the limit of the OpenShell command-line tool with this driver |
+| `workspace` | At most 19 characters, the limit of the OpenShell command-line tool with this driver; `hw-staging` and names that begin with `hw-staging-` are refused, because the workload pods of such a workspace would carry the name of a staging pod |
 
 A key of the other driver is rejected with `HW-DEPLOY-001`.
 With this driver, `image_digest` is the registry digest by which a pod references the worker image; with `openshell-docker` it is the image identifier the Docker engine reports.

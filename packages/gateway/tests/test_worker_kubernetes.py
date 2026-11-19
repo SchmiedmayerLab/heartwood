@@ -69,6 +69,15 @@ def _settings(root: Path, **changes: object) -> KubernetesWorkerDeployment:
     )
 
 
+@pytest.mark.parametrize("workspace", ["hw-staging", "hw-staging-a"])
+def test_a_workspace_named_like_a_staging_pod_is_refused(tmp_path: Path, workspace: str) -> None:
+    # A workload pod of such a workspace would be named `hw-staging-*`, the only pod name
+    # the platform admits exec sessions into.
+    with pytest.raises(ValueError, match="reserved for staging pods"):
+        _settings(tmp_path, workspace=workspace)
+    assert _settings(tmp_path, workspace="hw-stagings").workspace == "hw-stagings"
+
+
 def _intent() -> WorkerAttemptIntent:
     return WorkerAttemptIntent(
         project_id=uuid4(),

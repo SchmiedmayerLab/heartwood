@@ -124,6 +124,11 @@ class KubernetesWorkerDeployment(_WorkerSettings):
     @model_validator(mode="after")
     def _explicit_kubernetes(self) -> Self:
         _require_canonical(self.kubectl_cli, self.kubeconfig)
+        # A workload pod is named `<workspace>--<sandbox>`. The platform admits exec sessions
+        # only into pods named `hw-staging-*`, so no workspace may give its workload pods
+        # such a name.
+        if self.workspace == "hw-staging" or self.workspace.startswith("hw-staging-"):
+            raise ValueError("The workspace name is reserved for staging pods")
         return self
 
     @property
