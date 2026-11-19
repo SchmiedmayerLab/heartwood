@@ -31,6 +31,7 @@ Release documentation states the supported contract; run-specific results stay i
 | Container and native smoke | Container smoke and native release workflows | Entrypoints, filesystem layout, no secrets in image layers, offline operation, and installation of the release archive in an empty Ubuntu 24.04 container |
 | Capable-model acceptance | Capable model workflow, optional GPU qualification | Real inference driving the gateway and OpenHands through approval, rejection, replay, and audit export |
 | Reference platform boundary and services | Reference platform workflow | Application packages free of cloud SDKs, cloud infrastructure identifiers and platform code; platform service lint, types and tests |
+| Kubernetes cluster stage | Kubernetes qualification workflow | A kind cluster with Calico and the Agent Sandbox controller that enforces NetworkPolicy, shown by a reachable-connection control and two blocked-connection controls |
 | Native qualification | Worker candidate workflow | The installed application, worker image, and qualification gateway across the complete managed worker boundary |
 | Live synthetic validation | Operator run in Terra or Carina | The exact published artifact in the named platform without protected data |
 
@@ -47,6 +48,8 @@ Platform-service tests run the [live endpoint checks](../operate/platform-contra
 
 Pull-request and main-branch validation both end in the required `Release Candidate Ready` aggregate, which requires every validation workflow, including capable-model acceptance; on pull requests it also requires native worker qualification.
 On a pull request, native qualification and its candidate builds are skipped only when every changed path is under `documentation/` or `.github/` other than the worker candidate and pull-request validation workflows; any other path, including one the selection does not recognize, requires them.
+The Kubernetes cluster stage runs on pull requests that change its inputs and on every main commit.
+Its network policy controls run before any other cluster result counts, and the stage fails when either blocked connection succeeds or the reachable connection fails.
 On the main branch, the separate **Native Qualification** workflow runs the complete native qualification for every commit and attests its evidence; it has no concurrency group, so a newer commit never cancels the run of an earlier one.
 
 Pull-request jobs that build and run candidate code hold no signing or package-write permission; the Python job holds an identity token only to upload coverage to Codecov.

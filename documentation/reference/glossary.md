@@ -126,6 +126,9 @@ SPDX-License-Identifier: MIT
 **Key management service (KMS)**
 : A managed service that controls cryptographic keys and performs authorized operations such as checkpoint signing without exposing private key material to Heartwood.
 
+**kind**
+: Kubernetes in Docker, a tool that runs a Kubernetes cluster in containers; continuous integration uses it for the Kubernetes cluster stage.
+
 **Landlock**
 : A Linux security module that lets an unprivileged process restrict its own filesystem access.
 
@@ -158,6 +161,9 @@ SPDX-License-Identifier: MIT
 
 **Mutual TLS (mTLS)**
 : Transport Layer Security configured so both the client and server authenticate with certificates trusted by the other side.
+
+**NetworkPolicy**
+: A Kubernetes resource that allows pod traffic by label, port and direction; it takes effect only when the cluster's network plugin enforces it.
 
 **OAuth**
 : A standard authorization protocol that lets a user grant account access without giving Heartwood the account password.
