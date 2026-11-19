@@ -273,6 +273,7 @@ def test_main_validation_owns_release_readiness_dependencies() -> None:
         "gpu-containers": "gpu-container-image.yml",
         "native-assets": "native-release.yml",
         "python": "python.yml",
+        "reference-platform": "reference-platform.yml",
         "validation": "validate.yml",
         "web-ui": "web-ui.yml",
     }
