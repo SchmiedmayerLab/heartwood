@@ -81,8 +81,9 @@ resource "google_container_cluster" "platform" {
   }
 
   # Without initial_node_count and node_config the cluster has no default node pool,
-  # which GKE supports from this version on; every node belongs to the node pools below.
-  min_master_version = "1.36.4-gke.1469000"
+  # which GKE supports from 1.36.4-gke.1469000; every node belongs to the node pools
+  # below. GKE resolves the minor version to a patch that the release channel offers.
+  min_master_version = "1.36"
 
   # Nodes have public addresses to pull images from GHCR without Cloud NAT, and the
   # control plane endpoint accepts authenticated requests from any address.
@@ -95,6 +96,9 @@ resource "google_container_node_pool" "system" {
   name     = "system"
   cluster  = google_container_cluster.platform.id
   location = var.zone
+
+  # Nodes start only after their service account holds the node role.
+  depends_on = [google_project_iam_member.nodes]
 
   autoscaling {
     min_node_count = 1
@@ -126,6 +130,9 @@ resource "google_container_node_pool" "gpu" {
   name     = "gpu-l4-spot"
   cluster  = google_container_cluster.platform.id
   location = var.zone
+
+  # Nodes start only after their service account holds the node role.
+  depends_on = [google_project_iam_member.nodes]
 
   # The pool has no nodes until a pod requests a GPU.
   initial_node_count = 0

@@ -20,7 +20,7 @@ Continuous integration checks it offline with `tofu fmt -check` and `tofu valida
 
 | Resource | Configuration |
 |---|---|
-| Cluster | Zonal GKE Standard cluster, `REGULAR` release channel, control plane version 1.36.4-gke.1469000 or later, no default node pool |
+| Cluster | Zonal GKE Standard cluster, `REGULAR` release channel, control plane version 1.36, no default node pool (which needs 1.36.4-gke.1469000 or later) |
 | Network | Dedicated VPC network and subnet with secondary ranges for pods and services |
 | Network policy | Dataplane V2 (`ADVANCED_DATAPATH`), which enforces Kubernetes NetworkPolicy |
 | Workload identity | Workload Identity pool `PROJECT.svc.id.goog`; node pools expose the GKE metadata server to pods |
