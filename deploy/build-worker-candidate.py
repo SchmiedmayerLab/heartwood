@@ -250,12 +250,12 @@ def _gateway_version(checkout: Path, version: str) -> None:
 
 
 def _gateway_tests(container: list[str], rust: str, output: Path) -> list[dict[str, Any]]:
-    """Run the test suites of the patched crates before packaging, retaining commands and logs."""
+    """Run gateway deletion and Kubernetes driver tests before packaging, retaining their logs."""
     container = list(container)
     container[container.index("--memory") + 1] = "12g"
     container[container.index("--memory-swap") + 1] = "12g"
     suites = {
-        # The gateway's own deletion tests, which include those of the gateway patches.
+        # The deletion tests of `openshell-server`, which include those of its two patches.
         "gateway": [
             "openshell-server",
             "--lib",
@@ -570,7 +570,7 @@ def main() -> None:
     parser.add_argument(
         "--gateway-tests",
         action="store_true",
-        help="Run gateway deletion regressions before building (requires 12 GiB container memory)",
+        help="Run gateway and Kubernetes driver tests first (requires 12 GiB container memory)",
     )
     parser.add_argument("--uv", default="uv", help="Path to the pinned uv executable")
     args = parser.parse_args()

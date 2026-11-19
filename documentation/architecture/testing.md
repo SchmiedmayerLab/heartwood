@@ -111,6 +111,7 @@ The OpenShell gateway is built from the pinned source and the deletion patches r
 The patches are applied in the recorded order; `gateway-create-after-absence.patch` applies only after `gateway-delete-retry.patch`.
 Each patch also makes the gateway report its behavior as a compute driver capability.
 The managed-worker launcher requires `openshell.compute.delete-awaits-provisioning` and `openshell.compute.delete-retries-deleting`.
+This command builds the gateway:
 
 ```bash
 uv run --no-project --python 3.12.15 deploy/build-worker-candidate.py \
