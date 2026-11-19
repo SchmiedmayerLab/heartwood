@@ -1,0 +1,58 @@
+# This source file is part of the Heartwood open-source project
+#
+# SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+#
+# SPDX-License-Identifier: MIT
+
+# Values that render_openshell.py passes to the pinned OpenShell chart.
+
+# The platform chart ships the roles as fixed ClusterRoles, and the control service
+# binds them in each session namespace.
+rbac:
+  create: false
+  clusterScoped:
+    create: false
+agentSandbox:
+  preflight:
+    enabled: false
+pkiInitJob:
+  enabled: true
+
+# The control service replaces this reference with the configured gateway image.
+gateway:
+  image:
+    registry: heartwood.invalid
+    repository: openshell-gateway
+    tag: placeholder
+# Index digests of the images of the OpenShell release in images/worker/candidate/gateway.json.
+sandboxRuntime:
+  image:
+    digest: sha256:e57d07cd6cc1fc314b80368d6b51ec6fbf825fb62cd8f081312941180846866f
+supervisor:
+  image:
+    digest: sha256:f1ec231b5dbe5b6a40c33acb2ac847995aabb959a56134ef6d7d7aa4f43199d3
+# Heartwood names the image of every sandbox. A sandbox without one cannot start,
+# because this default does not resolve.
+sandbox:
+  image:
+    repository: heartwood.invalid/no-default-sandbox-image
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+
+server:
+  sandboxUid: "10001"
+  sandboxGid: "10001"
+  telemetryEnabled: false
+  auth:
+    allowUnauthenticatedUsers: false
+  # The control service writes a new key into this Secret for each session.
+  credentialStorage:
+    existingSecret: openshell-kek
+  drivers:
+    kubernetes:
+      allowDriverConfig: true
+      workspaceMode: shared
+gatewayConfig:
+  openshell:
+    version: 2
+  openshell.drivers.kubernetes:
+    allowed_pod_labels: ["heartwood.project", "heartwood.attempt", "heartwood.role"]

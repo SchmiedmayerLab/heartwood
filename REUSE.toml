@@ -80,3 +80,10 @@ path = ["reference-platform/chart/heartwood-platform/files/keycloak-client-scope
 precedence = "aggregate"
 SPDX-FileCopyrightText = "Red Hat, Inc. and/or its affiliates and other contributors"
 SPDX-License-Identifier = "Apache-2.0"
+
+# Rendered from the pinned OpenShell chart by reference-platform/tools/render_openshell.py.
+[[annotations]]
+path = ["reference-platform/chart/heartwood-platform/files/openshell-session.json"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = ["2025-2026 NVIDIA CORPORATION & AFFILIATES", "2026 Stanford University and the project authors (see CONTRIBUTORS.md)"]
+SPDX-License-Identifier = "Apache-2.0"
