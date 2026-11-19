@@ -441,6 +441,51 @@ def _supervisor(objects: Objects) -> dict[str, Any]:
     return _named(objects, "pod/os-supervisor-")
 
 
+_CA_BUNDLE = {
+    "name": "openshell-additional-ca",
+    "configMap": {
+        "defaultMode": 292,
+        "items": [{"key": "ca.crt", "path": "ca.crt"}],
+        "name": "openshell-additional-ca-dc5cbc21a452-6e07edecaad1ecac6eff6a7cf2",
+    },
+}
+
+
+def test_the_supervisor_may_mount_the_drivers_certificate_bundle(
+    admission: KubernetesWorkerAdmission, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    objects = _objects(admission)
+    _supervisor(objects)["spec"]["volumes"].append(copy.deepcopy(_CA_BUNDLE))
+    _serve(admission, monkeypatch, objects)
+    admission.inspect_worker(_SANDBOX_ID)
+
+
+@pytest.mark.parametrize(
+    ("path", "value"),
+    [
+        (("name",), "other"),
+        (("configMap", "name"), "openshell-config"),
+        (("configMap", "name"), "kube-root-ca.crt"),
+        (("configMap", "items"), _DELETE),
+        (("configMap", "items"), [{"key": "gateway.toml", "path": "ca.crt"}]),
+        (("configMap", "items", 0, "path"), "../ca.crt"),
+    ],
+)
+def test_any_other_config_map_volume_of_the_supervisor_is_refused(
+    admission: KubernetesWorkerAdmission,
+    monkeypatch: pytest.MonkeyPatch,
+    path: tuple[Any, ...],
+    value: object,
+) -> None:
+    objects = _objects(admission)
+    volume = copy.deepcopy(_CA_BUNDLE)
+    _change(volume, path, value)
+    _supervisor(objects)["spec"]["volumes"].append(volume)
+    _serve(admission, monkeypatch, objects)
+    with pytest.raises(WorkerAttemptError, match="supervisor confinement does not match"):
+        admission.inspect_worker(_SANDBOX_ID)
+
+
 def _control(objects: Objects) -> dict[str, Any]:
     return _named(objects, "networkpolicy.networking.k8s.io/os-control-")
 

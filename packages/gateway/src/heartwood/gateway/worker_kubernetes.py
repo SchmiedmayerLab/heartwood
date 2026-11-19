@@ -96,6 +96,11 @@ _SUPERVISOR_VOLUME_TYPES = frozenset({"emptyDir", "secret", "projected"})
 _SUPERVISOR_TOKEN_AUDIENCE = "openshell-gateway"
 # The gateway's certificate authority, which the supervisor verifies the gateway with.
 _GATEWAY_TLS_SECRET = "openshell-client-tls"
+# The certificate authorities a gateway is configured to add to the supervisor's trust for
+# the destinations a sandbox policy allows. The driver writes them to a ConfigMap that it
+# names after their content, and mounts the one key that holds certificates.
+_ADDITIONAL_CA_VOLUME = "openshell-additional-ca"
+_ADDITIONAL_CA_ITEMS = [{"key": "ca.crt", "path": "ca.crt"}]
 _SANDBOX_ID = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?")
 _CPU = re.compile(r"([0-9]+)(m?)")
 _MEMORY = re.compile(r"([0-9]+)(Ki|Mi|Gi|Ti)?")
@@ -323,6 +328,15 @@ def _sandbox_owner(metadata: object, *, controller: bool = False) -> tuple[str, 
 def _supervisor_volume(volume: dict[str, Any], sandbox_id: str) -> bool:
     """Accept the driver's volume types, this sandbox's Secrets and a gateway token only."""
     kinds = set(volume) - {"name"}
+    if kinds == {"configMap"}:
+        # A ConfigMap holds no credential. Only the driver's certificate bundle is accepted.
+        name = _field(volume, "configMap", "name")
+        return (
+            volume.get("name") == _ADDITIONAL_CA_VOLUME
+            and isinstance(name, str)
+            and name.startswith(_ADDITIONAL_CA_VOLUME + "-")
+            and _field(volume, "configMap", "items") == _ADDITIONAL_CA_ITEMS
+        )
     if len(kinds) != 1 or not kinds <= _SUPERVISOR_VOLUME_TYPES:
         return False
     if "secret" in volume:
