@@ -484,7 +484,8 @@ def test_gateway_configurations_select_their_compute_driver() -> None:
         for path in (_ROOT / directory).rglob("*")
         if path.is_file()
         and path.suffix in {".py", ".toml", ".yaml", ".yml", ".tpl", ".sh"}
-        and "[openshell.gateway]" in path.read_text()
+        and not {".venv", "node_modules"}.intersection(path.parts)
+        and "[openshell.gateway]" in path.read_text(errors="ignore")
     ]
     assert configurations
     for path in configurations:

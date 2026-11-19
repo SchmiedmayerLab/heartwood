@@ -471,7 +471,7 @@ The application's default lock installs patched OpenHands and OpenShell SDK whee
 The patches add the remote-event and configuration-admission hooks the trust boundary requires; the gateway refuses to construct a managed worker on an SDK without them.
 
 The OpenShell gateway is also built from pinned source with two deletion patches, as version `0.1.9+heartwood.1` with the purpose `qualification-only`; each patch makes the gateway report its behavior as a compute driver capability.
-The build contains the Docker and Kubernetes compute drivers, and each gateway configuration selects one with `compute_driver`.
+The build contains the Docker and Kubernetes compute drivers, and each gateway configuration in this repository selects one with `compute_driver`.
 Heartwood ships no production OpenShell gateway: a deployment's gateway is checked only by the capabilities it reports, and it must separately provide the [behavior native qualification depends on](../operate/platform-requirements.md).
 
 Native qualification runs the installed application, worker image, and qualification gateway through the complete boundary and produces commit-bound, verifiable evidence; [Testing and Evidence](testing.md) describes the cases, evidence, and verification.
