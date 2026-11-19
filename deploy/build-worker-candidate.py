@@ -25,6 +25,15 @@ from typing import Any
 
 _CONFIG = Path(__file__).resolve().parents[1] / "images/worker/candidate"
 _MAX_ARCHIVE = 50 * 1024 * 1024
+# The gateway binary contains both compute drivers. With more than one driver compiled in,
+# a gateway without a `compute_driver` setting selects one by probing its environment, so
+# every gateway configuration this repository writes names its driver.
+_GATEWAY_FEATURES = (
+    "telemetry",
+    "compute-driver-docker",
+    "compute-driver-kubernetes",
+    "vendored-z3",
+)
 
 
 def _digest(data: bytes) -> str:
@@ -380,7 +389,7 @@ def build_gateway(output: Path, cache: Path, *, gateway_tests: bool = False) -> 
             "openshell-gateway",
             "--no-default-features",
             "--features",
-            "telemetry,compute-driver-docker,vendored-z3",
+            ",".join(_GATEWAY_FEATURES),
             "--jobs",
             "1",
         ]
@@ -406,6 +415,7 @@ def build_gateway(output: Path, cache: Path, *, gateway_tests: bool = False) -> 
             "builder_sha256": builder_digest,
             "architecture": arch,
             "version": manifest["version"],
+            "features": list(_GATEWAY_FEATURES),
             "build": build,
             "tests": tests,
             "source_revision": manifest["source"]["revision"],

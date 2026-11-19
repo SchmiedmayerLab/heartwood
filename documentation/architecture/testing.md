@@ -113,9 +113,11 @@ uv run --no-project --python 3.12.15 deploy/build-worker-candidate.py \
   --gateway --gateway-tests --output test-results/gateway-candidate --cache test-results/gateway-cache
 ```
 
+The binary is built with the Docker and Kubernetes compute drivers, and the image is built from the upstream `Dockerfile.gateway` of the pinned source.
+A gateway with more than one driver and no `compute_driver` setting selects a driver by detection, so every gateway configuration in this repository sets `compute_driver`.
 `--gateway-tests` runs the upstream deletion regressions first and needs 12 GiB of container memory; a failed or empty test run prevents packaging.
 The cache keeps source archives and the Cargo registry, and compiled objects are keyed by the manifest so changed inputs never reuse them.
-The record binds source, manifest, lockfile, binary, and image identities; it establishes build provenance, not byte-identical gateway builds.
+The record binds source, manifest, lockfile, enabled features, binary, and image identities; it establishes build provenance, not byte-identical gateway builds.
 These artifacts are qualification inputs, not a supported production gateway; an operator's gateway must provide the [behavior qualification depends on](../operate/platform-requirements.md).
 `deploy/build-records-fixture.py` builds a versitygw server from a digest-verified source archive using a pinned Go 1.26 image, read-only sources and a bounded build container; `go mod verify` checks the downloaded or restored module cache against the source's `go.sum` before the build.
 Its artifacts retain the source archive, license and notice, binary hash and build inputs; they provide synthetic storage behavior, not a records-service recommendation.

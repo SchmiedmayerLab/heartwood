@@ -10,6 +10,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -419,6 +420,75 @@ def test_gateway_objects_are_not_reused_across_manifests(
             builder.build_gateway(tmp_path / f"output-{attempt}", tmp_path / "cache")
     assert len(targets) == 3
     assert targets[0] == targets[1] != targets[2]
+
+
+def test_gateway_build_enables_and_records_both_compute_drivers(
+    builder: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest = {
+        "version": "0.1.9+heartwood.1",
+        "source": {"revision": "reviewed"},
+        "patches": [],
+        "cmake": {"amd64": {}},
+        "cli": {"amd64": {}},
+        "images": {"rust": "rust@sha256:" + "a" * 64, "gateway_base": "base@sha256:" + "b" * 64},
+    }
+
+    def extract(_source: object, staging: Path, **_kwargs: object) -> Path:
+        (staging / "deploy/docker").mkdir(parents=True)
+        (staging / "Cargo.toml").write_text('[workspace.package]\nversion = "0.0.0"\n')
+        (staging / "Cargo.lock").write_text(
+            'version = 4\n[[package]]\nname = "openshell-server"\nversion = "0.0.0"\n'
+        )
+        for name in ("deploy/docker/Dockerfile.gateway", "LICENSE", "openshell"):
+            (staging / name).write_text("synthetic")
+        return staging
+
+    commands: list[list[str]] = []
+
+    def run(command: list[str], **_kwargs: object) -> None:
+        commands.append(command)
+        if "cargo" in command:
+            target = next(item for item in command if item.endswith(",dst=/target"))
+            binary = Path(target.split("src=")[1].split(",dst=")[0]) / "release/openshell-gateway"
+            binary.parent.mkdir(parents=True)
+            binary.write_text("synthetic gateway")
+        else:
+            Path(command[command.index("--iidfile") + 1]).write_text("sha256:" + "c" * 64)
+
+    def check_output(command: list[str], **_kwargs: object) -> str:
+        return "linux/amd64" if "info" in command else "openshell-gateway 0.1.9+heartwood.1"
+
+    monkeypatch.setattr(builder, "_gateway_configuration", lambda: (manifest, b"manifest"))
+    monkeypatch.setattr(builder, "_source", extract)
+    monkeypatch.setattr(builder.subprocess, "run", run)
+    monkeypatch.setattr(builder.subprocess, "check_output", check_output)
+    output = tmp_path / "output"
+    builder.build_gateway(output, tmp_path / "cache")
+    features = ["telemetry", "compute-driver-docker", "compute-driver-kubernetes", "vendored-z3"]
+    build, package = commands
+    assert build[build.index("--features") + 1] == ",".join(features)
+    assert "--no-default-features" in build
+    # The image comes from the upstream Dockerfile of the pinned source.
+    assert package[package.index("--file") + 1] == str(output / "deploy/docker/Dockerfile.gateway")
+    record = json.loads((output / "gateway-build-record.json").read_text())
+    assert record["features"] == features
+    assert record["build"] == build
+
+
+def test_gateway_configurations_select_their_compute_driver() -> None:
+    """A gateway with two drivers and no selection would choose one by detection."""
+    configurations = [
+        path
+        for directory in ("deploy", "images", "reference-platform")
+        for path in (_ROOT / directory).rglob("*")
+        if path.is_file()
+        and path.suffix in {".py", ".toml", ".yaml", ".yml", ".tpl", ".sh"}
+        and "[openshell.gateway]" in path.read_text()
+    ]
+    assert configurations
+    for path in configurations:
+        assert re.search(r'^compute_driver = "', path.read_text(), re.MULTILINE), path
 
 
 @pytest.mark.parametrize("gateway", [False, True])
