@@ -68,9 +68,11 @@ class ResearcherTokens:
             now = self._clock()
             stale = self._fetched_at is None or now - self._fetched_at >= _KEY_REFRESH_SECONDS
             if key_id not in self._keys and stale:
-                self._fetched_at = now
+                # A failed fetch raises and leaves the time unset, so the next token
+                # fetches again.
                 keys = jwt.PyJWKSet.from_dict(self._fetch_keys()).keys
                 self._keys = {key.key_id: key for key in keys if key.key_id is not None}
+                self._fetched_at = now
             try:
                 return self._keys[key_id]
             except KeyError:

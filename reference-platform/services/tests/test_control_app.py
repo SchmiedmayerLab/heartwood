@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 from fakes import AUDIENCE, HUB, ISSUER, FakeKeycloak, SigningKey, TokenReviews
 from heartwood_platform.common.tokens import ResearcherTokens, ServiceTokens
+from heartwood_platform.control.__main__ import Settings
 from heartwood_platform.control.app import create_app
 from heartwood_platform.control.keycloak import Keycloak
 from heartwood_platform.control.launch import LaunchService
@@ -215,3 +216,40 @@ def test_deletion_removes_the_session_and_its_redirect_uri(platform: Platform) -
     headers = platform.researcher(_BOB, "demo")
     assert platform.client.get("/v1/launch-context", headers=headers).status_code == 404
     assert platform.launch(_BOB, "demo")["session"] != first["session"]
+
+
+def test_keycloak_failure_is_reported_as_an_unavailable_component(platform: Platform) -> None:
+    platform.keycloak.secret = "rotated"
+
+    response = platform.client.put(f"/v1/researchers/{_BOB}/projects/demo/launch", headers=_HUB)
+
+    assert response.status_code == 502
+    assert response.json() == {"error": "a platform component is unavailable"}
+
+
+def test_settings_refuse_duplicate_projects_and_other_template_fields(tmp_path: Path) -> None:
+    project = {"id": "demo", "billing_attribution_ref": "grant", "policy_ref": "policy"}
+    settings = {
+        "platform_id": "reference-platform",
+        "database": str(tmp_path / "control.sqlite3"),
+        "audience": AUDIENCE,
+        "service_callers": [HUB],
+        "redirect_uri_template": _TEMPLATE,
+        "keycloak": {
+            "url": "http://keycloak:8080",
+            "issuer": ISSUER,
+            "realm": "heartwood",
+            "client_id": "heartwood-control",
+            "client_secret_file": "/nonexistent",
+        },
+        "projects": [project],
+    }
+    assert Settings.model_validate(settings).projects[0].id == "demo"
+
+    for change in (
+        {"projects": [project, project]},
+        {"redirect_uri_template": "https://hub.example.test/{0}/{subject}/{project}"},
+        {"platform_id": "two words"},
+    ):
+        with pytest.raises(ValueError, match="validation error"):
+            Settings.model_validate({**settings, **change})

@@ -127,7 +127,7 @@ class Keycloak:
                         "attributes": {"standard.token.exchange.enabled": "true"},
                     },
                 )
-                # Another replica or an earlier attempt may have created it.
+                # An administrator may have created it since the lookup.
                 if response.status_code != httpx.codes.CONFLICT:
                     response.raise_for_status()
                 client = self._existing(client_id)

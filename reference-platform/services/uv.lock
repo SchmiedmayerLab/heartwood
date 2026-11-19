@@ -287,6 +287,7 @@ source = { editable = "." }
 dependencies = [
     { name = "heartwood-schemas" },
     { name = "httpx" },
+    { name = "pydantic" },
     { name = "pyjwt", extra = ["crypto"] },
     { name = "starlette" },
     { name = "uvicorn" },
@@ -305,6 +306,7 @@ dev = [
 requires-dist = [
     { name = "heartwood-schemas", editable = "../../packages/schemas" },
     { name = "httpx", specifier = ">=0.28.1" },
+    { name = "pydantic", specifier = ">=2.12" },
     { name = "pyjwt", extras = ["crypto"], specifier = ">=2.15" },
     { name = "starlette", specifier = ">=1.10" },
     { name = "uvicorn", specifier = ">=0.54" },

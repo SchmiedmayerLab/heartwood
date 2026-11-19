@@ -16,6 +16,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Annotated
 
+import httpx
 from pydantic import BaseModel, ConfigDict, StringConstraints, TypeAdapter, ValidationError
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -71,6 +72,9 @@ def create_app(
                 return _error(404, "no session")
             except ValidationError:
                 return _error(422, "invalid request")
+            except httpx.HTTPError:
+                # Keycloak or the Kubernetes API did not answer as expected.
+                return _error(502, "a platform component is unavailable")
 
         return wrapper
 

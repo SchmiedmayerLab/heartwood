@@ -10,11 +10,11 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any, Self
 
 import httpx
 import uvicorn
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, StringConstraints, model_validator
 from starlette.applications import Starlette
 
 from heartwood_platform.common.kubernetes import Kubernetes, in_cluster_client
@@ -23,6 +23,9 @@ from heartwood_platform.control.app import ProjectId, Subject, create_app
 from heartwood_platform.control.keycloak import Keycloak
 from heartwood_platform.control.launch import LaunchService
 from heartwood_platform.control.registry import Project, Registry
+
+# The form of the references in a launch context.
+Reference = Annotated[str, StringConstraints(pattern=r"^\S{1,512}$")]
 
 
 class _Settings(BaseModel):
@@ -43,21 +46,32 @@ class ProjectSettings(_Settings):
     """One project of the registry."""
 
     id: ProjectId
-    billing_attribution_ref: str
-    policy_ref: str
+    billing_attribution_ref: Reference
+    policy_ref: Reference
     members: frozenset[Subject] = frozenset()
 
 
 class Settings(_Settings):
     """The configuration file of the control service."""
 
-    platform_id: str
+    platform_id: Reference
     database: Path
     audience: str
     service_callers: frozenset[str]
     redirect_uri_template: str
     keycloak: KeycloakSettings
     projects: tuple[ProjectSettings, ...]
+
+    @model_validator(mode="after")
+    def _validate(self) -> Self:
+        identifiers = [project.id for project in self.projects]
+        if len(set(identifiers)) != len(identifiers):
+            raise ValueError("project identifiers must be unique")
+        try:
+            self.redirect_uri_template.format(subject="subject", project="project")
+        except (IndexError, KeyError) as error:
+            raise ValueError("redirect_uri_template has an unknown field") from error
+        return self
 
 
 def build(settings: Settings, kubernetes: Kubernetes) -> Starlette:

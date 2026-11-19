@@ -12,11 +12,12 @@ from a pod in heartwood-sessions, the namespace that the network policy admits.
 
 from __future__ import annotations
 
+import base64
 import json
 import re
 from collections.abc import Iterator
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 import pytest
 from kube import Cluster
@@ -125,6 +126,66 @@ def _redirect_uri_is_registered(cluster: Cluster, project: str, uri: str) -> boo
     status, _ = _call(cluster, "GET", url)
     assert status in {200, 400}, status
     return status == 200
+
+
+def _project_client(cluster: Cluster, project: str) -> dict[str, Any]:
+    """Read the client of a project with the control service's own Keycloak rights."""
+    secret = cluster.kubectl(
+        "get",
+        "--namespace=heartwood-platform",
+        "secret",
+        "heartwood-control-keycloak",
+        "--output=jsonpath={.data.client-secret}",
+    )
+    assert secret.returncode == 0, secret.stderr
+    form = urlencode(
+        {
+            "grant_type": "client_credentials",
+            "client_id": "heartwood-control",
+            "client_secret": base64.b64decode(secret.stdout).decode(),
+            "scope": "kc-admin-api",
+        }
+    )
+    token = cluster.kubectl(
+        "exec",
+        "--stdin",
+        f"--namespace={_SESSIONS}",
+        _POD,
+        "--",
+        "curl",
+        "--silent",
+        "--max-time",
+        "30",
+        "--data",
+        "@-",
+        f"{_KEYCLOAK}/realms/heartwood/protocol/openid-connect/token",
+        text_input=form,
+    )
+    assert token.returncode == 0, token.stderr
+    url = f"{_KEYCLOAK}/admin/realms/heartwood/clients?clientId=hw-proj-{project}"
+    status, clients = _call(cluster, "GET", url, json.loads(token.stdout)["access_token"])
+    assert status == 200, clients
+    (client,) = clients
+    assert isinstance(client, dict)
+    return client
+
+
+def test_project_client_is_confidential_with_token_exchange_and_service_scopes(
+    cluster: Cluster,
+) -> None:
+    status, launch = _call(cluster, "PUT", _launch(_FIRST, "other"), _token(cluster))
+    assert status == 200, launch
+
+    client = _project_client(cluster, "other")
+
+    assert client["publicClient"] is False
+    assert client["standardFlowEnabled"] is True
+    assert client["implicitFlowEnabled"] is False
+    assert client["directAccessGrantsEnabled"] is False
+    assert client["serviceAccountsEnabled"] is False
+    assert client["attributes"]["standard.token.exchange.enabled"] == "true"
+    assert {"svc-control", "svc-data", "svc-jobs"} <= set(client["optionalClientScopes"])
+    assert client["redirectUris"] == [launch["redirect_uri"]]
 
 
 def test_spawner_launches_a_member_and_the_project_client_is_prepared(cluster: Cluster) -> None:

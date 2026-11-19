@@ -150,3 +150,19 @@ def test_other_service_account_tokens_are_refused(status: dict[str, Any]) -> Non
 
     with pytest.raises(AuthenticationError):
         services.verify("token")
+
+
+def test_failed_key_fetch_is_retried_by_the_next_token(key: SigningKey) -> None:
+    failing = [True]
+
+    def fetch() -> dict[str, Any]:
+        if failing[0]:
+            raise ConnectionError
+        return key.key_set()
+
+    tokens = ResearcherTokens(ISSUER, AUDIENCE, fetch, clock=lambda: 0.0)
+    with pytest.raises(ConnectionError):
+        tokens.verify(key.token())
+
+    failing[0] = False
+    assert tokens.verify(key.token()).project == "demo"
