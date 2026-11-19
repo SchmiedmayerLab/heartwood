@@ -49,7 +49,7 @@ An exception that no longer matches a finding also fails the check.
 ## Chart
 
 The chart `chart/heartwood-platform` installs the platform into the namespace `heartwood-platform` and creates the namespace `heartwood-sessions`.
-It loads synthetic and open data only.
+The platform is for synthetic and open data only.
 
 | Component | Content |
 |---|---|
@@ -64,6 +64,7 @@ It loads synthetic and open data only.
 Every image is pinned by digest in `values.yaml`, and `values.schema.json` rejects an image reference without a digest.
 Helm generates every credential at the first installation and keeps the existing value on an upgrade.
 The chart renders no credential from a fixed value.
+PostgreSQL and Keycloak keep the credentials of the first installation on their volumes, so a new installation after `helm uninstall` needs the volume claims of the old one deleted first.
 
 ### Keycloak Realm
 
@@ -89,7 +90,8 @@ RBAC cannot name namespaces that are created at run time, so two ValidatingAdmis
 `heartwood-control-scope` applies to the ServiceAccount `heartwood-control`:
 
 - It writes only in session namespaces, ServiceAccounts and Secrets named `hw-gw-<session>` in `heartwood-sessions`, the subjects of the ClusterRoleBinding `heartwood-openshell-node-reader`, and token reviews.
-- It creates and deletes only namespaces named `hw-s-<session>`, and a new one carries the label `heartwood.platform/session` and `pod-security.kubernetes.io/enforce=restricted`.
+- It creates and deletes only namespaces named `hw-s-<session>`, and a new one carries the label `heartwood.platform/session` and `pod-security.kubernetes.io/enforce=restricted`, at the latest version of that standard.
+- It writes only Secrets of the type `Opaque`.
 - A RoleBinding pairs a fixed ClusterRole with its only allowed subject:
 
   | ClusterRole | Subject |
@@ -104,7 +106,8 @@ RBAC cannot name namespaces that are created at run time, so two ValidatingAdmis
 `heartwood-staging-shape` applies to every ServiceAccount `hw-gw-*` in `heartwood-sessions`:
 
 - A pod uses the ServiceAccount `hw-staging` without a mounted token, runs only the image `sessions.stagingImage`, runs as a non-root user with the default seccomp profile, a read-only root file system and no capabilities, and mounts only volume claims named `hw-attempt-*` and `emptyDir` volumes.
-- A volume claim is named `hw-attempt-*`, uses the StorageClass `heartwood-attempt` and has no data source.
+- A pod takes no environment value from a Secret, a ConfigMap or a field, and names no node, priority class or runtime class.
+- A volume claim is named `hw-attempt-*`, uses the StorageClass `heartwood-attempt` and names no data source, volume or selector.
 - An exec session opens only into pods named `hw-staging-*`. Attach and port-forward requests are denied.
 
 An empty `sessions.stagingImage` denies every pod.

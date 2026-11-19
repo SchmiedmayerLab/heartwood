@@ -21,7 +21,11 @@ class Cluster:
     context: str
 
     def kubectl(
-        self, *arguments: str, actor: str | None = None, document: dict[str, Any] | None = None
+        self,
+        *arguments: str,
+        actor: str | None = None,
+        document: dict[str, Any] | None = None,
+        text_input: str | None = None,
     ) -> subprocess.CompletedProcess[str]:
         """Run kubectl, as a ServiceAccount when an actor is given."""
         command = ["kubectl", "--context", self.context]
@@ -30,7 +34,7 @@ class Cluster:
         command.extend(arguments)
         return subprocess.run(
             command,
-            input=None if document is None else json.dumps(document),
+            input=text_input if document is None else json.dumps(document),
             capture_output=True,
             text=True,
             timeout=120,

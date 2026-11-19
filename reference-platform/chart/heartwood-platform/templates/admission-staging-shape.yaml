@@ -66,6 +66,14 @@ spec:
         && (!has(c.securityContext.seccompProfile) || c.securityContext.seccompProfile.type == 'RuntimeDefault')))
       message: a staging pod runs as a non-root user with the default seccomp profile, a read-only root file system and no capabilities
     - expression: >-
+        !variables.pod || variables.containers.all(c, !has(c.envFrom)
+        && (!has(c.env) || c.env.all(e, !has(e.valueFrom))))
+      message: a staging pod takes no environment value from another object or field
+    - expression: >-
+        !variables.pod || (!has(object.spec.nodeName) && !has(object.spec.priorityClassName)
+        && !has(object.spec.runtimeClassName))
+      message: a staging pod names no node, priority class or runtime class
+    - expression: >-
         !variables.pod || !has(object.spec.volumes) || object.spec.volumes.all(v,
         has(v.emptyDir) || (has(v.persistentVolumeClaim)
         && v.persistentVolumeClaim.claimName.startsWith('hw-attempt-')))
@@ -73,8 +81,9 @@ spec:
     - expression: >-
         !variables.claim || (object.metadata.name.startsWith('hw-attempt-')
         && has(object.spec.storageClassName) && object.spec.storageClassName == 'heartwood-attempt'
-        && !has(object.spec.dataSource) && !has(object.spec.dataSourceRef))
-      message: an attempt volume claim is named hw-attempt-*, uses the StorageClass heartwood-attempt and has no data source
+        && !has(object.spec.dataSource) && !has(object.spec.dataSourceRef)
+        && !has(object.spec.volumeName) && !has(object.spec.selector))
+      message: an attempt volume claim is named hw-attempt-*, uses the StorageClass heartwood-attempt and names no data source or volume
     - expression: >-
         request.operation != 'CONNECT'
         || (has(request.subResource) && request.subResource == 'exec'

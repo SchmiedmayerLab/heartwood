@@ -36,6 +36,7 @@ _NAMESPACE_LABELS = "session label and the restricted Pod Security label"
 _PAIRING = "pairs a fixed ClusterRole with its only allowed subject"
 _NODE_READER = "adds and removes only the OpenShell ServiceAccounts"
 _GATEWAY_OBJECTS = "writes only objects named hw-gw-<session>"
+_SECRET_TYPE = "writes only Secrets of the type Opaque"
 
 
 def _namespace(name: str, labels: dict[str, str]) -> dict[str, Any]:
@@ -63,6 +64,13 @@ def _binding(
         "roleRef": {"apiGroup": "rbac.authorization.k8s.io", "kind": "ClusterRole", "name": role},
         "subjects": list(subjects),
     }
+
+
+def _role_binding(role: str, subject: dict[str, str]) -> dict[str, Any]:
+    """Bind a namespaced Role, which the session fixture creates without rules."""
+    binding = _binding(role, subject)
+    binding["roleRef"]["kind"] = "Role"
+    return binding
 
 
 def _node_reader(*subjects: dict[str, str]) -> dict[str, Any]:
@@ -142,6 +150,15 @@ def _changed(document: dict[str, Any], path: str, value: object = None) -> dict[
     return changed
 
 
+# An existing RuntimeClass, so that naming it reaches the staging policy.
+_RUNTIME_CLASS: dict[str, Any] = {
+    "apiVersion": "node.k8s.io/v1",
+    "kind": "RuntimeClass",
+    "metadata": {"name": "hw-policy-test"},
+    "handler": "runc",
+}
+
+
 @pytest.fixture(scope="module", autouse=True)
 def session(cluster: Cluster, staging_image: str) -> Iterator[None]:
     """Create the objects that the cases refer to, as the cluster administrator."""
@@ -164,6 +181,9 @@ def session(cluster: Cluster, staging_image: str) -> Iterator[None]:
     }
     wider_binding = _binding("wider-than-the-gateway-role", gateway, name="wider")
     wider_binding["roleRef"]["kind"] = "Role"
+    # A Role without rules, which authorization lets anyone bind.
+    empty = {**wider, "metadata": {"name": "heartwood-openshell-sandbox", "namespace": _NAMESPACE}}
+    empty["rules"] = []
     cluster.apply(
         _namespace(_NAMESPACE, _session_labels(_SESSION)),
         _namespace(_OPEN_NAMESPACE, {"heartwood.platform/session": "policyopen"}),
@@ -184,6 +204,8 @@ def session(cluster: Cluster, staging_image: str) -> Iterator[None]:
         _binding("view", _account("default", _NAMESPACE), name="foreign"),
         wider,
         wider_binding,
+        empty,
+        _RUNTIME_CLASS,
         probe,
         other,
     )
@@ -192,6 +214,7 @@ def session(cluster: Cluster, staging_image: str) -> Iterator[None]:
     )
     assert ready.returncode == 0, ready.stderr
     yield
+    cluster.kubectl("delete", "runtimeclass", _RUNTIME_CLASS["metadata"]["name"])
     cluster.kubectl("delete", "namespace", _NAMESPACE, _OPEN_NAMESPACE, "--wait")
     cluster.kubectl(
         "delete", "--namespace", "heartwood-sessions", "--ignore-not-found", "secret", "foreign"
@@ -275,6 +298,24 @@ _CONTROL_CASES: list[tuple[str, str, dict[str, Any], str | None]] = [
         _namespace(
             "hw-s-new",
             {"heartwood.platform/session": "new", "pod-security.kubernetes.io/enforce": "baseline"},
+        ),
+        _NAMESPACE_LABELS,
+    ),
+    (
+        "namespace-latest-pod-security-version",
+        "create",
+        _namespace(
+            "hw-s-new",
+            {**_session_labels("new"), "pod-security.kubernetes.io/enforce-version": "latest"},
+        ),
+        None,
+    ),
+    (
+        "namespace-old-pod-security-version",
+        "create",
+        _namespace(
+            "hw-s-new",
+            {**_session_labels("new"), "pod-security.kubernetes.io/enforce-version": "v1.0"},
         ),
         _NAMESPACE_LABELS,
     ),
@@ -391,6 +432,14 @@ _CONTROL_CASES: list[tuple[str, str, dict[str, Any], str | None]] = [
         _PAIRING,
     ),
     ("unbind-foreign", "delete", _binding("view", name="foreign"), _PAIRING),
+    # Roles that authorization lets the control service bind, because it holds their rules.
+    (
+        "bind-another-cluster-role",
+        "create",
+        _binding("system:public-info-viewer", _OPENSHELL),
+        _PAIRING,
+    ),
+    ("bind-a-role", "create", _role_binding("heartwood-openshell-sandbox", _OPENSHELL), _PAIRING),
     # A valid pair outside a session namespace.
     (
         "bind-in-default",
@@ -453,6 +502,20 @@ _CONTROL_CASES: list[tuple[str, str, dict[str, Any], str | None]] = [
         _GATEWAY_OBJECTS,
     ),
     ("other-secret", "create", _named("Secret", "hub", "heartwood-sessions"), _GATEWAY_OBJECTS),
+    (
+        "gateway-token-secret",
+        "create",
+        {
+            **_named("Secret", "hw-gw-new", "heartwood-sessions"),
+            "type": "kubernetes.io/service-account-token",
+            "metadata": {
+                "name": "hw-gw-new",
+                "namespace": "heartwood-sessions",
+                "annotations": {"kubernetes.io/service-account.name": "default"},
+            },
+        },
+        _SECRET_TYPE,
+    ),
     (
         "other-secret-delete",
         "delete",
@@ -518,7 +581,9 @@ _SERVICE_ACCOUNT = "ServiceAccount hw-staging without a mounted token"
 _IMAGE = "runs only the staging image"
 _SECURITY = "read-only root file system and no capabilities"
 _VOLUMES = "mounts only attempt volume claims and emptyDir volumes"
-_CLAIM = "is named hw-attempt-*, uses the StorageClass heartwood-attempt and has no data source"
+_CLAIM = "uses the StorageClass heartwood-attempt and names no data source or volume"
+_ENVIRONMENT = "takes no environment value from another object or field"
+_PLACEMENT = "names no node, priority class or runtime class"
 _EXEC = "opens exec sessions only into pods named hw-staging-*"
 
 _CONTAINER = "spec.containers.0"
@@ -533,11 +598,15 @@ _SIDECAR = {
 }
 
 
+_PLAIN = {"name": "KEY", "value": "value"}
+
+
 def _pod_cases(image: str) -> list[tuple[str, dict[str, Any], str | None]]:
     pod = _pod(image)
     return [
         ("pod", pod, None),
         ("pod-restricted-namespace", _pod(image, namespace=_NAMESPACE), None),
+        ("pod-plain-environment", _changed(pod, f"{_CONTAINER}.env", [_PLAIN]), None),
         (
             "pod-other-account",
             _changed(pod, "spec.serviceAccountName", "default"),
@@ -647,6 +716,46 @@ def _pod_cases(image: str) -> list[tuple[str, dict[str, Any], str | None]]:
             _VOLUMES,
         ),
         (
+            "pod-secret-environment",
+            _changed(
+                pod,
+                f"{_CONTAINER}.env",
+                [
+                    {
+                        "name": "KEY",
+                        "valueFrom": {"secretKeyRef": {"name": "openshell-kek", "key": "k"}},
+                    }
+                ],
+            ),
+            _ENVIRONMENT,
+        ),
+        (
+            "pod-config-map-environment",
+            _changed(
+                pod,
+                f"{_CONTAINER}.env",
+                [
+                    {
+                        "name": "KEY",
+                        "valueFrom": {"configMapKeyRef": {"name": "openshell-config", "key": "k"}},
+                    }
+                ],
+            ),
+            _ENVIRONMENT,
+        ),
+        (
+            "pod-secret-environment-source",
+            _changed(pod, f"{_CONTAINER}.envFrom", [{"secretRef": {"name": "openshell-kek"}}]),
+            _ENVIRONMENT,
+        ),
+        ("pod-node-name", _changed(pod, "spec.nodeName", "node"), _PLACEMENT),
+        (
+            "pod-priority-class",
+            _changed(pod, "spec.priorityClassName", "system-node-critical"),
+            _PLACEMENT,
+        ),
+        ("pod-runtime-class", _changed(pod, "spec.runtimeClassName", "hw-policy-test"), _PLACEMENT),
+        (
             "pod-other-claim",
             _changed(
                 pod, "spec.volumes.0.persistentVolumeClaim.claimName", "openshell-data-openshell-0"
@@ -683,6 +792,12 @@ _SOURCE = {"kind": "PersistentVolumeClaim", "name": "openshell-data-openshell-0"
         ),
         pytest.param(
             _changed(_claim(), "spec.dataSourceRef", _SOURCE), _CLAIM, id="claim-data-source-ref"
+        ),
+        pytest.param(_changed(_claim(), "spec.volumeName", "pv"), _CLAIM, id="claim-volume-name"),
+        pytest.param(
+            _changed(_claim(), "spec.selector", {"matchLabels": {"a": "b"}}),
+            _CLAIM,
+            id="claim-selector",
         ),
     ],
 )

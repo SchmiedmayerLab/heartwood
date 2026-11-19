@@ -69,6 +69,8 @@ spec:
         || (has(object.metadata.labels)
         && 'pod-security.kubernetes.io/enforce' in object.metadata.labels
         && object.metadata.labels['pod-security.kubernetes.io/enforce'] == 'restricted'
+        && (!('pod-security.kubernetes.io/enforce-version' in object.metadata.labels)
+        || object.metadata.labels['pod-security.kubernetes.io/enforce-version'] == 'latest')
         && 'heartwood.platform/session' in object.metadata.labels
         && 'hw-s-' + object.metadata.labels['heartwood.platform/session'] == object.metadata.name)
       message: a session namespace carries its session label and the restricted Pod Security label
@@ -104,6 +106,11 @@ spec:
         || variables.requestName.startsWith('hw-gw-')
         || (request.operation == 'CREATE' && object.metadata.name.startsWith('hw-gw-'))
       message: the control service writes only objects named hw-gw-<session> in {{ .Values.sessions.namespace }}
+    # The token controller fills a Secret of the service account token type with a token.
+    - expression: >-
+        variables.resource != 'secrets' || request.operation == 'DELETE'
+        || !has(object.type) || object.type == 'Opaque'
+      message: the control service writes only Secrets of the type Opaque
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding

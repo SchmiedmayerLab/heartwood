@@ -49,6 +49,8 @@ server:
     existingSecret: openshell-kek
   drivers:
     kubernetes:
+      # Heartwood passes the read-only input and Skill mounts of a sandbox as driver
+      # configuration.
       allowDriverConfig: true
       workspaceMode: shared
 gatewayConfig:
