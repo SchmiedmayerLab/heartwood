@@ -62,7 +62,7 @@ The platform is for synthetic and open data only.
 | Admission policies | `heartwood-control-scope`, `heartwood-staging-shape` and `heartwood-session-services` |
 | OpenShell objects | `files/openshell-session.json`, the objects of one session namespace |
 
-Every image is pinned by digest in `values.yaml`, and `values.schema.json` rejects an image reference without a digest.
+Every image in `values.yaml` is pinned by digest or has no default, and `values.schema.json` rejects an image reference without a digest.
 `images.platformServices` has no default and is set at installation to the image built from `services/Dockerfile`.
 `images.openshellGateway` has no default either.
 `values-kind.yaml` sets it to the published OpenShell 0.1.9 gateway, as a stand-in for the gateway that `images/worker/candidate/gateway.json` builds with its recorded patches.
@@ -104,12 +104,12 @@ Its Keycloak role `manage-clients` covers every client of the realm.
 
 At each launch the control service brings the namespace `hw-s-<session>` to the same state, and every step can be repeated:
 
-1. It creates the namespace with the labels `heartwood.platform/session` and `pod-security.kubernetes.io/enforce=restricted`, or reuses a namespace that carries them.
+1. It creates the namespace with the labels `heartwood.platform/session` and `pod-security.kubernetes.io/enforce=restricted`, or reuses a namespace that carries them and `pod-security.kubernetes.io/enforce-version=latest`.
 2. It binds `heartwood-session-control` to itself there, and applies the ResourceQuota and LimitRange from `sessions.quota`, `sessions.containerDefaults` and `sessions.containerDefaultRequests`.
 3. It applies the network policies: no ingress and no egress by default; ingress to the OpenShell gateway on port 8080 from the supervisors of its sandboxes and from pods in `heartwood-sessions` that carry the session label; egress of the OpenShell gateway and its certificate Job to DNS and to the Kubernetes API server.
 4. It creates the Secret `openshell-kek` with a new 32-byte key, unless the session has one. OpenShell encrypts the provider credentials of the session with it.
 5. It binds the other fixed ClusterRoles with RoleBindings and applies the OpenShell objects with server-side apply, with the namespace and `images.openshellGateway` in place of the placeholders.
-6. It sets the subjects of `heartwood-openshell-node-reader` to the OpenShell ServiceAccounts of all sessions in the registry.
+6. It sets the subjects of `heartwood-openshell-node-reader` to the OpenShell ServiceAccounts of all sessions in the registry whose removal has not begun.
 7. It creates the ServiceAccount `hw-gw-<session>` in `heartwood-sessions`, waits until the OpenShell gateway is ready, and replaces the Secret `hw-gw-<session>`.
 
 The Secret `hw-gw-<session>` holds `launch.json`, the secret of the project client, and the OpenShell client certificate, key and CA certificate.

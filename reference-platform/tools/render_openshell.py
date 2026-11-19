@@ -118,7 +118,7 @@ def session_objects(rendered: str) -> list[dict[str, Any]]:
 
 
 def serialize(objects: list[dict[str, Any]]) -> str:
-    """Serialize the objects as one List that kubectl applies."""
+    """Serialize the session objects as one List."""
     document = {"apiVersion": "v1", "kind": "List", "items": objects}
     return json.dumps(document, indent=2, sort_keys=True) + "\n"
 
