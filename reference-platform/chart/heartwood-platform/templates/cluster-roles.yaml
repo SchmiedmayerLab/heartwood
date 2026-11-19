@@ -1,0 +1,163 @@
+{{- /*
+This source file is part of the Heartwood open-source project
+
+SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+
+SPDX-License-Identifier: MIT
+*/ -}}
+
+{{- /*
+Fixed ClusterRoles of session namespaces. The control service binds them with
+RoleBindings inside one session namespace, to the subject that the admission policy
+heartwood-control-scope pairs with each role. No principal creates Roles.
+*/ -}}
+# Copy of the Role openshell-sandbox of the OpenShell chart 0.1.9, with read access to
+# the session's own Namespace, which that chart grants through a ClusterRole.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: heartwood-openshell-sandbox
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [persistentvolumeclaims]
+    verbs: [get]
+  - apiGroups: [agents.x-k8s.io]
+    resources: [sandboxes, sandboxes/status]
+    verbs: [create, delete, get, list, patch, update, watch]
+  - apiGroups: [""]
+    resources: [events]
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [create, delete, get, list, patch, watch]
+  - apiGroups: [""]
+    resources: [services]
+    verbs: [create, get]
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [create, delete]
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies]
+    verbs: [create, get]
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [get]
+---
+# Copy of the Role openshell-peer of the OpenShell chart 0.1.9.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: heartwood-openshell-peer
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get]
+---
+# Copy of the Role openshell-certgen of the OpenShell chart 0.1.9.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: heartwood-openshell-certgen
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [get, create]
+---
+# Cluster-scoped rules of the OpenShell chart 0.1.9 without the Namespace rule.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: heartwood-openshell-node-reader
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [node.k8s.io]
+    resources: [runtimeclasses]
+    verbs: [get]
+  - apiGroups: [scheduling.k8s.io]
+    resources: [priorityclasses]
+    verbs: [get]
+  - apiGroups: [authentication.k8s.io]
+    resources: [tokenreviews]
+    verbs: [create]
+  - apiGroups: [""]
+    resources: [nodes]
+    verbs: [get, list, watch]
+---
+# The chart leaves the subjects to the control service, which adds and removes the
+# OpenShell ServiceAccount of each session.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: heartwood-openshell-node-reader
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: heartwood-openshell-node-reader
+---
+# Rights of one Heartwood gateway in its session namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: heartwood-session-gateway
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [pods, persistentvolumeclaims]
+    verbs: [create, delete, get, list, watch]
+  - apiGroups: [""]
+    resources: [pods/exec]
+    verbs: [create]
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies]
+    verbs: [get, list]
+  - apiGroups: [agents.x-k8s.io]
+    resources: [sandboxes]
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [get]
+---
+# Rights of the control service in one session namespace. Server-side apply needs get
+# and patch on the object kinds that the control service applies.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: heartwood-session-control
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [serviceaccounts, configmaps, services, persistentvolumeclaims, resourcequotas, limitranges]
+    verbs: [create, get, patch, update, delete]
+  - apiGroups: [apps]
+    resources: [statefulsets]
+    verbs: [create, get, patch, update, delete]
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [create, get, patch, update, delete]
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies]
+    verbs: [create, get, patch, update, delete]
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [create, delete]
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [openshell-client-tls]
+    verbs: [get]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list]
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [get]
