@@ -414,6 +414,9 @@ def test_browser_sign_in_records_the_verified_subject_and_keeps_tokens_in_memory
         page = await _call(app, "GET", "/", headers={**navigation, "cookie": cookie.split(";")[0]})
         assert page[0] == 200
         assert b"Synthetic" in page[2]
+        # Behind a shared proxy origin, no page of that origin may frame the gateway.
+        assert "frame-ancestors 'none'" in page[1]["content-security-policy"]
+        assert page[1]["x-frame-options"] == "DENY"
         launch = json.dumps({"token": parse_qs(location.fragment)["launch"][0]}).encode()
         exchanged = await _call(app, "POST", "/launch", body=launch)
         assert exchanged[0] == 200
@@ -1336,6 +1339,11 @@ def test_access_reads_the_client_secret_and_certificate_authority(tmp_path: Path
         {"client_id": "two words"},
         {"subject": ""},
         {"subject": "line\nbreak"},
+        {"subject": "auth0|synthetic"},
+        {"subject": "researcher@example.test"},
+        {"subject": "s" * 129},
+        {"subject": "gateway"},
+        {"subject": "human"},
         {"client_secret_file": "relative/secret"},
         {"ca_file": "relative/ca.pem"},
         {"allow_plain_http": "true"},

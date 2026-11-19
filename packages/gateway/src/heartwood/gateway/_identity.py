@@ -33,7 +33,9 @@ import jwt
 from cryptography.fernet import Fernet, InvalidToken
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
 
+from heartwood.core_adapter.action_review import AUTOMATIC_REVIEW_ACTOR
 from heartwood.gateway._access import (
+    CAPABILITY_ACTOR,
     CAPABILITY_HEADER,
     AccessResponse,
     AccessUnavailableError,
@@ -84,7 +86,8 @@ class IdentityDeployment(BaseModel):
     issuer: str = Field(min_length=1, max_length=2048)
     client_id: str = Field(min_length=1, max_length=255, pattern=r"^[\x21-\x7E]+$")
     client_secret_file: Path = Field(repr=False)
-    subject: str = Field(min_length=1, max_length=255, pattern=r"^[\x20-\x7E]+$")
+    # The subject becomes the actor of every command, so it follows the actor reference form.
+    subject: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
     provider_url: str | None = Field(default=None, min_length=1, max_length=2048)
     ca_file: Path | None = None
     allow_plain_http: StrictBool = False
@@ -116,6 +119,8 @@ class IdentityDeployment(BaseModel):
                 )
             if not self.allow_plain_http:
                 require_protected_transport(url)
+        if self.subject in {CAPABILITY_ACTOR, AUTOMATIC_REVIEW_ACTOR}:
+            raise ValueError("identity subject names an actor the gateway reserves")
         for path in (self.client_secret_file, self.ca_file):
             if path is not None and not path.is_absolute():
                 raise ValueError("identity files are absolute paths")

@@ -175,9 +175,9 @@ subject = "7c9e6679-7425-40de-944b-e07fc1f90ae7"
 | `issuer` | Exact `iss` value of the provider's tokens and the origin the browser is sent to for sign-in |
 | `client_id` | The gateway's client at the provider; accepted tokens name it in `aud` |
 | `client_secret_file` | Absolute file that holds the client secret: printable ASCII without spaces, at most 4096 bytes, one trailing newline allowed |
-| `subject` | The only `sub` value the gateway accepts |
+| `subject` | The only `sub` value the gateway accepts: a letter or digit followed by at most 127 letters, digits, `_`, `.`, `:` or `-`; `gateway` and `human` are reserved |
 | `provider_url` | Optional base URL where the gateway itself reaches the provider's discovery document, token endpoint and keys; default `issuer` |
-| `ca_file` | Optional absolute PEM file of certificate authorities that replaces the system trust store for requests to the provider |
+| `ca_file` | Optional absolute PEM file of certificate authorities that replaces the default certificate bundle for requests to the provider |
 | `allow_plain_http` | Optional; `true` permits `http` URLs to hosts other than loopback; default `false` |
 
 `issuer` and `provider_url` are `http` or `https` URLs without credentials, query or fragment.

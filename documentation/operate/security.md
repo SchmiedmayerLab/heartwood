@@ -277,13 +277,16 @@ Every accepted command records the verified subject as its actor.
 
 The gateway keeps the researcher's access and refresh tokens, the client secret, authorization codes and capabilities in process memory.
 They are not written to project files, protected state, events, audit exports or logs, and they are not passed to agent tools or to the model.
+Without a [`[worker]`](../reference/configuration.md#deployment-manifest) table, agent tools run as the gateway's operating-system user and can read the client secret file and, where the operating system permits it, the gateway's memory.
+A deployment with `[identity]` should therefore also configure a worker.
 
 - One gateway accepts one subject; a token of any other person is refused.
 - A restart of the gateway ends every sign-in, and the researcher signs in again.
 - The gateway holds at most eight sign-ins and drops the oldest beyond that.
 - A sign-in completes only in the browser that started it; a second sign-in started in the same browser replaces the first.
 - The `heartwood-login` cookie that the callback sets for one minute authorizes nothing; it lets the page load once so that it can exchange the launch token.
-- The launch token in the URL fragment and the capability in the browser's session storage are readable by every script on the gateway's origin, and static responses allow framing from that origin.
+- The launch token in the URL fragment and the capability in the browser's session storage are readable by every script on the gateway's origin.
+- Static responses forbid framing, so another page cannot embed the gateway and complete a sign-in inside a frame.
 - Gateways of several researchers that share one origin under different paths are therefore separated only while nothing else on that origin serves pages a researcher controls.
 - An event stream or WebSocket that was opened with a sign-in's capability keeps delivering events after that sign-in ends, until the connection closes.
 - An unsigned token, a token signed with a shared secret, and a token signed with a key the provider does not publish are refused.

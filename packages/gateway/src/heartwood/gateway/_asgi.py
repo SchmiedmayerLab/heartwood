@@ -207,6 +207,7 @@ class GatewayAsgiApp:
                 path=request.path,
                 browser_base_path=self.ingress.browser_base_path,
                 browser_origin=request.external_origin,
+                framing="'none'" if self.ingress.mode == IDENTITY_INGRESS_MODE else "'self'",
             )
             return
         await _send_json_response(send, status_code=404, body={"error": "unknown gateway route"})
@@ -530,6 +531,7 @@ async def _send_static_response(
     path: str,
     browser_base_path: str,
     browser_origin: str,
+    framing: str,
 ) -> None:
     resolved = _static_file_path(static_dir, path=path)
     if resolved is None:
@@ -543,11 +545,14 @@ async def _send_static_response(
             "headers": [
                 (b"content-type", content_type.encode("ascii")),
                 (b"cache-control", b"no-store"),
-                (b"content-security-policy", _browser_content_security_policy(browser_origin)),
+                (
+                    b"content-security-policy",
+                    _browser_content_security_policy(browser_origin, framing=framing),
+                ),
                 (b"permissions-policy", b"camera=(), geolocation=(), microphone=()"),
                 (b"referrer-policy", b"no-referrer"),
                 (b"x-content-type-options", b"nosniff"),
-                (b"x-frame-options", b"SAMEORIGIN"),
+                (b"x-frame-options", b"DENY" if framing == "'none'" else b"SAMEORIGIN"),
             ],
         }
     )
@@ -557,7 +562,7 @@ async def _send_static_response(
     await send({"type": "http.response.body", "body": body})
 
 
-def _browser_content_security_policy(browser_origin: str) -> bytes:
+def _browser_content_security_policy(browser_origin: str, *, framing: str) -> bytes:
     origin = urlsplit(browser_origin)
     websocket_scheme = "wss" if origin.scheme == "https" else "ws"
     websocket_origin = f"{websocket_scheme}://{origin.netloc}"
@@ -567,7 +572,7 @@ def _browser_content_security_policy(browser_origin: str) -> bytes:
         f"connect-src 'self' {websocket_origin}; "
         "font-src 'self'; "
         "form-action 'self'; "
-        "frame-ancestors 'self'; "
+        f"frame-ancestors {framing}; "
         "img-src 'self' data:; "
         "object-src 'none'; "
         "script-src 'self'; "

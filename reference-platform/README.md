@@ -83,6 +83,7 @@ Helm generates the password of each account at the first installation and stores
 `files/keycloak-client-scopes.json` holds the built-in client scopes of the pinned Keycloak release, because a realm file that lists client scopes replaces the built-in ones.
 The Job `keycloak-bootstrap` disables the temporary administrator that Keycloak creates at its first start.
 Keycloak skips the import when the realm exists, so a later change to the realm needs a temporary administrator from `kc.sh bootstrap-admin`.
+An account added to `researchers` after the first installation gets a password in the Secret and no account in Keycloak until it is created that way.
 
 ### Control Service
 
