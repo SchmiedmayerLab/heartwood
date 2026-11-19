@@ -65,7 +65,17 @@ from heartwood.core_adapter.worker_attempts import (
     WorkerRevocationEvidence,
     WorkerRuntimeBinding,
 )
-from heartwood.schemas import AuditEvent, AuditRetention, JsonValue, PlatformOperationObservation
+from heartwood.schemas import (
+    AuditEvent,
+    AuditRetention,
+    CostDenomination,
+    EstimatedCost,
+    JsonValue,
+    OperationResourceLimit,
+    PlanningReference,
+    PlatformOperationObservation,
+    PlatformOperationProposal,
+)
 from heartwood.session import CommandKind, EventKind, SessionCommand, SessionEvent
 from packages.audit.tests.records_fixtures import MemoryS3
 
@@ -666,6 +676,50 @@ def test_operation_fields_are_bound_and_absent_ones_keep_the_recorded_digest(
         )
     with pytest.raises(ValidationError, match="states its estimate"):
         ExternalOperationReview(kind="submit")
+
+
+def test_a_recorded_platform_operation_request_keeps_its_serialized_form() -> None:
+    request = ExternalActionRequest(
+        service_id="synthetic-jobs",
+        tool_name="jobs__create_task_aaaaaaaa",
+        destination="jobs.example.org",
+        summary="Call create_task on Synthetic jobs",
+        request_json=canonical_request('{"name":"synthetic-analysis"}'),
+        project_context_id="launch-synthetic-1",
+        operation=ExternalOperationReview(
+            kind="submit",
+            proposal=PlatformOperationProposal(
+                service_id="synthetic-jobs",
+                tool="create_task",
+                description="Run task synthetic-analysis",
+                runtime_profile_ref="synthetic-batch-small",
+                resource_limits=(
+                    OperationResourceLimit(metric="duration", unit="s", maximum="1800"),
+                ),
+                data_scope="No project data",
+                destination="Project results prefix results/synthetic/",
+            ),
+            estimate=ExternalOperationEstimate(
+                state="current",
+                element_id="batch",
+                plan=PlanningReference(record_id="plan", revision=1),
+                prediction=PlanningReference(record_id="prediction", revision=1),
+                estimate_id="est-synthetic",
+                total=EstimatedCost(
+                    denomination=CostDenomination(kind="currency", unit="USD"),
+                    coverage="complete",
+                    expected="19.8",
+                ),
+                valid_until=datetime(2026, 7, 1, 1, tzinfo=UTC),
+            ),
+        ),
+    )
+    content = json.dumps(request.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+
+    # A change here changes the digest of every recorded platform operation proposal.
+    assert hashlib.sha256(content.encode()).hexdigest() == (
+        "bf10a40258389d90c1b15b6e54ec548fa5fe56cc9603909137cf7beee529c991"
+    )
 
 
 def test_journal_rejects_repeated_decision_and_duplicate_operation_source(setup: Setup) -> None:

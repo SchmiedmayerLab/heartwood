@@ -128,6 +128,10 @@ class ExternalOperationReview(_Record):
 
     A submission carries the platform's proposal, or none when the platform returned
     none, and the estimate it refers to. A cancellation names its target in the request.
+
+    The serialized review is part of each recorded proposal's digest. A field added here,
+    or to a message it embeds, must be left out when absent, or recorded proposals stop
+    matching their decisions.
     """
 
     kind: Literal["submit", "cancel"]
