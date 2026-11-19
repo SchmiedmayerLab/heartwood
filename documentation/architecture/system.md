@@ -151,6 +151,44 @@ The gateway version check compares the operator's declaration with the gateway's
 It catches a misconfigured deployment, not a gateway that misreports its version or lacks the behavior Heartwood's revocation evidence depends on.
 The patched OpenShell gateway Heartwood builds exists only for qualification ([Build and Qualification](#build-and-qualification)).
 
+### Kubernetes Worker Admission
+
+With the `openshell-kubernetes` driver, each sandbox is a workload pod that runs the worker and a supervisor pod that mediates its connections.
+The Kubernetes admission reads five objects with `kubectl` from the manifest's `namespace`: the workload pod, the supervisor pod, the per-sandbox NetworkPolicy `os-control-<sandbox id>`, the namespace-wide NetworkPolicy `openshell-sandbox-workloads`, and the namespace.
+It uses the manifest's `kubectl_cli` and `kubeconfig` and no inherited Kubernetes or proxy configuration.
+A missing or unreadable object, or an object reported under another name, kind, or namespace, fails admission.
+The table lists the accepted values next to the values Docker inspection accepts.
+
+| Property | Docker container | Kubernetes pods |
+|---|---|---|
+| Identity | Container name of the attempt; labels for project, attempt, and role `worker` | Workload pod named `<workspace>--<worker name>`; labels for project, attempt, role `worker`, sandbox, and boundary role; one controlling owner reference to the Sandbox resource of the same name |
+| Supervisor | Not a separate container | Supervisor pod `os-supervisor-<sandbox id>` with the sandbox labels and an owner reference to the same Sandbox resource, by name and UID |
+| Containers | One container | Workload pod: container `agent` and init containers `openshell-sandbox-bootstrap` and `workspace-init`, in that order; supervisor pod: container `supervisor`; no ephemeral container in either pod |
+| Image | `Image` equals `image_digest` | `agent` and `workspace-init` use `image_digest`, `openshell-sandbox-bootstrap` uses `sandbox_image_digest`, and `supervisor` uses `supervisor_image_digest`; each `image` is a reference by digest, and each `imageID` in the pod status carries the same digest |
+| Network | `NetworkMode` is `none` | `hostNetwork` is false; both NetworkPolicies have exactly the driver's rules, and `os-control-<sandbox id>` is owned by the same Sandbox resource |
+| Privilege | `Privileged` is false | `privileged` is false on every container |
+| Capabilities | `CapAdd` is empty and `CapDrop` contains `ALL` | `capabilities.drop` contains `ALL` and `capabilities.add` has no entry, on every container |
+| Privilege escalation | `no-new-privileges` is set | `allowPrivilegeEscalation` is false on every container |
+| Seccomp | No option that replaces the default profile | Pod `seccompProfile.type` is `RuntimeDefault`; a container profile, when set, is the same |
+| AppArmor and SELinux | Only AppArmor `docker-default` or an SELinux `container_t` label with individual categories | Not inspected |
+| Process and IPC namespaces | `PidMode` and `IpcMode` are private | `hostPID` and `hostIPC` are false; `shareProcessNamespace` is false on the workload pod |
+| User namespace | `UsernsMode` is empty | `hostUsers` is true |
+| Cgroup namespace | `CgroupnsMode` is `private` | Not reported |
+| User | Checked by the probe inside the worker | `runAsUser` and `runAsGroup` are `10001` and `runAsNonRoot` is true on every container and on the workload pod, whose `fsGroup` is `10001` and which adds no other supplemental group |
+| Service account token | Not applicable | `automountServiceAccountToken` is false on both pods; the supervisor pod's projected token has audience `openshell-gateway` |
+| Devices | `Devices`, `DeviceRequests`, and `DeviceCgroupRules` are empty | No `volumeDevices`; requests and limits name only `cpu` and `memory` on every container and pod; no resource claim |
+| CPU and memory | `NanoCpus` and `Memory` equal the manifest's `cpu` and `memory` | The limits of `agent` equal the manifest's `cpu` and `memory`, and its requests equal its limits |
+| Process limit | `PidsLimit` is positive | Not reported |
+| Volumes | No bind mount; only Docker volumes; no mount source that overlaps a withheld host location | Workload pod: exactly the volumes `inputs`, `skills`, and `workspace` (persistent volume claims), `openshell-runtime`, `openshell-runtime-state`, and `openshell-run` (`emptyDir`), `openshell-pod-identity` (`downwardAPI`), and `openshell-sandbox-bootstrap` (the sandbox's bootstrap Secret, mounted only by the init container of the same name); supervisor pod: only `emptyDir`, Secret, and projected service account token volumes |
+| Inputs and Skills | Exactly one read-only attempt volume at each of `/inputs` and `/skills` | Exactly one mount at each of `/inputs` and `/skills` in `agent`; its claim is the attempt's claim, read-only on the volume and on every mount |
+| Namespace | Not applicable | Label `pod-security.kubernetes.io/enforce` is `restricted`, and the namespace is active |
+
+The Kubernetes API server omits `hostNetwork`, `hostPID`, `hostIPC`, `privileged`, and `hostUsers` from a pod when they have their default value, so these five fields are accepted when absent.
+It also omits a list without entries, so `capabilities.add`, `volumeDevices`, `ephemeralContainers`, supplemental groups, and resource claims are accepted when absent or empty.
+Every other listed field must be present with its accepted value.
+
+`admission_record` in `heartwood.gateway.worker_kubernetes` returns the inspected values of both pods, both policies, and the namespace for qualification evidence, without environment, commands, labels, or annotations.
+
 ### Worker Attempt Ownership
 
 A worker attempt is a durable record in the paired session and audit journal with the phases `prepared`, `active`, `fenced`, and `revoked`.

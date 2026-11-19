@@ -73,6 +73,28 @@ The gateway enforces everything that decides authority, independently of anythin
 - action review, outside authorization and audit records, which a worker message cannot create or settle; and
 - revocation of a fenced attempt and removal of its volumes, and of attempts left by an earlier gateway process at the next `gateway serve --deployment` start.
 
+The [Kubernetes admission](../architecture/system.md#kubernetes-worker-admission) inspects the pods the OpenShell Kubernetes driver creates, also from outside the worker, and lists its accepted values next to the Docker values.
+It differs from Docker inspection where a pod does not report a property:
+
+- A pod has no network mode.
+  Admission confirms that the driver's two NetworkPolicies exist with the driver's rules.
+  It does not evaluate other policies in the namespace, and the Kubernetes API does not report whether the cluster's network plugin enforces them.
+- The process limit is the kubelet's `podPidsLimit`, a node setting that no pod field reports.
+- The cgroup namespace is not reported.
+  Container runtimes on cgroup version 2 give each container a private one.
+- The driver sets no AppArmor profile and no SELinux options, so the node's defaults apply.
+  The `restricted` Pod Security level that admission requires on the namespace rejects a pod that selects an unconfined profile.
+- A persistent volume claim can be backed by a host path.
+  Only the cluster-scoped PersistentVolume shows that, and admission compares the claim names in the pod.
+- CPU and memory limits are compared with the manifest for the `agent` container only.
+  The driver sets none on the init containers and the supervisor pod.
+- Admission reads the pods once.
+  A principal with `pods/ephemeralcontainers`, `pods/exec`, or `pods/attach` in the namespace can change or enter a pod afterwards.
+- The attempt key is a plain environment value in the workload pod and in its Sandbox resource.
+  Every principal that can read them can read the key, as with `docker inspect` on Docker.
+
+The platform must therefore provide an enforcing network plugin, a kubelet process limit, nodes on cgroup version 2, and access rules for the sandbox namespace.
+
 An uncertain revocation keeps the attempt fenced and the session's writer ownership retained until outside reconciliation observes that its resources are gone.
 After a recorded revocation, the next task can start a replacement worker in a new sandbox; it shares no credential, placeholder, conversation memory or workspace file with the revoked worker.
 A gateway restarted with a changed worker image in its manifest continues a settled session in a replacement worker launched from that image; a session the earlier worker left waiting for review, running or paused is refused and continues in a new session.
