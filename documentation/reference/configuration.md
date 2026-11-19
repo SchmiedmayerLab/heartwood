@@ -245,7 +245,7 @@ With this driver, `image_digest` is the registry digest by which a pod reference
 `kubectl_cli` and `kubeconfig` follow the same ownership and location rules as the other native tools and configuration files.
 The registered sandbox gateway must report one `openshell/kubernetes` compute driver with both deletion capabilities.
 The policy file must also list `/workspace` under `filesystem.read_write`, because the driver confines the worker to the listed paths and the worker's working directory is `/workspace`.
-The credential in `kubeconfig` needs these permissions in `namespace` and no others: create, delete, get, and list pods and persistent volume claims, create `pods/exec`, get and list NetworkPolicies and `sandboxes.agents.x-k8s.io`, and get the namespace.
+The credential in `kubeconfig` needs these permissions in `namespace` and no others: create, delete, get, list, and watch pods and persistent volume claims, create `pods/exec`, get and list NetworkPolicies, get, list, and watch `sandboxes.agents.x-k8s.io`, and get the namespace.
 The namespace must provide what [staging](../architecture/system.md#kubernetes-worker-staging) uses: a service account `hw-staging`, a storage class `heartwood-attempt`, and NetworkPolicies that deny the staging pod all traffic.
 `kubectl` runs with `PATH` and a temporary home directory only, so a `kubeconfig` that calls a credential plugin is not supported.
 

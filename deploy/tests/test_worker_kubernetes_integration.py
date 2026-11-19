@@ -96,15 +96,18 @@ def infrastructure(
         fixture.start()
         yield fixture
     finally:
-        native._retain_session_diagnostics(
-            fixture.applications, output / "session-diagnostics.json"
-        )
-        # Preserve control credentials and gateway state if revocation cannot settle.
-        for application in fixture.applications:
-            native._stop(application)
-        fixture.revoke_probes()
-        remaining = fixture.objects()
-        fixture.resources.close()
+        try:
+            native._retain_session_diagnostics(
+                fixture.applications, output / "session-diagnostics.json"
+            )
+            # Preserve control credentials and gateway state if revocation cannot settle.
+            for application in fixture.applications:
+                native._stop(application)
+            fixture.revoke_probes()
+            remaining = fixture.objects()
+        finally:
+            # The fixture's class patches end with the case, whatever teardown raised.
+            fixture.resources.close()
         assert remaining == [], f"Objects remain in the session namespace: {remaining}"
         shutil.rmtree(private)
         (output / "cleanup.json").write_text('{"complete": true}\n')
@@ -467,6 +470,7 @@ def test_kubernetes_workflow_boundary_and_revocation(
             ["public-address", "192.0.2.1", 443, "tcp"],
         ]
         # The same canary answers a client outside the worker before and after the probe.
+        routes = None
         for _ in range(2):
             with socket.create_connection(("127.0.0.1", port), timeout=5) as control:
                 control.sendall(b"positive-control")
@@ -478,6 +482,7 @@ def test_kubernetes_workflow_boundary_and_revocation(
                     timeout=90,
                 )
                 assert routes.exit_code == 0, routes.stderr
+        assert routes is not None, received
         observed_routes = json.loads(routes.stdout)
         assert set(observed_routes) == {target[0] for target in targets}
         # A TCP connection that opened, or any answer, means the route was open.
@@ -485,9 +490,17 @@ def test_kubernetes_workflow_boundary_and_revocation(
         assert received == [b"positive-control", b"positive-control"]
         assert len(fixture.provider.observations) == 3
 
-        # Below the sandbox: no NetworkPolicy of the namespace allows a pod with the workload
-        # role label and no sandbox process a connection to the same listener.
-        policy_layer = _policy_probe(fixture, own, port)
+        # Below the sandbox: a pod that the same NetworkPolicies select as the workload pod,
+        # with no sandbox process in it, gets no connection to the same listener either.
+        live = json.loads(fixture.outside("get", "pod", workload, "--output=json"))
+        probe_labels = {
+            key: value
+            for key, value in live["metadata"]["labels"].items()
+            if key.startswith(("openshell.ai/boundary-", "heartwood."))
+        }
+        assert probe_labels["openshell.ai/boundary-role"] == "workload", probe_labels
+        fixture.outside("get", "networkpolicy", "openshell-sandbox-workloads")
+        policy_layer = _policy_probe(fixture, own, port, probe_labels)
         assert policy_layer == "timeout", policy_layer
         assert received == [b"positive-control", b"positive-control"]
 
@@ -556,6 +569,16 @@ def test_kubernetes_workflow_boundary_and_revocation(
             "supervisor_pod": {"name": supervisor, "uid": pods[supervisor]["metadata"]["uid"]},
             "claims": record["claims"],
         }
+        # The driver's Service and NetworkPolicy of the sandbox, which revocation removes too.
+        sandbox_id = attempt.runtime.sandbox_id
+
+        def driver_objects() -> list[str]:
+            listed = fixture.outside("get", "services,networkpolicies", "--output=name")
+            return sorted(name for name in listed.split() if sandbox_id in name)
+
+        driver_objects_before = driver_objects()
+        assert f"service/os-supervisor-{sandbox_id}" in driver_objects_before
+        assert f"networkpolicy.networking.k8s.io/os-control-{sandbox_id}" in driver_objects_before
         before = fixture.objects(attempt_id=attempt_id)
         assert f"Pod/{workload}" in before
         assert f"Sandbox/{workload}" in before
@@ -564,21 +587,11 @@ def test_kubernetes_workflow_boundary_and_revocation(
         native._stop(application)
         native._assert_revoked(service)
         assert fixture.objects() == []
-        # The driver's Service and NetworkPolicy of the sandbox are owned by it and go with it.
-        sandbox_id = attempt.runtime.sandbox_id
+        # They are owned by the sandbox and removed with it.
         started = time.monotonic()
-        while True:
-            driver_objects = [
-                name
-                for name in fixture.outside(
-                    "get", "services,networkpolicies", "--output=name"
-                ).split()
-                if sandbox_id in name
-            ]
-            if not driver_objects or time.monotonic() - started > 60:
-                break
+        while (remaining := driver_objects()) and time.monotonic() - started < 60:
             time.sleep(1)
-        assert driver_objects == []
+        assert remaining == []
         driver_objects_seconds = round(time.monotonic() - started, 1)
         native._restore(fixture, application.project, "composition", service.store.audit_path)
         _evidence(
@@ -602,7 +615,8 @@ def test_kubernetes_workflow_boundary_and_revocation(
                 "images": images,
                 "objects_before_revocation": before,
                 "objects_after_revocation": [],
-                "driver_objects_after_revocation": driver_objects,
+                "driver_objects_before_revocation": driver_objects_before,
+                "driver_objects_after_revocation": remaining,
                 "driver_objects_absent_after_seconds": driver_objects_seconds,
                 "outside_approvals": len(approvals),
                 "revoked_before_writer_release": True,
@@ -622,13 +636,15 @@ except OSError as error: print(type(error).__name__)
 """
 
 
-def _policy_probe(fixture: KubernetesFixture, address: str, port: int) -> str:
-    """Connect from a pod that carries the workload role label and runs no sandbox."""
+def _policy_probe(
+    fixture: KubernetesFixture, address: str, port: int, labels: dict[str, str]
+) -> str:
+    """Connect from a pod that carries a workload pod's policy labels and runs no sandbox."""
     name = "hw-qualification-policy-probe"
     pod = {
         "apiVersion": "v1",
         "kind": "Pod",
-        "metadata": {"name": name, "labels": {"openshell.ai/boundary-role": "workload"}},
+        "metadata": {"name": name, "labels": labels},
         "spec": {
             "restartPolicy": "Never",
             "automountServiceAccountToken": False,
