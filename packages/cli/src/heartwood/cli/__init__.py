@@ -35,6 +35,7 @@ from heartwood.cli._audit import (
 )
 from heartwood.cli._brand import lockup
 from heartwood.cli._experiments import configure_experiments, handle_experiments
+from heartwood.cli._identity import configure_identity, handle_identity
 from heartwood.cli._interactive import (
     InteractionResult,
     InteractiveSession,
@@ -72,6 +73,7 @@ from heartwood.gateway import (
     CheckpointSignerError,
     CommandConflictError,
     GatewayAsgiApp,
+    IdentityAccess,
     IngressConfigurationError,
     IngressPolicy,
     InterfaceKind,
@@ -287,6 +289,10 @@ def _build_parser() -> argparse.ArgumentParser:
 
     configure_audit(subparsers.add_parser("audit", help="Audit-log operations."))
 
+    configure_identity(
+        subparsers.add_parser("identity", help="Sign in for a hosted gateway from a terminal.")
+    )
+
     configure_signer(
         subparsers.add_parser(
             "signer",
@@ -404,6 +410,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 def _main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
+    if args.command == "identity":
+        # The sign-in reads and writes nothing in the current directory.
+        return handle_identity(args)
     project = ProjectContext.current()
     if args.command == "project":
         from heartwood.gateway._project_migration import (
@@ -1123,6 +1132,9 @@ def _handle_serve(
                     worker_plan_factory=worker_plan_factory,
                     worker_reconciler=worker_reconciler,
                     checkpoint_evidence_factory=checkpoint_evidence_factory,
+                    service_tokens=access.service_token
+                    if isinstance(access, IdentityAccess)
+                    else None,
                 )
                 if deployment is not None
                 else SessionGateway(project=project)

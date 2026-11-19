@@ -41,6 +41,11 @@ from heartwood.core_adapter.external_actions import (
     external_action_records,
 )
 from heartwood.core_adapter.external_results import external_result_records
+from heartwood.gateway._access import (
+    AccessUnavailableError,
+    ServiceTokens,
+    TokenExchangeRefusedError,
+)
 from heartwood.gateway._credentials import CredentialStore
 from heartwood.gateway._mcp_policy import (
     GATEWAY_FIELDS,
@@ -138,12 +143,14 @@ class McpServerManager:
         destinations: Sequence[McpDestination],
         worker_available: bool,
         project_id: str | None = None,
+        service_tokens: ServiceTokens | None = None,
     ) -> None:
         self._config_store = config_store
         # The project the gateway names to services: the platform project of the launch
         # context, or this project's identifier.
         self.project_id = project_id
         self._credentials = credential_store
+        self._service_tokens = service_tokens
         self._destinations = tuple(destinations)
         self._worker_available = worker_available
         # Definitions from the latest test in this process, by server and tool name.
@@ -190,10 +197,40 @@ class McpServerManager:
         self._config_store.update(apply)
 
     def token(self, destination: McpDestination) -> str | None:
-        """Resolve a destination's bearer token in the gateway; never in project files."""
-        return self._credentials.resolve(mcp_credential_binding(destination.service_id))
+        """Resolve a destination's bearer token in the gateway; never in project files.
+
+        A destination that declares a token exchange gets the token exchanged for the
+        researcher's sign-in and never a stored one; None means no sign-in is live.
+        """
+        exchange = destination.token_exchange
+        if exchange is None:
+            return self._credentials.resolve(mcp_credential_binding(destination.service_id))
+        if self._service_tokens is None:
+            return None
+        try:
+            return self._service_tokens(exchange.scope, exchange.audience)
+        except AccessUnavailableError:
+            raise McpServerError(
+                "gateway-identity-provider",
+                "the identity provider is unavailable, so the research service has no token",
+            ) from None
+        except TokenExchangeRefusedError:
+            raise McpServerError(
+                "gateway-identity",
+                "the identity provider issued no token for this research service",
+            ) from None
+
+    @staticmethod
+    def _refuse_entered(destination: McpDestination, token: str | None) -> None:
+        if destination.token_exchange is not None and _entered(token) is not None:
+            raise McpServerError(
+                "mcp-credential",
+                "this research service takes its token from the researcher's sign-in "
+                "and accepts no entered token",
+            )
 
     def _save_token(self, destination: McpDestination, token: str | None, remember: bool) -> None:
+        self._refuse_entered(destination, token)
         if token is not None and token.strip():
             self._credentials.save(
                 mcp_credential_binding(destination.service_id), token.strip(), remember=remember
@@ -251,6 +288,7 @@ class McpServerManager:
         except ValueError as error:
             raise McpServerError("mcp-destination", str(error)) from None
         destination = destination_for(server.url, self._destinations)
+        self._refuse_entered(destination, token)
 
         def insert(current: McpServerSetting | None) -> McpServerSetting:
             if current is not None:
@@ -516,7 +554,15 @@ class McpServerManager:
         """Refuse a call whose server, selection, destination or credential no longer holds."""
         if self.live_identity(bound) is None:
             raise ExternalActionError("the research service tool is no longer enabled")
-        if token_authentication(self.token(bound.destination)).status == "expired":
+        try:
+            token = self.token(bound.destination)
+        except McpServerError as error:
+            raise ExternalActionError(error.detail) from None
+        if bound.destination.token_exchange is not None and token is None:
+            raise ExternalActionError(
+                "the research service waits until the researcher signs in at the gateway"
+            )
+        if token_authentication(token).status == "expired":
             raise ExternalActionError("the research service credential is expired")
 
     @contextmanager
@@ -536,6 +582,14 @@ class McpServerManager:
         from fastmcp.client.transports import StreamableHttpTransport
         from openhands.sdk.mcp import MCPClient
 
+        if destination.token_exchange is not None:
+            self._refuse_entered(destination, token)
+            token = self.token(destination)
+            if token is None:
+                raise McpServerError(
+                    "gateway-identity",
+                    "the research service waits until the researcher signs in at the gateway",
+                )
         token = self.token(destination) if token is None else token
         if token_authentication(token).status == "expired":
             raise McpServerError("mcp-credential", "the research service token is expired")

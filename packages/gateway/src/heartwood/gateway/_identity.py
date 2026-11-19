@@ -42,6 +42,7 @@ from heartwood.gateway._access import (
     AccessUnavailableError,
     GatewayAccess,
     LaunchCapability,
+    TokenExchangeRefusedError,
 )
 from heartwood.gateway._ingress import (
     IDENTITY_CALLBACK_PATH,
@@ -75,6 +76,8 @@ _PROVIDER_RETRY_SECONDS = 5.0
 _MAXIMUM_LOGINS = 8
 _LAUNCH_LIFETIME_SECONDS = 60
 _REFRESH_MARGIN_SECONDS = 30.0
+_TOKEN_EXCHANGE_GRANT = "urn:ietf:params:oauth:grant-type:token-exchange"
+_ACCESS_TOKEN_TYPE = "urn:ietf:params:oauth:token-type:access_token"
 
 type _TokenUse = Literal["id", "issued", "bearer"]
 
@@ -140,6 +143,23 @@ class _Login:
     launch_expires_at: float
 
 
+@dataclass(frozen=True, slots=True, repr=False)
+class _Bearer:
+    """A verified access token that a client other than the browser presented."""
+
+    access_token: str
+    expires_at: float
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class _Exchanged:
+    """A service token and the sign-in whose access token it was exchanged for."""
+
+    token: str
+    expires_at: float
+    sign_in: _Login | _Bearer
+
+
 @dataclass(frozen=True, slots=True)
 class _Endpoints:
     authorization: str
@@ -187,6 +207,9 @@ class IdentityAccess:
         self._used_states: OrderedDict[str, float] = OrderedDict()
         self._logins: OrderedDict[str, _Login] = OrderedDict()
         self._refresh_lock = Lock()
+        self._bearer: _Bearer | None = None
+        self._exchange_lock = Lock()
+        self._exchanged: dict[tuple[str, str], _Exchanged] = {}
         self._provider_lock = RLock()
         self._endpoints: _Endpoints | None = None
         self._keys: dict[str, jwt.PyJWK] = {}
@@ -234,9 +257,14 @@ class IdentityAccess:
         if scheme.lower() != "bearer" or not token.strip():
             return None
         try:
-            self._verified(token.strip(), "bearer")
+            claims = self._verified(token.strip(), "bearer")
         except _SignInRefusedError:
             return None
+        # The token stays in memory until it expires, as the subject token of exchanges.
+        expires_at = self._clock() + float(claims["exp"]) - time.time()
+        with self._lock:
+            if self._bearer is None or self._bearer.expires_at < expires_at:
+                self._bearer = _Bearer(token.strip(), expires_at)
         return self._subject.decode()
 
     def exchange_launch_token(self, token: str) -> str | None:
@@ -279,22 +307,85 @@ class IdentityAccess:
         return None
 
     def researcher_access_token(self) -> str | None:
-        """Return the access token of the latest sign-in, refreshed when it is about to expire.
+        """Return the researcher's current access token, refreshed when it is about to expire.
 
-        Returns None when no sign-in is live or the provider refuses the refresh. Raises
-        ``AccessUnavailableError`` when the provider cannot be reached.
+        Returns None when no sign-in is live. Raises ``AccessUnavailableError`` when the
+        provider cannot be reached.
+        """
+        subject = self._subject_token()
+        return None if subject is None else subject[1]
+
+    def service_token(self, scope: str, audience: str) -> str | None:
+        """Return a token for one platform service, exchanged for the researcher's token.
+
+        The scope and audience come from the deployment manifest. The token is kept in
+        memory until shortly before it expires and never beyond the sign-in it was
+        exchanged for. Returns None when no sign-in is live, so the caller waits for one.
+        Raises ``TokenExchangeRefusedError`` when the provider refuses the exchange and
+        ``AccessUnavailableError`` when it cannot be reached.
+        """
+        with self._exchange_lock:
+            subject = self._subject_token()
+            if subject is None:
+                return None
+            sign_in, subject_token = subject
+            with self._lock:
+                cached = self._exchanged.get((scope, audience))
+                if (
+                    cached is not None
+                    and cached.sign_in is sign_in
+                    and cached.expires_at - self._clock() > _REFRESH_MARGIN_SECONDS
+                ):
+                    return cached.token
+            try:
+                payload = self._token_request(
+                    {
+                        "grant_type": _TOKEN_EXCHANGE_GRANT,
+                        "subject_token": subject_token,
+                        "subject_token_type": _ACCESS_TOKEN_TYPE,
+                        "requested_token_type": _ACCESS_TOKEN_TYPE,
+                        "scope": scope,
+                        "audience": audience,
+                    }
+                )
+            except _SignInRefusedError:
+                raise TokenExchangeRefusedError from None
+            token = payload.get("access_token")
+            lifetime = _seconds(payload.get("expires_in"))
+            if (
+                not isinstance(token, str)
+                or not token
+                or lifetime is None
+                or str(payload.get("token_type")).lower() != "bearer"
+                or payload.get("issued_token_type", _ACCESS_TOKEN_TYPE) != _ACCESS_TOKEN_TYPE
+            ):
+                raise AccessUnavailableError(502)
+            with self._lock:
+                self._exchanged[scope, audience] = _Exchanged(
+                    token, min(self._clock() + lifetime, sign_in.expires_at), sign_in
+                )
+            return token
+
+    def _subject_token(self) -> tuple[_Login | _Bearer, str] | None:
+        """Return the live sign-in whose access token represents the researcher, and the token.
+
+        A browser sign-in comes first: the gateway obtained its token itself and can
+        refresh it. A bearer token that a client presented is used only while no browser
+        sign-in is live, and only until that token expires.
         """
         with self._refresh_lock:
             with self._lock:
                 now = self._purge()
                 if not self._logins:
-                    return None
+                    return (
+                        None if self._bearer is None else (self._bearer, self._bearer.access_token)
+                    )
                 capability, login = next(reversed(self._logins.items()))
                 if (
                     login.access_expires_at - now > _REFRESH_MARGIN_SECONDS
                     or login.refresh_token is None
                 ):
-                    return login.access_token
+                    return login, login.access_token
                 refresh_token = login.refresh_token
             try:
                 refreshed = self._tokens(
@@ -314,7 +405,7 @@ class IdentityAccess:
                 login.refresh_token = refreshed.refresh_token
                 login.access_expires_at = refreshed.access_expires_at
                 login.expires_at = refreshed.expires_at
-                return login.access_token
+                return login, login.access_token
 
     def _begin_sign_in(self) -> AccessResponse:
         endpoint = self._discovered().authorization
@@ -439,6 +530,16 @@ class IdentityAccess:
         now = self._clock()
         for capability in [key for key, item in self._logins.items() if item.expires_at <= now]:
             del self._logins[capability]
+        if self._bearer is not None and self._bearer.expires_at <= now:
+            self._bearer = None
+        # A service token goes with the sign-in it was exchanged for.
+        live = (*self._logins.values(), self._bearer)
+        for service in [
+            key
+            for key, item in self._exchanged.items()
+            if item.expires_at <= now or not any(item.sign_in is sign_in for sign_in in live)
+        ]:
+            del self._exchanged[service]
         return now
 
     def _tokens(self, payload: Mapping[str, Any], *, refresh_token: str | None) -> _Login:

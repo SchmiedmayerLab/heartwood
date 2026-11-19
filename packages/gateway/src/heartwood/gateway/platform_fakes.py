@@ -69,6 +69,8 @@ OTHER_PROJECT_ID = "research-project-b"
 INFERENCE_API_KEY = "synthetic-inference-key"
 MCP_PROTOCOL_VERSION = "2025-11-25"
 _SCOPE = "platform"
+# A project's client at the identity provider; services derive the project from it.
+_PROJECT_CLIENT_PREFIX = "hw-proj-"
 _EPOCH = datetime(2026, 7, 1, tzinfo=UTC)
 
 type InferenceFailure = Literal[
@@ -108,10 +110,11 @@ _INFERENCE_ERRORS: dict[InferenceFailure, tuple[int, str, str]] = {
 
 
 class FakeTokenIssuer:
-    """Issue exchanged, audience-restricted, project-scoped tokens with one signing key.
+    """Issue exchanged tokens for one audience, project client and researcher with one key.
 
     Each service fake verifies the issuer, audience, signature and expiry before a tool
-    runs, and checks the project claim against the requested project in the tool.
+    runs, and derives the project from the authorized party, ``hw-proj-<project>``, to
+    check it against the requested project in the tool.
     """
 
     def __init__(self) -> None:
@@ -133,7 +136,7 @@ class FakeTokenIssuer:
             audience=audience,
             scopes=[_SCOPE],
             expires_in_seconds=lifetime_seconds,
-            additional_claims={"project": project_id, "act": {"sub": "heartwood-gateway"}},
+            additional_claims={"azp": f"{_PROJECT_CLIENT_PREFIX}{project_id}"},
         )
 
     def verifier(self, audience: str) -> JWTVerifier:
@@ -224,7 +227,7 @@ class _Service:
     @staticmethod
     def _authorize(project_id: str) -> None:
         token = get_access_token()
-        if token is None or token.claims.get("project") != project_id:
+        if token is None or token.claims.get("azp") != f"{_PROJECT_CLIENT_PREFIX}{project_id}":
             raise ToolError("project authorization denied")
 
 

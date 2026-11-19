@@ -266,15 +266,19 @@ def _read_manifest(
         validate_evidence_deployment(evidence, project)
     mcp_destinations: tuple[McpDestination, ...] = ()
     if "mcp_destinations" in record:
+        try:
+            mcp_destinations = mcp_destinations_from_mapping(record["mcp_destinations"])
+        except ValueError as error:
+            raise DeploymentError("deployment-manifest", str(error)) from None
+        if "identity" not in record and any(item.token_exchange for item in mcp_destinations):
+            raise DeploymentError(
+                "deployment-manifest", "an MCP destination's token exchange requires [identity]"
+            )
         # Research services run only through outside review, which needs the worker boundary.
         if worker is None:
             raise DeploymentError(
                 "deployment-manifest", "MCP destinations require complete worker isolation"
             )
-        try:
-            mcp_destinations = mcp_destinations_from_mapping(record["mcp_destinations"])
-        except ValueError as error:
-            raise DeploymentError("deployment-manifest", str(error)) from None
     return ProjectDeployment(
         project=project,
         policy=policy,

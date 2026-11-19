@@ -15,6 +15,7 @@ import hashlib
 import json
 import secrets
 import time
+import tomllib
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
@@ -44,7 +45,20 @@ from heartwood.gateway import (
     load_project_deployment,
     select_gateway_access,
 )
-from heartwood.gateway._access import AccessResponse, AccessUnavailableError
+from heartwood.gateway._access import (
+    AccessResponse,
+    AccessUnavailableError,
+    TokenExchangeRefusedError,
+)
+from heartwood.gateway._mcp_policy import McpDestination, McpServerError
+from heartwood.gateway.platform_fakes import (
+    DATA_AUDIENCE,
+    OTHER_PROJECT_ID,
+    PROJECT_ID,
+    FakeDataService,
+    FakeTokenIssuer,
+    serve,
+)
 from heartwood.session import CommandKind, JsonValue, SessionCommand
 
 _ISSUER = "https://id.example.test/realms/research"
@@ -91,6 +105,11 @@ class _Provider:
         self.issued: list[str] = []
         self._codes: dict[str, dict[str, str]] = {}
         self._refresh_tokens: set[str] = set()
+        # Token exchange: the audience each scope belongs to, and every exchange request.
+        self.services = {"svc-data": "heartwood-data", "svc-jobs": "heartwood-jobs"}
+        self.exchanges: list[dict[str, str]] = []
+        self.exchange_fields: dict[str, Any] = {}
+        self.exchanged: Callable[[str], str] = self._exchanged
 
     def client(self) -> httpx.Client:
         return httpx.Client(transport=httpx.MockTransport(self._handle))
@@ -126,6 +145,45 @@ class _Provider:
         self._codes[code] = query
         self.issued.append(code)
         return f"code={code}&state={query['state']}&iss={self.issuer.replace(':', '%3A')}"
+
+    def _exchanged(self, audience: str) -> str:
+        now = int(time.time())
+        return self._sign(
+            {
+                "iss": self.issuer,
+                "sub": self.subject,
+                "aud": audience,
+                "azp": _CLIENT_ID,
+                "iat": now,
+                "exp": now + 120,
+                "jti": secrets.token_hex(8),
+            }
+        )
+
+    def _exchange(self, form: dict[str, str]) -> httpx.Response:
+        self.exchanges.append(form)
+        try:
+            subject = jwt.decode(
+                form["subject_token"],
+                self.key.public_key(),
+                algorithms=[self.algorithm],
+                options={"verify_aud": False},
+            )["sub"]
+        except jwt.PyJWTError:
+            subject = None
+        if subject != self.subject or self.services.get(form["scope"]) != form["audience"]:
+            return httpx.Response(400, json={"error": "invalid_request", "detail": _PROVIDER_TEXT})
+        payload = {
+            "access_token": self.exchanged(form["audience"]),
+            "issued_token_type": "urn:ietf:params:oauth:token-type:access_token",
+            "token_type": "Bearer",
+            "expires_in": 120,
+            **self.exchange_fields,
+        }
+        self.issued.append(payload["access_token"])
+        return httpx.Response(
+            200, json={name: value for name, value in payload.items() if value is not None}
+        )
 
     def _sign(self, claims: dict[str, Any], *, header_type: str | None = None) -> str:
         headers = {"kid": self.key_id, **({} if header_type is None else {"typ": header_type})}
@@ -166,6 +224,8 @@ class _Provider:
         form = {name: values[0] for name, values in parse_qs(request.content.decode()).items()}
         refused = httpx.Response(400, json={"error": "invalid_grant", "detail": _PROVIDER_TEXT})
         nonce = None
+        if form["grant_type"] == "urn:ietf:params:oauth:grant-type:token-exchange":
+            return self._exchange(form)
         if form["grant_type"] == "authorization_code":
             grant = self._codes.pop(form.get("code", ""), None)
             challenge = base64.urlsafe_b64encode(
@@ -799,7 +859,7 @@ def test_sign_in_is_refused_unless_every_token_check_passes(
     assert (completed.status_code, completed.check_id) == (403, "gateway-identity")
     assert completed.location is None
     assert completed.cookies == ()
-    assert access.researcher_access_token() is None
+    assert vars(access)["_logins"] == {}
 
 
 def test_an_authorized_party_with_several_audiences_signs_in(tmp_path: Path) -> None:
@@ -1464,3 +1524,322 @@ def _inside(path: Path) -> Path:
     inside.write_text(_CLIENT_SECRET)
     inside.chmod(0o600)
     return inside
+
+
+def test_a_service_token_is_exchanged_for_the_sign_in_and_kept_until_it_expires(
+    tmp_path: Path,
+) -> None:
+    provider = _Provider()
+    clock = _Clock()
+    access = _access(tmp_path, provider, clock=clock)
+    assert access.service_token("svc-data", "heartwood-data") is None
+    assert provider.requests == []
+    _sign_in(access, provider)
+    subject_token = access.researcher_access_token()
+
+    data = access.service_token("svc-data", "heartwood-data")
+
+    assert data in provider.issued
+    assert provider.exchanges == [
+        {
+            "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
+            "subject_token": subject_token,
+            "subject_token_type": "urn:ietf:params:oauth:token-type:access_token",
+            "requested_token_type": "urn:ietf:params:oauth:token-type:access_token",
+            "scope": "svc-data",
+            "audience": "heartwood-data",
+        }
+    ]
+    assert access.service_token("svc-data", "heartwood-data") == data
+    jobs = access.service_token("svc-jobs", "heartwood-jobs")
+    assert jobs not in {None, data}
+    assert len(provider.exchanges) == 2
+    # A token is replaced shortly before it expires.
+    clock.now += 89
+    assert access.service_token("svc-data", "heartwood-data") == data
+    clock.now += 2
+    assert access.service_token("svc-data", "heartwood-data") not in {None, data}
+    assert len(provider.exchanges) == 3
+    for secret in (data, jobs):
+        assert secret is not None
+        assert secret not in repr(access)
+        assert secret not in repr(list(vars(access)["_exchanged"].values()))
+
+
+def test_a_service_token_never_outlasts_its_sign_in(tmp_path: Path) -> None:
+    provider = _Provider()
+    provider.refresh_lifetime = None
+    provider.exchange_fields = {"expires_in": 3600}
+    clock = _Clock()
+    access = _access(tmp_path, provider, clock=clock)
+    _sign_in(access, provider)
+    first = access.service_token("svc-data", "heartwood-data")
+    assert first is not None
+
+    # The sign-in ends with its access token, long before the service token would.
+    clock.now += 300
+    assert access.service_token("svc-data", "heartwood-data") is None
+    assert vars(access)["_exchanged"] == {}
+    assert len(provider.exchanges) == 1
+
+    # A new sign-in gets a new token; the earlier one is not reused.
+    _sign_in(access, provider)
+    assert access.service_token("svc-data", "heartwood-data") not in {None, first}
+    assert len(provider.exchanges) == 2
+
+
+def test_a_newer_sign_in_replaces_the_service_tokens_of_an_earlier_one(tmp_path: Path) -> None:
+    provider = _Provider()
+    access = _access(tmp_path, provider)
+    _sign_in(access, provider)
+    first = access.service_token("svc-data", "heartwood-data")
+
+    _sign_in(access, provider)
+
+    assert access.service_token("svc-data", "heartwood-data") != first
+    assert provider.exchanges[0]["subject_token"] != provider.exchanges[1]["subject_token"]
+
+
+@pytest.mark.parametrize(
+    ("scope", "audience"),
+    [("svc-data", "heartwood-jobs"), ("svc-unknown", "heartwood-data")],
+)
+def test_a_refused_exchange_is_reported_without_provider_text(
+    tmp_path: Path, scope: str, audience: str
+) -> None:
+    provider = _Provider()
+    access = _access(tmp_path, provider)
+    _sign_in(access, provider)
+
+    with pytest.raises(TokenExchangeRefusedError) as error:
+        access.service_token(scope, audience)
+
+    assert _PROVIDER_TEXT not in str(error.value)
+    assert vars(access)["_exchanged"] == {}
+
+
+@pytest.mark.parametrize(
+    ("failure", "status"),
+    [
+        (lambda provider: setattr(provider, "unreachable", True), 503),
+        (lambda provider: provider.failing.add("token"), 502),
+        (lambda provider: provider.exchange_fields.update(access_token=None), 502),
+        (lambda provider: provider.exchange_fields.update(access_token=""), 502),
+        (lambda provider: provider.exchange_fields.update(token_type="N_A"), 502),
+        (lambda provider: provider.exchange_fields.update(expires_in=None), 502),
+        (
+            lambda provider: provider.exchange_fields.update(
+                issued_token_type="urn:ietf:params:oauth:token-type:refresh_token"
+            ),
+            502,
+        ),
+    ],
+    ids=[
+        "unreachable",
+        "provider-error",
+        "no-token",
+        "empty-token",
+        "other-token-type",
+        "no-lifetime",
+        "other-issued-type",
+    ],
+)
+def test_an_unavailable_or_unusable_exchange_issues_no_token(
+    tmp_path: Path, failure: Callable[[_Provider], object], status: int
+) -> None:
+    provider = _Provider()
+    access = _access(tmp_path, provider)
+    _sign_in(access, provider)
+    failure(provider)
+
+    with pytest.raises(AccessUnavailableError) as error:
+        access.service_token("svc-data", "heartwood-data")
+
+    assert error.value.status_code == status
+    assert vars(access)["_exchanged"] == {}
+
+
+def test_an_answer_without_an_issued_token_type_is_accepted(tmp_path: Path) -> None:
+    provider = _Provider()
+    provider.exchange_fields = {"issued_token_type": None}
+    access = _access(tmp_path, provider)
+    _sign_in(access, provider)
+
+    assert access.service_token("svc-data", "heartwood-data") in provider.issued
+
+
+def test_a_bearer_token_is_the_subject_token_only_without_a_browser_sign_in(
+    tmp_path: Path,
+) -> None:
+    provider = _Provider()
+    clock = _Clock()
+    access = _access(tmp_path, provider, clock=clock)
+    short = provider.token(exp=int(time.time()) + 120)
+    bearer = provider.token()
+    assert access.principal(_bearer(bearer)) == _SUBJECT
+    # A token that expires earlier does not replace the one already held.
+    assert access.principal(_bearer(short)) == _SUBJECT
+
+    assert access.researcher_access_token() == bearer
+    from_bearer = access.service_token("svc-data", "heartwood-data")
+    assert provider.exchanges[-1]["subject_token"] == bearer
+
+    # A browser sign-in takes over, and its own service token replaces the earlier one.
+    _sign_in(access, provider)
+    signed_in = access.researcher_access_token()
+    assert signed_in != bearer
+    assert access.service_token("svc-data", "heartwood-data") != from_bearer
+    assert provider.exchanges[-1]["subject_token"] == signed_in
+
+    # The bearer token is forgotten when it expires, whether or not a sign-in is live.
+    clock.now += 301
+    vars(access)["_logins"].clear()
+    assert access.researcher_access_token() is None
+    assert access.service_token("svc-data", "heartwood-data") is None
+    for secret in (bearer, short):
+        assert secret not in repr(access)
+        assert secret not in repr(vars(access)["_bearer"])
+
+
+def _listed_servers(gateway: SessionGateway) -> list[dict[str, Any]]:
+    return cast(list[dict[str, Any]], gateway.mcp_servers.settings()["servers"])
+
+
+def _destination(origin: str, **fields: object) -> McpDestination:
+    return McpDestination.model_validate(
+        {
+            "service_id": "synthetic-data",
+            "origin": origin,
+            "tools": ["get_object"],
+            "observation_tool": "get_operation",
+            "token_exchange": {"scope": "svc-data", "audience": "heartwood-data"},
+            **fields,
+        }
+    )
+
+
+def test_a_research_service_receives_the_exchanged_token_of_its_own_project_and_audience(
+    tmp_path: Path,
+) -> None:
+    provider = _Provider()
+    issuer = FakeTokenIssuer()
+    project = {"id": PROJECT_ID}
+    audience = {"value": DATA_AUDIENCE}
+    provider.exchanged = lambda _audience: issuer.exchange(
+        audience=audience["value"], project_id=project["id"], subject=_SUBJECT
+    )
+    access = _access(tmp_path, provider)
+    workspace = tmp_path / "research"
+
+    def listed(gateway: SessionGateway, destination: McpDestination) -> dict[str, Any]:
+        server = gateway.config_store.load().mcp_servers[0]
+        with gateway.mcp_servers.connect(server, destination) as client:
+            result = client.call_async_from_sync(
+                client.call_tool_mcp, "list_objects", {"project_id": PROJECT_ID}, timeout=5
+            )
+        return cast(dict[str, Any], result.model_dump(mode="json", by_alias=True))
+
+    with serve(FakeDataService(issuer).app) as origin:
+        destination = _destination(origin)
+        workspace.mkdir()
+        gateway = SessionGateway(
+            project=ProjectContext(workspace),
+            env={},
+            backend_id="deterministic",
+            mcp_destinations=(destination,),
+            service_tokens=access.service_token,
+        )
+        try:
+            servers = gateway.mcp_servers
+            servers.add("data", "Synthetic data", f"{origin}/mcp", None, False)
+            # Without a sign-in the service is not contacted and shows no credential.
+            with pytest.raises(McpServerError, match=r"HW-INGRESS-004.*signs in"):
+                servers.test("data", None, False)
+            assert _listed_servers(gateway)[0]["authentication"]["status"] == "missing"
+            assert provider.exchanges == []
+
+            _sign_in(access, provider)
+            assert _listed_servers(gateway)[0]["authentication"]["status"] == "valid"
+            tested = cast(dict[str, Any], servers.test("data", None, False))
+            assert "list_objects" in {tool["name"] for tool in tested["tools"]}
+            assert not listed(gateway, destination).get("isError")
+
+            # An entered token is refused, and a stored one is never read.
+            entered = issuer.exchange(audience=DATA_AUDIENCE)
+            with pytest.raises(McpServerError, match=r"accepts no entered token"):
+                servers.test("data", entered, False)
+            with pytest.raises(McpServerError, match=r"accepts no entered token"):
+                servers.add("other", "Other", f"{origin}/mcp", entered, True)
+            assert len(_listed_servers(gateway)) == 1
+
+            # The service refuses the token of another project's client and another audience.
+            _sign_in(access, provider)
+            project["id"] = OTHER_PROJECT_ID
+            assert listed(gateway, destination)["isError"]
+            _sign_in(access, provider)
+            project["id"], audience["value"] = PROJECT_ID, "https://jobs.synthetic.invalid"
+            with pytest.raises(McpServerError, match=r"HW-MCP-005"):
+                listed(gateway, destination)
+
+            # A refusal or an outage at the provider reaches the caller as a stable diagnostic.
+            _sign_in(access, provider)
+            provider.services.clear()
+            with pytest.raises(McpServerError, match=r"HW-INGRESS-004.*issued no token"):
+                servers.test("data", None, False)
+            assert _listed_servers(gateway)[0]["authentication"]["status"] == "missing"
+            provider.unreachable = True
+            with pytest.raises(McpServerError, match=r"HW-INGRESS-005"):
+                servers.test("data", None, False)
+        finally:
+            gateway.stop()
+
+    stored = b"".join(path.read_bytes() for path in workspace.rglob("*") if path.is_file())
+    for secret in (*provider.issued, entered):
+        assert secret.encode() not in stored
+
+
+def test_a_destination_with_a_token_exchange_has_no_token_without_identity(tmp_path: Path) -> None:
+    workspace = tmp_path / "research"
+    workspace.mkdir()
+    destination = _destination("https://data.example.test")
+    gateway = SessionGateway(
+        project=ProjectContext(workspace),
+        env={"HEARTWOOD_MCP_TOKEN_SYNTHETIC_DATA": "stored-token"},
+        backend_id="deterministic",
+        mcp_destinations=(destination,),
+    )
+    try:
+        assert gateway.mcp_servers.token(destination) is None
+    finally:
+        gateway.stop()
+
+
+@pytest.mark.parametrize(
+    "exchange",
+    [
+        {"scope": "svc-data"},
+        {"audience": "heartwood-data"},
+        {"scope": "two scopes", "audience": "heartwood-data"},
+        {"scope": "svc-data", "audience": ""},
+        {"scope": "svc-data", "audience": "heartwood-data", "subject_token": "value"},
+    ],
+)
+def test_a_token_exchange_declaration_names_one_scope_and_one_audience(
+    exchange: dict[str, str],
+) -> None:
+    with pytest.raises(ValidationError):
+        _destination("https://data.example.test", token_exchange=exchange)
+
+
+def test_manifest_refuses_a_token_exchange_without_the_identity_table(tmp_path: Path) -> None:
+    table = _identity_table(tmp_path)
+    manifest, workspace = _manifest(tmp_path, table)
+    record = tomllib.loads(manifest.read_text())
+    del record["identity"]
+    record["mcp_destinations"] = [
+        _destination("https://data.example.test").model_dump(mode="json", exclude_none=True)
+    ]
+    manifest.write_text(tomli_w.dumps(record))
+
+    with pytest.raises(ProjectStateError, match=r"token exchange requires \[identity\]"):
+        load_project_deployment(manifest, project_root=workspace, env={})
