@@ -6,17 +6,21 @@
 
 from __future__ import annotations
 
+import base64
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from fakes import AUDIENCE, HUB, ISSUER, FakeKeycloak, SigningKey, TokenReviews
+from fakes import AUDIENCE, HUB, ISSUER, FakeKeycloak, FakeKubernetes, SigningKey, TokenReviews
+from heartwood_platform.common.kubernetes import Kubernetes
 from heartwood_platform.common.tokens import ResearcherTokens, ServiceTokens
 from heartwood_platform.control.__main__ import Settings
 from heartwood_platform.control.app import create_app
 from heartwood_platform.control.keycloak import Keycloak
 from heartwood_platform.control.launch import LaunchService
 from heartwood_platform.control.registry import Project, Registry
+from heartwood_platform.control.sessions import Sessions, SessionSettings
 from starlette.testclient import TestClient
 
 from heartwood.schemas import PlatformLaunchContext
@@ -25,6 +29,13 @@ _HUB = {"Authorization": "Bearer hub-token"}
 _ALICE = "0b9f5d1e-7c64-4f0e-9d53-6f6f3f0f1a01"
 _BOB = "0b9f5d1e-7c64-4f0e-9d53-6f6f3f0f1a02"
 _NOW = datetime(2026, 11, 19, 12, 0, tzinfo=UTC)
+_OBJECTS = (
+    Path(__file__).resolve().parents[2]
+    / "chart"
+    / "heartwood-platform"
+    / "files"
+    / "openshell-session.json"
+)
 _TEMPLATE = "https://hub.example.test/user/{subject}/{project}/oauth_callback"
 
 
@@ -43,8 +54,24 @@ class Platform:
         keycloak = Keycloak(
             self.keycloak.client(), "heartwood", "heartwood-control", lambda: "control-secret"
         )
+        self.kubernetes = FakeKubernetes()
+        sessions = Sessions(
+            Kubernetes(self.kubernetes.client()),
+            SessionSettings(
+                control_namespace="heartwood-platform",
+                control_account="heartwood-control",
+                gateway_namespace="heartwood-sessions",
+                openshell_objects=_OBJECTS.read_text(encoding="utf-8"),
+                openshell_gateway_image="registry.example.test/gateway@sha256:" + "1" * 64,
+                api_server=(),
+                quota={"pods": "20"},
+                container_defaults={"cpu": "500m"},
+                container_default_requests={"cpu": "100m"},
+            ),
+            self.registry.session_ids,
+        )
         launches = LaunchService(
-            self.registry, keycloak, "reference-platform", _TEMPLATE, clock=lambda: _NOW
+            self.registry, keycloak, sessions, "reference-platform", _TEMPLATE, clock=lambda: _NOW
         )
         self.client = TestClient(
             create_app(
@@ -101,6 +128,11 @@ def test_launch_returns_the_registry_binding_and_prepares_the_project_client(
         "client_id": "hw-proj-demo",
         "redirect_uri": redirect_uri,
         "launch_context": context.model_dump(mode="json"),
+        "namespace": f"hw-s-{launch['session']}",
+        "namespace_uid": launch["namespace_uid"],
+        "kube_system_uid": "uid-0",
+        "gateway_service_account": f"hw-gw-{launch['session']}",
+        "openshell_endpoint": f"https://openshell.hw-s-{launch['session']}.svc.cluster.local:8080",
     }
     assert context == PlatformLaunchContext(
         project_context_id=str(launch["session"]),
@@ -112,6 +144,24 @@ def test_launch_returns_the_registry_binding_and_prepares_the_project_client(
         issued_at=_NOW,
     )
     assert platform.keycloak.by_client_id("hw-proj-demo")["redirectUris"] == [redirect_uri]
+
+
+def test_gateway_secret_holds_the_launch_and_the_credentials_and_the_reply_holds_none(
+    platform: Platform,
+) -> None:
+    launch = platform.launch(_BOB, "demo")
+
+    secret = platform.kubernetes.kind("Secret", "heartwood-sessions")[f"hw-gw-{launch['session']}"]
+    files = {name: base64.b64decode(value).decode() for name, value in secret["data"].items()}
+    assert json.loads(files.pop("launch.json")) == launch
+    assert files == {
+        "keycloak-client-secret": "secret-of-uuid-1",
+        "openshell-ca.crt": f"ca.crt of hw-s-{launch['session']}",
+        "openshell-tls.crt": f"tls.crt of hw-s-{launch['session']}",
+        "openshell-tls.key": f"tls.key of hw-s-{launch['session']}",
+    }
+    for credential in files.values():
+        assert credential not in json.dumps(launch)
 
 
 def test_relaunch_reuses_the_session_and_researchers_share_the_project_client(
@@ -146,6 +196,7 @@ def test_launch_outside_the_registry_is_refused_and_changes_nothing(
     assert response.status_code == status
     assert platform.keycloak.clients == {}
     assert platform.registry.session(subject, project) is None
+    assert platform.kubernetes.calls == []
 
 
 @pytest.mark.parametrize(
@@ -215,6 +266,8 @@ def test_deletion_removes_the_session_and_its_redirect_uri(platform: Platform) -
     assert platform.keycloak.by_client_id("hw-proj-demo")["redirectUris"] == [kept["redirect_uri"]]
     headers = platform.researcher(_BOB, "demo")
     assert platform.client.get("/v1/launch-context", headers=headers).status_code == 404
+    assert f"/api/v1/namespaces/hw-s-{first['session']}" not in platform.kubernetes.objects
+    assert f"/api/v1/namespaces/hw-s-{kept['session']}" in platform.kubernetes.objects
     assert platform.launch(_BOB, "demo")["session"] != first["session"]
 
 
@@ -241,6 +294,17 @@ def test_settings_refuse_duplicate_projects_and_other_template_fields(tmp_path: 
             "realm": "heartwood",
             "client_id": "heartwood-control",
             "client_secret_file": "/nonexistent",
+        },
+        "sessions": {
+            "control_namespace": "heartwood-platform",
+            "control_account": "heartwood-control",
+            "gateway_namespace": "heartwood-sessions",
+            "openshell_objects_file": str(_OBJECTS),
+            "openshell_gateway_image": "registry.example.test/gateway@sha256:" + "1" * 64,
+            "api_server": [{"cidr": "10.96.0.1/32", "port": 443}],
+            "quota": {"pods": "20"},
+            "container_defaults": {"cpu": "500m"},
+            "container_default_requests": {"cpu": "100m"},
         },
         "projects": [project],
     }

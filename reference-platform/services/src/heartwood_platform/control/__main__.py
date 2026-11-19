@@ -23,6 +23,7 @@ from heartwood_platform.control.app import ProjectId, Subject, create_app
 from heartwood_platform.control.keycloak import Keycloak
 from heartwood_platform.control.launch import LaunchService
 from heartwood_platform.control.registry import Project, Registry
+from heartwood_platform.control.sessions import ApiServerAddress, Sessions, SessionSettings
 
 # The form of the references in a launch context.
 Reference = Annotated[str, StringConstraints(pattern=r"^\S{1,512}$")]
@@ -51,6 +52,27 @@ class ProjectSettings(_Settings):
     members: frozenset[Subject] = frozenset()
 
 
+class ApiServerSettings(_Settings):
+    """An address under which pods reach the Kubernetes API server."""
+
+    cidr: str
+    port: int
+
+
+class SessionNamespaceSettings(_Settings):
+    """How the control service provisions session namespaces."""
+
+    control_namespace: str
+    control_account: str
+    gateway_namespace: str
+    openshell_objects_file: Path
+    openshell_gateway_image: str
+    api_server: tuple[ApiServerSettings, ...]
+    quota: dict[str, str]
+    container_defaults: dict[str, str]
+    container_default_requests: dict[str, str]
+
+
 class Settings(_Settings):
     """The configuration file of the control service."""
 
@@ -60,6 +82,7 @@ class Settings(_Settings):
     service_callers: frozenset[str]
     redirect_uri_template: str
     keycloak: KeycloakSettings
+    sessions: SessionNamespaceSettings
     projects: tuple[ProjectSettings, ...]
 
     @model_validator(mode="after")
@@ -98,8 +121,29 @@ def build(settings: Settings, kubernetes: Kubernetes) -> Starlette:
         assert isinstance(document, dict)
         return document
 
+    namespaces = settings.sessions
+    sessions = Sessions(
+        kubernetes,
+        SessionSettings(
+            control_namespace=namespaces.control_namespace,
+            control_account=namespaces.control_account,
+            gateway_namespace=namespaces.gateway_namespace,
+            openshell_objects=namespaces.openshell_objects_file.read_text(encoding="utf-8"),
+            openshell_gateway_image=namespaces.openshell_gateway_image,
+            api_server=tuple(
+                ApiServerAddress(address.cidr, address.port) for address in namespaces.api_server
+            ),
+            quota=namespaces.quota,
+            container_defaults=namespaces.container_defaults,
+            container_default_requests=namespaces.container_default_requests,
+        ),
+        registry.session_ids,
+    )
+    launches = LaunchService(
+        registry, keycloak, sessions, settings.platform_id, settings.redirect_uri_template
+    )
     return create_app(
-        LaunchService(registry, keycloak, settings.platform_id, settings.redirect_uri_template),
+        launches,
         ResearcherTokens(settings.keycloak.issuer, settings.audience, keys),
         ServiceTokens(kubernetes.review_token, settings.audience, settings.service_callers),
     )

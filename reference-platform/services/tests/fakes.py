@@ -169,3 +169,93 @@ class FakeKeycloak:
                 self.clients[identifier]["optionalClientScopes"].append(self.scopes[parts[3]])
             return httpx.Response(204)
         return httpx.Response(405)
+
+
+_BINDINGS = "/apis/rbac.authorization.k8s.io/v1/clusterrolebindings"
+
+
+class FakeKubernetes:
+    """The part of the Kubernetes API that the control service calls.
+
+    Objects are kept by their API path. A certificate Secret appears once the
+    certificate Job exists, and the gateway StatefulSet reports a ready replica after
+    a number of reads, as the certificate Job and the gateway would cause.
+    """
+
+    def __init__(self) -> None:
+        self.objects: dict[str, dict[str, Any]] = {
+            "/api/v1/namespaces/kube-system": {"metadata": {"name": "kube-system", "uid": "uid-0"}},
+            f"{_BINDINGS}/heartwood-openshell-node-reader": {
+                "metadata": {"name": "heartwood-openshell-node-reader"},
+                "roleRef": {"kind": "ClusterRole", "name": "heartwood-openshell-node-reader"},
+            },
+        }
+        self.calls: list[tuple[str, str]] = []
+        self.reads_until_ready = 1
+        self._reads = 0
+        self._created = 0
+
+    def client(self) -> httpx.Client:
+        transport = httpx.MockTransport(self._handle)
+        return httpx.Client(transport=transport, base_url="https://kubernetes.example.test")
+
+    def kind(self, kind: str, namespace: str | None = None) -> dict[str, dict[str, Any]]:
+        """Return the objects of a kind by name, in one namespace or cluster-wide."""
+        return {
+            item["metadata"]["name"]: item
+            for item in self.objects.values()
+            if item.get("kind") == kind and item["metadata"].get("namespace") == namespace
+        }
+
+    def _handle(self, request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        self.calls.append((request.method, path))
+        if request.method == "POST":
+            body = json.loads(request.content)
+            item = f"{path}/{body['metadata']['name']}"
+            if item in self.objects:
+                return httpx.Response(409)
+            self._created += 1
+            body["metadata"]["uid"] = f"uid-{self._created}"
+            self.objects[item] = body
+            return httpx.Response(201, json=body)
+        if request.method == "PATCH":
+            if (
+                request.headers["Content-Type"] != "application/apply-patch+yaml"
+                or request.url.params.get("fieldManager") != "heartwood-control"
+                or request.url.params.get("force") != "true"
+            ):
+                return httpx.Response(415)
+            self.objects[path] = {**self.objects.get(path, {}), **json.loads(request.content)}
+            return httpx.Response(200, json=self.objects[path])
+        if request.method == "DELETE":
+            if path not in self.objects:
+                return httpx.Response(404)
+            # Deleting a namespace deletes the objects in it.
+            name = path.removeprefix("/api/v1/namespaces/")
+            inside = None if name == path or "/" in name else f"/namespaces/{name}/"
+            for key in list(self.objects):
+                if key == path or (inside is not None and inside in key):
+                    del self.objects[key]
+            return httpx.Response(200)
+        return self._get(path)
+
+    def _get(self, path: str) -> httpx.Response:
+        namespace = path.split("/namespaces/")[-1].split("/")[0]
+        if path.endswith("/secrets/openshell-client-tls"):
+            job = f"/apis/batch/v1/namespaces/{namespace}/jobs/openshell-certgen"
+            if job not in self.objects:
+                return httpx.Response(404)
+            files = {name: f"{name} of {namespace}" for name in ("ca.crt", "tls.crt", "tls.key")}
+            data = {
+                name: base64.b64encode(value.encode()).decode() for name, value in files.items()
+            }
+            return httpx.Response(200, json={"data": data})
+        if path not in self.objects:
+            return httpx.Response(404)
+        found = self.objects[path]
+        if path.endswith("/statefulsets/openshell"):
+            self._reads += 1
+            ready = 1 if self._reads >= self.reads_until_ready else 0
+            found = {**found, "status": {"readyReplicas": ready}}
+        return httpx.Response(200, json=found)

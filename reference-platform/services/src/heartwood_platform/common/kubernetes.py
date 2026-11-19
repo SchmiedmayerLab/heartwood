@@ -40,12 +40,75 @@ def in_cluster_client(directory: Path = _SERVICE_ACCOUNT) -> httpx.Client:
     )
 
 
+# Path prefix, resource name and scope of the object kinds that the services write.
+_RESOURCES = {
+    "Namespace": ("/api/v1", "namespaces", False),
+    "ConfigMap": ("/api/v1", "configmaps", True),
+    "LimitRange": ("/api/v1", "limitranges", True),
+    "ResourceQuota": ("/api/v1", "resourcequotas", True),
+    "Secret": ("/api/v1", "secrets", True),
+    "Service": ("/api/v1", "services", True),
+    "ServiceAccount": ("/api/v1", "serviceaccounts", True),
+    "StatefulSet": ("/apis/apps/v1", "statefulsets", True),
+    "Job": ("/apis/batch/v1", "jobs", True),
+    "NetworkPolicy": ("/apis/networking.k8s.io/v1", "networkpolicies", True),
+    "RoleBinding": ("/apis/rbac.authorization.k8s.io/v1", "rolebindings", True),
+    "ClusterRoleBinding": ("/apis/rbac.authorization.k8s.io/v1", "clusterrolebindings", False),
+}
+_FIELD_MANAGER = "heartwood-control"
+
+
+def _collection(kind: str, namespace: str | None) -> str:
+    prefix, resource, namespaced = _RESOURCES[kind]
+    if namespaced != (namespace is not None):
+        raise ValueError(f"{kind} is {'' if namespaced else 'not '}namespaced")
+    return f"{prefix}/namespaces/{namespace}/{resource}" if namespaced else f"{prefix}/{resource}"
+
+
 class Kubernetes:
     """The Kubernetes API calls of the platform services."""
 
     def __init__(self, client: httpx.Client) -> None:
         """Use a client that is authenticated to the API server."""
         self._client = client
+
+    def create(self, document: dict[str, Any]) -> bool:
+        """Create an object. Return False when an object of that name exists."""
+        metadata = document["metadata"]
+        response = self._client.post(
+            _collection(document["kind"], metadata.get("namespace")), json=document
+        )
+        if response.status_code == httpx.codes.CONFLICT:
+            return False
+        response.raise_for_status()
+        return True
+
+    def apply(self, document: dict[str, Any]) -> None:
+        """Create or update an object with server-side apply, taking over its fields."""
+        metadata = document["metadata"]
+        collection = _collection(document["kind"], metadata.get("namespace"))
+        self._client.patch(
+            f"{collection}/{metadata['name']}",
+            params={"fieldManager": _FIELD_MANAGER, "force": "true"},
+            headers={"Content-Type": "application/apply-patch+yaml"},
+            json=document,
+        ).raise_for_status()
+
+    def get(self, kind: str, name: str, namespace: str | None = None) -> dict[str, Any] | None:
+        """Return an object, or None when it does not exist."""
+        response = self._client.get(f"{_collection(kind, namespace)}/{name}")
+        if response.status_code == httpx.codes.NOT_FOUND:
+            return None
+        response.raise_for_status()
+        document = response.json()
+        assert isinstance(document, dict)
+        return document
+
+    def delete(self, kind: str, name: str, namespace: str | None = None) -> None:
+        """Delete an object, whether or not it exists."""
+        response = self._client.delete(f"{_collection(kind, namespace)}/{name}")
+        if response.status_code != httpx.codes.NOT_FOUND:
+            response.raise_for_status()
 
     def review_token(self, token: str, audience: str) -> dict[str, Any]:
         """Return the status of a TokenReview of a token for one audience."""
