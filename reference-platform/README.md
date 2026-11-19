@@ -286,6 +286,8 @@ A synthetic researcher signs in to a project client with the authorization code 
 The tests check the subject, the authorized party and the single audience of the exchanged token, and that Keycloak refuses an audience without its scope and the client of another project.
 The command line client's device sign-in with the scope `project-demo` gives a token that the client of project demo exchanges with HTTP Basic client authentication, as the gateway does, and that the client of project other cannot exchange.
 The tests check that the control service refuses the researcher's own token, a token for another service, and a researcher who is not a member of the client's project.
+With an exchanged token the estimate tool prices a synthetic plan from the chart's price sheet.
+The tests check that it refuses a request without a token for the control service, another project, and the launch context of another project.
 
 ### Worker Qualification
 
