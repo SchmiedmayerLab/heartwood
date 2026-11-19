@@ -10,7 +10,7 @@ SPDX-License-Identifier: MIT
 
 # Kubernetes Reference Platform
 
-This directory holds the Kubernetes reference platform for synthetic and open data.
+This directory holds code of the Kubernetes reference platform, a deployment for synthetic and open data.
 It is kept apart from the Heartwood application packages under `packages/`.
 
 ## Layout
@@ -22,7 +22,8 @@ It is kept apart from the Heartwood application packages under `packages/`.
 
 ## Separation Rules
 
-- `services/` is its own uv project outside the application workspace. No application package can depend on it, and its dependencies stay out of the application lock.
+- `services/` is its own uv project outside the application workspace.
+  No application package can depend on it, and its dependencies stay out of the application lock.
 - The platform services may depend on `heartwood-schemas`, by path, and on no other application package.
 - Nothing in `packages/` may import `heartwood_platform`.
 - Application packages contain no cloud-specific code.
@@ -43,7 +44,7 @@ An exception that no longer matches a finding also fails the check.
 
 ## Checks
 
-The Reference Platform workflow runs the cloud boundary check and the platform service checks on every pull request and main commit, and `Release Candidate Ready` requires it.
+The [Reference Platform workflow](../.github/workflows/reference-platform.yml) runs the cloud boundary check and the platform service checks.
 To run the same checks locally:
 
 ```bash
