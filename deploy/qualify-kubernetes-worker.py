@@ -283,9 +283,8 @@ def _launch(cluster: Cluster, method: str) -> dict[str, Any]:
     )
     reply = _call(cluster, method, token)
     attempts = 1
-    # A launch can be repeated. The first launch after a chart installation was once
-    # answered with 502 after the control service had created only its own role binding;
-    # the number of requests is recorded with the cluster.
+    # A launch is idempotent, and the spawner repeats one that the control service answers
+    # with 502. The number of requests is recorded with the cluster.
     while method == "PUT" and reply["status"] == 502 and attempts < 3:
         time.sleep(5)
         reply = _call(cluster, method, token)
@@ -407,7 +406,7 @@ def _fixture_objects(cluster: Cluster, launched: dict[str, Any], built: dict[str
             "rules": [
                 {
                     "apiGroups": [""],
-                    "resources": ["pods", "persistentvolumeclaims", "events"],
+                    "resources": ["pods", "persistentvolumeclaims", "events", "services"],
                     "verbs": ["get", "list"],
                 },
                 # One probe pod with a workload pod's labels, and its output.
@@ -732,7 +731,12 @@ def run(arguments: argparse.Namespace) -> None:
             cluster.kubectl("logs", "--namespace", namespace, "openshell-0", "--tail=-1")
         )
     finally:
-        removed = _remove(cluster, namespace)
+        try:
+            removed = _remove(cluster, namespace)
+        except subprocess.CalledProcessError as error:
+            # The evidence records the failed removal; the case error stays the one raised.
+            sys.stderr.write(str(error.stderr or ""))
+            removed = False
     (output / "cluster.json").write_text(json.dumps(record, indent=2) + "\n")
     evidence: dict[str, Any] = {
         "qualification_kind": "synthetic-kubernetes",

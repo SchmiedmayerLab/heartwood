@@ -48,7 +48,9 @@ KUBERNETES_RETAINED = (
     DRILLS,
     "qualification.log",
     "cluster.json",
+    "images.json",
     "gateway.log",
+    "*/launch-failures.log",
     "*/evidence.json",
     "*/cleanup.json",
     "*/session-diagnostics.json",
@@ -215,7 +217,7 @@ def failures(manifest: dict[str, Any]) -> list[str]:
         reasons.append("qualification sources changed during the run")
     if manifest["returncode"] != 0:
         reasons.append("the test command failed")
-    if manifest.get("network_retained"):
+    if manifest["qualification_kind"] != "synthetic-kubernetes" and manifest["network_retained"]:
         reasons.append("the qualification network retained attached resources")
     if manifest["qualification_kind"] == "synthetic-kubernetes" and not manifest["session_removed"]:
         reasons.append("the session namespace was not removed")

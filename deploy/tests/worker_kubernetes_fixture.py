@@ -19,6 +19,7 @@ import os
 import secrets
 import shutil
 import subprocess
+import time
 import traceback
 from collections.abc import Callable, Iterator
 from contextlib import ExitStack, contextmanager, suppress
@@ -381,7 +382,7 @@ class KubernetesFixture:
                     )
                     break
                 except grpc.RpcError:
-                    continue
+                    time.sleep(2)
             else:
                 raise RuntimeError("Probe revocation is uncertain; retaining control state")
             if sandbox_id is not None:

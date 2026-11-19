@@ -156,13 +156,23 @@ def _pod(fixture: KubernetesFixture, name: str, **changes: Any) -> str:  # noqa:
             "runAsNonRoot": True,
             "runAsUser": 10002,
             "runAsGroup": 10002,
+            "fsGroup": 10002,
             "seccompProfile": {"type": "RuntimeDefault"},
         },
         "containers": [container],
     }
+    labels = {"heartwood.project": "case", "heartwood.attempt": "case", "heartwood.role": "staging"}
+    labels.update(changes.pop("labels", {}))
     container.update(changes.pop("container", {}))
     spec.update(changes)
-    return json.dumps({"apiVersion": "v1", "kind": "Pod", "metadata": {"name": name}, "spec": spec})
+    return json.dumps(
+        {
+            "apiVersion": "v1",
+            "kind": "Pod",
+            "metadata": {"name": name, "labels": labels},
+            "spec": spec,
+        }
+    )
 
 
 def _claim(name: str, storage_class: str) -> str:
@@ -189,10 +199,8 @@ def test_kubernetes_gateway_credential_is_confined(infrastructure: KubernetesFix
     def refused(name: str, expected: str, *arguments: str, stdin: str | None = None) -> None:
         code, error = fixture.as_gateway(*arguments, stdin=stdin)
         assert code != 0, f"{name} was permitted"
-        # Pod Security answers before the policy for a pod that both refuse.
-        by = next((by for by in (expected, _POD_SECURITY) if by in error), None)
-        assert by is not None, f"{name}: {error}"
-        refusals[name] = by
+        assert expected in error, f"{name}: {error}"
+        refusals[name] = expected
 
     # The fixed role grants no Secret, no policy change and nothing in another namespace.
     refused("read-secrets", "forbidden", "get", "secrets")
@@ -216,11 +224,33 @@ def test_kubernetes_gateway_credential_is_confined(infrastructure: KubernetesFix
     refused("ephemeral-container", "forbidden", "debug", "openshell-0", "--image=" + fixture.worker)
     # The role grants pod and claim creation; the admission policy admits one shape only.
     name = "hw-staging-" + uuid4().hex
+    # The shape the adapter creates is admitted; the request is a dry run.
+    code, answer = fixture.as_gateway(*create, "--dry-run=server", stdin=_pod(fixture, name))
+    assert code == 0, answer
+    # Pod Security answers before the policy for a pod that both refuse.
+    refused("pod-host-network", _POD_SECURITY, *create, stdin=_pod(fixture, name, hostNetwork=True))
     for case, document in (
         ("pod-other-image", _pod(fixture, name, container={"image": "docker.io/library/busybox"})),
+        (
+            "pod-supervisor-label",
+            _pod(fixture, name, labels={"openshell.ai/boundary-role": "supervisor"}),
+        ),
+        (
+            "pod-other-user",
+            _pod(
+                fixture,
+                name,
+                securityContext={
+                    "runAsNonRoot": True,
+                    "runAsUser": 10001,
+                    "runAsGroup": 10002,
+                    "fsGroup": 10002,
+                    "seccompProfile": {"type": "RuntimeDefault"},
+                },
+            ),
+        ),
         ("pod-default-account", _pod(fixture, name, serviceAccountName="default")),
         ("pod-mounted-token", _pod(fixture, name, automountServiceAccountToken=True)),
-        ("pod-host-network", _pod(fixture, name, hostNetwork=True)),
         (
             "pod-secret-volume",
             _pod(
@@ -419,7 +449,8 @@ def test_kubernetes_workflow_boundary_and_revocation(
                 assert routes.exit_code == 0, routes.stderr
         observed_routes = json.loads(routes.stdout)
         assert set(observed_routes) == {target[0] for target in targets}
-        assert all(outcome != "reached" for outcome in observed_routes.values()), observed_routes
+        # An answer or a connection that the peer closed both mean the route was open.
+        assert not {"reached", "closed"} & set(observed_routes.values()), observed_routes
         assert received == [b"positive-control", b"positive-control"]
         assert len(fixture.provider.observations) == 3
 
@@ -502,6 +533,22 @@ def test_kubernetes_workflow_boundary_and_revocation(
         native._stop(application)
         native._assert_revoked(service)
         assert fixture.objects() == []
+        # The driver's Service and NetworkPolicy of the sandbox are owned by it and go with it.
+        sandbox_id = attempt.runtime.sandbox_id
+        started = time.monotonic()
+        while True:
+            driver_objects = [
+                name
+                for name in fixture.outside(
+                    "get", "services,networkpolicies", "--output=name"
+                ).split()
+                if sandbox_id in name
+            ]
+            if not driver_objects or time.monotonic() - started > 60:
+                break
+            time.sleep(1)
+        assert driver_objects == []
+        driver_objects_seconds = round(time.monotonic() - started, 1)
         native._restore(fixture, application.project, "composition", service.store.audit_path)
         _evidence(
             fixture,
@@ -524,6 +571,8 @@ def test_kubernetes_workflow_boundary_and_revocation(
                 "images": images,
                 "objects_before_revocation": before,
                 "objects_after_revocation": [],
+                "driver_objects_after_revocation": driver_objects,
+                "driver_objects_absent_after_seconds": driver_objects_seconds,
                 "outside_approvals": len(approvals),
                 "revoked_before_writer_release": True,
                 "protected_state_restore": True,
