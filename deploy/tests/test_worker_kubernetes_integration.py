@@ -134,7 +134,7 @@ def _settled(service: SessionService, outcome: str) -> None:
     _absent(str(attempt.intent.attempt_id))
 
 
-def _pod(fixture: KubernetesFixture, name: str, **changes: Any) -> str:
+def _pod(fixture: KubernetesFixture, name: str, **changes: Any) -> str:  # noqa: ANN401
     """A pod of the staging shape, with one difference a case asks for."""
     container: dict[str, Any] = {
         "name": "stage",
@@ -255,7 +255,8 @@ from pathlib import Path
 assert os.getuid()==10001
 assert os.environ['HEARTWOOD_QUALIFICATION_KEY'].startswith('openshell:resolve:env:')
 checks={}
-for name in ['/inputs/summary.json','/inputs/new','/skills/aggregate-export/SKILL.md','/skills/new']:
+projections=['/inputs/summary.json','/inputs/new','/skills/aggregate-export/SKILL.md','/skills/new']
+for name in projections:
  try: Path(name).write_text('tampered')
  except OSError as error:
   assert error.errno in (errno.EROFS,errno.EACCES),error
@@ -573,7 +574,7 @@ def test_kubernetes_conflicting_deletion_is_retried_until_absence(
     answers: list[str] = []
     delete = SandboxClient.delete
 
-    def recorded(client: SandboxClient, name: str, **options: Any) -> Any:
+    def recorded(client: SandboxClient, name: str, **options: Any) -> Any:  # noqa: ANN401
         try:
             answer = delete(client, name, **options)
         except grpc.RpcError as error:
@@ -630,13 +631,14 @@ def test_kubernetes_unsent_creation_is_confirmed_absent(
     create = SandboxClient.create
     unsent: dict[str, Any] = {}
 
-    def lose(client: SandboxClient, **request: Any) -> Never:
+    def lose(client: SandboxClient, **request: Any) -> Never:  # noqa: ANN401
         if "heartwood.attempt" in request.get("labels", {}) and not request["name"].startswith(
             "probe-"
         ):
             unsent.update(request)
             raise TimeoutError("synthetic unsent creation")
-        return create(client, **request)  # type: ignore[return-value]
+        create(client, **request)
+        raise AssertionError("Only the attempt's creation is expected here")
 
     application = native._application(fixture)
     service = application._service("composition")
@@ -675,13 +677,13 @@ def test_kubernetes_unsent_creation_is_confirmed_absent(
 
 
 def _refused_launch(
-    fixture: KubernetesFixture, monkeypatch: pytest.MonkeyPatch, method: str, **deployment: Any
+    fixture: KubernetesFixture, monkeypatch: pytest.MonkeyPatch, method: str, **deployment: str
 ) -> tuple[SessionService, str, list[str]]:
     """Run one launch that the adapter must refuse, and return why it did."""
     refusals: list[str] = []
     original = getattr(KubernetesWorkerVolumes, method)
 
-    def observed(volumes: KubernetesWorkerVolumes, *arguments: Any) -> Any:
+    def observed(volumes: KubernetesWorkerVolumes, *arguments: Any) -> Any:  # noqa: ANN401
         try:
             return original(volumes, *arguments)
         except WorkerAttemptError as error:
@@ -817,9 +819,7 @@ def test_kubernetes_staging_transfers_a_large_input_within_the_request_limit(
         sandbox_policy_sha256=settings.sandbox_policy_sha256,
         input_manifest_sha256="d" * 64,
         control_plane=WorkerControlPlane(
-            gateway_registration_sha256="e" * 64,
-            gateway_endpoint_sha256="f" * 64,
-            container_runtime_sha256=cluster_sha256(settings),
+            control_plane_sha256="e" * 64, container_runtime_sha256=cluster_sha256(settings)
         ),
     )
     volumes = KubernetesWorkerVolumes(settings, intent)
@@ -852,29 +852,29 @@ def test_kubernetes_staging_transfers_a_large_input_within_the_request_limit(
 def test_kubernetes_lost_creation_reply_is_revoked_during_provisioning(
     infrastructure: KubernetesFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    native.test_lost_create_retains_writer_until_native_revocation(infrastructure, monkeypatch)  # type: ignore[arg-type]
+    native.test_lost_create_retains_writer_until_native_revocation(infrastructure, monkeypatch)
 
 
 def test_kubernetes_revoked_worker_is_replaced_for_the_next_command(
     infrastructure: KubernetesFixture,
 ) -> None:
-    native.test_native_revoked_worker_is_replaced_for_the_next_command(infrastructure)  # type: ignore[arg-type]
+    native.test_native_revoked_worker_is_replaced_for_the_next_command(infrastructure)
 
 
 @pytest.mark.parametrize("pending", [False, True], ids=["settled", "pending"])
 def test_kubernetes_gateway_restart_reconciles_the_session(
     infrastructure: KubernetesFixture, pending: bool
 ) -> None:
-    lifecycle.test_native_gateway_restart_reconciles_the_session(infrastructure, pending)  # type: ignore[arg-type]
+    lifecycle.test_native_gateway_restart_reconciles_the_session(infrastructure, pending)
 
 
 def test_kubernetes_cancellation_settles_without_repeating_the_effect(
     infrastructure: KubernetesFixture,
 ) -> None:
-    lifecycle.test_native_cancellation_settles_without_repeating_the_effect(infrastructure)  # type: ignore[arg-type]
+    lifecycle.test_native_cancellation_settles_without_repeating_the_effect(infrastructure)
 
 
 def test_kubernetes_migrated_project_serves_through_the_operator_manifest(
     infrastructure: KubernetesFixture,
 ) -> None:
-    lifecycle.test_native_migrated_project_serves_through_the_operator_manifest(infrastructure)  # type: ignore[arg-type]
+    lifecycle.test_native_migrated_project_serves_through_the_operator_manifest(infrastructure)

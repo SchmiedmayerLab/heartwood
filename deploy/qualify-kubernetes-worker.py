@@ -104,12 +104,15 @@ class Cluster:
     """Administrator access to the kind cluster, for what the platform would provide."""
 
     def __init__(self, name: str) -> None:
+        """Select the kubectl context that kind wrote for the cluster."""
         self.name = name
 
     def kubectl(self, *arguments: str, stdin: str | None = None) -> str:
+        """Run one kubectl command and return its output."""
         return _output(["kubectl", "--context", "kind-" + self.name, *arguments], stdin=stdin)
 
     def apply(self, *documents: dict[str, Any]) -> None:
+        """Create or update objects."""
         self.kubectl(
             "apply",
             "--filename=-",
@@ -117,6 +120,7 @@ class Cluster:
         )
 
     def json(self, *arguments: str) -> Any:  # noqa: ANN401
+        """Read objects as the API reports them."""
         return json.loads(self.kubectl("get", *arguments, "--output=json"))
 
 

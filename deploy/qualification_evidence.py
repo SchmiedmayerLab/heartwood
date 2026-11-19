@@ -130,7 +130,7 @@ KUBERNETES_PLATFORM_REQUIREMENTS = (
     {
         "docker_evidence": "HostConfig.CgroupnsMode private on the worker container",
         "kubernetes_evidence": None,
-        "platform_requirement": "nodes with cgroup v2, where each container has a private cgroup namespace",
+        "platform_requirement": "cgroup v2 nodes with a private cgroup namespace per container",
     },
     {
         "docker_evidence": "AppArmor profile and SELinux label in HostConfig.SecurityOpt",

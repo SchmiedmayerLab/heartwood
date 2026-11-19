@@ -6,9 +6,10 @@
 
 name: Kubernetes Qualification
 
+# The cluster job downloads the wheels and the gateway that the Worker Dependency
+# Candidate workflow built in the same run, so a caller runs this workflow after it.
 on:
   workflow_call:
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -54,7 +55,7 @@ jobs:
     needs: scope
     if: needs.scope.outputs.required == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 60
     env:
       KIND_VERSION: v0.33.0
       KIND_SHA256: aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d
@@ -89,6 +90,18 @@ jobs:
         with:
           version: "0.13.7"
           enable-cache: true
+      - name: Download candidate wheels
+        uses: actions/download-artifact@v8
+        with:
+          name: worker-dependency-candidate-${{ github.sha }}
+          path: test-results/worker-candidate
+      - name: Download the pinned gateway build
+        uses: actions/download-artifact@v8
+        with:
+          name: worker-gateway-candidate-${{ github.sha }}
+          path: test-results/gateway-candidate
+      - name: Build and check candidate images
+        run: bash images/worker/build-candidate-images.sh test-results/worker-candidate "${GITHUB_SHA}"
       - name: Create the kind cluster with Calico and Agent Sandbox
         run: bash reference-platform/cluster/create-cluster.sh heartwood
       - name: Require network policy enforcement
@@ -102,16 +115,40 @@ jobs:
           image="$(bash reference-platform/cluster/push-image.sh heartwood \
             heartwood-platform-services:candidate)"
           echo "PLATFORM_SERVICES_IMAGE=${image}" >> "${GITHUB_ENV}"
+      - name: Build the gateway and controller images and push them with the worker image
+        run: |
+          python3 deploy/qualify-kubernetes-worker.py images --cluster heartwood \
+            --worker-image heartwood-worker:qualification \
+            --runtime-image heartwood-runtime:qualification \
+            --gateway-artifacts test-results/gateway-candidate \
+            --output test-results/kubernetes-qualification/worker
+          images=test-results/kubernetes-qualification/worker/images.json
+          {
+            echo "GATEWAY_IMAGE=$(jq --raw-output .image_references.gateway "${images}")"
+            echo "WORKER_IMAGE=$(jq --raw-output .image_references.worker "${images}")"
+          } >> "${GITHUB_ENV}"
+      # Sessions run the built gateway, and staging pods run the worker image by digest.
       - name: Install the platform chart
         run: >-
           bash reference-platform/cluster/install-chart.sh heartwood
           --set "images.platformServices=${PLATFORM_SERVICES_IMAGE}"
+          --set "images.openshellGateway=${GATEWAY_IMAGE}"
+          --set "sessions.stagingImage=${WORKER_IMAGE}"
       - name: Test the installed chart
         working-directory: reference-platform/services
         run: |
           uv sync --locked
           uv run pytest -c pyproject.toml ../tests/cluster --cluster-context kind-heartwood \
+            --staging-image "${WORKER_IMAGE}" \
             --junitxml ../../test-results/kubernetes-qualification/platform-chart.xml
+      - name: Qualify managed workers on the Kubernetes driver
+        run: >-
+          python3 deploy/qualify-kubernetes-worker.py run --cluster heartwood
+          --output test-results/kubernetes-qualification/worker
+      - name: Verify the evidence for this commit
+        run: >-
+          python3 deploy/qualification_evidence.py
+          test-results/kubernetes-qualification/worker --commit "${GITHUB_SHA}"
       - name: Export cluster logs
         if: failure()
         run: kind export logs test-results/kubernetes-qualification/kind-logs --name heartwood
@@ -120,6 +157,8 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: kubernetes-qualification-${{ github.sha }}
-          path: test-results/kubernetes-qualification/
+          path: |
+            test-results/kubernetes-qualification/
+            !test-results/kubernetes-qualification/worker/gateway/
           if-no-files-found: ignore
           retention-days: ${{ github.event_name == 'pull_request' && 14 || 90 }}

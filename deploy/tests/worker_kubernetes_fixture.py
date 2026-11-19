@@ -138,7 +138,7 @@ class KubernetesFixture:
             env={**self.env, **environment},
         )
 
-    def _run(self, kubeconfig: Path, arguments: tuple[str, ...], stdin: str | None) -> Any:
+    def _run(self, kubeconfig: Path, arguments: tuple[str, ...], stdin: str | None) -> Any:  # noqa: ANN401
         return subprocess.run(
             [
                 str(self.kubectl),
@@ -302,7 +302,7 @@ class KubernetesFixture:
             process=policy_pb.ProcessPolicy(run_as_user="10001", run_as_group="10001"),
         )
 
-    def exec(self, worker: str, arguments: list[str], *, timeout: int = 30) -> Any:
+    def exec(self, worker: str, arguments: list[str], *, timeout: int = 30) -> Any:  # noqa: ANN401
         """Run a probe inside a worker through the sandbox gateway."""
         return self.control.exec(
             worker, arguments, workspace=WORKSPACE, timeout_seconds=timeout, no_login_shell=True
@@ -378,7 +378,7 @@ class KubernetesFixture:
         finally:
             self.revoke_probes()
 
-    def deployment(self, inputs: WorkerInputManifest, **changes: Any) -> KubernetesWorkerDeployment:
+    def deployment(self, inputs: WorkerInputManifest, **changes: str) -> KubernetesWorkerDeployment:
         policy_path = self.private / "policy.json"
         policy_path.write_text(json.dumps(MessageToDict(self.policy)))
         policy_path.chmod(0o600)

@@ -23,6 +23,8 @@ jobs:
   # A cluster failure fails this run; it does not block the native evidence attestation.
   kubernetes-qualification:
     name: Kubernetes Qualification
+    # The cluster stage uses the wheels and the gateway of the candidate build.
+    needs: native-qualification
     uses: ./.github/workflows/kubernetes-qualification.yml
   evidence-attestation:
     name: Attest Native Qualification Evidence
