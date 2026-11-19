@@ -40,9 +40,25 @@ RETAINED = (
     "*/model-qualification.json",
     "*/worker-container.json",
 )
+# The Kubernetes driver's run retains its own records: what admission read about the pods,
+# and what the run observed about the cluster and the session namespace.
+KUBERNETES_RETAINED = (
+    MANIFEST,
+    REPORT,
+    DRILLS,
+    "qualification.log",
+    "cluster.json",
+    "gateway.log",
+    "*/evidence.json",
+    "*/cleanup.json",
+    "*/session-diagnostics.json",
+    "*/provider-profile.json",
+    "*/worker-pods.json",
+)
 _NATIVE = "test_worker_native_integration::"
 _EXTERNAL = "test_worker_external_integration::"
 _LIFECYCLE = "test_worker_lifecycle_integration::"
+_KUBERNETES = "test_worker_kubernetes_integration::"
 EXPECTED_CASES = {
     "synthetic-native": frozenset(
         {
@@ -78,6 +94,68 @@ EXPECTED_CASES = {
         }
     ),
     "capable-model-native": frozenset({"test_worker_model_integration::test_native_capable_model"}),
+    "synthetic-kubernetes": frozenset(
+        _KUBERNETES + name
+        for name in (
+            "test_kubernetes_gateway_credential_is_confined",
+            "test_kubernetes_workflow_boundary_and_revocation",
+            "test_kubernetes_conflicting_deletion_is_retried_until_absence",
+            "test_kubernetes_unsent_creation_is_confirmed_absent",
+            "test_kubernetes_admission_refuses_another_supervisor_image",
+            "test_kubernetes_admission_refuses_an_added_network_policy",
+            "test_kubernetes_staging_requires_the_default_deny_policy",
+            "test_kubernetes_staging_transfers_a_large_input_within_the_request_limit",
+            "test_kubernetes_lost_creation_reply_is_revoked_during_provisioning",
+            "test_kubernetes_revoked_worker_is_replaced_for_the_next_command",
+            "test_kubernetes_gateway_restart_reconciles_the_session[settled]",
+            "test_kubernetes_gateway_restart_reconciles_the_session[pending]",
+            "test_kubernetes_cancellation_settles_without_repeating_the_effect",
+            "test_kubernetes_migrated_project_serves_through_the_operator_manifest",
+        )
+    ),
+}
+# What the Docker run reads from the worker container and a pod does not show. Each entry
+# names the platform requirement that takes the place of the inspected value.
+KUBERNETES_PLATFORM_REQUIREMENTS = (
+    {
+        "docker_evidence": "HostConfig.NetworkMode none on the worker container",
+        "kubernetes_evidence": "the driver's NetworkPolicies at admission, and route probes",
+        "platform_requirement": "a network plugin that enforces ingress and egress NetworkPolicy",
+    },
+    {
+        "docker_evidence": "HostConfig.PidsLimit on the worker container",
+        "kubernetes_evidence": None,
+        "platform_requirement": "a kubelet process limit for each pod (podPidsLimit)",
+    },
+    {
+        "docker_evidence": "HostConfig.CgroupnsMode private on the worker container",
+        "kubernetes_evidence": None,
+        "platform_requirement": "nodes with cgroup v2, where each container has a private cgroup namespace",
+    },
+    {
+        "docker_evidence": "AppArmor profile and SELinux label in HostConfig.SecurityOpt",
+        "kubernetes_evidence": "the restricted Pod Security level of the namespace at admission",
+        "platform_requirement": "the node's default AppArmor profile or SELinux container policy",
+    },
+)
+# Cases of the Docker run that the Kubernetes run does not repeat, with the reason.
+KUBERNETES_CASES_NOT_RUN = {
+    "records transport, records service and retained-audit cases": (
+        "independent of the compute driver; the Docker run qualifies them"
+    ),
+    "hostile approved action, expired provider credential and telemetry outage": (
+        "sandbox supervisor behavior that does not depend on the compute driver; "
+        "the Docker run qualifies it"
+    ),
+    "symlink workspace image and replacement worker image": (
+        "need further images in the cluster registry"
+    ),
+    "outside effects, two workers and advisory specialist": (
+        "gateway behavior that does not depend on the compute driver; the Docker run qualifies it"
+    ),
+    "forwarder ends with the gateway process": (
+        "the same forwarding process on both drivers; the Docker run qualifies it"
+    ),
 }
 _OUTCOMES = {"failure": "failed", "error": "error", "skipped": "skipped"}
 # Cases that retain their records outside a directory named after the case.
@@ -137,8 +215,10 @@ def failures(manifest: dict[str, Any]) -> list[str]:
         reasons.append("qualification sources changed during the run")
     if manifest["returncode"] != 0:
         reasons.append("the test command failed")
-    if manifest["network_retained"]:
+    if manifest.get("network_retained"):
         reasons.append("the qualification network retained attached resources")
+    if manifest["qualification_kind"] == "synthetic-kubernetes" and not manifest["session_removed"]:
+        reasons.append("the session namespace was not removed")
     executed = [case["id"] for case in manifest["cases"]]
     if sorted(executed) != sorted(EXPECTED_CASES[manifest["qualification_kind"]]):
         reasons.append("the executed cases differ from the expected set")
@@ -210,12 +290,12 @@ def drill_results(directory: Path) -> dict[str, Any]:
     }
 
 
-def write_checksums(directory: Path) -> None:
+def write_checksums(directory: Path, patterns: tuple[str, ...] = RETAINED) -> None:
     """Record the digest of every retained evidence file."""
     retained = sorted(
         {
             path
-            for pattern in RETAINED
+            for pattern in patterns
             for path in directory.glob(pattern)
             if path.is_file() and not path.is_symlink()
         }
