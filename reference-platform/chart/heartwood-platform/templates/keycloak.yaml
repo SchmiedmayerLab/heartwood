@@ -226,10 +226,12 @@ spec:
               set -u
               kcadm() { /opt/keycloak/bin/kcadm.sh "$@" --config /tmp/kcadm.config; }
               # kcadm.sh trusts the platform CA through a truststore made for this run.
+              # /tmp survives a restart of the container, so an earlier truststore is removed.
               export KC_CLI_TRUSTSTORE_PASSWORD="$(head -c 24 /dev/urandom | base64)"
+              rm -f /tmp/truststore.p12
               keytool -importcert -noprompt -alias platform-ca -file /etc/platform-ca/ca.crt \
                 -keystore /tmp/truststore.p12 -storetype PKCS12 \
-                -storepass "${KC_CLI_TRUSTSTORE_PASSWORD}" >/dev/null || exit 1
+                -storepass:env KC_CLI_TRUSTSTORE_PASSWORD >/dev/null || exit 1
               kcadm config truststore /tmp/truststore.p12 || exit 1
               for attempt in $(seq 1 60); do
                 if output="$(kcadm config credentials --server https://keycloak:8443 \

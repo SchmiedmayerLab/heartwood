@@ -381,6 +381,8 @@ def test_keycloak_serves_only_https_with_a_certificate_of_the_platform_ca(
     assert variables["KC_HTTPS_CERTIFICATE_FILE"] == "/opt/keycloak/conf/tls/tls.crt"
     assert variables["KC_HOSTNAME"].startswith("https://")
     assert [port["containerPort"] for port in container["ports"]] == [8443, 9000]
+    for probe in ("startupProbe", "readinessProbe"):
+        assert container[probe]["httpGet"]["scheme"] == "HTTPS"
     configuration = json.loads(
         _named(objects, "ConfigMap", "heartwood-control")["data"]["configuration.json"]
     )

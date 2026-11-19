@@ -78,7 +78,10 @@ PostgreSQL keeps the credentials of the first installation and the Keycloak real
 Keycloak serves only HTTPS, with a certificate that the platform CA signs for the names of its Service (`keycloak`, `keycloak.heartwood-platform`, and the `.svc` and `.svc.cluster.local` forms), valid for 825 days.
 Helm creates the certificate together with the CA and keeps both on an upgrade.
 The issuer of every token is `https://keycloak.heartwood-platform.svc.cluster.local:8443/realms/heartwood`, or the `keycloak.url` value.
-The control service and the bootstrap Job verify Keycloak against the platform CA alone; a gateway does the same with `ca_file` in its `[identity]` table.
+The control service and the bootstrap Job verify Keycloak against the platform CA alone.
+A gateway does the same with `ca_file` in its `[identity]` table, which names a regular file such as a copy that an init container makes, because a file in a ConfigMap volume is a symbolic link that the operator file checks refuse.
+The certificates are not renewed automatically.
+Deleting the Secret `keycloak-tls` and running `helm upgrade` issues a new serving certificate; deleting the Secret `platform-ca` as well replaces the CA and the certificate together, and the control service and running gateways then need a restart to read the new CA.
 A `keycloak.url` with another host name needs a certificate for that name, which the chart does not create.
 
 ### Keycloak Realm
