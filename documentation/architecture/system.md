@@ -210,7 +210,7 @@ The table lists each step next to the Docker step.
 | Read-only use | The worker mounts each volume read-only | The driver configuration names each claim read-only on the volume and on the mount |
 | Removal | No container of the attempt may be listed; then the staging container and the volumes are removed | For up to 90 seconds the Sandbox resource `<workspace>--hw-<attempt>` and every pod of the attempt must become absent; then the staging pod and the claims are deleted and their absence is awaited |
 
-A pod counts as the attempt's when it has the workload pod's name, the attempt's labels, an owner reference to the attempt's Sandbox resource, or the sandbox identifier in `openshell.ai/boundary-pair` or `openshell.ai/sandbox-id`.
+A pod counts as the attempt's when it has the workload pod's or the supervisor pod's name, the attempt's labels, an owner reference to the attempt's Sandbox resource, or the sandbox identifier in `openshell.ai/boundary-pair` or `openshell.ai/sandbox-id`.
 A failed or unreadable `kubectl` request stops staging, and staging is never repeated for an attempt; revocation removes what was created.
 A missing or unreadable listing is never read as absence.
 

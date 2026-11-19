@@ -597,7 +597,15 @@ def test_revocation_removes_claims_only_after_the_worker_is_absent(
 
 @pytest.mark.parametrize(
     "remaining",
-    ["sandbox", "workload-name", "workload-labels", "owned", "pair", "sandbox-label"],
+    [
+        "sandbox",
+        "workload-name",
+        "supervisor-name",
+        "workload-labels",
+        "owned",
+        "pair",
+        "sandbox-label",
+    ],
 )
 def test_claims_stay_while_any_object_of_the_worker_remains(
     volumes: KubernetesWorkerVolumes,
@@ -611,6 +619,8 @@ def test_claims_stay_while_any_object_of_the_worker_remains(
         cluster.place(_SANDBOX, volumes.pod_name)
     elif remaining == "workload-name":
         cluster.place("pod", volumes.pod_name)
+    elif remaining == "supervisor-name":
+        cluster.place("pod", "os-supervisor-" + _SANDBOX_ID)
     elif remaining == "workload-labels":
         cluster.place("pod", "renamed", labels={**volumes.labels, "heartwood.role": "worker"})
     elif remaining == "owned":

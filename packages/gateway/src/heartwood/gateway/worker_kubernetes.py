@@ -1037,8 +1037,9 @@ class KubernetesWorkerVolumes(KubernetesWorkerAdmission):
             labels = _field(metadata, "labels")
             labels = labels if isinstance(labels, dict) else {}
             owners = [owner.get("name") for owner in _objects(metadata, "ownerReferences")]
+            names = [self.pod_name, *(["os-supervisor-" + sandbox_id] if sandbox_id else [])]
             if (
-                _field(metadata, "name") == self.pod_name
+                _field(metadata, "name") in names
                 or self.pod_name in owners
                 or (
                     sandbox_id is not None
