@@ -308,6 +308,31 @@ def test_revocation_never_reports_a_worker_the_cluster_still_shows(
     assert kubernetes.removed == []
 
 
+def test_the_owner_never_reads_absence_in_a_cluster_other_than_the_launch_cluster(
+    kubernetes: _Kubernetes,
+) -> None:
+    runtime = kubernetes.attempt.launch(kubernetes.intent)
+    kubernetes.cluster = "8" * 64
+    with pytest.raises(WorkerControlPlaneError, match="changed after the launch"):
+        kubernetes.attempt.revoke(kubernetes.record("fenced", runtime))
+    assert kubernetes.removed == []
+    kubernetes.cluster = "9" * 64
+    assert kubernetes.attempt.revoke(kubernetes.record("fenced", runtime)).outcome == "revoked"
+    assert kubernetes.removed == ["sandbox-1"]
+
+
+def test_only_a_driver_failure_at_the_start_of_the_answer_is_retried(
+    kubernetes: _Kubernetes, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime = kubernetes.attempt.launch(kubernetes.intent)
+    requests = kubernetes.answer_deletions(
+        monkeypatch, kubernetes.error("INTERNAL", "store failed after " + _CONFLICT)
+    )
+    with pytest.raises(WorkerAttemptError, match="deletion requires reconciliation"):
+        kubernetes.attempt.revoke(kubernetes.record("fenced", runtime))
+    assert len(requests) == 1
+
+
 @pytest.mark.parametrize("revocation", ["owner", "reconciliation"])
 def test_a_conflicting_deletion_is_sent_again_until_the_gateway_completes_it(
     kubernetes: _Kubernetes, monkeypatch: pytest.MonkeyPatch, revocation: str

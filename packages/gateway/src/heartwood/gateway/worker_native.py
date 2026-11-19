@@ -737,6 +737,12 @@ print(json.dumps({'files':files,'uid':os.getuid(),
             self._forward.close()
         if self._volumes is not None:
             self.control.verify_configuration()
+            # Absence is evidence only in the cluster and namespace that ran the attempt.
+            if (
+                isinstance(self._volumes, KubernetesWorkerVolumes)
+                and _control_plane(self.control, self.request.project) != self._control_plane
+            ):
+                raise WorkerControlPlaneError("cluster or namespace changed after the launch")
             _remove_projections(self._volumes, self._sandbox_id)
         if self._workspace is not None:
             self._workspace.reset_client()

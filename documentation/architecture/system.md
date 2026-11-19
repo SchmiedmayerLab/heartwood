@@ -96,7 +96,7 @@ For that reason `review-outside-effects` is never in force outside a sandbox, an
 
 `heartwood gateway serve --deployment MANIFEST` selects the managed worker when the [deployment manifest](#protected-state-and-the-deployment-manifest) contains a `worker` table.
 No other launch path selects it, and a managed session never falls back to the local backend.
-This section describes the worker of the Docker reference driver, `driver = "openshell-docker"`, through which worker launch runs.
+This section describes the worker of the Docker reference driver, `driver = "openshell-docker"`, and names the differences of `driver = "openshell-kubernetes"`.
 
 The worker is the OpenHands agent server from the Heartwood worker image, started by `images/worker/launch.py` as user `10001`.
 Before starting the server it registers the image's own verified advisory specialists.
@@ -200,7 +200,7 @@ A policy without rules, such as a default denial, is accepted, and a selector th
 
 `admission_record` in `heartwood.gateway.worker_kubernetes` returns the inspected values of both pods, the policies, and the namespace for qualification evidence, without environment, commands, or pod labels and annotations.
 It keeps the namespace's Pod Security labels.
-The launcher keeps the record of the latest inspection, accepted or refused, on the attempt's adapter.
+The launcher keeps the record of the latest inspection whose objects could all be read, accepted or refused, on the attempt's adapter.
 
 ### Kubernetes Worker Staging
 
@@ -241,6 +241,7 @@ With the Kubernetes driver, a deletion that the sandbox gateway could not comple
 Only three answers are retried: an `INTERNAL` error that starts with `delete sandbox failed:`, which includes a concurrent change of the Sandbox resource, `FAILED_PRECONDITION`, which reports a pending operation, and `UNAVAILABLE`.
 Before each retry the sandbox's name, labels, and identity are read again.
 The cluster must then show neither the Sandbox resource nor any pod of the attempt, for which revocation waits up to 90 seconds, before the [claims are removed](#kubernetes-worker-staging).
+Revocation reads the cluster's identity again before that and keeps the attempt fenced when it differs from the launch.
 If revocation fails, the attempt stays fenced and the writer stays owned, and the worker can keep running until a retry succeeds: the managed session retries it, first after 15 seconds and then with the wait doubling up to 10 minutes, until revocation is observed, also after the session's service is closed, and the gateway stop and the next gateway start retry it too.
 A fence is raised only when the gateway observes the condition, so a worker the gateway is not exchanging data with is not detected by this path.
 
