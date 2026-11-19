@@ -202,6 +202,9 @@ def test_identity_provider_outage_is_reported_as_unavailable(tmp_path: Path) -> 
         {"scope": "elements", "element_ids": ["missing"]},
         {"scope": "elements", "element_ids": None},
         {"element_ids": ["batch"]},
+        # A billing or project context supplied as an argument is refused.
+        {"billing_attribution_ref": "synthetic-grant-other"},
+        {"project_context_id": "5d1f0a6e-0b7c-4a57-9a3e-0a17a17a17a1"},
     ],
 )
 def test_invalid_requests_are_refused(

@@ -131,7 +131,7 @@ The tool is listed as read-only, and an estimate reserves nothing and authorizes
 Each element has a cost range with its coverage.
 Work without a price, with a quantity in another unit, without an expected quantity or with a quantity of more digits has an unknown cost with the reason, and the total then covers the priced elements with partial coverage.
 Each estimate has a new identity, its creation time, a validity of `estimateValiditySeconds` that ends no later than the prices it used, and a FOCUS evidence reference with a digest for each price it used.
-Expected costs and upper bounds are rounded up and lower bounds down to six decimal places, so a cost above zero is never reported as `"0"`.
+Expected costs and upper bounds are rounded up and lower bounds down to six decimal places, so an expected cost or upper bound above zero is never reported as `"0"`.
 A prediction has at most 500 elements, and estimates are not stored.
 
 Every MCP request carries an exchanged token, verified like the token of `GET /v1/launch-context`, and the researcher must be a member of the token's project.

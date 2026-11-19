@@ -129,6 +129,12 @@ def researcher(cluster: Cluster, staging_image: str) -> Iterator[Researcher]:
                 request(cluster, pod, "DELETE", launch_url(FIRST, project), spawner_token(cluster))
 
 
+def _refusal(result: dict[str, Any]) -> str:
+    assert result["isError"] is True, result
+    assert result.get("structuredContent") is None
+    return str(result["content"][0]["text"])
+
+
 def test_tool_is_listed_read_only(researcher: Researcher) -> None:
     status, answer = researcher.call(researcher.tokens["demo"]["control"], "tools/list", {})
     assert status == 200, answer
@@ -146,7 +152,8 @@ def test_plan_is_priced_from_the_chart_price_sheet(researcher: Researcher) -> No
     assert estimate["project_context_id"] == researcher.sessions["demo"]
     assert estimate["total"]["coverage"] == "complete"
     assert estimate["total"]["denomination"] == {"kind": "currency", "unit": "USD"}
-    assert float(estimate["total"]["expected"]) > 0
+    # The chart's default price sheet prices the synthetic plan at these amounts.
+    assert (estimate["total"]["lower"], estimate["total"]["expected"]) == ("18.54", "24.7")
     assert set(estimate["covered_element_ids"]) == {"exploration", "batch", "inference"}
     assert estimate["focus_evidence"]
     assert estimate["valid_until"] > estimate["created_at"]
@@ -163,11 +170,13 @@ def test_tool_refuses_requests_without_a_token_for_the_control_service(
 
 def test_tool_answers_only_for_the_project_of_the_token(researcher: Researcher) -> None:
     token = researcher.tokens["other"]["control"]
-    # The client of project other asks for project demo.
-    refused = researcher.estimate(token, "demo", researcher.plan("demo"))
-    assert refused["isError"] is True
+    # The client of project other names project demo with its own launch context.
+    assert "project of the token" in _refusal(
+        researcher.estimate(token, "demo", researcher.plan("other"))
+    )
     # It names its own project and presents the launch context of project demo.
-    refused = researcher.estimate(token, "other", researcher.plan("demo"))
-    assert refused["isError"] is True
+    assert "another project context" in _refusal(
+        researcher.estimate(token, "other", researcher.plan("demo"))
+    )
     accepted = researcher.estimate(token, "other", researcher.plan("other"))
     assert accepted.get("isError") is not True, accepted
