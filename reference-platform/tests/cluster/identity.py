@@ -18,6 +18,7 @@ import html
 import json
 import re
 import secrets
+import sys
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -84,7 +85,7 @@ def probe(cluster: Cluster, name: str, image: str) -> Iterator[str]:
             "wait", f"--namespace={SESSIONS}", "--for=condition=Ready", f"pod/{name}"
         )
         assert ready.returncode == 0, ready.stderr
-        _wait_for_spawner_token(cluster)
+        _wait_for_spawner(cluster, name)
         yield name
     finally:
         cluster.kubectl("delete", f"--namespace={SESSIONS}", f"pod/{name}", "--wait")
@@ -92,31 +93,42 @@ def probe(cluster: Cluster, name: str, image: str) -> Iterator[str]:
             cluster.kubectl("delete", f"--namespace={SESSIONS}", "serviceaccount/hub")
 
 
-def _wait_for_spawner_token(cluster: Cluster) -> None:
-    """Wait until the API server accepts tokens of the stand-in for the spawner.
+def _wait_for_spawner(cluster: Cluster, pod: str) -> None:
+    """Wait until the control service accepts a token of the stand-in for the spawner.
 
-    A ServiceAccount that an earlier test deleted and this probe created again is
-    refused in TokenReviews until the API server's cache holds the new account.
+    In some full runs the control service refused the first tokens of a ServiceAccount
+    that an earlier module had deleted and this probe created again. The refusals that
+    precede acceptance are printed, so a run shows whether the wait was needed.
     """
     deadline = time.monotonic() + 60
+    refused: list[tuple[int, object]] = []
     while True:
-        review = {
-            "apiVersion": "authentication.k8s.io/v1",
-            "kind": "TokenReview",
-            "spec": {"token": spawner_token(cluster), "audiences": ["heartwood-control"]},
-        }
-        result = cluster.kubectl(
+        token = spawner_token(cluster)
+        status, _ = request(
+            cluster, pod, "GET", f"{CONTROL}/v1/researchers/{FIRST}/projects", token
+        )
+        if status == 200:
+            if refused:
+                print(f"the control service refused the spawner first: {refused}", file=sys.stderr)
+            return
+        # The API server's own answer for the same token, to tell the causes apart.
+        review = cluster.kubectl(
             "create",
             "--raw",
             "/apis/authentication.k8s.io/v1/tokenreviews",
             "--filename",
             "-",
-            text_input=json.dumps(review),
+            text_input=json.dumps(
+                {
+                    "apiVersion": "authentication.k8s.io/v1",
+                    "kind": "TokenReview",
+                    "spec": {"token": token, "audiences": ["heartwood-control"]},
+                }
+            ),
         )
-        assert result.returncode == 0, result.stderr
-        if json.loads(result.stdout).get("status", {}).get("authenticated") is True:
-            return
-        assert time.monotonic() < deadline, "the spawner's tokens are not accepted"
+        answer = json.loads(review.stdout).get("status", {}) if review.returncode == 0 else None
+        refused.append((status, answer and {k: answer.get(k) for k in ("authenticated", "error")}))
+        assert time.monotonic() < deadline, f"the spawner's tokens are not accepted: {refused}"
         time.sleep(1)
 
 
