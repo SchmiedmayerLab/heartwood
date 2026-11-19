@@ -640,7 +640,7 @@ Tests marked as expected failures state behavior that Heartwood requires and the
 
 | Area | Client behavior |
 |---|---|
-| Discovery | Lists tools with their annotations. Never reads resources or prompts. Does not follow redirects, so a redirect to another origin receives no request. |
+| Discovery | Lists tools with their annotations. Never reads resources or prompts. Follows a redirect within the same origin. A redirect to another origin is not followed and receives no request. |
 | Tool-set changes | A change announced with `notifications/tools/list_changed` reaches a client that the gateway owns through its `on_tools_reconciled` callback. An agent configured with `mcp_config` registers the announced tools at once. |
 | Credentials | A rejected credential fails discovery with the same generic error as an unavailable service. With a bearer header configured, the session journal, the audit log and the persisted conversation files contain no credential. |
 | Results | A result reaches the agent as text, without a size limit. Heartwood truncates the result it records in the session. |
