@@ -17,6 +17,8 @@ license = "MIT"
 authors = [{ name = "Stanford University and the project authors" }]
 dependencies = [
     "heartwood-schemas",
+    "fastmcp==4.1.6",
+    "mcp==2.3.0",
     "pydantic>=2.12",
     "httpx>=0.28.1",
     "pyjwt[crypto]>=2.15",

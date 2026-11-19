@@ -29,6 +29,7 @@ from heartwood_platform.control.__main__ import Settings
 from heartwood_platform.control.app import create_app
 from heartwood_platform.control.keycloak import Keycloak
 from heartwood_platform.control.launch import LaunchService
+from heartwood_platform.control.prices import PriceSheet
 from heartwood_platform.control.registry import Project, Registry
 from heartwood_platform.control.sessions import ProvisionedSession, Sessions, SessionSettings
 from starlette.testclient import TestClient
@@ -89,6 +90,8 @@ class Platform:
                 launches,
                 ResearcherTokens(ISSUER, AUDIENCE, self.key.key_set),
                 ServiceTokens(self.reviews.review, AUDIENCE, frozenset({HUB})),
+                PriceSheet.model_validate(SYNTHETIC_PRICES),
+                clock=lambda: _NOW,
             )
         )
 

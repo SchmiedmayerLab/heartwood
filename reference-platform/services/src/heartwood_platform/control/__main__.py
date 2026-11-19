@@ -159,6 +159,7 @@ def build(settings: Settings, kubernetes: Kubernetes) -> Starlette:
         launches,
         ResearcherTokens(settings.keycloak.issuer, settings.audience, keys),
         ServiceTokens(kubernetes.review_token, settings.audience, settings.service_callers),
+        settings.synthetic_prices,
     )
 
 
