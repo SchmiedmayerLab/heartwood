@@ -12,6 +12,9 @@ SPDX-License-Identifier: MIT
 **Agent**
 : Software that uses a model and tools iteratively to pursue a task rather than returning only one text response.
 
+**Agent Sandbox**
+: A Kubernetes project whose controller creates and manages sandbox pods from Sandbox resources; the OpenShell Kubernetes driver uses it.
+
 **Agent Skills**
 : An open directory format for agent instructions and optional scripts, references, assets, and tool declarations; Heartwood loads it through OpenHands.
 
@@ -35,6 +38,9 @@ SPDX-License-Identifier: MIT
 
 **Authorization Domain**
 : A Terra access restriction that limits a workspace and its data to members of named groups.
+
+**Calico**
+: A Kubernetes network plugin that enforces NetworkPolicy; the Kubernetes cluster stage installs it on kind.
 
 **Candidate build**
 : A reproducible build of worker, application, or sandbox gateway artifacts from pinned upstream sources and reviewed patches, used for native qualification.

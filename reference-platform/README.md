@@ -17,8 +17,8 @@ It is kept apart from the Heartwood application packages under `packages/`.
 
 | Path | Content |
 |---|---|
-| `cluster/` | kind cluster fixture: configuration, creation and deletion scripts, and the network policy controls |
 | `chart/heartwood-platform/values-gke.yaml` | Chart values for the GKE cluster: storage class and GPU node placement |
+| `cluster/` | kind cluster fixture: configuration, creation and deletion scripts, and the network policy controls |
 | `infrastructure/gke/` | OpenTofu configuration of the GKE cluster; see its [README](infrastructure/gke/README.md) |
 | `services/` | Python project `heartwood-reference-platform` with its own `pyproject.toml` and `uv.lock`; package `heartwood_platform` in `src/`, tests in `tests/` |
 | `tools/` | `check_cloud_boundary.py`, the cloud boundary check |
@@ -78,5 +78,6 @@ bash reference-platform/cluster/delete-cluster.sh heartwood
 
 `create-cluster.sh` installs Calico and the Agent Sandbox controller from pinned manifests whose SHA-256 digests it verifies.
 `network-policy-controls.sh` runs a reachable-connection control and two blocked-connection controls, one denied by an ingress policy and one by an egress policy.
-A blocked control passes only after three consecutive failed connections.
+A blocked control passes only after three consecutive connection timeouts.
+The reachable control then runs again, and after the policies are deleted both blocked pods must connect.
 The script writes `network-policy-controls.json` and exits with an error unless every control has its expected result.
