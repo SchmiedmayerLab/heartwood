@@ -1533,60 +1533,6 @@ def test_missing_capability_diagnostic_names_the_kubernetes_driver_version(
     assert str(raised.value).endswith("required deletion capabilities")
 
 
-def test_kubernetes_manifest_stops_launch_and_reconciliation_before_any_request(
-    kubernetes_deployment: tuple[KubernetesWorkerDeployment, ProjectContext],
-    kubernetes_gateway: _Sandboxes,
-) -> None:
-    settings, project = kubernetes_deployment
-    project.state_root.mkdir(parents=True, mode=0o700)
-    request = cast(
-        WorkerSessionRequest,
-        SimpleNamespace(
-            project=project,
-            session_id="synthetic",
-            profile=SimpleNamespace(
-                profile_id=settings.profile_id,
-                model=settings.model,
-                policy_endpoint=settings.model_endpoint,
-            ),
-            client_tools=(),
-        ),
-    )
-    with pytest.raises(
-        WorkerAttemptError, match="managed workers require the openshell-docker driver"
-    ):
-        native_worker_plan_factory(settings, project)(request)
-    assert project.project_id is not None
-    record = WorkerAttemptRecord.model_validate(
-        {
-            "phase": "fenced",
-            "intent": WorkerAttemptIntent(
-                project_id=project.project_id,
-                session_id="synthetic",
-                attempt_id=uuid4(),
-                conversation_id=uuid4(),
-                image_digest=settings.image_digest,
-                gateway_policy_sha256="c" * 64,
-                sandbox_policy_sha256=settings.sandbox_policy_sha256,
-                input_manifest_sha256="d" * 64,
-                control_plane=WorkerControlPlane(
-                    control_plane_sha256="1" * 64, container_runtime_sha256="2" * 64
-                ),
-            ),
-            "runtime": None,
-        }
-    )
-    kubernetes_gateway.place("hw-" + record.intent.attempt_id.hex[:16], {})
-    with pytest.raises(
-        WorkerAttemptError, match="managed workers require the openshell-docker driver"
-    ):
-        worker_native.native_worker_reconciler(settings, project)(record)
-    assert kubernetes_gateway.running
-    assert kubernetes_gateway.spec is None
-    assert kubernetes_gateway.deleted == []
-    assert not (settings.native_config_home.parent / "kubectl-used").exists()
-
-
 def test_managed_worker_manifest_has_no_declared_gateway_version(
     deployment: tuple[OpenShellWorkerDeployment, ProjectContext],
 ) -> None:

@@ -809,3 +809,83 @@ def test_requests_reach_the_explicit_tool_with_their_input_and_nothing_inherited
     assert first["argv"][-2:] == ["create", "--filename=-"]
     assert first["stdin"] == "\x00object"
     assert second["stdin"] == ""
+
+
+_IDENTITY_KUBECTL = """#!{python} -I
+import json, sys
+from pathlib import Path
+root = Path(__file__).parent
+arguments = sys.argv[1:]
+with (root / "calls.jsonl").open("a") as log:
+    log.write(json.dumps(arguments) + "\\n")
+answers = json.loads((root / "answers.json").read_text())
+if "config" in arguments:
+    sys.stdout.write(answers["view"])
+else:
+    sys.stdout.write(json.dumps(answers["namespace"]))
+"""
+
+
+def _identity(root: Path, **changes: object) -> str:
+    settings = _settings(root)
+    answers: dict[str, Any] = {
+        "view": "https://cluster.test:6443\nc3ludGhldGljIGF1dGhvcml0eQ==",
+        "namespace": {"kind": "Namespace", "metadata": {"name": _NAMESPACE, "uid": "uid-1"}},
+        **changes,
+    }
+    (root / "answers.json").write_text(json.dumps(answers))
+    settings.kubectl_cli.write_text(_IDENTITY_KUBECTL.format(python=sys.executable))
+    settings.kubectl_cli.chmod(0o700)
+    return worker_kubernetes.cluster_sha256(settings)
+
+
+def test_cluster_identity_binds_the_server_its_authority_and_the_namespace(tmp_path: Path) -> None:
+    identity = _identity(tmp_path)
+    assert len(identity) == 64
+    assert _identity(tmp_path) == identity
+    view, read = (
+        json.loads(line) for line in (tmp_path / "calls.jsonl").read_text().splitlines()[:2]
+    )
+    # The credential of the configuration is never printed: only the cluster entry is.
+    assert view[-6:] == [
+        "config",
+        "view",
+        "--raw",
+        "--minify",
+        "--flatten",
+        "--output=jsonpath={.clusters[0].cluster.server}"
+        '{"\\n"}{.clusters[0].cluster.certificate-authority-data}',
+    ]
+    assert read[-4:] == ["get", "namespace", _NAMESPACE, "--output=json"]
+    changed: list[dict[str, Any]] = [
+        {"view": "https://other.test:6443\nc3ludGhldGljIGF1dGhvcml0eQ=="},
+        {"view": "https://cluster.test:6443\nYW5vdGhlciBhdXRob3JpdHk="},
+        {"namespace": {"kind": "Namespace", "metadata": {"name": _NAMESPACE, "uid": "uid-2"}}},
+    ]
+    assert len({identity, *(_identity(tmp_path, **change) for change in changed)}) == 4
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"view": ""},
+        {"view": "https://cluster.test:6443"},
+        {"view": "https://cluster.test:6443\n"},
+        {"view": "\nc3ludGhldGljIGF1dGhvcml0eQ=="},
+        {"namespace": []},
+        {"namespace": {"kind": "Namespace", "metadata": {"name": _NAMESPACE}}},
+        {"namespace": {"kind": "Namespace", "metadata": {"name": "another", "uid": "uid-1"}}},
+        {"namespace": {"kind": "Pod", "metadata": {"name": _NAMESPACE, "uid": "uid-1"}}},
+        {"namespace": {"kind": "Namespace", "metadata": {"name": _NAMESPACE, "uid": 7}}},
+    ],
+)
+def test_an_incomplete_cluster_identity_is_never_recorded(
+    tmp_path: Path, change: dict[str, Any]
+) -> None:
+    with pytest.raises(WorkerAttemptError, match="cluster identity was not observed"):
+        _identity(tmp_path, **change)
+
+
+def test_a_cluster_that_does_not_answer_gives_no_identity(tmp_path: Path) -> None:
+    with pytest.raises(WorkerAttemptError, match="requires reconciliation"):
+        worker_kubernetes.cluster_sha256(_settings(tmp_path))

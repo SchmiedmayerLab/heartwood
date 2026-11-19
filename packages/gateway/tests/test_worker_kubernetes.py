@@ -397,6 +397,9 @@ def _serve(
     def command(*arguments: str) -> bytes:
         calls.append(arguments)
         assert arguments[0] == "get"
+        if arguments[2:] == ("--output=json",):
+            items = [value for key, value in objects.items() if key.startswith(arguments[1] + "/")]
+            return json.dumps({"kind": "List", "items": items}).encode()
         assert arguments[3:] == ("--output=json",)
         key = f"{arguments[1]}/{arguments[2]}"
         if key not in objects:
@@ -447,7 +450,9 @@ def test_admission_accepts_the_driver_objects_and_reads_each_once(
     objects = _objects(admission)
     calls = _serve(admission, monkeypatch, objects)
     admission.inspect_worker(_SANDBOX_ID)
-    assert sorted(f"{call[1]}/{call[2]}" for call in calls) == sorted(objects)
+    listing = ("get", "networkpolicy.networking.k8s.io", "--output=json")
+    assert calls.count(listing) == 1
+    assert sorted(f"{call[1]}/{call[2]}" for call in calls if call != listing) == sorted(objects)
     assert all(call[0] == "get" for call in calls)
 
 
@@ -1204,6 +1209,91 @@ def test_network_policies_other_than_the_driver_policies_are_refused(
         admission.inspect_worker(_SANDBOX_ID)
 
 
+def _policy(name: str, spec: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "apiVersion": "networking.k8s.io/v1",
+        "kind": "NetworkPolicy",
+        "metadata": {"name": name, "namespace": _NAMESPACE},
+        "spec": spec,
+    }
+
+
+_EGRESS_TO_ALL: dict[str, Any] = {"policyTypes": ["Egress"], "egress": [{}]}
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [
+        {"podSelector": {}, **_EGRESS_TO_ALL},
+        {"podSelector": {"matchLabels": {_ROLE: "workload"}}, **_EGRESS_TO_ALL},
+        {"podSelector": {"matchLabels": {"heartwood.role": "worker"}}, **_EGRESS_TO_ALL},
+        {
+            "podSelector": {
+                "matchExpressions": [{"key": _ROLE, "operator": "NotIn", "values": ["supervisor"]}]
+            },
+            **_EGRESS_TO_ALL,
+        },
+        {
+            "podSelector": {"matchExpressions": [{"key": _PAIR, "operator": "Exists"}]},
+            "policyTypes": ["Ingress"],
+            "ingress": [{"from": [{"namespaceSelector": {}}]}],
+        },
+        # A selector that cannot be evaluated is never read as selecting nothing.
+        {"podSelector": {"matchExpressions": [{"key": _ROLE, "operator": "Near"}]}},
+        {"podSelector": {"matchLabels": []}},
+        {"policyTypes": ["Egress"]},
+    ],
+)
+def test_another_policy_that_allows_the_workload_pod_traffic_is_refused(
+    admission: KubernetesWorkerAdmission, monkeypatch: pytest.MonkeyPatch, spec: dict[str, Any]
+) -> None:
+    objects = _objects(admission)
+    objects["networkpolicy.networking.k8s.io/added"] = _policy("added", spec)
+    _serve(admission, monkeypatch, objects)
+    with pytest.raises(WorkerAttemptError):
+        admission.inspect_worker(_SANDBOX_ID)
+    assert admission.record is not None
+    assert admission.record["network_policies"]["others"] == [{"name": "added", "spec": spec}]
+
+
+def test_policies_that_only_deny_or_select_other_pods_are_accepted(
+    admission: KubernetesWorkerAdmission, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    objects = _objects(admission)
+    others: dict[str, dict[str, Any]] = {
+        "default-deny": {"podSelector": {}, "policyTypes": ["Ingress", "Egress"]},
+        "supervisors": {"podSelector": {"matchLabels": {_ROLE: "supervisor"}}, **_EGRESS_TO_ALL},
+        "gateway": {
+            "podSelector": {
+                "matchExpressions": [{"key": "app", "operator": "In", "values": ["openshell"]}]
+            },
+            **_EGRESS_TO_ALL,
+        },
+        "unpaired": {
+            "podSelector": {"matchExpressions": [{"key": _PAIR, "operator": "DoesNotExist"}]},
+            **_EGRESS_TO_ALL,
+        },
+    }
+    for name, spec in others.items():
+        objects["networkpolicy.networking.k8s.io/" + name] = _policy(name, spec)
+    _serve(admission, monkeypatch, objects)
+    admission.inspect_worker(_SANDBOX_ID)
+    assert admission.record is not None
+    assert len(admission.record["network_policies"]["others"]) == 4
+
+
+def test_a_policy_listing_from_another_namespace_is_refused(
+    admission: KubernetesWorkerAdmission, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    objects = _objects(admission)
+    added = _policy("added", {"podSelector": {}, "policyTypes": ["Ingress"]})
+    added["metadata"]["namespace"] = "another"
+    objects["networkpolicy.networking.k8s.io/added"] = added
+    _serve(admission, monkeypatch, objects)
+    with pytest.raises(WorkerAttemptError, match="inspection was incomplete"):
+        admission.inspect_worker(_SANDBOX_ID)
+
+
 _LEVEL = ("metadata", "labels", "pod-security.kubernetes.io/enforce")
 
 
@@ -1460,6 +1550,11 @@ with (root / "calls.jsonl").open("a") as log:
     log.write("\\n")
 arguments = sys.argv[1:]
 position = arguments.index("get")
+if arguments[position + 2] == "--output=json":
+    found = sorted((root / "objects").glob(arguments[position + 1] + "--*.json"))
+    items = [json.loads(path.read_text()) for path in found]
+    sys.stdout.write(json.dumps({{"kind": "List", "items": items}}))
+    sys.exit(0)
 source = root / "objects" / (arguments[position + 1] + "--" + arguments[position + 2] + ".json")
 if not source.exists():
     sys.stderr.write("Error from server (NotFound)\\n")
@@ -1487,7 +1582,7 @@ def test_admission_runs_the_explicit_tool_with_the_manifest_cluster_and_namespac
     monkeypatch.setenv("HTTPS_PROXY", "http://proxy.invalid:3128")
     admission.inspect_worker(_SANDBOX_ID)
     calls = [json.loads(line) for line in (root / "calls.jsonl").read_text().splitlines()]
-    assert len(calls) == 5
+    assert len(calls) == 6
     for call in calls:
         argv, home = call["argv"], call["cwd"]
         assert argv[:4] == ["--kubeconfig", str(root / "kubeconfig"), "--namespace", _NAMESPACE]
@@ -1504,6 +1599,7 @@ def test_admission_runs_the_explicit_tool_with_the_manifest_cluster_and_namespac
         ["pod", "os-supervisor-" + _SANDBOX_ID],
         ["networkpolicy.networking.k8s.io", "os-control-" + _SANDBOX_ID],
         ["networkpolicy.networking.k8s.io", "openshell-sandbox-workloads"],
+        ["networkpolicy.networking.k8s.io", "--output=json"],
         ["namespace", _NAMESPACE],
     ]
 
