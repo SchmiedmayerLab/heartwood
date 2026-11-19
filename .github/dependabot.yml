@@ -21,7 +21,7 @@ updates:
     cooldown:
       default-days: 7
   - package-ecosystem: "uv"
-    directory: "/"
+    directories: ["/", "/reference-platform/services"]
     patterns: ["*"]
     multi-ecosystem-group: "weekly-dependencies"
     cooldown:
