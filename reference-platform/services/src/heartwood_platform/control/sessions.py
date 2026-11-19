@@ -226,11 +226,17 @@ class Sessions:
         assert isinstance(items, list)
         return items
 
-    def _apply_node_reader(self, removed: str | None = None) -> None:
-        """Set the subjects of the node reader binding to the sessions of the registry."""
+    def _apply_node_reader(self, session: str, *, removed: bool = False) -> None:
+        """Set the subjects of the node reader binding to the sessions of the registry.
+
+        A launch of a session whose removal failed midway provisions it again, so it
+        counts as removed only until its next launch.
+        """
         with self._node_reader_lock:
-            if removed is not None:
-                self._removed.add(removed)
+            if removed:
+                self._removed.add(session)
+            else:
+                self._removed.discard(session)
             sessions = sorted(set(self._active_sessions()) - self._removed)
             self._kubernetes.apply(
                 {
@@ -313,7 +319,7 @@ class Sessions:
             kubernetes.create(_role_binding(namespace, role, subject))
         for document in self._openshell_objects(namespace):
             kubernetes.apply(document)
-        self._apply_node_reader()
+        self._apply_node_reader(session)
         kubernetes.create(
             {
                 "apiVersion": "v1",
@@ -376,7 +382,7 @@ class Sessions:
     def remove(self, session: str) -> None:
         """Delete everything of a session, whether or not it was fully provisioned."""
         namespace = self._settings.gateway_namespace
-        self._apply_node_reader(removed=session)
+        self._apply_node_reader(session, removed=True)
         self._kubernetes.delete("Secret", gateway_account(session), namespace)
         self._kubernetes.delete("ServiceAccount", gateway_account(session), namespace)
         self._kubernetes.delete("Namespace", session_namespace(session))

@@ -255,6 +255,20 @@ def test_launch_fails_when_the_gateway_does_not_become_ready(platform: Platform)
     assert platform.provision("abc123").namespace == "hw-s-abc123"
 
 
+def test_launch_after_a_failed_removal_provisions_the_session_again(platform: Platform) -> None:
+    platform.provision("abc123")
+    secret = "/api/v1/namespaces/heartwood-sessions/secrets/hw-gw-abc123"
+    platform.api.failing.add(("DELETE", secret))
+    with pytest.raises(httpx.HTTPStatusError):
+        platform.sessions.remove("abc123")
+    assert platform.node_reader_subjects() == []
+
+    platform.api.failing.clear()
+    platform.provision("abc123")
+
+    assert platform.node_reader_subjects() == [_account("openshell", "hw-s-abc123")]
+
+
 @pytest.mark.parametrize("status", [404, 409])
 def test_deleting_an_absent_or_terminating_object_succeeds(status: int) -> None:
     transport = httpx.MockTransport(lambda _request: httpx.Response(status))

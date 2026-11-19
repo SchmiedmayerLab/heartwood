@@ -191,6 +191,8 @@ class FakeKubernetes:
             },
         }
         self.calls: list[tuple[str, str]] = []
+        # Requests, as method and path, that fail with a server error.
+        self.failing: set[tuple[str, str]] = set()
         self.reads_until_ready = 1
         self._reads = 0
         self._created = 0
@@ -210,6 +212,8 @@ class FakeKubernetes:
     def _handle(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
         self.calls.append((request.method, path))
+        if (request.method, path) in self.failing:
+            return httpx.Response(500)
         if request.method == "POST":
             body = json.loads(request.content)
             item = f"{path}/{body['metadata']['name']}"

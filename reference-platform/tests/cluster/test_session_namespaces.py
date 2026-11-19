@@ -374,8 +374,21 @@ def test_control_service_credentials_are_confined_by_the_admission_policy(
         "metadata": {"name": "hw-negative-case", "namespace": _SESSIONS},
     }
 
+    other_name = {
+        "apiVersion": "v1",
+        "kind": "Namespace",
+        "metadata": {
+            "name": "hw-negative-case",
+            "labels": {
+                "heartwood.platform/session": "negative-case",
+                "pod-security.kubernetes.io/enforce": "restricted",
+            },
+        },
+    }
+
     cases = {
         "a namespace without the Pod Security label": ("/api/v1/namespaces", unlabelled),
+        "a namespace that is not named like a session": ("/api/v1/namespaces", other_name),
         "a binding outside session namespaces": _binding(
             "default", "heartwood-session-control", control
         ),
@@ -402,4 +415,5 @@ def test_control_service_credentials_are_confined_by_the_admission_policy(
         cluster, "/api/v1/namespaces/default/configmaps", config_map
     )
     assert status == 403, message
-    assert cluster.kubectl("get", "namespace", "hw-s-negativecase").returncode != 0
+    for name in ("hw-s-negativecase", "hw-negative-case"):
+        assert cluster.kubectl("get", "namespace", name).returncode != 0
