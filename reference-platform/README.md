@@ -17,6 +17,8 @@ It is kept apart from the Heartwood application packages under `packages/`.
 
 | Path | Content |
 |---|---|
+| `chart/heartwood-platform/values-gke.yaml` | Chart values for the GKE cluster: storage class and GPU node placement |
+| `infrastructure/gke/` | OpenTofu configuration of the GKE cluster; see its [README](infrastructure/gke/README.md) |
 | `services/` | Python project `heartwood-reference-platform` with its own `pyproject.toml` and `uv.lock`; package `heartwood_platform` in `src/`, tests in `tests/` |
 | `tools/` | `check_cloud_boundary.py`, the cloud boundary check |
 
@@ -44,11 +46,14 @@ An exception that no longer matches a finding also fails the check.
 
 ## Checks
 
-The [Reference Platform workflow](../.github/workflows/reference-platform.yml) runs the cloud boundary check and the platform service checks.
+The [Reference Platform workflow](../.github/workflows/reference-platform.yml) runs the cloud boundary check, the offline OpenTofu checks and the platform service checks.
 To run the same checks locally:
 
 ```bash
 python3 reference-platform/tools/check_cloud_boundary.py
+tofu -chdir=reference-platform/infrastructure/gke fmt -check -recursive
+tofu -chdir=reference-platform/infrastructure/gke init -backend=false -lockfile=readonly
+tofu -chdir=reference-platform/infrastructure/gke validate
 cd reference-platform/services
 uv sync --locked
 uv run ruff format --check ..
