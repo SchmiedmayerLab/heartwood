@@ -56,8 +56,8 @@ postgresql:
   storage: 2Gi
 
 keycloak:
-  # Public URL of Keycloak and the base of every token issuer.
-  # Empty selects the in-cluster Service URL.
+  # Public HTTPS URL of Keycloak and the base of every token issuer.
+  # Empty selects the in-cluster Service URL, served with the certificate of the platform CA.
   url: ""
 
 versitygw:

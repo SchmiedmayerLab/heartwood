@@ -339,9 +339,53 @@ def test_platform_ca_certificate_is_a_certificate_authority(
     assert "CA:TRUE" in text
     assert "Certificate Sign" in text
     assert "X509v3 Subject Key Identifier" in text
-    published = _named(objects, "ConfigMap", "platform-ca")["data"]["ca.crt"]
-    assert published.strip() == certificate.decode().strip()
-    assert "PRIVATE KEY" not in published
+    published = [
+        item["data"]["ca.crt"]
+        for item in objects
+        if item["kind"] == "ConfigMap" and item["metadata"]["name"] == "platform-ca"
+    ]
+    assert len(published) == 1
+    for text in published:
+        assert text.strip() == certificate.decode().strip()
+        assert "PRIVATE KEY" not in text
+
+
+def test_keycloak_serves_only_https_with_a_certificate_of_the_platform_ca(
+    objects: list[dict[str, Any]], tmp_path: Path
+) -> None:
+    authority = tmp_path / "ca.crt"
+    authority.write_bytes(
+        base64.b64decode(_named(objects, "Secret", "platform-ca")["data"]["tls.crt"])
+    )
+    serving = tmp_path / "keycloak.crt"
+    serving.write_bytes(
+        base64.b64decode(_named(objects, "Secret", "keycloak-tls")["data"]["tls.crt"])
+    )
+    subprocess.run(
+        ["openssl", "verify", "-CAfile", str(authority), str(serving)],
+        check=True,
+        capture_output=True,
+    )
+    text = subprocess.run(
+        ["openssl", "x509", "-noout", "-ext", "subjectAltName", "-in", str(serving)],
+        check=True,
+        capture_output=True,
+    ).stdout.decode()
+    for name in ("keycloak", "keycloak.heartwood-platform.svc.cluster.local"):
+        assert f"DNS:{name}," in f"{text.strip()},"
+    container = _named(objects, "Deployment", "keycloak")["spec"]["template"]["spec"]["containers"][
+        0
+    ]
+    variables = {variable["name"]: variable.get("value") for variable in container["env"]}
+    assert "KC_HTTP_ENABLED" not in variables
+    assert variables["KC_HTTPS_CERTIFICATE_FILE"] == "/opt/keycloak/conf/tls/tls.crt"
+    assert variables["KC_HOSTNAME"].startswith("https://")
+    assert [port["containerPort"] for port in container["ports"]] == [8443, 9000]
+    configuration = json.loads(
+        _named(objects, "ConfigMap", "heartwood-control")["data"]["configuration.json"]
+    )
+    assert configuration["keycloak"]["url"] == "https://keycloak:8443"
+    assert configuration["keycloak"]["issuer"].startswith("https://")
 
 
 def test_gke_values_set_only_cluster_specific_keys() -> None:

@@ -54,10 +54,10 @@ The platform is for synthetic and open data only.
 | Component | Content |
 |---|---|
 | PostgreSQL | One StatefulSet with a role and a database for Keycloak |
-| Keycloak | One Deployment that imports the realm `heartwood` at its first start |
+| Keycloak | One Deployment that serves HTTPS on port 8443 and imports the realm `heartwood` at its first start |
 | Control service | One StatefulSet with the project registry, the launch interface and the provisioning of session namespaces |
 | versitygw | S3-compatible object store with one bucket `hw-project-<id>` for each entry in `projects` |
-| Platform certificate authority | Secret `platform-ca` with the key, and ConfigMap `platform-ca` with the certificate, which the control service copies into each session namespace |
+| Platform certificate authority | Secret `platform-ca` with the key, ConfigMap `platform-ca` with the certificate, which the control service copies into each session namespace, and Secret `keycloak-tls` with the serving certificate of Keycloak |
 | Session roles | Six fixed ClusterRoles for session namespaces, and the ServiceAccount and rights of the control service |
 | Admission policies | `heartwood-control-scope`, `heartwood-staging-shape` and `heartwood-session-services` |
 | OpenShell objects | `files/openshell-session.json`, the objects of one session namespace |
@@ -72,6 +72,14 @@ The [Kubernetes Qualification workflow](../.github/workflows/kubernetes-qualific
 Helm generates every credential at the first installation and keeps the existing value on an upgrade.
 The chart renders no credential from a fixed value.
 PostgreSQL keeps the credentials of the first installation and the Keycloak realm on its volume, so a new installation after `helm uninstall` needs the volume claims of the old one deleted first.
+
+### Keycloak
+
+Keycloak serves only HTTPS, with a certificate that the platform CA signs for the names of its Service (`keycloak`, `keycloak.heartwood-platform`, and the `.svc` and `.svc.cluster.local` forms), valid for 825 days.
+Helm creates the certificate together with the CA and keeps both on an upgrade.
+The issuer of every token is `https://keycloak.heartwood-platform.svc.cluster.local:8443/realms/heartwood`, or the `keycloak.url` value.
+The control service and the bootstrap Job verify Keycloak against the platform CA alone; a gateway does the same with `ca_file` in its `[identity]` table.
+A `keycloak.url` with another host name needs a certificate for that name, which the chart does not create.
 
 ### Keycloak Realm
 

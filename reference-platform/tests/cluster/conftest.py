@@ -13,11 +13,13 @@ that the chart was installed with.
 
 from __future__ import annotations
 
+import json
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 import yaml
-from kube import Cluster
+from kube import PROBE_CA, Cluster
 
 _VALUES = Path(__file__).resolve().parents[2] / "chart" / "heartwood-platform" / "values-kind.yaml"
 # The image of the pods that the tests run and exec into, with its /agnhost commands.
@@ -60,3 +62,23 @@ def staging_image(request: pytest.FixtureRequest) -> str:
 def probe_image() -> str:
     """The image of the pods that the tests run."""
     return _PROBE_IMAGE
+
+
+@pytest.fixture(scope="session", autouse=True)
+def probe_ca(cluster: Cluster) -> Iterator[None]:
+    """Copy the platform CA certificate into heartwood-sessions for the probe pods."""
+    result = cluster.kubectl(
+        "get", "--namespace=heartwood-platform", "configmap", "platform-ca", "--output=json"
+    )
+    assert result.returncode == 0, result.stderr
+    certificate = json.loads(result.stdout)["data"]["ca.crt"]
+    cluster.apply(
+        {
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": {"name": PROBE_CA, "namespace": "heartwood-sessions"},
+            "data": {"ca.crt": certificate},
+        }
+    )
+    yield
+    cluster.kubectl("delete", "--namespace=heartwood-sessions", f"configmap/{PROBE_CA}")

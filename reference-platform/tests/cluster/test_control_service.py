@@ -20,11 +20,11 @@ from typing import Any
 from urllib.parse import quote, urlencode
 
 import pytest
-from kube import Cluster
+from kube import PROBE_CA, Cluster
 
 _SESSIONS = "heartwood-sessions"
 _CONTROL = "http://heartwood-control.heartwood-platform.svc.cluster.local:8080"
-_KEYCLOAK = "http://keycloak.heartwood-platform.svc.cluster.local:8080"
+_KEYCLOAK = "https://keycloak.heartwood-platform.svc.cluster.local:8443"
 _FIRST = "6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0001"
 _SECOND = "6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0002"
 _POD = "hw-control-probe"
@@ -52,8 +52,10 @@ def caller(cluster: Cluster, probe_image: str) -> Iterator[None]:
                         "allowPrivilegeEscalation": False,
                         "capabilities": {"drop": ["ALL"]},
                     },
+                    "volumeMounts": [{"name": "platform-ca", "mountPath": "/etc/platform-ca"}],
                 }
             ],
+            "volumes": [{"name": "platform-ca", "configMap": {"name": PROBE_CA}}],
         },
     }
     account = {
@@ -96,6 +98,8 @@ def _call(cluster: Cluster, method: str, url: str, token: str | None = None) -> 
         "--silent",
         "--max-time",
         "30",
+        "--cacert",
+        "/etc/platform-ca/ca.crt",
         "--request",
         method,
         "--header",
@@ -156,6 +160,8 @@ def _project_client(cluster: Cluster, project: str) -> dict[str, Any]:
         "--silent",
         "--max-time",
         "30",
+        "--cacert",
+        "/etc/platform-ca/ca.crt",
         "--data",
         "@-",
         f"{_KEYCLOAK}/realms/heartwood/protocol/openid-connect/token",

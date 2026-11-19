@@ -8,13 +8,14 @@
 
 from __future__ import annotations
 
+import ssl
 import sys
 from pathlib import Path
 from typing import Annotated, Any, Self
 
 import httpx
 import uvicorn
-from pydantic import BaseModel, ConfigDict, StringConstraints, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 from starlette.applications import Starlette
 
 from heartwood_platform.common.kubernetes import Kubernetes, in_cluster_client
@@ -36,7 +37,9 @@ class _Settings(BaseModel):
 class KeycloakSettings(_Settings):
     """How the control service reaches Keycloak."""
 
-    url: str
+    url: str = Field(pattern=r"^https://[^/]+$")
+    # The platform CA, the only authority the control service trusts for Keycloak.
+    ca_file: Path
     issuer: str
     realm: str
     client_id: str
@@ -106,7 +109,11 @@ def build(settings: Settings, kubernetes: Kubernetes) -> Starlette:
         Project(project.id, project.billing_attribution_ref, project.policy_ref, project.members)
         for project in settings.projects
     )
-    client = httpx.Client(base_url=settings.keycloak.url, timeout=30)
+    client = httpx.Client(
+        base_url=settings.keycloak.url,
+        timeout=30,
+        verify=ssl.create_default_context(cafile=settings.keycloak.ca_file),
+    )
     secret_file = settings.keycloak.client_secret_file
     keycloak = Keycloak(
         client,
