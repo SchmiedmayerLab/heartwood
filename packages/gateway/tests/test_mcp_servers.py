@@ -13,8 +13,11 @@ from the deterministic token issuer and accept the gateway's operation binding.
 from __future__ import annotations
 
 import asyncio
+import http.server
 import json
 import socket
+import ssl
+import subprocess
 import threading
 import uuid
 from collections.abc import Callable, Iterator
@@ -24,6 +27,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Never, cast
 
+import httpx
 import pytest
 import tomli_w
 from fastmcp import FastMCP
@@ -31,7 +35,7 @@ from fastmcp.client.transports import StreamableHttpTransport
 from fastmcp.exceptions import ToolError
 from fastmcp.server.dependencies import get_access_token
 from mcp.types import ToolAnnotations
-from pydantic import AnyHttpUrl
+from pydantic import AnyHttpUrl, ValidationError
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import RedirectResponse, Response
@@ -506,6 +510,145 @@ def test_connections_apply_the_destinations_opt_in(
     # Without the opt-in the address is refused; with it the client is built for the server.
     assert outcomes == {False: "HW-MCP-001", True: "client reached"}
     assert reached == ["https://catalog.platform.svc/mcp"]
+
+
+def _authority(directory: Path, name: str) -> tuple[Path, Path]:
+    """A test certificate authority: its certificate and key."""
+    certificate, key = directory / f"{name}.crt", directory / f"{name}.key"
+    subprocess.run(
+        [
+            "openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256",
+            "-nodes", "-days", "1", "-subj", f"/CN={name}",
+            "-addext", "basicConstraints=critical,CA:TRUE",
+            "-addext", "keyUsage=critical,keyCertSign",
+            "-keyout", str(key), "-out", str(certificate),
+        ],
+        check=True,
+        capture_output=True,
+    )  # fmt: skip
+    return certificate, key
+
+
+@contextmanager
+def _https_server(directory: Path, authority: tuple[Path, Path]) -> Iterator[int]:
+    """Serve 200 over HTTPS on 127.0.0.1 with a localhost certificate of ``authority``."""
+    key, request, certificate = (directory / name for name in ("tls.key", "tls.csr", "tls.crt"))
+    subprocess.run(
+        [
+            "openssl", "req", "-new", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256",
+            "-nodes", "-subj", "/CN=localhost", "-keyout", str(key), "-out", str(request),
+        ],
+        check=True,
+        capture_output=True,
+    )  # fmt: skip
+    extensions = directory / "tls.ext"
+    extensions.write_text("subjectAltName=DNS:localhost\n", encoding="utf-8")
+    subprocess.run(
+        [
+            "openssl", "x509", "-req", "-in", str(request), "-CA", str(authority[0]),
+            "-CAkey", str(authority[1]), "-days", "1", "-extfile", str(extensions),
+            "-out", str(certificate),
+        ],
+        check=True,
+        capture_output=True,
+    )  # fmt: skip
+
+    class Answer(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            self.send_response(200)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, *_args: object) -> None:
+            pass
+
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(certificate, key)
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Answer)
+    server.socket = context.wrap_socket(server.socket, server_side=True)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield server.server_address[1]
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_a_destination_ca_file_replaces_the_default_trust(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    platform = _authority(tmp_path, "platform")
+    other = _authority(tmp_path, "other")
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.96.0.12", 0))],
+    )
+    transports: list[StreamableHttpTransport] = []
+
+    class UnreachableError(Exception):
+        pass
+
+    def no_client(transport: StreamableHttpTransport, **_kwargs: object) -> Never:
+        transports.append(transport)
+        raise UnreachableError
+
+    monkeypatch.setattr("openhands.sdk.mcp.MCPClient", no_client)
+    for ca_file in (platform[0], None):
+        destination = McpDestination(
+            service_id="cluster-catalog",
+            origin="https://catalog.platform.svc",
+            tools=("find_records",),
+            observation_tool="get_operation",
+            private_address=True,
+            ca_file=ca_file,
+        )
+        root = tmp_path / ("platform-ca" if ca_file else "default")
+        root.mkdir()
+        gateway = _gateway(root, (destination,), Platform())
+        try:
+            gateway.add_mcp_server(
+                McpServerAddRequest(
+                    server_id="catalog", label="Catalog", url=f"{destination.origin}/mcp"
+                )
+            )
+            with pytest.raises(UnreachableError):
+                gateway.test_mcp_server("catalog", McpServerTestRequest())
+        finally:
+            gateway.stop()
+    # The name resolution stand-in ends here; the servers below listen on loopback.
+    monkeypatch.undo()
+    trusted, default = (transport.verify for transport in transports)
+    assert default is None
+    assert isinstance(trusted, ssl.SSLContext)
+    # The context trusts the platform CA and nothing else.
+    for authority, accepted in ((platform, True), (other, False)):
+        served = tmp_path / authority[0].stem
+        served.mkdir()
+        with _https_server(served, authority) as port:
+            address = f"https://localhost:{port}/"
+            if accepted:
+                assert httpx.get(address, verify=trusted).status_code == 200
+            else:
+                with pytest.raises(httpx.ConnectError, match="CERTIFICATE_VERIFY_FAILED"):
+                    httpx.get(address, verify=trusted)
+
+
+def test_a_destination_ca_file_is_an_absolute_path_for_an_https_origin() -> None:
+    entry = {
+        "service_id": "catalog",
+        "origin": "https://catalog.example.org",
+        "tools": ["find_records"],
+        "observation_tool": "get_operation",
+    }
+    assert McpDestination.model_validate({**entry, "ca_file": "/etc/platform-ca/ca.crt"}).ca_file
+    for change in (
+        {"ca_file": "platform-ca/ca.crt"},
+        {"origin": "http://127.0.0.1:8080", "ca_file": "/etc/platform-ca/ca.crt"},
+    ):
+        with pytest.raises(ValidationError, match="ca_file"):
+            McpDestination.model_validate({**entry, **change})
 
 
 def test_translated_loopback_is_not_loopback(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1149,6 +1292,33 @@ def test_snapshot_reads_open_review_through_the_session_adapter(
 
 
 def test_manifest_destinations_require_worker_isolation(tmp_path: Path) -> None:
+    manifest, workspace = _destination_manifest(tmp_path, {})
+    with pytest.raises(ProjectStateError, match=r"HW-DEPLOY-001.*worker isolation"):
+        load_project_deployment(manifest, project_root=workspace)
+
+
+def test_manifest_destination_ca_file_follows_the_operator_file_rules(tmp_path: Path) -> None:
+    authority = tmp_path / "operator" / "ca.crt"
+    authority.parent.mkdir()
+    _authority(authority.parent, "ca")
+    manifest, workspace = _destination_manifest(tmp_path, {"ca_file": str(authority)})
+    # A safe file passes, and the next check, worker isolation, refuses the manifest.
+    with pytest.raises(ProjectStateError, match=r"worker isolation"):
+        load_project_deployment(manifest, project_root=workspace)
+
+    authority.chmod(0o666)
+    with pytest.raises(ProjectStateError, match=r"write-protected"):
+        load_project_deployment(manifest, project_root=workspace)
+    authority.chmod(0o644)
+    inside = tmp_path / "inside" / "research" / "ca.crt"
+    manifest, workspace = _destination_manifest(tmp_path / "inside", {"ca_file": str(inside)})
+    inside.write_bytes(authority.read_bytes())
+    with pytest.raises(ProjectStateError, match=r"outside project files"):
+        load_project_deployment(manifest, project_root=workspace)
+
+
+def _destination_manifest(tmp_path: Path, fields: dict[str, str]) -> tuple[Path, Path]:
+    tmp_path.mkdir(exist_ok=True)
     workspace = tmp_path / "research"
     workspace.mkdir()
     (tmp_path / "protected").mkdir(mode=0o700)
@@ -1168,14 +1338,14 @@ def test_manifest_destinations_require_worker_isolation(tmp_path: Path) -> None:
                         "origin": "https://catalog.example.org",
                         "tools": ["find_records"],
                         "observation_tool": "get_operation",
+                        **fields,
                     }
                 ],
             }
         )
     )
     manifest.chmod(0o600)
-    with pytest.raises(ProjectStateError, match=r"HW-DEPLOY-001.*worker isolation"):
-        load_project_deployment(manifest, project_root=workspace)
+    return manifest, workspace
 
 
 def test_project_configuration_keeps_reviewed_definitions_and_no_credentials(

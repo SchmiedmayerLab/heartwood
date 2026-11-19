@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import ssl
 import time
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager, suppress
@@ -612,6 +613,11 @@ class McpServerManager:
                 server.url,
                 auth=BearerAuth(token) if token else None,
                 max_sse_event_size=destination.max_result_bytes + 16 * 1024,
+                verify=(
+                    None
+                    if destination.ca_file is None
+                    else ssl.create_default_context(cafile=str(destination.ca_file))
+                ),
             ),
             timeout=destination.call_timeout_seconds,
         )

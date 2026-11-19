@@ -270,6 +270,9 @@ def _read_manifest(
             mcp_destinations = mcp_destinations_from_mapping(record["mcp_destinations"])
         except ValueError as error:
             raise DeploymentError("deployment-manifest", str(error)) from None
+        for destination in mcp_destinations:
+            if destination.ca_file is not None:
+                validate_operator_file(destination.ca_file, project)
         if "identity" not in record and any(item.token_exchange for item in mcp_destinations):
             raise DeploymentError(
                 "deployment-manifest", "an MCP destination's token exchange requires [identity]"
