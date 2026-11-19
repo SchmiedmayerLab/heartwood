@@ -57,7 +57,7 @@ The platform is for synthetic and open data only.
 | Keycloak | One Deployment that imports the realm `heartwood` at its first start |
 | Control service | One StatefulSet with the project registry, the launch interface and the provisioning of session namespaces |
 | versitygw | S3-compatible object store with one bucket `hw-project-<id>` for each entry in `projects` |
-| Platform certificate authority | Secret `platform-ca` with the key, and ConfigMap `platform-ca` with the certificate |
+| Platform certificate authority | Secret `platform-ca` with the key, and ConfigMap `platform-ca` with the certificate, which the control service copies into each session namespace |
 | Session roles | Six fixed ClusterRoles for session namespaces, and the ServiceAccount and rights of the control service |
 | Admission policies | `heartwood-control-scope`, `heartwood-staging-shape` and `heartwood-session-services` |
 | OpenShell objects | `files/openshell-session.json`, the objects of one session namespace |
@@ -65,7 +65,9 @@ The platform is for synthetic and open data only.
 Every image in `values.yaml` is pinned by digest or has no default, and `values.schema.json` rejects an image reference without a digest.
 `images.platformServices` has no default and is set at installation to the image built from `services/Dockerfile`.
 `images.openshellGateway` has no default either.
-`values-kind.yaml` sets it to the published OpenShell 0.1.9 gateway, as a stand-in for the gateway that `images/worker/candidate/gateway.json` builds with its recorded patches.
+`values-kind.yaml` sets it to the published OpenShell 0.1.9 gateway and `sessions.stagingImage` to a small test image.
+Both are stand-ins, used when the chart is rendered or installed without the built images.
+The [Kubernetes Qualification workflow](../.github/workflows/kubernetes-qualification.yml) installs the chart with the gateway that `images/worker/candidate/gateway.json` builds with its recorded patches and with the worker image by digest as `sessions.stagingImage`.
 Helm generates every credential at the first installation and keeps the existing value on an upgrade.
 The chart renders no credential from a fixed value.
 PostgreSQL keeps the credentials of the first installation and the Keycloak realm on its volume, so a new installation after `helm uninstall` needs the volume claims of the old one deleted first.
@@ -106,6 +108,7 @@ At each launch the control service brings the namespace `hw-s-<session>` to the 
 
 1. It creates the namespace with the labels `heartwood.platform/session` and `pod-security.kubernetes.io/enforce=restricted`, or reuses a namespace that carries them and `pod-security.kubernetes.io/enforce-version=latest`.
 2. It binds `heartwood-session-control` to itself there, and applies the ResourceQuota and LimitRange from `sessions.quota`, `sessions.containerDefaults` and `sessions.containerDefaultRequests`.
+   It also applies the ServiceAccount `hw-staging` without a mounted token, for the staging pods of the Heartwood gateway, and the ConfigMap `platform-ca` with the platform CA certificate.
 3. It applies the network policies: no ingress and no egress by default; ingress to the OpenShell gateway on port 8080 from the supervisors of its sandboxes and from pods in `heartwood-sessions` that carry the session label; egress of the OpenShell gateway and its certificate Job to DNS and to the Kubernetes API server.
 4. It creates the Secret `openshell-kek` with a new 32-byte key, unless the session has one. OpenShell encrypts the provider credentials of the session with it.
 5. It binds the other fixed ClusterRoles with RoleBindings and applies the OpenShell objects with server-side apply, with the namespace and `images.openshellGateway` in place of the placeholders.
@@ -172,6 +175,8 @@ the Service has the type `ClusterIP` and no external address.
 `tools/render_openshell.py` renders the OpenShell chart 0.1.9, pinned by the SHA-256 digest of its archive, with the values in `tools/openshell-values.yaml`, and writes `files/openshell-session.json`.
 The chart's RBAC creation is switched off, and the tool removes the Role and RoleBinding of the certificate Job.
 Every object carries a namespace placeholder, and the containers of the gateway and of the certificate Job carry an image placeholder.
+With `supervisor.network.additionalCaConfigMapName: platform-ca`, the gateway mounts the certificate of the session's ConfigMap `platform-ca`, and the Kubernetes driver gives it to the supervisor pod of each sandbox, which trusts it for the HTTPS destinations that the sandbox policy allows.
+The driver keeps the certificate in ConfigMaps that it creates, so `heartwood-openshell-sandbox` grants `get` and `create` on ConfigMaps, as the chart's Role does with this value.
 The tool fails when the chart renders another object kind, another image, or the namespace in a new place.
 
 ```bash
@@ -225,6 +230,8 @@ The reachable control then runs again, and after the policies are deleted both b
 The script writes `network-policy-controls.json` and exits with an error unless every control has its expected result.
 
 `install-chart.sh` installs the chart with `values-kind.yaml` and waits until every component is ready.
+When the chart is installed with another `sessions.stagingImage`, pass the same reference to the cluster tests with `--staging-image`; the default is the value in `values-kind.yaml`.
+The pods that the cluster tests run use a pinned agnhost image, independent of `sessions.stagingImage`.
 The cluster tests send each admission policy admitted requests and one denied request for each condition, including each ClusterRole with a subject other than its own, as the confined ServiceAccount.
 They also check which connections the network policies allow, and call the control service as a stand-in for the spawner.
 A launched session is checked for its namespace objects, its RoleBindings, a ready OpenShell gateway, an unchanged state after a second launch, and complete removal.

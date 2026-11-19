@@ -59,6 +59,8 @@ class SessionSettings:
     quota: dict[str, str]
     container_defaults: dict[str, str]
     container_default_requests: dict[str, str]
+    # The platform CA certificate in PEM form, which sandbox supervisors trust.
+    platform_ca: str
     ready_timeout_seconds: float = 180.0
 
 
@@ -135,7 +137,7 @@ class Sessions:
         self._removed: set[str] = set()
 
     def _namespace_objects(self, session: str) -> list[dict[str, Any]]:
-        """Quota, limits and network policies of a session namespace."""
+        """Quota, limits, network policies and platform objects of a session namespace."""
         namespace = session_namespace(session)
         settings = self._settings
         dns = {
@@ -150,6 +152,22 @@ class Sessions:
             "podSelector": {"matchLabels": {_SESSION_LABEL: session}},
         }
         return [
+            # The ServiceAccount of the staging pods that the Heartwood gateway creates.
+            # It grants nothing, and staging pods mount no token.
+            {
+                "apiVersion": "v1",
+                "kind": "ServiceAccount",
+                "metadata": {"name": "hw-staging", "namespace": namespace},
+                "automountServiceAccountToken": False,
+            },
+            # The OpenShell gateway mounts the platform CA certificate and passes it to
+            # the supervisors of its sandboxes, which trust it for allowed destinations.
+            {
+                "apiVersion": "v1",
+                "kind": "ConfigMap",
+                "metadata": {"name": "platform-ca", "namespace": namespace},
+                "data": {"ca.crt": settings.platform_ca},
+            },
             {
                 "apiVersion": "v1",
                 "kind": "ResourceQuota",

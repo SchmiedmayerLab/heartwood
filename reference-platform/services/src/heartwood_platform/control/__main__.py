@@ -71,6 +71,7 @@ class SessionNamespaceSettings(_Settings):
     quota: dict[str, str]
     container_defaults: dict[str, str]
     container_default_requests: dict[str, str]
+    platform_ca_file: Path
 
 
 class Settings(_Settings):
@@ -136,6 +137,7 @@ def build(settings: Settings, kubernetes: Kubernetes) -> Starlette:
             quota=namespaces.quota,
             container_defaults=namespaces.container_defaults,
             container_default_requests=namespaces.container_default_requests,
+            platform_ca=namespaces.platform_ca_file.read_text(encoding="utf-8"),
         ),
         registry.session_ids,
     )

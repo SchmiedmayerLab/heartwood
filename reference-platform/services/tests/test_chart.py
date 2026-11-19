@@ -147,6 +147,33 @@ def test_control_service_binds_only_the_fixed_cluster_roles(
     assert "subjects" not in binding
 
 
+def test_openshell_sandbox_role_creates_and_reads_config_maps_only(
+    objects: list[dict[str, Any]],
+) -> None:
+    rules = _named(objects, "ClusterRole", "heartwood-openshell-sandbox")["rules"]
+    (rule,) = [rule for rule in rules if "configmaps" in rule["resources"]]
+    assert rule == {"apiGroups": [""], "resources": ["configmaps"], "verbs": ["get", "create"]}
+
+
+def test_control_service_reads_the_platform_ca_certificate(objects: list[dict[str, Any]]) -> None:
+    configuration = json.loads(
+        _named(objects, "ConfigMap", "heartwood-control")["data"]["configuration.json"]
+    )
+    path = Path(configuration["sessions"]["platform_ca_file"])
+    spec = _named(objects, "StatefulSet", "heartwood-control")["spec"]["template"]["spec"]
+    (volume,) = [
+        item for item in spec["volumes"] if item.get("configMap", {}).get("name") == "platform-ca"
+    ]
+    (mount,) = [
+        item for item in spec["containers"][0]["volumeMounts"] if item["name"] == volume["name"]
+    ]
+
+    assert volume["configMap"]["items"] == [{"key": "ca.crt", "path": path.name}]
+    assert Path(mount["mountPath"]) == path.parent
+    assert mount["readOnly"] is True
+    assert "ca.crt" in _named(objects, "ConfigMap", "platform-ca")["data"]
+
+
 @pytest.mark.parametrize(
     "name", ["heartwood-control-scope", "heartwood-staging-shape", "heartwood-session-services"]
 )

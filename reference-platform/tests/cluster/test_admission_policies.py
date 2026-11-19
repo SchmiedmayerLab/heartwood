@@ -26,6 +26,9 @@ _NAMESPACE = f"hw-s-{_SESSION}"
 # comes from the staging policy alone.
 _OPEN_NAMESPACE = "hw-s-policyopen"
 _GATEWAY = f"system:serviceaccount:heartwood-sessions:hw-gw-{_SESSION}"
+# A pod named like the workload pod of a sandbox, <workspace>--<sandbox>, in the
+# workspace hw.
+_WORKLOAD_POD = "hw--hw-0123456789abcdef"
 
 _CONTROL_SCOPE = "ValidatingAdmissionPolicy 'heartwood-control-scope'"
 _STAGING_SHAPE = "ValidatingAdmissionPolicy 'heartwood-staging-shape'"
@@ -135,6 +138,90 @@ def _claim(name: str = "hw-attempt-a-inputs") -> dict[str, Any]:
     }
 
 
+# The attempt of the documents that a Heartwood gateway creates for staging, as
+# KubernetesWorkerVolumes in packages/gateway/src/heartwood/gateway/worker_kubernetes.py
+# builds them.
+_ATTEMPT = "0123456789abcdef0123456789abcdef"
+_ATTEMPT_LABELS = {
+    "heartwood.project": "demo",
+    "heartwood.attempt": "01234567-89ab-cdef-0123-456789abcdef",
+}
+
+
+def _gateway_claim(mount: str) -> dict[str, Any]:
+    return {
+        "apiVersion": "v1",
+        "kind": "PersistentVolumeClaim",
+        "metadata": {
+            "name": f"hw-attempt-{_ATTEMPT}-{mount}",
+            "namespace": _NAMESPACE,
+            "labels": {
+                **_ATTEMPT_LABELS,
+                "heartwood.role": "projection",
+                "openshell.ai/sandbox-attachable": "true",
+                "openshell.ai/sandbox-attachable-workspace": "hw",
+            },
+        },
+        "spec": {
+            "accessModes": ["ReadWriteOnce"],
+            "storageClassName": "heartwood-attempt",
+            "resources": {"requests": {"storage": "256Mi"}},
+        },
+    }
+
+
+def _gateway_staging_pod(image: str) -> dict[str, Any]:
+    limits = {"cpu": "1", "memory": "256Mi"}
+    return {
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "metadata": {
+            "name": f"hw-staging-{_ATTEMPT}",
+            "namespace": _NAMESPACE,
+            "labels": {**_ATTEMPT_LABELS, "heartwood.role": "staging"},
+        },
+        "spec": {
+            "restartPolicy": "Never",
+            "activeDeadlineSeconds": 600,
+            "terminationGracePeriodSeconds": 1,
+            "serviceAccountName": "hw-staging",
+            "automountServiceAccountToken": False,
+            "enableServiceLinks": False,
+            "securityContext": {
+                "runAsNonRoot": True,
+                "runAsUser": 10002,
+                "runAsGroup": 10002,
+                "fsGroup": 10002,
+                "seccompProfile": {"type": "RuntimeDefault"},
+            },
+            "containers": [
+                {
+                    "name": "stage",
+                    "image": image,
+                    "command": ["/bin/sleep", "600"],
+                    "securityContext": {
+                        "allowPrivilegeEscalation": False,
+                        "capabilities": {"drop": ["ALL"]},
+                        "readOnlyRootFilesystem": True,
+                    },
+                    "resources": {"limits": limits, "requests": limits},
+                    "volumeMounts": [
+                        {"name": "inputs", "mountPath": "/inputs"},
+                        {"name": "skills", "mountPath": "/skills"},
+                    ],
+                }
+            ],
+            "volumes": [
+                {
+                    "name": mount,
+                    "persistentVolumeClaim": {"claimName": f"hw-attempt-{_ATTEMPT}-{mount}"},
+                }
+                for mount in ("inputs", "skills")
+            ],
+        },
+    }
+
+
 def _changed(document: dict[str, Any], path: str, value: object = None) -> dict[str, Any]:
     """Copy a document and set the dotted path, or remove it when no value is given."""
     changed = copy.deepcopy(document)
@@ -160,12 +247,14 @@ _RUNTIME_CLASS: dict[str, Any] = {
 
 
 @pytest.fixture(scope="module", autouse=True)
-def session(cluster: Cluster, staging_image: str) -> Iterator[None]:
+def session(cluster: Cluster, probe_image: str) -> Iterator[None]:
     """Create the objects that the cases refer to, as the cluster administrator."""
-    probe = _pod(staging_image, name="hw-staging-probe", namespace=_NAMESPACE)
+    probe = _pod(probe_image, name="hw-staging-probe", namespace=_NAMESPACE)
     probe["spec"]["volumes"] = []
     other = copy.deepcopy(probe)
     other["metadata"]["name"] = "other-probe"
+    workload = copy.deepcopy(probe)
+    workload["metadata"]["name"] = _WORKLOAD_POD
     gateway = _account(f"hw-gw-{_SESSION}", "heartwood-sessions")
     wider = {
         "apiVersion": "rbac.authorization.k8s.io/v1",
@@ -213,6 +302,7 @@ def session(cluster: Cluster, staging_image: str) -> Iterator[None]:
         _RUNTIME_CLASS,
         probe,
         other,
+        workload,
     )
     ready = cluster.kubectl(
         "wait", "--namespace", _NAMESPACE, "--for=condition=Ready", "pod", "--all", "--timeout=180s"
@@ -668,6 +758,7 @@ def _pod_cases(image: str) -> list[tuple[str, dict[str, Any], str | None]]:
     pod = _pod(image)
     return [
         ("pod", pod, None),
+        ("gateway-staging-pod", _gateway_staging_pod(image), None),
         ("pod-restricted-namespace", _pod(image, namespace=_NAMESPACE), None),
         ("pod-plain-environment", _changed(pod, f"{_CONTAINER}.env", [_PLAIN]), None),
         (
@@ -845,6 +936,8 @@ _SOURCE = {"kind": "PersistentVolumeClaim", "name": "openshell-data-openshell-0"
     ("document", "message"),
     [
         pytest.param(_claim(), None, id="claim"),
+        pytest.param(_gateway_claim("inputs"), None, id="gateway-inputs-claim"),
+        pytest.param(_gateway_claim("skills"), None, id="gateway-skills-claim"),
         pytest.param(_claim("inputs"), _CLAIM, id="claim-other-name"),
         pytest.param(
             _changed(_claim(), "spec.storageClassName", "standard"), _CLAIM, id="claim-other-class"
@@ -895,6 +988,7 @@ def test_staging_shape_admits_exec_into_staging_pods_only(cluster: Cluster) -> N
     assert code == 0, error
     for arguments in (
         ("exec", "other-probe", "--", "/agnhost", "help"),
+        ("exec", _WORKLOAD_POD, "--", "/agnhost", "help"),
         ("attach", "hw-staging-probe"),
         ("port-forward", "pod/hw-staging-probe", ":8080"),
     ):
