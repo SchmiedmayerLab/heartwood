@@ -59,7 +59,7 @@ from heartwood.gateway.worker_volumes import (
 # checked against this gateway source revision and patch digests; recheck on any change.
 _CREATION_REJECTED = ("INVALID_ARGUMENT", "PERMISSION_DENIED", "UNAUTHENTICATED")
 _CREATION_REJECTED_GATEWAY = (
-    "f3d976590d3eb1379690a2abaf0f0e26c21d487d",
+    "ce58cf8e9b953281352d98a637e41616295b1318",
     (
         "f36989e0cddf843d79ee8d43376704c4358decc906ad3c92bf40db6c429534c1",
         "206aab5e89fcb6f338781e3b51c2b54bb7502483a06fadca6f482aef9bcc41ee",

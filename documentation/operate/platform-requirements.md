@@ -177,7 +177,7 @@ The gateway version does not satisfy the check.
 The decision is retained, with the reported version, driver and capabilities, in each worker attempt's evidence: an accepted gateway in the runtime binding and revocation evidence, a refused launch in the evidence that recorded the attempt as not created.
 The check relies on the gateway's own report: a gateway that reports a capability it does not implement passes, and Heartwood does not test the deletion behavior of the registered gateway.
 Both capability names come from the qualification build's patches; no upstream release reports them, so an unmodified upstream gateway is refused.
-The qualification build also reports `0.1.8+heartwood.3`, a local version that no upstream release uses, and the `gateway_build` entry of the [qualification evidence](../architecture/testing.md#native-qualification-evidence) records that version, its source revision and binary digests.
+The qualification build also reports `0.1.9+heartwood.1`, a local version that no upstream release uses, and the `gateway_build` entry of the [qualification evidence](../architecture/testing.md#native-qualification-evidence) records that version, its source revision and binary digests.
 Compare the deployed gateway with that record, or repeat native qualification against it and retain the evidence.
 
 ### Sensitive Data
