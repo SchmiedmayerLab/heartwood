@@ -18,7 +18,7 @@ _PLATFORM = "heartwood-platform.svc.cluster.local"
 _KEYCLOAK = f"keycloak.{_PLATFORM}:8443"
 _POSTGRESQL = f"postgresql.{_PLATFORM}:5432"
 _VERSITYGW = f"versitygw.{_PLATFORM}:7070"
-_CONTROL = f"heartwood-control.{_PLATFORM}:8080"
+_CONTROL = f"heartwood-control.{_PLATFORM}:8443"
 # Consecutive timeouts that count as blocked, as in network-policy-controls.sh.
 _BLOCKED_AFTER = 3
 

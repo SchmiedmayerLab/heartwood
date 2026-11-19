@@ -18,11 +18,11 @@ from collections.abc import Iterator
 from typing import Any
 
 import pytest
-from kube import Cluster
+from kube import PROBE_CA, Cluster
 
 _SESSIONS = "heartwood-sessions"
 _PLATFORM = "heartwood-platform"
-_CONTROL = "http://heartwood-control.heartwood-platform.svc.cluster.local:8080"
+_CONTROL = "https://heartwood-control.heartwood-platform.svc.cluster.local:8443"
 _FIRST = "6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0001"
 _SECOND = "6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0002"
 _POLICY = "ValidatingAdmissionPolicy 'heartwood-control-scope'"
@@ -50,8 +50,10 @@ def _pod(name: str, image: str, labels: dict[str, str]) -> dict[str, Any]:
                         "allowPrivilegeEscalation": False,
                         "capabilities": {"drop": ["ALL"]},
                     },
+                    "volumeMounts": [{"name": "platform-ca", "mountPath": "/etc/platform-ca"}],
                 }
             ],
+            "volumes": [{"name": "platform-ca", "configMap": {"name": PROBE_CA}}],
         },
     }
 
@@ -82,6 +84,8 @@ def _call(cluster: Cluster, method: str, subject: str, project: str) -> tuple[in
         "--silent",
         "--max-time",
         "240",
+        "--cacert",
+        "/etc/platform-ca/ca.crt",
         "--request",
         method,
         "--header",

@@ -48,7 +48,7 @@ from qualification_evidence import (
 ROOT = Path(__file__).resolve().parents[1]
 _SESSIONS = "heartwood-sessions"
 _PLATFORM = "heartwood-platform"
-_CONTROL = "http://heartwood-control.heartwood-platform.svc.cluster.local:8080"
+_CONTROL = "https://heartwood-control.heartwood-platform.svc.cluster.local:8443"
 # A synthetic researcher and project of the chart's kind values.
 _SUBJECT = "6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0001"
 _PROJECT = "demo"
@@ -84,11 +84,15 @@ _SOURCES = (
     "images/worker/candidate/replacement-worker.Dockerfile",
     "reference-platform/cluster/push-image.sh",
 )
-_LAUNCH = """import json,sys,urllib.error,urllib.request
+# The token and the platform CA certificate arrive on standard input; the request trusts
+# that CA alone.
+_LAUNCH = """import json,ssl,sys,urllib.error,urllib.request
+given=json.load(sys.stdin)
 request=urllib.request.Request(sys.argv[2],method=sys.argv[1],
- headers={'Authorization':'Bearer '+sys.stdin.read().strip()})
+ headers={'Authorization':'Bearer '+given['token']})
+context=ssl.create_default_context(cadata=given['ca'])
 try:
- with urllib.request.urlopen(request,timeout=300) as response:
+ with urllib.request.urlopen(request,timeout=300,context=context) as response:
   print(json.dumps({'status':response.status,'body':response.read().decode()}))
 except urllib.error.HTTPError as error:
  print(json.dumps({'status':error.code,'body':error.read().decode()}))
@@ -357,6 +361,7 @@ def _launch(cluster: Cluster, method: str) -> dict[str, Any]:
 
 
 def _call(cluster: Cluster, method: str, token: str) -> dict[str, Any]:
+    authority = cluster.json("configmap", "platform-ca", "--namespace", _PLATFORM)["data"]["ca.crt"]
     reply: dict[str, Any] = json.loads(
         cluster.kubectl(
             "exec",
@@ -371,7 +376,7 @@ def _call(cluster: Cluster, method: str, token: str) -> dict[str, Any]:
             _LAUNCH,
             method,
             f"{_CONTROL}/v1/researchers/{_SUBJECT}/projects/{_PROJECT}/launch",
-            stdin=token,
+            stdin=json.dumps({"token": token, "ca": authority}),
         )
     )
     return reply

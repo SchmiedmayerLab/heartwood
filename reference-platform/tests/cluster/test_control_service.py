@@ -23,7 +23,7 @@ import pytest
 from kube import PROBE_CA, Cluster
 
 _SESSIONS = "heartwood-sessions"
-_CONTROL = "http://heartwood-control.heartwood-platform.svc.cluster.local:8080"
+_CONTROL = "https://heartwood-control.heartwood-platform.svc.cluster.local:8443"
 _KEYCLOAK = "https://keycloak.heartwood-platform.svc.cluster.local:8443"
 _FIRST = "6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0001"
 _SECOND = "6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0002"
@@ -252,3 +252,40 @@ def test_other_callers_are_refused(cluster: Cluster) -> None:
     ):
         assert _call(cluster, "PUT", _launch(_FIRST, "demo"), token)[0] == 401
         assert _call(cluster, "GET", f"{_CONTROL}/v1/launch-context", token)[0] == 401
+
+
+def test_control_service_serves_only_https_with_a_certificate_of_the_platform_ca(
+    cluster: Cluster,
+) -> None:
+    # _call trusts only the platform CA, so an answer shows the certificate of the CA.
+    assert _call(cluster, "GET", f"{_CONTROL}/v1/launch-context")[0] == 401
+    # Without the platform CA the certificate is not trusted, and plain HTTP is not served.
+    for arguments in ((_CONTROL + "/healthz",), (_CONTROL.replace("https", "http") + "/healthz",)):
+        result = cluster.kubectl(
+            "exec",
+            f"--namespace={_SESSIONS}",
+            _POD,
+            "--",
+            "curl",
+            "--silent",
+            "--max-time",
+            "10",
+            "--output",
+            "/dev/null",
+            "--write-out",
+            "%{http_code}",
+            *arguments,
+        )
+        assert result.returncode != 0 or result.stdout.strip() == "400", result.stdout
+    # The service itself listens on no plain HTTP port.
+    result = cluster.kubectl(
+        "exec",
+        "--namespace=heartwood-platform",
+        "statefulset/heartwood-control",
+        "--",
+        "/opt/heartwood-platform/.venv/bin/python",
+        "-c",
+        "import socket; socket.create_connection(('127.0.0.1', 8080), 5)",
+    )
+    assert result.returncode != 0
+    assert "ConnectionRefusedError" in result.stderr

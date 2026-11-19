@@ -55,9 +55,9 @@ The platform is for synthetic and open data only.
 |---|---|
 | PostgreSQL | One StatefulSet with a role and a database for Keycloak |
 | Keycloak | One Deployment that serves HTTPS on port 8443 and imports the realm `heartwood` at its first start |
-| Control service | One StatefulSet with the project registry, the launch interface and the provisioning of session namespaces |
+| Control service | One StatefulSet that serves HTTPS on port 8443, with the project registry, the launch interface and the provisioning of session namespaces |
 | versitygw | S3-compatible object store with one bucket `hw-project-<id>` for each entry in `projects` |
-| Platform certificate authority | Secret `platform-ca` with the key, ConfigMap `platform-ca` with the certificate, which the control service copies into each session namespace, and Secret `keycloak-tls` with the serving certificate of Keycloak |
+| Platform certificate authority | Secret `platform-ca` with the key, ConfigMap `platform-ca` with the certificate, which the control service copies into each session namespace and each gateway Secret, and the Secrets `keycloak-tls` and `heartwood-control-tls` with the serving certificates of Keycloak and the control service |
 | Session roles | Six fixed ClusterRoles for session namespaces, and the ServiceAccount and rights of the control service |
 | Admission policies | `heartwood-control-scope`, `heartwood-staging-shape` and `heartwood-session-services` |
 | OpenShell objects | `files/openshell-session.json`, the objects of one session namespace |
@@ -79,11 +79,13 @@ Keycloak serves only HTTPS, with a certificate that the platform CA signs for th
 Helm creates the certificate together with the CA and keeps both on an upgrade.
 The issuer of every token is `https://keycloak.heartwood-platform.svc.cluster.local:8443/realms/heartwood`, or the `keycloak.url` value.
 The control service and the bootstrap Job verify Keycloak against the platform CA alone.
-A gateway does the same with `ca_file` in its `[identity]` table, which names a regular file such as a copy that an init container makes, because a file in a ConfigMap volume is a symbolic link that the operator file checks refuse.
+A gateway does the same with `ca_file` in its `[identity]` table.
+The control service writes the CA certificate as `platform-ca.crt` into the gateway's Secret `hw-gw-<session>`, and `ca_file` names a regular copy of it, such as one that an init container makes, because a file in a Secret or ConfigMap volume is a symbolic link that the operator file checks refuse.
 The certificates are not renewed automatically.
-Deleting the Secret `keycloak-tls` and running `helm upgrade` issues a new serving certificate, and deleting the Secret `platform-ca` replaces the CA and the serving certificate together.
+Deleting the Secret `keycloak-tls` or `heartwood-control-tls` and running `helm upgrade` issues a new serving certificate, and deleting the Secret `platform-ca` replaces the CA and both serving certificates together.
 Keycloak reads its certificate files again every minute, so it serves a new certificate within a few minutes, after the kubelet updates the Secret volume.
-After a new CA, the control service and running gateways need a restart once Keycloak serves the new certificate.
+After a new CA, the control service and running gateways need a restart once Keycloak and the control service serve the new certificates.
+The copies of the CA certificate in session namespaces and gateway Secrets are rewritten at the next launch of each session.
 A `keycloak.url` with another host name needs a certificate for that name, which the chart does not create.
 
 ### Keycloak Realm
@@ -102,6 +104,10 @@ An account added to `researchers` after the first installation gets a password i
 
 The control service keeps the project registry in a SQLite database on its volume: projects with their billing binding and policy, their members, and one session for each researcher and project.
 The chart value `projects` is the source of projects and members, and the service replaces the registry's projects with it at each start.
+
+The service serves only HTTPS on port 8443, with a certificate that the platform CA signs for the names of its Service (`heartwood-control`, `heartwood-control.heartwood-platform`, and the `.svc` and `.svc.cluster.local` forms), valid for 825 days and kept on an upgrade like the certificate of Keycloak.
+It checks its certificate files every minute and serves a changed certificate to new connections without a restart; a certificate that does not load with its key leaves the previous one in use.
+Its callers verify it against the platform CA alone, a Heartwood gateway through `ca_file` in the service's `[[mcp_destinations]]` entry.
 
 | Request | Caller | Result |
 |---|---|---|
@@ -156,7 +162,7 @@ At each launch the control service brings the namespace `hw-s-<session>` to the 
 6. It sets the subjects of `heartwood-openshell-node-reader` to the OpenShell ServiceAccounts of all sessions in the registry whose removal has not begun.
 7. It creates the ServiceAccount `hw-gw-<session>` in `heartwood-sessions`, waits until the OpenShell gateway is ready, and replaces the Secret `hw-gw-<session>`.
 
-The Secret `hw-gw-<session>` holds `launch.json`, the secret of the project client, and the OpenShell client certificate, key and CA certificate.
+The Secret `hw-gw-<session>` holds `launch.json`, the secret of the project client, the OpenShell client certificate, key and CA certificate, and the platform CA certificate `platform-ca.crt`.
 `launch.json` is the reply to the launch request: the session, the launch context, the namespace with its UID, the UID of `kube-system`, the gateway ServiceAccount and the OpenShell endpoint.
 The reply carries no credential.
 

@@ -173,7 +173,9 @@ def test_gateway_secret_holds_the_launch_and_the_credentials_and_the_reply_holds
         "openshell-ca.crt": f"ca.crt of hw-s-{launch['session']}",
         "openshell-tls.crt": f"tls.crt of hw-s-{launch['session']}",
         "openshell-tls.key": f"tls.key of hw-s-{launch['session']}",
+        "platform-ca.crt": "-----BEGIN CERTIFICATE-----\n",
     }
+    files.pop("platform-ca.crt")
     for credential in files.values():
         assert credential not in json.dumps(launch)
 
@@ -311,6 +313,10 @@ def test_settings_refuse_duplicate_projects_and_other_template_fields(tmp_path: 
         "service_callers": [HUB],
         "redirect_uri_template": _TEMPLATE,
         "keycloak": keycloak,
+        "tls": {
+            "certificate_file": "/etc/heartwood-control/tls/tls.crt",
+            "key_file": "/etc/heartwood-control/tls/tls.key",
+        },
         "sessions": {
             "control_namespace": "heartwood-platform",
             "control_account": "heartwood-control",
@@ -335,6 +341,8 @@ def test_settings_refuse_duplicate_projects_and_other_template_fields(tmp_path: 
         # Keycloak is reached only over HTTPS.
         {"keycloak": {**keycloak, "url": "http://keycloak:8080"}},
         {"synthetic_prices": {**SYNTHETIC_PRICES, "runtime_profiles": "none"}},
+        # The service serves only HTTPS, so its certificate and key are required.
+        {"tls": {"certificate_file": "/etc/heartwood-control/tls/tls.crt"}},
     ):
         with pytest.raises(ValueError, match="validation error"):
             Settings.model_validate_json(json.dumps({**settings, **change}))
