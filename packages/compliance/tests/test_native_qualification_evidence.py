@@ -837,6 +837,8 @@ def test_only_a_main_job_without_candidate_code_can_attest() -> None:
     assert _workflow("worker-candidate.yml")["permissions"] == {"contents": "read"}
     assert "pull_request" not in qualification["on"]
     assert attestation["needs"] == "native-qualification"
+    # Release creation finds the evidence run by this job name.
+    assert attestation["name"] == _ATTESTATION_JOB
     # Documented verification requires the main branch as the attested source ref.
     assert attestation["if"] == "github.ref == 'refs/heads/main'"
     assert attestation["permissions"] == {
@@ -859,6 +861,7 @@ def test_only_a_main_job_without_candidate_code_can_attest() -> None:
 
 
 _RELEASE_EVIDENCE = "Verify attested native qualification evidence"
+_ATTESTATION_JOB = "Attest Native Qualification Evidence"
 _EVIDENCE_ASSETS = (
     "native-qualification-evidence.tar.gz",
     "native-qualification-evidence.sigstore.jsonl",
@@ -870,7 +873,8 @@ _DRILL_ASSET = "agent-safety-drills.json"
 _GITHUB_CLI = """#!/usr/bin/env bash
 printf '%s\\n' "$*" >>"${GH_CALLS}"
 case "$1 $2" in
-  "run list") printf '%s\\n' "${RUN_ID}" ;;
+  "run list") printf '%s\\n' ${RUN_ID} ;;
+  "run view") printf '%s\\n' "${ATTESTATION:-success}" ;;
   "run download")
     while [[ "$1" != --dir ]]; do shift; done
     cp -R "${EVIDENCE}" "$2"
@@ -953,17 +957,21 @@ def test_release_attaches_only_attested_evidence_of_its_commit(
     calls = (tmp_path / "calls").read_text().splitlines()
     assert calls[0] == (
         "run list --repo SchmiedmayerLab/heartwood --workflow native-qualification.yml"
-        f" --branch main --commit {_COMMIT} --status success --limit 1"
-        " --json databaseId --jq .[0].databaseId // empty"
+        f" --branch main --commit {_COMMIT} --limit 20"
+        " --json databaseId --jq .[].databaseId"
     )
-    assert calls[1].startswith(
+    assert calls[1] == (
+        "run view 7 --repo SchmiedmayerLab/heartwood --json jobs"
+        f' --jq .jobs[] | select(.name == "{_ATTESTATION_JOB}") | .conclusion'
+    )
+    assert calls[2].startswith(
         "run download 7 --repo SchmiedmayerLab/heartwood"
         f" --name worker-native-qualification-{_COMMIT} "
     )
-    assert calls[2] == (
+    assert calls[3] == (
         "attestation download ../native-qualification/SHA256SUMS --repo SchmiedmayerLab/heartwood"
     )
-    verification = calls[3].split()
+    verification = calls[4].split()
     assert verification[:3] == [
         "attestation",
         "verify",
@@ -994,7 +1002,8 @@ def test_release_attaches_only_attested_evidence_of_its_commit(
 @pytest.mark.parametrize(
     ("overrides", "reason"),
     [
-        ({"RUN_ID": ""}, "no successful native qualification exists"),
+        ({"RUN_ID": ""}, "no attested native qualification exists"),
+        ({"ATTESTATION": "failure"}, "no attested native qualification exists"),
         ({"ATTESTED": ""}, ""),
         ({"VERIFY_STATUS": "1"}, ""),
         ({"GITHUB_SHA": _OTHER_COMMIT}, "the evidence describes another source commit"),

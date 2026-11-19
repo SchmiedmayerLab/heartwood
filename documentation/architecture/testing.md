@@ -256,7 +256,7 @@ On the main branch, a separate Native Qualification job, which runs no candidate
 Pull-request, manual, local, and capable-model runs, and manual Native Qualification runs on another branch, are not attested.
 
 Release creation keeps the evidence beyond its artifact retention.
-It locates the successful Native Qualification run of the release commit, downloads its evidence and attestation, verifies both as below, and fails when any of these is missing or does not verify.
+It locates the Native Qualification run of the release commit whose evidence attestation job succeeded, downloads its evidence and attestation, verifies both as below, and fails when any of these is missing or does not verify.
 The release then carries `native-qualification-evidence.tar.gz`, the evidence directory with its `SHA256SUMS`, and `native-qualification-evidence.sigstore.jsonl`, the attestation bundle for that `SHA256SUMS`.
 
 To verify release evidence, check out the release tag and run these commands in a directory holding both assets:
