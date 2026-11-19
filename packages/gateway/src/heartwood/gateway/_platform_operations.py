@@ -178,11 +178,12 @@ def _deployment_roles(destination: McpDestination) -> dict[str, str]:
 
 
 def _read_only(definition: str | None) -> bool | None:
+    """Return a listed tool's read-only hint; MCP defaults a missing hint to false."""
     if definition is None:
         return None
     annotations = json.loads(definition).get("annotations")
     value = annotations.get("readOnlyHint") if isinstance(annotations, dict) else None
-    return value if isinstance(value, bool) else None
+    return value if isinstance(value, bool) else False
 
 
 def proposal_reference(proposal: ExternalActionProposal) -> PlanningReference:

@@ -566,8 +566,9 @@ The gateway does the following:
   The gateway proposes the cancellation only for an operation this session sent to the same service under the same launch context, shows that operation in the review, and sends `target_operation_id` from its own record.
   The cancellation has its own operation identifier and observation, which reports what the platform observed, such as a cancelled task or one that had already completed.
   It undoes no completed work and no incurred charges.
-- **Planning links:** for a submission bound to a plan element, the gateway links the reviewed operation document derived from the proposal, each researcher decision with its session event as audit reference, the platform's admission as the first observation reports it, and every observation to the plan revision through `PlatformPlanning.link_operation_set` and `link_platform_record`.
-  The element's review state then follows the researcher's decision, and its platform state the admission.
+- **Planning links:** for a submission bound to a plan element, the gateway links the reviewed operation document derived from the proposal, each researcher decision with its session event as audit reference, the platform's admission as reported by the first observation that shows it, and every observation to the plan revision through `PlatformPlanning.link_operation_set` and `link_platform_record`.
+  A failed or unknown observation records no admission, because the platform may never have received the operation.
+  The element's review state then follows the researcher's decision, and its platform state the admission, or no request when there is none.
 - **Projection:** the session projection shows each operation with its platform proposal, estimate, status, platform reference, platform record and diagnostic in the terminal, browser and notebook.
   The audit records the operation identifier, digest, decision, status, platform record reference and cancellation target without request content.
 

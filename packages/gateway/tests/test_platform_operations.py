@@ -755,7 +755,10 @@ def test_cancellation_names_the_earlier_operation_from_the_gateways_record(
         assert cancel.proposal.request.target_operation_id == job.proposal.operation_id
         assert json.loads(cancel.proposal.request.request_json) == {}
         lines = platform_operation_lines(service.action(cancel))
-        assert lines[0].startswith(f"Cancels operation {operation_id}: Call create_task")
+        assert lines[0] == (
+            f"Cancels operation {operation_id}: Call create_task on Synthetic jobs "
+            "(platform reference task-0001)"
+        )
         assert "Cancellation does not undo completed work or incurred charges." in lines
         service.decide(cancel)
 

@@ -489,6 +489,7 @@ An operation the platform never received is reported as failed.
 When the condition persists, check that the job service is reachable and that the token for it is valid.
 While the outcome stays unknown, no other job on that service can be submitted or cancelled from this session; use the platform's own tools for running jobs meanwhile.
 Operations from a session whose platform launch context has since changed cannot be reconciled from a new launch context.
+That service then stays blocked for the rest of the session; start a new session to submit jobs to it again.
 
 ## Managed Compute
 
