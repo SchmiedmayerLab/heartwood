@@ -21,6 +21,7 @@ import json
 import subprocess
 import sys
 import tarfile
+import time
 import tomllib
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -226,20 +227,14 @@ def _pod(name: str, image: str, **spec: Any) -> dict[str, Any]:  # noqa: ANN401
         "image": image,
         "command": ["/bin/sleep", "7200"],
         "workingDir": "/qualification/output",
-        "securityContext": {
-            "allowPrivilegeEscalation": False,
-            "capabilities": {"drop": ["ALL"]},
-            "readOnlyRootFilesystem": True,
-        },
+        # The cases write below the image's own output directory, so the root file
+        # system stays writable.
+        "securityContext": {"allowPrivilegeEscalation": False, "capabilities": {"drop": ["ALL"]}},
         "resources": {
             "requests": {"cpu": "500m", "memory": "1Gi"},
             "limits": {"memory": "3Gi"},
         },
-        "volumeMounts": [
-            {"name": "output", "mountPath": "/qualification/output"},
-            {"name": "tmp", "mountPath": "/tmp"},
-            *spec.pop("volumeMounts", []),
-        ],
+        "volumeMounts": spec.pop("volumeMounts", []),
         "env": spec.pop("env", []),
     }
     return {
@@ -259,11 +254,7 @@ def _pod(name: str, image: str, **spec: Any) -> dict[str, Any]:  # noqa: ANN401
                 "seccompProfile": {"type": "RuntimeDefault"},
             },
             "containers": [container],
-            "volumes": [
-                {"name": "output", "emptyDir": {}},
-                {"name": "tmp", "emptyDir": {}},
-                *spec.pop("volumes", []),
-            ],
+            "volumes": spec.pop("volumes", []),
             **spec,
         },
     }
@@ -274,7 +265,23 @@ def _launch(cluster: Cluster, method: str) -> dict[str, Any]:
     token = cluster.kubectl(
         "create", "token", "hub", "--namespace", _SESSIONS, "--audience=heartwood-control"
     )
-    reply = json.loads(
+    reply = _call(cluster, method, token)
+    attempts = 1
+    # A launch can be repeated. The first launch after a chart installation was once
+    # answered with 502 after the control service had created only its own role binding;
+    # the number of requests is recorded with the cluster.
+    while method == "PUT" and reply["status"] == 502 and attempts < 3:
+        time.sleep(5)
+        reply = _call(cluster, method, token)
+        attempts += 1
+    if reply["status"] not in {200, 204}:
+        raise RuntimeError(f"The control service answered {reply['status']}: {reply['body']}")
+    launched: dict[str, Any] = json.loads(reply["body"]) if reply["body"] else {}
+    return {**launched, "launch_requests": attempts}
+
+
+def _call(cluster: Cluster, method: str, token: str) -> dict[str, Any]:
+    reply: dict[str, Any] = json.loads(
         cluster.kubectl(
             "exec",
             "--stdin",
@@ -291,10 +298,7 @@ def _launch(cluster: Cluster, method: str) -> dict[str, Any]:
             stdin=token,
         )
     )
-    if reply["status"] not in {200, 204}:
-        raise RuntimeError(f"The control service answered {reply['status']}: {reply['body']}")
-    launched: dict[str, Any] = json.loads(reply["body"]) if reply["body"] else {}
-    return launched
+    return reply
 
 
 def _provider_certificate(cluster: Cluster, host: str) -> dict[str, str]:
@@ -372,8 +376,11 @@ def _fixture_objects(cluster: Cluster, launched: dict[str, Any], built: dict[str
     account = {"kind": "ServiceAccount", "name": _FIXTURE, "namespace": _SESSIONS}
     selector = {"heartwood.qualification": "controller"}
     cluster.apply(
-        {"apiVersion": "v1", **account, "metadata": {"name": _FIXTURE, "namespace": _SESSIONS}}
-        | {"kind": "ServiceAccount"},
+        {
+            "apiVersion": "v1",
+            "kind": "ServiceAccount",
+            "metadata": {"name": _FIXTURE, "namespace": _SESSIONS},
+        },
         # The outside observer of the cases: it reads the session's objects, patches the
         # Sandbox resource for the injected conflict, and adds and removes policies.
         {
@@ -552,6 +559,7 @@ def _cluster_record(cluster: Cluster, launched: dict[str, Any]) -> dict[str, Any
             for node in nodes
         ],
         "session": launched["session"],
+        "launch_requests": launched["launch_requests"],
         "namespace": namespace,
         "namespace_uid": launched["namespace_uid"],
         "kube_system_uid": launched["kube_system_uid"],
@@ -623,6 +631,11 @@ def run(arguments: argparse.Namespace) -> None:
     record: dict[str, Any] = {}
     returncode = 1
     try:
+        # Pods of an earlier run that did not finish would keep their old image.
+        cluster.kubectl(
+            "delete", "--namespace", _SESSIONS, "--ignore-not-found", "--wait",
+            f"pod/{_CONTROLLER}", f"pod/{_LAUNCHER}",
+        )  # fmt: skip
         cluster.apply(
             {
                 "apiVersion": "v1",

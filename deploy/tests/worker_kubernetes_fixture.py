@@ -19,6 +19,7 @@ import os
 import secrets
 import shutil
 import subprocess
+import traceback
 from collections.abc import Callable, Iterator
 from contextlib import ExitStack, contextmanager, suppress
 from pathlib import Path
@@ -33,15 +34,18 @@ from heartwood.gateway import SessionGateway
 from heartwood.gateway.worker_deployment import KubernetesWorkerDeployment
 from heartwood.gateway.worker_inputs import WorkerInputManifest
 from heartwood.gateway.worker_kubernetes import KubernetesWorkerVolumes
+from heartwood.gateway.worker_native import _NativeWorkerAttempt
 
 WORKSPACE = "hw"
 WORKER_PODS = "worker-pods.json"
+LAUNCH_FAILURES = "launch-failures.log"
 _ACCOUNT = Path("/var/run/secrets/kubernetes.io/serviceaccount")
 _MOUNTS = Path("/qualification")
 _PROVIDER_PORT = 19671
-# The sandbox policy hash is a property of the policy, image and gateway, which every case
-# of one run shares, so one disposable probe learns it for the run.
-_policy_hash: list[str] = []
+# One provider serves every case of a run: the admitted policy hash covers the provider's
+# endpoints, so one disposable probe learns the hash for the run. The provider and its
+# profile stay in the session's sandbox gateway, which is removed with the session.
+_run: dict[str, str] = {}
 
 
 def _kubeconfig(path: Path, token: Path) -> None:
@@ -97,11 +101,21 @@ def retain_worker_pods(output: Path) -> Iterator[None]:
                         json.dumps(records, indent=2, sort_keys=True) + "\n"
                     )
 
+    stop_unadmitted = _NativeWorkerAttempt._stop_unadmitted
+
+    def explaining(attempt: _NativeWorkerAttempt) -> None:
+        # The launcher reports no cause of a failed launch; the run's log keeps it.
+        with suppress(Exception), (output / LAUNCH_FAILURES).open("a") as log:
+            log.write(traceback.format_exc(limit=-4) + "\n")
+        stop_unadmitted(attempt)
+
     KubernetesWorkerVolumes.inspect_worker = recording  # type: ignore[method-assign]
+    _NativeWorkerAttempt._stop_unadmitted = explaining  # type: ignore[method-assign]
     try:
         yield
     finally:
         KubernetesWorkerVolumes.inspect_worker = inspect_worker  # type: ignore[method-assign]
+        _NativeWorkerAttempt._stop_unadmitted = stop_unadmitted  # type: ignore[method-assign]
 
 
 class KubernetesFixture:
@@ -118,13 +132,17 @@ class KubernetesFixture:
         self.endpoint = os.environ["HW_OPENSHELL_ENDPOINT"]
         self.provider_host = os.environ["HW_PROVIDER_HOST"]
         self.base_url = f"https://{self.provider_host}:{_PROVIDER_PORT}/v1"
-        self.identity = "hw-k8s-" + uuid4().hex[:12]
+        self.identity = _run.setdefault("identity", "hw-k8s-" + uuid4().hex[:12])
         self.terminal_command = TERMINAL_COMMAND
         self.cli = Path("/opt/qualification/bin/openshell")
         self.kubectl = Path("/opt/qualification/bin/kubectl")
         self.images = json.loads(Path("/opt/qualification/gateway.json").read_text())["images"]
         self.config = private / "config"
-        self.env = {"PATH": os.defpath, "XDG_CONFIG_HOME": str(self.config)}
+        self.env = {
+            key: value
+            for key, value in os.environ.items()
+            if not key.startswith(("OPENSHELL_", "XDG_"))
+        } | {"XDG_CONFIG_HOME": str(self.config)}
         self.resources = ExitStack()
         self.applications: list[SessionGateway] = []
         self.probes: dict[str, str | None] = {}
@@ -134,7 +152,7 @@ class KubernetesFixture:
 
     def cli_command(self, arguments: list[str], **environment: str) -> str:
         return command(
-            [str(self.cli), *arguments, "--gateway", self.identity],
+            [str(self.cli), *arguments, "--gateway", self.identity, "--workspace", WORKSPACE],
             env={**self.env, **environment},
         )
 
@@ -230,6 +248,42 @@ class KubernetesFixture:
                 raise
         self.provider = SyntheticProvider(_MOUNTS / "provider")
         self.resources.callback(self.provider.close)
+        if "credential" in _run:
+            self.provider.credential = _run["credential"]
+            self.provider.forbidden_values = (self.provider.credential,)
+        else:
+            self._create_provider()
+            _run["credential"] = self.provider.credential
+        self.policy = policy_pb.SandboxPolicy(
+            version=1,
+            filesystem=policy_pb.FilesystemPolicy(
+                include_workdir=True,
+                read_only=[
+                    "/usr",
+                    "/bin",
+                    "/lib",
+                    "/etc",
+                    "/proc",
+                    "/dev/urandom",
+                    "/opt",
+                    "/inputs",
+                    "/skills",
+                ],
+                read_write=[
+                    "/tmp",
+                    "/dev/null",
+                    "/home/heartwood",
+                    "/dev/pts",
+                    "/dev/ptmx",
+                    "/workspace",
+                ],
+            ),
+            landlock=policy_pb.LandlockPolicy(compatibility="hard_requirement"),
+            process=policy_pb.ProcessPolicy(run_as_user="10001", run_as_group="10001"),
+        )
+
+    def _create_provider(self) -> None:
+        """Register the synthetic model route and its credential with the sandbox gateway."""
         profile = {
             "id": self.identity,
             "display_name": "Synthetic Qualification",
@@ -259,7 +313,6 @@ class KubernetesFixture:
         profile_path = self.output / "provider-profile.json"
         profile_path.write_text(json.dumps(profile, indent=2) + "\n")
         self.cli_command(["provider", "profile", "import", "--file", str(profile_path)])
-        self.resources.callback(self.cli_command, ["provider", "profile", "delete", self.identity])
         self.cli_command(
             [
                 "provider",
@@ -272,34 +325,6 @@ class KubernetesFixture:
                 "HEARTWOOD_QUALIFICATION_KEY",
             ],
             HEARTWOOD_QUALIFICATION_KEY=self.provider.credential,
-        )
-        self.resources.callback(self.cli_command, ["provider", "delete", self.identity])
-        self.policy = policy_pb.SandboxPolicy(
-            version=1,
-            filesystem=policy_pb.FilesystemPolicy(
-                include_workdir=True,
-                read_only=[
-                    "/usr",
-                    "/bin",
-                    "/lib",
-                    "/etc",
-                    "/proc",
-                    "/dev/urandom",
-                    "/opt",
-                    "/inputs",
-                    "/skills",
-                ],
-                read_write=[
-                    "/tmp",
-                    "/dev/null",
-                    "/home/heartwood",
-                    "/dev/pts",
-                    "/dev/ptmx",
-                    "/workspace",
-                ],
-            ),
-            landlock=policy_pb.LandlockPolicy(compatibility="hard_requirement"),
-            process=policy_pb.ProcessPolicy(run_as_user="10001", run_as_group="10001"),
         )
 
     def exec(self, worker: str, arguments: list[str], *, timeout: int = 30) -> Any:  # noqa: ANN401
@@ -360,8 +385,8 @@ class KubernetesFixture:
         """Admit a disposable probe before selecting the launch policy hash."""
         from openshell._proto import openshell_pb2 as pb
 
-        if _policy_hash:
-            return _policy_hash[0]
+        if "policy_hash" in _run:
+            return _run["policy_hash"]
         name, sandbox_id = self.create_probe(self.worker)
         try:
             ready = self.control.wait_ready(name, workspace=WORKSPACE, timeout_seconds=240)
@@ -373,8 +398,8 @@ class KubernetesFixture:
                 or admission.state != pb.CONFIGURATION_ADMISSION_STATE_ACCEPTED
             ):
                 raise RuntimeError("Independent native policy probe was not admitted")
-            _policy_hash.append(str(admission.policy_hash))
-            return _policy_hash[0]
+            _run["policy_hash"] = str(admission.policy_hash)
+            return _run["policy_hash"]
         finally:
             self.revoke_probes()
 

@@ -22,5 +22,10 @@ COPY --from=records-tls-fixture /tls_fixture.py /opt/qualification/packages/audi
 COPY deploy/tests/worker_kubernetes_fixture.py deploy/tests/test_worker_kubernetes_integration.py /opt/qualification/tests/
 COPY images/worker/candidate/gateway.json /opt/qualification/gateway.json
 
+# The cases keep their state below this directory. Heartwood requires that no other user
+# can write to a parent of its deployment files, which a mounted volume does not offer.
+USER root
+RUN install --directory --mode=0700 --owner=heartwood --group=heartwood /qualification/output
+
 USER heartwood
 ENTRYPOINT ["/opt/heartwood/.venv/bin/python", "-I", "-B"]

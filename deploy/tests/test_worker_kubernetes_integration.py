@@ -43,6 +43,7 @@ from heartwood.gateway.worker_kubernetes import KubernetesWorkerVolumes, cluster
 from heartwood.session import CommandKind
 
 _STAGING_SHAPE = "ValidatingAdmissionPolicy 'heartwood-staging-shape'"
+_POD_SECURITY = 'violates PodSecurity "restricted:latest"'
 _TRANSFER_BYTES = 64 * 1024 * 1024
 # The adapter gives each cluster request this long, including each archive transfer.
 _REQUEST_SECONDS = 60
@@ -188,8 +189,10 @@ def test_kubernetes_gateway_credential_is_confined(infrastructure: KubernetesFix
     def refused(name: str, expected: str, *arguments: str, stdin: str | None = None) -> None:
         code, error = fixture.as_gateway(*arguments, stdin=stdin)
         assert code != 0, f"{name} was permitted"
-        assert expected in error, f"{name}: {error}"
-        refusals[name] = expected
+        # Pod Security answers before the policy for a pod that both refuse.
+        by = next((by for by in (expected, _POD_SECURITY) if by in error), None)
+        assert by is not None, f"{name}: {error}"
+        refusals[name] = by
 
     # The fixed role grants no Secret, no policy change and nothing in another namespace.
     refused("read-secrets", "forbidden", "get", "secrets")
@@ -441,20 +444,27 @@ def test_kubernetes_workflow_boundary_and_revocation(
         }
         images = {
             name: {
-                status["name"]: {"image": status["image"], "image_id": status["imageID"]}
-                for status in pods[name]["status"]["containerStatuses"]
+                container["name"]: {
+                    "image": container["image"],
+                    "image_id": next(
+                        status["imageID"]
+                        for status in pods[name]["status"]["containerStatuses"]
+                        if status["name"] == container["name"]
+                    ),
+                }
+                for container in pods[name]["spec"]["containers"]
             }
             for name in (workload, supervisor)
         }
+        # The runtime reports the digest it pulled; it equals the digest the pod names.
         worker_digest = fixture.worker.partition("@")[2]
         assert images[workload]["agent"]["image"] == fixture.worker
-        assert images[workload]["agent"]["image_id"].endswith(worker_digest)
+        assert images[workload]["agent"]["image_id"] == fixture.worker
         supervisor_digest = fixture.images["supervisor"].partition("@")[2]
-        assert all(
-            status["image"].endswith(supervisor_digest)
-            and status["image_id"].endswith(supervisor_digest)
-            for status in images[supervisor].values()
-        )
+        assert set(images[supervisor]) == {"supervisor"}
+        assert images[supervisor]["supervisor"]["image"] == fixture.images["supervisor"]
+        assert images[supervisor]["supervisor"]["image_id"].endswith("@" + supervisor_digest)
+        assert worker_digest != supervisor_digest
         namespace = json.loads(fixture.outside("get", "namespace", fixture.namespace, "-o=json"))
         identities = {
             "namespace_uid": namespace["metadata"]["uid"],
@@ -708,7 +718,7 @@ def test_kubernetes_admission_refuses_another_supervisor_image(
     service, attempt_id, refusals = _refused_launch(
         fixture, monkeypatch, "inspect_worker", supervisor_image_digest="sha256:" + "0" * 64
     )
-    assert refusals == ["native worker supervisor pod does not match admission"]
+    assert refusals == ["native worker image does not match admission"]
     _settled(service, "revoked")
     (record,) = json.loads((fixture.output / WORKER_PODS).read_text())
     _evidence(
