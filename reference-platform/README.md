@@ -123,16 +123,19 @@ The prices in `values.yaml` are synthetic examples, and the sheet claims no FOCU
 Each entry of `runtimeProfiles` names a runtime profile of workload predictions, the kind of work it runs and the price of each measure: the seconds of exploration, the task seconds of batch work including the retry allowance, and the input and output tokens of inference.
 A GPU job is batch work on a GPU runtime profile, and the runtime profile of inference is the model name.
 `quantityPerPricingUnit` converts a measure to the pricing unit, such as 1000000 tokens for a price per million tokens.
-The service does not start with a sheet that has unknown fields, prices that are negative or not decimal strings, duplicate identifiers, rates of unknown prices, a missing measure or more than one currency.
+Prices and quantities are decimal strings with at most 18 integer and 12 fractional digits.
+The service does not start with a sheet that has unknown fields, values of another JSON type, prices that are negative or not such decimal strings, duplicate identifiers, rates of unknown prices, a missing measure or more than one currency.
 
 The MCP tool `estimate_workload` takes `project_id`, `scope`, `prediction` and `element_ids` and returns a `heartwood.platform-estimate.v1` document for the whole plan or for the named elements.
 The tool is listed as read-only, and an estimate reserves nothing and authorizes nothing.
 Each element has a cost range with its coverage.
-Work without a price, with a quantity in another unit or without an expected quantity has an unknown cost with the reason, and the total then covers the priced elements with partial coverage.
+Work without a price, with a quantity in another unit, without an expected quantity or with a quantity of more digits has an unknown cost with the reason, and the total then covers the priced elements with partial coverage.
 Each estimate has a new identity, its creation time, a validity of `estimateValiditySeconds` that ends no later than the prices it used, and a FOCUS evidence reference with a digest for each price it used.
-Amounts are rounded to six decimal places, and estimates are not stored.
+Expected costs and upper bounds are rounded up and lower bounds down to six decimal places, so a cost above zero is never reported as `"0"`.
+A prediction has at most 500 elements, and estimates are not stored.
 
-Every MCP request carries an exchanged token, verified like the token of `GET /v1/launch-context`, and the researcher must be a member of the token's project; other requests receive HTTP 401.
+Every MCP request carries an exchanged token, verified like the token of `GET /v1/launch-context`, and the researcher must be a member of the token's project.
+A request without such a token receives HTTP 401, and a request during which the keys of Keycloak cannot be fetched receives HTTP 502.
 The tool refuses a `project_id` other than the token's project, a researcher without a session in the project, and a prediction whose `project_context_id` is not the launch context of that session.
 Every price applies to every project, because `SkuPriceEligibility` must be `{"IsGlobalScope": true}`.
 

@@ -90,7 +90,7 @@ class Platform:
                 launches,
                 ResearcherTokens(ISSUER, AUDIENCE, self.key.key_set),
                 ServiceTokens(self.reviews.review, AUDIENCE, frozenset({HUB})),
-                PriceSheet.model_validate(SYNTHETIC_PRICES),
+                PriceSheet.model_validate_json(json.dumps(SYNTHETIC_PRICES)),
                 clock=lambda: _NOW,
             )
         )
@@ -326,7 +326,7 @@ def test_settings_refuse_duplicate_projects_and_other_template_fields(tmp_path: 
         "projects": [project],
         "synthetic_prices": SYNTHETIC_PRICES,
     }
-    assert Settings.model_validate(settings).projects[0].id == "demo"
+    assert Settings.model_validate_json(json.dumps(settings)).projects[0].id == "demo"
 
     for change in (
         {"projects": [project, project]},
@@ -337,7 +337,7 @@ def test_settings_refuse_duplicate_projects_and_other_template_fields(tmp_path: 
         {"synthetic_prices": {**SYNTHETIC_PRICES, "runtime_profiles": "none"}},
     ):
         with pytest.raises(ValueError, match="validation error"):
-            Settings.model_validate({**settings, **change})
+            Settings.model_validate_json(json.dumps({**settings, **change}))
 
 
 def test_deletion_during_a_launch_waits_and_then_removes_everything(tmp_path: Path) -> None:

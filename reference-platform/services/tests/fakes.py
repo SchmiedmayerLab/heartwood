@@ -102,6 +102,8 @@ class SigningKey:
 
     key_id: str = "test-key"
     fetches: int = 0
+    # Whether Keycloak is unreachable when the key set is fetched.
+    unavailable: bool = False
 
     @property
     def private(self) -> rsa.RSAPrivateKey:
@@ -109,6 +111,8 @@ class SigningKey:
 
     def key_set(self) -> dict[str, Any]:
         self.fetches += 1
+        if self.unavailable:
+            raise httpx.ConnectError("Keycloak is unreachable")
         numbers = self.private.public_key().public_numbers()
         key = {"kty": "RSA", "use": "sig", "alg": "RS256", "kid": self.key_id}
         return {"keys": [{**key, "n": _number(numbers.n), "e": _number(numbers.e)}]}

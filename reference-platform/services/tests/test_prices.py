@@ -44,7 +44,7 @@ def _sheet(change: Callable[[dict[str, Any]], object] | None = None) -> PriceShe
     document = copy.deepcopy(SYNTHETIC_PRICES)
     if change is not None:
         change(document)
-    return PriceSheet.model_validate(document)
+    return PriceSheet.model_validate_json(json.dumps(document))
 
 
 def _quote(
@@ -190,6 +190,45 @@ def _element(plan: WorkloadPrediction, element_id: str, **changes: Any) -> Workl
             "The prediction gives no expected value for duration.",
         ),
         ({"quantities": []}, "The prediction gives no duration."),
+        (
+            {
+                "quantities": [
+                    {
+                        "metric": "duration",
+                        "unit": "seconds",
+                        "expected": "9" * 19,
+                        "uncertainty": "-",
+                    }
+                ]
+            },
+            "duration has more digits than the price sheet prices.",
+        ),
+        (
+            {
+                "quantities": [
+                    {
+                        "metric": "duration",
+                        "unit": "seconds",
+                        "expected": "9" * 5000,
+                        "uncertainty": "-",
+                    }
+                ]
+            },
+            "duration has more digits than the price sheet prices.",
+        ),
+        (
+            {
+                "quantities": [
+                    {
+                        "metric": "duration",
+                        "unit": "seconds",
+                        "expected": "1." + "1" * 13,
+                        "uncertainty": "-",
+                    }
+                ]
+            },
+            "duration has more digits than the price sheet prices.",
+        ),
     ],
 )
 def test_work_that_the_sheet_cannot_measure_is_unknown(
@@ -201,6 +240,56 @@ def test_work_that_the_sheet_cannot_measure_is_unknown(
     assert exploration.coverage == "unknown"
     assert exploration.limitations == (limitation,)
     assert quote.total.coverage == "partial"
+
+
+def test_batch_with_a_retry_allowance_in_another_unit_is_unknown() -> None:
+    plan = prediction()
+    (batch,) = [item for item in plan.elements if item.element_id == "batch"]
+    quantities = [item.model_dump(mode="json") for item in batch.quantities]
+    for item in quantities:
+        if item["metric"] == "retry_allowance":
+            item["unit"] = "percent"
+
+    quote = _quote(plan=_element(plan, "batch", quantities=quantities), element_ids=["batch"])
+
+    assert quote.total.coverage == "unknown"
+    assert quote.total.limitations == (
+        "retry_allowance is given in percent; the price sheet expects count.",
+    )
+
+
+def _duration(**quantity: str) -> WorkloadPrediction:
+    exploration = {"metric": "duration", "unit": "seconds", "uncertainty": "-", **quantity}
+    return _element(prediction(), "exploration", quantities=[exploration])
+
+
+def test_largest_quantities_are_priced_exactly() -> None:
+    quote = _quote(plan=_duration(expected="9" * 18 + "." + "9" * 12), element_ids=["exploration"])
+
+    # 999999999999999999.999999999999 seconds at 0.0005, rounded up to six places.
+    assert (quote.total.lower, quote.total.expected) == (
+        "499999999999999.999999",
+        "500000000000000",
+    )
+
+
+def test_cost_above_zero_is_never_reported_as_zero() -> None:
+    plan = _element(
+        prediction(),
+        "inference",
+        quantities=[
+            {"metric": "input_tokens", "unit": "tokens", "expected": "1", "uncertainty": "-"},
+            {"metric": "output_tokens", "unit": "tokens", "expected": "0", "uncertainty": "-"},
+        ],
+    )
+
+    cost = _quote(plan=plan, element_ids=["inference"]).total
+
+    # One token at 0.50 per million tokens costs 0.0000005.
+    assert (cost.lower, cost.expected, cost.upper) == ("0", "0.000001", None)
+    zero = _quote(plan=_duration(expected="0"), element_ids=["exploration"]).total
+    assert (zero.lower, zero.expected, zero.upper) == (None, "0", None)
+    assert any("rounded up" in item for item in _quote().pricing_assumptions)
 
 
 def test_batch_without_a_retry_allowance_is_priced_without_retries() -> None:
@@ -317,6 +406,11 @@ def _missing_rate(document: dict[str, Any]) -> None:
         _missing_rate,
         _set("sku_prices", []),
         _set("estimate_validity_seconds", 0),
+        _set("estimate_validity_seconds", "3600"),
+        _first_price(SkuPriceEligibility={"IsGlobalScope": 1}),
+        _first_price(SkuPriceEffectiveStart=1767225600),
+        _first_price(UnitPrice="1" * 19),
+        _first_price(UnitPrice="0." + "1" * 13),
     ],
 )
 def test_price_sheet_is_refused_unless_it_is_consistent(

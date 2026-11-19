@@ -500,7 +500,7 @@ def test_control_service_configuration_holds_the_synthetic_prices(
     config = _named(objects, "ConfigMap", "heartwood-control")
     configuration = json.loads(config["data"]["configuration.json"])
 
-    settings = Settings.model_validate(configuration)
+    settings = Settings.model_validate_json(config["data"]["configuration.json"])
     # The tests price with the chart's synthetic prices.
     assert configuration["synthetic_prices"] == SYNTHETIC_PRICES
     assert settings.synthetic_prices.denomination.unit == "USD"
@@ -512,6 +512,10 @@ def test_control_service_configuration_holds_the_synthetic_prices(
         ("syntheticPrices.skuPrices[0].UnitPrice=0.5", "/syntheticPrices/skuPrices/0/UnitPrice"),
         ('syntheticPrices.skuPrices[0].UnitPrice="-1"', "/syntheticPrices/skuPrices/0/UnitPrice"),
         ('syntheticPrices.skuPrices[0].PricingQuantity="1"', "'PricingQuantity' not allowed"),
+        (
+            'syntheticPrices.skuPrices[0].SkuPriceEffectiveStart="2026-13-45T00:00:00Z"',
+            "/syntheticPrices/skuPrices/0/SkuPriceEffectiveStart",
+        ),
         (
             'syntheticPrices.runtimeProfiles[0].kind="job"',
             "/syntheticPrices/runtimeProfiles/0/kind",

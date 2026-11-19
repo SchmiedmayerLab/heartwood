@@ -27,7 +27,7 @@ from starlette.routing import Route
 
 from heartwood_platform.common.tokens import AuthenticationError, ResearcherTokens, ServiceTokens
 from heartwood_platform.control.launch import LaunchService, NoSessionError
-from heartwood_platform.control.planning import MCP_PATH, create_planning_app
+from heartwood_platform.control.planning import MCP_PATH, UNAVAILABLE, create_planning_app
 from heartwood_platform.control.prices import PriceSheet
 from heartwood_platform.control.registry import NotAMemberError
 from heartwood_platform.control.sessions import SessionError
@@ -83,7 +83,7 @@ def create_app(
                 return _error(422, "invalid request")
             except httpx.HTTPError:
                 # Keycloak or the Kubernetes API did not answer as expected.
-                return _error(502, "a platform component is unavailable")
+                return _error(502, UNAVAILABLE)
             except SessionError as error:
                 return _error(503, str(error))
 

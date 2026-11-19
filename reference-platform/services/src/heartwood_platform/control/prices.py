@@ -16,14 +16,23 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from decimal import ROUND_HALF_EVEN, Decimal
+from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal, localcontext
 from typing import Annotated, Literal, Self
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    StringConstraints,
+    model_validator,
+)
 
 from heartwood.schemas import (
     CostDenomination,
@@ -42,7 +51,10 @@ Kind = Literal["exploration", "batch", "inference"]
 Measure = Literal["duration", "task_duration", "input_tokens", "output_tokens"]
 Text = Annotated[str, StringConstraints(min_length=1, max_length=512, pattern=r"\S")]
 Identifier = Annotated[str, StringConstraints(pattern=r"^\S{1,512}$")]
-DecimalText = Annotated[str, StringConstraints(pattern=r"^(0|[1-9][0-9]*)(\.[0-9]+)?$")]
+# Prices and quantities have at most 18 integer and 12 fractional digits, so every
+# product and sum is exact within the precision of the calculation.
+_DECIMAL = r"^(0|[1-9][0-9]{0,17})(\.[0-9]{1,12})?$"
+DecimalText = Annotated[str, StringConstraints(pattern=_DECIMAL)]
 
 # The measures that price each kind of work.
 MEASURES: dict[str, frozenset[str]] = {
@@ -51,16 +63,23 @@ MEASURES: dict[str, frozenset[str]] = {
     "inference": frozenset({"input_tokens", "output_tokens"}),
 }
 _AMOUNT = Decimal("0.000001")
+_PRECISION = 120
 
 
 class _Model(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
 
 class GlobalEligibility(_Model):
     """A SKU Price Eligibility object that applies a price to every project."""
 
-    is_global_scope: Literal[True] = Field(alias="IsGlobalScope")
+    is_global_scope: StrictBool = Field(alias="IsGlobalScope")
+
+    @model_validator(mode="after")
+    def _validate(self) -> Self:
+        if not self.is_global_scope:
+            raise ValueError("only a global SkuPriceEligibility is supported")
+        return self
 
 
 class SkuPrice(_Model):
@@ -209,6 +228,9 @@ def _measures(element: WorkloadElement) -> dict[str, _Bounds] | str:
             return f"{item.metric} is given in {item.unit}; the price sheet expects {unit}."
         if item.expected is None:
             return f"The prediction gives no expected value for {item.metric}."
+        values = (item.lower, item.expected, item.upper)
+        if any(value is not None and not re.fullmatch(_DECIMAL, value) for value in values):
+            return f"{item.metric} has more digits than the price sheet prices."
         expected = Decimal(item.expected)
         lower = expected if item.lower is None else Decimal(item.lower)
         upper = expected if item.upper is None else Decimal(item.upper)
@@ -220,13 +242,16 @@ def _measures(element: WorkloadElement) -> dict[str, _Bounds] | str:
         return found
     tasks, duration = found["tasks"], found["duration_per_task"]
     retries = found.get("retry_allowance", (Decimal(0),) * 3)
-    lower, expected, upper = ((tasks[i] + retries[i]) * duration[i] for i in range(3))
+    with localcontext(prec=_PRECISION):
+        lower, expected, upper = ((tasks[i] + retries[i]) * duration[i] for i in range(3))
     return {"task_duration": (lower, expected, upper)}
 
 
-def _amount(value: Decimal) -> str:
-    rounded = value.quantize(_AMOUNT, rounding=ROUND_HALF_EVEN)
-    return "0" if rounded == 0 else format(rounded.normalize(), "f")
+def _amount(value: Decimal, rounding: str = ROUND_CEILING) -> str:
+    """Round to six places, up by default, so a cost above zero is never reported as zero."""
+    with localcontext(prec=_PRECISION):
+        rounded = value.quantize(_AMOUNT, rounding=rounding)
+        return "0" if rounded == 0 else format(rounded.normalize(), "f")
 
 
 @dataclass(frozen=True)
@@ -263,10 +288,13 @@ def _price_element(sheet: PriceSheet, element: WorkloadElement, now: datetime) -
         if not price.effective(now):
             return unknown(f"SKU price {price.sku_price_id} is not in effect.")
         prices.append(price)
-        factor = Decimal(price.unit_price) / Decimal(rate.quantity_per_pricing_unit)
-        for index, value in enumerate(measures[rate.measure]):
-            totals[index] += value * factor
-    lower, expected, upper = (_amount(value) for value in totals)
+        with localcontext(prec=_PRECISION):
+            for index, value in enumerate(measures[rate.measure]):
+                priced = value * Decimal(price.unit_price)
+                totals[index] += priced / Decimal(rate.quantity_per_pricing_unit)
+    # The lower bound rounds down, the expected cost and the upper bound round up.
+    lower = _amount(totals[0], ROUND_FLOOR)
+    expected, upper = _amount(totals[1]), _amount(totals[2])
     cost = EstimatedCost(
         denomination=denomination,
         coverage="complete",
@@ -284,8 +312,10 @@ def _total(denomination: CostDenomination, costs: Sequence[EstimatedCost]) -> Es
         return EstimatedCost(denomination=denomination, coverage="unknown", limitations=limitations)
 
     def summed(bound: Literal["lower", "expected", "upper"]) -> str:
+        # The amounts have six places, so their sum is exact.
         values = [str(getattr(cost, bound) or cost.expected) for cost in known]
-        return _amount(sum((Decimal(value) for value in values), Decimal(0)))
+        with localcontext(prec=_PRECISION):
+            return _amount(sum((Decimal(value) for value in values), Decimal(0)))
 
     lower, expected, upper = summed("lower"), summed("expected"), summed("upper")
     return EstimatedCost(
@@ -337,7 +367,8 @@ def estimate(
     used = {price.sku_price_id: price for item in priced for price in item.prices}
     assumptions = [
         "Prices come from the synthetic price sheet of the reference platform.",
-        "Amounts are rounded to six decimal places.",
+        "Expected costs and upper bounds are rounded up, and lower bounds down, to six "
+        "decimal places.",
     ]
     if any(
         by_id[element_id].kind == "batch"

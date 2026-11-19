@@ -20,7 +20,7 @@ import pytest
 import uvicorn
 from fastmcp import Client
 from fastmcp.client.transports import StreamableHttpTransport
-from heartwood_platform.control.planning import MCP_PATH
+from heartwood_platform.control.planning import MAX_ELEMENTS, MCP_PATH, UNAVAILABLE
 from starlette.testclient import TestClient
 from test_control_app import Platform
 from test_prices import prediction
@@ -147,6 +147,52 @@ def test_another_project_or_launch_context_is_refused(
     # Alice's own context in other is accepted.
     own = service.call(client, alice, service.arguments(service.alice, project="other"))
     assert own.json()["result"]["isError"] is False
+
+
+def test_another_researchers_launch_context_in_the_same_project_is_refused(
+    planning: tuple[Planning, TestClient],
+) -> None:
+    service, client = planning
+    alice = str(service.platform.launch(_ALICE, "demo")["session"])
+    bob = service.platform.researcher(_BOB, "demo")
+
+    response = service.call(client, bob, service.arguments(alice))
+
+    assert "another project context" in _refusal(response)
+
+
+def test_prediction_with_more_elements_than_the_limit_is_refused(
+    planning: tuple[Planning, TestClient],
+) -> None:
+    service, client = planning
+    headers = service.platform.researcher(_BOB, "demo")
+
+    def elements(count: int) -> dict[str, Any]:
+        arguments = service.arguments(service.bob)
+        (batch,) = [e for e in arguments["prediction"]["elements"] if e["kind"] == "batch"]
+        arguments["prediction"]["elements"] = [
+            {**batch, "element_id": f"batch-{index}"} for index in range(count)
+        ]
+        return arguments
+
+    accepted = service.call(client, headers, elements(MAX_ELEMENTS)).json()["result"]
+    assert accepted["isError"] is False
+    assert len(accepted["structuredContent"]["covered_element_ids"]) == MAX_ELEMENTS
+    refused = service.call(client, headers, elements(MAX_ELEMENTS + 1))
+    assert f"at most {MAX_ELEMENTS} elements" in _refusal(refused)
+
+
+def test_identity_provider_outage_is_reported_as_unavailable(tmp_path: Path) -> None:
+    service = Planning(tmp_path)
+    service.platform.key.unavailable = True
+    headers = service.platform.researcher(_BOB, "demo")
+
+    with TestClient(service.platform.client.app) as client:
+        response = service.call(client, headers, service.arguments(service.bob))
+        rest = client.get("/v1/launch-context", headers=headers)
+
+    assert (response.status_code, response.json()) == (502, {"error": UNAVAILABLE})
+    assert (rest.status_code, rest.json()) == (502, {"error": UNAVAILABLE})
 
 
 @pytest.mark.parametrize(
