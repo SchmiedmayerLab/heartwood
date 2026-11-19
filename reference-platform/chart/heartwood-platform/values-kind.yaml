@@ -20,6 +20,12 @@ projects:
     members:
       - 6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0001
 
+researchers:
+  - subject: 6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0001
+    username: researcher-one
+  - subject: 6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0002
+    username: researcher-two
+
 # The gateway and staging images below are stand-ins, used when the chart is rendered or
 # installed without the built images. An installation with the built images passes the
 # gateway image that images/worker/candidate/gateway.json builds with its recorded

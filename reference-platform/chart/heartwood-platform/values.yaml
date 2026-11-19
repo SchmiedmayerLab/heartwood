@@ -35,6 +35,13 @@ projects: []
 #    policyRef: synthetic-policy-1
 #    members: []
 
+# Synthetic researcher accounts of the Keycloak realm. subject is the identifier of the
+# account and the subject of its tokens. Each account gets a generated password in the
+# Secret keycloak-researchers, under its user name.
+researchers: []
+#  - subject: 6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0001
+#    username: researcher-one
+
 control:
   # Identifier of this platform in launch contexts.
   platformId: heartwood-reference-platform

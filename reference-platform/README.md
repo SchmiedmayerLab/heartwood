@@ -77,6 +77,9 @@ PostgreSQL keeps the credentials of the first installation and the Keycloak real
 
 The realm import creates the client scopes `svc-control`, `svc-data` and `svc-jobs`, each with one audience, and one scope `project-<id>` for each project.
 It creates the client `heartwood-control` with the role `manage-clients` and the optional scope `kc-admin-api`, the audience clients `heartwood-data` and `heartwood-jobs`, and the public client `heartwood-cli`.
+It creates one account for each entry in `researchers`, with the entry's `subject` as the identifier of the account and the subject of its tokens.
+The accounts are synthetic, and `projects[].members` names them by subject.
+Helm generates the password of each account at the first installation and stores it in the Secret `keycloak-researchers` under the user name.
 `files/keycloak-client-scopes.json` holds the built-in client scopes of the pinned Keycloak release, because a realm file that lists client scopes replaces the built-in ones.
 The Job `keycloak-bootstrap` disables the temporary administrator that Keycloak creates at its first start.
 Keycloak skips the import when the realm exists, so a later change to the realm needs a temporary administrator from `kc.sh bootstrap-admin`.

@@ -280,10 +280,52 @@ def test_realm_import_holds_scopes_and_no_credential(objects: list[dict[str, Any
     clients = {client["clientId"]: client for client in realm["clients"]}
     assert clients["heartwood-control"]["secret"] == "${HEARTWOOD_CONTROL_CLIENT_SECRET}"
     assert clients["heartwood-control"]["optionalClientScopes"] == ["kc-admin-api"]
-    (account,) = realm["users"]
+    account, *researchers = realm["users"]
     assert account["clientRoles"] == {"realm-management": ["manage-clients"]}
+    # Each password is a reference to the environment of Keycloak, never a value.
+    assert [user["credentials"] for user in researchers] == [
+        [
+            {
+                "type": "password",
+                "temporary": False,
+                "value": f"${{HEARTWOOD_RESEARCHER_PASSWORD_{index}}}",
+            }
+        ]
+        for index in range(len(researchers))
+    ]
+    assert all("clientRoles" not in user and "realmRoles" not in user for user in researchers)
+    passwords = _named(objects, "Secret", "keycloak-researchers")["data"] or {}
+    assert set(passwords) == {user["username"] for user in researchers}
+    environment = {
+        variable["name"]: variable["valueFrom"]["secretKeyRef"]
+        for variable in _named(objects, "Deployment", "keycloak")["spec"]["template"]["spec"][
+            "containers"
+        ][0]["env"]
+        if variable["name"].startswith("HEARTWOOD_RESEARCHER_PASSWORD_")
+    }
+    assert environment == {
+        f"HEARTWOOD_RESEARCHER_PASSWORD_{index}": {
+            "name": "keycloak-researchers",
+            "key": user["username"],
+        }
+        for index, user in enumerate(researchers)
+    }
     projects = {scope for scope in scopes if scope.startswith("project-")}
     assert set(clients["heartwood-cli"]["optionalClientScopes"]) == projects
+
+
+def test_synthetic_researchers_keep_the_subjects_of_the_registry() -> None:
+    objects = _render("values-kind.yaml")
+    realm = json.loads(
+        _named(objects, "ConfigMap", "keycloak-realm")["data"]["heartwood-realm.json"]
+    )
+    subjects = {user["id"] for user in realm["users"] if "id" in user}
+    configuration = json.loads(
+        _named(objects, "ConfigMap", "heartwood-control")["data"]["configuration.json"]
+    )
+    members = {member for project in configuration["projects"] for member in project["members"]}
+    assert subjects == members
+    assert len(subjects) == 2
 
 
 def test_platform_ca_certificate_is_a_certificate_authority(

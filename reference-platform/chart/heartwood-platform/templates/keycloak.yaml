@@ -31,6 +31,20 @@ type: Opaque
 data:
   client-secret: {{ include "heartwood.credential" (dict "context" . "name" "heartwood-control-keycloak" "key" "client-secret") }}
 ---
+# Passwords of the synthetic researchers, one key for each user name.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: keycloak-researchers
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+type: Opaque
+data:
+  {{- range $researcher := .Values.researchers }}
+  {{ $researcher.username }}: {{ include "heartwood.credential" (dict "context" $ "name" "keycloak-researchers" "key" $researcher.username) }}
+  {{- end }}
+---
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -125,6 +139,13 @@ spec:
                 secretKeyRef:
                   name: heartwood-control-keycloak
                   key: client-secret
+            {{- range $index, $researcher := .Values.researchers }}
+            - name: HEARTWOOD_RESEARCHER_PASSWORD_{{ $index }}
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-researchers
+                  key: {{ $researcher.username }}
+            {{- end }}
           ports:
             - name: http
               containerPort: 8080
