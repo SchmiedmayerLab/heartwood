@@ -6,20 +6,43 @@
  * SPDX-License-Identifier: MIT
  */
 
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { render, screen } from "@testing-library/react";
 import { createRef } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import fixture from "../../../fixtures/synthetic/platform-contract/failure-states.json";
 import { GatewayClient } from "./client";
 import { ConversationWorkspace } from "./components/ConversationWorkspace";
 import { emptyProjection } from "./test/fixtures";
 
+interface FailureState {
+  condition: string;
+  code: string;
+  surface: string;
+  diagnostic: string;
+}
+
 // The terminal and notebook tests in the gateway package render the same fixture.
-const states = fixture.states;
+// It is read at run time because the image build type-checks this package without it.
+const { states } = JSON.parse(
+  readFileSync(
+    resolve(
+      import.meta.dirname,
+      "../../../fixtures/synthetic/platform-contract/failure-states.json",
+    ),
+    "utf8",
+  ),
+) as { states: FailureState[] };
 
 describe("platform contract failure states in the browser", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it("reads every surface from the shared fixture", () => {
+    expect(new Set(states.map((state) => state.surface))).toEqual(
+      new Set(["gateway-response", "session"]),
+    );
   });
 
   it.each(states.filter((state) => state.surface === "session"))(
