@@ -4,7 +4,7 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""In-process stand-ins for Keycloak and the Kubernetes TokenReview API."""
+"""In-process stand-ins for Keycloak and the Kubernetes TokenReview API, and synthetic prices."""
 
 from __future__ import annotations
 
@@ -23,6 +23,65 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 ISSUER = "https://keycloak.example.test/realms/heartwood"
 AUDIENCE = "heartwood-control"
 HUB = "system:serviceaccount:heartwood-sessions:hub"
+
+
+def _sku_price(sku: str, unit_price: str, pricing_unit: str) -> dict[str, Any]:
+    return {
+        "ServiceProviderName": "Synthetic Provider",
+        "SkuId": sku,
+        "SkuPriceId": f"{sku}-list",
+        "ChargeCategory": "Usage",
+        "UnitPrice": unit_price,
+        "UnitPriceType": "List",
+        "PricingUnit": pricing_unit,
+        "PricingCurrency": "USD",
+        "PricingCurrencyCategory": "Payable",
+        "SkuPriceEffectiveStart": "2026-01-01T00:00:00Z",
+        "SkuPriceEligibility": {"IsGlobalScope": True},
+    }
+
+
+def _profile(reference: str, kind: str, *rates: tuple[str, str, str]) -> dict[str, Any]:
+    return {
+        "runtime_profile_ref": reference,
+        "kind": kind,
+        "rates": [
+            {"measure": measure, "sku_price_id": price, "quantity_per_pricing_unit": quantity}
+            for measure, price, quantity in rates
+        ],
+    }
+
+
+# A price sheet in the form of the control service configuration.
+SYNTHETIC_PRICES: dict[str, Any] = {
+    "estimate_validity_seconds": 3600,
+    "sku_prices": [
+        _sku_price("synthetic-exploration-small", "0.0005", "Seconds"),
+        _sku_price("synthetic-batch-small", "0.0003", "Task-Seconds"),
+        _sku_price("synthetic-batch-gpu", "0.004", "Task-Seconds"),
+        _sku_price("synthetic-coder-input", "0.50", "1,000,000 Input Tokens"),
+        _sku_price("synthetic-coder-output", "1.50", "1,000,000 Output Tokens"),
+    ],
+    "runtime_profiles": [
+        _profile(
+            "synthetic-exploration-small",
+            "exploration",
+            ("duration", "synthetic-exploration-small-list", "1"),
+        ),
+        _profile(
+            "synthetic-batch-small", "batch", ("task_duration", "synthetic-batch-small-list", "1")
+        ),
+        _profile(
+            "synthetic-batch-gpu", "batch", ("task_duration", "synthetic-batch-gpu-list", "1")
+        ),
+        _profile(
+            "synthetic-coder",
+            "inference",
+            ("input_tokens", "synthetic-coder-input-list", "1000000"),
+            ("output_tokens", "synthetic-coder-output-list", "1000000"),
+        ),
+    ],
+}
 
 
 def _number(value: int) -> str:
