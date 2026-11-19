@@ -377,7 +377,8 @@ def test_keycloak_serves_only_https_with_a_certificate_of_the_platform_ca(
         0
     ]
     variables = {variable["name"]: variable.get("value") for variable in container["env"]}
-    assert "KC_HTTP_ENABLED" not in variables
+    assert variables["KC_HTTP_ENABLED"] == "false"
+    assert variables["KC_HTTPS_CERTIFICATES_RELOAD_PERIOD"] == "1m"
     assert variables["KC_HTTPS_CERTIFICATE_FILE"] == "/opt/keycloak/conf/tls/tls.crt"
     assert variables["KC_HOSTNAME"].startswith("https://")
     assert [port["containerPort"] for port in container["ports"]] == [8443, 9000]

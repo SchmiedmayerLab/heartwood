@@ -122,6 +122,12 @@ spec:
               value: /opt/keycloak/conf/tls/tls.crt
             - name: KC_HTTPS_CERTIFICATE_KEY_FILE
               value: /opt/keycloak/conf/tls/tls.key
+            # A replaced certificate is served within a minute after the Secret volume changes,
+            # within the wait of the bootstrap Job after an upgrade.
+            - name: KC_HTTPS_CERTIFICATES_RELOAD_PERIOD
+              value: 1m
+            - name: KC_HTTP_ENABLED
+              value: "false"
             - name: KC_HEALTH_ENABLED
               value: "true"
             - name: KC_CACHE

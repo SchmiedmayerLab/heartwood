@@ -132,23 +132,17 @@ def test_keycloak_serves_https_with_a_certificate_of_the_platform_ca(cluster: Cl
         "http://keycloak.heartwood-platform.svc.cluster.local:8443/realms/heartwood",
     )
     assert result.stdout.strip() in {"000", "400"}, result.stdout
-    # The Service has no other port.
+    # Keycloak itself listens on no plain HTTP port.
     result = cluster.kubectl(
         "exec",
-        f"--namespace={_SESSIONS}",
-        _POD,
+        "--namespace=heartwood-platform",
+        "deployment/keycloak",
         "--",
-        "curl",
-        "--silent",
-        "--max-time",
-        "10",
-        "--output",
-        "/dev/null",
-        "--write-out",
-        "%{http_code}",
-        "http://keycloak.heartwood-platform.svc.cluster.local:8080/realms/heartwood",
+        "/bin/bash",
+        "-c",
+        "! (exec 3<>/dev/tcp/127.0.0.1/8080) 2>/dev/null",
     )
-    assert result.stdout.strip() == "000", result.stdout
+    assert result.returncode == 0, "Keycloak accepts connections on port 8080"
 
 
 def test_bootstrap_administrator_is_disabled(cluster: Cluster) -> None:
