@@ -1,0 +1,217 @@
+# This source file is part of the Heartwood open-source project
+#
+# SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+#
+# SPDX-License-Identifier: MIT
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from pathlib import Path
+
+import pytest
+from fakes import AUDIENCE, HUB, ISSUER, FakeKeycloak, SigningKey, TokenReviews
+from heartwood_platform.common.tokens import ResearcherTokens, ServiceTokens
+from heartwood_platform.control.app import create_app
+from heartwood_platform.control.keycloak import Keycloak
+from heartwood_platform.control.launch import LaunchService
+from heartwood_platform.control.registry import Project, Registry
+from starlette.testclient import TestClient
+
+from heartwood.schemas import PlatformLaunchContext
+
+_HUB = {"Authorization": "Bearer hub-token"}
+_ALICE = "0b9f5d1e-7c64-4f0e-9d53-6f6f3f0f1a01"
+_BOB = "0b9f5d1e-7c64-4f0e-9d53-6f6f3f0f1a02"
+_NOW = datetime(2026, 11, 19, 12, 0, tzinfo=UTC)
+_TEMPLATE = "https://hub.example.test/user/{subject}/{project}/oauth_callback"
+
+
+class Platform:
+    def __init__(self, directory: Path) -> None:
+        self.key = SigningKey()
+        self.keycloak = FakeKeycloak()
+        self.reviews = TokenReviews()
+        self.registry = Registry(directory / "control.sqlite3")
+        self.registry.synchronize(
+            [
+                Project("demo", "grant-demo", "policy-1", frozenset({_ALICE, _BOB})),
+                Project("other", "grant-other", "policy-1", frozenset({_ALICE})),
+            ]
+        )
+        keycloak = Keycloak(
+            self.keycloak.client(), "heartwood", "heartwood-control", lambda: "control-secret"
+        )
+        launches = LaunchService(
+            self.registry, keycloak, "reference-platform", _TEMPLATE, clock=lambda: _NOW
+        )
+        self.client = TestClient(
+            create_app(
+                launches,
+                ResearcherTokens(ISSUER, AUDIENCE, self.key.key_set),
+                ServiceTokens(self.reviews.review, AUDIENCE, frozenset({HUB})),
+            )
+        )
+
+    def launch(self, subject: str, project: str) -> dict[str, object]:
+        response = self.client.put(
+            f"/v1/researchers/{subject}/projects/{project}/launch", headers=_HUB
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert isinstance(body, dict)
+        return body
+
+    def researcher(self, subject: str, project: str) -> dict[str, str]:
+        return {"Authorization": f"Bearer {self.key.token(sub=subject, azp=f'hw-proj-{project}')}"}
+
+
+@pytest.fixture
+def platform(tmp_path: Path) -> Platform:
+    return Platform(tmp_path)
+
+
+def test_health_needs_no_token(platform: Platform) -> None:
+    assert platform.client.get("/healthz").json() == {"status": "ok"}
+
+
+def test_spawner_lists_the_projects_of_a_researcher(platform: Platform) -> None:
+    def projects(subject: str) -> object:
+        return platform.client.get(f"/v1/researchers/{subject}/projects", headers=_HUB).json()
+
+    assert projects(_ALICE) == {"projects": ["demo", "other"]}
+    assert projects(_BOB) == {"projects": ["demo"]}
+    assert projects("unknown") == {"projects": []}
+
+
+def test_launch_returns_the_registry_binding_and_prepares_the_project_client(
+    platform: Platform,
+) -> None:
+    launch = platform.launch(_BOB, "demo")
+
+    redirect_uri = f"https://hub.example.test/user/{_BOB}/demo/oauth_callback"
+    context = PlatformLaunchContext.model_validate_json(
+        platform.client.get("/v1/launch-context", headers=platform.researcher(_BOB, "demo")).content
+    )
+    assert launch == {
+        "session": launch["session"],
+        "subject": _BOB,
+        "project": "demo",
+        "client_id": "hw-proj-demo",
+        "redirect_uri": redirect_uri,
+        "launch_context": context.model_dump(mode="json"),
+    }
+    assert context == PlatformLaunchContext(
+        project_context_id=str(launch["session"]),
+        platform_id="reference-platform",
+        project_id="demo",
+        billing_attribution_ref="grant-demo",
+        authority_ref="reference-platform",
+        policy_ref="policy-1",
+        issued_at=_NOW,
+    )
+    assert platform.keycloak.by_client_id("hw-proj-demo")["redirectUris"] == [redirect_uri]
+
+
+def test_relaunch_reuses_the_session_and_researchers_share_the_project_client(
+    platform: Platform,
+) -> None:
+    first = platform.launch(_BOB, "demo")
+
+    assert platform.launch(_BOB, "demo")["session"] == first["session"]
+    assert platform.launch(_ALICE, "demo")["session"] != first["session"]
+    assert len(platform.keycloak.clients) == 1
+    assert len(platform.keycloak.by_client_id("hw-proj-demo")["redirectUris"]) == 2
+
+
+@pytest.mark.parametrize(
+    ("subject", "project", "status"),
+    [
+        (_BOB, "other", 403),
+        (_BOB, "missing", 403),
+        ("unknown", "demo", 403),
+        (_BOB, "Demo", 422),
+        ("bob@example.test", "demo", 422),
+        ("x" * 65, "demo", 422),
+    ],
+)
+def test_launch_outside_the_registry_is_refused_and_changes_nothing(
+    platform: Platform, subject: str, project: str, status: int
+) -> None:
+    response = platform.client.put(
+        f"/v1/researchers/{subject}/projects/{project}/launch", headers=_HUB
+    )
+
+    assert response.status_code == status
+    assert platform.keycloak.clients == {}
+    assert platform.registry.session(subject, project) is None
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {},
+        {"Authorization": "Bearer other-token"},
+        {"Authorization": "Basic hub-token"},
+        {"Authorization": "Bearer"},
+    ],
+)
+def test_service_calls_need_an_accepted_service_account_token(
+    platform: Platform, headers: dict[str, str]
+) -> None:
+    launch = f"/v1/researchers/{_BOB}/projects/demo/launch"
+
+    assert (
+        platform.client.get(f"/v1/researchers/{_BOB}/projects", headers=headers).status_code == 401
+    )
+    assert platform.client.put(launch, headers=headers).status_code == 401
+    assert platform.client.delete(launch, headers=headers).status_code == 401
+    assert platform.client.get("/v1/launch-context", headers=headers).status_code == 401
+    assert platform.keycloak.clients == {}
+
+
+def test_researcher_token_does_not_open_the_service_interface(platform: Platform) -> None:
+    platform.launch(_BOB, "demo")
+    headers = platform.researcher(_BOB, "demo")
+
+    launch = f"/v1/researchers/{_ALICE}/projects/demo/launch"
+    assert platform.client.put(launch, headers=headers).status_code == 401
+    assert (
+        platform.client.get(f"/v1/researchers/{_BOB}/projects", headers=headers).status_code == 401
+    )
+    assert platform.client.get("/v1/launch-context", headers=_HUB).status_code == 401
+
+
+def test_launch_context_follows_the_token_and_the_registry(platform: Platform) -> None:
+    platform.launch(_BOB, "demo")
+    platform.launch(_ALICE, "other")
+
+    def status(subject: str, project: str) -> int:
+        headers = platform.researcher(subject, project)
+        response = platform.client.get("/v1/launch-context", headers=headers)
+        return int(response.status_code)
+
+    assert status(_BOB, "demo") == 200
+    assert status(_ALICE, "other") == 200
+    # A member without a session, a session's project without membership, and a
+    # token of another project client.
+    assert status(_ALICE, "demo") == 404
+    assert status(_BOB, "other") == 403
+    assert status("unknown", "demo") == 403
+
+    platform.registry.synchronize([Project("demo", "grant-demo", "policy-1", frozenset({_ALICE}))])
+    assert status(_BOB, "demo") == 403
+
+
+def test_deletion_removes_the_session_and_its_redirect_uri(platform: Platform) -> None:
+    first = platform.launch(_BOB, "demo")
+    kept = platform.launch(_ALICE, "demo")
+    launch = f"/v1/researchers/{_BOB}/projects/demo/launch"
+
+    assert platform.client.delete(launch, headers=_HUB).status_code == 204
+    assert platform.client.delete(launch, headers=_HUB).status_code == 204
+
+    assert platform.keycloak.by_client_id("hw-proj-demo")["redirectUris"] == [kept["redirect_uri"]]
+    headers = platform.researcher(_BOB, "demo")
+    assert platform.client.get("/v1/launch-context", headers=headers).status_code == 404
+    assert platform.launch(_BOB, "demo")["session"] != first["session"]
