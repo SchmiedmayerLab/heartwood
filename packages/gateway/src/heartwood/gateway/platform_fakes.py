@@ -436,6 +436,8 @@ class FakeJobService(_Service):
         self._state = _Tasks()
         self._drop_after_submit = False
         self._delay_after_submit = 0.0
+        # How often the service was asked to describe a submission.
+        self.proposal_count = 0
         self.server.tool(self.create_task, annotations=_SUBMIT)
         self.server.tool(self.get_task, annotations=_READ_ONLY)
         self.server.tool(self.cancel_task, annotations=_CANCEL)
@@ -501,6 +503,7 @@ class FakeJobService(_Service):
     ) -> PlatformOperationProposal:
         """Describe what ``create_task`` would run for these arguments; nothing is submitted."""
         self._admit(project_id)
+        self.proposal_count += 1
         if tool != "create_task":
             raise ToolError("no proposal for this tool")
         try:

@@ -596,9 +596,21 @@ def test_a_lost_reply_is_reconciled_before_any_retry(tmp_path: Path) -> None:
         )
         assert service.record(record).phase == "unknown"
         assert (_operation(service.action(record)).diagnostic or "").startswith("HW-OPS-003")
-        # No other operation on the service is proposed until the outcome is known.
+        # No other operation on the service is proposed, or described by the platform,
+        # until the outcome is known.
+        proposals = service.jobs.proposal_count
         service.worker.call(service.tool("create_task"), _CPU)
-        retry = service.session.replay_events()[-1]
+        # Within the reconciliation interval, so only new calls are considered.
+        advance_outside_calls(
+            service.session, service.adapter, clock=lambda: service.adapter.last_reconciled
+        )
+        assert service.jobs.proposal_count == proposals
+        assert len(external_action_records(service.session.replay_events())) == 1
+        retry = next(
+            event
+            for event in reversed(service.session.replay_events())
+            if event.kind == "tool_call.proposed"
+        )
         with pytest.raises(ExternalActionError, match="unknown outcome"):
             service.session.propose_external_action(retry.event_id)
 

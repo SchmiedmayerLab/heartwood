@@ -661,6 +661,10 @@ class McpOutsideAdapter:
             json.dumps(identities, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()
 
+    def service_id(self, tool_name: str) -> str:
+        """Return the service a bound client tool calls."""
+        return self._tool(tool_name).destination.service_id
+
     def _tool(self, tool_name: str) -> McpBoundTool:
         bound = self._bound.get(tool_name)
         if bound is None:
@@ -952,9 +956,14 @@ def _advance(
 
 def _propose_calls(service: SessionService, adapter: McpOutsideAdapter) -> None:
     events = service.replay_events()
-    reviewed = {
-        record.proposal.source_event_id: record
-        for record in external_action_records(events).values()
+    records = external_action_records(events).values()
+    reviewed = {record.proposal.source_event_id: record for record in records}
+    # No review opens for a service with an unknown outcome, so a submission is not
+    # described by its platform on every read while that outcome is reconciled.
+    blocked = {
+        record.proposal.request.service_id
+        for record in records
+        if record.phase in {"submitting", "unknown"}
     }
     attempt = service.worker_attempt()
     current = None if attempt is None else str(attempt.intent.attempt_id)
@@ -966,7 +975,9 @@ def _propose_calls(service: SessionService, adapter: McpOutsideAdapter) -> None:
         ):
             continue
         existing = reviewed.get(event.event_id)
-        if existing is not None and existing.phase != "proposed":
+        if (existing is not None and existing.phase != "proposed") or adapter.service_id(
+            str(event.payload.get("tool_name"))
+        ) in blocked:
             continue
         # An expired review is closed and replaced; an open one is left alone.
         with suppress(ValueError):
