@@ -159,7 +159,8 @@ See [Projects and Private State](../start/project.md#operator-bound-external-sta
 
 ### Managed Worker
 
-The `[worker]` table runs each session's agent in an OpenShell sandbox through the Docker reference driver.
+The `[worker]` table runs each session's agent in an OpenShell sandbox.
+Its `driver` selects the sandbox driver and the keys that belong to it; the example uses the Docker reference driver.
 Replace the example identities and digests with independently qualified values; the effective policy digest must not be learned from the worker whose admission it decides.
 
 ```toml
@@ -190,12 +191,13 @@ files = []
 
 | Key | Requirement |
 |---|---|
-| `driver` | `openshell-docker` |
+| `driver` | `openshell-docker` or `openshell-kubernetes`; see [Kubernetes Driver](#kubernetes-driver) |
 | `gateway` | Name of the registered sandbox gateway |
 | `native_config_home` | Contains `openshell/gateways/<gateway>/metadata.json` and `mtls/ca.crt`, `mtls/tls.crt`, and an owner-only `mtls/tls.key` |
-| `openshell_cli`, `docker_cli` | Absolute executable paths |
-| `docker_host` | `unix://` path of the local Docker socket; no TCP endpoint is accepted |
-| `docker_socket_group` | Optional numeric group ID; required when the socket is group-writable |
+| `openshell_cli` | Absolute executable path |
+| `docker_cli` | Absolute executable path; `openshell-docker` only |
+| `docker_host` | `unix://` path of the local Docker socket; no TCP endpoint is accepted; `openshell-docker` only |
+| `docker_socket_group` | Optional numeric group ID; required when the socket is group-writable; `openshell-docker` only |
 | `workspace` | Sandbox workspace name |
 | `image_digest` | `sha256:` digest of the qualified worker image |
 | `sandbox_policy_sha256` | Digest of the effective sandbox policy the gateway must observe |
@@ -212,6 +214,34 @@ The socket must be owned by root or the gateway user and not world-writable; a g
 Membership in the socket's group grants Docker control-plane authority; never add a worker identity to it.
 The registered sandbox gateway must report the two [deletion capabilities](../operate/platform-requirements.md#gateway-behavior-behind-native-qualification) native revocation depends on; the gateway version is not configured and does not satisfy the check.
 The inference endpoint must enforce approved models and tenant scope itself; the manifest adds no model router.
+
+#### Kubernetes Driver
+
+With `driver = "openshell-kubernetes"` the table omits the three `docker_` keys and adds these keys:
+
+```toml
+[worker]
+driver = "openshell-kubernetes"
+kubectl_cli = "/opt/heartwood/bin/kubectl"
+kubeconfig = "/etc/heartwood/native/kubeconfig"
+namespace = "research-sandboxes"
+supervisor_image_digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+sandbox_image_digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+```
+
+| Key | Requirement |
+|---|---|
+| `kubectl_cli` | Absolute executable path of `kubectl` |
+| `kubeconfig` | Absolute path of the `kubectl` configuration for the cluster; readable and writable by its owner only |
+| `namespace` | Namespace in which the sandbox gateway creates the session's pods; lowercase letters, digits, and hyphens |
+| `supervisor_image_digest` | `sha256:` digest of the OpenShell supervisor image |
+| `sandbox_image_digest` | `sha256:` digest of the OpenShell sandbox runtime image |
+| `workspace` | At most 19 characters, the limit of the OpenShell command-line tool with this driver |
+
+A key of the other driver is rejected with `HW-DEPLOY-001`.
+`kubectl_cli` and `kubeconfig` follow the same ownership and location rules as the other native tools and configuration files.
+The registered sandbox gateway must report one `openshell/kubernetes` compute driver with both deletion capabilities.
+Worker launch and reconciliation run through the Docker driver: with `openshell-kubernetes`, `heartwood gateway serve` validates the manifest and checks the gateway, and a worker launch or reconciliation stops before any sandbox, volume or deletion request.
 
 ### Model Connections
 

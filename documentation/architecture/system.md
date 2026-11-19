@@ -121,7 +121,7 @@ Launch happens once per session service, on the session's first backend read:
 2. The gateway stages the manifest's `inputs` (at most 128 files, 16 MiB each and 64 MiB in total) and a [Skill projection](skills.md#worker-projection) into a private directory under the state root.
    One input identity digest binds the inputs, the Skill selection, the specialist catalog fingerprint, and any client-tool specifications.
 3. The session journals the attempt intent before any sandbox exists.
-4. The launcher connects to the registered OpenShell gateway with its mutual TLS identity, reads its info, and requires exactly one Docker compute driver that reports both [deletion capabilities](../operate/platform-requirements.md#gateway-behavior-behind-native-qualification) revocation evidence depends on.
+4. The launcher connects to the registered OpenShell gateway with its mutual TLS identity, reads its info, and requires exactly one compute driver, of the implementation the manifest's `driver` selects, that reports both [deletion capabilities](../operate/platform-requirements.md#gateway-behavior-behind-native-qualification) revocation evidence depends on.
    A missing capability or an unreadable report stops serving at start with `HW-WORKER-001`, and stops a later launch or reconciliation before any sandbox, volume, or deletion request.
    A launch refused this way reports `HW-WORKER-001` in the session and is recorded as revoked without a created worker.
    The decision and the reported gateway version, driver, and capabilities are retained with the attempt: an accepted report in its runtime binding and revocation evidence, a refused one in its revocation evidence.
