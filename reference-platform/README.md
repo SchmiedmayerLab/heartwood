@@ -161,7 +161,8 @@ RBAC cannot name namespaces that are created at run time, so ValidatingAdmission
 
 `heartwood-staging-shape` applies to every ServiceAccount `hw-gw-*` in `heartwood-sessions`:
 
-- A pod uses the ServiceAccount `hw-staging` without a mounted token, runs only the image `sessions.stagingImage`, runs as a non-root user with the default seccomp profile, a read-only root file system and no capabilities, and mounts only volume claims named `hw-attempt-*` and `emptyDir` volumes.
+- A pod is named `hw-staging-*` and carries only the labels `heartwood.project`, `heartwood.attempt` and `heartwood.role` with the value `staging`, so no NetworkPolicy with allowances selects it.
+- A pod uses the ServiceAccount `hw-staging` without a mounted token, runs only the image `sessions.stagingImage`, runs as user and group `10002` with no other group, with the default seccomp profile, a read-only root file system and no capabilities, and mounts only volume claims named `hw-attempt-*`.
 - A pod takes no environment value from a Secret, a ConfigMap or a field, and names no node, priority class or runtime class.
 - A volume claim is named `hw-attempt-*`, uses the StorageClass `heartwood-attempt` and names no data source, volume or selector.
 - An exec session opens only into pods named `hw-staging-*`. Attach and port-forward requests are denied.
@@ -178,6 +179,8 @@ The chart's RBAC creation is switched off, and the tool removes the Role and Rol
 Every object carries a namespace placeholder, and the containers of the gateway and of the certificate Job carry an image placeholder.
 With `supervisor.network.additionalCaConfigMapName: platform-ca`, the gateway mounts the certificate of the session's ConfigMap `platform-ca`, and the Kubernetes driver gives it to the supervisor pod of each sandbox, which trusts it for the HTTPS destinations that the sandbox policy allows.
 The driver keeps the certificate in ConfigMaps that it creates, so `heartwood-openshell-sandbox` grants `get` and `create` on ConfigMaps, as the chart's Role does with this value.
+Admission accepts a ConfigMap volume of a supervisor pod only under the driver's name `openshell-additional-ca-*`.
+The OpenShell gateway, which already controls the supervisors, writes these ConfigMaps.
 The tool fails when the chart renders another object kind, another image, or the namespace in a new place.
 
 ```bash

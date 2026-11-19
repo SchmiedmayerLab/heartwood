@@ -95,13 +95,23 @@ def _pod(
     return {
         "apiVersion": "v1",
         "kind": "Pod",
-        "metadata": {"name": name, "namespace": namespace},
+        "metadata": {
+            "name": name,
+            "namespace": namespace,
+            "labels": {
+                "heartwood.project": "demo",
+                "heartwood.attempt": "a",
+                "heartwood.role": "staging",
+            },
+        },
         "spec": {
             "serviceAccountName": "hw-staging",
             "automountServiceAccountToken": False,
             "securityContext": {
                 "runAsNonRoot": True,
-                "runAsUser": 65534,
+                "runAsUser": 10002,
+                "runAsGroup": 10002,
+                "fsGroup": 10002,
                 "seccompProfile": {"type": "RuntimeDefault"},
             },
             "containers": [
@@ -119,7 +129,7 @@ def _pod(
             ],
             "volumes": [
                 {"name": "inputs", "persistentVolumeClaim": {"claimName": "hw-attempt-a-inputs"}},
-                {"name": "scratch", "emptyDir": {}},
+                {"name": "skills", "persistentVolumeClaim": {"claimName": "hw-attempt-a-skills"}},
             ],
         },
     }
@@ -733,7 +743,9 @@ def test_control_service_may_review_tokens(cluster: Cluster) -> None:
 _SERVICE_ACCOUNT = "ServiceAccount hw-staging without a mounted token"
 _IMAGE = "runs only the staging image"
 _SECURITY = "read-only root file system and no capabilities"
-_VOLUMES = "mounts only attempt volume claims and emptyDir volumes"
+_VOLUMES = "mounts only attempt volume claims"
+_LABELS = "carries only the labels heartwood.project, heartwood.attempt and heartwood.role"
+_USER = "runs as user and group 10002 with no other group"
 _CLAIM = "uses the StorageClass heartwood-attempt and names no data source or volume"
 _ENVIRONMENT = "takes no environment value from another object or field"
 _PLACEMENT = "names no node, priority class or runtime class"
@@ -754,8 +766,15 @@ _SIDECAR = {
 _PLAIN = {"name": "KEY", "value": "value"}
 
 
+def _labelled(pod: dict[str, Any], labels: dict[str, str]) -> dict[str, Any]:
+    changed = copy.deepcopy(pod)
+    changed["metadata"]["labels"] = labels
+    return changed
+
+
 def _pod_cases(image: str) -> list[tuple[str, dict[str, Any], str | None]]:
     pod = _pod(image)
+    labels = pod["metadata"]["labels"]
     return [
         ("pod", pod, None),
         ("gateway-staging-pod", _gateway_staging_pod(image), None),
@@ -783,6 +802,54 @@ def _pod_cases(image: str) -> list[tuple[str, dict[str, Any], str | None]]:
             "pod-second-container",
             _changed(pod, "spec.containers", [*pod["spec"]["containers"], _SIDECAR]),
             _IMAGE,
+        ),
+        ("pod-other-name", _changed(pod, "metadata.name", "hw-case"), _LABELS),
+        (
+            "pod-supervisor-label",
+            _labelled(pod, {**labels, "openshell.ai/boundary-role": "supervisor"}),
+            _LABELS,
+        ),
+        (
+            "pod-gateway-labels",
+            _labelled(
+                pod,
+                {
+                    **labels,
+                    "app.kubernetes.io/name": "openshell",
+                    "app.kubernetes.io/instance": "openshell",
+                },
+            ),
+            _LABELS,
+        ),
+        ("pod-other-role", _labelled(pod, {**labels, "heartwood.role": "worker"}), _LABELS),
+        (
+            "pod-without-role",
+            _labelled(pod, {k: v for k, v in labels.items() if k != "heartwood.role"}),
+            _LABELS,
+        ),
+        ("pod-without-labels", _changed(pod, "metadata.labels"), _LABELS),
+        ("pod-other-user", _changed(pod, "spec.securityContext.runAsUser", 10001), _USER),
+        ("pod-other-group", _changed(pod, "spec.securityContext.runAsGroup", 10001), _USER),
+        ("pod-without-fs-group", _changed(pod, "spec.securityContext.fsGroup"), _USER),
+        (
+            "pod-supplemental-group",
+            _changed(pod, "spec.securityContext.supplementalGroups", [10001]),
+            _USER,
+        ),
+        (
+            "pod-container-user",
+            _changed(pod, f"{_CONTAINER}.securityContext.runAsUser", 10001),
+            _USER,
+        ),
+        (
+            "pod-container-group",
+            _changed(pod, f"{_CONTAINER}.securityContext.runAsGroup", 10001),
+            _USER,
+        ),
+        (
+            "pod-empty-dir-volume",
+            _changed(pod, "spec.volumes.1", {"name": "v", "emptyDir": {}}),
+            _VOLUMES,
         ),
         ("pod-root", _changed(pod, "spec.securityContext.runAsNonRoot"), _SECURITY),
         (
