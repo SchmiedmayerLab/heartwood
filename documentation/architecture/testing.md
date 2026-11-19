@@ -110,7 +110,7 @@ The image retains both build records in `/opt/heartwood/qualification/`, and its
 The OpenShell gateway is built from the pinned source and the deletion patches recorded in `images/worker/candidate/gateway.json`, whose purpose is `qualification-only`.
 The patches are applied in the recorded order; `gateway-create-after-absence.patch` applies only after `gateway-delete-retry.patch`.
 Each patch also makes the gateway report its behavior as a compute driver capability.
-The managed-worker launcher requires `openshell.compute.delete-awaits-provisioning` and `openshell.compute.delete-retries-deleting`:
+The managed-worker launcher requires `openshell.compute.delete-awaits-provisioning` and `openshell.compute.delete-retries-deleting`.
 
 ```bash
 uv run --no-project --python 3.12.15 deploy/build-worker-candidate.py \
@@ -119,7 +119,7 @@ uv run --no-project --python 3.12.15 deploy/build-worker-candidate.py \
 
 The binary is built with the Docker and Kubernetes compute drivers, and the image is built from the upstream `Dockerfile.gateway` of the pinned source.
 A gateway with more than one driver and no `compute_driver` setting selects a driver by detection, so every gateway configuration in this repository sets `compute_driver`.
-`--gateway-tests` first runs the gateway's deletion tests and the library tests of the Kubernetes driver crate, which include the tests of the patches, and needs 12 GiB of container memory; a failed or empty test run prevents packaging.
+`--gateway-tests` first runs the gateway's deletion tests and the library tests of the Kubernetes driver crate, which include the tests of the three patches to those crates, and needs 12 GiB of container memory; a failed or empty test run prevents packaging.
 The cache keeps source archives and the Cargo registry; compiled objects are keyed by the manifest, and Cargo rebuilds them when the enabled features change.
 The record binds source, manifest, lockfile, enabled features, binary, and image identities; it establishes build provenance, not byte-identical gateway builds.
 These artifacts are qualification inputs, not a supported production gateway; an operator's gateway must provide the [behavior qualification depends on](../operate/platform-requirements.md).

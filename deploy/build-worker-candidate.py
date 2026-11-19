@@ -250,7 +250,7 @@ def _gateway_version(checkout: Path, version: str) -> None:
 
 
 def _gateway_tests(container: list[str], rust: str, output: Path) -> list[dict[str, Any]]:
-    """Run deletion regressions before packaging, retaining the exact commands and logs."""
+    """Run the test suites of the patched crates before packaging, retaining commands and logs."""
     container = list(container)
     container[container.index("--memory") + 1] = "12g"
     container[container.index("--memory-swap") + 1] = "12g"
@@ -279,12 +279,12 @@ def _gateway_tests(container: list[str], rust: str, output: Path) -> list[dict[s
         command.extend(arguments)
         (output / f"{suite}-test-command.json").write_text(json.dumps(command, indent=2) + "\n")
         log = output / f"{suite}-tests.log"
-        print(f"Running {suite} deletion regressions; log: {log}", flush=True)
+        print(f"Running {suite} tests before the build; log: {log}", flush=True)
         with log.open("w") as stream:
             subprocess.run(command, stdout=stream, stderr=subprocess.STDOUT, check=True)
         result = re.search(r"test result: ok\. (\d+) passed; 0 failed;", log.read_text())
         if result is None or int(result[1]) == 0:
-            raise ValueError("Gateway deletion tests did not report a nonempty passing suite")
+            raise ValueError(f"The {suite} tests did not report a nonempty passing suite")
         records.append(
             {
                 "suite": suite,

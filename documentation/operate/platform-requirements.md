@@ -187,9 +187,12 @@ Heartwood's check of the registered gateway does not depend on them.
   A missing Sandbox resource is still reported as absent.
   The driver reports capability `openshell.compute.delete-awaits-provisioning`.
 - A deletion that finds no sandbox under a workspace and name records that name in the gateway's store.
-  For 24 hours after the last such deletion, the gateway rejects a creation under that name with status `FAILED_PRECONDITION` and reason `SANDBOX_NAME_CONFIRMED_ABSENT`, before it calls the compute driver.
+  For 24 hours after the last such deletion, the gateway rejects a creation under that name with status `FAILED_PRECONDITION`, before it calls the compute driver.
+  The error carries the reason `SANDBOX_NAME_CONFIRMED_ABSENT`, except while the cleanup of the rejected creation's record is still pending.
   A creation request that was still in flight when the deletion answered therefore creates no sandbox.
-  A name stays available after the deletion of an existing sandbox, and the record lasts across a gateway restart as long as the store does.
+  A deletion that is refused before the name is looked up, for a missing workspace or a missing role, records nothing.
+  The deletion of a sandbox that exists when the deletion starts leaves its name available.
+  The record lasts across a gateway restart as long as the store does.
   The gateway reports it as capability `openshell.compute.create-rejects-deleted-name` on its compute driver.
 
 ### Sensitive Data
