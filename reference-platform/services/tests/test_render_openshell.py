@@ -9,6 +9,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+import tomllib
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -138,3 +139,26 @@ def test_gateway_passes_the_platform_ca_to_sandbox_supervisors() -> None:
         '[openshell.supervisor.network]\nadditional_ca_bundle = "/etc/openshell-tls/'
         'additional-ca-source/ca.crt"' in configuration
     )
+
+
+def test_gateway_has_the_settings_the_platform_requirements_name() -> None:
+    objects = {(item["kind"], item["metadata"]["name"]): item for item in _committed()}
+    configuration = tomllib.loads(
+        objects[("ConfigMap", "openshell-config")]["data"]["gateway.toml"]
+    )
+    driver = configuration["openshell"]["drivers"]["kubernetes"]
+    release = json.loads(
+        (_PLATFORM.parent / "images" / "worker" / "candidate" / "gateway.json").read_text()
+    )["images"]
+
+    assert objects[("StatefulSet", "openshell")]["spec"]["replicas"] == 1
+    assert driver["allow_driver_config"] is True
+    assert driver["allowed_pod_labels"] == [
+        "heartwood.project",
+        "heartwood.attempt",
+        "heartwood.role",
+    ]
+    assert (driver["sandbox_uid"], driver["sandbox_gid"]) == (10001, 10001)
+    assert driver["workspace_mode"] == "shared"
+    assert driver["supervisor_image"] == release["supervisor"]
+    assert driver["sandbox_runtime_image"] == release["sandbox"]
