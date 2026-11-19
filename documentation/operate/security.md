@@ -74,7 +74,7 @@ The gateway enforces everything that decides authority, independently of anythin
 - revocation of a fenced attempt and removal of its volumes, and of attempts left by an earlier gateway process at the next `gateway serve --deployment` start.
 
 The [Kubernetes admission](../architecture/system.md#kubernetes-worker-admission) inspects the pods the OpenShell Kubernetes driver creates, also from outside the worker, and lists its accepted values next to the Docker values.
-It differs from Docker inspection where a pod does not report a property:
+It differs from Docker inspection in these points:
 
 - A pod has no network mode.
   Admission confirms that the driver's two NetworkPolicies exist with the driver's rules.
@@ -95,7 +95,7 @@ It differs from Docker inspection where a pod does not report a property:
 - The attempt key is a plain environment value in the workload pod and in its Sandbox resource.
   Every principal that can read them can read the key, as with `docker inspect` on Docker.
 
-The platform must therefore provide an enforcing network plugin, a kubelet process limit, nodes on cgroup version 2, and access rules for the sandbox namespace.
+The platform must therefore provide an enforcing network plugin, a kubelet process limit, nodes on cgroup version 2 with a default AppArmor or SELinux confinement for containers, and access rules for the sandbox namespace.
 
 An uncertain revocation keeps the attempt fenced and the session's writer ownership retained until outside reconciliation observes that its resources are gone.
 After a recorded revocation, the next task can start a replacement worker in a new sandbox; it shares no credential, placeholder, conversation memory or workspace file with the revoked worker.

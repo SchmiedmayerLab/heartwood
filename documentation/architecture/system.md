@@ -164,7 +164,7 @@ The table lists the accepted values next to the values Docker inspection accepts
 | Identity | Container name of the attempt; labels for project, attempt, and role `worker` | Workload pod named `<workspace>--<worker name>`; labels for project, attempt, role `worker`, sandbox, and boundary role; one controlling owner reference to the Sandbox resource of the same name |
 | Supervisor | Not a separate container | Supervisor pod `os-supervisor-<sandbox id>` with the sandbox labels and an owner reference to the same Sandbox resource, by name and UID |
 | Containers | One container | Workload pod: container `agent` and init containers `openshell-sandbox-bootstrap` and `workspace-init`, in that order; supervisor pod: container `supervisor`; no ephemeral container in either pod |
-| Image | `Image` equals `image_digest` | `agent` and `workspace-init` use `image_digest`, `openshell-sandbox-bootstrap` uses `sandbox_image_digest`, and `supervisor` uses `supervisor_image_digest`; each `image` is a reference by digest, and each `imageID` in the pod status carries the same digest |
+| Image | `Image` equals `image_digest` | `agent` and `workspace-init` use `image_digest`, `openshell-sandbox-bootstrap` uses `sandbox_image_digest`, and `supervisor` uses `supervisor_image_digest`; each `image` is a reference by digest, and each `imageID` in the pod status carries the same digest; the digest is the registry digest the pod references, where Docker reports the local image identifier |
 | Network | `NetworkMode` is `none` | `hostNetwork` is false; both NetworkPolicies have exactly the driver's rules, and `os-control-<sandbox id>` is owned by the same Sandbox resource |
 | Privilege | `Privileged` is false | `privileged` is false on every container |
 | Capabilities | `CapAdd` is empty and `CapDrop` contains `ALL` | `capabilities.drop` contains `ALL` and `capabilities.add` has no entry, on every container |
@@ -176,7 +176,7 @@ The table lists the accepted values next to the values Docker inspection accepts
 | Process and IPC namespaces | `PidMode` and `IpcMode` are private | `hostPID` and `hostIPC` are false; `shareProcessNamespace` is false on the workload pod |
 | User namespace | `UsernsMode` is empty | `hostUsers` is true |
 | Cgroup namespace | `CgroupnsMode` is `private` | Not reported |
-| User | Checked by the probe inside the worker | `runAsUser` and `runAsGroup` are `10001` and `runAsNonRoot` is true on every container and on the workload pod, whose `fsGroup` is `10001` and which adds no other supplemental group |
+| User | Checked by the probe inside the worker | `runAsUser` and `runAsGroup` are `10001` and `runAsNonRoot` is true on every container and on the workload pod; `fsGroup` is `10001` on both pods, and neither adds another supplemental group |
 | Service account token | Not applicable | `automountServiceAccountToken` is false on both pods; the supervisor pod's projected token has audience `openshell-gateway` |
 | Devices | `Devices`, `DeviceRequests`, and `DeviceCgroupRules` are empty | No `volumeDevices`; requests and limits name only `cpu` and `memory` on every container and pod; no resource claim |
 | CPU and memory | `NanoCpus` and `Memory` equal the manifest's `cpu` and `memory` | The limits of `agent` equal the manifest's `cpu` and `memory`, and its requests equal its limits; `resources` is present on every container |
