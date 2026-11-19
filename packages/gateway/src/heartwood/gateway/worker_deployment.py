@@ -109,9 +109,12 @@ class KubernetesWorkerDeployment(_WorkerSettings):
     kubeconfig: Path
     namespace: _Name
     # The registry repository of the worker image; pods reference it with `image_digest`.
+    # The first component names the registry host, as container runtimes read it: a
+    # dotted name, `localhost`, or a single name with a port.
     image_repository: str = Field(
         pattern=(
-            r"^(?:localhost|[a-z0-9][a-z0-9-]*(?:\.[a-z0-9][a-z0-9-]*)+)(?::[0-9]{1,5})?"
+            r"^(?:(?:localhost|[a-z0-9][a-z0-9-]*(?:\.[a-z0-9][a-z0-9-]*)+)(?::[0-9]{1,5})?"
+            r"|[a-z0-9][a-z0-9-]*:[0-9]{1,5})"
             r"(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)+$"
         ),
         max_length=255,

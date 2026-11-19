@@ -1281,6 +1281,26 @@ def test_each_driver_requires_its_fields_and_refuses_the_other_drivers(
 
 
 @pytest.mark.parametrize(
+    "repository",
+    [
+        "registry.test/heartwood/worker",
+        "registry.test:5000/worker",
+        "localhost:5000/worker",
+        # A single name is a registry host only together with a port.
+        "cluster-registry:5000/heartwood-worker",
+    ],
+)
+def test_a_repository_names_its_registry_host_as_container_runtimes_read_it(
+    kubernetes_deployment: tuple[KubernetesWorkerDeployment, ProjectContext], repository: str
+) -> None:
+    settings = worker_deployment_from_mapping(
+        {**kubernetes_deployment[0].model_dump(), "image_repository": repository}
+    )
+    assert isinstance(settings, KubernetesWorkerDeployment)
+    assert settings.image == f"{repository}@{settings.image_digest}"
+
+
+@pytest.mark.parametrize(
     ("field", "value"),
     [
         ("kubectl_cli", "bin/kubectl"),
@@ -1292,6 +1312,7 @@ def test_each_driver_requires_its_fields_and_refuses_the_other_drivers(
         # A repository names its registry and carries neither a tag nor a digest.
         ("image_repository", "heartwood-worker"),
         ("image_repository", "heartwood/worker"),
+        ("image_repository", "heartwood:latest/worker"),
         ("image_repository", "registry.test/heartwood/worker:latest"),
         ("image_repository", "registry.test/heartwood/worker@sha256:" + "a" * 64),
         ("image_repository", "Registry.test/heartwood/worker"),
