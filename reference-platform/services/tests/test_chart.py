@@ -27,6 +27,9 @@ _TEMPLATE += ["--namespace", "heartwood-platform"]
 _SERVICES = "images.platformServices=registry.example.test/services@sha256:" + "0" * 64
 _GATEWAY = "images.openshellGateway=registry.example.test/gateway@sha256:" + "1" * 64
 _IMAGES = ["--set", _SERVICES, "--set", _GATEWAY]
+# Without a cluster, Helm cannot read the API server addresses.
+_API_SERVER = ["--set-json", 'sessions.apiServer=[{"cidr":"10.96.0.1/32","port":443}]']
+_IMAGES += _API_SERVER
 _BASE = list(_TEMPLATE)
 _TEMPLATE += _IMAGES
 _FIXED_ROLES = {
@@ -230,7 +233,7 @@ def test_sessions_namespace_is_neither_the_platform_nor_a_session_namespace(name
     [(_GATEWAY, "/images/platformServices"), (_SERVICES, "/images/openshellGateway")],
 )
 def test_installation_needs_the_images_without_a_default(given: str, missing: str) -> None:
-    result = subprocess.run([*_BASE, "--set", given], capture_output=True, text=True)
+    result = subprocess.run([*_BASE, *_API_SERVER, "--set", given], capture_output=True, text=True)
     assert result.returncode != 0
     assert missing in result.stderr
 
@@ -262,3 +265,10 @@ def test_control_service_configuration_holds_the_registry(objects: list[dict[str
             "ports": [{"protocol": "TCP", "port": 8080}],
         }
     ]
+
+
+def test_installation_needs_the_api_server_addresses() -> None:
+    command = [*_BASE, "--set", _SERVICES, "--set", _GATEWAY]
+    result = subprocess.run(command, capture_output=True, text=True)
+    assert result.returncode != 0
+    assert "sessions.apiServer is empty" in result.stderr

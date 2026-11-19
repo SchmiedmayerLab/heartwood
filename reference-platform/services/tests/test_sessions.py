@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 from fakes import FakeKubernetes
 from heartwood_platform.common.kubernetes import Kubernetes
@@ -37,7 +38,7 @@ class Platform:
         self.api = FakeKubernetes()
         self.active: list[str] = []
         self.now = 0.0
-        settings = SessionSettings(
+        self.settings = SessionSettings(
             control_namespace="heartwood-platform",
             control_account="heartwood-control",
             gateway_namespace="heartwood-sessions",
@@ -54,7 +55,7 @@ class Platform:
         )
         self.sessions = Sessions(
             Kubernetes(self.api.client()),
-            settings,
+            self.settings,
             lambda: self.active,
             sleep=self._sleep,
             clock=lambda: self.now,
@@ -212,6 +213,11 @@ def test_node_reader_subjects_follow_the_sessions_and_removal_deletes_everything
 
     assert platform.node_reader_subjects() == [_account("openshell", "hw-s-def456")]
     assert [path for path in platform.api.objects if "abc123" in path] == []
+    # The registry lists a session until its removal is complete. A launch of another
+    # session in that time does not add the removed subject again.
+    assert "abc123" in platform.active
+    platform.provision("def456")
+    assert platform.node_reader_subjects() == [_account("openshell", "hw-s-def456")]
     assert set(platform.api.kind("ServiceAccount", "heartwood-sessions")) == {"hw-gw-def456"}
     assert "/api/v1/namespaces/hw-s-def456" in platform.api.objects
 
@@ -247,3 +253,25 @@ def test_launch_fails_when_the_gateway_does_not_become_ready(platform: Platform)
     assert platform.now >= 10
     platform.api.reads_until_ready = 0
     assert platform.provision("abc123").namespace == "hw-s-abc123"
+
+
+@pytest.mark.parametrize("status", [404, 409])
+def test_deleting_an_absent_or_terminating_object_succeeds(status: int) -> None:
+    transport = httpx.MockTransport(lambda _request: httpx.Response(status))
+    kubernetes = Kubernetes(httpx.Client(transport=transport, base_url="https://k.example.test"))
+
+    kubernetes.delete("Namespace", "hw-s-abc123")
+
+
+def test_gateway_secret_that_another_party_created_fails_the_launch(platform: Platform) -> None:
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(409 if request.method == "POST" else 404)
+    )
+    sessions = Sessions(
+        Kubernetes(httpx.Client(transport=transport, base_url="https://k.example.test")),
+        platform.settings,
+        list,
+    )
+
+    with pytest.raises(SessionError, match="created by another party"):
+        sessions.write_gateway_secret("abc123", {"launch.json": "{}"})

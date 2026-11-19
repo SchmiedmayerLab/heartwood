@@ -130,6 +130,9 @@ class Sessions:
         self._clock = clock
         self._kube_system_uid: str | None = None
         self._node_reader_lock = threading.Lock()
+        # Sessions whose removal has begun. The registry lists a session until its
+        # removal is complete, and a concurrent launch must not add its subject again.
+        self._removed: set[str] = set()
 
     def _namespace_objects(self, session: str) -> list[dict[str, Any]]:
         """Quota, limits and network policies of a session namespace."""
@@ -223,10 +226,12 @@ class Sessions:
         assert isinstance(items, list)
         return items
 
-    def _apply_node_reader(self, without: str | None = None) -> None:
+    def _apply_node_reader(self, removed: str | None = None) -> None:
         """Set the subjects of the node reader binding to the sessions of the registry."""
         with self._node_reader_lock:
-            sessions = sorted(set(self._active_sessions()) - {without})
+            if removed is not None:
+                self._removed.add(removed)
+            sessions = sorted(set(self._active_sessions()) - self._removed)
             self._kubernetes.apply(
                 {
                     "apiVersion": f"{_RBAC}/v1",
@@ -246,8 +251,7 @@ class Sessions:
             self._kube_system_uid = namespace["metadata"]["uid"]
         return self._kube_system_uid
 
-    def _wait(self, describe: str, ready: Callable[[], Any]) -> Any:  # noqa: ANN401
-        deadline = self._clock() + self._settings.ready_timeout_seconds
+    def _wait(self, describe: str, deadline: float, ready: Callable[[], Any]) -> Any:  # noqa: ANN401
         while True:
             result = ready()
             if result:
@@ -319,12 +323,15 @@ class Sessions:
             }
         )
 
+        deadline = self._clock() + settings.ready_timeout_seconds
         client = self._wait(
             "the OpenShell client certificate",
+            deadline,
             lambda: kubernetes.get("Secret", "openshell-client-tls", namespace),
         )
         self._wait(
             "the OpenShell gateway",
+            deadline,
             lambda: (
                 (kubernetes.get("StatefulSet", "openshell", namespace) or {})
                 .get("status", {})
@@ -348,7 +355,7 @@ class Sessions:
         name = gateway_account(session)
         # The service may create and delete Secrets there, and not read or update them.
         self._kubernetes.delete("Secret", name, namespace)
-        self._kubernetes.create(
+        created = self._kubernetes.create(
             {
                 "apiVersion": "v1",
                 "kind": "Secret",
@@ -363,11 +370,13 @@ class Sessions:
                 },
             }
         )
+        if not created:
+            raise SessionError("the gateway Secret was created by another party")
 
     def remove(self, session: str) -> None:
         """Delete everything of a session, whether or not it was fully provisioned."""
         namespace = self._settings.gateway_namespace
-        self._apply_node_reader(without=session)
+        self._apply_node_reader(removed=session)
         self._kubernetes.delete("Secret", gateway_account(session), namespace)
         self._kubernetes.delete("ServiceAccount", gateway_account(session), namespace)
         self._kubernetes.delete("Namespace", session_namespace(session))

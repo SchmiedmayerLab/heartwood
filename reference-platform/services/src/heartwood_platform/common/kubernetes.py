@@ -105,9 +105,13 @@ class Kubernetes:
         return document
 
     def delete(self, kind: str, name: str, namespace: str | None = None) -> None:
-        """Delete an object, whether or not it exists."""
+        """Delete an object, whether or not it exists or is already being deleted.
+
+        The API server answers a repeated deletion of a namespace that is still being
+        emptied with a conflict.
+        """
         response = self._client.delete(f"{_collection(kind, namespace)}/{name}")
-        if response.status_code != httpx.codes.NOT_FOUND:
+        if response.status_code not in {httpx.codes.NOT_FOUND, httpx.codes.CONFLICT}:
             response.raise_for_status()
 
     def review_token(self, token: str, audience: str) -> dict[str, Any]:

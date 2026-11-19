@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import json
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -20,7 +21,7 @@ from heartwood_platform.control.app import create_app
 from heartwood_platform.control.keycloak import Keycloak
 from heartwood_platform.control.launch import LaunchService
 from heartwood_platform.control.registry import Project, Registry
-from heartwood_platform.control.sessions import Sessions, SessionSettings
+from heartwood_platform.control.sessions import ProvisionedSession, Sessions, SessionSettings
 from starlette.testclient import TestClient
 
 from heartwood.schemas import PlatformLaunchContext
@@ -317,3 +318,46 @@ def test_settings_refuse_duplicate_projects_and_other_template_fields(tmp_path: 
     ):
         with pytest.raises(ValueError, match="validation error"):
             Settings.model_validate({**settings, **change})
+
+
+def test_deletion_during_a_launch_waits_and_then_removes_everything(tmp_path: Path) -> None:
+    registry = Registry(tmp_path / "control.sqlite3")
+    registry.synchronize([Project("demo", "grant-demo", "policy-1", frozenset({_BOB}))])
+    events: list[str] = []
+
+    class SlowSessions:
+        """A launch during which a deletion of the same session arrives."""
+
+        def provision(self, session: str) -> ProvisionedSession:
+            self.deletion = threading.Thread(target=launches.delete, args=(_BOB, "demo"))
+            self.deletion.start()
+            self.deletion.join(timeout=0.3)
+            events.append("provisioned")
+            return ProvisionedSession(
+                namespace=f"hw-s-{session}",
+                namespace_uid="uid-1",
+                kube_system_uid="uid-0",
+                gateway_account=f"hw-gw-{session}",
+                openshell_endpoint="https://openshell.example.test:8080",
+                openshell_client={},
+            )
+
+        def write_gateway_secret(self, session: str, files: dict[str, str]) -> None:
+            del session, files
+            events.append("secret written")
+
+        def remove(self, session: str) -> None:
+            del session
+            events.append("removed")
+
+    sessions = SlowSessions()
+    keycloak = FakeKeycloak()
+    clients = Keycloak(keycloak.client(), "heartwood", "heartwood-control", lambda: keycloak.secret)
+    launches = LaunchService(registry, clients, sessions, "reference-platform", _TEMPLATE)
+
+    launches.prepare(_BOB, "demo")
+    sessions.deletion.join()
+
+    assert events == ["provisioned", "secret written", "removed"]
+    assert registry.session(_BOB, "demo") is None
+    assert keycloak.by_client_id("hw-proj-demo")["redirectUris"] == []

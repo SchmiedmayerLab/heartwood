@@ -8,7 +8,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import threading
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Protocol
 
@@ -91,6 +93,18 @@ class LaunchService:
         self._platform_id = platform_id
         self._redirect_uri_template = redirect_uri_template
         self._clock = clock
+        # A launch waits for the session's gateway. A deletion that ran meanwhile
+        # would leave what the launch writes afterwards, so both hold one lock for
+        # each researcher and project.
+        self._locks: dict[tuple[str, str], threading.Lock] = {}
+        self._locks_guard = threading.Lock()
+
+    @contextmanager
+    def _serialized(self, subject: str, project: str) -> Iterator[None]:
+        with self._locks_guard:
+            lock = self._locks.setdefault((subject, project), threading.Lock())
+        with lock:
+            yield
 
     def projects(self, subject: str) -> list[str]:
         """Return the identifiers of the projects that a subject may launch."""
@@ -118,6 +132,10 @@ class LaunchService:
         next one.
         """
         found = self._registry.project(subject, project)
+        with self._serialized(subject, project):
+            return self._prepare(found, subject, project)
+
+    def _prepare(self, found: Project, subject: str, project: str) -> Launch:
         session = self._registry.session(subject, project, create=True)
         assert session is not None
         provisioned = self._sessions.provision(session.id)
@@ -162,9 +180,10 @@ class LaunchService:
 
     def delete(self, subject: str, project: str) -> None:
         """Remove the session of a researcher in a project, whether or not it exists."""
-        session = self._registry.session(subject, project)
-        if session is None:
-            return
-        self._sessions.remove(session.id)
-        self._clients.remove_redirect_uri(project, self._redirect_uri(session))
-        self._registry.delete_session(subject, project)
+        with self._serialized(subject, project):
+            session = self._registry.session(subject, project)
+            if session is None:
+                return
+            self._sessions.remove(session.id)
+            self._clients.remove_redirect_uri(project, self._redirect_uri(session))
+            self._registry.delete_session(subject, project)

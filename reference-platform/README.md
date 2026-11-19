@@ -119,7 +119,9 @@ The reply carries no credential.
 Deleting the launch removes the session's subject from `heartwood-openshell-node-reader`, the ServiceAccount and Secret `hw-gw-<session>`, and the namespace with everything in it.
 
 The API server addresses of the egress policy come from `sessions.apiServer`.
-When that list is empty, Helm reads the address of the Service `kubernetes` and its endpoints from the cluster at installation.
+When that list is empty, Helm reads the address of the Service `kubernetes` and its endpoints from the cluster at installation, and rendering without a cluster fails.
+The addresses are written at installation and at each upgrade.
+A launch and a deletion of the same researcher and project run one after the other.
 The certificates and the key of a session do not rotate while the session exists.
 The control service reads the pods of every session namespace.
 
