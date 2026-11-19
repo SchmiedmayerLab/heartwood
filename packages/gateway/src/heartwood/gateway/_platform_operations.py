@@ -20,8 +20,6 @@ import json
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, cast
 
-from pydantic import ValidationError
-
 from heartwood.core_adapter.external_actions import (
     ExternalActionError,
     ExternalActionProposal,
@@ -54,6 +52,9 @@ if TYPE_CHECKING:
 
 OPTIONAL_CAPABILITIES = ("gpu-resources", "dataset-attachment", "application-discovery")
 _REQUEST_PROTOCOL = "mcp-tools-call"
+# Statuses that show the platform's admission decision. A failed operation may never have
+# reached the platform, and an unknown one has no answer, so neither records an admission.
+_ADMISSION = frozenset({"submitted", "queued", "running", "completed", "cancelled", "denied"})
 
 
 def call_structured(
@@ -96,7 +97,7 @@ def request_proposal(
                 )
             )
         )
-    except (ExternalActionError, ValidationError, ValueError, TimeoutError, OSError):
+    except Exception:  # Any failure leaves the read unanswered; nothing is assumed.
         return None
     if proposal.service_id != destination.service_id or proposal.tool != tool:
         return None
@@ -128,7 +129,7 @@ def operations_report(
                     )
                 )
             )
-        except (ExternalActionError, ValidationError, ValueError, TimeoutError, OSError):
+        except Exception:  # Any failure leaves the read unanswered; nothing is assumed.
             declared = None
         if declared is not None and declared.service_id != destination.service_id:
             declared = None
@@ -249,20 +250,27 @@ def link_operations(
 
     Each reviewed submission that names a plan element is linked with its exact document;
     each researcher decision on it becomes a researcher decision record with the session
-    event as audit reference; each observation is linked, and the first one is recorded as
-    the platform's admission decision. Returns the last sequence read.
+    event as audit reference; each observation is linked, and the first one that shows
+    whether the platform admitted the work is recorded as its admission decision. Returns
+    the last sequence read.
     """
     events = service.replay_events()
-    first_observed: set[str] = set()
+    if not events or events[-1].sequence <= after_sequence:
+        return after_sequence
+    admitted: set[str] = set()
     last = after_sequence
     for event in events:
         if event.kind != EventKind.EXTERNAL_ACTION_RECORDED:
             continue
         record = ExternalActionRecord.model_validate_json(json.dumps(event.payload["record"]))
         operation_id = str(record.proposal.operation_id)
-        admission = record.observation is not None and operation_id not in first_observed
-        if record.observation is not None:
-            first_observed.add(operation_id)
+        admission = (
+            record.observation is not None
+            and record.observation.operation.status in _ADMISSION
+            and operation_id not in admitted
+        )
+        if admission:
+            admitted.add(operation_id)
         if event.sequence <= after_sequence:
             continue
         last = event.sequence
@@ -317,7 +325,7 @@ def _link_record(
     if record.observation is None:
         return
     observed = record.observation.operation
-    if admission and observed.status != "unknown":
+    if admission:
         planning.link_platform_record(_admission(observed, reference, digest))
     planning.link_platform_record(observed)
 
@@ -325,7 +333,7 @@ def _link_record(
 def _admission(
     observed: PlatformOperationObservation, reference: PlanningReference, digest: str
 ) -> PlatformAuthorization:
-    """Record the platform's admission decision as the submission's first observation reports it."""
+    """Record the platform's admission decision as the first telling observation reports it."""
     return PlatformAuthorization(
         project_context_id=observed.project_context_id,
         authorization_id=f"admission-{observed.operation_id}",

@@ -1443,6 +1443,15 @@ def _platform_operation(
         check = "operation-proposal-missing"
     target = request.target_operation_id
     target_action = None if target is None else actions.get(f"outside-operation-{target}")
+    target_summary = None if target_action is None else target_action.summary
+    target_details = None if target_action is None else target_action.details
+    if (
+        target_summary is not None
+        and isinstance(target_details, ProjectionOutsideOperationActionDetails)
+        and target_details.operation is not None
+        and target_details.operation.backend_operation_ref is not None
+    ):
+        target_summary += f" (platform reference {target_details.operation.backend_operation_ref})"
     estimate = review.estimate
     platform = review.proposal
     return ProjectionPlatformOperation(
@@ -1486,7 +1495,7 @@ def _platform_operation(
         ),
         project_context_id=request.project_context_id,
         target_operation_id=None if target is None else str(target),
-        target_summary=None if target_action is None else target_action.summary,
+        target_summary=target_summary,
         status=status,
         backend_operation_ref=None if observed is None else observed.backend_operation_ref,
         platform_record_ref=None if observed is None else observed.platform_record_ref,

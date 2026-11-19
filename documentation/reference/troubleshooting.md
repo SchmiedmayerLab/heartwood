@@ -477,7 +477,7 @@ Reject the review, or let it expire; a new review of the same call asks the plat
 
 ### `HW-OPS-002`: A Platform Operation Failed
 
-The platform admitted the job, and the job failed, for example because its executor reported an error.
+The platform reported the job as failed, either after it ran, for example because its executor reported an error, or because the platform never received it.
 The operation shows the platform's report and its platform record.
 Read the platform record, revise the job, and let the agent propose it again; Heartwood never resubmits a job automatically.
 
@@ -487,6 +487,8 @@ The reply to a submission or cancellation was lost or did not arrive within the 
 Heartwood asks the service's status tool about the same operation identifier until the platform reports it, and proposes or sends nothing else to that service meanwhile.
 An operation the platform never received is reported as failed.
 When the condition persists, check that the job service is reachable and that the token for it is valid.
+While the outcome stays unknown, no other job on that service can be submitted or cancelled from this session; use the platform's own tools for running jobs meanwhile.
+Operations from a session whose platform launch context has since changed cannot be reconciled from a new launch context.
 
 ## Managed Compute
 

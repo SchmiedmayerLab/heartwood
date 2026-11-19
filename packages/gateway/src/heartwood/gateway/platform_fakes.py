@@ -438,6 +438,8 @@ class FakeJobService(_Service):
         self._delay_after_submit = 0.0
         # How often the service was asked to describe a submission.
         self.proposal_count = 0
+        # Seconds the next proposal answer is held, to stand in for a slow service.
+        self.proposal_delay = 0.0
         self.server.tool(self.create_task, annotations=_SUBMIT)
         self.server.tool(self.get_task, annotations=_READ_ONLY)
         self.server.tool(self.cancel_task, annotations=_CANCEL)
@@ -504,6 +506,8 @@ class FakeJobService(_Service):
         """Describe what ``create_task`` would run for these arguments; nothing is submitted."""
         self._admit(project_id)
         self.proposal_count += 1
+        delay, self.proposal_delay = self.proposal_delay, 0.0
+        time.sleep(delay)
         if tool != "create_task":
             raise ToolError("no proposal for this tool")
         try:

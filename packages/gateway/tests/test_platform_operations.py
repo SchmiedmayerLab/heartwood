@@ -628,10 +628,19 @@ def test_a_lost_reply_is_reconciled_before_any_retry(tmp_path: Path) -> None:
 
 def test_a_timed_out_submission_is_reconciled_to_one_task(tmp_path: Path) -> None:
     with platform(tmp_path) as service:
-        service.jobs.delay_next_submission_reply(3)
+        service.jobs.delay_next_submission_reply(4)
         record = service.call("create_task", _CPU)
-        service.decide(record)
-        assert service.record(record).phase in {"unknown", "observed"}
+        service.session.handle(
+            SessionCommand(
+                command_id=str(uuid.uuid4()),
+                session_id=service.session.store.session_id,
+                kind=CommandKind.APPROVE,
+                actor_id="researcher",
+                created_at=datetime.now(UTC).isoformat(),
+                payload={"target_type": "action-set", "target_id": record.proposal.group_id},
+            )
+        )
+        assert service.record(record).phase == "unknown"
 
         service.advance()
 
@@ -1036,3 +1045,50 @@ def test_operation_profiles_keep_their_reading_tools_apart_from_selectable_ones(
             mcp_destinations_from_mapping([{**entry, "operations": operations}])
     with pytest.raises(ValueError, match="next to a submission tool"):
         mcp_destinations_from_mapping([{**entry, "tools": ["cancel_task"]}])
+
+
+def test_a_slow_proposal_tool_leaves_the_review_without_a_platform_proposal(
+    tmp_path: Path,
+) -> None:
+    with platform(tmp_path) as service:
+        service.jobs.proposal_delay = 3
+        record = service.call("create_task", _CPU)
+
+        review = record.proposal.request.operation
+        assert review is not None
+        assert review.proposal is None
+        assert (_operation(service.action(record)).diagnostic or "").startswith("HW-OPS-001")
+
+
+def test_admission_is_linked_only_from_an_observation_that_shows_it(tmp_path: Path) -> None:
+    with platform(tmp_path) as service:
+        service.plan(1, "batch")
+        never = service.call("create_task", _CPU)
+        service.jobs.revoked_projects.add(PROJECT_ID)
+        service.decide(never)
+        service.jobs.revoked_projects.clear()
+        service.advance()
+        assert _observed(service.record(never)) == "failed"
+        revision = service.gateway.planning().plans[0].revisions[0]
+        # The platform never received it, so nothing records an admission.
+        assert revision.overview.authorizations == ()
+        assert [item.status for item in revision.overview.operations] == ["failed"]
+
+        service.jobs.drop_next_submission_reply()
+        lost = service.call("create_task", {**_CPU, "name": "second"})
+        service.session.handle(
+            SessionCommand(
+                command_id=str(uuid.uuid4()),
+                session_id=service.session.store.session_id,
+                kind=CommandKind.APPROVE,
+                actor_id="researcher",
+                created_at=datetime.now(UTC).isoformat(),
+                payload={"target_type": "action-set", "target_id": lost.proposal.group_id},
+            )
+        )
+        service.advance()
+        assert _observed(service.record(lost)) == "queued"
+        revision = service.gateway.planning().plans[0].revisions[0]
+        assert [
+            (item.authorization_id, item.status) for item in revision.overview.authorizations
+        ] == [(f"admission-{lost.proposal.operation_id}", "authorized")]

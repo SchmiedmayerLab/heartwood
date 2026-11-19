@@ -547,6 +547,7 @@ The gateway does the following:
 - **Discovery:** testing the server shows the declared operations with their permissions and whether the project holds them, and each optional capability as available, not permitted or, when the service does not declare it, unavailable.
   Discovery authorizes nothing, and reading status or proposals is never permission to submit work or attach data.
 - **Proposal:** before review the gateway asks the proposal tool about the worker's exact arguments, which has no effect at the service.
+  The session waits for that answer, at most the destination's `call_timeout_seconds`.
   The review shows the platform's text as such, with the runtime profile, resource limits, data scope, results destination and launch context.
   A submission without a usable platform proposal can be reviewed and rejected, but not approved.
 - **Estimate:** the review names the batch element of the latest revision of each recorded plan that uses the proposal's runtime profile, and the latest platform estimate that covers it, with its amount, coverage and validity.
