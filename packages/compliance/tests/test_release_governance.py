@@ -159,6 +159,11 @@ def test_release_source_versions_reject_other_candidate() -> None:
     errors = _release_verifier().source_version_errors(Path.cwd(), "999.999.999")
     assert errors
     assert f"packages/cli/pyproject.toml: {_declared_version()}" in errors
+    assert f"reference-platform/services/pyproject.toml: {_declared_version()}" in errors
+    assert any(
+        error.startswith("reference-platform/services/uv.lock:heartwood-schemas: ")
+        for error in errors
+    )
 
 
 def test_current_release_guides_match_declared_version() -> None:

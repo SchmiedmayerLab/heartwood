@@ -173,7 +173,11 @@ def source_version_errors(root: Path, version: str) -> list[str]:
     declared_version = release_metadata.get("version")
     if isinstance(declared_version, str):
         semantic_versions["VERSION.toml"] = declared_version
-    for metadata_path in sorted((root / "packages").glob("*/pyproject.toml")):
+    platform_services = root / "reference-platform" / "services"
+    metadata_paths = sorted((root / "packages").glob("*/pyproject.toml"))
+    if (platform_services / "pyproject.toml").is_file():
+        metadata_paths.append(platform_services / "pyproject.toml")
+    for metadata_path in metadata_paths:
         metadata = tomllib.loads(metadata_path.read_text(encoding="utf-8"))
         project = metadata.get("project")
         if isinstance(project, dict):
@@ -215,10 +219,14 @@ def source_version_errors(root: Path, version: str) -> list[str]:
                 semantic_versions[f"{web_lock_path.relative_to(root)}:root"] = root_package[
                     "version"
                 ]
-    uv_lock_path = root / "uv.lock"
-    uv_lock = tomllib.loads(uv_lock_path.read_text(encoding="utf-8"))
-    lock_packages = uv_lock.get("package")
-    if isinstance(lock_packages, list):
+    uv_lock_paths = [root / "uv.lock"]
+    if (platform_services / "uv.lock").is_file():
+        uv_lock_paths.append(platform_services / "uv.lock")
+    for uv_lock_path in uv_lock_paths:
+        uv_lock = tomllib.loads(uv_lock_path.read_text(encoding="utf-8"))
+        lock_packages = uv_lock.get("package")
+        if not isinstance(lock_packages, list):
+            continue
         for package in lock_packages:
             if not isinstance(package, dict):
                 continue
@@ -229,7 +237,8 @@ def source_version_errors(root: Path, version: str) -> list[str]:
                 and name in release_package_names
                 and isinstance(package_version, str)
             ):
-                python_lock_versions[f"uv.lock:{name}"] = package_version
+                lock_name = uv_lock_path.relative_to(root).as_posix()
+                python_lock_versions[f"{lock_name}:{name}"] = package_version
     if not semantic_versions and not python_source_versions and not python_lock_versions:
         errors.append("no packaged component versions were found")
         return errors
