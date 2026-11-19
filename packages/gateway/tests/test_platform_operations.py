@@ -54,6 +54,7 @@ from heartwood.gateway._mcp_policy import (
 )
 from heartwood.gateway._mcp_servers import McpOutsideAdapter, advance_outside_calls
 from heartwood.gateway._model_settings import ModelProfile, ModelSettings
+from heartwood.gateway._platform_operations import _read_only
 from heartwood.gateway._platform_planning import PlatformPlanningBinding
 from heartwood.gateway._session_projection import (
     ProjectionActionRecord,
@@ -1095,3 +1096,10 @@ def test_admission_is_linked_only_from_an_observation_that_shows_it(tmp_path: Pa
         assert [
             (item.authorization_id, item.status) for item in revision.overview.authorizations
         ] == [(f"admission-{lost.proposal.operation_id}", "authorized")]
+
+
+def test_a_missing_read_only_hint_counts_as_false() -> None:
+    assert _read_only(None) is None
+    assert _read_only(json.dumps({"name": "create_task"})) is False
+    assert _read_only(json.dumps({"name": "get_task", "annotations": {}})) is False
+    assert _read_only(json.dumps({"name": "get_task", "annotations": {"readOnlyHint": True}}))
