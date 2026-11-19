@@ -12,7 +12,24 @@ SPDX-License-Identifier: MIT
 {{- $projects = append $projects (dict "id" .id "billing_attribution_ref" .billingAttributionRef "policy_ref" .policyRef "members" (.members | default list)) -}}
 {{- end -}}
 {{- $keycloak := dict "url" "http://keycloak:8080" "issuer" (printf "%s/realms/heartwood" (include "heartwood.keycloakUrl" .)) "realm" "heartwood" "client_id" "heartwood-control" "client_secret_file" "/etc/heartwood-control/keycloak/client-secret" -}}
-{{- dict "platform_id" .Values.control.platformId "database" "/var/lib/heartwood-control/control.sqlite3" "audience" "heartwood-control" "service_callers" .Values.control.serviceCallers "redirect_uri_template" .Values.control.redirectUriTemplate "keycloak" $keycloak "projects" $projects | toPrettyJson -}}
+{{- /* Without configured addresses, the Service address and the endpoints of the API server are read from the cluster. */ -}}
+{{- $apiServer := .Values.sessions.apiServer -}}
+{{- if not $apiServer -}}
+{{- $service := lookup "v1" "Service" "default" "kubernetes" -}}
+{{- if $service -}}
+{{- $apiServer = append $apiServer (dict "cidr" (printf "%s/32" $service.spec.clusterIP) "port" 443) -}}
+{{- end -}}
+{{- $slice := lookup "discovery.k8s.io/v1" "EndpointSlice" "default" "kubernetes" -}}
+{{- if $slice -}}
+{{- range $endpoint := $slice.endpoints -}}
+{{- range $address := $endpoint.addresses -}}
+{{- $apiServer = append $apiServer (dict "cidr" (printf "%s/32" $address) "port" (index $slice.ports 0).port) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- $sessions := dict "control_namespace" .Release.Namespace "control_account" "heartwood-control" "gateway_namespace" .Values.sessions.namespace "openshell_objects_file" "/etc/heartwood-control/openshell/openshell-session.json" "openshell_gateway_image" .Values.images.openshellGateway "api_server" $apiServer "quota" .Values.sessions.quota "container_defaults" .Values.sessions.containerDefaults "container_default_requests" .Values.sessions.containerDefaultRequests -}}
+{{- dict "sessions" $sessions "platform_id" .Values.control.platformId "database" "/var/lib/heartwood-control/control.sqlite3" "audience" "heartwood-control" "service_callers" .Values.control.serviceCallers "redirect_uri_template" .Values.control.redirectUriTemplate "keycloak" $keycloak "projects" $projects | toPrettyJson -}}
 {{- end }}
 # The registry and the settings of the control service. It holds no credential.
 apiVersion: v1
@@ -25,6 +42,18 @@ metadata:
 data:
   configuration.json: |
     {{- include "heartwood.controlConfiguration" . | nindent 4 }}
+---
+# The OpenShell objects that the control service applies in each session namespace.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: heartwood-control-openshell
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+data:
+  openshell-session.json: |
+    {{- .Files.Get "files/openshell-session.json" | nindent 4 }}
 ---
 apiVersion: v1
 kind: Service
@@ -62,9 +91,11 @@ spec:
         {{- include "heartwood.selector" (dict "context" . "component" "control") | nindent 8 }}
       annotations:
         checksum/configuration: {{ include "heartwood.controlConfiguration" . | sha256sum }}
+        checksum/openshell: {{ .Files.Get "files/openshell-session.json" | sha256sum }}
     spec:
       serviceAccountName: heartwood-control
-      # The service reviews the tokens of its callers through the Kubernetes API.
+      # The service reviews the tokens of its callers and provisions session namespaces
+      # through the Kubernetes API.
       automountServiceAccountToken: true
       enableServiceLinks: false
       securityContext:
@@ -97,6 +128,9 @@ spec:
             - name: keycloak
               mountPath: /etc/heartwood-control/keycloak
               readOnly: true
+            - name: openshell
+              mountPath: /etc/heartwood-control/openshell
+              readOnly: true
             - name: data
               mountPath: /var/lib/heartwood-control
             - name: tmp
@@ -108,6 +142,9 @@ spec:
         - name: keycloak
           secret:
             secretName: heartwood-control-keycloak
+        - name: openshell
+          configMap:
+            name: heartwood-control-openshell
         - name: tmp
           emptyDir: {}
   volumeClaimTemplates:
