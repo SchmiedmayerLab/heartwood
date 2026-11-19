@@ -78,7 +78,8 @@ It differs from Docker inspection in these points:
 
 - A pod has no network mode.
   Admission confirms that the driver's two NetworkPolicies exist with the driver's rules.
-  It refuses any other policy of the namespace that selects the workload pod and has a rule.
+  It refuses any other NetworkPolicy of the namespace that selects the workload pod and has a rule.
+  Cluster-wide and plugin-specific policies are not read.
   The Kubernetes API does not report whether the cluster's network plugin enforces the policies.
 - The process limit is the kubelet's `podPidsLimit`, a node setting that no pod field reports.
 - The cgroup namespace is not reported.

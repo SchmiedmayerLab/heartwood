@@ -244,6 +244,26 @@ def test_failed_staging_or_admission_never_binds_a_worker(
     assert kubernetes.removed == ["sandbox-1" if created else None]
 
 
+def test_launch_refuses_an_intent_for_another_image_before_staging(
+    kubernetes: _Kubernetes,
+) -> None:
+    intent = kubernetes.intent.model_copy(update={"image_digest": "sha256:" + "e" * 64})
+    with pytest.raises(WorkerAttemptError, match="outside reconciliation"):
+        kubernetes.attempt.launch(intent)
+    assert kubernetes.events == []
+    assert kubernetes.sandboxes.spec is None
+
+
+def test_the_docker_driver_refuses_an_intent_for_another_image_before_staging(
+    native: _Native,
+) -> None:
+    intent = native.intent.model_copy(update={"image_digest": "sha256:" + "e" * 64})
+    with pytest.raises(WorkerAttemptError, match="outside reconciliation"):
+        native.attempt.launch(intent)
+    assert native.sandboxes.spec is None
+    assert native.docker.volumes == {}
+
+
 def test_launch_refuses_a_cluster_that_changed_after_preparation(kubernetes: _Kubernetes) -> None:
     kubernetes.cluster = "8" * 64
     with pytest.raises(WorkerAttemptError, match="outside reconciliation"):
@@ -509,6 +529,57 @@ def test_a_creation_that_arrived_before_the_absence_question_is_recorded_as_revo
     assert requests[0] == {"allow_missing": True, "timeout_seconds": 90}
     assert len(requests) == 2
     assert kubernetes.removed == ["sandbox-late"]
+
+
+def test_the_owner_resolves_an_unresolved_creation_with_the_capability_read_at_launch(
+    kubernetes: _Kubernetes, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    kubernetes.reports(ABSENCE_REJECTS_CREATION)
+    _lost_creation(kubernetes, monkeypatch)
+    absent = SimpleNamespace(outcome=_outcome("ALREADY_ABSENT"), sandbox_id=None)
+    requests = kubernetes.answer_deletions(monkeypatch, absent)
+    evidence = kubernetes.attempt.revoke(kubernetes.record("fenced", None))
+    assert evidence.outcome == "not-created"
+    assert requests == [{"allow_missing": True, "timeout_seconds": 90}]
+    assert kubernetes.removed == [None]
+
+
+def test_an_accepted_deletion_of_an_unresolved_creation_is_followed_until_absence(
+    kubernetes: _Kubernetes, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    kubernetes.reports(ABSENCE_REJECTS_CREATION)
+    _lost_creation(kubernetes, monkeypatch)
+    accepted = SimpleNamespace(outcome=_outcome("ACCEPTED"), sandbox_id="sandbox-late")
+    completed = SimpleNamespace(outcome=_outcome("COMPLETED"), sandbox_id="sandbox-late")
+    requests = kubernetes.answer_deletions(monkeypatch, accepted, completed)
+    evidence = kubernetes.attempt.revoke(kubernetes.record("fenced", None))
+    assert (evidence.outcome, evidence.sandbox_id) == ("revoked", "sandbox-late")
+    # The accepted deletion is sent again as an ordinary deletion of that sandbox.
+    assert [set(request) for request in requests] == [
+        {"allow_missing", "timeout_seconds"},
+        {"timeout_seconds"},
+    ]
+    assert kubernetes.removed == ["sandbox-late"]
+
+
+def test_a_sandbox_that_cannot_be_read_between_retries_keeps_the_attempt_fenced(
+    kubernetes: _Kubernetes, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime = kubernetes.attempt.launch(kubernetes.intent)
+    requests = kubernetes.answer_deletions(monkeypatch, kubernetes.error("INTERNAL", _CONFLICT))
+
+    def unavailable(*_arguments: object, **_options: object) -> None:
+        raise kubernetes.error("UNAVAILABLE")
+
+    monkeypatch.setattr(
+        worker_native,
+        "sleep",
+        lambda _seconds: monkeypatch.setattr(kubernetes.sandboxes, "get", unavailable),
+    )
+    with pytest.raises(WorkerAttemptError, match="absence was not observed"):
+        kubernetes.attempt.revoke(kubernetes.record("fenced", runtime))
+    assert len(requests) == 1
+    assert kubernetes.removed == []
 
 
 def test_the_docker_driver_keeps_an_unresolved_creation_fenced_with_the_same_capability(

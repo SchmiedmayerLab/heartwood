@@ -406,7 +406,6 @@ def cluster_sha256(settings: KubernetesWorkerDeployment) -> str:
     if (
         not server
         or not authority.strip()
-        or len(view) > 256 * 1024
         or _field(namespace, "kind") != "Namespace"
         or _field(namespace, "metadata", "name") != settings.namespace
         or not isinstance(uid, str)

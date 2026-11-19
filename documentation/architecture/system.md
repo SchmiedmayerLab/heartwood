@@ -261,7 +261,7 @@ After any other failed or unanswered creation request, absence of the sandbox is
 The qualified sandbox gateway rejects deletion of a sandbox whose provisioning has not settled, but it does not report a creation request it has not recorded yet, so absence cannot show that such a request will not still create the sandbox.
 The attempt therefore stays fenced and its revocation keeps being retried; a sandbox that appears under the attempt's unique name with its full identity is deleted, and the attempt is recorded as revoked.
 With the Kubernetes driver and a sandbox gateway that reports `openshell.compute.create-rejects-deleted-name`, revocation asks the gateway by deleting the attempt's name with `allow_missing`.
-The answer `ALREADY_ABSENT` records `not-created`, because that gateway rejects a later creation under the name; a completed deletion records `revoked` with the identity the gateway returns; any other answer keeps the attempt fenced.
+The answer `ALREADY_ABSENT` records `not-created`, because that gateway rejects a later creation under the name; a completed or accepted deletion is followed as the deletion of the sandbox whose identity the gateway returns, and records `revoked`; any other answer keeps the attempt fenced.
 In both cases the cluster must also show no object of the attempt.
 Resolving such an attempt from absence requires a sandbox gateway that rejects or reports later creations under a name whose absence it confirmed.
 The native forwarder runs under a small supervisor in its own process group, which ends the whole group when the gateway's end of a pipe closes, so no forwarder outlives the gateway process, however that process ends.

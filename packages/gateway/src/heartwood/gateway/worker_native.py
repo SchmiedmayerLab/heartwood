@@ -305,7 +305,7 @@ def _delete_with_retry(control: NativeWorkerControl, volumes: _Volumes, sandbox_
             if not retried or pause is None or monotonic() + pause >= deadline:
                 raise WorkerAttemptError("native worker deletion requires reconciliation") from None
         sleep(pause)
-        # The identity is read again, so a retry never deletes a replacement.
+        # The identity is read again before each retry, so a replacement found there stays.
         if _owned_sandbox(control, volumes, sandbox_id) is None:
             return
 
@@ -452,6 +452,7 @@ class _NativeWorkerAttempt:
                 intent.project_id != self.request.project.project_id
                 or intent.session_id != self.request.session_id
                 or intent.input_manifest_sha256 != self._input_identity
+                or intent.image_digest != self.settings.image_digest
                 or intent.sandbox_policy_sha256 != self.settings.sandbox_policy_sha256
                 or intent.control_plane != self._control_plane
             ):

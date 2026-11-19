@@ -389,6 +389,7 @@ Correct the operator files; do not loosen their permissions or move them into th
 Heartwood leaves the attempt fenced and does not record revocation, because a worker missing from the current infrastructure may still be running on the earlier one.
 Stop the worker on the infrastructure it ran on, using that control plane's own tools, and continue the work in a new session.
 Pointing the manifest back at the original control plane and Docker daemon, or cluster and namespace, lets the next gateway start reconcile the attempt normally.
+With the Kubernetes driver, a changed API server address or certificate authority in `kubeconfig`, or a namespace deleted and created again, also counts as other infrastructure.
 
 ### `HW-WORKER-003`: Worker Revocation Was Not Observed
 
