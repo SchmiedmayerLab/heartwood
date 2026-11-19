@@ -25,6 +25,7 @@ import httpx
 import pytest
 
 import heartwood.gateway._openhands_sdk as openhands_sdk_module
+from heartwood.cli import main as terminal_main
 from heartwood.cli._interactive import format_projection_lines
 from heartwood.core_adapter import (
     AgentBackend,
@@ -40,6 +41,8 @@ from heartwood.gateway import (
     ModelProfile,
     OpenHandsSdkBackend,
     ProjectContext,
+    RestGateway,
+    RestRequest,
     SessionGateway,
     SessionProjection,
     project_session,
@@ -51,7 +54,7 @@ from heartwood.gateway.platform_fakes import (
     RunningFakes,
     running_platform_fakes,
 )
-from heartwood.notebook import build_view_model, build_widget_spec
+from heartwood.notebook import NotebookSession, build_view_model, build_widget_spec
 from heartwood.schemas import PolicyProfile
 from heartwood.session import CommandKind, EventKind, SessionCommand, SessionEvent
 
@@ -276,6 +279,50 @@ def test_gateway_refusals_carry_the_fixture_diagnostic(
         gateway.stop()
 
     assert f"{body['code']}: {body['error']}" == state["diagnostic"]
+
+
+def test_capability_not_offered_shows_the_same_diagnostic_in_every_interface(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    state = next(item for item in _STATES if item["surface"] == "setup-refusal")
+    project = ProjectContext(tmp_path)
+    workstation = SessionGateway(project=project, env={}, backend_id="deterministic")
+    try:
+        workstation.configure_model_source("openai")
+    finally:
+        workstation.stop()
+    # Carina offers neither the OpenAI API nor the stored choice made on a workstation.
+    carina = {"HEARTWOOD_PLATFORM": "carina"}
+    gateway = SessionGateway(project=project, env=carina, backend_id="deterministic")
+    try:
+        readiness = gateway.project_readiness()
+        browser = RestGateway(gateway).handle(
+            RestRequest(
+                method="PUT",
+                path="/settings/models/source",
+                body=json.dumps({"source_id": "openai"}),
+            )
+        )
+        with pytest.raises(ValueError, match=re.escape(state["diagnostic"])) as notebook:
+            NotebookSession(gateway=gateway).connect_model("openai", "gpt-synthetic")
+    finally:
+        gateway.stop()
+    monkeypatch.chdir(tmp_path)
+    for name, value in carina.items():
+        monkeypatch.setenv(name, value)
+    with pytest.raises(SystemExit):
+        terminal_main(["models", "connect", "openai", "gpt-synthetic"])
+    terminal = capsys.readouterr().err
+
+    assert [
+        f"{check['code']}: {check['summary']}"
+        for check in readiness["checks"]
+        if check.get("code") == state["code"]
+    ] == [state["diagnostic"]]
+    assert browser.status_code == 422
+    assert f"{browser.body['code']}: {browser.body['error']}" == state["diagnostic"]
+    assert str(notebook.value) == state["diagnostic"]
+    assert terminal.rstrip().endswith(state["diagnostic"])
 
 
 def test_inference_keeps_working_while_platform_tools_are_down(

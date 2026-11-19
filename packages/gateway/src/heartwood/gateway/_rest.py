@@ -37,6 +37,7 @@ from heartwood.gateway._model_transfer import ModelTransferError
 from heartwood.gateway._project import ProjectStateError
 from heartwood.gateway._project_activity import ProjectOwnershipError
 from heartwood.gateway._project_config import ProjectConfigError
+from heartwood.gateway._readiness import CapabilityNotOfferedError
 from heartwood.gateway._session_catalog import SessionCatalogError, SessionNotFoundError
 from heartwood.gateway._skill_settings import SkillSettingsError
 from heartwood.gateway._startup import InterfaceKind
@@ -724,6 +725,11 @@ def _optional_int(value: str | None) -> int | None:
 
 
 def _error(status_code: int, reason: object) -> RestResponse:
+    if isinstance(reason, CapabilityNotOfferedError):
+        # Clients show the stable code the same way as the terminal message does.
+        return RestResponse(
+            status_code=status_code, body={"code": reason.code, "error": reason.detail}
+        )
     return RestResponse(status_code=status_code, body={"error": str(reason)})
 
 

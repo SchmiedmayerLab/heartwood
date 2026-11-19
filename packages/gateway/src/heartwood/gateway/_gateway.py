@@ -132,6 +132,7 @@ from heartwood.gateway._project_config import (
     ProjectModelSettingsStore,
 )
 from heartwood.gateway._readiness import (
+    CapabilityNotOfferedError,
     DeploymentReadiness,
     EffectivePolicy,
     inspect_deployment,
@@ -1831,7 +1832,7 @@ class SessionGateway:
             None,
         )
         if option is None:
-            raise ProjectConfigError(f"unsupported model source: {model_source}")
+            raise CapabilityNotOfferedError
         persist_deployment_profile(
             self.project,
             model_source=option.source_id,
@@ -2905,7 +2906,7 @@ class SessionGateway:
             return
         available_sources = {option.source_id for option in model_source_options(self.env)}
         if model_source not in available_sources:
-            raise ModelCatalogError(f"{connection_id} is unavailable in the detected environment")
+            raise CapabilityNotOfferedError
         try:
             self.configure_model_source(model_source)
         except ProjectConfigError as error:
@@ -2982,7 +2983,7 @@ class SessionGateway:
             return
         adapter = select_platform_adapter(self.env)
         if "custom" not in adapter.capabilities().model_sources:
-            raise ModelCatalogError("Custom API is unavailable on this platform")
+            raise CapabilityNotOfferedError
         default_policy = adapter.default_policy_profile()
         credential_allowlist = default_policy.credential_allowlist
         if connection.credential_reference is not None:

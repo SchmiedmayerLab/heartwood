@@ -41,7 +41,7 @@ describe("platform contract failure states in the browser", () => {
 
   it("reads every surface from the shared fixture", () => {
     expect(new Set(states.map((state) => state.surface))).toEqual(
-      new Set(["gateway-response", "session"]),
+      new Set(["gateway-response", "session", "setup-refusal"]),
     );
   });
 
@@ -99,6 +99,25 @@ describe("platform contract failure states in the browser", () => {
 
       await expect(
         new GatewayClient("/proxy/8767").replayEvents("session-test"),
+      ).rejects.toThrow(diagnostic);
+    },
+  );
+
+  it.each(states.filter((state) => state.surface === "setup-refusal"))(
+    "reports $code when a choice is not offered",
+    async ({ code, diagnostic }) => {
+      const error = diagnostic.slice(code.length + 2);
+      vi.stubGlobal(
+        "fetch",
+        vi
+          .fn()
+          .mockResolvedValue(
+            new Response(JSON.stringify({ code, error }), { status: 422 }),
+          ),
+      );
+
+      await expect(
+        new GatewayClient("/proxy/8767").configureModelSource("openai"),
       ).rejects.toThrow(diagnostic);
     },
   );

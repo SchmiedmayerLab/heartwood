@@ -97,6 +97,13 @@ The deployment manifest's `allowed_action_review_modes` no longer lists the proj
 Each session records the change before its next model dispatch.
 Select any mode the deployment permits in `/permissions`, browser settings or with `--review-mode`; the selection replaces the stored mode and ends the warning.
 
+### `HW-SETUP-004`: Capability Is Not Offered on This Platform
+
+The project's stored model connection, or a requested one, is not offered by the detected platform.
+Setup lists only the connections the platform offers, so this happens when a project moves to another platform or a client names a connection directly.
+`heartwood doctor` and the browser readiness view report a stored connection, and the terminal, browser and notebook refuse a requested one with this code.
+Run `heartwood setup` or open browser settings and select a connection this platform offers.
+
 ## Models and Credentials
 
 ### `HW-MODEL-001`: No Model Is Selected

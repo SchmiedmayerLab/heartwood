@@ -31,7 +31,7 @@ from heartwood.session import SessionCommand
 
 
 class GatewayError(TypedDict):
-    """An application error, optionally carrying a stable ingress diagnostic code."""
+    """An application error, optionally carrying a stable diagnostic code."""
 
     error: str
     code: NotRequired[str]

@@ -2,6 +2,12 @@
   "schema_version": "heartwood.synthetic-failure-states.v1",
   "states": [
     {
+      "condition": "Capability not offered",
+      "code": "HW-SETUP-004",
+      "surface": "setup-refusal",
+      "diagnostic": "HW-SETUP-004: The selected model connection is not offered on this platform"
+    },
+    {
       "condition": "Missing or invalid launch capability",
       "code": "HW-INGRESS-003",
       "surface": "gateway-response",

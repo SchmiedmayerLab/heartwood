@@ -127,6 +127,12 @@ _DIAGNOSTICS: dict[str, DiagnosticDefinition] = {
         "Select a review mode the deployment permits; Review Every Action applies until then.",
         "/reference/troubleshooting/#hw-setup-003-stored-review-mode-is-not-permitted-by-the-deployment",
     ),
+    "platform-capability": DiagnosticDefinition(
+        "HW-SETUP-004",
+        "Capability is not offered on this platform",
+        "Select a model connection this platform offers.",
+        "/reference/troubleshooting/#hw-setup-004-capability-is-not-offered-on-this-platform",
+    ),
     "agent-runtime": DiagnosticDefinition(
         "HW-AGENT-001",
         "Agent runtime is unavailable",

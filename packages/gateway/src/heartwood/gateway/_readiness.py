@@ -70,6 +70,21 @@ ModelSource = Literal[
 
 _STANFORD_ROOT = "https://aiapi-prod.stanford.edu/v1"
 _LOGGER = logging.getLogger(__name__)
+_NOT_OFFERED = "The selected model connection is not offered on this platform"
+
+
+class CapabilityNotOfferedError(ModelCatalogError):
+    """Raised when a request names a choice the detected platform does not offer.
+
+    The message starts with the stable diagnostic code, which the gateway's HTTP routes
+    return separately.
+    """
+
+    def __init__(self) -> None:
+        code = diagnostic_for("platform-capability").code
+        super().__init__(f"{code}: {_NOT_OFFERED}")
+        self.code = code
+        self.detail = _NOT_OFFERED
 
 
 @dataclass(frozen=True, slots=True)
@@ -374,17 +389,11 @@ def inspect_deployment(
     configured_source = config.model_source if config is not None else None
     source_supported = configured_source in adapter.capabilities().model_sources
     checks.append(
-        ReadinessCheck(
-            "model-source",
-            "pass" if source_supported else "warning" if configured_source is None else "fail",
-            (
-                "Model connection is selected"
-                if source_supported
-                else "No model connection selected"
-                if configured_source is None
-                else "Selected model connection is unavailable on this platform"
-            ),
-        )
+        ReadinessCheck("model-source", "pass", "Model connection is selected")
+        if source_supported
+        else ReadinessCheck("model-source", "warning", "No model connection selected")
+        if configured_source is None
+        else ReadinessCheck("platform-capability", "fail", _NOT_OFFERED)
     )
     active_model = _active_model_profile(config)
     checks.append(
