@@ -15,11 +15,9 @@ it does not establish authorization, policy enforcement, or live-platform qualif
 
 from __future__ import annotations
 
-import ipaddress
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal
-from urllib.parse import urlsplit
 
 import openai
 from fastmcp.client.transports import StreamableHttpTransport
@@ -36,6 +34,7 @@ from heartwood.adapters.service_conformance import (
 )
 from heartwood.core_adapter import BackendErrorCode
 from heartwood.gateway._openhands_failures import classified_error_code
+from heartwood.gateway._transport import require_protected_transport
 from heartwood.schemas import PlatformMcpServiceProfile
 
 _TIMEOUT_SECONDS = 15.0
@@ -60,7 +59,7 @@ class InferenceEndpoint:
     def __post_init__(self) -> None:
         """Refuse to send the key over an unprotected transport."""
         if self.api_key is not None:
-            _require_protected_transport(self.base_url)
+            require_protected_transport(self.base_url)
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,7 +72,7 @@ class McpEndpoint:
     def __post_init__(self) -> None:
         """Refuse to send the token over an unprotected transport."""
         if self.token is not None:
-            _require_protected_transport(str(self.profile.url))
+            require_protected_transport(str(self.profile.url))
 
 
 @dataclass(frozen=True, slots=True)
@@ -167,18 +166,6 @@ def check_mcp_service(endpoint: McpEndpoint) -> CapabilityCheck:
         return CapabilityCheck("platform-tools", service, "unavailable", tuple(checks))
     finally:
         client.sync_close()
-
-
-def _require_protected_transport(url: str) -> None:
-    """Send credentials only over HTTPS or to a loopback address."""
-    parts = urlsplit(url)
-    host = parts.hostname or ""
-    try:
-        loopback = host == "localhost" or ipaddress.ip_address(host).is_loopback
-    except ValueError:
-        loopback = False
-    if parts.scheme != "https" and not (parts.scheme == "http" and loopback):
-        raise ValueError("credentials are sent only over HTTPS or to a loopback address")
 
 
 def run_platform_conformance(
