@@ -108,6 +108,11 @@ class KubernetesWorkerDeployment(_WorkerSettings):
     kubectl_cli: Path
     kubeconfig: Path
     namespace: _Name
+    # The registry repository of the worker image; pods reference it with `image_digest`.
+    image_repository: str = Field(
+        pattern=r"^[a-z0-9][a-z0-9.-]*(?::[0-9]{1,5})?(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)+$",
+        max_length=255,
+    )
     # Images the driver adds to every sandbox: the supervisor pod's image and the sandbox
     # runtime that the workload pod's first init container installs.
     supervisor_image_digest: ImageDigest
@@ -117,6 +122,11 @@ class KubernetesWorkerDeployment(_WorkerSettings):
     def _explicit_kubernetes(self) -> Self:
         _require_canonical(self.kubectl_cli, self.kubeconfig)
         return self
+
+    @property
+    def image(self) -> str:
+        """The worker image as a pod references it: by digest, never by a tag that could move."""
+        return f"{self.image_repository}@{self.image_digest}"
 
 
 WorkerDeployment = OpenShellWorkerDeployment | KubernetesWorkerDeployment

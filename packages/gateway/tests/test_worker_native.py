@@ -1213,6 +1213,7 @@ _KUBERNETES_FIELDS = (
     "kubectl_cli",
     "kubeconfig",
     "namespace",
+    "image_repository",
     "supervisor_image_digest",
     "sandbox_image_digest",
 )
@@ -1238,6 +1239,7 @@ def kubernetes_deployment(
             "kubectl_cli": kubectl,
             "kubeconfig": kubeconfig,
             "namespace": "hw-s-synthetic",
+            "image_repository": "registry.test/heartwood/worker",
             "supervisor_image_digest": "sha256:" + "5" * 64,
             "sandbox_image_digest": "sha256:" + "6" * 64,
         }
@@ -1287,6 +1289,12 @@ def test_each_driver_requires_its_fields_and_refuses_the_other_drivers(
         ("kubeconfig", "/etc/heartwood/../kubeconfig"),
         ("namespace", "Sessions"),
         ("namespace", "a" * 64),
+        # A repository names its registry and carries neither a tag nor a digest.
+        ("image_repository", "heartwood-worker"),
+        ("image_repository", "registry.test/heartwood/worker:latest"),
+        ("image_repository", "registry.test/heartwood/worker@sha256:" + "a" * 64),
+        ("image_repository", "Registry.test/heartwood/worker"),
+        ("image_repository", "registry.test/" + "a" * 250),
         ("supervisor_image_digest", "ghcr.io/nvidia/openshell/supervisor:0.1.8"),
         ("sandbox_image_digest", "sha256:" + "a" * 63),
         # The sandbox command-line tool accepts at most 19 characters with this driver.
