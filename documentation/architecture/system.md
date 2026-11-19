@@ -176,7 +176,7 @@ The table lists the accepted values next to the values Docker inspection accepts
 | Process and IPC namespaces | `PidMode` and `IpcMode` are private | `hostPID` and `hostIPC` are false; `shareProcessNamespace` is false on the workload pod |
 | User namespace | `UsernsMode` is empty | `hostUsers` is true |
 | Cgroup namespace | `CgroupnsMode` is `private` | Not reported |
-| User | Checked by the probe inside the worker | `runAsUser` and `runAsGroup` are `10001` and `runAsNonRoot` is true on every container and on the workload pod; `fsGroup` is `10001` on both pods, and neither adds another supplemental group |
+| User | Checked by the probe inside the worker | `runAsUser` and `runAsGroup` are `10001` and `runAsNonRoot` is true on every container and on the workload pod, and a pod-level `runAsUser` or `runAsGroup` on the supervisor pod is `10001`; `fsGroup` is `10001` on both pods, and neither lists another supplemental group |
 | Service account token | Not applicable | `automountServiceAccountToken` is false on both pods; the supervisor pod's projected token has audience `openshell-gateway` |
 | Devices | `Devices`, `DeviceRequests`, and `DeviceCgroupRules` are empty | No `volumeDevices`; requests and limits name only `cpu` and `memory` on every container and pod; no resource claim |
 | CPU and memory | `NanoCpus` and `Memory` equal the manifest's `cpu` and `memory` | The limits of `agent` equal the manifest's `cpu` and `memory`, and its requests equal its limits; `resources` is present on every container |

@@ -1401,6 +1401,7 @@ def test_evidence_record_keeps_inspected_values_without_environment_or_labels(
     assert workload["containers"][0]["resources"]["limits"] == {"cpu": "1", "memory": "2Gi"}
     assert workload["containers"][0]["volumeDevices"] == "<absent>"
     assert workload["containers"][0]["restartPolicy"] == "<absent>"
+    assert workload["containers"][0]["ports"] == "<absent>"
     assert workload["spec"]["runtimeClassName"] == "<absent>"
     assert workload["containers"][0]["securityContext"]["capabilities"] == {"drop": ["ALL"]}
     assert len(workload["initContainers"]) == 2
