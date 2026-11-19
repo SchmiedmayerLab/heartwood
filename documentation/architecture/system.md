@@ -191,7 +191,8 @@ A setting the table excludes, such as `appArmorProfile` or `runtimeClassName`, m
 Pod-level `resources` and a container's own `seccompProfile` are optional.
 Every other listed field must be present with its accepted value.
 
-`admission_record` in `heartwood.gateway.worker_kubernetes` returns the inspected values of both pods, both policies, and the namespace for qualification evidence, without environment, commands, labels, or annotations.
+`admission_record` in `heartwood.gateway.worker_kubernetes` returns the inspected values of both pods, both policies, and the namespace for qualification evidence, without environment, commands, or pod labels and annotations.
+It keeps the namespace's Pod Security labels.
 
 ### Worker Attempt Ownership
 
