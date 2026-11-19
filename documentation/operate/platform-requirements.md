@@ -181,11 +181,10 @@ The qualification build also reports `0.1.9+heartwood.2`, a local version that n
 Compare the deployed gateway with that record, or repeat native qualification against it and retain the evidence.
 
 The qualification build has two further behaviors that the unmodified upstream release lacks.
-Heartwood's check of the registered gateway does not depend on them.
 
 - The Kubernetes driver reports a delete that the Kubernetes API answers with a conflict as an error, because the Sandbox resource may still exist; the upstream release reports that delete as absence.
   A missing Sandbox resource is still reported as absent.
-  The driver reports capability `openshell.compute.delete-awaits-provisioning`; Heartwood's check still accepts only the `openshell/docker` driver.
+  The driver reports capability `openshell.compute.delete-awaits-provisioning`, which Heartwood's check requires under an `openshell-kubernetes` manifest.
 - A deletion that finds no sandbox under a workspace and name records that name in the gateway's store.
   For 24 hours after the last such deletion, the gateway rejects a creation under that name before it asks the compute driver to create the sandbox.
   The rejection has status `FAILED_PRECONDITION` and reason `SANDBOX_NAME_CONFIRMED_ABSENT` once the cleanup of the rejected creation's record completes; otherwise the error can have another status or lack the reason.
