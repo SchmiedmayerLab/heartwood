@@ -199,6 +199,7 @@ from heartwood.gateway._project_config import (
 )
 from heartwood.gateway._readiness import (
     MODEL_SOURCE_OPTIONS,
+    CapabilityNotOfferedError,
     DeploymentReadiness,
     ModelSourceOption,
     ReadinessCheck,
@@ -285,6 +286,7 @@ __all__ = [
     "AuditCheckpointVerification",
     "AuditIntegrityError",
     "AuditVerification",
+    "CapabilityNotOfferedError",
     "CheckpointSigner",
     "CheckpointSignerError",
     "CheckpointSignerProfile",

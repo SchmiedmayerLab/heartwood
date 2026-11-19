@@ -27,6 +27,7 @@ import pytest
 import tomli_w
 
 import heartwood.gateway._openhands_sdk as openhands_sdk_module
+from heartwood.cli import main as terminal_main
 from heartwood.cli._models import _handle_models, configure_models
 from heartwood.core_adapter import SessionService
 from heartwood.gateway import (
@@ -275,6 +276,75 @@ def _cli_error(
     with pytest.raises(SystemExit):
         _cli(gateway, arguments)
     return capsys.readouterr().err
+
+
+@pytest.mark.parametrize("interactive", [True, False], ids=["menu", "options"])
+def test_guided_setup_lists_and_selects_a_deployment_connection(
+    tmp_path: Path,
+    inference: tuple[FakeInference, str],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    interactive: bool,
+) -> None:
+    _fake, base_url = inference
+    record = _record(tmp_path, base_url)
+    deployment = _deployment(tmp_path, record)
+    assert deployment.manifest is not None
+    monkeypatch.setenv(_KEY, INFERENCE_API_KEY)
+    monkeypatch.chdir(cast(str, record["workspace"]))
+
+    def answer(prompt: str) -> str:
+        if prompt.startswith("Select ["):
+            # The deployment connection is listed after the platform's own model sources.
+            return next(
+                line.split(".", 1)[0].strip()
+                for line in capsys.readouterr().out.splitlines()
+                if line.strip().endswith("Synthetic Platform Models")
+            )
+        return "y" if prompt.startswith("Continue") else "synthetic-alias"
+
+    monkeypatch.setattr("builtins.input", answer)
+    options = (
+        []
+        if interactive
+        else ["--model-source", _CONNECTION, "--model-id", "synthetic-alias", "--yes"]
+    )
+
+    assert terminal_main(["setup", "--deployment", str(deployment.manifest), *options]) == 0
+
+    gateway = _gateway(deployment)
+    try:
+        settings = gateway.model_settings()
+        readiness = {check.check_id: check for check in gateway.deployment_readiness().checks}
+    finally:
+        gateway.stop()
+    assert settings["model_source"] == _CONNECTION
+    assert settings["active_profile"] == _CONNECTION
+    assert readiness["model-source"].status == "pass"
+    assert "Setup complete." in capsys.readouterr().out
+
+
+def test_guided_setup_refuses_a_connection_the_deployment_does_not_declare(
+    tmp_path: Path,
+    inference: tuple[FakeInference, str],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _fake, base_url = inference
+    record = _record(tmp_path, base_url)
+    deployment = _deployment(tmp_path, record)
+    assert deployment.manifest is not None
+    monkeypatch.chdir(cast(str, record["workspace"]))
+    arguments = ["--model-source", "synthetic-other", "--model-id", "synthetic-alias", "--yes"]
+
+    with pytest.raises(SystemExit):
+        terminal_main(["setup", "--deployment", str(deployment.manifest), *arguments])
+
+    assert (
+        capsys.readouterr()
+        .err.rstrip()
+        .endswith("HW-SETUP-004: The selected model connection is not offered on this platform")
+    )
 
 
 @pytest.mark.parametrize(

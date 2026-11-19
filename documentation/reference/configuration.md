@@ -248,7 +248,7 @@ max_output_tokens = 8192
 supports_tool_calls = true
 ```
 
-Each connection appears with the institution-managed providers in browser settings and `heartwood models list`.
+Each connection appears with the institution-managed providers in browser settings, `heartwood models list` and `heartwood setup --deployment MANIFEST`.
 A connection identifier must use lowercase letters, digits, hyphens and underscores and must differ from Heartwood's built-in connection and model-source identifiers, because it becomes the project's model source once a model is selected.
 A declared model with a supported protocol is selected at the `supervised` capability tier.
 The gateway validates connections as described in [Inference](../operate/platform-contract.md#inference).

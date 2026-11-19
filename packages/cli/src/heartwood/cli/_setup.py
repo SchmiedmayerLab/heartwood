@@ -27,6 +27,7 @@ from heartwood.gateway import (
     BUILT_IN_MODEL_CONNECTIONS,
     MODEL_SOURCE_OPTIONS,
     ActionSettingsError,
+    CapabilityNotOfferedError,
     CredentialStoreError,
     DeploymentReadiness,
     ModelArtifactError,
@@ -40,6 +41,7 @@ from heartwood.gateway import (
     SessionGateway,
     custom_model_connection_requires_token,
     inspect_deployment,
+    load_project_deployment,
     model_source_options,
 )
 from heartwood.schemas import ModelArtifactsResponse, StartupPlanResponse
@@ -60,8 +62,12 @@ def configure_setup(setup: argparse.ArgumentParser) -> None:
     """Attach the guided setup options."""
     setup.add_argument(
         "--model-source",
-        choices=tuple(option.source_id for option in model_source_options(os.environ)),
-        help="Model service to configure.",
+        help="Model service, or a model connection the deployment manifest declares.",
+    )
+    setup.add_argument(
+        "--deployment",
+        type=Path,
+        help="Absolute operator manifest whose project and model connections to configure.",
     )
     setup.add_argument("--model-id", help="Exact model identifier reported by the service.")
     setup.add_argument("--base-url", help="Base URL for another compatible model service.")
@@ -171,7 +177,57 @@ def _configure_setup(
     *,
     project: ProjectContext,
 ) -> tuple[int, SessionGateway | None]:
-    readiness = inspect_deployment(project)
+    deployment_path: Path | None = getattr(args, "deployment", None)
+    if deployment_path is None:
+        return _configure_project(parser, args, project=project, gateway=None)
+    deployment = load_project_deployment(deployment_path, project_root=project.root)
+    # The deployment's gateway owns its state and lists the connections it declares.
+    gateway = _run_with_progress(
+        lambda: SessionGateway(deployment=deployment),
+        activity=_STARTUP_ACTIVITY,
+    )
+    configured: SessionGateway | None = None
+    try:
+        code, configured = _configure_project(
+            parser, args, project=deployment.project, gateway=gateway
+        )
+    finally:
+        if configured is None:
+            gateway.stop()
+    return code, configured
+
+
+def _setup_choices(gateway: SessionGateway | None) -> tuple[tuple[str, str, str], ...]:
+    """Return the model source, label and description of each choice the gateway offers."""
+    if gateway is None:
+        return tuple(
+            (option.source_id, option.label, option.description)
+            for option in model_source_options(os.environ)
+        )
+    settings = gateway.model_settings()
+    sources = settings["source_options"]
+    offered = {source["connection_id"] for source in sources}
+    return (
+        *((source["source_id"], source["label"], source["description"]) for source in sources),
+        # A connection the deployment declares is its own model source.
+        *(
+            (connection["connection_id"], connection["label"], connection["group_label"])
+            for connection in settings["connections"]
+            if connection["source"] == "platform" and connection["connection_id"] not in offered
+        ),
+    )
+
+
+def _configure_project(
+    parser: argparse.ArgumentParser,
+    args: argparse.Namespace,
+    *,
+    project: ProjectContext,
+    gateway: SessionGateway | None,
+) -> tuple[int, SessionGateway | None]:
+    readiness = (
+        gateway.deployment_readiness() if gateway is not None else inspect_deployment(project)
+    )
     if readiness.state == "recovery-required":
         print(_format_readiness(readiness))
         print("\nSetup cannot continue until failed environment checks are resolved.")
@@ -186,12 +242,16 @@ def _configure_setup(
     resume_managed_local = False
     if project.config_path.is_file():
         adapter = select_platform_adapter(os.environ)
-        config_store = ProjectConfigStore(
-            project,
-            ProjectConfig(
-                platform_id=adapter.adapter_id,
-                policy=adapter.default_policy_profile(),
-            ),
+        config_store = (
+            gateway.config_store
+            if gateway is not None
+            else ProjectConfigStore(
+                project,
+                ProjectConfig(
+                    platform_id=adapter.adapter_id,
+                    policy=adapter.default_policy_profile(),
+                ),
+            )
         )
         existing = config_store.load()
         if source is None and existing.model_source is not None:
@@ -230,33 +290,32 @@ def _configure_setup(
                         else connection.provider_model_id(existing_profile.model)
                     )
                 resume_existing = True
+    choices = _setup_choices(gateway)
     if source is None:
         if non_interactive:
             parser.error("--model-source is required with --non-interactive")
         print(_format_readiness(readiness))
-        options = model_source_options(os.environ)
         print("\nWhere should the model run?")
-        for index, option in enumerate(options, start=1):
-            print(f"  {index}. {option.label}")
-            print(f"     {option.description}")
+        for index, (_choice, label, description) in enumerate(choices, start=1):
+            print(f"  {index}. {label}")
+            print(f"     {description}")
         try:
-            choice = input(f"Select [1-{len(options)}]: ").strip()
+            choice = input(f"Select [1-{len(choices)}]: ").strip()
         except EOFError:
             print("\nSetup cancelled because input closed.")
             return 1, None
-        if not choice.isdigit() or not 1 <= int(choice) <= len(options):
+        if not choice.isdigit() or not 1 <= int(choice) <= len(choices):
             print("Setup cancelled because no valid model source was selected.")
             return 1, None
-        source = options[int(choice) - 1].source_id
+        source = choices[int(choice) - 1][0]
+    labels = {choice: label for choice, label, _description in choices}
+    if source not in labels:
+        parser.error(str(CapabilityNotOfferedError()))
     if non_interactive and model_id is None:
         parser.error("--model-id is required with --non-interactive")
     print("\nConfiguration")
     print(f"  Platform: {readiness.platform_id}")
-    source_option = next(
-        (option for option in MODEL_SOURCE_OPTIONS if option.source_id == source),
-        None,
-    )
-    print(f"  Model source: {source_option.label if source_option else source}")
+    print(f"  Model source: {labels[source]}")
     if not confirmed and not resume_existing:
         if non_interactive:
             parser.error("--yes is required with --non-interactive")
@@ -269,20 +328,23 @@ def _configure_setup(
         print("Setup cancelled.")
         return 1, None
     snapshot = _snapshot_setup_file(project)
-    gateway: SessionGateway | None = None
+    selected_option = next(
+        (option for option in MODEL_SOURCE_OPTIONS if option.source_id == source),
+        None,
+    )
     try:
-        gateway = _run_with_progress(
-            lambda: SessionGateway(project=project),
-            activity=_STARTUP_ACTIVITY,
-        )
-        if not resume_existing:
+        if gateway is None:
+            gateway = _run_with_progress(
+                lambda: SessionGateway(project=project),
+                activity=_STARTUP_ACTIVITY,
+            )
+        # Selecting a model on a declared connection makes it the project's model source.
+        if not resume_existing and selected_option is not None:
             gateway.configure_model_source(source)
         gateway.start()
-        selected_option = next(
-            option for option in MODEL_SOURCE_OPTIONS if option.source_id == source
-        )
+        connection_id = source if selected_option is None else selected_option.connection_id
         for listed in gateway.model_settings()["connections"]:
-            if listed["connection_id"] == selected_option.connection_id:
+            if listed["connection_id"] == connection_id:
                 print(f"  Data handling: {listed['data_handling_summary']}")
         if source == "heartwood":
             if not resume_managed_local:
@@ -293,7 +355,6 @@ def _configure_setup(
                     yes_download=bool(getattr(args, "yes_download", False)),
                 )
             return 0, gateway
-        connection_id = selected_option.connection_id
         if source == "custom" and base_url is None and not non_interactive:
             try:
                 base_url = input("Compatible service URL: ").strip()
