@@ -240,3 +240,28 @@ The cluster tests send each admission policy admitted requests and one denied re
 They also check which connections the network policies allow, and call the control service as a stand-in for the spawner.
 A launched session is checked for its namespace objects, its RoleBindings, a ready OpenShell gateway, an unchanged state after a second launch, and complete removal.
 Requests sent from the control service's pod with its own token show that the admission policy confines it.
+
+### Worker Qualification
+
+`deploy/qualify-kubernetes-worker.py` runs the managed worker on the OpenShell Kubernetes driver in a session that the control service provisions.
+It needs the candidate wheels and the gateway build of `deploy/build-worker-candidate.py`, Python 3.12 or later, and the tools above.
+The commands below replace the chart installation and the cluster tests of the previous block.
+
+```bash
+bash images/worker/build-candidate-images.sh test-results/worker-candidate "$(git rev-parse HEAD)"
+python3 deploy/qualify-kubernetes-worker.py images --cluster heartwood \
+  --worker-image heartwood-worker:qualification --runtime-image heartwood-runtime:qualification \
+  --gateway-artifacts test-results/gateway-candidate --output test-results/kubernetes-qualification/worker
+gateway="$(jq --raw-output .image_references.gateway test-results/kubernetes-qualification/worker/images.json)"
+worker="$(jq --raw-output .image_references.worker test-results/kubernetes-qualification/worker/images.json)"
+bash reference-platform/cluster/install-chart.sh heartwood --set "images.platformServices=${image}" \
+  --set "images.openshellGateway=${gateway}" --set "sessions.stagingImage=${worker}"
+(cd reference-platform/services && uv run pytest -c pyproject.toml ../tests/cluster \
+  --cluster-context kind-heartwood --staging-image "${worker}")
+python3 deploy/qualify-kubernetes-worker.py run --cluster heartwood \
+  --output test-results/kubernetes-qualification/worker
+```
+
+`images` verifies the gateway build, packages the gateway image, builds the controller image and pushes both with the worker image to the cluster's registry.
+`run` launches a session as the spawner would, starts the controller pod with that session's gateway ServiceAccount, runs the cases and removes the session.
+[Kubernetes Driver Qualification](../documentation/architecture/testing.md#kubernetes-driver-qualification) lists the cases and the evidence.

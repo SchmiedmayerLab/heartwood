@@ -31,7 +31,7 @@ Release documentation states the supported contract; run-specific results stay i
 | Container and native smoke | Container smoke and native release workflows | Entrypoints, filesystem layout, no secrets in image layers, offline operation, and installation of the release archive in an empty Ubuntu 24.04 container |
 | Capable-model acceptance | Capable model workflow, optional GPU qualification | Real inference driving the gateway and OpenHands through approval, rejection, replay, and audit export |
 | Reference platform boundary and services | Reference platform workflow | Application packages free of cloud SDKs, cloud infrastructure identifiers and platform code; platform service lint, types and tests |
-| Kubernetes cluster stage | Kubernetes qualification workflow | A kind cluster with Calico and the Agent Sandbox controller; a reachable-connection control and two blocked-connection controls show that the cluster enforces NetworkPolicy |
+| Kubernetes cluster stage | Kubernetes qualification workflow | A kind cluster with Calico and the Agent Sandbox controller; a reachable-connection control and two blocked-connection controls show that the cluster enforces NetworkPolicy; the platform chart and its admission policies; the managed worker on the OpenShell Kubernetes driver, see [Kubernetes Driver Qualification](#kubernetes-driver-qualification) |
 | Native qualification | Worker candidate workflow | The installed application, worker image, and qualification gateway across the complete managed worker boundary |
 | Live synthetic validation | Operator run in Terra or Carina | The exact published artifact in the named platform without protected data |
 
@@ -49,6 +49,7 @@ Platform-service tests run the [live endpoint checks](../operate/platform-contra
 Pull-request and main-branch validation both end in the required `Release Candidate Ready` aggregate, which requires every validation workflow, including capable-model acceptance; on pull requests it also requires native worker qualification and the Kubernetes cluster stage.
 On a pull request, native qualification and its candidate builds are skipped only when every changed path is under `documentation/` or `.github/` other than the worker candidate and pull-request validation workflows; any other path, including one the selection does not recognize, requires them.
 The Kubernetes cluster stage runs on pull requests that change its inputs and on every main commit.
+It runs after native qualification, whose candidate wheels and gateway build it uses.
 The stage fails when a blocked connection does not time out, when the reachable connection fails, or when a blocked pod cannot connect after its policies are deleted.
 On the main branch, the separate **Native Qualification** workflow runs the complete native qualification for every commit and attests its evidence; it has no concurrency group, so a newer commit never cancels the run of an earlier one.
 
@@ -296,6 +297,51 @@ The attestation shows where and from which commit the checksums came, not that q
 
 A manifest binds a result to one commit, one set of image contents, and one host; it does not transfer to another commit, architecture, or rebuilt image.
 Unattested evidence shows internal consistency, not origin.
+
+### Kubernetes Driver Qualification
+
+`deploy/qualify-kubernetes-worker.py` runs the managed worker on the OpenShell Kubernetes driver of the kind cluster that the Kubernetes qualification workflow creates.
+The workflow builds the worker and runtime images with the script the Docker qualification uses, and packages the gateway from the same verified build artifacts.
+It pushes the worker, gateway and controller images to the cluster's registry, and the cluster pulls each by digest.
+The platform chart is installed with that gateway image and with the worker image as the staging image.
+
+The run launches one session through the platform's control service, which provisions the session namespace, its sandbox gateway and the gateway ServiceAccount.
+The cases run in a controller pod that stands in for the session's Heartwood gateway pod.
+It holds the token of the session's gateway ServiceAccount and the sandbox gateway's client certificate, so every cluster request of the adapter passes the fixed role and the staging admission policy.
+A second credential lets the cases read the namespace, patch the Sandbox resource and add or remove NetworkPolicies from outside the adapter.
+The synthetic model route of the Docker qualification serves in the controller pod with a certificate of the platform CA, and the worker reaches it only through its supervisor.
+
+| Case | Establishes |
+|---|---|
+| `test_kubernetes_gateway_credential_is_confined` | The gateway's credential reads no Secret, namespace list or other namespace, changes no NetworkPolicy or Sandbox resource, and the staging admission policy refuses another image, another ServiceAccount, a mounted token, the host network, a Secret volume, a foreign claim, another claim name and another StorageClass |
+| `test_kubernetes_workflow_boundary_and_revocation` | Two approved actions run through the synthetic model route; the worker runs as user `10001` with read-only inputs and Skills, no service account token and no runtime socket; direct connections to the controller, the model route, the Kubernetes API, cluster DNS, the sandbox gateway and a metadata address fail while a client outside the worker reaches the same listener; the gateway's credential opens no exec, attach or port-forward session into the worker's pods; both pods run their images by digest; after revocation the cluster shows no object of the attempt |
+| `test_kubernetes_conflicting_deletion_is_retried_until_absence` | While six writers patch the Sandbox resource, a deletion answers with the conflict error, revocation sends it again, and the attempt is recorded as revoked only after the cluster shows no object |
+| `test_kubernetes_unsent_creation_is_confirmed_absent` | A creation request that never reached the gateway is recorded as not created after the gateway confirms absence, the attempt's claims are removed, and a later creation under the same name is refused |
+| `test_kubernetes_lost_creation_reply_is_revoked_during_provisioning` | A creation whose reply is lost is deleted while it provisions, and no pod or claim remains |
+| `test_kubernetes_admission_refuses_another_supervisor_image` | A supervisor pod that runs another digest than the manifest pins is refused at admission, and the worker is deleted |
+| `test_kubernetes_admission_refuses_an_added_network_policy` | A further NetworkPolicy that allows workload pods egress is refused at admission, and the worker is deleted |
+| `test_kubernetes_staging_requires_the_default_deny_policy` | Without the default-deny policy, staging creates nothing |
+| `test_kubernetes_staging_transfers_a_large_input_within_the_request_limit` | Staging of one 64 MiB input completes within the 60 seconds that one cluster request may take |
+| Restart, cancellation, replacement and migration cases | The Docker qualification's case functions `test_native_gateway_restart_reconciles_the_session`, `test_native_cancellation_settles_without_repeating_the_effect`, `test_native_revoked_worker_is_replaced_for_the_next_command` and `test_native_migrated_project_serves_through_the_operator_manifest`, run on this driver with absence read from the cluster |
+
+The run writes `qualification.json` with the fields of the [native qualification evidence](#native-qualification-evidence) and these differences:
+
+| Field | Content |
+|---|---|
+| `qualification_kind`, `driver` | `synthetic-kubernetes` and `openshell-kubernetes` |
+| `cluster` | Kubernetes version, network plugin image, and each node's architecture, kernel, operating system image, container runtime and kubelet version |
+| `kubernetes_identities` | The session, its namespace with its UID, the UID of `kube-system`, and the gateway ServiceAccount |
+| `image_references` | The registry references, by digest, under which the cluster pulled the worker, gateway and controller images |
+| `session_removed` | Whether the session namespace was gone after the run |
+| `platform_requirements` | Each value the Docker run reads from the worker container that a pod does not show, with the platform requirement that takes its place |
+| `cases_not_run` | The cases of the Docker run that this run does not repeat, each with the reason |
+
+The fields `records_build`, `controller_socket_group`, `network_retained` and `records_service` are absent.
+Each worker case retains `worker-pods.json` in place of `worker-container.json`: the driver name, the sandbox identifier, the UIDs of the attempt's volume claims, and the pod, policy and namespace values that admission read, recorded before admission decided.
+`cluster.json` holds the cluster record, the namespace labels, the names of the NetworkPolicies and the image pull events of the session namespace.
+A run passes under the conditions of the Docker run that apply to it, and only when the session namespace was removed.
+The evidence of this run is retained with the workflow run and is not attested.
+It describes one kind cluster with one node; it does not transfer to another cluster, network plugin or node image.
 
 ## Agent Safety Drills
 
