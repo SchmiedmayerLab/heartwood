@@ -484,6 +484,26 @@ def test_fields_the_api_server_omits_at_their_default_are_accepted_absent_or_at_
             admission.inspect_worker(_SANDBOX_ID)
 
 
+def test_the_driver_settings_that_weaken_nothing_are_accepted(
+    admission: KubernetesWorkerAdmission, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    objects = _objects(admission)
+    _serve(admission, monkeypatch, objects)
+    workload = _workload(objects)
+    # As the pinned driver reports them on its workload pod.
+    workload["spec"]["securityContext"]["sysctls"] = [
+        {"name": "net.ipv4.ip_unprivileged_port_start", "value": "0"}
+    ]
+    workload["spec"]["containers"][0]["ports"] = [
+        {"containerPort": 5500, "name": "sandbox-control", "protocol": "TCP"}
+    ]
+    workload["spec"]["containers"][0]["env"].append({"name": "OPENSHELL_OCI_IMAGE_USER"})
+    workload["spec"]["containers"][0]["volumeMounts"][0]["recursiveReadOnly"] = "Disabled"
+    del _namespace(objects)["metadata"]["labels"]["pod-security.kubernetes.io/enforce-version"]
+    del _supervisor(objects)["metadata"]["labels"]["openshell.ai/component"]
+    admission.inspect_worker(_SANDBOX_ID)
+
+
 def _each_container(path: tuple[Any, ...], *values: object) -> list[Any]:
     return [
         pytest.param(_workload, (*container, *path), value, id=f"{name}-{'.'.join(path)}-{n}")
@@ -533,6 +553,82 @@ _CONFINEMENT = [
     *_each_container((*_CONTEXT, "runAsNonRoot"), _DELETE, False),
     *_each_container((*_CONTEXT, "seccompProfile"), {"type": "Unconfined"}, {}),
     *_each_container(_CONTEXT, _DELETE, None),
+    *_each_container((*_CONTEXT, "appArmorProfile"), {"type": "Unconfined"}),
+    *_each_container((*_CONTEXT, "seLinuxOptions"), {"type": "spc_t"}),
+    *_each_container((*_CONTEXT, "procMount"), "Unmasked"),
+    *_each_container((*_CONTEXT, "windowsOptions"), {"hostProcess": True}),
+    *_each_container((*_CONTEXT, "capabilities", "unlisted"), ["ALL"]),
+    *_each_container(("ports",), [{"containerPort": 5500, "hostPort": 5500}]),
+    *_each_container(("ports",), [{"containerPort": 5500, "hostIP": "0.0.0.0"}]),
+    *_each_container(("envFrom",), [{"secretRef": {"name": "openshell-client-tls"}}]),
+    *_each_container(
+        ("env",),
+        [{"name": "KEY", "valueFrom": {"secretKeyRef": {"name": "os-sandbox-other", "key": "k"}}}],
+        [{"name": "KEY", "valueFrom": {"configMapKeyRef": {"name": "other", "key": "k"}}}],
+    ),
+    *_each_container(("restartPolicy",), "Always"),
+    *[
+        case
+        for target, name in ((_workload, "workload"), (_supervisor, "supervisor"))
+        for case in (
+            *_case(
+                target,
+                name + "-apparmor",
+                ("spec", *_CONTEXT, "appArmorProfile"),
+                {"type": "Unconfined"},
+            ),
+            *_case(
+                target, name + "-selinux", ("spec", *_CONTEXT, "seLinuxOptions"), {"type": "spc_t"}
+            ),
+            *_case(
+                target,
+                name + "-windows",
+                ("spec", *_CONTEXT, "windowsOptions"),
+                {"hostProcess": True},
+            ),
+            *_case(
+                target,
+                name + "-sysctls",
+                ("spec", *_CONTEXT, "sysctls"),
+                [{"name": "kernel.shm_rmid_forced", "value": "1"}],
+                [
+                    {"name": "net.ipv4.ip_unprivileged_port_start", "value": "0"},
+                    {"name": "kernel.msgmax", "value": "65536"},
+                ],
+                None,
+            ),
+            *_case(target, name + "-runtime-class", ("spec", "runtimeClassName"), "other"),
+            *_case(
+                target,
+                name + "-annotation",
+                ("metadata", "annotations"),
+                {"container.apparmor.security.beta.kubernetes.io/agent": "unconfined"},
+                "unconfined",
+                None,
+            ),
+        )
+    ],
+    *_case(
+        _supervisor,
+        "supervisor-context",
+        (*_SUPERVISOR, *_CONTEXT, "seLinuxOptions"),
+        {"type": "spc_t"},
+    ),
+    *_case(
+        _supervisor,
+        "supervisor-environment",
+        (*_SUPERVISOR, "envFrom"),
+        [{"secretRef": {"name": "os-sandbox-other"}}],
+    ),
+    *_case(
+        _supervisor,
+        "supervisor-secret",
+        ("spec", "volumes", 0, "secret"),
+        {"secretName": "os-sandbox-0698f582-bdd8-4ddc-969c-96c0e749a85e-f8c054"},
+        {"secretName": "os-supervisor-11111111-bdd8-4ddc-969c-96c0e749a85e-f8c054"},
+        {"secretName": None},
+        {},
+    ),
     *_each_container(("volumeDevices",), [{"name": "workspace", "devicePath": "/dev/xvda"}]),
     *_case(
         _supervisor, "supervisor-token", ("spec", "automountServiceAccountToken"), _DELETE, True
@@ -725,6 +821,7 @@ def test_limits_other_than_the_manifest_and_extended_resources_are_refused(
         ("2", "2048Mi", {"cpu": "2", "memory": "2Gi"}),
         ("1000m", "1Gi", {"cpu": "1", "memory": "1073741824"}),
         ("1", "1Gi", {"cpu": "1000m", "memory": "1048576Ki"}),
+        ("64", "1024Gi", {"cpu": "64", "memory": "1Ti"}),
     ],
 )
 def test_limits_equal_to_the_manifest_are_accepted_in_any_reported_form(
@@ -899,6 +996,17 @@ _UNOBSERVED_MOUNT = "projection mounts were not observed"
         (_volume(1, "persistentVolumeClaim", "claimName"), "project-data", _READ_ONLY_MOUNT),
         (_volume(0), {"name": "inputs", "hostPath": {"path": "/"}}, _READ_ONLY_MOUNT),
         (_volume(0), {"name": "inputs", "emptyDir": {}}, _READ_ONLY_MOUNT),
+        ((*_AGENT, "volumeMounts", 0, "subPath"), "selected", _READ_ONLY_MOUNT),
+        ((*_AGENT, "volumeMounts", 0, "subPathExpr"), "$(POD_NAME)", _READ_ONLY_MOUNT),
+        ((*_AGENT, "volumeMounts", 1, "mountPropagation"), "Bidirectional", _READ_ONLY_MOUNT),
+        ((*_AGENT, "volumeMounts", 5, "mountPath"), "//inputs", _UNOBSERVED_MOUNT),
+        ((*_AGENT, "volumeMounts", 5, "mountPath"), "/run/../inputs", _UNOBSERVED_MOUNT),
+        ((*_AGENT, "volumeMounts", 5, "mountPath"), "/run/./x", _UNOBSERVED_MOUNT),
+        ((*_AGENT, "volumeMounts", 5, "mountPath"), "inputs", _UNOBSERVED_MOUNT),
+        ((*_AGENT, "volumeMounts", 5, "mountPath"), "/skills/", _UNOBSERVED_MOUNT),
+        ((*_AGENT, "volumeMounts", 5, "mountPath"), "", _UNOBSERVED_MOUNT),
+        ((*_WORKSPACE_INIT, "volumeMounts", 0, "mountPath"), "//mnt", _UNOBSERVED_MOUNT),
+        ((*_AGENT, "volumeMounts", 5, "name"), ["openshell-run"], _UNOBSERVED_MOUNT),
         ((*_AGENT, "volumeMounts", 0, "mountPath"), None, _UNOBSERVED_MOUNT),
         ((*_AGENT, "volumeMounts", 0, "mountPath"), _DELETE, _UNOBSERVED_MOUNT),
         ((*_AGENT, "volumeMounts", 5, "name"), "unlisted", _UNOBSERVED_MOUNT),
@@ -1033,12 +1141,16 @@ def test_pods_of_another_attempt_or_sandbox_are_refused(
 def test_a_second_owner_is_refused(
     admission: KubernetesWorkerAdmission, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    for target in (_workload, _supervisor, _control):
+    for target, message in (
+        (_workload, _FOREIGN),
+        (_supervisor, _UNPAIRED),
+        (_control, "network policies do not match admission"),
+    ):
         objects = _objects(admission)
         _serve(admission, monkeypatch, objects)
         owners = target(objects)["metadata"]["ownerReferences"]
         owners.append({**owners[0], "uid": "9f915c5e-10d0-48d3-8453-483461cb9f84"})
-        with pytest.raises(WorkerAttemptError):
+        with pytest.raises(WorkerAttemptError, match=message):
             admission.inspect_worker(_SANDBOX_ID)
 
 
@@ -1089,6 +1201,8 @@ _LEVEL = ("metadata", "labels", "pod-security.kubernetes.io/enforce")
         (_LEVEL, _DELETE),
         (_LEVEL, "baseline"),
         (_LEVEL, "privileged"),
+        (("metadata", "labels", "pod-security.kubernetes.io/enforce-version"), "v1.0"),
+        (("metadata", "labels", "pod-security.kubernetes.io/enforce-version"), None),
         (("metadata", "labels"), _DELETE),
         (("status", "phase"), "Terminating"),
         (("status",), _DELETE),
@@ -1131,7 +1245,19 @@ def test_a_warning_or_audit_level_does_not_enforce(
     ],
 )
 @pytest.mark.parametrize(
-    "response", ["missing", b"null", b"[]", b"{}", b"invalid", b"\xff", "kind", "name", "items"]
+    "response",
+    [
+        "missing",
+        b"null",
+        b"[]",
+        b"{}",
+        b"invalid",
+        b"\xff",
+        b"[" * 100_000,
+        "kind",
+        "name",
+        "items",
+    ],
 )
 def test_a_missing_or_unreadable_object_is_refused(
     admission: KubernetesWorkerAdmission,
@@ -1168,7 +1294,12 @@ def test_a_missing_or_unreadable_object_is_refused(
 
 @pytest.mark.parametrize(
     "prefix",
-    ["pod/hw--", "pod/os-supervisor-", "networkpolicy.networking.k8s.io/os-control-"],
+    [
+        "pod/hw--",
+        "pod/os-supervisor-",
+        "networkpolicy.networking.k8s.io/os-control-",
+        "networkpolicy.networking.k8s.io/openshell-",
+    ],
 )
 def test_an_object_reported_for_another_namespace_is_refused(
     admission: KubernetesWorkerAdmission, monkeypatch: pytest.MonkeyPatch, prefix: str
@@ -1194,6 +1325,12 @@ def test_an_object_reported_for_another_namespace_is_refused(
         (_workload, (*_AGENT, "volumeMounts"), [None]),
         (_workload, (*_AGENT, "volumeMounts"), "inputs"),
         (_workload, ("status", "containerStatuses"), [None]),
+        (_workload, ("status", "containerStatuses", 0, "name"), ["agent"]),
+        (_workload, ("status", "initContainerStatuses", 0, "name"), {"name": "agent"}),
+        (_workload, (*_AGENT, "ports"), [None]),
+        (_workload, (*_AGENT, "env"), "SESSION_API_KEY"),
+        (_workload, (*_AGENT, "name"), ["agent"]),
+        (_supervisor, ("status", "containerStatuses", 0, "name"), ["supervisor"]),
         (_workload, ("metadata",), None),
         (_supervisor, ("spec",), None),
         (_supervisor, ("spec", "containers"), [None]),
@@ -1241,7 +1378,9 @@ def test_evidence_record_keeps_inspected_values_without_environment_or_labels(
     text = json.dumps(record, sort_keys=True)
     assert _ATTEMPT_KEY not in text
     assert "SESSION_API_KEY" not in text
-    assert all(value not in text for value in admission.labels.values())
+    # Object names carry the attempt identifier; no label, and so no project, is recorded.
+    assert "heartwood.project" not in text
+    assert admission.labels["heartwood.project"] not in text
     workload = record["workload_pod"]
     assert workload["spec"]["hostNetwork"] == "<absent>"
     assert workload["spec"]["hostUsers"] == "<absent>"

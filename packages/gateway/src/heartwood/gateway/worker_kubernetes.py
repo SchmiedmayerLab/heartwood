@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import posixpath
 import re
 import subprocess
 from pathlib import PurePosixPath
@@ -25,6 +26,38 @@ _PAIR = "openshell.ai/boundary-pair"
 _ROLE = "openshell.ai/boundary-role"
 _SANDBOX = "openshell.ai/sandbox-id"
 _POD_SECURITY = "pod-security.kubernetes.io/enforce"
+_APPARMOR_ANNOTATION = "container.apparmor.security.beta.kubernetes.io/"
+# Every security context field the driver sets. Any other field is refused, so a profile,
+# label or option that could replace a default, such as an unconfined AppArmor profile,
+# SELinux options or an unmasked `/proc`, never passes unread.
+_POD_CONTEXT_FIELDS = frozenset(
+    {
+        "fsGroup",
+        "fsGroupChangePolicy",
+        "runAsGroup",
+        "runAsNonRoot",
+        "runAsUser",
+        "seccompProfile",
+        "supplementalGroups",
+        "supplementalGroupsPolicy",
+        "sysctls",
+    }
+)
+_CONTAINER_CONTEXT_FIELDS = frozenset(
+    {
+        "allowPrivilegeEscalation",
+        "capabilities",
+        "privileged",
+        "readOnlyRootFilesystem",
+        "runAsGroup",
+        "runAsNonRoot",
+        "runAsUser",
+        "seccompProfile",
+    }
+)
+# The one kernel setting the driver's workload pod carries.
+_SYSCTLS = [{"name": "net.ipv4.ip_unprivileged_port_start", "value": "0"}]
+_MOUNT_FIELDS = frozenset({"name", "mountPath", "readOnly", "recursiveReadOnly"})
 # The policy the driver keeps in the namespace: workload pods accept their supervisor's
 # control connection and have no egress of their own.
 _FENCE_POLICY = "openshell-sandbox-workloads"
@@ -53,10 +86,12 @@ _SUPERVISOR_VOLUME_TYPES = frozenset({"emptyDir", "secret", "projected"})
 # The supervisor authenticates to the sandbox gateway only; a token for another audience
 # could be presented to the cluster's own API.
 _SUPERVISOR_TOKEN_AUDIENCE = "openshell-gateway"
+# The gateway's certificate authority, which the supervisor verifies the gateway with.
+_GATEWAY_TLS_SECRET = "openshell-client-tls"
 _SANDBOX_ID = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?")
 _CPU = re.compile(r"([0-9]+)(m?)")
-_MEMORY = re.compile(r"([0-9]+)(Ki|Mi|Gi)?")
-_MEMORY_UNITS = {None: 1, "Ki": 1024, "Mi": 1024**2, "Gi": 1024**3}
+_MEMORY = re.compile(r"([0-9]+)(Ki|Mi|Gi|Ti)?")
+_MEMORY_UNITS = {None: 1, "Ki": 1024, "Mi": 1024**2, "Gi": 1024**3, "Ti": 1024**4}
 
 # What the evidence record keeps of each pod and container: the inspected values, without
 # environment, commands, labels or annotations.
@@ -121,11 +156,6 @@ def _objects(value: object, name: str) -> list[dict[str, Any]]:
     return reported
 
 
-def _require(accepted: bool, message: str) -> None:
-    if not accepted:
-        raise WorkerAttemptError(message)
-
-
 def _pinned(reference: object, digest: str) -> bool:
     """Accept only an image reference by digest, never a tag that could move."""
     return (
@@ -137,11 +167,16 @@ def _pinned(reference: object, digest: str) -> bool:
 
 def _confined(container: dict[str, Any]) -> bool:
     context = _field(container, "securityContext")
-    drop = _field(context, "capabilities", "drop")
+    capabilities = _field(context, "capabilities")
+    drop = _field(capabilities, "drop")
     # A container profile replaces the pod's, so only the same profile is accepted.
     profile = _field(context, "seccompProfile")
     return (
-        _field(context, "allowPrivilegeEscalation") is False
+        isinstance(context, dict)
+        and set(context) <= _CONTAINER_CONTEXT_FIELDS
+        and isinstance(capabilities, dict)
+        and set(capabilities) <= {"add", "drop"}
+        and _field(context, "allowPrivilegeEscalation") is False
         and _default(_field(context, "privileged"), False)
         and isinstance(drop, list)
         and "ALL" in drop
@@ -151,6 +186,35 @@ def _confined(container: dict[str, Any]) -> bool:
         and _field(context, "runAsNonRoot") is True
         and (profile is _ABSENT or profile == {"type": "RuntimeDefault"})
         and _none(_field(container, "volumeDevices"))
+        # A host port would expose the container on the node's own address.
+        and not any({"hostPort", "hostIP"} & set(port) for port in _objects(container, "ports"))
+        # A reference would deliver another Secret or ConfigMap of the namespace.
+        and _none(_field(container, "envFrom"))
+        and not any("valueFrom" in variable for variable in _objects(container, "env"))
+        # An init container that restarts keeps running next to the worker.
+        and _field(container, "restartPolicy") is _ABSENT
+    )
+
+
+def _pod_confined(pod: object) -> bool:
+    """Accept only the driver's pod security fields, the default profile and its runtime."""
+    spec = _field(pod, "spec")
+    context = _field(spec, "securityContext")
+    annotations = _field(pod, "metadata", "annotations")
+    sysctls = _field(context, "sysctls")
+    return (
+        _host_namespaces_private(spec)
+        and _field(spec, "automountServiceAccountToken") is False
+        and isinstance(context, dict)
+        and set(context) <= _POD_CONTEXT_FIELDS
+        and context.get("seccompProfile") == {"type": "RuntimeDefault"}
+        and (sysctls is _ABSENT or sysctls == _SYSCTLS)
+        and _field(spec, "runtimeClassName") is _ABSENT
+        and (annotations is _ABSENT or isinstance(annotations, dict))
+        and not any(
+            str(name).startswith(_APPARMOR_ANNOTATION)
+            for name in (annotations if isinstance(annotations, dict) else ())
+        )
     )
 
 
@@ -216,11 +280,16 @@ def _sandbox_owner(metadata: object, *, controller: bool = False) -> tuple[str, 
     return name, uid
 
 
-def _supervisor_volume(volume: dict[str, Any]) -> bool:
-    """Accept the driver's volume types, and a projected token for the sandbox gateway only."""
+def _supervisor_volume(volume: dict[str, Any], sandbox_id: str) -> bool:
+    """Accept the driver's volume types, this sandbox's Secrets and a gateway token only."""
     kinds = set(volume) - {"name"}
     if len(kinds) != 1 or not kinds <= _SUPERVISOR_VOLUME_TYPES:
         return False
+    if "secret" in volume:
+        secret = _field(volume, "secret", "secretName")
+        return isinstance(secret, str) and (
+            secret == _GATEWAY_TLS_SECRET or secret.startswith(f"os-supervisor-{sandbox_id}-")
+        )
     if "projected" not in volume:
         return True
     sources = _field(volume, "projected", "sources")
@@ -359,7 +428,7 @@ class KubernetesWorkerAdmission:
         output = self.command("get", resource, name, "--output=json")
         try:
             value = json.loads(output)
-        except (ValueError, UnicodeError):
+        except (ValueError, UnicodeError, RecursionError):
             raise WorkerAttemptError("native resource inspection was incomplete") from None
         if (
             not isinstance(value, dict)
@@ -393,8 +462,11 @@ class KubernetesWorkerAdmission:
         self._inspect_supervisor(observed["supervisor_pod"], sandbox_id, sandbox)
         self._inspect_policies(observed, sandbox_id, sandbox)
         namespace = observed["namespace"]
+        version = _field(namespace, "metadata", "labels", _POD_SECURITY + "-version")
         if (
             _field(namespace, "metadata", "labels", _POD_SECURITY) != "restricted"
+            # Without the label the cluster applies the latest version of the level.
+            or not (version is _ABSENT or version == "latest")
             or _field(namespace, "status", "phase") != "Active"
         ):
             raise WorkerAttemptError(
@@ -440,15 +512,13 @@ class KubernetesWorkerAdmission:
         context = _field(spec, "securityContext")
         groups = _field(context, "supplementalGroups")
         if (
-            not _host_namespaces_private(spec)
+            not _pod_confined(pod)
             or _field(spec, "shareProcessNamespace") is not False
-            or _field(spec, "automountServiceAccountToken") is not False
             or not all(
                 _is_worker_id(_field(context, name))
                 for name in ("runAsUser", "runAsGroup", "fsGroup")
             )
             or _field(context, "runAsNonRoot") is not True
-            or _field(context, "seccompProfile") != {"type": "RuntimeDefault"}
             or not (_none(groups) or groups == [_WORKER_ID])
             or not all(_confined(container) for container in everything)
         ):
@@ -472,9 +542,10 @@ class KubernetesWorkerAdmission:
     ) -> None:
         """Require each container's requested and running image to be the pinned digest."""
         running = {
-            item.get("name"): item.get("imageID")
+            name: item.get("imageID")
             for group in ("containerStatuses", "initContainerStatuses")
             for item in _objects(_field(pod, "status"), group)
+            if isinstance(name := item.get("name"), str)
         }
         for container in containers:
             digest = images[container["name"]]
@@ -514,8 +585,14 @@ class KubernetesWorkerAdmission:
         mounts = {
             container["name"]: _objects(container, "volumeMounts") for container in containers
         }
+        # A path that is relative or not normalized could reach a projection unnoticed.
         if any(
-            not isinstance(mount.get("mountPath"), str) or mount.get("name") not in volumes
+            not isinstance(path := mount.get("mountPath"), str)
+            or not path.startswith("/")
+            or path.startswith("//")
+            or posixpath.normpath(path) != path
+            or not isinstance(name := mount.get("name"), str)
+            or name not in volumes
             for observed_mounts in mounts.values()
             for mount in observed_mounts
         ):
@@ -541,6 +618,8 @@ class KubernetesWorkerAdmission:
                 or len(matching) != 1
                 or matching[0].get("name") != mount
                 or PurePosixPath(matching[0]["mountPath"]) != target
+                # A sub-path or propagation setting would change what the mount shows.
+                or set(matching[0]) - _MOUNT_FIELDS
                 or any(
                     observed.get("readOnly") is not True
                     for observed_mounts in mounts.values()
@@ -575,14 +654,14 @@ class KubernetesWorkerAdmission:
         )
         pod_resources = _field(spec, "resources")
         if (
-            not _host_namespaces_private(spec)
-            or _field(spec, "automountServiceAccountToken") is not False
-            or _field(spec, "securityContext", "seccompProfile") != {"type": "RuntimeDefault"}
+            not _pod_confined(pod)
             or not _confined(supervisor)
             or not _cpu_and_memory_only(_field(supervisor, "resources"))
             or not (pod_resources is _ABSENT or _cpu_and_memory_only(pod_resources))
             or not _none(_field(spec, "resourceClaims"))
-            or not all(_supervisor_volume(volume) for volume in _objects(spec, "volumes"))
+            or not all(
+                _supervisor_volume(volume, sandbox_id) for volume in _objects(spec, "volumes")
+            )
         ):
             raise WorkerAttemptError("native supervisor confinement does not match admission")
 
