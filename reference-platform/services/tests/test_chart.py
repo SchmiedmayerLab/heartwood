@@ -18,6 +18,8 @@ from typing import Any
 
 import pytest
 import yaml
+from fakes import SYNTHETIC_PRICES
+from heartwood_platform.control.__main__ import Settings
 
 _CHART = Path(__file__).resolve().parents[2] / "chart" / "heartwood-platform"
 _DIGEST = re.compile(r"^[a-z0-9][a-z0-9._/:-]*@sha256:[0-9a-f]{64}$")
@@ -490,3 +492,33 @@ def test_installation_needs_the_api_server_addresses() -> None:
     result = subprocess.run(command, capture_output=True, text=True)
     assert result.returncode != 0
     assert "sessions.apiServer is empty" in result.stderr
+
+
+def test_control_service_configuration_holds_the_synthetic_prices(
+    objects: list[dict[str, Any]],
+) -> None:
+    config = _named(objects, "ConfigMap", "heartwood-control")
+    configuration = json.loads(config["data"]["configuration.json"])
+
+    settings = Settings.model_validate(configuration)
+    # The tests price with the chart's synthetic prices.
+    assert configuration["synthetic_prices"] == SYNTHETIC_PRICES
+    assert settings.synthetic_prices.denomination.unit == "USD"
+
+
+@pytest.mark.parametrize(
+    ("value", "path"),
+    [
+        ("syntheticPrices.skuPrices[0].UnitPrice=0.5", "/syntheticPrices/skuPrices/0/UnitPrice"),
+        ('syntheticPrices.skuPrices[0].UnitPrice="-1"', "/syntheticPrices/skuPrices/0/UnitPrice"),
+        ('syntheticPrices.skuPrices[0].PricingQuantity="1"', "'PricingQuantity' not allowed"),
+        (
+            'syntheticPrices.runtimeProfiles[0].kind="job"',
+            "/syntheticPrices/runtimeProfiles/0/kind",
+        ),
+    ],
+)
+def test_schema_rejects_inconsistent_synthetic_prices(value: str, path: str) -> None:
+    result = subprocess.run([*_TEMPLATE, "--set-json", value], capture_output=True, text=True)
+    assert result.returncode != 0
+    assert path in result.stderr

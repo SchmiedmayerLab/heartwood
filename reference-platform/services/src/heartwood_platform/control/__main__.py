@@ -23,6 +23,7 @@ from heartwood_platform.common.tokens import ResearcherTokens, ServiceTokens
 from heartwood_platform.control.app import ProjectId, Subject, create_app
 from heartwood_platform.control.keycloak import Keycloak
 from heartwood_platform.control.launch import LaunchService
+from heartwood_platform.control.prices import PriceSheet
 from heartwood_platform.control.registry import Project, Registry
 from heartwood_platform.control.sessions import ApiServerAddress, Sessions, SessionSettings
 
@@ -89,6 +90,7 @@ class Settings(_Settings):
     keycloak: KeycloakSettings
     sessions: SessionNamespaceSettings
     projects: tuple[ProjectSettings, ...]
+    synthetic_prices: PriceSheet
 
     @model_validator(mode="after")
     def _validate(self) -> Self:

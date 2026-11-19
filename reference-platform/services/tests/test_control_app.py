@@ -13,7 +13,16 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from fakes import AUDIENCE, HUB, ISSUER, FakeKeycloak, FakeKubernetes, SigningKey, TokenReviews
+from fakes import (
+    AUDIENCE,
+    HUB,
+    ISSUER,
+    SYNTHETIC_PRICES,
+    FakeKeycloak,
+    FakeKubernetes,
+    SigningKey,
+    TokenReviews,
+)
 from heartwood_platform.common.kubernetes import Kubernetes
 from heartwood_platform.common.tokens import ResearcherTokens, ServiceTokens
 from heartwood_platform.control.__main__ import Settings
@@ -312,6 +321,7 @@ def test_settings_refuse_duplicate_projects_and_other_template_fields(tmp_path: 
             "platform_ca_file": "/etc/heartwood-control/platform-ca/ca.crt",
         },
         "projects": [project],
+        "synthetic_prices": SYNTHETIC_PRICES,
     }
     assert Settings.model_validate(settings).projects[0].id == "demo"
 
@@ -321,6 +331,7 @@ def test_settings_refuse_duplicate_projects_and_other_template_fields(tmp_path: 
         {"platform_id": "two words"},
         # Keycloak is reached only over HTTPS.
         {"keycloak": {**keycloak, "url": "http://keycloak:8080"}},
+        {"synthetic_prices": {**SYNTHETIC_PRICES, "runtime_profiles": "none"}},
     ):
         with pytest.raises(ValueError, match="validation error"):
             Settings.model_validate({**settings, **change})
