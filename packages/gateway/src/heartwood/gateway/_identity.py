@@ -363,6 +363,9 @@ class IdentityAccess:
     def _exchanged_expiry(self, token: str, audience: str) -> float:
         """Check that an exchanged token names only its service and return its expiry.
 
+        The expiry is on the gateway's clock. A token that expires within the margin is
+        refused as unusable, because it would expire before it could be reused.
+
         The token comes straight from the provider's token endpoint, so the claims are
         read without a signature check; the service verifies the signature. A provider
         whose configuration adds another audience, another client or another person is
@@ -384,7 +387,11 @@ class IdentityAccess:
             or isinstance(expiry, bool)
         ):
             raise AccessUnavailableError(502)
-        return float(expiry)
+        # The claim is wall-clock time; the cache counts on the gateway's own clock.
+        expires_at = self._clock() + float(expiry) - time.time()
+        if expires_at - self._clock() <= _REFRESH_MARGIN_SECONDS:
+            raise AccessUnavailableError(502)
+        return expires_at
 
     def _subject_token(self) -> tuple[_Login | _Bearer, str] | None:
         """Return the live sign-in whose access token represents the researcher, and the token.

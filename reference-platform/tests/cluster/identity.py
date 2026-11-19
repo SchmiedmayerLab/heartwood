@@ -18,6 +18,7 @@ import html
 import json
 import re
 import secrets
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
@@ -77,11 +78,40 @@ def probe(cluster: Cluster, name: str, image: str) -> Iterator[str]:
             "wait", f"--namespace={SESSIONS}", "--for=condition=Ready", f"pod/{name}"
         )
         assert ready.returncode == 0, ready.stderr
+        _wait_for_spawner_token(cluster)
         yield name
     finally:
         cluster.kubectl("delete", f"--namespace={SESSIONS}", f"pod/{name}", "--wait")
         if existed.returncode != 0:
             cluster.kubectl("delete", f"--namespace={SESSIONS}", "serviceaccount/hub")
+
+
+def _wait_for_spawner_token(cluster: Cluster) -> None:
+    """Wait until the API server accepts tokens of the stand-in for the spawner.
+
+    A ServiceAccount that an earlier test deleted and this probe created again is
+    refused in TokenReviews until the API server's cache holds the new account.
+    """
+    deadline = time.monotonic() + 60
+    while True:
+        review = {
+            "apiVersion": "authentication.k8s.io/v1",
+            "kind": "TokenReview",
+            "spec": {"token": spawner_token(cluster), "audiences": ["heartwood-control"]},
+        }
+        result = cluster.kubectl(
+            "create",
+            "--raw",
+            "/apis/authentication.k8s.io/v1/tokenreviews",
+            "--filename",
+            "-",
+            text_input=json.dumps(review),
+        )
+        assert result.returncode == 0, result.stderr
+        if json.loads(result.stdout).get("status", {}).get("authenticated") is True:
+            return
+        assert time.monotonic() < deadline, "the spawner's tokens are not accepted"
+        time.sleep(1)
 
 
 def curl(cluster: Cluster, pod: str, *arguments: str, text_input: str = "") -> str:

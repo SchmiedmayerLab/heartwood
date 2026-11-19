@@ -1552,6 +1552,7 @@ def _inside(path: Path) -> Path:
         {"sub": "another-researcher"},
         {"iss": "https://other.example.test/realms/research"},
         {"exp": None},
+        {"exp": int(time.time()) + 20},
     ],
 )
 def test_an_exchanged_token_for_more_or_other_than_the_request_is_never_sent(
@@ -1575,6 +1576,28 @@ def test_an_exchanged_token_for_more_or_other_than_the_request_is_never_sent(
     with pytest.raises(AccessUnavailableError):
         access.service_token("svc-data", "heartwood-data")
     assert vars(access)["_exchanged"] == {}
+
+
+def test_the_expiry_of_an_exchanged_token_bounds_its_reuse(tmp_path: Path) -> None:
+    provider = _Provider()
+    issued = provider.exchanged
+    # The token expires after 60 seconds, although the response names 120.
+    provider.exchanged = lambda audience: provider._sign(
+        {
+            **jwt.decode(issued(audience), options={"verify_signature": False}),
+            "exp": int(time.time()) + 60,
+        }
+    )
+    clock = _Clock()
+    access = _access(tmp_path, provider, clock=clock)
+    _sign_in(access, provider)
+
+    first = access.service_token("svc-data", "heartwood-data")
+    clock.now += 20
+    assert access.service_token("svc-data", "heartwood-data") == first
+    clock.now += 15
+    assert access.service_token("svc-data", "heartwood-data") != first
+    assert len(provider.exchanges) == 2
 
 
 def test_a_service_token_is_exchanged_for_the_sign_in_and_kept_until_it_expires(

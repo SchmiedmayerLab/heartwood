@@ -282,7 +282,8 @@ The gateway authenticates as its client and presents the researcher's access tok
 The service receives a token with its own audience, the gateway's client as authorized party and the researcher as subject, as the [platform contract](platform-contract.md#service-tokens) specifies.
 The subject token is the access token of the latest browser sign-in, which the gateway refreshes; while no browser sign-in is live, it is the latest-expiring access token that a client presented as a bearer token, until that token expires.
 The gateway sends an exchanged token only when its issuer, its single audience, its authorized party and its subject are the ones requested; otherwise it reports the provider as unusable.
-The gateway keeps an exchanged token in memory until 30 seconds before it expires and discards it when the sign-in it was exchanged for ends.
+An exchanged token that expires within 30 seconds is reported as unusable.
+The gateway uses an exchanged token until 30 seconds before it expires and discards it when the sign-in it was exchanged for ends.
 Without a live sign-in the gateway requests no token, and a call to that service is refused with `HW-INGRESS-004` until the researcher signs in again.
 A refusal by the provider is reported as `HW-INGRESS-004` and an unreachable provider as `HW-INGRESS-005`, both without the provider's text.
 
