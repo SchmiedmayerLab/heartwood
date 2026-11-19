@@ -20,13 +20,14 @@ Continuous integration checks it offline with `tofu fmt -check` and `tofu valida
 
 | Resource | Configuration |
 |---|---|
-| Cluster | Zonal GKE Standard cluster, `REGULAR` release channel, no default node pool |
+| Cluster | Zonal GKE Standard cluster, `REGULAR` release channel, control plane version 1.36.4-gke.1469000 or later, no default node pool |
 | Network | Dedicated VPC network and subnet with secondary ranges for pods and services |
 | Network policy | Dataplane V2 (`ADVANCED_DATAPATH`), which enforces Kubernetes NetworkPolicy |
 | Workload identity | Workload Identity pool `PROJECT.svc.id.goog`; node pools expose the GKE metadata server to pods |
 | System node pool | `e2-standard-4` nodes, autoscaled from one to three |
-| GPU node pool | `g2-standard-8` spot nodes with one NVIDIA L4 GPU each, autoscaled from zero to one; GKE installs the driver and taints the nodes with `nvidia.com/gpu=present:NoSchedule` |
-| Node identity | Dedicated service account with log and metric write roles only |
+| GPU node pool | `g2-standard-8` spot nodes with one NVIDIA L4 GPU each, autoscaled from zero to one; GKE installs the driver; the pool taints its nodes with `nvidia.com/gpu=present:NoSchedule` |
+| Node identity | Dedicated service account with the role `roles/container.defaultNodeServiceAccount` only |
+| Access | Nodes have public addresses; the control plane endpoint accepts authenticated requests from any address |
 | APIs | Compute Engine and Kubernetes Engine, left enabled on removal |
 
 The configuration creates no service account keys.
@@ -48,7 +49,7 @@ From the repository root:
 tofu -chdir=reference-platform/infrastructure/gke init && tofu -chdir=reference-platform/infrastructure/gke apply -var project_id=PROJECT
 ```
 
-Running the same command again with an unchanged configuration reports no changes.
+A repeated apply of an unchanged configuration is expected to report no changes; this has not been verified on a cluster.
 OpenTofu keeps the state in `terraform.tfstate` in this directory.
 Git ignores that file; keep it, because removal needs it.
 
@@ -61,7 +62,8 @@ gcloud container clusters get-credentials heartwood-reference --zone us-central1
 ## Remove
 
 Deleting a cluster leaves the Persistent Disks of its dynamically provisioned volumes in the project.
-Delete every PersistentVolumeClaim first and wait until its PersistentVolume is gone, then run:
+Load balancers that Services of type `LoadBalancer`, Ingress or Gateway resources created also stay, and they keep the network from being deleted.
+Uninstall the chart, delete every PersistentVolumeClaim, wait until every PersistentVolume is gone, then run:
 
 ```bash
 tofu -chdir=reference-platform/infrastructure/gke destroy -var project_id=PROJECT
