@@ -19,6 +19,10 @@ from heartwood.adapters import INGRESS_MODES, IngressMode
 
 type PrefixHandling = Literal["preserve", "strip"]
 
+# The browser routes of identity-proxy ingress that a navigation from another site may open.
+IDENTITY_LOGIN_PATH = "/identity/login"
+IDENTITY_CALLBACK_PATH = "/oauth_callback"
+_IDENTITY_NAVIGATION_PATHS = frozenset({"/", IDENTITY_LOGIN_PATH, IDENTITY_CALLBACK_PATH})
 _HTTP_TOKEN = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
 _SUPPORTED_FORWARDED_HEADERS = frozenset(
     {
@@ -242,12 +246,14 @@ class IngressPolicy:
         forwarded_client = self._validate_forwarding(headers)
         self._validate_host(headers)
         # A sign-in returns through the identity provider, so the browser reports the
-        # navigation that follows it as cross-site.
+        # top-level navigation that follows it as cross-site.
         navigation = (
             self.mode == "identity-proxy"
             and not websocket
             and scope.get("method") == "GET"
             and headers.get("sec-fetch-mode") == ("navigate",)
+            and headers.get("sec-fetch-dest", ("document",)) == ("document",)
+            and self._is_identity_navigation(scope)
         )
         self._validate_origin(headers, websocket=websocket, navigation=navigation)
         path = _validated_path(scope)
@@ -360,8 +366,9 @@ class IngressPolicy:
     ) -> str | None:
         """Check the metadata of a reverse proxy chain against the external origin.
 
-        Each proxy in a chain appends to the client, protocol and port headers, so the
-        first value is the one the outermost proxy observed.
+        Each proxy in a chain appends to the client, protocol and port headers. The first
+        value is the one the outermost proxy observed when that proxy replaces the values
+        a client supplied; the values are checked for consistency and grant no access.
         """
         unsupported = forwarded.intersection(_JUPYTER_CONTEXT_HEADERS | {"x-forwarded-uri"})
         if unsupported:
@@ -512,6 +519,12 @@ class IngressPolicy:
                     "cross-origin browser requests are not accepted",
                     status_code=403,
                 )
+
+    def _is_identity_navigation(self, scope: Mapping[str, object]) -> bool:
+        try:
+            return self._internal_path(_validated_path(scope)) in _IDENTITY_NAVIGATION_PATHS
+        except IngressRequestError:
+            return False
 
     def _internal_path(self, path: str) -> str:
         base = self.external_base_path

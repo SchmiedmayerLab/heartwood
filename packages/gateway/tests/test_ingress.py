@@ -882,21 +882,41 @@ def test_identity_proxy_enforces_source_host_and_base_path() -> None:
         policy.validate_scope(_proxied(origin="https://other.example.test"))
 
 
-def test_only_identity_proxy_navigations_may_arrive_from_another_site() -> None:
+def _navigated(path: str, *headers: tuple[str, str]) -> dict[str, object]:
+    return {**_proxied(*headers), "path": path, "raw_path": path.encode()}
+
+
+def test_only_identity_proxy_sign_in_navigations_may_arrive_from_another_site() -> None:
     navigation = (("sec-fetch-site", "cross-site"), ("sec-fetch-mode", "navigate"))
+    document = (*navigation, ("sec-fetch-dest", "document"))
+    base = "/user/researcher/demo"
     policy = _identity_proxy()
 
-    assert policy.validate_scope(_proxied(*navigation)).path == "/sessions"
+    for path in ("", "/", "/identity/login", "/oauth_callback"):
+        internal = "/" if path == "" else path
+        assert policy.validate_scope(_navigated(f"{base}{path}", *navigation)).path == internal
+        assert policy.validate_scope(_navigated(f"{base}{path}", *document)).path == internal
+    refused: list[dict[str, object]] = [
+        # Another route, a framed navigation, another method, a request that is no navigation.
+        _navigated(f"{base}/sessions", *document),
+        _navigated(f"{base}/app.js", *document),
+        _navigated("/elsewhere", *document),
+        _navigated(f"{base}/oauth_callback", *navigation, ("sec-fetch-dest", "iframe")),
+        {**_navigated(f"{base}/oauth_callback", *document), "method": "POST"},
+        _navigated(
+            f"{base}/oauth_callback", ("sec-fetch-site", "cross-site"), ("sec-fetch-mode", "cors")
+        ),
+    ]
+    for scope in refused:
+        with pytest.raises(IngressRequestError, match="cross-origin"):
+            policy.validate_scope(scope)
     with pytest.raises(IngressRequestError, match="cross-origin"):
         policy.validate_scope(
-            _proxied(("sec-fetch-site", "cross-site"), ("sec-fetch-mode", "cors"))
-        )
-    with pytest.raises(IngressRequestError, match="cross-origin"):
-        policy.validate_scope({**_proxied(*navigation), "method": "POST"})
-    with pytest.raises(IngressRequestError, match="cross-origin"):
-        policy.validate_scope(
-            {**_proxied(*navigation, origin="https://research.example.test"), "type": "websocket"},
+            {
+                **_proxied(*document, origin="https://research.example.test"),
+                "type": "websocket",
+            },
             websocket=True,
         )
     with pytest.raises(IngressRequestError, match="cross-origin"):
-        IngressPolicy.create().validate_scope(_scope(headers=navigation))
+        IngressPolicy.create().validate_scope(_scope("/", headers=navigation))

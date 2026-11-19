@@ -61,7 +61,7 @@ class AccessResponse:
 
     status_code: int
     location: str | None = None
-    cookie: str | None = None
+    cookies: tuple[str, ...] = ()
     check_id: str | None = None
 
 

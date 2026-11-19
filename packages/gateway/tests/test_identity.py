@@ -95,7 +95,7 @@ class _Provider:
     def client(self) -> httpx.Client:
         return httpx.Client(transport=httpx.MockTransport(self._handle))
 
-    def token(self, **claims: object) -> str:
+    def token(self, *, header_type: str | None = None, **claims: object) -> str:
         """Sign an access token as the device flow of a public client would obtain it."""
         now = int(time.time())
         payload = {
@@ -107,7 +107,10 @@ class _Provider:
             "exp": now + 300,
             **claims,
         }
-        return self._sign({name: value for name, value in payload.items() if value is not None})
+        return self._sign(
+            {name: value for name, value in payload.items() if value is not None},
+            header_type=header_type,
+        )
 
     def authorize(self, location: str | None) -> str:
         """Act as the browser at the authorization endpoint and return the callback query."""
@@ -124,8 +127,9 @@ class _Provider:
         self.issued.append(code)
         return f"code={code}&state={query['state']}&iss={self.issuer.replace(':', '%3A')}"
 
-    def _sign(self, claims: dict[str, Any]) -> str:
-        token = jwt.encode(claims, self.key, algorithm=self.algorithm, headers={"kid": self.key_id})
+    def _sign(self, claims: dict[str, Any], *, header_type: str | None = None) -> str:
+        headers = {"kid": self.key_id, **({} if header_type is None else {"typ": header_type})}
+        token = jwt.encode(claims, self.key, algorithm=self.algorithm, headers=headers)
         self.issued.append(token)
         return token
 
@@ -263,11 +267,23 @@ def _get(access: IdentityAccess, path: str, query: str = "") -> AccessResponse:
     return response
 
 
+def _sealed(started: AccessResponse) -> str:
+    """Return the sign-in cookie a browser sends back, as a Cookie header value."""
+    return started.cookies[0].split(";")[0]
+
+
+def _finish(access: IdentityAccess, started: AccessResponse, query: str) -> AccessResponse:
+    """Return to the callback as the browser that received ``started``."""
+    response = _route(access, "/oauth_callback", query, cookie=_sealed(started))
+    assert response is not None
+    return response
+
+
 def _sign_in(access: IdentityAccess, provider: _Provider) -> tuple[str, str]:
     """Complete one browser sign-in and return its capability and launch token."""
     started = _get(access, "/identity/login")
     assert started.status_code == 302
-    completed = _get(access, "/oauth_callback", provider.authorize(started.location))
+    completed = _finish(access, started, provider.authorize(started.location))
     assert completed.status_code == 302, completed
     launch_token = parse_qs(urlsplit(str(completed.location)).fragment)["launch"][0]
     capability = access.exchange_launch_token(launch_token)
@@ -336,7 +352,13 @@ async def _call(
         receive,
         send,
     )
-    response_headers = {name.decode(): value.decode() for name, value in sent[0]["headers"]}
+    response_headers: dict[str, str] = {}
+    for name, value in sent[0]["headers"]:
+        # A repeated header, such as two cookies, is joined with a line break.
+        repeated = response_headers.get(name.decode())
+        response_headers[name.decode()] = (
+            value.decode() if repeated is None else f"{repeated}\n{value.decode()}"
+        )
     return sent[0]["status"], response_headers, cast(bytes, sent[1]["body"])
 
 
@@ -366,20 +388,29 @@ def test_browser_sign_in_records_the_verified_subject_and_keeps_tokens_in_memory
         started = await _call(app, "GET", "/identity/login")
         assert started[0] == 302
         assert started[1]["cache-control"] == "no-store"
+        sealed = started[1]["set-cookie"]
+        assert sealed.startswith("heartwood-sign-in=")
+        assert sealed.endswith(f"; Max-Age=600; Path={_BASE}; HttpOnly; SameSite=Lax; Secure")
+        query = provider.authorize(started[1]["location"])
+        # The callback URL alone, as another browser would open it, signs nobody in.
+        assert _refusal(await _call(app, "GET", "/oauth_callback", query=query)) == (
+            403,
+            "HW-INGRESS-004",
+        )
         callback = await _call(
             app,
             "GET",
             "/oauth_callback",
-            query=provider.authorize(started[1]["location"]),
-            headers=navigation,
+            query=query,
+            headers={**navigation, "cookie": sealed.split(";")[0]},
         )
         assert callback[0] == 302
         location = urlsplit(callback[1]["location"])
         assert callback[1]["location"].startswith(f"{_ORIGIN}{_BASE}/#launch=")
-        cookie = callback[1]["set-cookie"]
-        assert cookie == (
-            f"heartwood-login=1; Max-Age=60; Path={_BASE}; HttpOnly; SameSite=Lax; Secure"
-        )
+        cleared, cookie = callback[1]["set-cookie"].split("\n")
+        attributes = f"Path={_BASE}; HttpOnly; SameSite=Lax; Secure"
+        assert cleared == f"heartwood-sign-in=; Max-Age=0; {attributes}"
+        assert cookie == f"heartwood-login=1; Max-Age=60; {attributes}"
         page = await _call(app, "GET", "/", headers={**navigation, "cookie": cookie.split(";")[0]})
         assert page[0] == 200
         assert b"Synthetic" in page[2]
@@ -452,6 +483,35 @@ def test_browser_sign_in_records_the_verified_subject_and_keeps_tokens_in_memory
             401,
         ),
         (lambda _provider: _bearer("not-a-token"), 401),
+        (lambda provider: _bearer(provider.token(header_type="at+jwt")), 200),
+        (lambda provider: _bearer(provider.token(typ="Bearer")), 200),
+        (lambda provider: _bearer(provider.token(nonce="synthetic-nonce")), 401),
+        (lambda provider: _bearer(provider.token(at_hash="synthetic-hash")), 401),
+        (lambda provider: _bearer(provider.token(c_hash="synthetic-hash")), 401),
+        (lambda provider: _bearer(provider.token(typ="ID")), 401),
+        (lambda provider: _bearer(provider.token(iat=int(time.time()) + 600)), 401),
+        (lambda provider: _bearer(provider.token(nbf=int(time.time()) + 600)), 401),
+        (
+            lambda provider: _bearer(
+                jwt.encode(_claims(provider), _EC_KEY, "ES256", headers={"kid": "key-1"})
+            ),
+            401,
+        ),
+        *(
+            (
+                lambda provider, algorithm=algorithm: _bearer(
+                    jwt.encode(_claims(provider), _RSA_KEY, algorithm, headers={"kid": "key-1"})
+                ),
+                401,
+            )
+            for algorithm in ("PS256", "RS384", "RS512")
+        ),
+        (
+            lambda provider: _bearer(
+                jwt.encode(_claims(provider), _RSA_KEY, "RS256", headers={"kid": "key-9"})
+            ),
+            401,
+        ),
     ],
     ids=[
         "valid",
@@ -469,6 +529,19 @@ def test_browser_sign_in_records_the_verified_subject_and_keeps_tokens_in_memory
         "unsigned",
         "shared-secret",
         "malformed",
+        "access-token-header-type",
+        "access-token-type-claim",
+        "identity-token-nonce",
+        "identity-token-access-hash",
+        "identity-token-code-hash",
+        "identity-token-type-claim",
+        "issued-in-the-future",
+        "not-yet-valid",
+        "elliptic-curve-header-for-an-rsa-key",
+        "ps256",
+        "rs384",
+        "rs512",
+        "unknown-key-identifier",
     ],
 )
 def test_a_bearer_token_is_accepted_only_for_the_bound_subject_and_client(
@@ -502,6 +575,121 @@ def test_a_bearer_token_is_accepted_only_for_the_bound_subject_and_client(
     else:
         assert _refusal(response) == (401, "HW-INGRESS-004")
         assert not (tmp_path / "research" / ".heartwood" / "sessions").exists()
+
+
+def test_two_authorization_headers_and_cross_site_api_navigations_are_refused(
+    tmp_path: Path,
+) -> None:
+    provider = _Provider()
+    access = _access(tmp_path, provider)
+    app = GatewayAsgiApp(_gateway(tmp_path / "research"), ingress=_ingress(), access=access)
+    token = provider.token()
+
+    assert access.principal({"authorization": (f"Bearer {token}", f"Bearer {token}")}) is None
+    response = asyncio.run(
+        _call(
+            app,
+            "GET",
+            "/sessions",
+            headers={"sec-fetch-site": "cross-site", "sec-fetch-mode": "navigate"},
+        )
+    )
+    # Only the sign-in routes accept a navigation from another site.
+    assert _refusal(response) == (403, "HW-INGRESS-002")
+    assert _refusal(asyncio.run(_call(app, "GET", "/sessions"))) == (401, "HW-INGRESS-004")
+
+
+def test_an_identity_token_of_the_browser_flow_is_no_bearer_token(tmp_path: Path) -> None:
+    provider = _Provider()
+    access = _access(tmp_path, provider)
+    _sign_in(access, provider)
+    identity_tokens = [
+        token
+        for token in provider.issued
+        if token.count(".") == 2
+        and "nonce" in jwt.decode(token, options={"verify_signature": False})
+    ]
+
+    assert identity_tokens
+    assert all(access.principal(_bearer(token)) is None for token in identity_tokens)
+
+
+def test_a_token_of_another_issuer_fetches_no_keys(tmp_path: Path) -> None:
+    provider = _Provider()
+    access = _access(tmp_path, provider)
+
+    assert access.principal(_bearer(provider.token(iss="https://other.example.test"))) is None
+    assert provider.requests == []
+
+
+def test_an_unavailable_provider_is_asked_again_only_after_a_pause(tmp_path: Path) -> None:
+    provider = _Provider()
+    provider.failing = {"openid-configuration"}
+    clock = _Clock()
+    access = _access(tmp_path, provider, clock=clock)
+    token = provider.token()
+
+    for _ in range(50):
+        assert _get(access, "/identity/login").status_code == 502
+        with pytest.raises(AccessUnavailableError):
+            access.principal(_bearer(token))
+    assert provider.requests == ["openid-configuration"]
+
+    clock.now += 5
+    assert _get(access, "/identity/login").status_code == 502
+    assert provider.requests == ["openid-configuration"] * 2
+    # A failing key endpoint is remembered in the same way, and recovery is noticed.
+    provider.failing = {"keys"}
+    clock.now += 5
+    for _ in range(50):
+        with pytest.raises(AccessUnavailableError):
+            access.principal(_bearer(token))
+    assert provider.requests.count("keys") == 1
+    assert _get(access, "/identity/login").status_code == 302
+    provider.failing = set()
+    clock.now += 5
+    assert access.principal(_bearer(token)) == _SUBJECT
+
+
+def test_the_callback_requires_the_cookie_of_the_browser_that_started_the_sign_in(
+    tmp_path: Path,
+) -> None:
+    provider = _Provider()
+    access = _access(tmp_path, provider)
+    started = _get(access, "/identity/login")
+    other = _get(access, "/identity/login")
+    query = provider.authorize(started.location)
+    name, _, value = _sealed(started).partition("=")
+    tampered = f"{name}={value[:-8]}{'A' * 8}"
+    foreign = _access(tmp_path, provider)
+
+    for cookie in (None, _sealed(other), tampered, f"{name}=", f"{name}=not-sealed", "other=1"):
+        refused = _route(access, "/oauth_callback", query, cookie=cookie)
+        assert refused is not None
+        assert (refused.status_code, refused.check_id) == (403, "gateway-identity")
+    # Another gateway process, with another key, does not accept the cookie either.
+    assert _finish(foreign, started, query).status_code == 403
+    assert provider.requests.count("token") == 0
+
+    assert _finish(access, started, query).status_code == 302
+    assert _finish(access, started, query).status_code == 403
+    assert provider.requests.count("token") == 1
+
+
+def test_used_states_are_bounded_and_forgotten_when_they_expire(tmp_path: Path) -> None:
+    provider = _Provider()
+    clock = _Clock()
+    access = _access(tmp_path, provider, clock=clock)
+    for _ in range(1030):
+        started = _get(access, "/identity/login")
+        _finish(
+            access, started, "state=" + parse_qs(urlsplit(str(started.location)).query)["state"][0]
+        )
+
+    assert len(vars(access)["_used_states"]) == 1024
+    clock.now += 600
+    _sign_in(access, provider)
+    assert len(vars(access)["_used_states"]) == 1
 
 
 def _claims(provider: _Provider) -> dict[str, Any]:
@@ -603,11 +791,11 @@ def test_sign_in_is_refused_unless_every_token_check_passes(
     started = _get(access, "/identity/login")
     tamper(provider)
 
-    completed = _get(access, "/oauth_callback", provider.authorize(started.location))
+    completed = _finish(access, started, provider.authorize(started.location))
 
     assert (completed.status_code, completed.check_id) == (403, "gateway-identity")
     assert completed.location is None
-    assert completed.cookie is None
+    assert completed.cookies == ()
     assert access.researcher_access_token() is None
 
 
@@ -659,7 +847,7 @@ def test_callback_refuses_unexpected_queries(tmp_path: Path, query: Callable[[st
     access = _access(tmp_path, provider)
     started = _get(access, "/identity/login")
 
-    completed = _get(access, "/oauth_callback", query(provider.authorize(started.location)))
+    completed = _finish(access, started, query(provider.authorize(started.location)))
 
     assert (completed.status_code, completed.check_id) == (403, "gateway-identity")
 
@@ -670,35 +858,41 @@ def test_state_is_single_use_and_expires(tmp_path: Path) -> None:
     access = _access(tmp_path, provider, clock=clock)
     started = _get(access, "/identity/login")
     query = provider.authorize(started.location)
-    assert _get(access, "/oauth_callback", query).status_code == 302
+    assert _finish(access, started, query).status_code == 302
 
-    assert _get(access, "/oauth_callback", query).status_code == 403
+    assert _finish(access, started, query).status_code == 403
     # A second code for the consumed state is refused as well.
-    assert _get(access, "/oauth_callback", provider.authorize(started.location)).status_code == 403
+    assert _finish(access, started, provider.authorize(started.location)).status_code == 403
 
     late = _get(access, "/identity/login")
     clock.now += 601
-    assert _get(access, "/oauth_callback", provider.authorize(late.location)).status_code == 403
+    assert _finish(access, late, provider.authorize(late.location)).status_code == 403
 
 
 def test_a_code_obtained_for_another_verifier_is_refused(tmp_path: Path) -> None:
     provider = _Provider()
     access = _access(tmp_path, provider)
-    first = provider.authorize(_get(access, "/identity/login").location)
+    started = _get(access, "/identity/login")
+    first = provider.authorize(started.location)
     second = provider.authorize(_get(access, "/identity/login").location)
-    swapped = "&".join((first.split("&")[0], *second.split("&")[1:]))
+    swapped = "&".join((second.split("&")[0], *first.split("&")[1:]))
 
-    assert _get(access, "/oauth_callback", swapped).status_code == 403
+    assert _finish(access, started, swapped).status_code == 403
 
 
-def test_pending_sign_ins_and_live_sign_ins_are_bounded(tmp_path: Path) -> None:
+def test_sign_ins_in_progress_hold_no_state_and_live_sign_ins_are_bounded(
+    tmp_path: Path,
+) -> None:
     provider = _Provider()
     access = _access(tmp_path, provider)
     oldest = _get(access, "/identity/login")
-    kept = [_get(access, "/identity/login") for _ in range(256)]
+    before = {name: repr(value) for name, value in vars(access).items()}
+    for _ in range(2000):
+        _get(access, "/identity/login")
 
-    assert _get(access, "/oauth_callback", provider.authorize(oldest.location)).status_code == 403
-    assert _get(access, "/oauth_callback", provider.authorize(kept[0].location)).status_code == 302
+    # Requests without identity leave nothing behind and cannot end another sign-in.
+    assert {name: repr(value) for name, value in vars(access).items()} == before
+    assert _finish(access, oldest, provider.authorize(oldest.location)).status_code == 302
 
     capabilities = [_sign_in(access, provider)[0] for _ in range(8)]
     assert access.principal(_capability(capabilities[0])) == _SUBJECT
@@ -717,7 +911,7 @@ def test_launch_token_is_single_use_and_short_lived(tmp_path: Path) -> None:
     assert access.exchange_launch_token("unknown") is None
 
     started = _get(access, "/identity/login")
-    completed = _get(access, "/oauth_callback", provider.authorize(started.location))
+    completed = _finish(access, started, provider.authorize(started.location))
     clock.now += 61
     assert (
         access.exchange_launch_token(
@@ -905,7 +1099,7 @@ def test_provider_failures_during_sign_in_report_a_stable_diagnostic(
     query = provider.authorize(started.location)
     failure(provider)
 
-    completed = _get(access, "/oauth_callback", query)
+    completed = _finish(access, started, query)
 
     assert (completed.status_code, completed.check_id) == (status, "gateway-identity-provider")
     assert access.researcher_access_token() is None
@@ -1040,9 +1234,13 @@ def test_the_index_document_is_served_only_after_the_sign_in_marker(tmp_path: Pa
     assert "redirect_uri=http%3A%2F%2Fresearch.example.test%2Foauth_callback" in str(
         started.location
     )
-    completed = _get(access, "/oauth_callback", provider.authorize(started.location))
+    completed = _finish(access, started, provider.authorize(started.location))
     assert str(completed.location).startswith("http://research.example.test/#launch=")
-    assert completed.cookie == "heartwood-login=1; Max-Age=60; Path=/; HttpOnly; SameSite=Lax"
+    assert completed.cookies == (
+        "heartwood-sign-in=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax",
+        "heartwood-login=1; Max-Age=60; Path=/; HttpOnly; SameSite=Lax",
+    )
+    assert started.cookies[0].endswith("; Max-Age=600; Path=/; HttpOnly; SameSite=Lax")
 
 
 def _write_secret(tmp_path: Path, content: str = f"{_CLIENT_SECRET}\n") -> Path:

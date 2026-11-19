@@ -484,8 +484,7 @@ async def _send_access_response(send: AsgiSend, response: AccessResponse) -> Non
         (b"cache-control", b"no-store"),
         (b"referrer-policy", b"no-referrer"),
     ]
-    if response.cookie is not None:
-        headers.append((b"set-cookie", response.cookie.encode("ascii")))
+    headers.extend((b"set-cookie", cookie.encode("ascii")) for cookie in response.cookies)
     await send({"type": "http.response.start", "status": response.status_code, "headers": headers})
     await send({"type": "http.response.body", "body": b""})
 

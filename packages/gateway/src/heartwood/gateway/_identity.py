@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import secrets
 import ssl
 import time
@@ -29,6 +30,7 @@ from urllib.parse import parse_qs, quote, urlencode, urlsplit
 
 import httpx
 import jwt
+from cryptography.fernet import Fernet, InvalidToken
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
 
 from heartwood.gateway._access import (
@@ -38,24 +40,35 @@ from heartwood.gateway._access import (
     GatewayAccess,
     LaunchCapability,
 )
-from heartwood.gateway._ingress import IngressConfigurationError, IngressPolicy
+from heartwood.gateway._ingress import (
+    IDENTITY_CALLBACK_PATH,
+    IDENTITY_LOGIN_PATH,
+    IngressConfigurationError,
+    IngressPolicy,
+)
 from heartwood.gateway._transport import require_protected_transport
 from heartwood.persistence import read_private_text
 
 IDENTITY_INGRESS_MODE = "identity-proxy"
-LOGIN_PATH = "/identity/login"
-CALLBACK_PATH = "/oauth_callback"
+LOGIN_PATH = IDENTITY_LOGIN_PATH
+CALLBACK_PATH = IDENTITY_CALLBACK_PATH
+# Holds the sealed state of a sign-in in progress, for the browser that started it.
+SIGN_IN_COOKIE = "heartwood-sign-in"
+# Lets the index document load once after a sign-in; it authorizes nothing.
 LOGIN_COOKIE = "heartwood-login"
 
 # Asymmetric signatures only: a token never selects an unsigned or shared-secret algorithm.
 _ALGORITHMS = ("RS256", "ES256")
+_IDENTITY_TOKEN_CLAIMS = frozenset({"nonce", "at_hash", "c_hash"})
 _CLOCK_SKEW_SECONDS = 30
 _PROVIDER_TIMEOUT_SECONDS = 10.0
 _MAXIMUM_PROVIDER_RESPONSE_BYTES = 1_048_576
 # Lower bound between two key fetches, so unknown key identifiers cannot flood the provider.
 _KEY_REFRESH_SECONDS = 30.0
-_PENDING_LIFETIME_SECONDS = 600.0
-_MAXIMUM_PENDING = 256
+_SIGN_IN_LIFETIME_SECONDS = 600
+_MAXIMUM_USED_STATES = 1024
+# A failed discovery or key fetch is answered from memory for this long.
+_PROVIDER_RETRY_SECONDS = 5.0
 _MAXIMUM_LOGINS = 8
 _LAUNCH_LIFETIME_SECONDS = 60
 _REFRESH_MARGIN_SECONDS = 30.0
@@ -113,13 +126,6 @@ class _SignInRefusedError(Exception):
     """The provider or a token did not establish the bound researcher."""
 
 
-@dataclass(frozen=True, slots=True, repr=False)
-class _Pending:
-    nonce: str
-    verifier: str
-    expires_at: float
-
-
 @dataclass(slots=True, repr=False)
 class _Login:
     access_token: str
@@ -166,21 +172,22 @@ class IdentityAccess:
             raise IngressConfigurationError(
                 "identity-proxy ingress requires an ASCII external origin and base path"
             )
-        self._cookie = (
-            f"{LOGIN_COOKIE}=1; Max-Age={_LAUNCH_LIFETIME_SECONDS}; "
-            f"Path={ingress.external_base_path}; HttpOnly; SameSite=Lax"
-            + ("; Secure" if ingress.external_origin.startswith("https://") else "")
+        self._cookie_attributes = f"Path={ingress.external_base_path}; HttpOnly; SameSite=Lax" + (
+            "; Secure" if ingress.external_origin.startswith("https://") else ""
         )
+        # The key lives as long as the process, so a restart ends every sign-in in progress.
+        self._seal = Fernet(Fernet.generate_key())
         self._http = http
         self._clock = clock
         self._lock = Lock()
-        self._pending: OrderedDict[str, _Pending] = OrderedDict()
+        self._used_states: OrderedDict[str, float] = OrderedDict()
         self._logins: OrderedDict[str, _Login] = OrderedDict()
         self._refresh_lock = Lock()
         self._provider_lock = RLock()
         self._endpoints: _Endpoints | None = None
         self._keys: dict[str, jwt.PyJWK] = {}
         self._keys_fetched_at: float | None = None
+        self._provider_failure: tuple[float, int] | None = None
 
     @classmethod
     def create(cls, deployment: IdentityDeployment, ingress: IngressPolicy) -> IdentityAccess:
@@ -258,12 +265,12 @@ class IdentityAccess:
             if path == LOGIN_PATH:
                 return self._begin_sign_in()
             if path == CALLBACK_PATH:
-                return self._complete_sign_in(query_string)
+                return self._complete_sign_in(query_string, headers)
         except AccessUnavailableError as error:
             return AccessResponse(error.status_code, check_id="gateway-identity-provider")
         except _SignInRefusedError:
             return AccessResponse(403, check_id=self.refusal_check)
-        if path == "/" and not _has_login_cookie(headers):
+        if path == "/" and _cookie_value(headers, LOGIN_COOKIE) != "1":
             return AccessResponse(302, location=f"{self._base_url}{LOGIN_PATH}")
         return None
 
@@ -311,11 +318,12 @@ class IdentityAccess:
         nonce = secrets.token_urlsafe(32)
         verifier = secrets.token_urlsafe(64)
         challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest())
-        with self._lock:
-            now = self._purge()
-            while len(self._pending) >= _MAXIMUM_PENDING:
-                self._pending.popitem(last=False)
-            self._pending[state] = _Pending(nonce, verifier, now + _PENDING_LIFETIME_SECONDS)
+        # The sign-in is bound to the browser that started it: its state, nonce and code
+        # verifier travel only in a cookie sealed with this process's key, so the gateway
+        # keeps no table that requests without identity could fill.
+        sealed = self._seal.encrypt_at_time(
+            json.dumps([state, nonce, verifier]).encode(), int(self._clock())
+        )
         query = urlencode(
             {
                 "response_type": "code",
@@ -328,14 +336,20 @@ class IdentityAccess:
                 "code_challenge_method": "S256",
             }
         )
-        return AccessResponse(302, location=f"{endpoint}{'&' if '?' in endpoint else '?'}{query}")
+        return AccessResponse(
+            302,
+            location=f"{endpoint}{'&' if '?' in endpoint else '?'}{query}",
+            cookies=(self._cookie(SIGN_IN_COOKIE, sealed.decode(), _SIGN_IN_LIFETIME_SECONDS),),
+        )
 
-    def _complete_sign_in(self, query_string: str) -> AccessResponse:
+    def _complete_sign_in(
+        self, query_string: str, headers: Mapping[str, tuple[str, ...]]
+    ) -> AccessResponse:
         try:
             query = parse_qs(query_string, keep_blank_values=True, max_num_fields=16)
         except ValueError:
             raise _SignInRefusedError from None
-        pending = self._take_pending(_one(query, "state"))
+        nonce, verifier = self._started_sign_in(_one(query, "state"), headers)
         if "error" in query or query.get("iss", [self._issuer]) != [self._issuer]:
             raise _SignInRefusedError
         payload = self._token_request(
@@ -343,15 +357,15 @@ class IdentityAccess:
                 "grant_type": "authorization_code",
                 "code": _one(query, "code"),
                 "redirect_uri": f"{self._base_url}{CALLBACK_PATH}",
-                "code_verifier": pending.verifier,
+                "code_verifier": verifier,
             }
         )
         id_token = payload.get("id_token")
         if not isinstance(id_token, str):
             raise AccessUnavailableError(502)
-        nonce = self._verified(id_token, "id").get("nonce")
-        if not isinstance(nonce, str) or not secrets.compare_digest(
-            nonce.encode(), pending.nonce.encode()
+        returned = self._verified(id_token, "id").get("nonce")
+        if not isinstance(returned, str) or not secrets.compare_digest(
+            returned.encode(), nonce.encode()
         ):
             raise _SignInRefusedError
         login = self._tokens(payload, refresh_token=None)
@@ -363,22 +377,48 @@ class IdentityAccess:
             while len(self._logins) >= _MAXIMUM_LOGINS:
                 self._logins.popitem(last=False)
             self._logins[capability] = login
-        # The cookie authorizes nothing. It only lets the index document through once,
-        # so the page can exchange the launch token; every API request needs the capability.
+        # The marker cookie authorizes nothing. It only lets the index document through
+        # once, so the page can exchange the launch token; every API request needs the
+        # capability. The sign-in cookie has served its purpose and is removed.
         return AccessResponse(
             302,
             location=f"{self._base_url}/#{urlencode({'launch': launch_token})}",
-            cookie=self._cookie,
+            cookies=(
+                self._cookie(SIGN_IN_COOKIE, "", 0),
+                self._cookie(LOGIN_COOKIE, "1", _LAUNCH_LIFETIME_SECONDS),
+            ),
         )
 
-    def _take_pending(self, state: str) -> _Pending:
-        presented = state.encode()
+    def _started_sign_in(
+        self, state: str, headers: Mapping[str, tuple[str, ...]]
+    ) -> tuple[str, str]:
+        """Return the nonce and code verifier of the sign-in this browser started.
+
+        The callback's state must equal the one sealed in the browser's cookie, and each
+        state is accepted once. The record of used states is bounded; beyond it, a second
+        use still fails at the provider, which redeems an authorization code once.
+        """
+        try:
+            now = self._clock()
+            sealed = _cookie_value(headers, SIGN_IN_COOKIE).encode()
+            started, nonce, verifier = json.loads(
+                self._seal.decrypt_at_time(sealed, _SIGN_IN_LIFETIME_SECONDS, int(now))
+            )
+            matches = secrets.compare_digest(str(started).encode(), state.encode())
+        except (InvalidToken, ValueError, TypeError):
+            raise _SignInRefusedError from None
         with self._lock:
-            self._purge()
-            for known in self._pending:
-                if secrets.compare_digest(known.encode(), presented):
-                    return self._pending.pop(known)
-        raise _SignInRefusedError
+            for used in [key for key, expiry in self._used_states.items() if expiry <= now]:
+                del self._used_states[used]
+            if not matches or started in self._used_states:
+                raise _SignInRefusedError
+            while len(self._used_states) >= _MAXIMUM_USED_STATES:
+                self._used_states.popitem(last=False)
+            self._used_states[started] = now + _SIGN_IN_LIFETIME_SECONDS
+        return str(nonce), str(verifier)
+
+    def _cookie(self, name: str, value: str, lifetime: int) -> str:
+        return f"{name}={value}; Max-Age={lifetime}; {self._cookie_attributes}"
 
     def _login(self, capability: str) -> _Login | None:
         try:
@@ -393,8 +433,6 @@ class IdentityAccess:
 
     def _purge(self) -> float:
         now = self._clock()
-        for state in [key for key, item in self._pending.items() if item.expires_at <= now]:
-            del self._pending[state]
         for capability in [key for key, item in self._logins.items() if item.expires_at <= now]:
             del self._logins[capability]
         return now
@@ -434,6 +472,9 @@ class IdentityAccess:
             key_id = header.get("kid")
             if header.get("alg") not in _ALGORITHMS or not isinstance(key_id, str):
                 raise _SignInRefusedError
+            # A token of another issuer is refused before any key is looked up or fetched.
+            if jwt.decode(token, options={"verify_signature": False}).get("iss") != self._issuer:
+                raise _SignInRefusedError
             claims: dict[str, Any] = jwt.decode(
                 token,
                 self._key(key_id),
@@ -461,7 +502,13 @@ class IdentityAccess:
             # A provider may leave the requesting client out of its own access token's audience.
             accepted = self._client_id in audiences or authorized_party == self._client_id
         else:
-            accepted = self._client_id in audiences
+            # An identity token names this client as its audience too, and it is no
+            # access token: its marks are refused.
+            accepted = (
+                self._client_id in audiences
+                and not _IDENTITY_TOKEN_CLAIMS.intersection(claims)
+                and str(claims.get("typ")).lower() != "id"
+            )
         if (
             not accepted
             or not isinstance(subject, str)
@@ -480,9 +527,7 @@ class IdentityAccess:
                 self._keys_fetched_at is None or now - self._keys_fetched_at >= _KEY_REFRESH_SECONDS
             )
             if key_id not in self._keys and stale:
-                # A failed fetch raises and leaves the time unset, so the next token
-                # fetches again.
-                document = self._provider_json(self._http_request("GET", self._discovered().keys))
+                document = self._provider_document(self._discovered().keys)
                 try:
                     keys = jwt.PyJWKSet.from_dict(document).keys
                 except jwt.PyJWTError:
@@ -508,10 +553,8 @@ class IdentityAccess:
         """
         with self._provider_lock:
             if self._endpoints is None:
-                document = self._provider_json(
-                    self._http_request(
-                        "GET", f"{self._provider.rstrip('/')}/.well-known/openid-configuration"
-                    )
+                document = self._provider_document(
+                    f"{self._provider.rstrip('/')}/.well-known/openid-configuration"
                 )
                 if document.get("issuer") != self._issuer:
                     raise AccessUnavailableError(502)
@@ -521,6 +564,25 @@ class IdentityAccess:
                     keys=self._endpoint(document, "jwks_uri", self._provider),
                 )
             return self._endpoints
+
+    def _provider_document(self, url: str) -> dict[str, Any]:
+        """Fetch discovery or keys; a failure is remembered briefly and not retried meanwhile.
+
+        Requests without identity can ask for these documents, so an unavailable provider
+        is asked once in a while and the other requests are answered from memory.
+        """
+        now = self._clock()
+        if self._provider_failure is not None:
+            failed_at, status_code = self._provider_failure
+            if now - failed_at < _PROVIDER_RETRY_SECONDS:
+                raise AccessUnavailableError(status_code)
+        try:
+            document = self._provider_json(self._http_request("GET", url))
+        except AccessUnavailableError as error:
+            self._provider_failure = (self._clock(), error.status_code)
+            raise
+        self._provider_failure = None
+        return document
 
     def _endpoint(self, document: Mapping[str, Any], name: str, base: str) -> str:
         value = document.get(name)
@@ -630,9 +692,11 @@ def _origin(url: str) -> str:
     return f"{parts.scheme}://{parts.netloc}".lower()
 
 
-def _has_login_cookie(headers: Mapping[str, tuple[str, ...]]) -> bool:
-    return any(
-        item.strip() == f"{LOGIN_COOKIE}=1"
-        for value in headers.get("cookie", ())
-        for item in value.split(";")
-    )
+def _cookie_value(headers: Mapping[str, tuple[str, ...]], name: str) -> str:
+    """Return the value of one request cookie, or an empty string."""
+    for header in headers.get("cookie", ()):
+        for item in header.split(";"):
+            key, _, value = item.strip().partition("=")
+            if key == name:
+                return value
+    return ""
