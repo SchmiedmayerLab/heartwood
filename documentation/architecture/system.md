@@ -252,7 +252,7 @@ A session whose revocation was not observed (`HW-WORKER-003`) is retried while t
 Until then the gateway caches no service for that session: a read returns its journal and a command is refused, so no command takes the session out of the retry, and the first command after the observed revocation can admit a replacement.
 
 Each attempt's launch intent records stable identities of the sandbox control plane and the container runtime it uses: the registered gateway's name, endpoint, and certificate authority, and the identity the Docker daemon behind the configured socket reports.
-With the Kubernetes driver the second identity is a digest of the API server address and certificate authority in `kubeconfig` and of the namespace's name and UID.
+With the Kubernetes driver the second identity is a digest of the API server address and certificate authority in `kubeconfig`, the namespace's name and UID, and the manifest's `workspace`.
 Launch refuses to proceed when either identity changed after preparation.
 Reconciliation observes the infrastructure named by the current deployment manifest only when both identities match the attempt's record; otherwise the attempt stays fenced with `HW-WORKER-002` and nothing is observed or removed, because absence on other infrastructure is not evidence of revocation.
 Attempt records are versioned: records written before launches retained these identities remain readable, name no infrastructure, and are never reconciled against the current one.
@@ -261,7 +261,9 @@ After any other failed or unanswered creation request, absence of the sandbox is
 The qualified sandbox gateway rejects deletion of a sandbox whose provisioning has not settled, but it does not report a creation request it has not recorded yet, so absence cannot show that such a request will not still create the sandbox.
 The attempt therefore stays fenced and its revocation keeps being retried; a sandbox that appears under the attempt's unique name with its full identity is deleted, and the attempt is recorded as revoked.
 With the Kubernetes driver and a sandbox gateway that reports `openshell.compute.create-rejects-deleted-name`, revocation asks the gateway by deleting the attempt's name with `allow_missing`.
-The answer `ALREADY_ABSENT` records `not-created`, because that gateway rejects a later creation under the name; a completed or accepted deletion is followed as the deletion of the sandbox whose identity the gateway returns, and records `revoked`; any other answer keeps the attempt fenced.
+The answer `ALREADY_ABSENT` records `not-created`, because that gateway rejects a later creation under the name.
+A completed or accepted deletion is followed as the deletion of the sandbox whose identity the gateway returns, and records `revoked`.
+Any other answer keeps the attempt fenced.
 In both cases the cluster must also show no object of the attempt.
 Resolving such an attempt from absence requires a sandbox gateway that rejects or reports later creations under a name whose absence it confirmed.
 The native forwarder runs under a small supervisor in its own process group, which ends the whole group when the gateway's end of a pipe closes, so no forwarder outlives the gateway process, however that process ends.

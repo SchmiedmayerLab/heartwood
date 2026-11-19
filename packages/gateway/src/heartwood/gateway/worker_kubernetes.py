@@ -377,11 +377,13 @@ def _kubectl(settings: KubernetesWorkerDeployment, *args: str, stdin: bytes | No
 
 
 def cluster_sha256(settings: KubernetesWorkerDeployment) -> str:
-    """Identify the cluster and namespace behind the configured `kubectl` configuration.
+    """Identify the cluster, namespace and workspace an attempt's objects are named in.
 
     A cluster keeps its API server address and certificate authority, and a namespace keeps
     its identity until it is deleted, so another cluster behind the same configuration path,
-    or a namespace created again under the same name, yields a different identity.
+    or a namespace created again under the same name, yields a different identity. The
+    workspace is part of every sandbox and Sandbox resource name, so absence under another
+    workspace says nothing about the attempt.
     """
     unobserved = WorkerAttemptError("cluster identity was not observed")
     view = _kubectl(
@@ -419,6 +421,7 @@ def cluster_sha256(settings: KubernetesWorkerDeployment) -> str:
             "certificate_authority": hashlib.sha256(authority.strip().encode()).hexdigest(),
             "namespace": settings.namespace,
             "namespace_uid": uid,
+            "workspace": settings.workspace,
         },
         sort_keys=True,
     )

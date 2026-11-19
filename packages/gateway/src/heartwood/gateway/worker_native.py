@@ -272,7 +272,8 @@ def _unresolved_creation(control: NativeWorkerControl, volumes: _Volumes) -> str
         and isinstance(result.sandbox_id, str)
         and result.sandbox_id
     ):
-        # The name is the attempt's own, so the removed sandbox is the one it requested.
+        # Its labels can no longer be read. The name derives from the attempt identifier,
+        # and only this attempt's creation request used it.
         return result.sandbox_id
     raise unresolved from None
 

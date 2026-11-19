@@ -233,7 +233,7 @@ sandbox_image_digest = "sha256:0000000000000000000000000000000000000000000000000
 | Key | Requirement |
 |---|---|
 | `kubectl_cli` | Absolute executable path of `kubectl` |
-| `kubeconfig` | Absolute path of the `kubectl` configuration for the cluster; accessible by its owner only |
+| `kubeconfig` | Absolute path of the `kubectl` configuration for the cluster, with a current context and the cluster's certificate authority; accessible by its owner only |
 | `namespace` | Namespace in which the sandbox gateway creates the session's pods; lowercase letters, digits, and hyphens |
 | `image_repository` | Registry repository of the worker image, with its registry host and without a tag or digest; pods reference the image as `<image_repository>@<image_digest>` |
 | `supervisor_image_digest` | `sha256:` digest of the OpenShell supervisor image |

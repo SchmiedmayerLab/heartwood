@@ -863,6 +863,10 @@ def test_cluster_identity_binds_the_server_its_authority_and_the_namespace(tmp_p
         {"namespace": {"kind": "Namespace", "metadata": {"name": _NAMESPACE, "uid": "uid-2"}}},
     ]
     assert len({identity, *(_identity(tmp_path, **change) for change in changed)}) == 4
+    # Sandboxes are named after the workspace, so another workspace is other infrastructure.
+    renamed = _settings(tmp_path).model_copy(update={"workspace": "other"})
+    _identity(tmp_path)
+    assert worker_kubernetes.cluster_sha256(renamed) != identity
 
 
 @pytest.mark.parametrize(
