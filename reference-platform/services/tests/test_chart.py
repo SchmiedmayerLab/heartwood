@@ -265,6 +265,36 @@ def test_installation_needs_the_images_without_a_default(given: str, missing: st
     assert missing in result.stderr
 
 
+@pytest.mark.parametrize(
+    ("repository", "accepted"),
+    [
+        ("", True),
+        ("kind-registry:5000/openshell", True),
+        ("registry.example.test/mirror/openshell", True),
+        ("registry.example.test/openshell/", False),
+        ("registry.example.test/openshell:0.1.9", False),
+        ("registry.example.test/openshell@sha256:" + "2" * 64, False),
+    ],
+)
+def test_sandbox_image_repository_is_passed_to_the_control_service(
+    repository: str, accepted: bool
+) -> None:
+    result = subprocess.run(
+        [*_TEMPLATE, "--set", f"images.openshellRepository={repository}"],
+        capture_output=True,
+        text=True,
+    )
+    if not accepted:
+        assert result.returncode != 0
+        assert "/images/openshellRepository" in result.stderr
+        return
+    assert result.returncode == 0, result.stderr
+    objects = [item for item in yaml.safe_load_all(result.stdout) if item is not None]
+    config = _named(objects, "ConfigMap", "heartwood-control")
+    sessions = json.loads(config["data"]["configuration.json"])["sessions"]
+    assert sessions["openshell_repository"] == repository
+
+
 def test_control_service_configuration_holds_the_registry(objects: list[dict[str, Any]]) -> None:
     config = _named(objects, "ConfigMap", "heartwood-control")
     configuration = json.loads(config["data"]["configuration.json"])

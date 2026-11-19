@@ -72,6 +72,7 @@ class SessionNamespaceSettings(_Settings):
     container_defaults: dict[str, str]
     container_default_requests: dict[str, str]
     platform_ca_file: Path
+    openshell_repository: str = ""
 
 
 class Settings(_Settings):
@@ -138,6 +139,7 @@ def build(settings: Settings, kubernetes: Kubernetes) -> Starlette:
             container_defaults=namespaces.container_defaults,
             container_default_requests=namespaces.container_default_requests,
             platform_ca=namespaces.platform_ca_file.read_text(encoding="utf-8"),
+            openshell_repository=namespaces.openshell_repository,
         ),
         registry.session_ids,
     )

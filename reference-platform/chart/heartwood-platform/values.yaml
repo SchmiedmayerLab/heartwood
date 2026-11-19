@@ -18,6 +18,10 @@ images:
   # Image of the OpenShell gateway of each session, with the Kubernetes driver.
   # It has no default: set it to a reference by digest.
   openshellGateway: ""
+  # Repository from which session pods pull the OpenShell supervisor and sandbox runtime
+  # images, each under its upstream name and digest, such as a mirror of the release.
+  # Empty pulls them from ghcr.io/nvidia/openshell.
+  openshellRepository: ""
 
 # StorageClass of the platform's own volumes. Empty selects the cluster default.
 storageClassName: ""

@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import base64
+import dataclasses
 import json
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,7 @@ import pytest
 from fakes import FakeKubernetes
 from heartwood_platform.common.kubernetes import Kubernetes
 from heartwood_platform.control.sessions import (
+    OPENSHELL_REPOSITORY,
     ApiServerAddress,
     SessionError,
     Sessions,
@@ -178,6 +180,24 @@ def test_openshell_objects_are_applied_in_the_namespace_with_the_configured_imag
         "tls.crt": "tls.crt of hw-s-abc123",
         "tls.key": "tls.key of hw-s-abc123",
     }
+
+
+def test_sandbox_images_are_pulled_from_the_configured_repository(platform: Platform) -> None:
+    platform.sessions = Sessions(
+        Kubernetes(platform.api.client()),
+        dataclasses.replace(platform.settings, openshell_repository="registry.example.test/mirror"),
+        lambda: platform.active,
+        sleep=platform._sleep,
+        clock=lambda: platform.now,
+    )
+    platform.provision("abc123")
+
+    rendered = _OBJECTS.read_text(encoding="utf-8")
+    text = json.dumps(list(platform.api.objects.values()))
+    assert OPENSHELL_REPOSITORY not in text
+    for name in ("supervisor", "sandbox"):
+        digest = rendered.split(f"{OPENSHELL_REPOSITORY}/{name}@", 1)[1][:71]
+        assert text.count(f"registry.example.test/mirror/{name}@{digest}") == 1
 
 
 def test_staging_pods_get_a_service_account_without_a_token(platform: Platform) -> None:

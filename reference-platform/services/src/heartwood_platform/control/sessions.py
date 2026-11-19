@@ -27,6 +27,9 @@ from heartwood_platform.common.kubernetes import Kubernetes
 
 NAMESPACE_PLACEHOLDER = "hw-s-placeholder"
 GATEWAY_IMAGE_PLACEHOLDER = "heartwood.invalid/openshell-gateway:placeholder"
+# The repository of the OpenShell release images that the sandbox gateway gives its pods.
+OPENSHELL_REPOSITORY = "ghcr.io/nvidia/openshell"
+_SANDBOX_IMAGES = ("supervisor", "sandbox")
 
 _SESSION_LABEL = "heartwood.platform/session"
 _RBAC = "rbac.authorization.k8s.io"
@@ -61,6 +64,9 @@ class SessionSettings:
     container_default_requests: dict[str, str]
     # The platform CA certificate in PEM form, which sandbox supervisors trust.
     platform_ca: str
+    # The repository from which session pods pull the supervisor and sandbox runtime
+    # images, each under its upstream name and digest. Empty keeps OPENSHELL_REPOSITORY.
+    openshell_repository: str = ""
     ready_timeout_seconds: float = 180.0
 
 
@@ -240,6 +246,13 @@ class Sessions:
         text = self._settings.openshell_objects.replace(NAMESPACE_PLACEHOLDER, namespace).replace(
             GATEWAY_IMAGE_PLACEHOLDER, self._settings.openshell_gateway_image
         )
+        if self._settings.openshell_repository:
+            # Only the repository changes; each reference keeps the digest of the release.
+            for name in _SANDBOX_IMAGES:
+                text = text.replace(
+                    f"{OPENSHELL_REPOSITORY}/{name}@",
+                    f"{self._settings.openshell_repository}/{name}@",
+                )
         items = json.loads(text)["items"]
         assert isinstance(items, list)
         return items

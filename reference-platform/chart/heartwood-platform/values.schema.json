@@ -36,7 +36,8 @@
         "keycloak",
         "versitygw",
         "platformServices",
-        "openshellGateway"
+        "openshellGateway",
+        "openshellRepository"
       ],
       "properties": {
         "postgresql": {
@@ -53,6 +54,11 @@
         },
         "openshellGateway": {
           "$ref": "#/$defs/image"
+        },
+        "openshellRepository": {
+          "description": "A registry repository without tag or digest, or empty.",
+          "type": "string",
+          "pattern": "^([a-z0-9][a-z0-9.-]*(:[0-9]+)?(/[a-z0-9][a-z0-9._-]*)*)?$"
         }
       }
     },
