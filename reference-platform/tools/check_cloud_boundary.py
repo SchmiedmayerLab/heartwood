@@ -39,6 +39,7 @@ CLOUD_DISTRIBUTIONS = (
     "azure-*",
     "boto3",
     "botocore",
+    "gcloud-aio-*",
     "gcsfs",
     "google-api-core",
     "google-api-python-client",
@@ -56,6 +57,7 @@ CLOUD_MODULES = (
     "azure",
     "boto3",
     "botocore",
+    "gcloud.aio",
     "gcsfs",
     "google.api_core",
     "google.auth",
@@ -73,10 +75,8 @@ SHARED_MODULE = "heartwood.schemas"
 # Cloud infrastructure identifiers, matched case-insensitively in package sources.
 CLOUD_IDENTIFIERS = re.compile(
     r"""
-    (?<![a-z0-9.-])[a-z0-9.-]*\.googleapis\.com
-    | (?<![a-z0-9.-])[a-z0-9.-]*\.amazonaws\.com
-    | (?<![a-z0-9.-])[a-z0-9.-]*\.azure\.com
-    | (?<![a-z0-9.-])[a-z0-9.-]*\.windows\.net
+    (?<![a-z0-9.-])(?:[a-z0-9-]+\.)*(?:googleapis\.com|amazonaws\.com|azure\.com|azure\.net)\b
+    | (?<![a-z0-9.-])(?:[a-z0-9-]+\.)+(?:windows\.net|azurecr\.io)\b
     | metadata\.google\.internal
     | 169\.254\.169\.254
     | 169\.254\.170\.2\b
@@ -86,6 +86,7 @@ CLOUD_IDENTIFIERS = re.compile(
     | (?<![a-z0-9.-])[a-z0-9.-]*\.csi\.aws\.com
     | \b(?:standard|premium|balanced)-rwo\b
     | \bpd-(?:standard|ssd|balanced|extreme)\b
+    | \bhyperdisk-(?:balanced|extreme|throughput|ml)\b
     """,
     re.IGNORECASE | re.VERBOSE,
 )
@@ -164,9 +165,10 @@ def _python_dependencies(path: Path) -> list[tuple[str, int]]:
     return [(name, _line_of(text, name)) for name in sorted(names - {""})]
 
 
-def _imported_modules(path: Path) -> list[tuple[str, int]]:
+def _imported_modules(path: Path, data: bytes | None = None) -> list[tuple[str, int]]:
     """Return absolute module names imported statically or by a literal dynamic import."""
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    # Parsing bytes honours a PEP 263 coding declaration.
+    tree = ast.parse(path.read_bytes() if data is None else data, filename=str(path))
     modules: list[tuple[str, int]] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -221,22 +223,26 @@ def _check_package_metadata(root: Path, package: Path) -> list[Finding]:
 
 def _check_source_file(root: Path, path: Path) -> list[Finding]:
     relative = path.relative_to(root).as_posix()
-    try:
-        text = path.read_text(encoding="utf-8")
-    except UnicodeDecodeError:
-        return []
+    data = path.read_bytes()
     findings: list[Finding] = []
-    if path.suffix == ".py":
+    if path.suffix in {".py", ".pyi"}:
         try:
-            modules = _imported_modules(path)
-        except SyntaxError as error:
-            return [Finding(relative, error.lineno or 1, "", f"cannot be parsed: {error.msg}")]
+            modules = _imported_modules(path, data)
+        except (SyntaxError, ValueError) as error:
+            line = getattr(error, "lineno", None) or 1
+            return [Finding(relative, line, "", f"cannot be parsed: {error}")]
+        reported: set[tuple[int, str]] = set()
         for module, line in modules:
-            if _matching_module(module, (PLATFORM_MODULE,)):
-                findings.append(Finding(relative, line, PLATFORM_MODULE, f"imports {module}"))
-            cloud = _matching_module(module, CLOUD_MODULES)
-            if cloud:
-                findings.append(Finding(relative, line, cloud, f"imports cloud SDK {module}"))
+            for entry, message in (
+                (_matching_module(module, (PLATFORM_MODULE,)), f"imports {module}"),
+                (_matching_module(module, CLOUD_MODULES), f"imports cloud SDK {module}"),
+            ):
+                # `from google.cloud import storage` is reported once, not per name.
+                if entry and (line, entry) not in reported:
+                    reported.add((line, entry))
+                    findings.append(Finding(relative, line, entry, message))
+    # Identifiers are ASCII; Latin-1 maps every byte, so no file is skipped as undecodable.
+    text = data.decode("latin-1")
     for number, line_text in enumerate(text.splitlines(), start=1):
         for match in CLOUD_IDENTIFIERS.finditer(line_text):
             identifier = match.group(0)

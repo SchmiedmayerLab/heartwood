@@ -78,7 +78,6 @@ def test_planted_cloud_import_and_identifier_fail(
 
     assert errors == [
         "packages/sample/src/heartwood/sample/storage.py:1: imports cloud SDK google.cloud",
-        "packages/sample/src/heartwood/sample/storage.py:1: imports cloud SDK google.cloud.storage",
         "packages/sample/src/heartwood/sample/storage.py:3: "
         "names cloud infrastructure storage.googleapis.com",
     ]
@@ -122,6 +121,10 @@ def test_static_and_literal_dynamic_imports_are_found(
         "ebs.csi.aws.com",
         "standard-rwo",
         "pd-ssd",
+        "hyperdisk-balanced",
+        "googleapis.com",
+        "vault.azure.net",
+        "registry.azurecr.io",
     ],
 )
 def test_cloud_identifiers_are_found_in_any_source_file(tmp_path: Path, identifier: str) -> None:
@@ -167,8 +170,6 @@ def test_application_packages_cannot_use_platform_code(tmp_path: Path) -> None:
     assert errors == [
         "packages/sample/pyproject.toml:3: depends on platform code heartwood-reference-platform",
         "packages/sample/src/heartwood/sample/launch.py:1: imports heartwood_platform.control",
-        "packages/sample/src/heartwood/sample/launch.py:1: "
-        "imports heartwood_platform.control.client",
     ]
 
 
@@ -222,3 +223,28 @@ def test_unparsable_source_fails_closed(tmp_path: Path) -> None:
     assert errors[0].startswith(
         "packages/sample/src/heartwood/sample/broken.py:1: cannot be parsed"
     )
+
+
+def test_coding_declaration_and_stub_files_are_checked(tmp_path: Path) -> None:
+    source = _package(tmp_path)
+    (source / "legacy.py").write_bytes(
+        b"# -*- coding: latin-1 -*-\nimport boto3\nNAME = '\xe9'\nHOST = 'storage.googleapis.com'\n"
+    )
+    (source / "typed.pyi").write_text("import gcloud.aio.storage\n")
+
+    assert boundary.check(tmp_path, ()) == [
+        "packages/sample/src/heartwood/sample/legacy.py:2: imports cloud SDK boto3",
+        "packages/sample/src/heartwood/sample/legacy.py:4: "
+        "names cloud infrastructure storage.googleapis.com",
+        "packages/sample/src/heartwood/sample/typed.pyi:1: imports cloud SDK gcloud.aio.storage",
+    ]
+
+
+def test_files_that_are_not_utf8_are_still_scanned(tmp_path: Path) -> None:
+    source = _package(tmp_path)
+    (source / "settings.json").write_bytes(b'{"a": "\xff", "host": "s3.amazonaws.com"}\n')
+
+    assert boundary.check(tmp_path, ()) == [
+        "packages/sample/src/heartwood/sample/settings.json:1: "
+        "names cloud infrastructure s3.amazonaws.com"
+    ]
