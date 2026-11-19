@@ -88,7 +88,7 @@ def test_gateway_owns_listener_and_consumes_descriptor_before_start(
         if descriptor is not None:
             with pytest.raises(OSError, match="Bad file descriptor"):
                 os.fstat(descriptor)
-            assert app.access.authorizes({"x-heartwood-capability": (_SECRET,)})
+            assert app.access.principal({"x-heartwood-capability": (_SECRET,)}) == "human"
         observed.append(True)
 
     monkeypatch.setattr(uvicorn.Config, "bind_socket", lambda _config: listener)

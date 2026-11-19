@@ -420,3 +420,130 @@ def test_doctor_browser_and_serve_report_a_review_mode_the_manifest_narrowed(
     assert main([*arguments, "--ingress-mode", "direct-loopback"]) == 0
     assert served == ["review-all"]
     assert f"HW-SETUP-003: {review['summary']}" in capsys.readouterr().err
+
+
+def _identity_launch(tmp_path: Path, *, identity_table: bool) -> list[str]:
+    workspace = tmp_path / "research"
+    workspace.mkdir()
+    state_parent = tmp_path / "protected"
+    state_parent.mkdir(mode=0o700)
+    project_id = str(uuid4())
+    web = tmp_path / "web"
+    web.mkdir()
+    (web / "index.html").write_text("<main>Synthetic</main>")
+    secret = tmp_path / "client-secret"
+    secret.write_text("synthetic-client-secret-0123456789\n")
+    secret.chmod(0o600)
+    record: dict[str, object] = {
+        "schema_version": "heartwood.project-deployment.v1",
+        "project_id": project_id,
+        "workspace": str(workspace),
+        "state_root": str(state_parent / project_id),
+        "policy": {"policy_id": "deployment-test", "platform_id": "generic"},
+    }
+    if identity_table:
+        record["identity"] = {
+            "issuer": "https://id.example.test/realms/research",
+            "client_id": "hw-proj-demo",
+            "client_secret_file": str(secret),
+            "subject": "researcher-7f3c",
+        }
+    manifest = tmp_path / "deployment.toml"
+    manifest.write_text(tomli_w.dumps(record))
+    manifest.chmod(0o600)
+    return ["gateway", "serve", "--deployment", str(manifest), "--web-root", str(web)]
+
+
+_IDENTITY_ROUTE = [
+    "--ingress-mode",
+    "identity-proxy",
+    "--host",
+    "0.0.0.0",
+    "--public-origin",
+    "https://research.example.test",
+    "--base-path",
+    "/user/researcher/demo",
+    "--trusted-proxy-source",
+    "10.0.0.0/24",
+]
+
+
+def test_identity_proxy_launch_serves_the_external_url_without_a_launch_link(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from heartwood.gateway import IdentityAccess
+
+    arguments = _identity_launch(tmp_path, identity_table=True)
+    started: list[bool] = []
+
+    def run(server: uvicorn.Server, **_kwargs: object) -> None:
+        app = server.config.app
+        assert isinstance(app, GatewayAsgiApp)
+        assert isinstance(app.access, IdentityAccess)
+        assert app.ingress.mode == "identity-proxy"
+        started.append(True)
+        app.gateway.stop()
+
+    monkeypatch.chdir(tmp_path / "research")
+    monkeypatch.setenv("HEARTWOOD_PLATFORM", "generic")
+    monkeypatch.setattr("heartwood.cli.uvicorn.Server.run", run)
+    monkeypatch.setattr(
+        "heartwood.cli.uvicorn.Config.bind_socket",
+        lambda _config: socket.create_server(("127.0.0.1", 0)),
+    )
+
+    assert main([*arguments, *_IDENTITY_ROUTE]) == 0
+
+    printed = capsys.readouterr().out
+    assert started == [True]
+    assert "https://research.example.test/user/researcher/demo/\n" in printed
+    assert "#launch=" not in printed
+    assert "synthetic-client-secret" not in printed
+
+
+@pytest.mark.parametrize(
+    ("identity_table", "route", "message"),
+    [
+        (
+            False,
+            _IDENTITY_ROUTE,
+            r"HW-INGRESS-001.*requires the deployment manifest's \[identity\]",
+        ),
+        (True, [], r"HW-INGRESS-001.*\[identity\] table requires identity-proxy ingress"),
+        (
+            True,
+            [*_IDENTITY_ROUTE, "--capability-fd", "3"],
+            r"HW-INGRESS-001.*accepts no capability descriptor",
+        ),
+        (True, [*_IDENTITY_ROUTE, "--proxy-strips-prefix"], r"HW-INGRESS-001.*must preserve"),
+    ],
+)
+def test_identity_proxy_launch_refuses_an_incomplete_binding(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    identity_table: bool,
+    route: list[str],
+    message: str,
+) -> None:
+    arguments = _identity_launch(tmp_path, identity_table=identity_table)
+    monkeypatch.chdir(tmp_path / "research")
+    monkeypatch.setenv("HEARTWOOD_PLATFORM", "generic")
+    monkeypatch.setattr(
+        "heartwood.cli.uvicorn.Server.run",
+        lambda *_args, **_kwargs: pytest.fail("the gateway was started"),
+    )
+
+    with pytest.raises(SystemExit, match=message):
+        main([*arguments, *route])
+
+
+def test_platforms_other_than_the_generic_one_do_not_offer_identity_proxy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    web = tmp_path / "web"
+    web.mkdir()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("HEARTWOOD_PLATFORM", "carina")
+
+    with pytest.raises(SystemExit, match=r"does not allow identity-proxy gateway ingress"):
+        main(["gateway", "serve", "--web-root", str(web), *_IDENTITY_ROUTE])

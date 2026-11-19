@@ -571,9 +571,12 @@ export interface PlatformCapabilitiesResponse {
   credential_backends: (
     "process" | "keyring" | "mounted-file" | "managed-identity"
   )[];
-  default_ingress_mode: "direct-loopback" | "jupyter-proxy" | "trusted-proxy";
+  default_ingress_mode:
+    "direct-loopback" | "jupyter-proxy" | "trusted-proxy" | "identity-proxy";
   display_name: string;
-  ingress_modes: ("direct-loopback" | "jupyter-proxy" | "trusted-proxy")[];
+  ingress_modes: (
+    "direct-loopback" | "jupyter-proxy" | "trusted-proxy" | "identity-proxy"
+  )[];
   interfaces: InterfaceKind[];
   managed_model_connections: string[];
   managed_runtimes: ("llama-cpp" | "vllm")[];

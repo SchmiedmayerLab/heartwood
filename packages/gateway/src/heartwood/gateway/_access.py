@@ -4,7 +4,7 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Launch capability that binds gateway API access to the launching researcher."""
+"""Gateway access: the contract of an access method and the launch capability."""
 
 from __future__ import annotations
 
@@ -15,7 +15,9 @@ import selectors
 import stat
 import time
 from collections.abc import Mapping
+from dataclasses import dataclass
 from threading import Lock
+from typing import Protocol
 from urllib.parse import urlencode
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -43,6 +45,51 @@ class LaunchResponse(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     capability: str = Field(min_length=32, max_length=4096, repr=False)
+
+
+class AccessUnavailableError(RuntimeError):
+    """A request could not be checked because the service that verifies it is unavailable."""
+
+    def __init__(self, status_code: int = 503) -> None:
+        super().__init__("the service that verifies gateway requests is unavailable")
+        self.status_code = status_code
+
+
+@dataclass(frozen=True, slots=True)
+class AccessResponse:
+    """A redirect, or a refusal reported with the stable diagnostic of ``check_id``."""
+
+    status_code: int
+    location: str | None = None
+    cookie: str | None = None
+    check_id: str | None = None
+
+
+class GatewayAccess(Protocol):
+    """How a gateway decides who issued a request."""
+
+    @property
+    def refusal_check(self) -> str:
+        """Return the diagnostic check reported to a request that is not authorized."""
+
+    def principal(self, headers: Mapping[str, tuple[str, ...]]) -> str | None:
+        """Return the actor to record for an authorized request, otherwise None."""
+
+    def exchange_launch_token(self, token: str) -> str | None:
+        """Exchange a one-time launch token for the capability the browser then sends."""
+
+    def launch_url(self, ingress: IngressPolicy) -> str | None:
+        """Return a one-time browser link when the access method issues one."""
+
+    def browser_response(
+        self,
+        *,
+        method: str,
+        path: str,
+        query_string: str,
+        headers: Mapping[str, tuple[str, ...]],
+    ) -> AccessResponse | None:
+        """Answer a browser route the access method owns; None leaves it to the gateway."""
 
 
 class LaunchCapability:
@@ -117,10 +164,7 @@ class LaunchCapability:
             raise IngressConfigurationError("cannot read capability descriptor") from error
         return cls(secret, launch_token=None)
 
-    @property
-    def actor_id(self) -> str:
-        """Return the principal recorded for commands presented with this capability."""
-        return CAPABILITY_ACTOR
+    refusal_check = "gateway-capability"
 
     def launch_url(self, ingress: IngressPolicy) -> str | None:
         """Return the one-time browser link, or None when the secret was supplied externally."""
@@ -138,10 +182,24 @@ class LaunchCapability:
             self._launch_token = None
             return self._secret.decode("ascii")
 
-    def authorizes(self, headers: Mapping[str, tuple[str, ...]]) -> bool:
-        """Return whether the request carries the explicit capability header."""
+    def principal(self, headers: Mapping[str, tuple[str, ...]]) -> str | None:
+        """Return the launching principal when the request carries the capability header."""
         presented = [value.strip() for value in headers.get(CAPABILITY_HEADER, ())]
         try:
-            return any(secrets.compare_digest(self._secret, value.encode()) for value in presented)
+            authorized = any(
+                secrets.compare_digest(self._secret, value.encode()) for value in presented
+            )
         except UnicodeError:
-            return False
+            return None
+        return CAPABILITY_ACTOR if authorized else None
+
+    def browser_response(
+        self,
+        *,
+        method: str,  # noqa: ARG002
+        path: str,  # noqa: ARG002
+        query_string: str,  # noqa: ARG002
+        headers: Mapping[str, tuple[str, ...]],  # noqa: ARG002
+    ) -> None:
+        """Own no browser route: the launch link carries the researcher's access."""
+        return

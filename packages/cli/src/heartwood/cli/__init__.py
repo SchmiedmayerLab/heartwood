@@ -75,7 +75,6 @@ from heartwood.gateway import (
     IngressConfigurationError,
     IngressPolicy,
     InterfaceKind,
-    LaunchCapability,
     NativeLockUnavailableError,
     ProjectConfigError,
     ProjectContext,
@@ -92,6 +91,7 @@ from heartwood.gateway import (
     load_checkpoint_signer_registry,
     load_project_deployment,
     narrowed_review_check,
+    select_gateway_access,
 )
 from heartwood.session import CommandKind, EventKind, SessionEvent, validate_session_id
 
@@ -1080,10 +1080,10 @@ def _handle_serve(
             raise IngressConfigurationError(
                 "environment capability delivery is unsupported; use --capability-fd"
             )
-        access = (
-            LaunchCapability.from_descriptor(capability_descriptor)
-            if capability_descriptor is not None
-            else LaunchCapability.generate()
+        access = select_gateway_access(
+            ingress,
+            identity=None if deployment is None else deployment.identity,
+            capability_descriptor=capability_descriptor,
         )
     except IngressConfigurationError as error:
         raise SystemExit(f"{diagnostic.code}: {error}") from error
@@ -1160,6 +1160,12 @@ def _handle_serve(
             launch_url = access.launch_url(ingress)
             if launch_url is not None:
                 print(f"Open Heartwood with this one-time link:\n  {launch_url}\n", flush=True)
+            elif ingress.mode == "identity-proxy":
+                print(
+                    "Heartwood is served at:\n"
+                    f"  {ingress.external_origin}{ingress.browser_base_path}/\n",
+                    flush=True,
+                )
             uvicorn.Server(config).run(sockets=[listener])
     return 0
 

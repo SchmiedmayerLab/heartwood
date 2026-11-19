@@ -36,7 +36,7 @@ from heartwood.core_adapter import (
     SessionRecoveryError,
     SessionStorageCapabilityError,
 )
-from heartwood.gateway._access import LaunchCapability
+from heartwood.gateway._access import GatewayAccess, LaunchCapability
 from heartwood.gateway._action_presentation import (
     RETAINED_APPROVAL_NOTICE,
     SPECIALIST_RESULT_LABEL,
@@ -100,6 +100,7 @@ from heartwood.gateway._gpu_environment import (
     inspect_gpu_environment,
     minimum_compute_capability_for_model,
 )
+from heartwood.gateway._identity import IdentityAccess, IdentityDeployment, select_gateway_access
 from heartwood.gateway._ingress import (
     IngressConfigurationError,
     IngressPolicy,
@@ -313,6 +314,7 @@ __all__ = [
     "CredentialStoreError",
     "DeploymentReadiness",
     "DiagnosticDefinition",
+    "GatewayAccess",
     "GatewayAsgiApp",
     "GatewayClosedError",
     "GatewayEventStream",
@@ -320,6 +322,8 @@ __all__ = [
     "GpuDevice",
     "GpuEnvironment",
     "HuggingFaceModelRepository",
+    "IdentityAccess",
+    "IdentityDeployment",
     "IngressConfigurationError",
     "IngressPolicy",
     "IngressRequest",
@@ -503,6 +507,7 @@ __all__ = [
     "retained_approval",
     "retained_approval_notice",
     "retained_approval_sendable",
+    "select_gateway_access",
     "specialist_review_lines",
     "user_checkpoint_signer_registry_path",
     "verify_model_artifact",

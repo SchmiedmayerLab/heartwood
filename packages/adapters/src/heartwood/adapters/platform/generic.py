@@ -49,7 +49,7 @@ class GenericPlatformAdapter:
             display_name="Workstation or container",
             interfaces=("terminal", "web", "notebook"),
             browser_route="direct",
-            ingress_modes=("direct-loopback", "jupyter-proxy", "trusted-proxy"),
+            ingress_modes=("direct-loopback", "jupyter-proxy", "trusted-proxy", "identity-proxy"),
             default_ingress_mode="direct-loopback",
             managed_runtimes=("llama-cpp", "vllm"),
             scheduler="none",

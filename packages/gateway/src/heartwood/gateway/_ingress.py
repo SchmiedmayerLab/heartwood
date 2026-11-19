@@ -127,7 +127,7 @@ class IngressPolicy:
             raise IngressConfigurationError(
                 "Jupyter proxy ingress requires a loopback gateway bind"
             )
-        if mode in {"jupyter-proxy", "trusted-proxy"} and not external_origin:
+        if mode != "direct-loopback" and not external_origin:
             raise IngressConfigurationError(f"{mode} ingress requires the exact external origin")
         normalized_base = normalize_base_path(external_base_path)
         normalized_origin = _normalize_origin(
@@ -183,11 +183,25 @@ class IngressPolicy:
         else:
             if not sources:
                 raise IngressConfigurationError(
-                    "trusted-proxy ingress requires at least one exact proxy source range"
+                    f"{mode} ingress requires at least one exact proxy source range"
                 )
             if host_loopback_publication:
                 raise IngressConfigurationError(
-                    "trusted-proxy ingress cannot use the host-loopback publication boundary"
+                    f"{mode} ingress cannot use the host-loopback publication boundary"
+                )
+        if mode == "identity-proxy":
+            if loopback_bind:
+                raise IngressConfigurationError(
+                    "identity-proxy ingress requires a non-loopback gateway bind"
+                )
+            if identity_header is not None:
+                raise IngressConfigurationError(
+                    "identity-proxy ingress verifies the researcher's identity and cannot "
+                    "configure a trusted proxy identity assertion"
+                )
+            if normalized_prefix_handling != "preserve":
+                raise IngressConfigurationError(
+                    "identity-proxy ingress must preserve its configured base path"
                 )
 
         return cls(
@@ -227,7 +241,15 @@ class IngressPolicy:
         self._validate_source(source_ip)
         forwarded_client = self._validate_forwarding(headers)
         self._validate_host(headers)
-        self._validate_origin(headers, websocket=websocket)
+        # A sign-in returns through the identity provider, so the browser reports the
+        # navigation that follows it as cross-site.
+        navigation = (
+            self.mode == "identity-proxy"
+            and not websocket
+            and scope.get("method") == "GET"
+            and headers.get("sec-fetch-mode") == ("navigate",)
+        )
+        self._validate_origin(headers, websocket=websocket, navigation=navigation)
         path = _validated_path(scope)
         query_string = _validated_query_string(scope)
         internal_path = self._internal_path(path)
@@ -255,7 +277,7 @@ class IngressPolicy:
                 "Jupyter proxy request did not originate from loopback",
                 status_code=403,
             )
-        if self.mode != "trusted-proxy":
+        if self.mode not in {"trusted-proxy", "identity-proxy"}:
             return
         networks = tuple(ipaddress.ip_network(source) for source in self.trusted_proxy_sources)
         if not any(address in network for network in networks):
@@ -280,6 +302,8 @@ class IngressPolicy:
         if self.mode == "jupyter-proxy":
             self._validate_jupyter_forwarding(headers, forwarded)
             return None
+        if self.mode == "identity-proxy":
+            return self._validate_proxy_chain_forwarding(headers, forwarded)
         unsupported = forwarded.intersection(
             _UNSUPPORTED_FORWARDED_HEADERS | _JUPYTER_CONTEXT_HEADERS
         )
@@ -328,6 +352,65 @@ class IngressPolicy:
                     status_code=403,
                 )
         return forwarded_client
+
+    def _validate_proxy_chain_forwarding(
+        self,
+        headers: Mapping[str, tuple[str, ...]],
+        forwarded: frozenset[str],
+    ) -> str | None:
+        """Check the metadata of a reverse proxy chain against the external origin.
+
+        Each proxy in a chain appends to the client, protocol and port headers, so the
+        first value is the one the outermost proxy observed.
+        """
+        unsupported = forwarded.intersection(_JUPYTER_CONTEXT_HEADERS | {"x-forwarded-uri"})
+        if unsupported:
+            raise IngressRequestError(
+                f"unsupported forwarded metadata is not accepted: {', '.join(sorted(unsupported))}"
+            )
+        expected = urlsplit(self.external_origin)
+        default_port = 443 if expected.scheme == "https" else 80
+        authority = _origin_authority(expected)
+        if "x-forwarded-host" in forwarded and _normalize_authority(
+            _one_header(headers, "x-forwarded-host")
+        ) not in {authority, f"{authority}:{default_port}"}:
+            raise IngressRequestError(
+                "forwarded host does not match the configured external origin",
+                status_code=403,
+            )
+        if (
+            "x-forwarded-proto" in forwarded
+            and _first_forwarded(headers, "x-forwarded-proto").lower() != expected.scheme
+        ):
+            raise IngressRequestError(
+                "forwarded protocol does not match the configured external origin",
+                status_code=403,
+            )
+        if "x-forwarded-port" in forwarded and _first_forwarded(headers, "x-forwarded-port") != str(
+            expected.port or default_port
+        ):
+            raise IngressRequestError(
+                "forwarded port does not match the configured external origin",
+                status_code=403,
+            )
+        if "x-forwarded-prefix" in forwarded:
+            try:
+                prefix = normalize_base_path(_one_header(headers, "x-forwarded-prefix"))
+            except IngressConfigurationError as error:
+                raise IngressRequestError("forwarded prefix is malformed") from error
+            if prefix != self.external_base_path:
+                raise IngressRequestError(
+                    "forwarded prefix does not match the configured external base path",
+                    status_code=403,
+                )
+        if "x-real-ip" in forwarded:
+            try:
+                ipaddress.ip_address(_one_header(headers, "x-real-ip"))
+            except ValueError as error:
+                raise IngressRequestError("forwarded client is not a valid IP address") from error
+        if "x-forwarded-for" in forwarded:
+            return _forwarded_clients(headers, allow_chain=True)[0]
+        return None
 
     def _validate_jupyter_forwarding(
         self,
@@ -400,6 +483,7 @@ class IngressPolicy:
         headers: Mapping[str, tuple[str, ...]],
         *,
         websocket: bool,
+        navigation: bool = False,
     ) -> None:
         origins = headers.get("origin", ())
         if websocket and not origins:
@@ -423,7 +507,7 @@ class IngressPolicy:
         fetch_site = headers.get("sec-fetch-site", ())
         if fetch_site:
             value = _one_header(headers, "sec-fetch-site").lower()
-            if value not in {"none", "same-origin"}:
+            if value not in {"none", "same-origin"} and not navigation:
                 raise IngressRequestError(
                     "cross-origin browser requests are not accepted",
                     status_code=403,
@@ -617,6 +701,13 @@ def _reject_ambiguous_forwarding(forwarded: frozenset[str]) -> None:
         )
     if forwarded.intersection({"x-original-url", "x-rewrite-url"}):
         raise IngressRequestError("rewritten URL metadata is not accepted")
+
+
+def _first_forwarded(headers: Mapping[str, tuple[str, ...]], name: str) -> str:
+    values = [value.strip() for value in _one_header(headers, name).split(",")]
+    if len(values) > 8 or not all(values):
+        raise IngressRequestError(f"request {name} header is malformed")
+    return values[0]
 
 
 def _forwarded_clients(

@@ -51,7 +51,7 @@ def test_descriptor_capability_is_consumed_and_prints_no_link(tmp_path: Path, pi
     with pytest.raises(OSError, match="Bad file descriptor"):
         os.fstat(descriptor)
     assert capability.launch_url(IngressPolicy.create()) is None
-    assert capability.authorizes({"x-heartwood-capability": (f" {_SECRET} ",)})
+    assert capability.principal({"x-heartwood-capability": (f" {_SECRET} ",)}) == "human"
 
 
 @pytest.mark.parametrize(
@@ -108,7 +108,7 @@ def test_capability_rejects_unusable_secrets(secret: str) -> None:
 
 def test_capability_accepts_explicit_headers_and_rejects_cookies() -> None:
     capability = LaunchCapability(_SECRET, launch_token=None)
-    assert capability.authorizes({"x-heartwood-capability": (_SECRET,)})
-    assert not capability.authorizes({"cookie": ("heartwood-capability=" + _SECRET,)})
-    assert not capability.authorizes({"x-heartwood-capability": ("\u00e9" * 40,)})
-    assert not capability.authorizes({})
+    assert capability.principal({"x-heartwood-capability": (_SECRET,)}) == "human"
+    assert capability.principal({"cookie": ("heartwood-capability=" + _SECRET,)}) is None
+    assert capability.principal({"x-heartwood-capability": ("\u00e9" * 40,)}) is None
+    assert capability.principal({}) is None

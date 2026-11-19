@@ -768,3 +768,135 @@ def test_ingress_rejects_malformed_asgi_scope_values() -> None:
     ):
         with pytest.raises(IngressRequestError, match=message):
             policy.validate_scope(scope)
+
+
+def _identity_proxy(**options: object) -> IngressPolicy:
+    configuration: dict[str, Any] = {
+        "mode": "identity-proxy",
+        "bind_host": "0.0.0.0",
+        "external_origin": "https://research.example.test",
+        "external_base_path": "/user/researcher/demo",
+        "trusted_proxy_sources": ("10.0.0.2",),
+        **options,
+    }
+    return IngressPolicy.create(**configuration)
+
+
+def _proxied(
+    *headers: tuple[str, str],
+    host: str = "research.example.test",
+    origin: str | None = None,
+    client: str = "10.0.0.2",
+) -> dict[str, object]:
+    return _scope(
+        "/user/researcher/demo/sessions", host=host, origin=origin, client=client, headers=headers
+    )
+
+
+@pytest.mark.parametrize(
+    ("options", "message"),
+    [
+        ({"bind_host": "127.0.0.1"}, "non-loopback gateway bind"),
+        ({"external_origin": None}, "exact external origin"),
+        ({"trusted_proxy_sources": ()}, "exact proxy source range"),
+        ({"prefix_handling": "strip"}, "must preserve"),
+        ({"host_loopback_publication": True}, "host-loopback publication"),
+        (
+            {"trusted_identity_header": "x-proxy-user", "trusted_identity": "researcher"},
+            "cannot configure a trusted proxy identity assertion",
+        ),
+    ],
+)
+def test_identity_proxy_requires_one_proxied_route(options: dict[str, Any], message: str) -> None:
+    with pytest.raises(IngressConfigurationError, match=message):
+        _identity_proxy(**options)
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        (),
+        (("x-forwarded-for", "203.0.113.7, 10.0.0.9"),),
+        (
+            ("x-forwarded-for", "203.0.113.7"),
+            ("x-forwarded-host", "research.example.test"),
+            ("x-forwarded-proto", "https,http"),
+            ("x-forwarded-port", "443,8000"),
+            ("x-forwarded-prefix", "/user/researcher/demo/"),
+            ("x-forwarded-server", "proxy-1"),
+            ("x-real-ip", "203.0.113.7"),
+        ),
+        (("x-forwarded-host", "research.example.test:443"), ("x-forwarded-proto", "HTTPS")),
+    ],
+)
+def test_identity_proxy_accepts_reverse_proxy_metadata_and_keeps_the_prefix(
+    headers: tuple[tuple[str, str], ...],
+) -> None:
+    request = _identity_proxy().validate_scope(_proxied(*headers))
+
+    assert request.path == "/sessions"
+    assert request.external_base_path == "/user/researcher/demo"
+    forwarded = any(name == "x-forwarded-for" for name, _value in headers)
+    assert request.client_ip == ("203.0.113.7" if forwarded else "10.0.0.2")
+
+
+@pytest.mark.parametrize(
+    ("headers", "message"),
+    [
+        ((("x-forwarded-host", "other.example.test"),), "forwarded host"),
+        ((("x-forwarded-proto", "http"),), "forwarded protocol"),
+        ((("x-forwarded-proto", "http,https"),), "forwarded protocol"),
+        ((("x-forwarded-proto", "https,,http"),), "malformed"),
+        ((("x-forwarded-port", "8443"),), "forwarded port"),
+        ((("x-forwarded-prefix", "/user/other/demo"),), "forwarded prefix"),
+        ((("x-forwarded-prefix", "relative"),), "forwarded prefix is malformed"),
+        ((("x-forwarded-for", "not-an-address"),), "valid IP address"),
+        ((("x-real-ip", "not-an-address"),), "valid IP address"),
+        ((("forwarded", "for=203.0.113.7"),), "RFC Forwarded"),
+        ((("x-original-url", "/sessions"),), "rewritten URL"),
+        ((("x-rewrite-url", "/sessions"),), "rewritten URL"),
+        ((("x-forwarded-uri", "/sessions"),), "unsupported forwarded metadata"),
+        ((("x-forwarded-context", "/user/researcher/demo"),), "unsupported forwarded metadata"),
+        ((("x-forwarded-host", "a.example"), ("x-forwarded-host", "b.example")), "must not repeat"),
+    ],
+)
+def test_identity_proxy_refuses_metadata_that_contradicts_the_route(
+    headers: tuple[tuple[str, str], ...], message: str
+) -> None:
+    with pytest.raises(IngressRequestError, match=message):
+        _identity_proxy().validate_scope(_proxied(*headers))
+
+
+def test_identity_proxy_enforces_source_host_and_base_path() -> None:
+    policy = _identity_proxy()
+
+    with pytest.raises(IngressRequestError, match="trusted proxy source"):
+        policy.validate_scope(_proxied(client="10.0.0.3"))
+    with pytest.raises(IngressRequestError, match="request host"):
+        policy.validate_scope(_proxied(host="0.0.0.0:8767"))
+    with pytest.raises(IngressRequestError, match="outside the configured gateway base path"):
+        policy.validate_scope(
+            _scope("/sessions", host="research.example.test", client="10.0.0.2", origin=None)
+        )
+    with pytest.raises(IngressRequestError, match="request origin"):
+        policy.validate_scope(_proxied(origin="https://other.example.test"))
+
+
+def test_only_identity_proxy_navigations_may_arrive_from_another_site() -> None:
+    navigation = (("sec-fetch-site", "cross-site"), ("sec-fetch-mode", "navigate"))
+    policy = _identity_proxy()
+
+    assert policy.validate_scope(_proxied(*navigation)).path == "/sessions"
+    with pytest.raises(IngressRequestError, match="cross-origin"):
+        policy.validate_scope(
+            _proxied(("sec-fetch-site", "cross-site"), ("sec-fetch-mode", "cors"))
+        )
+    with pytest.raises(IngressRequestError, match="cross-origin"):
+        policy.validate_scope({**_proxied(*navigation), "method": "POST"})
+    with pytest.raises(IngressRequestError, match="cross-origin"):
+        policy.validate_scope(
+            {**_proxied(*navigation, origin="https://research.example.test"), "type": "websocket"},
+            websocket=True,
+        )
+    with pytest.raises(IngressRequestError, match="cross-origin"):
+        IngressPolicy.create().validate_scope(_scope(headers=navigation))

@@ -498,13 +498,16 @@ _REST_OPERATIONS = (
 
 _ERROR_DESCRIPTIONS = {
     400: "Malformed request, query, ingress metadata, JSON, or UTF-8 body.",
-    401: "The launch capability is missing or invalid.",
+    401: "The launch capability or the verified identity is missing or invalid.",
     403: "The request does not satisfy the configured ingress boundary.",
     404: "The resource or configured ingress path is unavailable.",
     409: "Storage locking, project or session ownership, integrity recovery, or command conflict.",
     413: "The request body exceeds 1 MiB.",
     422: "The request or current configuration fails validation.",
-    503: "The gateway is shutting down or stopped, or the verification environment is unavailable.",
+    503: (
+        "The gateway is shutting down or stopped, or the verification environment or the "
+        "identity provider is unavailable."
+    ),
 }
 _STREAM_DESCRIPTION = (
     "Each update contains durable events and the current projection. Transient text can change "
@@ -522,7 +525,7 @@ def gateway_openapi(*, api_version: str | None = None) -> dict[str, Any]:
     The document version identifies the application release, not an additional wire version.
     All paths are relative to the deployment's browser-visible gateway base URL.
     """
-    security: list[dict[str, list[str]]] = [{"CapabilityHeader": []}]
+    security: list[dict[str, list[str]]] = [{"CapabilityHeader": []}, {"IdentityBearer": []}]
     types: dict[tuple[Any, Literal["validation", "serialization"]], TypeAdapter[Any]] = {}
     for operation in _REST_OPERATIONS:
         types[operation.response, "serialization"] = TypeAdapter(operation.response)
@@ -566,8 +569,9 @@ def gateway_openapi(*, api_version: str | None = None) -> dict[str, Any]:
             }
         if operation.path.endswith("/commands"):
             description["description"] = (
-                "The gateway replaces client-supplied actor_id with the launching principal "
-                "(currently human). Command IDs support idempotent retries; conflicting reuse "
+                "The gateway replaces client-supplied actor_id with the principal of the "
+                "request: human for the launch capability, or the verified subject with "
+                "identity-proxy ingress. Command IDs support idempotent retries; conflicting reuse "
                 "is rejected. The payload is a generic JSON object; command-specific rules "
                 "are enforced by the gateway. Approval decisions bind the complete ordered "
                 "action set, including tools and exact structured arguments. Changed action "
@@ -628,9 +632,10 @@ def gateway_openapi(*, api_version: str | None = None) -> dict[str, Any]:
                 "Implemented per-project gateway operations. Set the server URL to the exact "
                 "browser-visible gateway base path. Protected API and stream requests require a "
                 "capability and valid deployment ingress; /launch exchanges a one-time token. "
-                "The platform authenticates users; "
-                "the current gateway records one human principal, not verified individual "
-                "identities. Platform estimates and budgets have draft schemas but no runtime "
+                "With identity-proxy ingress the gateway verifies one researcher with OpenID "
+                "Connect and records the verified subject; in the other modes the platform "
+                "authenticates users and the gateway records one human principal. "
+                "Platform estimates and budgets have draft schemas but no runtime "
                 "HTTP endpoints. An operator-bound deployment policy limits project preferences, "
                 "and approvals bind exact action contents. A valid request "
                 "schema, gateway capability, or researcher approval never grants platform "
@@ -644,13 +649,24 @@ def gateway_openapi(*, api_version: str | None = None) -> dict[str, Any]:
             "schemas": definitions.get("$defs", {}),
             "securitySchemes": {
                 "CapabilityHeader": {"type": "apiKey", "in": "header", "name": CAPABILITY_HEADER},
+                "IdentityBearer": {
+                    "type": "http",
+                    "scheme": "bearer",
+                    "bearerFormat": "JWT",
+                    "description": (
+                        "Identity-proxy ingress only: an access token of the configured issuer "
+                        "whose audience contains the gateway's client and whose subject is the "
+                        "bound researcher."
+                    ),
+                },
             },
         },
         "x-websocket": {
             "path": "/sessions/{session_id}/events",
             "description": _STREAM_DESCRIPTION + " The stream sends snapshots only; submit "
             "commands through HTTP. The exact configured Origin header is required. "
-            "Authenticate with the capability header or, after connection, a JSON frame with "
+            "Authenticate with the capability header, with a bearer token header under "
+            "identity-proxy ingress, or, after connection, a JSON frame with "
             "type=authenticate and capability. No events are sent before authorization; the "
             "authentication frame is limited to 8192 bytes and must arrive within five seconds.",
             "parameters": _parameters("/sessions/{session_id}/events"),
