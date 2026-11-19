@@ -21,7 +21,7 @@ import secrets
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
-from urllib.parse import parse_qs, urlencode, urlsplit
+from urllib.parse import parse_qs, quote, urlencode, urljoin, urlsplit
 
 from kube import Cluster
 
@@ -71,12 +71,12 @@ def probe(cluster: Cluster, name: str, image: str) -> Iterator[str]:
         "metadata": {"name": "hub", "namespace": SESSIONS},
     }
     existed = cluster.kubectl("get", f"--namespace={SESSIONS}", "serviceaccount/hub")
-    cluster.apply(pod, account)
-    ready = cluster.kubectl(
-        "wait", f"--namespace={SESSIONS}", "--for=condition=Ready", f"pod/{name}"
-    )
-    assert ready.returncode == 0, ready.stderr
     try:
+        cluster.apply(pod, account)
+        ready = cluster.kubectl(
+            "wait", f"--namespace={SESSIONS}", "--for=condition=Ready", f"pod/{name}"
+        )
+        assert ready.returncode == 0, ready.stderr
         yield name
     finally:
         cluster.kubectl("delete", f"--namespace={SESSIONS}", f"pod/{name}", "--wait")
@@ -176,22 +176,103 @@ def claims(token: str) -> dict[str, Any]:
     return decoded
 
 
-def token_request(cluster: Cluster, pod: str, form: dict[str, str]) -> tuple[int, dict[str, Any]]:
-    """Send a form to the token endpoint of the realm."""
-    output = curl(
-        cluster,
-        pod,
-        "--data",
-        "@-",
-        "--write-out",
-        "\n%{http_code}",
-        f"{REALM}/token",
-        text_input=urlencode(form),
-    )
+def token_request(
+    cluster: Cluster,
+    pod: str,
+    form: dict[str, str],
+    *,
+    endpoint: str = "token",
+    basic: tuple[str, str] | None = None,
+) -> tuple[int, dict[str, Any]]:
+    """Send a form to an endpoint of the realm.
+
+    With ``basic``, the client authenticates with HTTP Basic, as the gateway does, and
+    the header reaches curl through a file that only the probe reads.
+    """
+    arguments = ["--data", "@-", "--write-out", "\n%{http_code}"]
+    path = None
+    if basic is not None:
+        path = f"/scratch/{secrets.token_hex(8)}.headers"
+        credentials = base64.b64encode(
+            f"{quote(basic[0], safe='')}:{quote(basic[1], safe='')}".encode()
+        ).decode()
+        written = cluster.kubectl(
+            "exec",
+            "--stdin",
+            f"--namespace={SESSIONS}",
+            pod,
+            "--",
+            "sh",
+            "-c",
+            f"umask 077 && cat > {path}",
+            text_input=f"Authorization: Basic {credentials}",
+        )
+        assert written.returncode == 0, written.stderr
+        arguments += ["--header", f"@{path}"]
+    try:
+        output = curl(cluster, pod, *arguments, f"{REALM}/{endpoint}", text_input=urlencode(form))
+    finally:
+        if path is not None:
+            cluster.kubectl("exec", f"--namespace={SESSIONS}", pod, "--", "rm", "-f", path)
     text, _, status = output.rpartition("\n")
     body = json.loads(text)
     assert isinstance(body, dict)
     return int(status), body
+
+
+def device_sign_in(cluster: Cluster, pod: str, *, username: str, scope: str) -> dict[str, Any]:
+    """Sign a researcher in with the device authorization grant of the command line client.
+
+    The researcher approves the code in a browser, here curl with a cookie jar, and the
+    command line client polls the token endpoint as ``heartwood identity token`` does.
+    """
+    status, grant = token_request(
+        cluster, pod, {"client_id": "heartwood-cli", "scope": scope}, endpoint="auth/device"
+    )
+    assert status == 200, grant.get("error")
+    jar = f"/scratch/{secrets.token_hex(8)}.cookies"
+    cookies = ("--cookie", jar, "--cookie-jar", jar, "--location")
+    try:
+        page = curl(cluster, pod, *cookies, grant["verification_uri_complete"])
+        form = re.search(r'<form[^>]*id="kc-form-login"[^>]*action="([^"]+)"', page)
+        assert form is not None, page[:400]
+        password = secret(cluster, PLATFORM, "keycloak-researchers", username)
+        page = curl(
+            cluster,
+            pod,
+            *cookies,
+            "--data",
+            "@-",
+            html.unescape(form.group(1)),
+            text_input=urlencode({"username": username, "password": password}),
+        )
+        # A public client asks the researcher to grant the requested scopes; the consent
+        # form has a relative action and a hidden code.
+        consent = re.search(r'<form[^>]*action="([^"]*login-actions/consent[^"]*)"', page)
+        if consent is not None:
+            fields = dict(re.findall(r'<input type="hidden" name="([^"]+)" value="([^"]*)"', page))
+            curl(
+                cluster,
+                pod,
+                *cookies,
+                "--data",
+                "@-",
+                urljoin(KEYCLOAK, html.unescape(consent.group(1))),
+                text_input=urlencode({**fields, "accept": "Yes"}),
+            )
+    finally:
+        cluster.kubectl("exec", f"--namespace={SESSIONS}", pod, "--", "rm", "-f", jar)
+    status, tokens = token_request(
+        cluster,
+        pod,
+        {
+            "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+            "device_code": grant["device_code"],
+            "client_id": "heartwood-cli",
+        },
+    )
+    assert status == 200, tokens.get("error")
+    return tokens
 
 
 def sign_in(
@@ -269,12 +350,15 @@ def exchange(
     subject_token: str,
     service: str | None,
     audience: str | None = None,
+    basic: bool = False,
 ) -> tuple[int, dict[str, Any]]:
-    """Exchange a researcher token for a token of one platform service."""
+    """Exchange a researcher token for a token of one platform service.
+
+    The client authenticates in the form, or with HTTP Basic as the gateway does.
+    """
     form = {
         "grant_type": EXCHANGE,
-        "client_id": client_id,
-        "client_secret": client_secret,
+        **({} if basic else {"client_id": client_id, "client_secret": client_secret}),
         "subject_token": subject_token,
         "subject_token_type": ACCESS_TOKEN,
         "requested_token_type": ACCESS_TOKEN,
@@ -283,4 +367,4 @@ def exchange(
         form["scope"] = f"svc-{service}"
     if audience is not None:
         form["audience"] = audience
-    return token_request(cluster, pod, form)
+    return token_request(cluster, pod, form, basic=(client_id, client_secret) if basic else None)

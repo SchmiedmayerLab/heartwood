@@ -309,7 +309,7 @@ The gateway authenticates as the project's client and sends the researcher's acc
 | `exp` | No later than the researcher's token | Unexpired |
 
 The service does not forward the token.
-The identity provider decides which client may request which scope and audience; a scope without its audience, an audience without its scope and another project's client are refused there.
+The identity provider decides which client may request which scope and audience; an audience requested without its scope, a scope requested with another service's audience and another project's client are refused there.
 
 Annotations are hints from the server, not authorization, and a changed tool set requires a new review.
 
@@ -768,7 +768,7 @@ The fakes hold synthetic data only and are not reference implementations of a pl
 | Fake | Shape | Covered behavior |
 |---|---|---|
 | Inference | OpenAI-compatible model list and streaming Chat Completions | A reply that completes an agent turn; a rejected credential, an exhausted quota, a rate limit, an unknown model and an unavailable service |
-| Token issuer | Exchanged JWT access tokens with one audience, the project's client `hw-proj-<project>` as authorized party and the researcher as subject | Valid, expired, wrong-audience and wrong-project tokens |
+| Token issuer | Exchanged JWT access tokens with one audience such as `heartwood-data`, its scope such as `svc-data`, the project's client `hw-proj-<project>` as authorized party and the researcher as subject | Valid, expired, wrong-audience and wrong-project tokens |
 | Data service | MCP tools `list_objects`, `get_object` and `get_access_url`, returning DRS object and access URL fields | A selected object, an unselected object, another project's object, an expired access grant and an unavailable service |
 | Budget service | MCP tools `get_budgets` and `estimate_workload`, returning `heartwood.budget-observation.v1` and `heartwood.platform-estimate.v1` priced from a synthetic price sheet | Allocations changed by other work or an administrator, estimates for a whole plan or for named elements, unsupported workload kinds and unpriced runtime profiles reported as unknown cost, a prediction for another project context and an unavailable service |
 | Job service | MCP tools `create_task`, `get_task`, `cancel_task`, `describe_operations` and `propose_task`, keyed by operation identifier and returning `heartwood.platform-operation-observation.v1` with the TES task identifier as backend reference and the TES state among its limitations, the declared operations, and the proposal for a submission | Submission, status, cancellation of a named operation, status of an identifier the service never received, a lost or delayed reply that reconciles to one task, a conflicting resubmission, a denied GPU request, an exhausted budget, revoked access and a task that fails after it started |

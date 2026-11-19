@@ -261,7 +261,8 @@ A launched session is checked for its namespace objects, its RoleBindings, a rea
 Requests sent from the control service's pod with its own token show that the admission policy confines it.
 A synthetic researcher signs in to a project client with the authorization code flow, and the client exchanges the researcher's token for a token of one service.
 The tests check the subject, the authorized party and the single audience of the exchanged token, and that Keycloak refuses an audience without its scope and the client of another project.
-The control service must refuse the researcher's own token, a token for another service, and a researcher who is not a member of the client's project.
+The command line client's device sign-in with the scope `project-demo` gives a token that the client of project demo exchanges with HTTP Basic client authentication, as the gateway does, and that the client of project other cannot exchange.
+The tests check that the control service refuses the researcher's own token, a token for another service, and a researcher who is not a member of the client's project.
 
 ### Worker Qualification
 

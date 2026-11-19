@@ -24,6 +24,7 @@ from identity import (
     SECOND,
     SESSIONS,
     claims,
+    device_sign_in,
     exchange,
     launch_url,
     probe,
@@ -69,6 +70,8 @@ class Platform:
         subject_token: str,
         service: str | None,
         audience: str | None = None,
+        *,
+        basic: bool = False,
     ) -> tuple[int, dict[str, Any]]:
         return exchange(
             self.cluster,
@@ -78,6 +81,7 @@ class Platform:
             subject_token=subject_token,
             service=service,
             audience=audience,
+            basic=basic,
         )
 
     def launch_context(self, token: str) -> tuple[int, Any]:
@@ -222,3 +226,38 @@ def test_registry_refuses_a_researcher_outside_the_project(platform: Platform) -
 
     status, _ = platform.launch_context(exchanged["access_token"])
     assert status == 403
+
+
+def test_command_line_token_is_exchanged_by_the_project_client(platform: Platform) -> None:
+    """The device sign-in with a project scope gives a token that the gateway exchanges."""
+    tokens = device_sign_in(
+        platform.cluster, platform.pod, username="researcher-one", scope="openid project-demo"
+    )
+    access = claims(tokens["access_token"])
+    assert access["sub"] == FIRST
+    assert access["azp"] == "heartwood-cli"
+    audiences = access["aud"] if isinstance(access["aud"], list) else [access["aud"]]
+    assert "hw-proj-demo" in audiences
+    assert "hw-proj-other" not in audiences
+
+    # The gateway authenticates with HTTP Basic; the client of project demo may exchange.
+    status, exchanged = platform.exchange(
+        platform.demo, tokens["access_token"], "control", "heartwood-control", basic=True
+    )
+    assert status == 200, exchanged.get("error_description")
+    token = claims(exchanged["access_token"])
+    assert (token["sub"], token["azp"], token["aud"]) == (
+        FIRST,
+        "hw-proj-demo",
+        "heartwood-control",
+    )
+    status, context = platform.launch_context(exchanged["access_token"])
+    assert status == 200, context
+    assert context["project_id"] == "demo"
+
+    # The client of project other is not in the token's audience.
+    status, refused = platform.exchange(
+        platform.other, tokens["access_token"], "control", "heartwood-control", basic=True
+    )
+    assert status in {400, 403}, (status, refused.get("error"))
+    assert "access_token" not in refused

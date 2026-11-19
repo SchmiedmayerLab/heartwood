@@ -306,15 +306,6 @@ class IdentityAccess:
             return AccessResponse(302, location=f"{self._base_url}{LOGIN_PATH}")
         return None
 
-    def researcher_access_token(self) -> str | None:
-        """Return the researcher's current access token, refreshed when it is about to expire.
-
-        Returns None when no sign-in is live. Raises ``AccessUnavailableError`` when the
-        provider cannot be reached.
-        """
-        subject = self._subject_token()
-        return None if subject is None else subject[1]
-
     def service_token(self, scope: str, audience: str) -> str | None:
         """Return a token for one platform service, exchanged for the researcher's token.
 
@@ -360,11 +351,40 @@ class IdentityAccess:
                 or payload.get("issued_token_type", _ACCESS_TOKEN_TYPE) != _ACCESS_TOKEN_TYPE
             ):
                 raise AccessUnavailableError(502)
+            expires_at = self._exchanged_expiry(token, audience)
             with self._lock:
                 self._exchanged[scope, audience] = _Exchanged(
-                    token, min(self._clock() + lifetime, sign_in.expires_at), sign_in
+                    token,
+                    min(self._clock() + lifetime, expires_at, sign_in.expires_at),
+                    sign_in,
                 )
             return token
+
+    def _exchanged_expiry(self, token: str, audience: str) -> float:
+        """Check that an exchanged token names only its service and return its expiry.
+
+        The token comes straight from the provider's token endpoint, so the claims are
+        read without a signature check; the service verifies the signature. A provider
+        whose configuration adds another audience, another client or another person is
+        reported as unusable, and no such token is sent.
+        """
+        try:
+            claims = jwt.decode(token, options={"verify_signature": False})
+        except jwt.PyJWTError:
+            raise AccessUnavailableError(502) from None
+        expiry = claims.get("exp")
+        subject = claims.get("sub")
+        if (
+            claims.get("aud") not in (audience, [audience])
+            or claims.get("azp") != self._client_id
+            or claims.get("iss") != self._issuer
+            or not isinstance(subject, str)
+            or not secrets.compare_digest(subject.encode(), self._subject)
+            or not isinstance(expiry, int)
+            or isinstance(expiry, bool)
+        ):
+            raise AccessUnavailableError(502)
+        return float(expiry)
 
     def _subject_token(self) -> tuple[_Login | _Bearer, str] | None:
         """Return the live sign-in whose access token represents the researcher, and the token.
