@@ -185,6 +185,7 @@ The qualification build has two further behaviors that the unmodified upstream r
 - The Kubernetes driver reports a delete that the Kubernetes API answers with a conflict as an error, because the Sandbox resource may still exist; the upstream release reports that delete as absence.
   A missing Sandbox resource is still reported as absent.
   The driver reports capability `openshell.compute.delete-awaits-provisioning`, which Heartwood's check requires under an `openshell-kubernetes` manifest.
+  Revocation through the Kubernetes driver sends such a deletion again.
 - A deletion that finds no sandbox under a workspace and name records that name in the gateway's store.
   For 24 hours after the last such deletion, the gateway rejects a creation under that name before it asks the compute driver to create the sandbox.
   The rejection has status `FAILED_PRECONDITION` and reason `SANDBOX_NAME_CONFIRMED_ABSENT` once the cleanup of the rejected creation's record completes; otherwise the error can have another status or lack the reason.
@@ -193,6 +194,7 @@ The qualification build has two further behaviors that the unmodified upstream r
   The deletion of a sandbox that exists when the deletion starts leaves its name available.
   The record lasts across a gateway restart as long as the store does.
   The gateway reports it as capability `openshell.compute.create-rejects-deleted-name` on its compute driver.
+  With the Kubernetes driver, Heartwood records an unanswered creation as never created only through a gateway that reports this capability; without it the attempt stays fenced.
 
 ### Sensitive Data
 

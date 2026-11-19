@@ -388,7 +388,7 @@ Correct the operator files; do not loosen their permissions or move them into th
 `heartwood gateway serve --deployment` found a session whose worker attempt was left unrevoked, but the attempt ran on a different sandbox control plane or container runtime than the deployment manifest names now, or its record predates the recording of that infrastructure.
 Heartwood leaves the attempt fenced and does not record revocation, because a worker missing from the current infrastructure may still be running on the earlier one.
 Stop the worker on the infrastructure it ran on, using that control plane's own tools, and continue the work in a new session.
-Pointing the manifest back at the original control plane and Docker daemon lets the next gateway start reconcile the attempt normally.
+Pointing the manifest back at the original control plane and Docker daemon, or cluster and namespace, lets the next gateway start reconcile the attempt normally.
 
 ### `HW-WORKER-003`: Worker Revocation Was Not Observed
 
@@ -398,6 +398,7 @@ The gateway retries while it runs, with a growing interval of up to 10 minutes, 
 A worker whose revocation fails while the gateway runs, including when its session's service is being closed, is handled the same way: the session stays fenced, refuses commands as retryable and stays readable until the retry observes revocation.
 When the gateway's request to create the worker failed or went unanswered, the attempt stays fenced even while the control plane answers, because absence does not show that the creation will not still complete; the retry deletes the worker if it appears.
 The only exception is a request the control plane rejected as invalid, unauthorized or unauthenticated, which the same gateway process then records as never created.
+With the Kubernetes driver, a sandbox gateway that reports `openshell.compute.create-rejects-deleted-name` also resolves the attempt by confirming that the worker's name is absent.
 A gateway process that ended after it prepared a worker and before it recorded the worker's runtime or its revocation leaves the attempt fenced the same way.
 Continue such a session's work in a new session.
 Do not delete the session's records or writer files to release it.
