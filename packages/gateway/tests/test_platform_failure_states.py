@@ -186,8 +186,8 @@ def test_fixture_covers_each_coded_failure_state_in_the_contract() -> None:
     table = contract.split("### Failure States", 1)[1].split("\n\n", 2)[1]
 
     assert set(re.findall(r"HW-[A-Z]+-\d{3}", table)) == {state["code"] for state in _STATES}
-    # Each surface below has a test that shows its states in every interface; model
-    # discovery states are covered in test_platform_model_connections.py.
+    # Each surface below has a test that shows its states in every interface.
+    # Model discovery states are tested in test_platform_model_connections.py.
     assert {state["surface"] for state in _STATES} == {
         "gateway-response",
         "model-discovery",

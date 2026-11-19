@@ -46,7 +46,7 @@ Without a terminal on standard input and without `--prompt`, it prints usage and
 
 | Option | Meaning |
 |---|---|
-| `--model-source SOURCE` | `heartwood`, `stanford-ai-api-gateway`, `openai-subscription`, `openai`, `anthropic`, or `custom`, or with `--deployment` a connection identifier the manifest declares; a source the platform does not offer stops setup with [`HW-SETUP-004`](troubleshooting.md#hw-setup-004-capability-is-not-offered-on-this-platform) |
+| `--model-source SOURCE` | `heartwood`, `stanford-ai-api-gateway`, `openai-subscription`, `openai`, `anthropic`, `custom`, or with `--deployment` a connection identifier the manifest declares. Setup stops with [`HW-SETUP-004`](troubleshooting.md#hw-setup-004-capability-is-not-offered-on-this-platform) for a source the platform does not offer |
 | `--deployment MANIFEST` | Absolute operator manifest whose project and model connections to configure |
 | `--model-id ID` | Exact model identifier reported by the service |
 | `--base-url URL` | Base URL of another compatible model service |

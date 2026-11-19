@@ -62,7 +62,11 @@ def configure_setup(setup: argparse.ArgumentParser) -> None:
     """Attach the guided setup options."""
     setup.add_argument(
         "--model-source",
-        help="Model service, or a model connection the deployment manifest declares.",
+        help=(
+            "Model service ("
+            + ", ".join(option.source_id for option in MODEL_SOURCE_OPTIONS)
+            + "), or a model connection the deployment manifest declares."
+        ),
     )
     setup.add_argument(
         "--deployment",
@@ -241,18 +245,17 @@ def _configure_project(
     resume_existing = False
     resume_managed_local = False
     if project.config_path.is_file():
-        adapter = select_platform_adapter(os.environ)
-        config_store = (
-            gateway.config_store
-            if gateway is not None
-            else ProjectConfigStore(
+        if gateway is not None:
+            config_store = gateway.config_store
+        else:
+            adapter = select_platform_adapter(os.environ)
+            config_store = ProjectConfigStore(
                 project,
                 ProjectConfig(
                     platform_id=adapter.adapter_id,
                     policy=adapter.default_policy_profile(),
                 ),
             )
-        )
         existing = config_store.load()
         if source is None and existing.model_source is not None:
             try:
@@ -309,6 +312,7 @@ def _configure_project(
             return 1, None
         source = choices[int(choice) - 1][0]
     labels = {choice: label for choice, label, _description in choices}
+    # The choices come from the gateway, so a source outside them is one it does not offer.
     if source not in labels:
         parser.error(str(CapabilityNotOfferedError()))
     if non_interactive and model_id is None:
@@ -332,6 +336,8 @@ def _configure_project(
         (option for option in MODEL_SOURCE_OPTIONS if option.source_id == source),
         None,
     )
+    # A gateway passed in belongs to the caller, which stops it.
+    owns_gateway = gateway is None
     try:
         if gateway is None:
             gateway = _run_with_progress(
@@ -439,7 +445,7 @@ def _configure_project(
         ModelSettingsError,
         ModelSnapshotError,
     ) as error:
-        if gateway is not None:
+        if owns_gateway and gateway is not None:
             gateway.stop()
         _restore_setup_file(project, snapshot)
         if source == "heartwood":
@@ -454,7 +460,7 @@ def _configure_project(
             print(f"Setup could not validate the model route: {error}")
         return 1, None
     except BaseException:
-        if gateway is not None:
+        if owns_gateway and gateway is not None:
             gateway.stop()
         _restore_setup_file(project, snapshot)
         raise

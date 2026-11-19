@@ -337,14 +337,49 @@ def test_guided_setup_refuses_a_connection_the_deployment_does_not_declare(
     monkeypatch.chdir(cast(str, record["workspace"]))
     arguments = ["--model-source", "synthetic-other", "--model-id", "synthetic-alias", "--yes"]
 
-    with pytest.raises(SystemExit):
+    with pytest.raises(SystemExit) as refused:
         terminal_main(["setup", "--deployment", str(deployment.manifest), *arguments])
 
-    assert (
-        capsys.readouterr()
-        .err.rstrip()
-        .endswith("HW-SETUP-004: The selected model connection is not offered on this platform")
+    assert refused.value.code == 2
+    refusal = capsys.readouterr().err.rstrip()
+    assert refusal.endswith(
+        "HW-SETUP-004: The selected model connection is not offered on this platform"
     )
+    assert not deployment.project.config_path.exists()
+
+
+def test_guided_setup_resumes_a_deployment_connection_selection(
+    tmp_path: Path,
+    inference: tuple[FakeInference, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _fake, base_url = inference
+    record = _record(tmp_path, base_url)
+    deployment = _deployment(tmp_path, record)
+    assert deployment.manifest is not None
+    monkeypatch.setenv(_KEY, INFERENCE_API_KEY)
+    monkeypatch.chdir(cast(str, record["workspace"]))
+    gateway = _gateway(deployment)
+    try:
+        gateway.connect_model(_CONNECTION, "synthetic-alias")
+        selected = gateway.model_settings()
+    finally:
+        gateway.stop()
+
+    def refuse(prompt: str) -> str:
+        raise AssertionError(f"setup asked again: {prompt}")
+
+    monkeypatch.setattr("builtins.input", refuse)
+
+    assert terminal_main(["setup", "--deployment", str(deployment.manifest)]) == 0
+
+    gateway = _gateway(deployment)
+    try:
+        resumed = gateway.model_settings()
+    finally:
+        gateway.stop()
+    assert resumed["model_source"] == _CONNECTION
+    assert resumed["profiles"] == selected["profiles"]
 
 
 @pytest.mark.parametrize(
