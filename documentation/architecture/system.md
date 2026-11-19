@@ -94,8 +94,9 @@ For that reason `review-outside-effects` is never in force outside a sandbox, an
 
 ### Managed Native Worker
 
-`heartwood gateway serve --deployment MANIFEST` selects the managed worker when the [deployment manifest](#protected-state-and-the-deployment-manifest) contains a `worker` table with `driver = "openshell-docker"`.
+`heartwood gateway serve --deployment MANIFEST` selects the managed worker when the [deployment manifest](#protected-state-and-the-deployment-manifest) contains a `worker` table.
 No other launch path selects it, and a managed session never falls back to the local backend.
+This section describes the worker of the Docker reference driver, `driver = "openshell-docker"`, through which worker launch runs.
 
 The worker is the OpenHands agent server from the Heartwood worker image, started by `images/worker/launch.py` as user `10001`.
 Before starting the server it registers the image's own verified advisory specialists.

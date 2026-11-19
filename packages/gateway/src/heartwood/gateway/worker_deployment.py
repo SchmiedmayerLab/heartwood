@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Annotated, Literal, Self
+from typing import Annotated, ClassVar, Literal, Self
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
@@ -27,12 +27,14 @@ def _require_canonical(*paths: Path) -> None:
             raise ValueError("Worker deployment paths must be absolute and canonical")
 
 
-class WorkerDeployment(BaseModel):
+_CONFIG = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
+
+
+class _WorkerSettings(BaseModel):
     """Select trusted native tools and a qualified route without embedding credentials."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
+    model_config = _CONFIG
 
-    driver: str
     gateway: _Name
     native_config_home: Path
     openshell_cli: Path
@@ -66,8 +68,11 @@ class WorkerDeployment(BaseModel):
         return self
 
 
-class OpenShellWorkerDeployment(WorkerDeployment):
+class OpenShellWorkerDeployment(_WorkerSettings):
     """The Docker reference deployment: one local daemon behind an explicit socket."""
+
+    # The compute driver implementation the sandbox gateway must report for this driver.
+    gateway_driver: ClassVar[str] = "openshell/docker"
 
     driver: Literal["openshell-docker"]
     docker_cli: Path
@@ -91,8 +96,10 @@ class OpenShellWorkerDeployment(WorkerDeployment):
         return self
 
 
-class KubernetesWorkerDeployment(WorkerDeployment):
+class KubernetesWorkerDeployment(_WorkerSettings):
     """A Kubernetes deployment: sandboxes run as pods in one namespace of one cluster."""
+
+    gateway_driver: ClassVar[str] = "openshell/kubernetes"
 
     driver: Literal["openshell-kubernetes"]
     # The sandbox command-line tool accepts a workspace name of at most 19 characters with
@@ -112,12 +119,11 @@ class KubernetesWorkerDeployment(WorkerDeployment):
         return self
 
 
-_WORKER_DEPLOYMENT: TypeAdapter[OpenShellWorkerDeployment | KubernetesWorkerDeployment] = (
-    TypeAdapter(
-        Annotated[
-            OpenShellWorkerDeployment | KubernetesWorkerDeployment, Field(discriminator="driver")
-        ]
-    )
+WorkerDeployment = OpenShellWorkerDeployment | KubernetesWorkerDeployment
+# The adapter needs its own configuration: the models' setting does not reach union errors.
+_WORKER_DEPLOYMENT: TypeAdapter[WorkerDeployment] = TypeAdapter(
+    Annotated[WorkerDeployment, Field(discriminator="driver")],
+    config=ConfigDict(hide_input_in_errors=True),
 )
 
 

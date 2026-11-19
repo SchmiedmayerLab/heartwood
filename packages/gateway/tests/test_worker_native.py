@@ -1302,6 +1302,28 @@ def test_invalid_kubernetes_settings_are_refused(
         worker_deployment_from_mapping({**kubernetes_deployment[0].model_dump(), field: value})
 
 
+def test_refused_worker_tables_do_not_repeat_their_values(
+    deployment: tuple[OpenShellWorkerDeployment, ProjectContext],
+    kubernetes_deployment: tuple[KubernetesWorkerDeployment, ProjectContext],
+) -> None:
+    marker = "synthetic-value-that-must-not-be-repeated"
+    for table in (deployment[0].model_dump(), kubernetes_deployment[0].model_dump()):
+        # An unknown driver is named in the refusal; no other value of the table is.
+        for change in (
+            {"driver": "openshell-podman"},
+            {"gateway": marker.upper()},
+            {"unlisted": marker},
+        ):
+            with pytest.raises(ValidationError) as raised:
+                worker_deployment_from_mapping({**table, "provider": marker, **change})
+            assert marker not in str(raised.value).lower()
+        with pytest.raises(ValidationError) as raised:
+            worker_deployment_from_mapping(
+                {k: v for k, v in table.items() if k != "driver"} | {"provider": marker}
+            )
+        assert marker not in str(raised.value)
+
+
 def test_workspace_name_limit_applies_to_the_kubernetes_driver_only(
     deployment: tuple[OpenShellWorkerDeployment, ProjectContext],
     kubernetes_deployment: tuple[KubernetesWorkerDeployment, ProjectContext],
@@ -1319,6 +1341,7 @@ def test_workspace_name_limit_applies_to_the_kubernetes_driver_only(
         "kubeconfig_missing",
         "kubeconfig_authority",
         "kubeconfig_link",
+        "kubectl_authority",
         "kubectl_permissions",
         "kubectl_not_executable",
     ],
@@ -1341,11 +1364,16 @@ def test_untrusted_kubernetes_authority_is_rejected(
         link = settings.kubeconfig.parent / "kubeconfig-link"
         link.symlink_to(settings.kubeconfig)
         settings = settings.model_copy(update={"kubeconfig": link})
+    elif change == "kubectl_authority":
+        target = project.root / "kubectl"
+        target.write_bytes(settings.kubectl_cli.read_bytes())
+        target.chmod(0o500)
+        settings = settings.model_copy(update={"kubectl_cli": target})
     elif change == "kubectl_permissions":
         settings.kubectl_cli.chmod(0o777)
     else:
         settings.kubectl_cli.chmod(0o400)
-    with pytest.raises((ProjectStateError, OSError)):
+    with pytest.raises(OSError if change == "kubeconfig_missing" else ProjectStateError):
         validate_worker_deployment(settings, project)
     assert not project.state_root.exists()
 
@@ -1515,7 +1543,9 @@ def test_kubernetes_manifest_stops_launch_and_reconciliation_before_any_request(
             client_tools=(),
         ),
     )
-    with pytest.raises(WorkerAttemptError, match="requires the openshell-docker driver"):
+    with pytest.raises(
+        WorkerAttemptError, match="managed workers require the openshell-docker driver"
+    ):
         native_worker_plan_factory(settings, project)(request)
     assert project.project_id is not None
     record = WorkerAttemptRecord.model_validate(
@@ -1538,7 +1568,9 @@ def test_kubernetes_manifest_stops_launch_and_reconciliation_before_any_request(
         }
     )
     kubernetes_gateway.place("hw-" + record.intent.attempt_id.hex[:16], {})
-    with pytest.raises(WorkerAttemptError, match="requires the openshell-docker driver"):
+    with pytest.raises(
+        WorkerAttemptError, match="managed workers require the openshell-docker driver"
+    ):
         worker_native.native_worker_reconciler(settings, project)(record)
     assert kubernetes_gateway.running
     assert kubernetes_gateway.spec is None

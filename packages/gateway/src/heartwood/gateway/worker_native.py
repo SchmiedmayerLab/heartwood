@@ -148,7 +148,7 @@ def _volume_settings(
     # Staging, admission and evidence of absence run through the Docker driver only; any
     # other driver stops here, before a sandbox, volume or deletion request.
     if not isinstance(settings, OpenShellWorkerDeployment):
-        raise WorkerAttemptError("managed worker launch requires the openshell-docker driver")
+        raise WorkerAttemptError("managed workers require the openshell-docker driver")
     return WorkerVolumeSettings(
         docker_cli=settings.docker_cli,
         docker_host=settings.docker_host,

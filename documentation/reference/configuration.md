@@ -217,7 +217,7 @@ The inference endpoint must enforce approved models and tenant scope itself; the
 
 #### Kubernetes Driver
 
-With `driver = "openshell-kubernetes"` the table omits the three `docker_` keys and adds these keys:
+With `driver = "openshell-kubernetes"` the table omits the three `docker_` keys, adds five keys, and limits the length of `workspace`:
 
 ```toml
 [worker]
@@ -232,7 +232,7 @@ sandbox_image_digest = "sha256:0000000000000000000000000000000000000000000000000
 | Key | Requirement |
 |---|---|
 | `kubectl_cli` | Absolute executable path of `kubectl` |
-| `kubeconfig` | Absolute path of the `kubectl` configuration for the cluster; readable and writable by its owner only |
+| `kubeconfig` | Absolute path of the `kubectl` configuration for the cluster; accessible by its owner only |
 | `namespace` | Namespace in which the sandbox gateway creates the session's pods; lowercase letters, digits, and hyphens |
 | `supervisor_image_digest` | `sha256:` digest of the OpenShell supervisor image |
 | `sandbox_image_digest` | `sha256:` digest of the OpenShell sandbox runtime image |

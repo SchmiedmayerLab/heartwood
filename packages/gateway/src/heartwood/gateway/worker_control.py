@@ -42,11 +42,6 @@ REQUIRED_GATEWAY_CAPABILITIES = frozenset(
         "openshell.compute.delete-retries-deleting",
     }
 )
-# The compute driver implementation the gateway must report for each manifest driver.
-_DRIVER_IMPLEMENTATIONS = {
-    "openshell-docker": "openshell/docker",
-    "openshell-kubernetes": "openshell/kubernetes",
-}
 
 
 class NativeWorkerControl:
@@ -57,7 +52,6 @@ class NativeWorkerControl:
         self.settings = settings
         self.project = project
         validate_worker_deployment(settings, project)
-        self._driver = _DRIVER_IMPLEMENTATIONS[settings.driver]
         directory = settings.native_config_home / "openshell" / "gateways" / settings.gateway
         self._files = tuple(
             directory / name
@@ -153,7 +147,7 @@ class NativeWorkerControl:
             missing = REQUIRED_GATEWAY_CAPABILITIES.difference(self.gateway.capabilities)
             detail = (
                 f": version {self.gateway.version} lacks {', '.join(sorted(missing))}"
-                if self.gateway.driver == self._driver
+                if self.gateway.driver == self.settings.gateway_driver
                 else ""
             )
             raise WorkerGatewayCapabilityError(
@@ -173,7 +167,7 @@ class NativeWorkerControl:
         capabilities = tuple(driver.supported_capabilities) if driver is not None else ()
         accepted = (
             driver is not None
-            and driver.implementation_name == self._driver
+            and driver.implementation_name == self.settings.gateway_driver
             and REQUIRED_GATEWAY_CAPABILITIES.issubset(capabilities)
         )
         return WorkerGatewayReport(

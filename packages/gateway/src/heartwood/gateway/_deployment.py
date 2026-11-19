@@ -45,7 +45,6 @@ from heartwood.gateway.checkpoint_deployment import (
     validate_evidence_deployment,
 )
 from heartwood.gateway.worker_deployment import (
-    KubernetesWorkerDeployment,
     OpenShellWorkerDeployment,
     WorkerDeployment,
     worker_deployment_from_mapping,
@@ -405,10 +404,8 @@ def validate_worker_deployment(worker: WorkerDeployment, project: ProjectContext
     """Reject workspace authority and changed policy before native clients are constructed."""
     if isinstance(worker, OpenShellWorkerDeployment):
         driver_cli = worker.docker_cli
-    elif isinstance(worker, KubernetesWorkerDeployment):
-        driver_cli = worker.kubectl_cli
     else:
-        raise ProjectStateError("worker deployment selects an unsupported driver")
+        driver_cli = worker.kubectl_cli
     for path in (worker.openshell_cli, driver_cli, worker.policy_path):
         validate_operator_file(path, project)
     for binary in (worker.openshell_cli, driver_cli):
@@ -416,7 +413,7 @@ def validate_worker_deployment(worker: WorkerDeployment, project: ProjectContext
             raise ProjectStateError("native worker tools must be executable")
     if isinstance(worker, OpenShellWorkerDeployment):
         _validate_docker_socket(worker, project)
-    if isinstance(worker, KubernetesWorkerDeployment):
+    else:
         # The cluster credential may be embedded in this file or referenced from it.
         validate_operator_file(worker.kubeconfig, project)
         if stat.S_IMODE(worker.kubeconfig.stat().st_mode) & 0o077:
