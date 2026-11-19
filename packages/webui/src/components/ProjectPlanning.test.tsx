@@ -6,15 +6,25 @@
  * SPDX-License-Identifier: MIT
  */
 
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import example from "../../../../fixtures/synthetic/platform-contract/planning-projection.json";
 import type { HeartwoodClient } from "../client";
 import type { PlanningProjection } from "../types";
 import { admissionNotice, ProjectPlanning } from "./ProjectPlanning";
 
 // The gateway tests check that this file is the projection the gateway produces.
-const projection = example as PlanningProjection;
+// It is read at run time because the image build type-checks this package without it.
+const projection = JSON.parse(
+  readFileSync(
+    resolve(
+      import.meta.dirname,
+      "../../../../fixtures/synthetic/platform-contract/planning-projection.json",
+    ),
+    "utf8",
+  ),
+) as PlanningProjection;
 
 const client = (value: PlanningProjection = projection) => ({
   getPlanning: vi.fn<HeartwoodClient["getPlanning"]>().mockResolvedValue(value),
