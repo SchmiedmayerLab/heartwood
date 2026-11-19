@@ -149,6 +149,7 @@ checkpoint_evidence = false
 | `[evidence]` | Optional automatic checkpointing; requires `[worker]`; see [Configure Managed Evidence](../operate/audit-checkpoints.md#configure-managed-evidence) |
 | `[model_connections]`, `[model_metadata]` | Optional platform model connections and model declarations; see [Model Connections](#model-connections) |
 | `[[mcp_destinations]]` | Optional origins for research MCP servers; requires `[worker]`; see [MCP Destinations](#mcp-destinations) |
+| `[identity]` | Optional OpenID Connect client and researcher; required by `identity-proxy` ingress and refused with every other mode; see [Identity](#identity) |
 
 Any other key, at any level, is rejected.
 The manifest must be an absolute path that traverses no symbolic link, lie outside the research directory and the state root, be a regular file of at most 64 KiB owned by root or the gateway user, and not be writable by group or others.
@@ -156,6 +157,38 @@ Every parent directory of the manifest and of `state_root` must be owned by root
 An omitted `allowed_action_review_modes` permits the platform's modes, plus `review-outside-effects` with a `[worker]` section, which makes `review-outside-effects` the default for sessions in an isolated worker; list the modes explicitly.
 Credential names are references; credentials never belong in the manifest.
 See [Projects and Private State](../start/project.md#operator-bound-external-state) for the operator workflow.
+
+### Identity
+
+The `[identity]` table binds a gateway that runs with `--ingress-mode identity-proxy` to one OpenID Connect provider, one confidential client and one researcher.
+
+```toml
+[identity]
+issuer = "https://id.example.org/realms/research"
+client_id = "hw-proj-demo"
+client_secret_file = "/etc/heartwood/identity/client-secret"
+subject = "7c9e6679-7425-40de-944b-e07fc1f90ae7"
+```
+
+| Key | Requirement |
+|---|---|
+| `issuer` | Exact `iss` value of the provider's tokens and the origin the browser is sent to for sign-in |
+| `client_id` | The gateway's client at the provider; accepted tokens name it in `aud` |
+| `client_secret_file` | Absolute file that holds the client secret: printable ASCII without spaces, at most 4096 bytes, one trailing newline allowed |
+| `subject` | The only `sub` value the gateway accepts |
+| `provider_url` | Optional base URL where the gateway itself reaches the provider's discovery document, token endpoint and keys; default `issuer` |
+| `ca_file` | Optional absolute PEM file of certificate authorities that replaces the system trust store for requests to the provider |
+| `allow_plain_http` | Optional; `true` permits `http` URLs to hosts other than loopback; default `false` |
+
+`issuer` and `provider_url` are `http` or `https` URLs without credentials, query or fragment.
+Both use `https`, or `http` to a loopback address, unless `allow_plain_http` is `true`.
+With `allow_plain_http`, the client secret, authorization codes and tokens cross the network between the gateway and `provider_url` unencrypted.
+The gateway reads `<provider_url>/.well-known/openid-configuration`, and the document's `issuer` must equal the configured `issuer`.
+The document's endpoints must lie on the origin of `issuer` or of `provider_url`.
+The gateway sends the browser to the authorization endpoint on the `issuer` origin and requests tokens and keys on the `provider_url` origin.
+`client_secret_file` and `ca_file` follow the rules for operator files: outside the research directory and the state root, no symbolic link in the path, owned by root or the gateway user, and not writable by group or others.
+`client_secret_file` must also be unreadable by group and others.
+[Researcher Identity](../operate/security.md#researcher-identity) describes sign-in and token handling.
 
 ### Managed Worker
 

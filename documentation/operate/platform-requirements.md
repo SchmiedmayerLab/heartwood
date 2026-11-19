@@ -42,7 +42,8 @@ Provide, without secret values:
 
 The proxy authenticates and authorizes the researcher, strips client-supplied forwarding and identity headers, supports unbuffered streaming and WebSocket upgrades, and prevents direct access to the gateway.
 Use one gateway per researcher and project, and separate authenticated origins for mutually untrusted projects.
-Heartwood does not verify OpenID Connect identities or exchange platform tokens.
+With [`identity-proxy` ingress](security.md#researcher-identity) the gateway verifies one researcher's OpenID Connect identity itself, and the proxy only forwards requests.
+Heartwood does not exchange platform tokens.
 The [Gateway API reference](../reference/gateway-api.md) and the generated `gateway.openapi.json` define every route.
 
 ## Inference Access

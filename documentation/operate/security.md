@@ -231,13 +231,18 @@ Removing a detected secret from history and rotating it remain manual incident s
 The gateway accepts traffic through one configured ingress mode:
 
 - `direct-loopback` binds to loopback and rejects forwarding headers;
-- `jupyter-proxy` binds to loopback, requires the exact external origin and stripped prefix, and validates the route metadata of `jupyter-server-proxy`; and
-- `trusted-proxy` accepts only configured source ranges with one complete forwarded client, host, protocol and prefix set, and can require an exact non-secret identity assertion header.
+- `jupyter-proxy` binds to loopback, requires the exact external origin and stripped prefix, and validates the route metadata of `jupyter-server-proxy`;
+- `trusted-proxy` accepts only configured source ranges with one complete forwarded client, host, protocol and prefix set, and can require an exact non-secret identity assertion header; and
+- `identity-proxy` binds to a non-loopback address, accepts only configured source ranges, keeps the external base path, and verifies the researcher as described in [Researcher Identity](#researcher-identity).
 
 Every mode validates host, origin, WebSocket origin, path, query encoding and base path, and rejects duplicated security headers, undeclared forwarding metadata, encoded or traversing paths and wildcard origins.
 Request bodies are limited to 1 MiB of UTF-8.
 Browser responses set a restrictive content security policy, same-origin framing, no referrer, MIME-sniffing protection, and a permissions policy that disables camera, geolocation and microphone.
-Heartwood does not authenticate end users or terminate public TLS; the platform proxy must do both and strip client-supplied forwarding and identity headers.
+In `identity-proxy` mode the forwarded client, host, protocol, port and prefix headers are optional.
+The host, the first protocol value, the first port value and the prefix must match the external origin and base path when present; `X-Real-IP` and `X-Forwarded-Server` are accepted and unused.
+A top-level `GET` navigation may arrive from another site in that mode, because a sign-in returns through the identity provider.
+Heartwood does not terminate public TLS.
+Outside `identity-proxy` mode Heartwood does not authenticate end users; the platform proxy must do so and strip client-supplied forwarding and identity headers.
 
 ## Launch Capability
 
@@ -249,8 +254,35 @@ Access logging is disabled, and a request without the capability receives `HW-IN
 
 The capability separates the researcher's browser from other operating-system users and from requests that lack it.
 It does not separate the researcher from same-user processes, from scripts on the same origin, or from another person sharing the account.
-Every accepted command records the launching principal as its actor; a command cannot claim another actor, and the actor `gateway` is reserved for automatic review decisions.
+Every accepted command records the launching principal, `human`, as its actor; a command cannot claim another actor, and the actor `gateway` is reserved for automatic review decisions.
 Use separate authenticated origins for mutually untrusted projects; in Jupyter proxy mode, notebook content on the same origin is trusted.
+
+## Researcher Identity
+
+With `identity-proxy` ingress the gateway is a confidential OpenID Connect client bound to one subject by the manifest's [`[identity]` table](../reference/configuration.md#identity).
+It replaces the launch link: every API request, server-sent event stream and WebSocket needs a sign-in capability or an access token, and a request with neither receives `HW-INGRESS-004`.
+
+A browser that opens the gateway's URL is redirected to `identity/login` and from there to the provider's authorization endpoint with a `state`, a `nonce` and a PKCE challenge.
+The provider returns the browser to `oauth_callback`, where the gateway redeems the code with its client secret and verifies the ID token.
+The gateway accepts RS256 and ES256 signatures made with the provider's published keys, and requires the configured issuer, an audience that names its client, an unexpired lifetime, the `nonce` of this sign-in and the bound subject.
+An access token that is a JSON Web Token must carry the same issuer and subject and name the client as audience or authorized party.
+The browser then receives a one-time launch token in the URL fragment and exchanges it at `POST /launch` for a capability of that sign-in, which it sends as in the [launch capability](#launch-capability) flow.
+A sign-in ends when its refresh token expires, when the provider reports that time, and otherwise when its access token expires.
+
+Other clients send `Authorization: Bearer` with an access token of the same issuer whose `aud` contains the gateway's client and whose `sub` is the bound subject.
+Every accepted command records the verified subject as its actor.
+
+The gateway keeps the researcher's access and refresh tokens, the client secret, authorization codes and capabilities in process memory.
+They are not written to project files, protected state, events, audit exports or logs, and they are not passed to agent tools or to the model.
+
+- One gateway accepts one subject; a token of any other person is refused.
+- A restart of the gateway ends every sign-in, and the researcher signs in again.
+- The gateway holds at most eight sign-ins and 256 unfinished sign-in attempts, and drops the oldest beyond that.
+- The `heartwood-login` cookie that the callback sets for one minute authorizes nothing; it lets the page load once so that it can exchange the launch token.
+- An unsigned token, a token signed with a shared secret, and a token signed with a key the provider does not publish are refused.
+- The gateway cannot tell an ID token from an access token when both name its client as audience, so the provider must issue ID tokens for the gateway's client only to the gateway.
+- With `allow_plain_http` the client secret and the tokens cross the network to the provider unencrypted.
+- When the provider cannot be reached or answers with an unusable document, the request receives `HW-INGRESS-005` without the provider's text.
 
 ## Model Content
 
@@ -288,7 +320,8 @@ Native qualification runs synthetic and benign workloads, and no deployment of H
 Synthetic qualification, CI validation and a running sandbox are evidence for an institutional review, not institutional approval.
 Review modes do not constrain a compromised isolated worker, which can act inside its sandbox without an approval.
 A released outside result reaches the model as a user-role message; the envelope that labels it is not an instruction boundary.
-Heartwood does not verify individual identities, attribute commands to individual people behind one gateway, or replace platform authorization.
+Outside `identity-proxy` ingress Heartwood does not verify individual identities.
+Heartwood does not attribute commands to individual people behind one gateway or replace platform authorization.
 Heartwood provides no quarantine, steward-approved output release, encrypted execution storage or records-system retention enforcement.
 
 ## Deployment Security Checklist
@@ -296,7 +329,7 @@ Heartwood provides no quarantine, steward-approved output release, encrypted exe
 Confirm each control before researchers add project data, and again after each update:
 
 - authenticate every user before they reach the execution environment, and isolate projects and users with platform permissions;
-- keep the gateway on loopback or behind one configured authenticated proxy, and keep the launch link and capability private to the researcher;
+- keep the gateway on loopback, behind one configured authenticated proxy, or in `identity-proxy` mode behind a proxy with a declared source range, and keep the launch link and capability private to the researcher;
 - deny network egress except reviewed model and package endpoints;
 - keep provider secrets in a keyring, mounted secret or managed identity, and production checkpoint keys in an independently authorized signer;
 - list `allowed_action_review_modes` explicitly, with only the modes evaluated for the deployment;

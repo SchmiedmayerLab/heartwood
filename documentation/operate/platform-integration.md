@@ -44,8 +44,9 @@ Expose managed connection metadata without secret values, and never let a user-e
 Choose one of the shared ingress modes instead of adding platform-specific request parsing:
 
 - `direct-loopback` for a client that connects directly to a loopback gateway;
-- `jupyter-proxy` for an authenticated local Jupyter proxy that strips one exact external prefix and supplies only validated Jupyter route metadata; or
-- `trusted-proxy` for a non-loopback deployment with exact proxy source ranges, external origin, base path and forwarded metadata.
+- `jupyter-proxy` for an authenticated local Jupyter proxy that strips one exact external prefix and supplies only validated Jupyter route metadata;
+- `trusted-proxy` for a non-loopback deployment with exact proxy source ranges, external origin, base path and forwarded metadata; or
+- `identity-proxy` for a gateway behind a reverse proxy that forwards requests without authenticating them, where the gateway verifies one researcher with OpenID Connect.
 
 The deployment supplies route values to `heartwood gateway serve`, which validates them once for the REST API, server-sent events, WebSockets, browser assets and the generated browser base path.
 Interface clients do not read Terra, Carina, Jupyter or proxy environment variables.
@@ -54,6 +55,13 @@ A trusted proxy removes inbound forwarding and identity headers before setting i
 Every request also needs the launch capability.
 Either let the researcher open the launch link that `heartwood gateway serve` prints and forward the browser's header and WebSocket authentication frame unchanged, or supply the capability through `--capability-fd` and inject `X-Heartwood-Capability` from the proxy for callers it has authenticated.
 Keep the descriptor source and the capability away from the worker and from other users.
+
+In `identity-proxy` mode the gateway issues no launch link and accepts no `--capability-fd`.
+The deployment manifest's [`[identity]` table](../reference/configuration.md#identity) names the provider, the gateway's client and the one subject the gateway accepts.
+The proxy keeps the external base path, connects from a declared source range and forwards the `Host` header unchanged.
+Register `<public origin><base path>/oauth_callback` as the client's redirect URI at the provider.
+The generic adapter offers this mode; an adapter lists it in `ingress_modes` to offer it on another platform.
+[Researcher Identity](security.md#researcher-identity) states what the gateway verifies.
 
 ## Model Credential Isolation
 
