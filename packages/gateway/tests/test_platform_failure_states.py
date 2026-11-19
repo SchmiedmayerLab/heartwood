@@ -187,10 +187,12 @@ def test_fixture_covers_each_coded_failure_state_in_the_contract() -> None:
 
     assert set(re.findall(r"HW-[A-Z]+-\d{3}", table)) == {state["code"] for state in _STATES}
     # Each surface below has a test that shows its states in every interface.
-    # Model discovery states are tested in test_platform_model_connections.py.
+    # Model discovery states are tested in test_platform_model_connections.py,
+    # and planning states in test_platform_planning.py.
     assert {state["surface"] for state in _STATES} == {
         "gateway-response",
         "model-discovery",
+        "planning",
         "session",
         "setup-refusal",
     }
