@@ -37,6 +37,7 @@ from heartwood.core_adapter.action_review import AUTOMATIC_REVIEW_ACTOR
 from heartwood.gateway._access import (
     CAPABILITY_ACTOR,
     CAPABILITY_HEADER,
+    OPERATOR_ACTOR,
     AccessResponse,
     AccessUnavailableError,
     GatewayAccess,
@@ -119,7 +120,7 @@ class IdentityDeployment(BaseModel):
                 )
             if not self.allow_plain_http:
                 require_protected_transport(url)
-        if self.subject in {CAPABILITY_ACTOR, AUTOMATIC_REVIEW_ACTOR}:
+        if self.subject in {CAPABILITY_ACTOR, AUTOMATIC_REVIEW_ACTOR, OPERATOR_ACTOR}:
             raise ValueError("identity subject names an actor the gateway reserves")
         for path in (self.client_secret_file, self.ca_file):
             if path is not None and not path.is_absolute():

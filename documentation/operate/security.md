@@ -286,8 +286,9 @@ A deployment with `[identity]` should therefore also configure a worker.
 - A sign-in completes only in the browser that started it; a second sign-in started in the same browser replaces the first.
 - The `heartwood-login` cookie that the callback sets for one minute authorizes nothing; it lets the page load once so that it can exchange the launch token.
 - The launch token in the URL fragment and the capability in the browser's session storage are readable by every script on the gateway's origin.
-- Static responses forbid framing, so another page cannot embed the gateway and complete a sign-in inside a frame.
 - Gateways of several researchers that share one origin under different paths are therefore separated only while nothing else on that origin serves pages a researcher controls.
+- Static responses forbid framing, so another page cannot embed the gateway; a script on the same origin can still open the gateway in another window and read its launch token.
+- With an `http` public origin, the authorization code, the launch token, the capability, bearer tokens that clients present and the cookies cross the network between the client and the proxy unencrypted, and the cookies carry no `Secure` attribute.
 - An event stream or WebSocket that was opened with a sign-in's capability keeps delivering events after that sign-in ends, until the connection closes.
 - An unsigned token, a token signed with a shared secret, and a token signed with a key the provider does not publish are refused.
 - With `allow_plain_http` the client secret and the tokens cross the network to the provider unencrypted.

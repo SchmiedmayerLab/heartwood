@@ -27,6 +27,8 @@ from heartwood.gateway._ingress import IngressConfigurationError, IngressPolicy
 CAPABILITY_HEADER = "x-heartwood-capability"
 CAPABILITY_ENVIRONMENT = "HEARTWOOD_GATEWAY_CAPABILITY"
 CAPABILITY_ACTOR = "human"
+# The actor of operator actions, such as audit checkpoint exports.
+OPERATOR_ACTOR = "deployment-operator"
 _MINIMUM_SECRET_LENGTH = 32
 _MAXIMUM_SECRET_BYTES = 4096
 _DESCRIPTOR_TIMEOUT_SECONDS = 5.0

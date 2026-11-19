@@ -1344,6 +1344,7 @@ def test_access_reads_the_client_secret_and_certificate_authority(tmp_path: Path
         {"subject": "s" * 129},
         {"subject": "gateway"},
         {"subject": "human"},
+        {"subject": "deployment-operator"},
         {"client_secret_file": "relative/secret"},
         {"ca_file": "relative/ca.pem"},
         {"allow_plain_http": "true"},
