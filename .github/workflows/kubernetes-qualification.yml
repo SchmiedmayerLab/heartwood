@@ -1,0 +1,89 @@
+# This source file is part of the Heartwood open-source project
+#
+# SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+#
+# SPDX-License-Identifier: MIT
+
+name: Kubernetes Qualification
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scope:
+    name: Select the cluster stage for changed inputs
+    runs-on: ubuntu-24.04
+    outputs:
+      required: ${{ steps.inputs.outputs.required }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+          submodules: true
+      # The scope is decided here, so a caller sees success when the cluster job is skipped.
+      - name: Compare a pull request with its base
+        id: inputs
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          required=true
+          if [[ "${EVENT_NAME}" == "pull_request" ]]; then
+            required=false
+            changed="$(git diff --name-only --no-renames HEAD^1 HEAD)"
+            while IFS= read -r path; do
+              case "${path}" in
+                packages/gateway/* | packages/schemas/* | images/* | deploy/* | reference-platform/* | \
+                  .github/workflows/pull-request-validation.yml | \
+                  .github/workflows/worker-candidate.yml | \
+                  .github/workflows/kubernetes-qualification.yml)
+                  required=true
+                  ;;
+              esac
+            done <<<"${changed}"
+          fi
+          echo "required=${required}" >> "${GITHUB_OUTPUT}"
+
+  cluster:
+    name: Kubernetes qualification
+    needs: scope
+    if: needs.scope.outputs.required == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      KIND_VERSION: v0.33.0
+      KIND_SHA256: aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          submodules: true
+      - name: Install kind
+        run: |
+          mkdir -p "${RUNNER_TEMP}/bin"
+          curl --fail --silent --show-error --location --retry 3 --output "${RUNNER_TEMP}/bin/kind" \
+            "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64"
+          echo "${KIND_SHA256}  ${RUNNER_TEMP}/bin/kind" | sha256sum --check
+          chmod +x "${RUNNER_TEMP}/bin/kind"
+          echo "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
+      - name: Create the kind cluster with Calico and Agent Sandbox
+        run: bash reference-platform/cluster/create-cluster.sh heartwood
+      # Every later cluster result counts only when both controls pass.
+      - name: Require network policy enforcement
+        run: >-
+          bash reference-platform/cluster/network-policy-controls.sh heartwood
+          test-results/kubernetes-qualification
+      - name: Retain the cluster evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: kubernetes-qualification-${{ github.sha }}
+          path: test-results/kubernetes-qualification/
+          if-no-files-found: ignore
+          retention-days: ${{ github.event_name == 'pull_request' && 14 || 90 }}
