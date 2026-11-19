@@ -229,6 +229,8 @@ def sources(tmp_path: Path) -> dict[str, Path]:
     (inputs / "data" / "table.csv").chmod(0o400)
     (skills / "synthetic").mkdir(parents=True, mode=0o700)
     (skills / "synthetic" / "SKILL.md").write_bytes(b"# Synthetic\n")
+    (skills / "synthetic" / "run.sh").write_bytes(b"#!/bin/sh\n")
+    (skills / "synthetic" / "run.sh").chmod(0o500)
     for directory in (inputs, skills, tmp_path / "staged"):
         directory.chmod(0o700)
     return {"inputs": inputs.resolve(), "skills": skills.resolve()}
@@ -294,11 +296,12 @@ def test_staging_copies_snapshots_into_labeled_claims_and_removes_its_pod(
     assert spec["serviceAccountName"] == "hw-staging"
     assert spec["automountServiceAccountToken"] is False
     assert spec["restartPolicy"] == "Never"
+    assert spec["terminationGracePeriodSeconds"] == 1
     assert spec["securityContext"] == {
         "runAsNonRoot": True,
-        "runAsUser": 10001,
-        "runAsGroup": 10001,
-        "fsGroup": 10001,
+        "runAsUser": 10002,
+        "runAsGroup": 10002,
+        "fsGroup": 10002,
         "seccompProfile": {"type": "RuntimeDefault"},
     }
     (container,) = spec["containers"]
@@ -317,7 +320,12 @@ def test_staging_copies_snapshots_into_labeled_claims_and_removes_its_pod(
     assert not {"hostNetwork", "hostPID", "hostIPC", "initContainers"} & set(spec)
     assert cluster.copied == {
         "inputs": {"data": (0o755, None), "data/table.csv": (0o644, b"synthetic,1\n")},
-        "skills": {"synthetic": (0o755, None), "synthetic/SKILL.md": (0o644, b"# Synthetic\n")},
+        "skills": {
+            "synthetic": (0o755, None),
+            "synthetic/SKILL.md": (0o644, b"# Synthetic\n"),
+            # A file keeps whether it is executable.
+            "synthetic/run.sh": (0o755, b"#!/bin/sh\n"),
+        },
     }
     assert cluster.names("pod") == []
     assert cluster.names(_CLAIM) == sorted(volumes.names.values())
@@ -416,6 +424,16 @@ def test_snapshots_that_are_not_private_directories_of_files_reach_no_cluster_re
                 "policyTypes": ["Egress"],
             },
         ],
+        [_DENY_ALL, {"podSelector": {"matchLabels": ["heartwood.role"]}}],
+        [_DENY_ALL, {"podSelector": {"matchExpressions": {"key": "a"}}}],
+        [
+            _DENY_ALL,
+            {"podSelector": {"matchExpressions": [{"key": "a", "operator": "In", "values": "a"}]}},
+        ],
+        [_DENY_ALL, {"podSelector": {"matchExpressions": [{"operator": "Exists"}]}}],
+        [_DENY_ALL, {"podSelector": {"labelSelector": {}}}],
+        [{"podSelector": {}}],
+        [{"podSelector": {}, "policyTypes": "Ingress,Egress"}],
     ],
 )
 def test_staging_requires_policies_that_deny_its_pod_all_traffic(
@@ -427,7 +445,9 @@ def test_staging_requires_policies_that_deny_its_pod_all_traffic(
     del cluster.objects[_POLICY, "default-deny"]
     for index, spec in enumerate(policies):
         cluster.place(_POLICY, f"policy-{index}", spec=spec)
-    with pytest.raises(WorkerAttemptError):
+    with pytest.raises(
+        WorkerAttemptError, match=r"without network access|inspection was incomplete"
+    ):
         volumes.stage(sources)
     assert set(cluster.verbs()) == {"get"}
     assert cluster.names("pod") == cluster.names(_CLAIM) == []
@@ -492,7 +512,7 @@ def test_a_claim_the_cluster_reports_differently_stops_staging_before_the_pod(
         return output
 
     volumes.command = altered  # type: ignore[method-assign]
-    with pytest.raises(WorkerAttemptError):
+    with pytest.raises(WorkerAttemptError, match=r"does not belong|does not match its request"):
         volumes.stage(sources)
     assert cluster.names("pod") == []
     assert "exec" not in cluster.verbs()
@@ -555,7 +575,7 @@ def test_a_staging_pod_that_changed_during_the_copy_is_not_accepted(
         return output
 
     volumes.command = altered  # type: ignore[method-assign]
-    with pytest.raises(WorkerAttemptError):
+    with pytest.raises(WorkerAttemptError, match=r"does not belong|did not complete"):
         volumes.stage(sources)
     assert "delete" not in cluster.verbs()
 
@@ -684,7 +704,17 @@ def test_an_object_that_stays_after_its_deletion_is_not_reported_as_removed(
 
 @pytest.mark.parametrize(
     "response",
-    [b"invalid", b"[]", b'{"kind":"List","items":{}}', b'{"kind":"List","items":[1]}', "namespace"],
+    [
+        b"invalid",
+        b"[]",
+        b"{}",
+        b'{"kind":"Status","status":"Failure"}',
+        b'{"kind":"List"}',
+        b'{"items":[]}',
+        b'{"kind":"List","items":{}}',
+        b'{"kind":"List","items":[1]}',
+        "namespace",
+    ],
 )
 def test_an_unreadable_pod_listing_is_never_read_as_absence(
     volumes: KubernetesWorkerVolumes, cluster: _Cluster, response: str | bytes
@@ -702,6 +732,44 @@ def test_an_unreadable_pod_listing_is_never_read_as_absence(
     volumes.command = altered  # type: ignore[method-assign]
     with pytest.raises(WorkerAttemptError, match="inspection was incomplete"):
         volumes.remove_after_revocation()
+
+
+@pytest.mark.parametrize("failing", [2, 3])
+def test_a_later_creation_that_fails_leaves_the_earlier_objects_for_revocation(
+    volumes: KubernetesWorkerVolumes, cluster: _Cluster, sources: dict[str, Path], failing: int
+) -> None:
+    command, creations = cluster.command, [0]
+
+    def limited(*arguments: str, stdin: bytes | None = None) -> bytes:
+        if arguments[0] == "create":
+            creations[0] += 1
+            if creations[0] == failing:
+                raise WorkerAttemptError("native Kubernetes operation requires reconciliation")
+        return command(*arguments, stdin=stdin)
+
+    volumes.command = limited  # type: ignore[method-assign]
+    with pytest.raises(WorkerAttemptError, match="requires reconciliation"):
+        volumes.stage(sources)
+    # The second claim, or the pod after both claims, was refused.
+    assert len(cluster.names(_CLAIM)) == failing - 1
+    assert cluster.names("pod") == []
+    assert "exec" not in cluster.verbs()
+    volumes.command = command  # type: ignore[method-assign]
+    volumes.remove_after_revocation()
+    assert cluster.names(_CLAIM) == []
+
+
+@pytest.mark.parametrize("unreadable", [_SANDBOX, "pod"])
+def test_absence_that_cannot_be_read_removes_nothing(
+    volumes: KubernetesWorkerVolumes, cluster: _Cluster, sources: dict[str, Path], unreadable: str
+) -> None:
+    volumes.stage(sources)
+    cluster.calls.clear()
+    cluster.failing = unreadable
+    with pytest.raises(WorkerAttemptError, match="requires reconciliation"):
+        volumes.remove_after_revocation(_SANDBOX_ID)
+    assert "delete" not in cluster.verbs()
+    assert cluster.names(_CLAIM) == sorted(volumes.names.values())
 
 
 _FAKE_KUBECTL = """#!{python} -I

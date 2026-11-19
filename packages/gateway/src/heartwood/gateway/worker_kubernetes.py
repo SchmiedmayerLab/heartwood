@@ -22,7 +22,11 @@ from typing import Any
 
 from heartwood.core_adapter.worker_attempts import WorkerAttemptError, WorkerAttemptIntent
 from heartwood.gateway.worker_deployment import KubernetesWorkerDeployment
-from heartwood.gateway.worker_volumes import _native_limits, require_private_snapshots
+from heartwood.gateway.worker_volumes import (
+    _native_limits,
+    attachable_labels,
+    require_private_snapshots,
+)
 
 _WORKER_ID = 10001
 _PAIR = "openshell.ai/boundary-pair"
@@ -126,6 +130,8 @@ _ABSENT_RECORD = "<absent>"
 # What the platform provides in the namespace for staging: a service account that grants
 # nothing, and the storage class of the attempt's claims.
 _STAGING_SERVICE_ACCOUNT = "hw-staging"
+# Another identity than the worker's, so the worker does not own the staged files.
+_STAGING_ID = 10002
 _STAGING_CONTAINER = "stage"
 _STORAGE_CLASS = "heartwood-attempt"
 # Inputs and Skills are each limited to 64 MiB before staging.
@@ -477,7 +483,10 @@ def _allows_traffic(policy: dict[str, Any]) -> bool:
 
 
 def _archive(source: Path) -> bytes:
-    """Pack a staged snapshot's directories and regular files, readable by the worker."""
+    """Pack a staged snapshot's directories and regular files, readable by every user.
+
+    A file keeps whether it is executable, as `chmod a+rX` keeps it on the Docker path.
+    """
     stream = io.BytesIO()
     with tarfile.open(fileobj=stream, mode="w", format=tarfile.PAX_FORMAT) as archive:
         for path in sorted(source.rglob("*")):
@@ -486,7 +495,7 @@ def _archive(source: Path) -> bytes:
                 raise WorkerAttemptError("worker staging requires canonical private snapshots")
             member = tarfile.TarInfo(path.relative_to(source).as_posix())
             member.type = tarfile.DIRTYPE if directory else tarfile.REGTYPE
-            member.mode = 0o755 if directory else 0o644
+            member.mode = 0o755 if directory or path.stat().st_mode & 0o111 else 0o644
             if directory:
                 archive.addfile(member)
                 continue
@@ -802,8 +811,16 @@ class KubernetesWorkerVolumes(KubernetesWorkerAdmission):
 
     def _list(self, resource: str) -> list[dict[str, Any]]:
         """Read every object of one kind in the namespace."""
-        items = _objects(_parsed(self.command("get", resource, "--output=json")), "items")
-        if any(_field(item, "metadata", "namespace") != self.settings.namespace for item in items):
+        listing = _parsed(self.command("get", resource, "--output=json"))
+        items = _objects(listing, "items")
+        # An answer without a list of items is never read as an empty namespace.
+        if (
+            not str(listing.get("kind", "")).endswith("List")
+            or not isinstance(listing.get("items"), list)
+            or any(
+                _field(item, "metadata", "namespace") != self.settings.namespace for item in items
+            )
+        ):
             raise WorkerAttemptError("native resource inspection was incomplete")
         return items
 
@@ -821,7 +838,7 @@ class KubernetesWorkerVolumes(KubernetesWorkerAdmission):
         return uid
 
     def _delete(self, resource: str, name: str, *, role: str) -> None:
-        """Request deletion of one object only while it carries the attempt's identity."""
+        """Request deletion of the object under a name only if it carries the attempt's labels."""
         selector = ",".join(
             f"{label}={value}" for label, value in {**self.labels, "heartwood.role": role}.items()
         )
@@ -867,9 +884,7 @@ class KubernetesWorkerVolumes(KubernetesWorkerAdmission):
                 "labels": {
                     **self.labels,
                     "heartwood.role": "projection",
-                    # The sandbox gateway attaches only claims approved for its workspace.
-                    "openshell.ai/sandbox-attachable": "true",
-                    "openshell.ai/sandbox-attachable-workspace": self.settings.workspace,
+                    **attachable_labels(self.settings.workspace),
                 },
             },
             "spec": {
@@ -892,16 +907,16 @@ class KubernetesWorkerVolumes(KubernetesWorkerAdmission):
             "spec": {
                 "restartPolicy": "Never",
                 "activeDeadlineSeconds": _STAGING_SECONDS,
-                "terminationGracePeriodSeconds": 0,
+                # A grace period of zero would remove the pod before its container stopped.
+                "terminationGracePeriodSeconds": 1,
                 "serviceAccountName": _STAGING_SERVICE_ACCOUNT,
                 "automountServiceAccountToken": False,
                 "enableServiceLinks": False,
-                # The worker's own identity, so the staged files need no change of owner.
                 "securityContext": {
                     "runAsNonRoot": True,
-                    "runAsUser": _WORKER_ID,
-                    "runAsGroup": _WORKER_ID,
-                    "fsGroup": _WORKER_ID,
+                    "runAsUser": _STAGING_ID,
+                    "runAsGroup": _STAGING_ID,
+                    "fsGroup": _STAGING_ID,
                     "seccompProfile": {"type": "RuntimeDefault"},
                 },
                 "containers": [

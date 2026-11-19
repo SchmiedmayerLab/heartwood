@@ -166,6 +166,14 @@ def container_runtime_sha256(settings: WorkerVolumeSettings) -> str:
     return hashlib.sha256(identity.encode()).hexdigest()
 
 
+def attachable_labels(workspace: str) -> dict[str, str]:
+    """Labels by which the sandbox gateway approves a volume for one workspace's sandboxes."""
+    return {
+        "openshell.ai/sandbox-attachable": "true",
+        "openshell.ai/sandbox-attachable-workspace": workspace,
+    }
+
+
 def require_private_snapshots(sources: dict[str, Path], names: dict[str, str]) -> None:
     """Require one canonical, operator-owned private directory for each projection."""
     if set(sources) != set(names):
@@ -240,10 +248,11 @@ class WorkerVolumes:
                 "volume",
                 "create",
                 *self._label_arguments(role="projection"),
-                "--label",
-                "openshell.ai/sandbox-attachable=true",
-                "--label",
-                f"openshell.ai/sandbox-attachable-workspace={self.settings.workspace}",
+                *(
+                    argument
+                    for label, value in attachable_labels(self.settings.workspace).items()
+                    for argument in ("--label", f"{label}={value}")
+                ),
                 name,
             )
             self._owned(self._inspect("volume", name), container=False, role="projection")

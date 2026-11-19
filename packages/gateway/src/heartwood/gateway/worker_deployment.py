@@ -110,7 +110,10 @@ class KubernetesWorkerDeployment(_WorkerSettings):
     namespace: _Name
     # The registry repository of the worker image; pods reference it with `image_digest`.
     image_repository: str = Field(
-        pattern=r"^[a-z0-9][a-z0-9.-]*(?::[0-9]{1,5})?(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)+$",
+        pattern=(
+            r"^(?:localhost|[a-z0-9][a-z0-9-]*(?:\.[a-z0-9][a-z0-9-]*)+)(?::[0-9]{1,5})?"
+            r"(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)+$"
+        ),
         max_length=255,
     )
     # Images the driver adds to every sandbox: the supervisor pod's image and the sandbox

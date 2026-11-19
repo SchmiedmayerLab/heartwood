@@ -93,7 +93,9 @@ It differs from Docker inspection in these points:
   A principal with `pods/ephemeralcontainers`, `pods/exec`, or `pods/attach` in the namespace, or one that can patch pods, can change or enter a pod afterwards.
 - [Staging](../architecture/system.md#kubernetes-worker-staging) runs in a pod, which cannot disable its own network.
   The gateway requires NetworkPolicies that select the staging pod, cover ingress and egress, and allow nothing, and it relies on the cluster's network plugin to enforce them.
-- The staging pod runs as user `10001` with every capability dropped, where the Docker preparation container runs as user `0` with `FOWNER`.
+  Only `networking.k8s.io` NetworkPolicies of the namespace are read; a cluster-wide or plugin-specific policy that allows traffic is not visible to the gateway.
+- The staging pod runs as user `10002` with every capability dropped, where the Docker preparation container runs as user `0` with `FOWNER`.
+  The staged files belong to user `10002`, so the worker, user `10001`, has no write permission on them.
 - Admission does not compare container commands, node placement, or tolerations.
 - The attempt key is a plain environment value in the workload pod and in its Sandbox resource.
   Every principal that can read them can read the key, as with `docker inspect` on Docker.

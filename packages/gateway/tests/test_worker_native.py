@@ -1291,6 +1291,7 @@ def test_each_driver_requires_its_fields_and_refuses_the_other_drivers(
         ("namespace", "a" * 64),
         # A repository names its registry and carries neither a tag nor a digest.
         ("image_repository", "heartwood-worker"),
+        ("image_repository", "heartwood/worker"),
         ("image_repository", "registry.test/heartwood/worker:latest"),
         ("image_repository", "registry.test/heartwood/worker@sha256:" + "a" * 64),
         ("image_repository", "Registry.test/heartwood/worker"),
