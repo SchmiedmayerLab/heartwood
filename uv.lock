@@ -1953,7 +1953,7 @@ requires-dist = [
     { name = "openai", specifier = "==2.53.0" },
     { name = "openhands-sdk", path = "vendor/runtime-wheels/openhands_sdk-1.62.0+heartwood.3-py3-none-any.whl" },
     { name = "openhands-tools", path = "vendor/runtime-wheels/openhands_tools-1.62.0+heartwood.3-py3-none-any.whl" },
-    { name = "openshell", path = "vendor/runtime-wheels/openshell-0.1.8+heartwood.2-py3-none-any.whl" },
+    { name = "openshell", path = "vendor/runtime-wheels/openshell-0.1.9+heartwood.1-py3-none-any.whl" },
     { name = "packaging", specifier = "==26.3" },
     { name = "pydantic", specifier = ">=2.12" },
     { name = "starlette", specifier = "==1.10.0" },
@@ -3880,8 +3880,8 @@ requires-dist = [
 
 [[package]]
 name = "openshell"
-version = "0.1.8+heartwood.2"
-source = { path = "vendor/runtime-wheels/openshell-0.1.8+heartwood.2-py3-none-any.whl" }
+version = "0.1.9+heartwood.1"
+source = { path = "vendor/runtime-wheels/openshell-0.1.9+heartwood.1-py3-none-any.whl" }
 dependencies = [
     { name = "cloudpickle" },
     { name = "googleapis-common-protos" },
@@ -3890,16 +3890,16 @@ dependencies = [
     { name = "protobuf" },
 ]
 wheels = [
-    { filename = "openshell-0.1.8+heartwood.2-py3-none-any.whl", hash = "sha256:cec3d348f9752de65eca8ec58b20e330e504b0628d7a0f3e3e596d25e30d8cfd" },
+    { filename = "openshell-0.1.9+heartwood.1-py3-none-any.whl", hash = "sha256:44e9f055fb42469d083afd492d866e72dce928601aa618f94ab6edb95c2e8abc" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "cloudpickle", specifier = ">=3.0" },
     { name = "googleapis-common-protos", specifier = ">=1.63" },
-    { name = "grpcio", specifier = ">=1.60" },
+    { name = "grpcio", specifier = ">=1.78.2" },
     { name = "httpx", specifier = ">=0.27" },
-    { name = "protobuf", specifier = ">=4.25" },
+    { name = "protobuf", specifier = ">=6.31.1" },
 ]
 
 [[package]]
