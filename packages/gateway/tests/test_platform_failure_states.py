@@ -186,6 +186,12 @@ def test_fixture_covers_each_coded_failure_state_in_the_contract() -> None:
     table = contract.split("### Failure States", 1)[1].split("\n\n", 2)[1]
 
     assert set(re.findall(r"HW-[A-Z]+-\d{3}", table)) == {state["code"] for state in _STATES}
+    # Each surface below has a test that shows its states in every interface.
+    assert {state["surface"] for state in _STATES} == {
+        "gateway-response",
+        "session",
+        "setup-refusal",
+    }
 
 
 @pytest.mark.parametrize(
@@ -281,10 +287,16 @@ def test_gateway_refusals_carry_the_fixture_diagnostic(
     assert f"{body['code']}: {body['error']}" == state["diagnostic"]
 
 
+@pytest.mark.parametrize(
+    "state",
+    [pytest.param(item, id=item["code"]) for item in _STATES if item["surface"] == "setup-refusal"],
+)
 def test_capability_not_offered_shows_the_same_diagnostic_in_every_interface(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    state: dict[str, str],
 ) -> None:
-    state = next(item for item in _STATES if item["surface"] == "setup-refusal")
     project = ProjectContext(tmp_path)
     workstation = SessionGateway(project=project, env={}, backend_id="deterministic")
     try:
@@ -310,6 +322,8 @@ def test_capability_not_offered_shows_the_same_diagnostic_in_every_interface(
     monkeypatch.chdir(tmp_path)
     for name, value in carina.items():
         monkeypatch.setenv(name, value)
+    terminal_main(["doctor"])
+    doctor = capsys.readouterr().out
     with pytest.raises(SystemExit):
         terminal_main(["models", "connect", "openai", "gpt-synthetic"])
     terminal = capsys.readouterr().err
@@ -323,6 +337,8 @@ def test_capability_not_offered_shows_the_same_diagnostic_in_every_interface(
     assert f"{browser.body['code']}: {browser.body['error']}" == state["diagnostic"]
     assert str(notebook.value) == state["diagnostic"]
     assert terminal.rstrip().endswith(state["diagnostic"])
+    assert state["diagnostic"].split(": ", 1)[1] in doctor
+    assert state["code"] in doctor
 
 
 def test_inference_keeps_working_while_platform_tools_are_down(

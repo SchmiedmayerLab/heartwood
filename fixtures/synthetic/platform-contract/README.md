@@ -50,4 +50,4 @@ It does not contact the server, establish transition history, or authenticate th
 ## Failure States
 
 `failure-states.json` lists each coded failure state of the platform contract with the diagnostic Heartwood shows for it.
-The gateway tests produce these states through the deterministic service fakes and check the terminal and notebook presentation; the browser tests render the same file.
+The gateway tests produce these states, using the deterministic service fakes for the model failures, and check the terminal and notebook presentation; the browser tests render the same file.
