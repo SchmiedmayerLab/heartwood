@@ -13,7 +13,7 @@ It also fails when the platform services depend on a Heartwood package other tha
 `heartwood-schemas`. Exceptions are listed in `ALLOWLIST`, each with its reason; an
 exception that no longer matches anything fails the check, so the list stays current.
 Research platform adapters and model provider names in model routing are outside its
-scope: it matches SDK names, hosts and cluster settings, not provider names.
+scope.
 
 Usage: `python3 reference-platform/tools/check_cloud_boundary.py [--root PATH]`.
 """
@@ -265,8 +265,11 @@ def _check_platform_services(root: Path) -> list[Finding]:
     for path in sorted((services / "src").rglob("*.py")):
         relative = path.relative_to(root).as_posix()
         for module, line in _imported_modules(path):
-            if _matching_module(module, ("heartwood",)) and not _matching_module(
-                module, (SHARED_MODULE,)
+            # `from heartwood import schemas` also yields the bare namespace `heartwood`.
+            if (
+                module != "heartwood"
+                and _matching_module(module, ("heartwood",))
+                and not _matching_module(module, (SHARED_MODULE,))
             ):
                 message = f"platform services import application package {module}"
                 findings.append(Finding(relative, line, module, message))

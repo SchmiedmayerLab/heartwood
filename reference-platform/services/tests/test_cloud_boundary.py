@@ -178,7 +178,9 @@ def test_platform_services_may_use_only_the_shared_schemas(tmp_path: Path) -> No
     _services(
         tmp_path,
         '"heartwood-schemas", "heartwood-gateway"',
-        "from heartwood.schemas import records\nfrom heartwood.gateway import app\n",
+        "from heartwood.schemas import records\n"
+        "from heartwood.gateway import app\n"
+        "from heartwood import schemas\n",
     )
 
     assert boundary.check(tmp_path, ()) == [
