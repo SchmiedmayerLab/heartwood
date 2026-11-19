@@ -134,7 +134,7 @@
       "additionalProperties": false,
       "required": [
         "namespace",
-        "stagingImage",
+        "stagingImages",
         "attemptStorageClass",
         "apiServer",
         "quota",
@@ -154,15 +154,12 @@
             }
           ]
         },
-        "stagingImage": {
-          "anyOf": [
-            {
-              "const": ""
-            },
-            {
-              "$ref": "#/$defs/image"
-            }
-          ]
+        "stagingImages": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/image"
+          }
         },
         "attemptStorageClass": {
           "type": "object",

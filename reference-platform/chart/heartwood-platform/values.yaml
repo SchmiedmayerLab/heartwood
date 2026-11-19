@@ -59,8 +59,10 @@ versitygw:
 sessions:
   # Namespace of the Hub and the Heartwood gateway pods.
   namespace: heartwood-sessions
-  # Image of the staging pods that a Heartwood gateway may create, by digest.
-  stagingImage: ""
+  # Images of the staging pods that a Heartwood gateway may create, by digest: the
+  # worker images of the sessions' deployment manifests. During a change of the worker
+  # image, list the current and the next image. An empty list denies every pod.
+  stagingImages: []
   # Addresses under which pods reach the Kubernetes API server, as a list of
   # {cidr, port}. Session namespaces deny egress by default, and the OpenShell gateway
   # may reach these. Empty reads the addresses from the cluster at installation.

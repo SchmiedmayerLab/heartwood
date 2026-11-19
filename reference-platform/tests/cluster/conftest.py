@@ -7,7 +7,7 @@
 """Fixtures of the cluster tests.
 
 The tests need an installed chart. They run only with --cluster-context, which names
-the kubectl context of that cluster. --staging-image names the sessions.stagingImage
+the kubectl context of that cluster. --staging-image names one of the sessions.stagingImages
 that the chart was installed with.
 """
 
@@ -29,7 +29,7 @@ _PROBE_IMAGE = (
 
 def _kind_staging_image() -> str:
     values = yaml.safe_load(_VALUES.read_text(encoding="utf-8"))
-    image = values["sessions"]["stagingImage"]
+    image = values["sessions"]["stagingImages"][0]
     assert isinstance(image, str)
     return image
 
@@ -39,7 +39,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption(
         "--staging-image",
         default=_kind_staging_image(),
-        help="sessions.stagingImage of the installed chart (default: values-kind.yaml)",
+        help="an image of sessions.stagingImages of the installed chart (default: values-kind)",
     )
 
 

@@ -183,6 +183,55 @@ def test_admission_policies_fail_closed_and_deny(objects: list[dict[str, Any]], 
     assert binding["spec"] == {"policyName": name, "validationActions": ["Deny"]}
 
 
+@pytest.mark.parametrize(
+    ("images", "listed"),
+    [
+        ([], "[]"),
+        (
+            ["registry.example.test/worker@sha256:" + "3" * 64],
+            '["registry.example.test/worker@sha256:' + "3" * 64 + '"]',
+        ),
+        (
+            [
+                "registry.example.test/worker@sha256:" + "3" * 64,
+                "registry.example.test/worker@sha256:" + "4" * 64,
+            ],
+            '["registry.example.test/worker@sha256:'
+            + "3" * 64
+            + '","registry.example.test/worker@sha256:'
+            + "4" * 64
+            + '"]',
+        ),
+    ],
+)
+def test_staging_pods_run_only_the_listed_images(images: list[str], listed: str) -> None:
+    result = subprocess.run(
+        [*_TEMPLATE, "--set-json", f"sessions.stagingImages={json.dumps(images)}"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    objects = [item for item in yaml.safe_load_all(result.stdout) if item is not None]
+    policy = _named(objects, "ValidatingAdmissionPolicy", "heartwood-staging-shape")
+    (rule,) = [
+        item["expression"]
+        for item in policy["spec"]["validations"]
+        if item["message"] == "a staging pod runs only a staging image"
+    ]
+    assert rule == f"!variables.pod || variables.containers.all(c, c.image in {listed})"
+
+
+@pytest.mark.parametrize("image", ["registry.example.test/worker:latest", ""])
+def test_staging_images_are_pinned_by_digest(image: str) -> None:
+    result = subprocess.run(
+        [*_TEMPLATE, "--set-json", f"sessions.stagingImages={json.dumps([image])}"],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert "/sessions/stagingImages/0" in result.stderr
+
+
 def test_credentials_are_generated_for_each_installation() -> None:
     def secrets(objects: list[dict[str, Any]]) -> dict[str, str]:
         return {

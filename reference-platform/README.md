@@ -65,9 +65,9 @@ The platform is for synthetic and open data only.
 Every image in `values.yaml` is pinned by digest or has no default, and `values.schema.json` rejects an image reference without a digest.
 `images.platformServices` has no default and is set at installation to the image built from `services/Dockerfile`.
 `images.openshellGateway` has no default either.
-`values-kind.yaml` sets it to the published OpenShell 0.1.9 gateway and `sessions.stagingImage` to a small test image.
+`values-kind.yaml` sets it to the published OpenShell 0.1.9 gateway and `sessions.stagingImages` to a small test image.
 Both are stand-ins, used when the chart is rendered or installed without the built images.
-The [Kubernetes Qualification workflow](../.github/workflows/kubernetes-qualification.yml) installs the chart with the gateway that `images/worker/candidate/gateway.json` builds with its recorded patches and with the worker image by digest as `sessions.stagingImage`.
+An installation with the built images sets `images.openshellGateway` to the gateway that `images/worker/candidate/gateway.json` builds with its recorded patches and lists the worker image by digest in `sessions.stagingImages`.
 `images.openshellRepository` names a repository, such as a mirror, from which session pods pull the OpenShell supervisor and sandbox runtime images under their upstream names and digests; empty pulls them from `ghcr.io/nvidia/openshell`.
 Helm generates every credential at the first installation and keeps the existing value on an upgrade.
 The chart renders no credential from a fixed value.
@@ -162,12 +162,12 @@ RBAC cannot name namespaces that are created at run time, so ValidatingAdmission
 `heartwood-staging-shape` applies to every ServiceAccount `hw-gw-*` in `heartwood-sessions`:
 
 - A pod is named `hw-staging-*` and carries only the labels `heartwood.project`, `heartwood.attempt` and `heartwood.role` with the value `staging`, so no NetworkPolicy with allowances selects it.
-- A pod uses the ServiceAccount `hw-staging` without a mounted token, runs only the image `sessions.stagingImage`, runs as user and group `10002` with no other group, with the default seccomp profile, a read-only root file system and no capabilities, and mounts only volume claims named `hw-attempt-*`.
+- A pod uses the ServiceAccount `hw-staging` without a mounted token, runs only an image of `sessions.stagingImages`, runs as user and group `10002` with no other group and the supplemental group policy `Strict`, with the default seccomp profile, a read-only root file system and no capabilities, and mounts only volume claims named `hw-attempt-*`.
 - A pod takes no environment value from a Secret, a ConfigMap or a field, and names no node, priority class or runtime class.
 - A volume claim is named `hw-attempt-*`, uses the StorageClass `heartwood-attempt` and names no data source, volume or selector.
 - An exec session opens only into pods named `hw-staging-*`. Attach and port-forward requests are denied.
 
-An empty `sessions.stagingImage` denies every pod.
+`sessions.stagingImages` lists the worker images of the sessions' deployment manifests; during a change of the worker image it lists the current and the next image, and an empty list denies every pod.
 
 `heartwood-session-services` applies to every Service in a namespace that carries the label `heartwood.platform/session`:
 the Service has the type `ClusterIP` and no external address.
@@ -234,8 +234,8 @@ The reachable control then runs again, and after the policies are deleted both b
 The script writes `network-policy-controls.json` and exits with an error unless every control has its expected result.
 
 `install-chart.sh` installs the chart with `values-kind.yaml` and waits until every component is ready.
-When the chart is installed with another `sessions.stagingImage`, pass the same reference to the cluster tests with `--staging-image`; the default is the value in `values-kind.yaml`.
-The pods that the cluster tests run use a pinned agnhost image, independent of `sessions.stagingImage`.
+When the chart is installed with other `sessions.stagingImages`, pass one of them to the cluster tests with `--staging-image`; the default is the value in `values-kind.yaml`.
+The pods that the cluster tests run use a pinned agnhost image, independent of `sessions.stagingImages`.
 The cluster tests send each admission policy admitted requests and one denied request for each condition, including each ClusterRole with a subject other than its own, as the confined ServiceAccount.
 They also check which connections the network policies allow, and call the control service as a stand-in for the spawner.
 A launched session is checked for its namespace objects, its RoleBindings, a ready OpenShell gateway, an unchanged state after a second launch, and complete removal.

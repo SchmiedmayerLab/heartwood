@@ -302,6 +302,7 @@ def test_staging_copies_snapshots_into_labeled_claims_and_removes_its_pod(
         "runAsUser": 10002,
         "runAsGroup": 10002,
         "fsGroup": 10002,
+        "supplementalGroupsPolicy": "Strict",
         "seccompProfile": {"type": "RuntimeDefault"},
     }
     (container,) = spec["containers"]

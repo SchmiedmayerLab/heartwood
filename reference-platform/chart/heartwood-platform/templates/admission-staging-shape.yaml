@@ -56,8 +56,8 @@ spec:
         && has(object.spec.automountServiceAccountToken) && object.spec.automountServiceAccountToken == false)
       message: a staging pod uses the ServiceAccount hw-staging without a mounted token
     - expression: >-
-        !variables.pod || variables.containers.all(c, c.image == {{ .Values.sessions.stagingImage | squote }})
-      message: a staging pod runs only the staging image
+        !variables.pod || variables.containers.all(c, c.image in {{ .Values.sessions.stagingImages | toJson }})
+      message: a staging pod runs only a staging image
     - expression: >-
         !variables.pod || (has(object.spec.securityContext)
         && has(object.spec.securityContext.runAsNonRoot) && object.spec.securityContext.runAsNonRoot
@@ -80,9 +80,11 @@ spec:
         && has(object.spec.securityContext.runAsGroup) && object.spec.securityContext.runAsGroup == 10002
         && has(object.spec.securityContext.fsGroup) && object.spec.securityContext.fsGroup == 10002
         && !has(object.spec.securityContext.supplementalGroups)
+        && has(object.spec.securityContext.supplementalGroupsPolicy)
+        && object.spec.securityContext.supplementalGroupsPolicy == 'Strict'
         && variables.containers.all(c, !has(c.securityContext)
         || (!has(c.securityContext.runAsUser) && !has(c.securityContext.runAsGroup))))
-      message: a staging pod runs as user and group 10002 with no other group
+      message: a staging pod runs as user and group 10002 with no other group and the supplemental group policy Strict
     - expression: >-
         !variables.pod || variables.containers.all(c, !has(c.envFrom)
         && (!has(c.env) || c.env.all(e, !has(e.valueFrom))))

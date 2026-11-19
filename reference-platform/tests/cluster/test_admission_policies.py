@@ -112,6 +112,7 @@ def _pod(
                 "runAsUser": 10002,
                 "runAsGroup": 10002,
                 "fsGroup": 10002,
+                "supplementalGroupsPolicy": "Strict",
                 "seccompProfile": {"type": "RuntimeDefault"},
             },
             "containers": [
@@ -202,6 +203,7 @@ def _gateway_staging_pod(image: str) -> dict[str, Any]:
                 "runAsUser": 10002,
                 "runAsGroup": 10002,
                 "fsGroup": 10002,
+                "supplementalGroupsPolicy": "Strict",
                 "seccompProfile": {"type": "RuntimeDefault"},
             },
             "containers": [
@@ -741,11 +743,11 @@ def test_control_service_may_review_tokens(cluster: Cluster) -> None:
 
 
 _SERVICE_ACCOUNT = "ServiceAccount hw-staging without a mounted token"
-_IMAGE = "runs only the staging image"
+_IMAGE = "runs only a staging image"
 _SECURITY = "read-only root file system and no capabilities"
 _VOLUMES = "mounts only attempt volume claims"
 _LABELS = "carries only the labels heartwood.project, heartwood.attempt and heartwood.role"
-_USER = "runs as user and group 10002 with no other group"
+_USER = "runs as user and group 10002 with no other group and the supplemental group policy"
 _CLAIM = "uses the StorageClass heartwood-attempt and names no data source or volume"
 _ENVIRONMENT = "takes no environment value from another object or field"
 _PLACEMENT = "names no node, priority class or runtime class"
@@ -831,6 +833,16 @@ def _pod_cases(image: str) -> list[tuple[str, dict[str, Any], str | None]]:
         ("pod-other-user", _changed(pod, "spec.securityContext.runAsUser", 10001), _USER),
         ("pod-other-group", _changed(pod, "spec.securityContext.runAsGroup", 10001), _USER),
         ("pod-without-fs-group", _changed(pod, "spec.securityContext.fsGroup"), _USER),
+        (
+            "pod-merged-groups",
+            _changed(pod, "spec.securityContext.supplementalGroupsPolicy", "Merge"),
+            _USER,
+        ),
+        (
+            "pod-default-group-policy",
+            _changed(pod, "spec.securityContext.supplementalGroupsPolicy"),
+            _USER,
+        ),
         (
             "pod-supplemental-group",
             _changed(pod, "spec.securityContext.supplementalGroups", [10001]),

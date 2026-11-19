@@ -1009,6 +1009,8 @@ class KubernetesWorkerVolumes(KubernetesWorkerAdmission):
                     "runAsUser": _STAGING_ID,
                     "runAsGroup": _STAGING_ID,
                     "fsGroup": _STAGING_ID,
+                    # Groups of the user in the image's /etc/group are not added.
+                    "supplementalGroupsPolicy": "Strict",
                     "seccompProfile": {"type": "RuntimeDefault"},
                 },
                 "containers": [
