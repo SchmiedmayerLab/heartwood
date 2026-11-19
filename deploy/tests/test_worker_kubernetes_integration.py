@@ -443,7 +443,8 @@ def test_kubernetes_workflow_boundary_and_revocation(
             connections[name] = _STAGING_SHAPE if _STAGING_SHAPE in error else "forbidden"
         assert connections["exec-workload"] == _STAGING_SHAPE
 
-        # Both images were pulled by digest, the worker image from the cluster's registry.
+        # Every container of both pods names its image by digest in the cluster's registry,
+        # and the runtime reports that it runs the same reference.
         pods = {
             item["metadata"]["name"]: item
             for item in json.loads(fixture.outside("get", "pods", "--output=json"))["items"]
@@ -454,23 +455,35 @@ def test_kubernetes_workflow_boundary_and_revocation(
                     "image": container["image"],
                     "image_id": next(
                         status["imageID"]
-                        for status in pods[name]["status"]["containerStatuses"]
+                        for group in ("containerStatuses", "initContainerStatuses")
+                        for status in pods[name]["status"].get(group, [])
                         if status["name"] == container["name"]
                     ),
                 }
-                for container in pods[name]["spec"]["containers"]
+                for group in ("containers", "initContainers")
+                for container in pods[name]["spec"].get(group, [])
             }
             for name in (workload, supervisor)
         }
-        # The runtime reports the digest it pulled; it equals the digest the pod names.
-        worker_digest = fixture.worker.partition("@")[2]
-        assert images[workload]["agent"]["image"] == fixture.worker
-        assert images[workload]["agent"]["image_id"] == fixture.worker
-        supervisor_digest = fixture.images["supervisor"].partition("@")[2]
-        assert set(images[supervisor]) == {"supervisor"}
-        assert images[supervisor]["supervisor"]["image"] == fixture.images["supervisor"]
-        assert images[supervisor]["supervisor"]["image_id"].endswith("@" + supervisor_digest)
-        assert worker_digest != supervisor_digest
+        assert images == {
+            workload: {
+                "agent": {"image": fixture.worker, "image_id": fixture.worker},
+                "openshell-sandbox-bootstrap": {
+                    "image": fixture.sandbox_image,
+                    "image_id": fixture.sandbox_image,
+                },
+                "workspace-init": {"image": fixture.worker, "image_id": fixture.worker},
+            },
+            supervisor: {
+                "supervisor": {
+                    "image": fixture.supervisor_image,
+                    "image_id": fixture.supervisor_image,
+                }
+            },
+        }, images
+        registry = fixture.worker.partition("/")[0]
+        assert fixture.supervisor_image.startswith(registry + "/")
+        assert fixture.sandbox_image.startswith(registry + "/")
         namespace = json.loads(fixture.outside("get", "namespace", fixture.namespace, "-o=json"))
         identities = {
             "namespace_uid": namespace["metadata"]["uid"],

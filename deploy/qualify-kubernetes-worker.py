@@ -5,8 +5,10 @@
 """Run the native-worker cases on the Kubernetes driver of a kind cluster.
 
 `images` verifies the gateway artifacts, builds the gateway and controller images and
-pushes them and the worker image to the cluster's registry. The platform chart is then
-installed with the gateway and worker references that `images` wrote to `images.json`.
+pushes them and the worker image to the cluster's registry, and copies the supervisor and
+sandbox runtime images of the OpenShell release there under their digests. The platform
+chart is then installed with the references and the repository that `images` wrote to
+`images.json`.
 `run` launches one session through the platform's control service, runs the cases in a
 pod that holds that session's gateway credentials, and retains the evidence.
 """
@@ -197,6 +199,18 @@ def images(arguments: argparse.Namespace) -> None:
         references[name] = _output(
             ["bash", str(ROOT / "reference-platform/cluster/push-image.sh"), arguments.cluster, tag]
         ).strip()
+    # The supervisor and sandbox runtime images of the OpenShell release, copied under their
+    # digests, so the cluster pulls every image of a worker from its own registry.
+    for name in ("supervisor", "sandbox"):
+        references[name] = _output(
+            [
+                "bash",
+                str(ROOT / "reference-platform/cluster/push-image.sh"),
+                arguments.cluster,
+                manifest["images"][name],
+                "openshell/" + name,
+            ]
+        ).strip()
     (output / "images.json").write_text(
         json.dumps(
             {
@@ -210,6 +224,8 @@ def images(arguments: argparse.Namespace) -> None:
                 "qualification_sources": sources,
                 "images": identifiers,
                 "image_references": references,
+                # The value of the chart's images.openshellRepository.
+                "openshell_repository": references["supervisor"].rpartition("/supervisor@")[0],
                 "image_sources": image_sources,
                 "gateway_build": record,
                 "worker_interpreter": interpreter,
@@ -487,6 +503,8 @@ def _fixture_objects(cluster: Cluster, launched: dict[str, Any], built: dict[str
                     "HW_SESSION_NAMESPACE": namespace,
                     "HW_WORKER_IMAGE": built["image_references"]["worker"],
                     "HW_GATEWAY_IMAGE": built["image_references"]["gateway"],
+                    "HW_SUPERVISOR_IMAGE": built["image_references"]["supervisor"],
+                    "HW_SANDBOX_IMAGE": built["image_references"]["sandbox"],
                     "HW_OPENSHELL_ENDPOINT": launched["openshell_endpoint"],
                     "HW_PROVIDER_HOST": host,
                     "HW_WORKER_INTERPRETER": built["worker_interpreter"],

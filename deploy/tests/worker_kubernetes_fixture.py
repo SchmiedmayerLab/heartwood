@@ -129,6 +129,8 @@ class KubernetesFixture:
         self.namespace = os.environ["HW_SESSION_NAMESPACE"]
         self.worker = os.environ["HW_WORKER_IMAGE"]
         self.gateway_image = os.environ["HW_GATEWAY_IMAGE"]
+        self.supervisor_image = os.environ["HW_SUPERVISOR_IMAGE"]
+        self.sandbox_image = os.environ["HW_SANDBOX_IMAGE"]
         self.endpoint = os.environ["HW_OPENSHELL_ENDPOINT"]
         self.provider_host = os.environ["HW_PROVIDER_HOST"]
         self.base_url = f"https://{self.provider_host}:{_PROVIDER_PORT}/v1"
@@ -137,6 +139,13 @@ class KubernetesFixture:
         self.cli = Path("/opt/qualification/bin/openshell")
         self.kubectl = Path("/opt/qualification/bin/kubectl")
         self.images = json.loads(Path("/opt/qualification/gateway.json").read_text())["images"]
+        # The cluster's registry holds the OpenShell release images under their digests.
+        for name, reference in (
+            ("supervisor", self.supervisor_image),
+            ("sandbox", self.sandbox_image),
+        ):
+            if reference.partition("@")[2] != self.images[name].partition("@")[2]:
+                raise ValueError(f"The {name} image differs from the gateway manifest")
         self.config = private / "config"
         self.env = {
             key: value

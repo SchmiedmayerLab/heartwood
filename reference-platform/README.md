@@ -254,8 +254,10 @@ python3 deploy/qualify-kubernetes-worker.py images --cluster heartwood \
   --gateway-artifacts test-results/gateway-candidate --output test-results/kubernetes-qualification/worker
 gateway="$(jq --raw-output .image_references.gateway test-results/kubernetes-qualification/worker/images.json)"
 worker="$(jq --raw-output .image_references.worker test-results/kubernetes-qualification/worker/images.json)"
+openshell="$(jq --raw-output .openshell_repository test-results/kubernetes-qualification/worker/images.json)"
 bash reference-platform/cluster/install-chart.sh heartwood --set "images.platformServices=${image}" \
-  --set "images.openshellGateway=${gateway}" --set "sessions.stagingImage=${worker}"
+  --set "images.openshellGateway=${gateway}" --set "images.openshellRepository=${openshell}" \
+  --set "sessions.stagingImage=${worker}"
 (cd reference-platform/services && uv run pytest -c pyproject.toml ../tests/cluster \
   --cluster-context kind-heartwood --staging-image "${worker}")
 python3 deploy/qualify-kubernetes-worker.py run --cluster heartwood \
@@ -263,5 +265,6 @@ python3 deploy/qualify-kubernetes-worker.py run --cluster heartwood \
 ```
 
 `images` verifies the gateway build, packages the gateway image, builds the controller image and pushes both with the worker image to the cluster's registry.
+It also copies the supervisor and sandbox runtime images of the OpenShell release to the cluster's registry under their digests, so the cluster pulls every image of a worker from there.
 `run` launches a session as the spawner would, starts the controller pod with that session's gateway ServiceAccount, runs the cases and removes the session.
 [Kubernetes Driver Qualification](../documentation/architecture/testing.md#kubernetes-driver-qualification) lists the cases and the evidence.

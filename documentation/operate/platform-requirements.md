@@ -173,7 +173,7 @@ The cluster and its nodes:
 | A kubelet process limit for each pod (`podPidsLimit`) | A pod does not show a process limit, so admission cannot read one. |
 | Nodes with cgroup v2 | The container runtime then gives each container a private cgroup namespace, which a pod does not show. |
 | The container runtime's default AppArmor profile or SELinux policy on every node | The pods carry no profile field; the `restricted` Pod Security level refuses an unconfined profile. |
-| A registry from which the nodes pull the worker image by digest | The manifest names the image as `image_repository` and `image_digest`, and admission compares the digest the pod runs. |
+| A registry from which the nodes pull the worker image and the OpenShell supervisor and sandbox runtime images by digest | The manifest names the worker image as `image_repository` and `image_digest`, and admission compares the digest each container runs with the manifest. |
 | A StorageClass `heartwood-attempt` that provisions `ReadWriteOnce` volumes and deletes them with their claim | Inputs and Skills are staged into two claims of 256 MiB for each attempt. Admission reads the claims, and a claim does not show whether its volume is a host path. |
 
 The namespace of a session:

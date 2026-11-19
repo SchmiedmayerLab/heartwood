@@ -302,8 +302,8 @@ Unattested evidence shows internal consistency, not origin.
 
 `deploy/qualify-kubernetes-worker.py` runs the managed worker on the OpenShell Kubernetes driver of the kind cluster that the Kubernetes qualification workflow creates.
 The workflow builds the worker and runtime images with the script the Docker qualification uses, and packages the gateway from the same verified build artifacts.
-It pushes the worker, gateway and controller images to the cluster's registry, and the cluster pulls each by digest.
-The platform chart is installed with that gateway image and with the worker image as the staging image.
+It pushes the worker, gateway and controller images to the cluster's registry and copies the supervisor and sandbox runtime images of the OpenShell release there under their digests, and the cluster pulls each by digest.
+The platform chart is installed with that gateway image, with that registry as `images.openshellRepository`, and with the worker image as the staging image.
 
 The run launches one session through the platform's control service, which provisions the session namespace, its sandbox gateway and the gateway ServiceAccount.
 The cases run in a controller pod that stands in for the session's Heartwood gateway pod.
@@ -315,7 +315,7 @@ One provider registration and one policy probe serve every case of a run, and ea
 | Case | Establishes |
 |---|---|
 | `test_kubernetes_gateway_credential_is_confined` | The gateway's credential reads no Secret, namespace list or other namespace, changes no NetworkPolicy or Sandbox resource, and the staging admission policy refuses another image, another ServiceAccount, a mounted token, the host network, a Secret volume, a foreign claim, another claim name and another StorageClass |
-| `test_kubernetes_workflow_boundary_and_revocation` | Two approved actions run through the synthetic model route; the worker runs as user `10001` with read-only inputs and Skills, no service account token and no runtime socket; direct connections from the worker to the controller, the model route, the Kubernetes API, cluster DNS, the sandbox gateway and a metadata address are denied inside the sandbox, a pod that carries a workload pod's labels and runs no sandbox times out against the same listener, and a client outside both reaches it; the gateway's credential opens no exec, attach or port-forward session into the worker's pods; both pods run their images by digest; after revocation the cluster shows no object of the attempt |
+| `test_kubernetes_workflow_boundary_and_revocation` | Two approved actions run through the synthetic model route; the worker runs as user `10001` with read-only inputs and Skills, no service account token and no runtime socket; direct connections from the worker to the controller, the model route, the Kubernetes API, cluster DNS, the sandbox gateway and a metadata address are denied inside the sandbox, a pod that carries a workload pod's labels and runs no sandbox times out against the same listener, and a client outside both reaches it; the gateway's credential opens no exec, attach or port-forward session into the worker's pods; every container of both pods runs its image by digest from the cluster's registry, and the runtime reports the same reference; after revocation the cluster shows no object of the attempt |
 | `test_kubernetes_conflicting_deletion_is_retried_until_absence` | While six writers patch the Sandbox resource, a deletion answers with the conflict error, revocation sends it again, and the attempt is recorded as revoked only after the cluster shows no object |
 | `test_kubernetes_unsent_creation_is_confirmed_absent` | A creation request that never reached the gateway is recorded as not created after the gateway confirms absence, the attempt's claims are removed, and a later creation under the same name is refused |
 | `test_kubernetes_lost_creation_reply_is_revoked_during_provisioning` | A creation whose reply is lost is deleted while it provisions, and no pod or claim remains |
@@ -332,7 +332,7 @@ The run writes `qualification.json` with the fields of the [native qualification
 | `qualification_kind`, `driver` | `synthetic-kubernetes` and `openshell-kubernetes` |
 | `cluster` | Kubernetes version, network plugin image, and each node's architecture, kernel, operating system image, container runtime and kubelet version |
 | `kubernetes_identities` | The session, its namespace with its UID, the UID of `kube-system`, and the gateway ServiceAccount |
-| `image_references` | The registry references, by digest, under which the cluster pulled the worker, gateway and controller images |
+| `image_references` | The registry references, by digest, under which the cluster pulled the worker, gateway, controller, supervisor and sandbox runtime images |
 | `session_removed` | Whether the session namespace was gone after the run |
 | `platform_requirements` | Each value the Docker run reads from the worker container that a pod does not show, with the platform requirement that takes its place |
 | `cases_not_run` | The cases of the Docker run that this run does not repeat, each with the reason |
