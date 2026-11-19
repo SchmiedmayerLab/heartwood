@@ -55,7 +55,7 @@ The platform is for synthetic and open data only.
 |---|---|
 | PostgreSQL | One StatefulSet with a role and a database for Keycloak |
 | Keycloak | One Deployment that imports the realm `heartwood` at its first start |
-| Control service | One StatefulSet with the project registry and the launch interface |
+| Control service | One StatefulSet with the project registry, the launch interface and the provisioning of session namespaces |
 | versitygw | S3-compatible object store with one bucket `hw-project-<id>` for each entry in `projects` |
 | Platform certificate authority | Secret `platform-ca` with the key, and ConfigMap `platform-ca` with the certificate |
 | Session roles | Six fixed ClusterRoles for session namespaces, and the ServiceAccount and rights of the control service |
@@ -64,6 +64,8 @@ The platform is for synthetic and open data only.
 
 Every image is pinned by digest in `values.yaml`, and `values.schema.json` rejects an image reference without a digest.
 `images.platformServices` has no default and is set at installation to the image built from `services/Dockerfile`.
+`images.openshellGateway` has no default either.
+`values-kind.yaml` sets it to the published OpenShell 0.1.9 gateway, as a stand-in for the gateway that `images/worker/candidate/gateway.json` builds with its recorded patches.
 Helm generates every credential at the first installation and keeps the existing value on an upgrade.
 The chart renders no credential from a fixed value.
 PostgreSQL keeps the credentials of the first installation and the Keycloak realm on its volume, so a new installation after `helm uninstall` needs the volume claims of the old one deleted first.
@@ -84,8 +86,8 @@ The chart value `projects` is the source of projects and members, and the servic
 | Request | Caller | Result |
 |---|---|---|
 | `GET /v1/researchers/{subject}/projects` | Platform component | The projects that the researcher is a member of |
-| `PUT /v1/researchers/{subject}/projects/{project}/launch` | Platform component | The session, the project client and the launch context; the session is created at the first launch |
-| `DELETE /v1/researchers/{subject}/projects/{project}/launch` | Platform component | The session and its redirect URI are removed |
+| `PUT /v1/researchers/{subject}/projects/{project}/launch` | Platform component | The session with its namespace, the project client and the launch context; the session is created at the first launch |
+| `DELETE /v1/researchers/{subject}/projects/{project}/launch` | Platform component | The session, its namespace and its redirect URI are removed |
 | `GET /v1/launch-context` | Heartwood gateway | The launch context of the researcher and project that the token names |
 
 A platform component sends a projected service account token with the audience `heartwood-control`.
@@ -97,6 +99,29 @@ Every request is checked against the registry, and the billing binding of a laun
 At a launch the service creates the Keycloak client `hw-proj-<project>` unless it exists: a confidential client with the authorization code flow and standard token exchange, without direct access grants and without a service account, and with the optional scopes `svc-control`, `svc-data` and `svc-jobs`.
 It adds the redirect URI of the researcher's gateway, from `control.redirectUriTemplate`, and serializes the updates of one client, because Keycloak replaces the whole client on an update.
 Its Keycloak role `manage-clients` covers every client of the realm.
+
+### Session Namespaces
+
+At each launch the control service brings the namespace `hw-s-<session>` to the same state, and every step can be repeated:
+
+1. It creates the namespace with the labels `heartwood.platform/session` and `pod-security.kubernetes.io/enforce=restricted`, or reuses a namespace that carries them.
+2. It binds `heartwood-session-control` to itself there, and applies the ResourceQuota and LimitRange from `sessions.quota`, `sessions.containerDefaults` and `sessions.containerDefaultRequests`.
+3. It applies the network policies: no ingress and no egress by default; ingress to the OpenShell gateway on port 8080 from the supervisors of its sandboxes and from pods in `heartwood-sessions` that carry the session label; egress of the OpenShell gateway and its certificate Job to DNS and to the Kubernetes API server.
+4. It creates the Secret `openshell-kek` with a new 32-byte key, unless the session has one. OpenShell encrypts the provider credentials of the session with it.
+5. It binds the other fixed ClusterRoles with RoleBindings and applies the OpenShell objects with server-side apply, with the namespace and `images.openshellGateway` in place of the placeholders.
+6. It sets the subjects of `heartwood-openshell-node-reader` to the OpenShell ServiceAccounts of all sessions in the registry.
+7. It creates the ServiceAccount `hw-gw-<session>` in `heartwood-sessions`, waits until the OpenShell gateway is ready, and replaces the Secret `hw-gw-<session>`.
+
+The Secret `hw-gw-<session>` holds `launch.json`, the secret of the project client, and the OpenShell client certificate, key and CA certificate.
+`launch.json` is the reply to the launch request: the session, the launch context, the namespace with its UID, the UID of `kube-system`, the gateway ServiceAccount and the OpenShell endpoint.
+The reply carries no credential.
+
+Deleting the launch removes the session's subject from `heartwood-openshell-node-reader`, the ServiceAccount and Secret `hw-gw-<session>`, and the namespace with everything in it.
+
+The API server addresses of the egress policy come from `sessions.apiServer`.
+When that list is empty, Helm reads the address of the Service `kubernetes` and its endpoints from the cluster at installation.
+The certificates and the key of a session do not rotate while the session exists.
+The control service reads the pods of every session namespace.
 
 ### Network Policies
 
@@ -200,3 +225,5 @@ The script writes `network-policy-controls.json` and exits with an error unless 
 `install-chart.sh` installs the chart with `values-kind.yaml` and waits until every component is ready.
 The cluster tests send each admission policy admitted requests and one denied request for each condition, including each ClusterRole with a subject other than its own, as the confined ServiceAccount.
 They also check which connections the network policies allow, and call the control service as a stand-in for the spawner.
+A launched session is checked for its namespace objects, its RoleBindings, a ready OpenShell gateway, an unchanged state after a second launch, and complete removal.
+Requests sent from the control service's pod with its own token show that the admission policy confines it.

@@ -37,7 +37,7 @@ class Cluster:
             input=text_input if document is None else json.dumps(document),
             capture_output=True,
             text=True,
-            timeout=120,
+            timeout=300,
         )
 
     def apply(self, *documents: dict[str, Any]) -> None:
