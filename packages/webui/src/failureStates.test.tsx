@@ -45,6 +45,7 @@ describe("platform contract failure states in the browser", () => {
       new Set([
         "gateway-response",
         "model-discovery",
+        "operation",
         "planning",
         "session",
         "setup-refusal",
