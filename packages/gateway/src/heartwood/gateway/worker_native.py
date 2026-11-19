@@ -40,7 +40,7 @@ from heartwood.gateway._remote_workspace import _client_tool_contract
 from heartwood.gateway._worker_events import AdmittedWorkerWorkspace, require_worker_event_hooks
 from heartwood.gateway._workspace import WorkspaceInspector
 from heartwood.gateway.worker_control import NativeWorkerControl, NativeWorkerForward
-from heartwood.gateway.worker_deployment import OpenShellWorkerDeployment
+from heartwood.gateway.worker_deployment import OpenShellWorkerDeployment, WorkerDeployment
 from heartwood.gateway.worker_inputs import stage_worker_inputs
 from heartwood.gateway.worker_sessions import (
     WorkerPlanFactory,
@@ -68,7 +68,7 @@ _CREATION_REJECTED_GATEWAY = (
 
 
 def native_worker_plan_factory(
-    settings: OpenShellWorkerDeployment,
+    settings: WorkerDeployment,
     project: ProjectContext,
     *,
     client_tools: Sequence[ClientToolSpec] = (),
@@ -96,9 +96,7 @@ def native_worker_plan_factory(
     return prepare
 
 
-def require_gateway_capabilities(
-    settings: OpenShellWorkerDeployment, project: ProjectContext
-) -> None:
+def require_gateway_capabilities(settings: WorkerDeployment, project: ProjectContext) -> None:
     """Require the registered gateway's deletion capabilities once before serving sessions."""
     control = NativeWorkerControl(settings, project)
     try:
@@ -108,7 +106,7 @@ def require_gateway_capabilities(
 
 
 def native_worker_reconciler(
-    settings: OpenShellWorkerDeployment, project: ProjectContext
+    settings: WorkerDeployment, project: ProjectContext
 ) -> WorkerReconciler:
     """Revoke attempts whose gateway process ended, only on the infrastructure that ran them."""
 
@@ -145,8 +143,12 @@ def native_worker_reconciler(
 
 
 def _volume_settings(
-    settings: OpenShellWorkerDeployment, project: ProjectContext, image_digest: str
+    settings: WorkerDeployment, project: ProjectContext, image_digest: str
 ) -> WorkerVolumeSettings:
+    # Staging, admission and evidence of absence run through the Docker driver only; any
+    # other driver stops here, before a sandbox, volume or deletion request.
+    if not isinstance(settings, OpenShellWorkerDeployment):
+        raise WorkerAttemptError("managed worker launch requires the openshell-docker driver")
     return WorkerVolumeSettings(
         docker_cli=settings.docker_cli,
         docker_host=settings.docker_host,
@@ -209,7 +211,7 @@ def _delete_sandbox(control: NativeWorkerControl, volumes: WorkerVolumes, sandbo
 
 
 def _revocation_evidence(
-    settings: OpenShellWorkerDeployment,
+    settings: WorkerDeployment,
     record: WorkerAttemptRecord,
     sandbox_id: str | None,
     gateway: WorkerGatewayReport | None,
@@ -236,7 +238,7 @@ def _revocation_evidence(
 class _NativeWorkerAttempt:
     def __init__(
         self,
-        settings: OpenShellWorkerDeployment,
+        settings: WorkerDeployment,
         request: WorkerSessionRequest,
         *,
         client_tools: Sequence[ClientToolSpec] = (),

@@ -27,6 +27,7 @@ from unittest.mock import Mock
 from uuid import uuid4
 
 import pytest
+import tomli_w
 from openhands.sdk.tool.client_tool import ClientToolSpec
 from pydantic import ValidationError
 
@@ -42,14 +43,24 @@ from heartwood.core_adapter.worker_attempts import (
     WorkerGatewayReport,
     WorkerRuntimeBinding,
 )
-from heartwood.gateway import ProjectContext, ProjectStateError, worker_native
+from heartwood.gateway import (
+    ProjectContext,
+    ProjectStateError,
+    load_project_deployment,
+    worker_native,
+)
 from heartwood.gateway._deployment import validate_worker_deployment
 from heartwood.gateway.worker_control import (
     REQUIRED_GATEWAY_CAPABILITIES,
     NativeWorkerControl,
     NativeWorkerForward,
 )
-from heartwood.gateway.worker_deployment import OpenShellWorkerDeployment
+from heartwood.gateway.worker_deployment import (
+    KubernetesWorkerDeployment,
+    OpenShellWorkerDeployment,
+    WorkerDeployment,
+    worker_deployment_from_mapping,
+)
 from heartwood.gateway.worker_inputs import WorkerInputManifest
 from heartwood.gateway.worker_native import _NativeWorkerAttempt, native_worker_plan_factory
 from heartwood.gateway.worker_sessions import WorkerSessionRequest
@@ -406,7 +417,7 @@ _CATALOG = "f" * 64
 class _Sandboxes:
     """The control-plane observations one uniquely named sandbox can return."""
 
-    def __init__(self, settings: OpenShellWorkerDeployment) -> None:
+    def __init__(self, settings: WorkerDeployment) -> None:
         self.settings = settings
         self.pb = pytest.importorskip("openshell._proto.openshell_pb2")
         self.grpc = pytest.importorskip("grpc")
@@ -1127,6 +1138,11 @@ def _refused(driver: str | None, *capabilities: str) -> WorkerGatewayReport:
             id="other-driver",
         ),
         pytest.param(
+            [("openshell/kubernetes", _GATEWAY_CAPABILITIES)],
+            _refused("openshell/kubernetes", *_GATEWAY_CAPABILITIES),
+            id="kubernetes-driver",
+        ),
+        pytest.param(
             [("openshell/docker", _GATEWAY_CAPABILITIES)] * 2, _refused(None), id="ambiguous"
         ),
         pytest.param([("openshell/docker", ("OpenShell.Compute.X",))], _UNREADABLE, id="malformed"),
@@ -1191,6 +1207,343 @@ def test_reported_capabilities_admit_any_gateway_version_and_are_recorded(
         native.record("fenced", runtime)
     )
     assert reconciled.gateway == expected
+
+
+_KUBERNETES_FIELDS = (
+    "kubectl_cli",
+    "kubeconfig",
+    "namespace",
+    "supervisor_image_digest",
+    "sandbox_image_digest",
+)
+
+
+@pytest.fixture
+def kubernetes_deployment(
+    deployment: tuple[OpenShellWorkerDeployment, ProjectContext],
+) -> tuple[KubernetesWorkerDeployment, ProjectContext]:
+    """The same operator files, with a tool that records any use in place of `kubectl`."""
+    docker, project = deployment
+    root = docker.native_config_home.parent
+    kubectl = root / "kubectl"
+    kubectl.write_text(f"#!/bin/sh\ntouch {root / 'kubectl-used'}\nexit 1\n")
+    kubectl.chmod(0o500)
+    kubeconfig = root / "kubeconfig"
+    kubeconfig.write_text("synthetic fixture, not a credential")
+    kubeconfig.chmod(0o600)
+    settings = KubernetesWorkerDeployment.model_validate(
+        {
+            **docker.model_dump(exclude={"docker_cli", "docker_host", "docker_socket_group"}),
+            "driver": "openshell-kubernetes",
+            "kubectl_cli": kubectl,
+            "kubeconfig": kubeconfig,
+            "namespace": "hw-s-synthetic",
+            "supervisor_image_digest": "sha256:" + "5" * 64,
+            "sandbox_image_digest": "sha256:" + "6" * 64,
+        }
+    )
+    return settings, project
+
+
+def test_manifest_selects_the_settings_of_its_worker_driver(
+    deployment: tuple[OpenShellWorkerDeployment, ProjectContext],
+    kubernetes_deployment: tuple[KubernetesWorkerDeployment, ProjectContext],
+) -> None:
+    docker, _project = deployment
+    kubernetes, _project = kubernetes_deployment
+    assert worker_deployment_from_mapping(docker.model_dump()) == docker
+    assert worker_deployment_from_mapping(kubernetes.model_dump()) == kubernetes
+    for driver in ("openshell-podman", "", None):
+        with pytest.raises(ValidationError):
+            worker_deployment_from_mapping({**kubernetes.model_dump(), "driver": driver})
+    without_driver = kubernetes.model_dump(exclude={"driver"})
+    with pytest.raises(ValidationError):
+        worker_deployment_from_mapping(without_driver)
+
+
+@pytest.mark.parametrize("field", _KUBERNETES_FIELDS)
+def test_each_driver_requires_its_fields_and_refuses_the_other_drivers(
+    deployment: tuple[OpenShellWorkerDeployment, ProjectContext],
+    kubernetes_deployment: tuple[KubernetesWorkerDeployment, ProjectContext],
+    field: str,
+) -> None:
+    docker = deployment[0].model_dump()
+    kubernetes = kubernetes_deployment[0].model_dump()
+    with pytest.raises(ValidationError):
+        worker_deployment_from_mapping({k: v for k, v in kubernetes.items() if k != field})
+    with pytest.raises(ValidationError):
+        worker_deployment_from_mapping({**docker, field: kubernetes[field]})
+    for name in ("docker_cli", "docker_host", "docker_socket_group"):
+        with pytest.raises(ValidationError):
+            worker_deployment_from_mapping({**kubernetes, name: docker[name] or 0})
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("kubectl_cli", "bin/kubectl"),
+        ("kubectl_cli", "/opt/../kubectl"),
+        ("kubeconfig", "kubeconfig"),
+        ("kubeconfig", "/etc/heartwood/../kubeconfig"),
+        ("namespace", "Sessions"),
+        ("namespace", "a" * 64),
+        ("supervisor_image_digest", "ghcr.io/nvidia/openshell/supervisor:0.1.8"),
+        ("sandbox_image_digest", "sha256:" + "a" * 63),
+        # The sandbox command-line tool accepts at most 19 characters with this driver.
+        ("workspace", "a" * 20),
+    ],
+)
+def test_invalid_kubernetes_settings_are_refused(
+    kubernetes_deployment: tuple[KubernetesWorkerDeployment, ProjectContext],
+    field: str,
+    value: str,
+) -> None:
+    with pytest.raises(ValidationError):
+        worker_deployment_from_mapping({**kubernetes_deployment[0].model_dump(), field: value})
+
+
+def test_workspace_name_limit_applies_to_the_kubernetes_driver_only(
+    deployment: tuple[OpenShellWorkerDeployment, ProjectContext],
+    kubernetes_deployment: tuple[KubernetesWorkerDeployment, ProjectContext],
+) -> None:
+    longest = {**kubernetes_deployment[0].model_dump(), "workspace": "a" * 19}
+    assert worker_deployment_from_mapping(longest).workspace == "a" * 19
+    docker = {**deployment[0].model_dump(), "workspace": "a" * 63}
+    assert worker_deployment_from_mapping(docker).workspace == "a" * 63
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "kubeconfig_permissions",
+        "kubeconfig_missing",
+        "kubeconfig_authority",
+        "kubeconfig_link",
+        "kubectl_permissions",
+        "kubectl_not_executable",
+    ],
+)
+def test_untrusted_kubernetes_authority_is_rejected(
+    kubernetes_deployment: tuple[KubernetesWorkerDeployment, ProjectContext], change: str
+) -> None:
+    settings, project = kubernetes_deployment
+    validate_worker_deployment(settings, project)
+    if change == "kubeconfig_permissions":
+        settings.kubeconfig.chmod(0o640)
+    elif change == "kubeconfig_missing":
+        settings.kubeconfig.unlink()
+    elif change == "kubeconfig_authority":
+        target = project.root / "kubeconfig"
+        target.write_bytes(settings.kubeconfig.read_bytes())
+        target.chmod(0o600)
+        settings = settings.model_copy(update={"kubeconfig": target})
+    elif change == "kubeconfig_link":
+        link = settings.kubeconfig.parent / "kubeconfig-link"
+        link.symlink_to(settings.kubeconfig)
+        settings = settings.model_copy(update={"kubeconfig": link})
+    elif change == "kubectl_permissions":
+        settings.kubectl_cli.chmod(0o777)
+    else:
+        settings.kubectl_cli.chmod(0o400)
+    with pytest.raises((ProjectStateError, OSError)):
+        validate_worker_deployment(settings, project)
+    assert not project.state_root.exists()
+
+
+def _worker_manifest(settings: WorkerDeployment, project: ProjectContext) -> tuple[Path, Any]:
+    record = {
+        "schema_version": "heartwood.project-deployment.v1",
+        "project_id": str(project.project_id),
+        "workspace": str(project.root),
+        "state_root": str(project.state_root),
+        "policy": {"policy_id": "deployment", "platform_id": "generic"},
+        "worker": settings.model_dump(mode="json", exclude_none=True),
+    }
+    path = settings.native_config_home.parent / "deployment.toml"
+    project.state_root.parent.mkdir(mode=0o700)
+    return path, record
+
+
+def test_kubernetes_manifest_loads_and_invalid_tables_stop_with_the_manifest_diagnostic(
+    kubernetes_deployment: tuple[KubernetesWorkerDeployment, ProjectContext],
+) -> None:
+    settings, project = kubernetes_deployment
+    path, record = _worker_manifest(settings, project)
+
+    def load(worker: dict[str, object]) -> WorkerDeployment | None:
+        path.write_text(tomli_w.dumps({**record, "worker": worker}))
+        path.chmod(0o600)
+        return load_project_deployment(path, project_root=project.root, env={}).worker
+
+    table = record["worker"]
+    assert load(table) == settings
+    for invalid in (
+        {**table, "docker_cli": table["kubectl_cli"]},
+        {**table, "docker_host": "unix:///run/docker.sock"},
+        {**table, "driver": "openshell-docker"},
+        {**table, "driver": "openshell-podman"},
+        {**table, "workspace": "a" * 20},
+        {k: v for k, v in table.items() if k != "namespace"},
+        {k: v for k, v in table.items() if k != "kubeconfig"},
+    ):
+        with pytest.raises(ProjectStateError, match="HW-DEPLOY-001"):
+            load(invalid)
+    settings.kubeconfig.chmod(0o644)
+    with pytest.raises(ProjectStateError, match="HW-DEPLOY-001"):
+        load(table)
+    assert not project.state_root.exists()
+    assert not (settings.native_config_home.parent / "kubectl-used").exists()
+
+
+@pytest.fixture
+def kubernetes_gateway(
+    kubernetes_deployment: tuple[KubernetesWorkerDeployment, ProjectContext],
+    monkeypatch: pytest.MonkeyPatch,
+) -> _Sandboxes:
+    sandboxes = _Sandboxes(kubernetes_deployment[0])
+    sandboxes.drivers = [("openshell/kubernetes", _GATEWAY_CAPABILITIES)]
+    monkeypatch.setattr("openshell.SandboxClient", lambda *_args, **_options: sandboxes)
+    return sandboxes
+
+
+def test_kubernetes_manifest_accepts_exactly_one_kubernetes_driver_with_both_capabilities(
+    kubernetes_deployment: tuple[KubernetesWorkerDeployment, ProjectContext],
+    kubernetes_gateway: _Sandboxes,
+) -> None:
+    settings, project = kubernetes_deployment
+    control = NativeWorkerControl(settings, project)
+    control.connect()
+    assert control.gateway == WorkerGatewayReport(
+        decision="accepted",
+        version=_GATEWAY_VERSION,
+        driver="openshell/kubernetes",
+        capabilities=_GATEWAY_CAPABILITIES,
+    )
+    control.close()
+    worker_native.require_gateway_capabilities(settings, project)
+    assert kubernetes_gateway.closed
+
+
+_KUBERNETES = "openshell/kubernetes"
+
+
+@pytest.mark.parametrize(
+    ("drivers", "recorded"),
+    [
+        pytest.param(None, _UNREADABLE, id="unreadable"),
+        pytest.param([], _refused(None), id="no-driver"),
+        pytest.param(
+            [("openshell/docker", _GATEWAY_CAPABILITIES)],
+            _refused("openshell/docker", *_GATEWAY_CAPABILITIES),
+            id="docker-driver",
+        ),
+        pytest.param([(_KUBERNETES, ())], _refused(_KUBERNETES), id="no-capabilities"),
+        pytest.param(
+            [(_KUBERNETES, (_DELETE_RETRY,))],
+            _refused(_KUBERNETES, _DELETE_RETRY),
+            id="no-provisioning-wait",
+        ),
+        pytest.param(
+            [(_KUBERNETES, (_DELETE_AWAITS_PROVISIONING,))],
+            _refused(_KUBERNETES, _DELETE_AWAITS_PROVISIONING),
+            id="no-retry",
+        ),
+        pytest.param([(_KUBERNETES, _GATEWAY_CAPABILITIES)] * 2, _refused(None), id="ambiguous"),
+        pytest.param(
+            [(_KUBERNETES, _GATEWAY_CAPABILITIES), ("openshell/docker", _GATEWAY_CAPABILITIES)],
+            _refused(None),
+            id="both-drivers",
+        ),
+    ],
+)
+def test_kubernetes_manifest_refuses_every_other_driver_set_before_any_request(
+    kubernetes_deployment: tuple[KubernetesWorkerDeployment, ProjectContext],
+    kubernetes_gateway: _Sandboxes,
+    drivers: list[tuple[str, tuple[str, ...]]] | None,
+    recorded: WorkerGatewayReport,
+) -> None:
+    settings, project = kubernetes_deployment
+    if drivers is None:
+        kubernetes_gateway.version = None
+    else:
+        kubernetes_gateway.drivers = drivers
+    with pytest.raises(WorkerGatewayCapabilityError, match="required deletion capabilities"):
+        worker_native.require_gateway_capabilities(settings, project)
+    control = NativeWorkerControl(settings, project)
+    with pytest.raises(WorkerGatewayCapabilityError):
+        control.connect()
+    assert control.gateway == recorded
+    assert control.client is None
+    assert kubernetes_gateway.closed
+    assert kubernetes_gateway.spec is None
+    assert kubernetes_gateway.deleted == []
+    assert not (settings.native_config_home.parent / "kubectl-used").exists()
+
+
+def test_missing_capability_diagnostic_names_the_kubernetes_driver_version(
+    kubernetes_deployment: tuple[KubernetesWorkerDeployment, ProjectContext],
+    kubernetes_gateway: _Sandboxes,
+) -> None:
+    kubernetes_gateway.drivers = [(_KUBERNETES, (_DELETE_RETRY,))]
+    with pytest.raises(WorkerGatewayCapabilityError) as raised:
+        worker_native.require_gateway_capabilities(*kubernetes_deployment)
+    assert str(raised.value).endswith(
+        f"version {_GATEWAY_VERSION} lacks {_DELETE_AWAITS_PROVISIONING}"
+    )
+    kubernetes_gateway.drivers = [("openshell/docker", ())]
+    with pytest.raises(WorkerGatewayCapabilityError) as raised:
+        worker_native.require_gateway_capabilities(*kubernetes_deployment)
+    assert str(raised.value).endswith("required deletion capabilities")
+
+
+def test_kubernetes_manifest_stops_launch_and_reconciliation_before_any_request(
+    kubernetes_deployment: tuple[KubernetesWorkerDeployment, ProjectContext],
+    kubernetes_gateway: _Sandboxes,
+) -> None:
+    settings, project = kubernetes_deployment
+    project.state_root.mkdir(parents=True, mode=0o700)
+    request = cast(
+        WorkerSessionRequest,
+        SimpleNamespace(
+            project=project,
+            session_id="synthetic",
+            profile=SimpleNamespace(
+                profile_id=settings.profile_id,
+                model=settings.model,
+                policy_endpoint=settings.model_endpoint,
+            ),
+            client_tools=(),
+        ),
+    )
+    with pytest.raises(WorkerAttemptError, match="requires the openshell-docker driver"):
+        native_worker_plan_factory(settings, project)(request)
+    assert project.project_id is not None
+    record = WorkerAttemptRecord.model_validate(
+        {
+            "phase": "fenced",
+            "intent": WorkerAttemptIntent(
+                project_id=project.project_id,
+                session_id="synthetic",
+                attempt_id=uuid4(),
+                conversation_id=uuid4(),
+                image_digest=settings.image_digest,
+                gateway_policy_sha256="c" * 64,
+                sandbox_policy_sha256=settings.sandbox_policy_sha256,
+                input_manifest_sha256="d" * 64,
+                control_plane=WorkerControlPlane(
+                    control_plane_sha256="1" * 64, container_runtime_sha256="2" * 64
+                ),
+            ),
+            "runtime": None,
+        }
+    )
+    kubernetes_gateway.place("hw-" + record.intent.attempt_id.hex[:16], {})
+    with pytest.raises(WorkerAttemptError, match="requires the openshell-docker driver"):
+        worker_native.native_worker_reconciler(settings, project)(record)
+    assert kubernetes_gateway.running
+    assert kubernetes_gateway.spec is None
+    assert kubernetes_gateway.deleted == []
+    assert not (settings.native_config_home.parent / "kubectl-used").exists()
 
 
 def test_managed_worker_manifest_has_no_declared_gateway_version(

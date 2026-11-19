@@ -30,28 +30,34 @@ from heartwood.core_adapter.worker_attempts import (
 )
 from heartwood.gateway._deployment import validate_worker_deployment
 from heartwood.gateway._project import ProjectContext
-from heartwood.gateway.worker_deployment import OpenShellWorkerDeployment
+from heartwood.gateway.worker_deployment import WorkerDeployment
 from heartwood.persistence import read_private_text
 
 # Revocation and cleanup evidence depends on these deletion behaviors of the gateway and its
-# Docker driver: deletion waits for provisioning to settle, and an explicit delete of a sandbox
-# already marked deleting calls the driver again.
+# Docker or Kubernetes driver: deletion waits for provisioning to settle, and an explicit delete
+# of a sandbox already marked deleting calls the driver again.
 REQUIRED_GATEWAY_CAPABILITIES = frozenset(
     {
         "openshell.compute.delete-awaits-provisioning",
         "openshell.compute.delete-retries-deleting",
     }
 )
+# The compute driver implementation the gateway must report for each manifest driver.
+_DRIVER_IMPLEMENTATIONS = {
+    "openshell-docker": "openshell/docker",
+    "openshell-kubernetes": "openshell/kubernetes",
+}
 
 
 class NativeWorkerControl:
     """Retain native connection material without selecting ambient gateway credentials."""
 
-    def __init__(self, settings: OpenShellWorkerDeployment, project: ProjectContext) -> None:
+    def __init__(self, settings: WorkerDeployment, project: ProjectContext) -> None:
         """Validate native connection material without opening a control channel."""
         self.settings = settings
         self.project = project
         validate_worker_deployment(settings, project)
+        self._driver = _DRIVER_IMPLEMENTATIONS[settings.driver]
         directory = settings.native_config_home / "openshell" / "gateways" / settings.gateway
         self._files = tuple(
             directory / name
@@ -147,7 +153,7 @@ class NativeWorkerControl:
             missing = REQUIRED_GATEWAY_CAPABILITIES.difference(self.gateway.capabilities)
             detail = (
                 f": version {self.gateway.version} lacks {', '.join(sorted(missing))}"
-                if self.gateway.driver == "openshell/docker"
+                if self.gateway.driver == self._driver
                 else ""
             )
             raise WorkerGatewayCapabilityError(
@@ -156,7 +162,7 @@ class NativeWorkerControl:
             )
 
     def _gateway_report(self) -> WorkerGatewayReport:
-        """Decide on the one Docker compute driver's negotiated capabilities from the gateway."""
+        """Decide on the one selected compute driver's negotiated capabilities from the gateway."""
         info = self.client.gateway_info()
         drivers = [
             extension
@@ -167,7 +173,7 @@ class NativeWorkerControl:
         capabilities = tuple(driver.supported_capabilities) if driver is not None else ()
         accepted = (
             driver is not None
-            and driver.implementation_name == "openshell/docker"
+            and driver.implementation_name == self._driver
             and REQUIRED_GATEWAY_CAPABILITIES.issubset(capabilities)
         )
         return WorkerGatewayReport(
