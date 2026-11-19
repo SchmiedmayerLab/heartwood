@@ -608,6 +608,16 @@ _CONFINEMENT = [
             ),
         )
     ],
+    *_case(_supervisor, "supervisor-fs-group", ("spec", *_CONTEXT, "fsGroup"), _DELETE, 0),
+    *_case(
+        _supervisor,
+        "supervisor-groups",
+        ("spec", *_CONTEXT, "supplementalGroups"),
+        [0],
+        [10001, 0],
+    ),
+    *_case(_supervisor, "supervisor-pod-user", ("spec", *_CONTEXT, "runAsUser"), 0, "10001"),
+    *_case(_supervisor, "supervisor-pod-group", ("spec", *_CONTEXT, "runAsGroup"), 0),
     *_case(
         _supervisor,
         "supervisor-context",
@@ -788,6 +798,7 @@ def test_each_container_must_run_its_own_pinned_image(
         ),
         *_case(_workload, "requests", (*_AGENT, "resources", "requests"), _DELETE, {"cpu": "1"}),
         *_case(_workload, "agent-resources", (*_AGENT, "resources"), _DELETE, None),
+        *_case(_workload, "agent-unlisted", (*_AGENT, "resources", "unlisted"), {}),
         *_case(_workload, "agent-claims", (*_AGENT, "resources", "claims"), [{"name": "gpu"}]),
         *_case(_workload, "init-resources", (*_RUNTIME_INIT, "resources"), _DELETE, _GPU),
         *_case(
@@ -1389,6 +1400,8 @@ def test_evidence_record_keeps_inspected_values_without_environment_or_labels(
     assert [item["name"] for item in workload["containers"]] == ["agent"]
     assert workload["containers"][0]["resources"]["limits"] == {"cpu": "1", "memory": "2Gi"}
     assert workload["containers"][0]["volumeDevices"] == "<absent>"
+    assert workload["containers"][0]["restartPolicy"] == "<absent>"
+    assert workload["spec"]["runtimeClassName"] == "<absent>"
     assert workload["containers"][0]["securityContext"]["capabilities"] == {"drop": ["ALL"]}
     assert len(workload["initContainers"]) == 2
     assert workload["ephemeralContainers"] == []

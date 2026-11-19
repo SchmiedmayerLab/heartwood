@@ -105,6 +105,7 @@ _RECORDED_POD_FIELDS = (
     "securityContext",
     "resources",
     "resourceClaims",
+    "runtimeClassName",
     "volumes",
 )
 _RECORDED_CONTAINER_FIELDS = (
@@ -114,6 +115,8 @@ _RECORDED_CONTAINER_FIELDS = (
     "resources",
     "volumeMounts",
     "volumeDevices",
+    "ports",
+    "restartPolicy",
 )
 _ABSENT_RECORD = "<absent>"
 
@@ -202,12 +205,20 @@ def _pod_confined(pod: object) -> bool:
     context = _field(spec, "securityContext")
     annotations = _field(pod, "metadata", "annotations")
     sysctls = _field(context, "sysctls")
+    groups = _field(context, "supplementalGroups")
     return (
         _host_namespaces_private(spec)
         and _field(spec, "automountServiceAccountToken") is False
         and isinstance(context, dict)
         and set(context) <= _POD_CONTEXT_FIELDS
         and context.get("seccompProfile") == {"type": "RuntimeDefault"}
+        # The file system group joins every container's groups.
+        and _is_worker_id(context.get("fsGroup"))
+        and (_none(groups) or groups == [_WORKER_ID])
+        and all(
+            name not in context or _is_worker_id(context[name])
+            for name in ("runAsUser", "runAsGroup")
+        )
         and (sysctls is _ABSENT or sysctls == _SYSCTLS)
         and _field(spec, "runtimeClassName") is _ABSENT
         and (annotations is _ABSENT or isinstance(annotations, dict))
@@ -510,16 +521,11 @@ class KubernetesWorkerAdmission:
         }
         self._require_images(pod, everything, images)
         context = _field(spec, "securityContext")
-        groups = _field(context, "supplementalGroups")
         if (
             not _pod_confined(pod)
             or _field(spec, "shareProcessNamespace") is not False
-            or not all(
-                _is_worker_id(_field(context, name))
-                for name in ("runAsUser", "runAsGroup", "fsGroup")
-            )
+            or not all(_is_worker_id(_field(context, name)) for name in ("runAsUser", "runAsGroup"))
             or _field(context, "runAsNonRoot") is not True
-            or not (_none(groups) or groups == [_WORKER_ID])
             or not all(_confined(container) for container in everything)
         ):
             raise WorkerAttemptError("native worker confinement does not match admission")
