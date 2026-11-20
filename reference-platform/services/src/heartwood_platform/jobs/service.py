@@ -14,7 +14,6 @@ The executor runs the tasks and is reached only through :class:`TesExecutor`.
 
 from __future__ import annotations
 
-import contextlib
 import hashlib
 import json
 import logging
@@ -384,7 +383,10 @@ class JobService:
         if tool != "create_task":
             raise InvalidRequestError("no proposal for this tool")
         try:
-            request = TaskRequest.model_validate(arguments)
+            # create_task takes null for its optional arguments, so a proposal does too.
+            request = TaskRequest.model_validate(
+                {key: value for key, value in arguments.items() if value is not None}
+            )
         except ValueError:
             raise InvalidRequestError("invalid task arguments") from None
         resources = request.resources
@@ -670,8 +672,14 @@ class JobService:
     def _cancel(self, record: Operation) -> None:
         """Cancel a record's task; a task the executor no longer has is observed as such."""
         assert record.task_id is not None
-        with contextlib.suppress(TaskNotFoundError):
+        try:
             self._executors[record.project].cancel(record.task_id)
+        except TaskNotFoundError:
+            pass
+        except httpx.HTTPStatusError as error:
+            # A task that ended meanwhile may be refused; observing it shows its state.
+            if not error.response.is_client_error:
+                raise
 
     def _pages(self, project: str, filters: TaskFilter) -> Iterator[TesTaskView]:
         executor = self._executors[project]
@@ -688,7 +696,11 @@ class JobService:
         """Return the task that carries a submission's operation tag."""
         filters = TaskFilter(tag_key=OPERATION_TAG, tag_value=record.operation_id)
         for view in self._pages(record.project, filters):
-            if _adoptable(view, record):
+            if (
+                (view.tags or {}).get(OPERATION_TAG) == record.operation_id
+                and _adoptable(view, record)
+                and self._records.by_task(record.project, view.id) is None
+            ):
                 return view
         return None
 
@@ -769,7 +781,10 @@ class JobService:
         if record.failure is not None:
             # An earlier cancellation has not ended the task yet.
             self._cancel(record)
-            return self._observe_task(record)
+            record = self._observe_task(record)
+            if record.state == "COMPLETE":
+                return self._records.update(record, failure=None)
+            return record
         failure = None
         if record.started_at is None:
             if now - record.created_at > timedelta(seconds=self._settings.start_deadline_seconds):
@@ -781,12 +796,14 @@ class JobService:
             )
         if failure is None:
             return record
+        # Recorded first, so the reason survives an interruption after the cancellation.
+        record = self._records.update(record, failure=failure)
         self._cancel(record)
         record = self._observe_task(record)
         if record.state == "COMPLETE":
             # The task ended before the cancellation reached it.
-            return record
-        return self._records.update(record, failure=failure)
+            return self._records.update(record, failure=None)
+        return record
 
     def _settle(self, record: Operation) -> Operation:
         if record.settled or record.state not in TERMINAL:
@@ -814,42 +831,45 @@ class JobService:
     def reconcile(self, project: str) -> list[str]:
         """Cancel the project's tasks that no operation recorded and refresh open operations.
 
-        A task created outside the job service, such as with a worker's credential, has no
-        record and is cancelled. One task or record that fails is logged and the others are
-        still reconciled. Return the identifiers of the cancelled tasks.
+        A task created outside the job service, such as with the executor's credential, has
+        no record and is cancelled. The listing runs without the project's lock, and each
+        task and record is then handled under it, so calls of the project wait for one
+        step at most. One task or record that fails is logged and the others are still
+        reconciled. Return the identifiers of the cancelled tasks.
         """
         cancelled: list[str] = []
         executor = self._executors[project]
-        with self._locks[project]:
-            for state in ACTIVE:
-                for view in self._pages(project, TaskFilter(state=state)):
-                    try:
-                        if self._records.by_task(project, view.id) is not None:
-                            continue
-                        tagged = (view.tags or {}).get(OPERATION_TAG)
-                        record = None if tagged is None else self._records.get(project, tagged)
-                        if (
-                            record is not None
-                            and record.kind == "submit"
-                            and record.state == "SUBMITTING"
-                            and _adoptable(view, record)
-                        ):
-                            self._records.update(record, state="QUEUED", task_id=view.id)
-                            continue
-                        _LOGGER.warning(
-                            "cancelling task %s of %s, which no operation recorded",
-                            view.id,
-                            project,
-                        )
-                        executor.cancel(view.id)
-                        cancelled.append(view.id)
-                    except Exception:
-                        _LOGGER.exception("reconciling task %s of %s failed", view.id, project)
-            for record in self._records.open_submissions(project):
-                try:
-                    self._refresh(record)
-                except Exception:
-                    _LOGGER.exception("refreshing %s of %s failed", record.operation_id, project)
+        views = [view for state in ACTIVE for view in self._pages(project, TaskFilter(state=state))]
+        for view in views:
+            try:
+                with self._locks[project]:
+                    if self._records.by_task(project, view.id) is not None:
+                        continue
+                    tagged = (view.tags or {}).get(OPERATION_TAG)
+                    record = None if tagged is None else self._records.get(project, tagged)
+                    if (
+                        record is not None
+                        and record.kind == "submit"
+                        and record.state == "SUBMITTING"
+                        and _adoptable(view, record)
+                    ):
+                        self._records.update(record, state="QUEUED", task_id=view.id)
+                        continue
+                    _LOGGER.warning(
+                        "cancelling task %s of %s, which no operation recorded", view.id, project
+                    )
+                    executor.cancel(view.id)
+                    cancelled.append(view.id)
+            except Exception:
+                _LOGGER.exception("reconciling task %s of %s failed", view.id, project)
+        for listed in self._records.open_submissions(project):
+            try:
+                with self._locks[project]:
+                    record = self._records.get(project, listed.operation_id)
+                    if record is not None:
+                        self._refresh(record)
+            except Exception:
+                _LOGGER.exception("refreshing %s of %s failed", listed.operation_id, project)
         return cancelled
 
     # Observations.
@@ -867,9 +887,13 @@ class JobService:
             target = self._refresh(target)
             status = "completed"
             reference = target.task_id or target.operation_id
-            limitations.append(
-                f"Cancellation of {record.target} observed TES state {target.state}."
-            )
+            if target.failure is None and target.state not in {"DENIED", "SUBMITTING"}:
+                observed = f"TES state {target.state}"
+            else:
+                observed = f"status {_STATUS.get(target.state, 'unknown')}"
+                if target.failure is not None:
+                    observed = "status failed"
+            limitations.append(f"Cancellation of {record.target} observed {observed}.")
         else:
             status = _STATUS.get(record.state, "unknown")
             if record.failure is not None:
@@ -877,7 +901,8 @@ class JobService:
                 limitations.append(record.failure)
             if record.detail is not None:
                 limitations.append(record.detail)
-            if record.state not in {"DENIED", "SUBMITTING"}:
+            # Only a state that the executor reported is named as a TES state.
+            if record.failure is None and record.state not in {"DENIED", "SUBMITTING"}:
                 limitations.append(f"TES state {record.state}.")
             if record.state == "SUBMITTING":
                 limitations.append("The executor has not confirmed the task yet.")

@@ -66,7 +66,13 @@ class JobBudgets(Protocol):
         """
 
     def settle(self, holder: str, usage: JobUsage) -> None:
-        """Record what the task used and release the rest of its reservation."""
+        """Record what the task used and release the rest of its reservation.
+
+        Settling is idempotent per holder and ends the holder: settling again, or settling
+        a holder that never reserved, changes nothing, and a later reservation for a settled
+        holder is refused. The job service settles by holder whenever it cannot tell whether
+        a reservation reached the budget.
+        """
 
 
 class ControlContexts:

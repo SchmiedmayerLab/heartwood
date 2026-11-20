@@ -927,7 +927,7 @@ def test_cancelling_a_task_that_the_executor_lost(jobs: tuple[Jobs, TestClient])
     del service.executors["demo"].tasks["task-0000"]
     cancel = {"project_id": "demo", "operation_id": "c", "target_operation_id": "op-1"}
     observed = service.observe(client, "cancel_task", cancel)
-    assert observed.limitations == ("Cancellation of op-1 observed TES state SYSTEM_ERROR.",)
+    assert observed.limitations == ("Cancellation of op-1 observed status failed.",)
     target = service.observe(client, "get_task", {"project_id": "demo", "operation_id": "op-1"})
     assert target.status == "failed"
     assert "no longer has the task" in target.limitations[0]
@@ -970,3 +970,63 @@ def _sleeping(tags: dict[str, str]) -> TesTask:
             "tags": tags,
         }
     )
+
+
+def test_a_proposal_takes_null_for_optional_arguments(jobs: tuple[Jobs, TestClient]) -> None:
+    service, client = jobs
+    arguments = {
+        "name": "n",
+        "image": IMAGE,
+        "command": ["true"],
+        "resources": None,
+        "inputs": None,
+    }
+    result = service.call(
+        client,
+        "propose_task",
+        {"project_id": "demo", "tool": "create_task", "arguments": arguments},
+    )
+    assert result["isError"] is False
+
+
+def test_a_finished_task_whose_cancellation_is_refused_is_observed(
+    jobs: tuple[Jobs, TestClient], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, client = jobs
+    service.observe(client, "create_task", task())
+    executor = service.executors["demo"]
+    executor.advance("task-0000", "RUNNING")
+    service.observe(client, "get_task", {"project_id": "demo", "operation_id": "op-1"})
+
+    def refuse(_: str) -> None:
+        executor.advance("task-0000", "COMPLETE")
+        request = httpx.Request("POST", "https://executor/v1/tasks/task-0000%3Acancel")
+        raise httpx.HTTPStatusError(
+            "conflict", request=request, response=httpx.Response(409, request=request)
+        )
+
+    monkeypatch.setattr(executor, "cancel", refuse)
+    cancel = {"project_id": "demo", "operation_id": "c", "target_operation_id": "op-1"}
+    observed = service.observe(client, "cancel_task", cancel)
+    assert observed.limitations == ("Cancellation of op-1 observed TES state COMPLETE.",)
+
+
+def test_a_tagged_task_of_another_operation_is_never_adopted(
+    jobs: tuple[Jobs, TestClient], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, client = jobs
+    executor = service.executors["demo"]
+    other = executor.create(_sleeping({OPERATION_TAG: "op-other"}))
+    listing = executor.list
+    # An executor that ignores the tag filter.
+    monkeypatch.setattr(
+        executor,
+        "list",
+        lambda token=None, view="BASIC", filters=None: listing(token, view),  # noqa: ARG005
+    )
+    executor.failure = "unreachable"
+    assert service.observe(client, "create_task", task()).status == "submitted"
+    executor.failure = None
+    observed = service.observe(client, "get_task", {"project_id": "demo", "operation_id": "op-1"})
+    assert observed.status == "submitted"
+    assert observed.backend_operation_ref != other

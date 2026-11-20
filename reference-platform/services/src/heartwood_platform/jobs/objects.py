@@ -14,6 +14,7 @@ objects that expire.
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -28,6 +29,7 @@ from heartwood_platform.common.signing import Credentials, presign
 # project's bucket as <dataset>/<file>.
 DRS_ID = re.compile(r"^([a-z0-9][a-z0-9-]{0,62})\.([A-Za-z0-9][A-Za-z0-9_.-]{0,127})$")
 RESULTS_PREFIX = "results"
+_LOGGER = logging.getLogger(__name__)
 
 
 class ObjectNotFoundError(Exception):
@@ -91,11 +93,14 @@ class StoreObjects:
     def input_url(self, project: str, object_id: str, expires: int) -> str:
         """Return a URL that reads one existing object of the project."""
         match = DRS_ID.fullmatch(object_id)
-        if match is None or project not in self._buckets:
+        # Results are not project data that a task reads by DRS identifier.
+        if match is None or match.group(1) == RESULTS_PREFIX or project not in self._buckets:
             raise ObjectNotFoundError
         key = f"{match.group(1)}/{match.group(2)}"
         # The check uses its own short-lived URL, so the task's URL is never sent here.
         response = self._client.head(self._url("HEAD", project, key, 60))
+        if response.status_code == httpx.codes.FORBIDDEN:
+            _LOGGER.warning("the store refused the job account of %s", project)
         if response.status_code in {httpx.codes.NOT_FOUND, httpx.codes.FORBIDDEN}:
             raise ObjectNotFoundError
         response.raise_for_status()

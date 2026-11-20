@@ -209,8 +209,9 @@ class HttpTesExecutor:
             follow_redirects=False,
         )
 
-    def _checked(self, response: httpx.Response) -> httpx.Response:
-        if response.status_code == httpx.codes.NOT_FOUND:
+    def _checked(self, response: httpx.Response, *, task: bool = False) -> httpx.Response:
+        """Raise for an error; a 404 on the path of one task means it does not exist."""
+        if task and response.status_code == httpx.codes.NOT_FOUND:
             raise TaskNotFoundError
         response.raise_for_status()
         return response
@@ -238,7 +239,7 @@ class HttpTesExecutor:
     def get(self, task_id: str, view: View = "BASIC") -> TesTaskView:
         """Return a task, or raise :class:`TaskNotFoundError`."""
         response = self._client.get(self._path(task_id), params={"view": view})
-        return TesTaskView.model_validate(self._checked(response).json())
+        return TesTaskView.model_validate(self._checked(response, task=True).json())
 
     def list(
         self, page_token: str | None = None, view: View = "BASIC", filters: TaskFilter | None = None
@@ -254,4 +255,4 @@ class HttpTesExecutor:
 
     def cancel(self, task_id: str) -> None:
         """Cancel a task; the colon of ``:cancel`` is sent encoded, as Funnel requires."""
-        self._checked(self._client.post(f"{self._path(task_id)}%3Acancel"))
+        self._checked(self._client.post(f"{self._path(task_id)}%3Acancel"), task=True)

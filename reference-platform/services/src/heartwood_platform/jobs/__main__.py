@@ -154,8 +154,9 @@ def build(settings: Settings) -> tuple[Starlette, JobService]:
             project.store.bucket,
             Credentials(_read(project.store.access_key_file), _read(project.store.secret_key_file)),
         )
+    # Short, because a submission checks each of its inputs under the project's lock.
     store = httpx.Client(
-        timeout=30, verify=ssl.create_default_context(cafile=settings.store.ca_file)
+        timeout=5, verify=ssl.create_default_context(cafile=settings.store.ca_file)
     )
     service = JobService(
         Records(settings.database),
@@ -180,7 +181,8 @@ def build(settings: Settings) -> tuple[Starlette, JobService]:
         response = keys_client.get(settings.keys_url)
         response.raise_for_status()
         document = response.json()
-        assert isinstance(document, dict)
+        if not isinstance(document, dict):
+            raise httpx.DecodingError("the key set is not an object")
         return document
 
     contexts = ControlContexts(
@@ -196,7 +198,8 @@ def build(settings: Settings) -> tuple[Starlette, JobService]:
 
 def reconcile_forever(service: JobService, interval: float, stop: threading.Event) -> None:
     """Reconcile every project's tasks with the records until ``stop`` is set."""
-    while not stop.wait(interval):
+    # The first round runs at start, so tasks of a stopped service are handled at once.
+    while True:
         for project in service.projects():
             try:
                 cancelled = service.reconcile(project)
@@ -206,6 +209,8 @@ def reconcile_forever(service: JobService, interval: float, stop: threading.Even
                 continue
             if cancelled:
                 _LOGGER.warning("cancelled %d unrecorded tasks of %s", len(cancelled), project)
+        if stop.wait(interval):
+            return
 
 
 def main() -> None:
