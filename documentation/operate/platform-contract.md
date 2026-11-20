@@ -98,7 +98,7 @@ Releases carry build attestations; separate artifact signatures, software bills 
 |---|---|---|---|
 | Workstation or container | The researcher | The operating system and the launch link | Current |
 | Platform workspace | The platform, in the researcher's workspace | The platform proxy | Current for the Terra terminal and notebook and the Stanford Carina terminal, CI validated |
-| Hosted per-project service | The platform, one gateway per researcher and project | The institution's identity provider, verified by Heartwood | Identity verification current, implemented and tested locally with a synthetic provider; platform launch unavailable |
+| Hosted per-project service | The platform, one gateway per researcher and project | The institution's identity provider, verified by Heartwood | Identity verification current, implemented and tested locally with a synthetic provider; platform launch current in the Kubernetes reference platform, tested on a local cluster without a model route for workers |
 
 Gateway shutdown does not stop external jobs or storage charges.
 
