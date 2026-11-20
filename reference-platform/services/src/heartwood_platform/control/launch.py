@@ -19,7 +19,7 @@ from pydantic import BaseModel, ConfigDict
 from heartwood.schemas import PlatformLaunchContext
 from heartwood_platform.control.hosted import HostedGateway
 from heartwood_platform.control.keycloak import project_client
-from heartwood_platform.control.registry import Project, Registry, Session
+from heartwood_platform.control.registry import NotAMemberError, Project, Registry, Session
 from heartwood_platform.control.sessions import ProvisionedSession
 
 
@@ -34,6 +34,9 @@ class ProjectClients(Protocol):
 
     def remove_redirect_uri(self, project: str, uri: str) -> None:
         """Remove a redirect URI from the client of a project."""
+
+    def rotate_client_secret(self, project: str) -> None:
+        """Replace the secret of a project's client."""
 
     def client_secret(self, project: str) -> str:
         """Return the secret of the client of a project."""
@@ -192,6 +195,31 @@ class LaunchService:
         if session is None:
             raise NoSessionError
         return self._context(found, session)
+
+    def rotate_client_secret(self, project: str) -> list[str]:
+        """Replace the secret of a project's client and rewrite the gateway Secrets.
+
+        Each session of the project is prepared again under its lock, which writes the
+        new secret into its gateway Secret. A running gateway keeps the previous secret,
+        which Keycloak no longer accepts, until its server starts again. Returns the
+        sessions whose gateway Secrets were rewritten.
+        """
+        if not self._registry.has_project(project):
+            raise NotAMemberError
+        self._clients.rotate_client_secret(project)
+        rewritten = []
+        for session in self._registry.sessions_of(project):
+            with self._serialized(session.subject, project):
+                try:
+                    found = self._registry.project(session.subject, project)
+                except NotAMemberError:
+                    # A former member's session cannot start again, so its Secret stays.
+                    continue
+                if self._registry.session(session.subject, project) is None:
+                    continue
+                self._prepare(found, session.subject, project)
+            rewritten.append(session.id)
+        return rewritten
 
     def delete(self, subject: str, project: str) -> None:
         """Remove the session of a researcher in a project, whether or not it exists."""

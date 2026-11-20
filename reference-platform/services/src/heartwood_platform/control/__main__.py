@@ -87,6 +87,8 @@ class Settings(_Settings):
     database: Path
     audience: str
     service_callers: frozenset[str]
+    # Service accounts of platform operators, which may rotate project client secrets.
+    operator_callers: frozenset[str] = frozenset()
     redirect_uri_template: str
     keycloak: KeycloakSettings
     # The serving certificate from the platform CA; the service serves only HTTPS.
@@ -178,6 +180,11 @@ def build(settings: Settings, kubernetes: Kubernetes) -> Starlette:
         ResearcherTokens(settings.keycloak.issuer, settings.audience, keys),
         ServiceTokens(kubernetes.review_token, settings.audience, settings.service_callers),
         settings.synthetic_prices,
+        operators=ServiceTokens(
+            kubernetes.review_token, settings.audience, settings.operator_callers
+        )
+        if settings.operator_callers
+        else None,
     )
 
 

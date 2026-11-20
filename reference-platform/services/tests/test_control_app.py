@@ -17,6 +17,7 @@ from fakes import (
     AUDIENCE,
     HUB,
     ISSUER,
+    OPERATOR,
     SYNTHETIC_PRICES,
     FakeKeycloak,
     FakeKubernetes,
@@ -94,6 +95,7 @@ class Platform:
                 ServiceTokens(self.reviews.review, AUDIENCE, frozenset({HUB})),
                 PriceSheet.model_validate_json(json.dumps(SYNTHETIC_PRICES)),
                 clock=lambda: _NOW,
+                operators=ServiceTokens(self.reviews.review, AUDIENCE, frozenset({OPERATOR})),
             )
         )
 
@@ -392,3 +394,40 @@ def test_deletion_during_a_launch_waits_and_then_removes_everything(tmp_path: Pa
     assert events == ["provisioned", "secret written", "removed"]
     assert registry.session(_BOB, "demo") is None
     assert keycloak.by_client_id("hw-proj-demo")["redirectUris"] == []
+
+
+_OPERATOR = {"Authorization": "Bearer operator-token"}
+
+
+def _gateway_secret(platform: Platform, session: object) -> str:
+    secret = platform.kubernetes.kind("Secret", "heartwood-sessions")[f"hw-gw-{session}"]
+    return base64.b64decode(secret["data"]["keycloak-client-secret"]).decode()
+
+
+def test_an_operator_rotates_a_project_client_secret_into_every_gateway_secret(
+    platform: Platform,
+) -> None:
+    alice, bob = platform.launch(_ALICE, "demo"), platform.launch(_BOB, "demo")
+    other = platform.launch(_ALICE, "other")
+    before = _gateway_secret(platform, alice["session"])
+
+    response = platform.client.post("/v1/projects/demo/client-secret", headers=_OPERATOR)
+
+    assert response.status_code == 200, response.text
+    assert set(response.json()["sessions"]) == {alice["session"], bob["session"]}
+    after = _gateway_secret(platform, alice["session"])
+    assert after != before
+    assert _gateway_secret(platform, bob["session"]) == after
+    # Another project's client and its gateways keep their secret.
+    assert _gateway_secret(platform, other["session"]) == "secret-of-uuid-2"
+
+
+def test_only_operators_rotate_and_only_existing_projects(platform: Platform) -> None:
+    for headers in ({}, _HUB, {"Authorization": "Bearer unknown"}):
+        response = platform.client.post("/v1/projects/demo/client-secret", headers=headers)
+        assert response.status_code == 401
+    response = platform.client.post("/v1/projects/missing/client-secret", headers=_OPERATOR)
+    assert response.status_code == 403
+    response = platform.client.post("/v1/projects/Not_A_Project/client-secret", headers=_OPERATOR)
+    assert response.status_code == 422
+    assert platform.keycloak.rotations == {}

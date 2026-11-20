@@ -23,6 +23,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 ISSUER = "https://keycloak.example.test/realms/heartwood"
 AUDIENCE = "heartwood-control"
 HUB = "system:serviceaccount:heartwood-sessions:hub"
+OPERATOR = "system:serviceaccount:heartwood-platform:heartwood-operator"
 
 
 def _sku_price(sku: str, unit_price: str, pricing_unit: str) -> dict[str, Any]:
@@ -146,7 +147,12 @@ class TokenReviews:
                 "authenticated": True,
                 "audiences": [AUDIENCE],
                 "user": {"username": HUB},
-            }
+            },
+            "operator-token": {
+                "authenticated": True,
+                "audiences": [AUDIENCE],
+                "user": {"username": OPERATOR},
+            },
         }
 
     def review(self, token: str, audience: str) -> dict[str, Any]:
@@ -169,6 +175,8 @@ class FakeKeycloak:
         self.token_requests: list[dict[str, str]] = []
         self.requests: list[tuple[str, str]] = []
         self.update_delay = 0.0
+        # Client secret rotations by client identifier.
+        self.rotations: dict[str, int] = {}
         self._lock = threading.Lock()
 
     def client(self) -> httpx.Client:
@@ -225,8 +233,16 @@ class FakeKeycloak:
             with self._lock:
                 self.clients[identifier] = body
             return httpx.Response(204)
+        if parts[2:] == ["client-secret"] and method == "POST":
+            with self._lock:
+                self.rotations[identifier] = self.rotations.get(identifier, 0) + 1
+            return httpx.Response(200, json={"type": "secret", "value": "rotated"})
         if parts[2:] == ["client-secret"]:
-            return httpx.Response(200, json={"type": "secret", "value": f"secret-of-{identifier}"})
+            rotation = self.rotations.get(identifier, 0)
+            suffix = f"-{rotation}" if rotation else ""
+            return httpx.Response(
+                200, json={"type": "secret", "value": f"secret-of-{identifier}{suffix}"}
+            )
         if parts[2] == "optional-client-scopes" and method == "PUT":
             with self._lock:
                 self.clients[identifier]["optionalClientScopes"].append(self.scopes[parts[3]])

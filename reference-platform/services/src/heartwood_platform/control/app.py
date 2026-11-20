@@ -38,6 +38,7 @@ ProjectId = Annotated[str, StringConstraints(pattern=r"^[a-z0-9]([a-z0-9-]{0,30}
 
 
 _SUBJECT = TypeAdapter(Subject)
+_PROJECT_ID = TypeAdapter(ProjectId)
 
 
 class LaunchRequest(BaseModel):
@@ -66,8 +67,13 @@ def create_app(
     services: ServiceTokens,
     prices: PriceSheet,
     clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+    operators: ServiceTokens | None = None,
 ) -> Starlette:
-    """Build the application around the launch service, the prices and both verifiers."""
+    """Build the application around the launch service, the prices and the verifiers.
+
+    ``operators`` accepts the platform operators' service accounts, which may rotate
+    project client secrets; without it nobody may.
+    """
 
     def handled(endpoint: Callable[[Request], Response]) -> Callable[[Request], Response]:
         def wrapper(request: Request) -> Response:
@@ -114,6 +120,13 @@ def create_app(
         launches.delete(launch.subject, launch.project)
         return Response(status_code=204)
 
+    def rotate(request: Request) -> Response:
+        if operators is None:
+            raise AuthenticationError("no operator is configured")
+        operators.verify(_bearer(request))
+        project = _PROJECT_ID.validate_python(request.path_params["project"])
+        return JSONResponse({"sessions": launches.rotate_client_secret(project)})
+
     def launch_context(request: Request) -> Response:
         researcher = researchers.verify(_bearer(request))
         context = launches.context(researcher.subject, researcher.project)
@@ -127,6 +140,7 @@ def create_app(
             Route("/v1/researchers/{subject}/projects", handled(projects)),
             Route(launch_path, handled(prepare), methods=["PUT"]),
             Route(launch_path, handled(delete), methods=["DELETE"]),
+            Route("/v1/projects/{project}/client-secret", handled(rotate), methods=["POST"]),
             Route("/v1/launch-context", handled(launch_context)),
             Route(MCP_PATH, planning),
         ],

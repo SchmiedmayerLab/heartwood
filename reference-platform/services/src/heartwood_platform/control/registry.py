@@ -103,6 +103,12 @@ class Registry:
                     [(project.id, subject) for subject in sorted(project.members)],
                 )
 
+    def has_project(self, project: str) -> bool:
+        """Return whether the registry holds a project."""
+        with self._transaction() as connection:
+            row = connection.execute("SELECT 1 FROM project WHERE id = ?", (project,)).fetchone()
+        return row is not None
+
     def projects_of(self, subject: str) -> list[Project]:
         """Return the projects that a subject is a member of."""
         with self._transaction() as connection:
@@ -137,6 +143,16 @@ class Registry:
         if row is None:
             return None
         return Session(row[0], row[1], row[2], datetime.fromisoformat(row[3]))
+
+    def sessions_of(self, project: str) -> list[Session]:
+        """Return the sessions of a project."""
+        with self._transaction() as connection:
+            rows = connection.execute(
+                "SELECT id, subject, project_id, created_at FROM session"
+                " WHERE project_id = ? ORDER BY id",
+                (project,),
+            ).fetchall()
+        return [Session(row[0], row[1], row[2], datetime.fromisoformat(row[3])) for row in rows]
 
     def session_ids(self) -> list[str]:
         """Return the identifiers of all sessions."""

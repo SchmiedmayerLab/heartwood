@@ -50,7 +50,7 @@ SPDX-License-Identifier: MIT
 {{- $modelRoute := dict "profile_id" $route.profileId "model" $route.model "endpoint" $route.endpoint "provider" $route.provider "placeholder_env" $route.placeholderEnv -}}
 {{- $hosted := dict "control_url" (printf "https://heartwood-control.%s.svc.cluster.local:8443" .Release.Namespace) "worker" $hostedWorker "model_route" $modelRoute -}}
 {{- $redirect := printf "%s/user/{subject}/{project}/oauth_callback" .Values.hub.publicOrigin -}}
-{{- dict "tls" $tls "hosted" $hosted "synthetic_prices" $syntheticPrices "sessions" $sessions "platform_id" .Values.control.platformId "database" "/var/lib/heartwood-control/control.sqlite3" "audience" "heartwood-control" "service_callers" .Values.control.serviceCallers "redirect_uri_template" $redirect "keycloak" $keycloak "projects" $projects | toPrettyJson -}}
+{{- dict "tls" $tls "hosted" $hosted "synthetic_prices" $syntheticPrices "sessions" $sessions "platform_id" .Values.control.platformId "database" "/var/lib/heartwood-control/control.sqlite3" "audience" "heartwood-control" "service_callers" .Values.control.serviceCallers "operator_callers" .Values.control.operatorCallers "redirect_uri_template" $redirect "keycloak" $keycloak "projects" $projects | toPrettyJson -}}
 {{- end }}
 # The registry and the settings of the control service. It holds no credential.
 apiVersion: v1
