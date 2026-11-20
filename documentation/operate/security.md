@@ -259,7 +259,8 @@ Use separate authenticated origins for mutually untrusted projects; in Jupyter p
 
 ## Researcher Identity
 
-With `identity-proxy` ingress the gateway is a confidential OpenID Connect client bound to one subject by the manifest's [`[identity]` table](../reference/configuration.md#identity).
+With `identity-proxy` ingress the gateway is a confidential OpenID Connect client bound to one subject of one issuer by the manifest's [`[identity]` table](../reference/configuration.md#identity).
+The subject may take any form the provider issues, such as a UUID, `auth0|...`, a number, an opaque string or an e-mail address.
 It replaces the launch link: every API request, server-sent event stream and WebSocket needs a sign-in capability or an access token, and a request with neither receives `HW-INGRESS-004`.
 
 A browser that opens the gateway's URL is redirected to `identity/login` and from there to the provider's authorization endpoint with a `state`, a `nonce` and a PKCE challenge.
@@ -273,7 +274,18 @@ A sign-in ends when its refresh token expires, when the provider reports that ti
 
 Other clients send `Authorization: Bearer` with an access token of the same issuer whose `aud` contains the gateway's client and whose `sub` is the bound subject.
 A token that carries a `nonce`, `at_hash` or `c_hash` claim, or a `typ` claim of `ID`, is an identity token and is refused as a bearer token.
-Every accepted command records the verified subject as its actor.
+The gateway compares the token's `iss` and `sub` claims with the bound issuer and subject exactly, character for character, for the browser sign-in and for bearer tokens.
+
+Every accepted command records the researcher's actor, `oidc-` followed by the hexadecimal SHA-256 digest of the issuer, a zero byte and the subject, each encoded as UTF-8.
+The same subject at two issuers yields two actors, and a command cannot claim another actor.
+Session events, audit records and audit exports carry this actor and neither the subject nor the issuer.
+The digest is not keyed: anyone who knows or guesses an issuer and a subject, such as an e-mail address, can compute the actor and recognize that researcher's records.
+Of the gateway's files, only the deployment manifest, which the operator protects, contains the subject.
+A platform that places the subject in the gateway's base path or public origin, as the reference platform does with `/user/<subject>/<project>`, exposes it in URLs, the redirect URI and proxy logs.
+The gateway shows no name from the token's claims and stores none.
+
+Records that name the same researcher by another actor, such as the subject itself, remain readable and are not rewritten.
+An outside approval that was authorized under another actor and not dispatched is not dispatched for the current actor: a retry of that approval is refused with a message that it was recorded for another actor, and the researcher denies it to withdraw it.
 
 ### Service Tokens
 
@@ -294,7 +306,7 @@ They are not written to project files, protected state, events, audit exports or
 Without a [`[worker]`](../reference/configuration.md#deployment-manifest) table, agent tools run as the gateway's operating-system user and can read the client secret file and, where the operating system permits it, the gateway's memory.
 A deployment with `[identity]` should therefore also configure a worker.
 
-- One gateway accepts one subject; a token of any other person is refused.
+- One gateway accepts one subject of one issuer; a token of any other person, or of the same subject at another issuer, is refused.
 - A restart of the gateway ends every sign-in, and the researcher signs in again.
 - The gateway holds at most eight sign-ins and drops the oldest beyond that.
 - A sign-in completes only in the browser that started it; a second sign-in started in the same browser replaces the first.

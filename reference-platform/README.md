@@ -198,6 +198,8 @@ It then starts the gateway pod in `heartwood-sessions` with the ServiceAccount `
 The init container runs `heartwood-hosted-configure`, which copies the Secret `hw-gw-<session>` into a memory volume with owner-only files, registers the session's OpenShell gateway with its client certificate, and creates the research and state directories on the claim.
 The gateway mounts the copies read-only at `/etc/heartwood/deployment` and the registration at `/etc/heartwood/native` from the memory volume, and the research and state directories at `/research` and `/var/lib/heartwood` from the claim; `templates/_hub.tpl` lists these mounts.
 The gateway serves `heartwood gateway serve` with `identity-proxy` ingress under `/user/<subject>/<project>`, and accepts proxied requests only from `hub.trustedProxySources`.
+Hosted sessions launch for subjects of 1 to 64 lowercase letters, digits and `-`, such as Keycloak's UUIDs, because the subject is part of the gateway path, the control service paths and the redirect URI, where it also appears in URLs and proxy logs.
+The gateway records an actor derived from the issuer and the subject, as [Researcher Identity](../documentation/operate/security.md#researcher-identity) describes.
 
 The control service writes the gateway's deployment manifest into the Secret: the identity of the researcher and the project client, the worker on the Kubernetes driver in the session namespace, and the control service as the `[planning]` service.
 `hub.worker` sets the worker image, its sandbox policy and the policy's effective digest from qualification, and `hub.modelRoute` the model route; the default route names an address that does not resolve.

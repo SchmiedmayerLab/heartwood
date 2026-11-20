@@ -57,7 +57,7 @@ Either let the researcher open the launch link that `heartwood gateway serve` pr
 Keep the descriptor source and the capability away from the worker and from other users.
 
 In `identity-proxy` mode the gateway issues no launch link and accepts no `--capability-fd`.
-The deployment manifest's [`[identity]` table](../reference/configuration.md#identity) names the provider, the gateway's client and the one subject the gateway accepts.
+The deployment manifest's [`[identity]` table](../reference/configuration.md#identity) names the provider, the gateway's client and the one subject the gateway accepts, in the form the provider issues it.
 The proxy keeps the external base path, connects from a declared source range and forwards the `Host` header unchanged.
 Register `<public origin><base path>/oauth_callback` as the client's redirect URI at the provider.
 The generic adapter offers this mode; an adapter lists it in `ingress_modes` to offer it on another platform.

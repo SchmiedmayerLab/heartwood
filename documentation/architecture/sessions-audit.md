@@ -98,6 +98,7 @@ Otherwise the session rejects further mutation, so a second approval or task can
 Outside decisions distinguish authorization from dispatch: an `authorized` record proves the native call has not started, and a `submitting` record means its outcome may be uncertain.
 When checkpoint evidence is configured, in either mode, the authorization checkpoint must be retained before submission is recorded.
 An authorization that could not be sent is dispatched only by an exact retry of its own approval command, with the same identifier and content, a live matching worker, and renewed input, policy, and expiry checks.
+The recorded actor is part of that content, so a retry under another actor, such as the same researcher after the gateway's actor for that researcher changed, is refused with a message that a different actor recorded it, and denying the review withdraws it.
 The projection reports a retained authorization as the pending action set with the decision `approved` and offers only `deny`, so no interface presents it as a new review.
 In a session that cannot continue, the gateway records that withdrawal, and any refusal, through its cached service, or else through a service bound to the deployment's trusted records but to no backend, so neither a restart nor a released service causes a worker to be prepared or launched for it.
 A service without a backend records no session closure, so reading such a session adds nothing to the journal except the expiry of an approval past its validity, and an audit export or a workflow start needs no checkpoint.
@@ -189,6 +190,7 @@ The [managed evidence contract](../operate/audit-checkpoints.md#automatic-eviden
 The retention declaration also does not implement storage lifecycle controls; the deployment records system remains responsible for authoritative storage and policy enforcement.
 
 Exact action arguments, commands, affected paths, file content, patches, tool output, and failure text stay out of the content-minimized audit payload.
+Each command records the actor that the gateway assigns: `human` for the launch capability, `gateway` for automatic decisions, and with [`identity-proxy` ingress](../operate/security.md#researcher-identity) an identifier derived from the provider's issuer and subject, so records written under that identifier carry no subject or e-mail address of the researcher.
 Model-route decisions keep the route's declared [data handling](../models/index.md#data-and-compliance-boundary): destination, retention authority and route description, with no credential reference or value.
 Scientific code, input, environment, and output declarations belong in separate [experiment records](experiments.md), not in the security audit payload.
 An operator-requested checkpoint can retain their exact project export as a separate file, with only its digest, byte count, filename, and binding version recorded in the terminal audit-export event.

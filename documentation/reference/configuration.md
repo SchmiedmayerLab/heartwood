@@ -176,11 +176,12 @@ subject = "7c9e6679-7425-40de-944b-e07fc1f90ae7"
 | `issuer` | Exact `iss` value of the provider's tokens and the origin the browser is sent to for sign-in |
 | `client_id` | The gateway's client at the provider; accepted tokens name it in `aud` |
 | `client_secret_file` | Absolute file that holds the client secret: printable ASCII without spaces, at most 4096 bytes, one trailing newline allowed |
-| `subject` | The only `sub` value the gateway accepts: a letter or digit followed by at most 127 letters, digits, `_`, `.`, `:` or `-`; `gateway`, `human` and `deployment-operator` are reserved |
+| `subject` | The only `sub` value the gateway accepts, exactly as the provider issues it: 1 to 255 characters without control or format characters and without leading or trailing whitespace |
 | `provider_url` | Optional base URL where the gateway itself reaches the provider's discovery document, token endpoint and keys; default `issuer` |
 | `ca_file` | Optional absolute PEM file of certificate authorities that replaces the default certificate bundle for requests to the provider |
 
-`issuer` and `provider_url` are `http` or `https` URLs without credentials, query or fragment.
+Commands record an actor derived from `issuer` and `subject`, as [Researcher Identity](../operate/security.md#researcher-identity) describes, so a change of either value changes the actor of later records.
+`issuer` and `provider_url` are `http` or `https` URLs without credentials, query, fragment, whitespace or control characters.
 Both use `https`, or `http` to a loopback address.
 A provider whose certificate comes from a private authority, such as a platform CA, is trusted through `ca_file`.
 The gateway reads `<provider_url>/.well-known/openid-configuration`, and the document's `issuer` must equal the configured `issuer`.
