@@ -168,7 +168,7 @@ def test_regenerated_revision_archive_verifies_by_content(
     cache.mkdir()
     requests = _serve(monkeypatch, builder, regenerated)
     checkout = builder._source(source, tmp_path / "first", cache=cache)
-    assert checkout.name == "renamed-abc"
+    assert checkout == tmp_path / "first/checkout"
     assert (checkout / "src/alias.py").readlink() == Path("module.py")
     assert os.access(checkout / "bin/tool", os.X_OK)
     assert requests == [source["url"]]
@@ -223,6 +223,45 @@ def test_changed_revision_content_fails_closed(
             cache=cache,
         )
     assert not list(cache.iterdir())
+
+
+def test_tree_digest_encoding_is_fixed(builder: ModuleType, tmp_path: Path) -> None:
+    # A known answer, so a changed encoding cannot pass by changing both sides.
+    expected = "c74159f17d258fc1b25d957315427b82aab8aed18de99ac73cb1fe316399d6fd"
+    assert _tree_digest(builder, _TREE, tmp_path / "reviewed") == expected
+
+
+@pytest.mark.parametrize("entry", ["hard-link", "symlink-root", "file-root", "oversized"])
+def test_revision_archive_shape_and_size_are_bounded(
+    builder: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, entry: str
+) -> None:
+    def member(name: str, kind: bytes, link: str = "", size: int = 0) -> tarfile.TarInfo:
+        info = tarfile.TarInfo(name)
+        info.type, info.linkname, info.size = kind, link, size
+        return info
+
+    root = member("Upstream-abc", tarfile.DIRTYPE)
+    members = {
+        "hard-link": [
+            root,
+            member("Upstream-abc/b", tarfile.REGTYPE, size=1),
+            member("Upstream-abc/a", tarfile.LNKTYPE, "Upstream-abc/b"),
+        ],
+        "symlink-root": [member("Upstream-abc", tarfile.SYMTYPE, ".")],
+        "file-root": [member("Upstream-abc", tarfile.REGTYPE, size=1)],
+        "oversized": [root, member("Upstream-abc/a", tarfile.REGTYPE, size=64)],
+    }[entry]
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w") as bundle:
+        for info in members:
+            bundle.addfile(info, io.BytesIO(b"x" * info.size) if info.isfile() else None)
+    monkeypatch.setattr(builder, "_MAX_EXTRACTED", 32)
+    _serve(monkeypatch, builder, gzip.compress(buffer.getvalue()))
+    reason = "one root" if entry.endswith("-root") else "unreadable or unsafe"
+    with pytest.raises(ValueError, match=reason):
+        builder._source(
+            {"url": "https://example.invalid", "tree_sha256": "0" * 64}, tmp_path / "staging"
+        )
 
 
 @pytest.mark.parametrize(

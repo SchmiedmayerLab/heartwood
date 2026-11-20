@@ -26,6 +26,7 @@ from typing import Any
 
 _CONFIG = Path(__file__).resolve().parents[1] / "images/worker/candidate"
 _MAX_ARCHIVE = 50 * 1024 * 1024
+_MAX_EXTRACTED = 1024 * 1024 * 1024
 
 
 def _digest(data: bytes) -> str:
@@ -66,6 +67,26 @@ def _tree_digest(root: Path) -> str:
     return _digest(b"".join(b"\0".join(entry) + b"\0" for entry in sorted(entries)))
 
 
+def _extract(archive: bytes, staging: Path) -> None:
+    """Extract with the data filter, bounding the extracted size and refusing hard links."""
+    extracted = 0
+
+    def admit(member: tarfile.TarInfo, path: str) -> tarfile.TarInfo | None:
+        nonlocal extracted
+        extracted += member.size
+        if member.islnk() or extracted > _MAX_EXTRACTED:
+            raise tarfile.FilterError(member)
+        return tarfile.data_filter(member, path)
+
+    try:
+        with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz") as bundle:
+            bundle.extractall(staging, filter=admit)
+    except (tarfile.TarError, EOFError, zlib.error) as error:
+        # The data filter also refuses paths and links that leave the staging directory.
+        message = "Candidate source digest mismatch: unreadable or unsafe archive"
+        raise ValueError(message) from error
+
+
 def _source(
     source: dict[str, Any],
     staging: Path,
@@ -82,7 +103,7 @@ def _source(
     """
     if ("sha256" in source) == ("tree_sha256" in source):
         raise ValueError("Candidate source must record exactly one of sha256 and tree_sha256")
-    expected = source.get("sha256") or source["tree_sha256"]
+    expected = source["sha256"] if "sha256" in source else source["tree_sha256"]
     if not re.fullmatch(r"[0-9a-f]{64}", expected):
         raise ValueError("Candidate source digest must be a SHA-256 hex digest")
     cached = cache / (expected + ".tar.gz") if cache is not None else None
@@ -97,23 +118,18 @@ def _source(
     if "sha256" in source and _digest(archive) != expected:
         raise ValueError("Candidate source digest mismatch")
     staging.mkdir(parents=True)
-    try:
-        with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz") as bundle:
-            bundle.extractall(staging, filter="data")
-    except (tarfile.TarError, EOFError, zlib.error) as error:
-        # The data filter also refuses paths and links that leave the staging directory.
-        message = "Candidate source digest mismatch: unreadable or unsafe archive"
-        raise ValueError(message) from error
+    _extract(archive, staging)
     if "tree_sha256" in source:
         # The root directory's name follows the repository name, which can change.
         # Only one root may exist, so nothing unverified sits beside the checkout.
         roots = list(staging.iterdir())
         if len(roots) != 1 or roots[0].is_symlink() or not roots[0].is_dir():
             raise ValueError("Candidate source digest mismatch: archive must have one root")
-        checkout = roots[0]
-        actual = _tree_digest(checkout)
+        actual = _tree_digest(roots[0])
         if actual != expected:
             raise ValueError(f"Candidate source digest mismatch: tree_sha256 is {actual}")
+        # A fixed name keeps the unverified root name out of build paths and mounts.
+        checkout = roots[0].rename(staging / "checkout")
     else:
         checkout = staging / str(source["directory"])
         if not checkout.is_dir():
