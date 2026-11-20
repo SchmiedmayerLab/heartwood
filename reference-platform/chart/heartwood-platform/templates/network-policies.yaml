@@ -67,6 +67,7 @@ spec:
         - podSelector:
             matchLabels:
               app.kubernetes.io/name: jupyterhub
+              app.kubernetes.io/instance: {{ .Release.Name }}
               app.kubernetes.io/component: hub
       ports:
         - protocol: TCP
@@ -114,6 +115,7 @@ spec:
         - podSelector:
             matchLabels:
               app.kubernetes.io/name: jupyterhub
+              app.kubernetes.io/instance: {{ .Release.Name }}
               app.kubernetes.io/component: hub
       ports:
         - protocol: TCP
@@ -131,6 +133,7 @@ spec:
   podSelector:
     matchLabels:
       app.kubernetes.io/name: jupyterhub
+      app.kubernetes.io/instance: {{ .Release.Name }}
       app.kubernetes.io/component: proxy
   policyTypes: [Ingress]
   ingress:
@@ -141,6 +144,7 @@ spec:
         - podSelector:
             matchLabels:
               app.kubernetes.io/name: jupyterhub
+              app.kubernetes.io/instance: {{ .Release.Name }}
               app.kubernetes.io/component: hub
       ports:
         - protocol: TCP
@@ -158,6 +162,7 @@ spec:
   podSelector:
     matchLabels:
       app.kubernetes.io/name: jupyterhub
+      app.kubernetes.io/instance: {{ .Release.Name }}
       app.kubernetes.io/component: hub
   policyTypes: [Ingress]
   ingress:
@@ -165,6 +170,7 @@ spec:
         - podSelector:
             matchLabels:
               app.kubernetes.io/name: jupyterhub
+              app.kubernetes.io/instance: {{ .Release.Name }}
               app.kubernetes.io/component: proxy
       ports:
         - protocol: TCP
@@ -194,6 +200,9 @@ spec:
               - key: app.kubernetes.io/name
                 operator: In
                 values: [jupyterhub]
+              - key: app.kubernetes.io/instance
+                operator: In
+                values: [{{ .Release.Name | quote }}]
               - key: app.kubernetes.io/component
                 operator: In
                 values: [hub, proxy]

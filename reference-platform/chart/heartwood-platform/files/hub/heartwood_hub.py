@@ -29,6 +29,8 @@ SESSION_LABEL = "heartwood.platform/session"
 ROLE_LABEL = "heartwood.platform/role"
 CONFIGURE = "/usr/local/libexec/heartwood-hosted-configure"
 _PROJECT = re.compile(r"^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$")
+# The subject form that the control service accepts in its paths.
+_SUBJECT = re.compile(r"^[A-Za-z0-9-]{1,64}$")
 
 
 def profiles(projects: list[str], server: str) -> list[dict[str, Any]]:
@@ -61,15 +63,28 @@ def gateway_arguments(settings: dict[str, Any], subject: str, project: str) -> l
     return arguments
 
 
-def pod_settings(launch: dict[str, Any]) -> dict[str, Any]:
+def pod_settings(launch: dict[str, Any], settings: dict[str, Any]) -> dict[str, Any]:
     """Return the per-session settings of the gateway pod for a prepared launch.
 
     Only the init container mounts the session's Secret. It copies the files into a
     memory volume with owner-only modes and creates the research and state directories
-    on the server's volume, which the gateway mounts by subdirectory.
+    on the server's volume, which the gateway mounts by subdirectory. The mounts come
+    from the chart, which admits exactly these.
     """
     session = launch["session"]
     secret = launch["gateway_service_account"]
+
+    def mounts(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [
+            {
+                "name": item["name"],
+                "mountPath": item["mountPath"],
+                **({"subPath": item["subPath"]} if item["subPath"] else {}),
+                **({"readOnly": True} if item["readOnly"] else {}),
+            }
+            for item in items
+        ]
+
     return {
         "service_account": secret,
         "pvc_name": f"hw-home-{session}",
@@ -80,23 +95,8 @@ def pod_settings(launch: dict[str, Any]) -> dict[str, Any]:
             {"name": "home", "persistentVolumeClaim": {"claimName": f"hw-home-{session}"}},
             {"name": "tmp", "emptyDir": {"sizeLimit": "1Gi"}},
         ],
-        "volume_mounts": [
-            {
-                "name": "work",
-                "mountPath": "/etc/heartwood/deployment",
-                "subPath": "deployment",
-                "readOnly": True,
-            },
-            {"name": "work", "mountPath": "/etc/heartwood/native", "subPath": "native"},
-            {"name": "home", "mountPath": "/research", "subPath": "research"},
-            {"name": "home", "mountPath": "/var/lib/heartwood", "subPath": "state"},
-            {"name": "tmp", "mountPath": "/tmp"},
-        ],
-        "init_mounts": [
-            {"name": "source", "mountPath": "/etc/heartwood/source", "readOnly": True},
-            {"name": "work", "mountPath": "/etc/heartwood/work"},
-            {"name": "home", "mountPath": "/var/lib/heartwood-home"},
-        ],
+        "volume_mounts": mounts(settings["volume_mounts"]),
+        "init_mounts": mounts(settings["init_mounts"]),
     }
 
 
@@ -109,6 +109,12 @@ def configure(c: Any, settings: dict[str, Any]) -> None:  # noqa: ANN401
     issuer = settings["issuer"]
     origin = settings["public_origin"]
 
+    def platform_ca_only(curl: Any) -> None:  # noqa: ANN401
+        """Trust only the CA file: libcurl also reads its built-in certificate directory."""
+        import pycurl
+
+        curl.unsetopt(pycurl.CAPATH)
+
     async def control(method: str, path: str) -> tuple[int, Any]:
         """Call the control service with the Hub's token, trusting the platform CA alone."""
         token = Path(settings["token_file"]).read_text(encoding="utf-8").strip()
@@ -120,6 +126,7 @@ def configure(c: Any, settings: dict[str, Any]) -> None:  # noqa: ANN401
             allow_nonstandard_methods=method == "DELETE",
             ca_certs=settings["ca_file"],
             validate_cert=True,
+            prepare_curl_callback=platform_ca_only,
             request_timeout=300,
         )
         response = await AsyncHTTPClient().fetch(request, raise_error=False)
@@ -129,6 +136,8 @@ def configure(c: Any, settings: dict[str, Any]) -> None:  # noqa: ANN401
             return response.code, None
 
     async def projects(subject: str) -> list[str]:
+        if not _SUBJECT.fullmatch(subject):
+            return []
         status, answer = await control("GET", f"/v1/researchers/{subject}/projects")
         if status != 200 or not isinstance(answer, dict):
             return []
@@ -141,6 +150,8 @@ def configure(c: Any, settings: dict[str, Any]) -> None:  # noqa: ANN401
         # The current settings, so a spawn after an upgrade uses the upgraded values.
         current = json.loads(SETTINGS.read_text(encoding="utf-8"))
         subject, project = spawner.user.name, spawner.name
+        if not _SUBJECT.fullmatch(subject):
+            raise web.HTTPError(403, "This account cannot start servers.")
         if not _PROJECT.fullmatch(project or ""):
             raise web.HTTPError(400, "Start a named server for one of your projects.")
         chosen = (spawner.user_options or {}).get("profile")
@@ -153,7 +164,7 @@ def configure(c: Any, settings: dict[str, Any]) -> None:  # noqa: ANN401
             raise web.HTTPError(403, "You are not a member of this project.")
         if status != 200 or not isinstance(launch, dict):
             raise web.HTTPError(502, "The platform could not prepare the session.")
-        pod = pod_settings(launch)
+        pod = pod_settings(launch, current)
         resources = current["resources"]
         spawner.image = current["gateway_image"]
         spawner.cpu_limit = resources["cpu_limit"]
@@ -205,7 +216,10 @@ def configure(c: Any, settings: dict[str, Any]) -> None:  # noqa: ANN401
     c.GenericOAuthenticator.scope = ["openid"]
     c.GenericOAuthenticator.username_claim = "sub"
     c.GenericOAuthenticator.validate_server_cert = True
-    c.GenericOAuthenticator.http_request_kwargs = {"ca_certs": settings["ca_file"]}
+    c.GenericOAuthenticator.http_request_kwargs = {
+        "ca_certs": settings["ca_file"],
+        "prepare_curl_callback": platform_ca_only,
+    }
     # Every account of the realm may sign in; the control service authorizes projects.
     c.GenericOAuthenticator.allow_all = True
 

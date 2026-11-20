@@ -15,6 +15,7 @@ container mount that Secret.
 */ -}}
 {{- $image := .Values.images.hostedGateway -}}
 {{- $sources := .Values.hub.trustedProxySources -}}
+{{- $mounts := include "heartwood.hubMounts" . | fromJson -}}
 {{- $fixed := list "heartwood" "gateway" "serve" "--deployment" "/etc/heartwood/deployment/deployment.toml" "--ingress-mode" "identity-proxy" "--host" "0.0.0.0" "--port" "8888" "--public-origin" .Values.hub.publicOrigin "--base-path" -}}
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
@@ -50,10 +51,6 @@ spec:
       expression: >-
         !variables.pod ? [] : object.spec.containers
         + (has(object.spec.initContainers) ? object.spec.initContainers : [])
-    - name: secretVolumes
-      expression: >-
-        !variables.pod || !has(object.spec.volumes) ? [] :
-        object.spec.volumes.filter(v, has(v.secret)).map(v, v.name)
   validations:
     - expression: >-
         !variables.pod || (variables.session.matches('^[a-z0-9]{1,40}$')
@@ -61,6 +58,16 @@ spec:
         && object.spec.serviceAccountName == 'hw-gw-' + variables.session
         && object.metadata.labels['heartwood.platform/role'] == 'hosted-gateway')
       message: a gateway pod carries its session label and the role hosted-gateway, and uses the ServiceAccount hw-gw-<session>
+    # Network policies and Services select pods by label, so a gateway pod carries only the
+    # labels of JupyterHub's servers and its own.
+    - expression: >-
+        !variables.pod || (object.metadata.labels.all(k, k in ['app', 'chart', 'component', 'heritage',
+        'release', 'helm.sh/chart', 'heartwood.platform/session', 'heartwood.platform/role']
+        || k.startsWith('app.kubernetes.io/') || k.startsWith('hub.jupyter.org/'))
+        && (!('component' in object.metadata.labels) || object.metadata.labels['component'] == 'singleuser-server')
+        && (!('app.kubernetes.io/component' in object.metadata.labels)
+        || object.metadata.labels['app.kubernetes.io/component'] == 'singleuser-server'))
+      message: a gateway pod carries only the labels of a JupyterHub server and its session labels
     - expression: >-
         !variables.pod || (size(object.spec.containers) == 1
         && has(object.spec.initContainers) && size(object.spec.initContainers) == 1
@@ -69,7 +76,7 @@ spec:
       message: a gateway pod runs one init container and one container of the hosted gateway image
     - expression: >-
         !variables.pod || (object.spec.initContainers[0].command == ['/usr/local/libexec/heartwood-hosted-configure']
-        && !has(object.spec.initContainers[0].args))
+        && !has(object.spec.initContainers[0].args) && !has(object.spec.initContainers[0].restartPolicy))
       message: the init container of a gateway pod runs only the configuration script
     - expression: >-
         !variables.pod || (!has(object.spec.containers[0].command)
@@ -92,8 +99,17 @@ spec:
         && (e.name.matches('^(JUPYTERHUB_[A-Z_]+|JPY_API_TOKEN|JUPYTER_IMAGE(_SPEC)?|MEM_(LIMIT|GUARANTEE)|CPU_(LIMIT|GUARANTEE))$')
         || (e.name == 'HOME' && e.value == '/tmp'))))
         && [has(c.livenessProbe) ? c.livenessProbe : {}, has(c.readinessProbe) ? c.readinessProbe : {},
-        has(c.startupProbe) ? c.startupProbe : {}].all(p, !has(p.exec)))
-      message: a gateway pod sets only the Hub's environment variables, no lifecycle hook and no exec probe
+        has(c.startupProbe) ? c.startupProbe : {}].all(p, !has(p.exec))
+        && !has(c.volumeDevices)
+        && (!has(c.terminationMessagePath) || c.terminationMessagePath == '/dev/termination-log')
+        && (!has(c.terminationMessagePolicy) || c.terminationMessagePolicy == 'File'))
+      message: a gateway pod sets only the Hub's environment variables, no lifecycle hook, no exec probe and the default termination message
+    # The gateway resolves Keycloak, the control service and the API server through the
+    # cluster's DNS only.
+    - expression: >-
+        !variables.pod || (!has(object.spec.hostAliases) && !has(object.spec.dnsConfig)
+        && (!has(object.spec.dnsPolicy) || object.spec.dnsPolicy == 'ClusterFirst'))
+      message: a gateway pod resolves names through the cluster's DNS only
     - expression: >-
         !variables.pod || (has(object.spec.securityContext)
         && has(object.spec.securityContext.runAsNonRoot) && object.spec.securityContext.runAsNonRoot
@@ -117,17 +133,21 @@ spec:
       message: a gateway pod runs as user 10001 without host access, with the default seccomp profile, a read-only root file system and no capabilities
     - expression: >-
         !variables.pod || (has(object.spec.volumes) && object.spec.volumes.all(v,
-        (has(v.secret) && v.secret.secretName == object.spec.serviceAccountName)
-        || has(v.emptyDir)
-        || (has(v.persistentVolumeClaim) && v.persistentVolumeClaim.claimName == 'hw-home-' + variables.session)
-        || (has(v.projected) && v.projected.sources.all(s,
+        (v.name == 'source' && has(v.secret) && v.secret.secretName == object.spec.serviceAccountName)
+        || (v.name == 'work' && has(v.emptyDir) && has(v.emptyDir.medium) && v.emptyDir.medium == 'Memory')
+        || (v.name == 'tmp' && has(v.emptyDir))
+        || (v.name == 'home' && has(v.persistentVolumeClaim) && v.persistentVolumeClaim.claimName == 'hw-home-' + variables.session)
+        || (v.name.startsWith('kube-api-access-') && has(v.projected) && v.projected.sources.all(s,
         (has(s.serviceAccountToken) && !has(s.serviceAccountToken.audience))
         || (has(s.configMap) && s.configMap.name == 'kube-root-ca.crt')
         || has(s.downwardAPI)))))
-      message: a gateway pod mounts only its session's Secret, empty directories, its volume claim hw-home-<session> and its ServiceAccount token
+      message: a gateway pod mounts only its session's Secret, a memory volume, a temporary volume, its volume claim hw-home-<session> and its ServiceAccount token
+    # The init container writes the copies of the Secret into the memory volume, and the
+    # container reads them only where the gateway expects them.
     - expression: >-
-        !variables.pod || (object.spec.containers[0].volumeMounts.all(m, !(m.name in variables.secretVolumes)))
-      message: only the init container of a gateway pod mounts the session's Secret
+        !variables.pod || ({{ include "heartwood.exactMounts" (dict "container" "object.spec.containers[0]" "mounts" $mounts.main) }}
+        && {{ include "heartwood.exactMounts" (dict "container" "object.spec.initContainers[0]" "mounts" $mounts.init) }})
+      message: the containers of a gateway pod mount exactly the volumes and paths of the gateway layout
     - expression: >-
         !variables.claim || (object.metadata.name.matches('^hw-home-[a-z0-9]{1,40}$')
         && !has(object.spec.dataSource) && !has(object.spec.dataSourceRef)

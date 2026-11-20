@@ -180,13 +180,13 @@ The control service reads the pods of every session namespace.
 
 ### JupyterHub
 
-The chart depends on the Zero to JupyterHub chart 4.4.5, whose archive `charts/jupyterhub-4.4.5.tgz` the chart tests compare with the digest of the chart repository index.
+The chart depends on the Zero to JupyterHub chart 4.4.5, and the chart tests compare the SHA-256 digest of its archive `charts/jupyterhub-4.4.5.tgz` with the digest that the chart repository index lists for it.
 The Hub, the proxy `proxy-public` and the idle culler run in `heartwood-platform`; the chart's own RBAC, user scheduler, image pullers, placeholders and network policies are off.
 `files/hub/heartwood_hub.py` configures the Hub, which loads it from its `jupyterhub_config.d` directory and reads its settings from the ConfigMap `heartwood-hub` on each spawn.
 A change of that file takes effect after the Hub restarts.
 
 Researchers sign in to the Hub through Keycloak with the client `heartwood-hub`, whose secret Helm generates into the Secret `heartwood-hub-keycloak`.
-The Hub trusts the platform CA alone for Keycloak and the control service, and its user name is the subject of the researcher's token.
+The Hub trusts the platform CA alone for Keycloak and the control service, without the certificate directory that libcurl reads by default, and its user name is the subject of the researcher's token.
 Every account of the realm may sign in; the control service decides which projects a researcher may start.
 
 Each project of a researcher is one named server whose name is the project.
@@ -194,6 +194,7 @@ The spawn form offers a server only the project of its name, after the Hub asks 
 Before each start the Hub asks the control service to prepare the session, and it refuses the start when the researcher is not a member of the project.
 It then starts the gateway pod in `heartwood-sessions` with the ServiceAccount `hw-gw-<session>`, the session label, the volume claim `hw-home-<session>` and the hosted gateway image.
 The init container runs `heartwood-hosted-configure`, which copies the Secret `hw-gw-<session>` into a memory volume with owner-only files, registers the session's OpenShell gateway with its client certificate, and creates the research and state directories on the claim.
+The gateway mounts the copies read-only at `/etc/heartwood/deployment` and the registration at `/etc/heartwood/native` from the memory volume, and the research and state directories at `/research` and `/var/lib/heartwood` from the claim; `templates/_hub.tpl` lists these mounts.
 The gateway serves `heartwood gateway serve` with `identity-proxy` ingress under `/user/<subject>/<project>`, and accepts proxied requests only from `hub.trustedProxySources`.
 
 The control service writes the gateway's deployment manifest into the Secret: the identity of the researcher and the project client, the worker on the Kubernetes driver in the session namespace, and the control service as the `[planning]` service.
@@ -212,8 +213,9 @@ The Hub remains a trusted platform component: it can start the gateway of any se
 
 - A pod carries its session label and the role label `hosted-gateway`, and uses the ServiceAccount `hw-gw-<session>` of that session.
 - A pod runs one init container and one container of `images.hostedGateway`; the init container runs only `heartwood-hosted-configure`, and the container only `heartwood gateway serve` with the fixed arguments above.
-- A pod mounts only its session's Secret, which only the init container mounts, empty directories, the volume claim `hw-home-<session>`, and its ServiceAccount token.
-- A pod sets only the environment variables that JupyterHub and KubeSpawner set and `HOME`, takes no value from another object, and has no lifecycle hook and no exec probe.
+- A pod carries only the labels of a JupyterHub server and its session labels.
+- A pod mounts only its session's Secret, a memory volume, a temporary volume, the volume claim `hw-home-<session>` and its ServiceAccount token, and each container mounts exactly the volumes, paths and subdirectories of the layout above, so only the init container mounts the Secret and the copies stay in the memory volume.
+- A pod sets only the environment variables that JupyterHub and KubeSpawner set and `HOME`, takes no value from another object, has no lifecycle hook, no exec probe and the default termination message, and resolves names through the cluster's DNS only.
 - A pod runs as user `10001` without host access, with the default seccomp profile, a read-only root file system and no capabilities.
 - A volume claim is named `hw-home-<session>` and names no data source, volume or selector.
 
@@ -227,7 +229,7 @@ Keycloak accepts connections from `heartwood-sessions`, from the Hub, from the c
 The control service accepts connections from `heartwood-sessions` and from the Hub.
 versitygw accepts connections from its bootstrap Job.
 The proxy accepts researchers' connections on port 8000 from anywhere and configuration from the Hub on port 8001, and the Hub accepts connections from the proxy.
-A gateway pod accepts connections on port 8888 from the proxy and the Hub, and gateways do not reach each other.
+A gateway pod accepts connections on port 8888 from the proxy and the Hub, so gateways reach each other only through the proxy, where each gateway verifies its researcher.
 
 ### Session Roles and Admission Policies
 

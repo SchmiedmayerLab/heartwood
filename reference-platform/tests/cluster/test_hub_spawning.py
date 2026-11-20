@@ -160,8 +160,21 @@ def test_a_second_researcher_is_refused(server: Server, cluster: Cluster) -> Non
     second = server.second
     second.sign_in_to_hub()
     # Not a member of project other: the Hub offers it no server and refuses to start one.
-    second.spawn(SECOND, "other")
-    time.sleep(10)
+    status, page = second.spawn(SECOND, "other")
+    assert 'value="other"' not in page
+    deadline = time.monotonic() + 120
+    while time.monotonic() < deadline:
+        status, user = second.hub_api("GET", f"/users/{SECOND}")
+        assert status == 200, user
+        started = user["servers"].get("other")
+        if started is None or not started["pending"]:
+            break
+        time.sleep(3)
+    assert started is None or not started["ready"], started
+    # The control service prepared no session for the refused start.
+    secrets = _json(cluster, "secret", f"--namespace={SESSIONS}")["items"]
+    names = {item["metadata"]["name"] for item in secrets}
+    assert {name for name in names if name.startswith("hw-gw-")} == {f"hw-gw-{server.session}"}
     sessions = {
         pod["metadata"]["labels"]["heartwood.platform/session"] for pod in gateway_pods(cluster)
     }
@@ -194,12 +207,17 @@ def test_the_hub_cannot_read_secrets_in_the_sessions_namespace(
     assert 'cannot get resource "secrets"' in result.stderr
 
 
-def _pod_as_hub(cluster: Cluster, pod: dict[str, Any]) -> str:
+def _as_hub(cluster: Cluster, document: dict[str, Any]) -> tuple[int, str]:
     result = cluster.kubectl(
-        "create", "--dry-run=server", f"--as={_HUB}", "--filename", "-", document=pod
+        "create", "--dry-run=server", f"--as={_HUB}", "--filename", "-", document=document
     )
-    assert result.returncode != 0, "the pod was admitted"
-    return result.stderr
+    return result.returncode, result.stderr
+
+
+def _pod_as_hub(cluster: Cluster, pod: dict[str, Any]) -> str:
+    returncode, refusal = _as_hub(cluster, pod)
+    assert returncode != 0, "the pod was admitted"
+    return refusal
 
 
 def test_the_hub_creates_only_gateway_pods_of_the_admitted_shape(
@@ -252,6 +270,47 @@ def test_the_hub_creates_only_gateway_pods_of_the_admitted_shape(
         for volume in pod["spec"]["volumes"]
     ]
     probe_exec = [{**containers[0], "livenessProbe": {"exec": {"command": ["true"]}}}]
+    # The unchanged shape, as the Hub created it, is admitted.
+    assert _as_hub(cluster, changed()) == (0, "")
+    secret_env = [
+        {
+            **containers[0],
+            "env": [
+                *containers[0]["env"],
+                {
+                    "name": "JUPYTERHUB_LEAK",
+                    "valueFrom": {"secretKeyRef": {"name": f"hw-gw-{server.session}", "key": "x"}},
+                },
+            ],
+        }
+    ]
+    command = [{**containers[0], "command": ["sh", "-c", "env"]}]
+    hook = [{**containers[0], "lifecycle": {"postStart": {"exec": {"command": ["true"]}}}}]
+    message_file = [
+        {**containers[0], "terminationMessagePath": "/etc/heartwood/deployment/client-secret"}
+    ]
+    # The memory volume with the copies of the Secret at the research directory.
+    research = [
+        {
+            **containers[0],
+            "volumeMounts": [
+                {**mount, "subPath": "deployment"} if mount["mountPath"] == "/research" else mount
+                for mount in containers[0]["volumeMounts"]
+            ],
+        }
+    ]
+    # The init container writing the copies onto the server's volume.
+    persisted = [
+        {
+            **init[0],
+            "volumeMounts": [
+                {**mount, "name": "home"} if mount["mountPath"] == "/etc/heartwood/work" else mount
+                for mount in init[0]["volumeMounts"]
+            ],
+        }
+    ]
+    sidecar = [{**init[0], "restartPolicy": "Always"}]
+    labels = {**pod["metadata"]["labels"], "app.kubernetes.io/component": "hub"}
     cases = [
         ("hosted gateway image", changed(containers=other_image)),
         ("fixed arguments", changed(containers=shell)),
@@ -264,11 +323,50 @@ def test_the_hub_creates_only_gateway_pods_of_the_admitted_shape(
         # The restricted Pod Security Standard of the namespace refuses it first.
         ("PodSecurity", changed(hostNetwork=True)),
         ("no exec probe", changed(containers=probe_exec)),
+        ("only the Hub's environment variables", changed(containers=secret_env)),
+        ("fixed arguments", changed(containers=command)),
+        ("no lifecycle hook", changed(containers=hook)),
+        ("default termination message", changed(containers=message_file)),
+        ("exactly the volumes and paths", changed(containers=research)),
+        ("exactly the volumes and paths", changed(initContainers=persisted)),
+        ("configuration script", changed(initContainers=sidecar)),
+        ("cluster's DNS", changed(hostAliases=[{"ip": "10.0.0.1", "hostnames": ["keycloak"]}])),
+        (
+            "only the labels",
+            {**changed(), "metadata": {**pod["metadata"], "labels": labels}},
+        ),
     ]
     for message, case in cases:
         # The pod specs hold the server's Hub token, so only the refusal is reported.
         refusal = _pod_as_hub(cluster, case)
         assert message in refusal, refusal
+
+
+def test_the_hub_creates_only_its_own_volume_claims_and_nothing_elsewhere(
+    server: Server, cluster: Cluster
+) -> None:
+    claim = {
+        "apiVersion": "v1",
+        "kind": "PersistentVolumeClaim",
+        "metadata": {"name": f"hw-home-{server.session}x", "namespace": SESSIONS},
+        "spec": {
+            "accessModes": ["ReadWriteOnce"],
+            "resources": {"requests": {"storage": "1Gi"}},
+            "dataSource": {"kind": "PersistentVolumeClaim", "name": f"hw-home-{server.session}"},
+        },
+    }
+    returncode, refusal = _as_hub(cluster, claim)
+    assert returncode != 0
+    assert "name no data source" in refusal
+    elsewhere = {
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "metadata": {"name": "hw-hub-elsewhere", "namespace": f"hw-s-{server.session}"},
+        "spec": {"containers": [{"name": "c", "image": "registry.k8s.io/pause:3.10.1"}]},
+    }
+    returncode, refusal = _as_hub(cluster, elsewhere)
+    assert returncode != 0
+    assert "Forbidden" in refusal
 
 
 def test_the_idle_culler_stops_the_server_and_keeps_the_session(

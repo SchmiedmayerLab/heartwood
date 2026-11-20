@@ -117,8 +117,8 @@ class HostedGateway:
         policy = json.dumps(worker.policy, sort_keys=True, separators=(",", ":"))
         repository, _, digest = worker.image.partition("@")
         # Pods reference the worker by digest alone, so a tag in the reference is dropped.
-        path, _, name = repository.rpartition("/")
-        repository = f"{path}/{name.partition(':')[0]}"
+        path, slash, name = repository.rpartition("/")
+        repository = f"{path}{slash}{name.partition(':')[0]}"
         manifest = "\n".join(
             [
                 _table(

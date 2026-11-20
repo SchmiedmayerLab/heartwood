@@ -129,3 +129,22 @@ def test_the_files_are_the_ones_the_manifest_names() -> None:
         "worker-policy.json",
         "launch-context.json",
     }
+
+
+def test_a_worker_image_without_a_registry_path_keeps_its_name() -> None:
+    settings = dict(HOSTED, worker={**HOSTED["worker"], "image": "worker:1@sha256:" + "2" * 64})
+    supervisor, sandbox = sandbox_digests(_OBJECTS.read_text(encoding="utf-8"))
+    gateway = HostedGateway(
+        HostedGatewaySettings.model_validate(settings),
+        issuer="https://keycloak.example.test/realms/heartwood",
+        supervisor=supervisor,
+        sandbox=sandbox,
+    )
+    files = gateway.files(
+        session="abc123",
+        subject="6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0001",
+        client_id="hw-proj-demo",
+        namespace="hw-s-abc123",
+        launch_context=_LAUNCH,
+    )
+    assert tomllib.loads(files["deployment.toml"])["worker"]["image_repository"] == "worker"

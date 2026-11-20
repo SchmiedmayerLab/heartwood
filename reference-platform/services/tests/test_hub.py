@@ -94,6 +94,21 @@ def test_hub_pods_are_admitted_only_in_the_gateway_shape(objects: list[dict[str,
         }
     ]
     validations = " ".join(item["expression"] for item in policy["spec"]["validations"])
+    messages = [item["message"] for item in policy["spec"]["validations"]]
+    for subject in (
+        "ServiceAccount hw-gw-<session>",
+        "only the labels",
+        "hosted gateway image",
+        "configuration script",
+        "fixed arguments",
+        "default termination message",
+        "cluster's DNS",
+        "without host access",
+        "its volume claim hw-home-<session>",
+        "exactly the volumes and paths",
+        "name no data source",
+    ):
+        assert [message for message in messages if subject in message], subject
     assert "registry.example.test/hosted-gateway@sha256:" + "4" * 64 in validations
     assert "'hw-gw-' + variables.session" in validations
     assert "'hw-home-' + variables.session" in validations
@@ -110,7 +125,11 @@ def test_the_arguments_of_the_hook_match_the_admission_policy(
     arguments = ["heartwood", "gateway", "serve"]
     arguments += hub.gateway_arguments(settings, "6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0001", "demo")
     policy = _named(objects, "ValidatingAdmissionPolicy", "heartwood-hub-pods")
-    expression = policy["spec"]["validations"][3]["expression"]
+    (expression,) = [
+        item["expression"]
+        for item in policy["spec"]["validations"]
+        if "fixed arguments" in item["message"]
+    ]
     assert f"size(object.spec.containers[0].args) == {len(arguments)}" in expression
     for index, value in enumerate(arguments):
         if index != 14:
@@ -120,9 +139,12 @@ def test_the_arguments_of_the_hook_match_the_admission_policy(
     assert arguments[14] == "/user/6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0001/demo"
 
 
-def test_the_hook_mounts_the_secret_only_in_the_init_container() -> None:
+def test_the_hook_mounts_the_secret_only_in_the_init_container(
+    objects: list[dict[str, Any]],
+) -> None:
+    settings = json.loads(_named(objects, "ConfigMap", "heartwood-hub")["data"]["settings.json"])
     pod = _module().pod_settings(
-        {"session": _SESSION, "gateway_service_account": f"hw-gw-{_SESSION}"}
+        {"session": _SESSION, "gateway_service_account": f"hw-gw-{_SESSION}"}, settings
     )
     assert pod["service_account"] == f"hw-gw-{_SESSION}"
     assert pod["pvc_name"] == f"hw-home-{_SESSION}"
@@ -136,6 +158,18 @@ def test_the_hook_mounts_the_secret_only_in_the_init_container() -> None:
     assert secret["name"] not in {mount["name"] for mount in pod["volume_mounts"]}
     (work,) = [volume for volume in pod["volumes"] if volume["name"] == "work"]
     assert work["emptyDir"]["medium"] == "Memory"
+    # The policy admits exactly the mounts of the chart's settings.
+    expression = " ".join(
+        item["expression"]
+        for item in _named(objects, "ValidatingAdmissionPolicy", "heartwood-hub-pods")["spec"][
+            "validations"
+        ]
+    )
+    for mount in pod["volume_mounts"] + pod["init_mounts"]:
+        assert f"m.mountPath == {json.dumps(mount['mountPath'])}" in expression
+    assert "size(object.spec.containers[0].volumeMounts.filter" in expression
+    assert "terminationMessagePath" in expression
+    assert "hostAliases" in expression
 
 
 def test_a_named_server_offers_only_its_own_project() -> None:

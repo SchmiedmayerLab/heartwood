@@ -546,6 +546,7 @@ def test_control_service_configuration_holds_the_registry(objects: list[dict[str
                     "podSelector": {
                         "matchLabels": {
                             "app.kubernetes.io/name": "jupyterhub",
+                            "app.kubernetes.io/instance": "heartwood-platform",
                             "app.kubernetes.io/component": "hub",
                         }
                     }
