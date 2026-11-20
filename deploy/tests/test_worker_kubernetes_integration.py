@@ -1316,7 +1316,7 @@ _EXHAUST_MEMORY = "chunks = []\nwhile True:\n    chunks.append(b'x' * (64 * 1024
 def test_kubernetes_worker_container_is_never_restarted(
     infrastructure: KubernetesFixture,
 ) -> None:
-    """A workload container that ends stays ended, so its writable layer ends with the worker."""
+    """A workload container that ends through its memory limit is never restarted."""
     from openshell._proto import openshell_pb2 as pb
 
     fixture = infrastructure

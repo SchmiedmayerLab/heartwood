@@ -399,7 +399,7 @@ The [Kubernetes driver qualification](#kubernetes-driver-qualification) records 
 | `kubernetes-staging-default-deny.v1` | `test_kubernetes_staging_requires_the_default_deny_policy` | Without the default-deny policy, staging creates nothing |
 | `kubernetes-staging-name.v1` | `test_kubernetes_staging_name_workspace_creates_no_pod` | A sandbox in a workspace whose name begins with `hw-staging` never gets a Sandbox resource or pod of that name |
 | `kubernetes-staging-transfer.v1` | `test_kubernetes_staging_transfers_a_large_input_within_the_request_limit` | A 64 MiB input is staged within the time one cluster request may take, and its claims are removed |
-| `kubernetes-worker-container-lifetime.v1` | `test_kubernetes_worker_container_is_never_restarted` | A workload container that ends is never restarted, so the worker's writable layer ends with the worker |
+| `kubernetes-worker-container-lifetime.v1` | `test_kubernetes_worker_container_is_never_restarted` | A workload container that ends through its memory limit is never restarted |
 | `kubernetes-workspace-symlink.v1` | `test_kubernetes_symlink_workspace_image_runs_without_its_working_directory` | A symbolic-link working directory in the image selects no workspace: the driver mounts its workspace claim at `/sandbox`, nothing is mounted at the link or at `/workspace`, and the link resolves to the image's own `/workspace` |
 
 Two prompt-injection drills run outside native qualification:
