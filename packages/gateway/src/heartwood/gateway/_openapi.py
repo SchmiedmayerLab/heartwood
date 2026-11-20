@@ -570,12 +570,12 @@ def gateway_openapi(*, api_version: str | None = None) -> dict[str, Any]:
         if operation.path.endswith("/commands"):
             description["description"] = (
                 "The gateway replaces client-supplied actor_id with the principal of the "
-                "request: human for the launch capability, or the verified subject with "
-                "identity-proxy ingress. Command IDs support idempotent retries; conflicting reuse "
-                "is rejected. The payload is a generic JSON object; command-specific rules "
-                "are enforced by the gateway. Approval decisions bind the complete ordered "
-                "action set, including tools and exact structured arguments. Changed action "
-                "contents require a new decision."
+                "request: human for the launch capability, or with identity-proxy ingress an "
+                "actor derived from the verified issuer and subject. Command IDs support "
+                "idempotent retries; conflicting reuse is rejected. The payload is a generic "
+                "JSON object; command-specific rules are enforced by the gateway. Approval "
+                "decisions bind the complete ordered action set, including tools and exact "
+                "structured arguments. Changed action contents require a new decision."
             )
         paths.setdefault(operation.path, {})[operation.method.lower()] = description
 
@@ -633,8 +633,9 @@ def gateway_openapi(*, api_version: str | None = None) -> dict[str, Any]:
                 "browser-visible gateway base path. Protected API and stream requests require a "
                 "capability and valid deployment ingress; /launch exchanges a one-time token. "
                 "With identity-proxy ingress the gateway verifies one researcher with OpenID "
-                "Connect and records the verified subject; in the other modes the platform "
-                "authenticates users and the gateway records one human principal. "
+                "Connect and records an actor derived from its issuer and subject; in the "
+                "other modes the platform authenticates users and the gateway records one "
+                "human principal. "
                 "Platform estimates and budgets have draft schemas but no runtime "
                 "HTTP endpoints. An operator-bound deployment policy limits project preferences, "
                 "and approvals bind exact action contents. A valid request "

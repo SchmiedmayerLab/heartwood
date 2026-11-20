@@ -324,7 +324,7 @@ def test_identity_refusals_carry_the_fixture_diagnostic(
                 "issuer": "https://identity.synthetic.invalid",
                 "client_id": "hw-proj-synthetic",
                 "client_secret_file": str(tmp_path / "client-secret"),
-                "subject": "synthetic-researcher",
+                "subject": "auth0|synthetic-researcher",
             }
         ),
         ingress,

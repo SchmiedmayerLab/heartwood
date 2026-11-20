@@ -6,10 +6,11 @@
 
 """Researcher identity verified with OpenID Connect for a gateway behind a reverse proxy.
 
-The gateway is a confidential OpenID Connect client bound to one subject. A browser
-signs in through the authorization code flow, and other clients present an access
-token issued for this client. Tokens, the client secret, codes and capabilities stay
-in this process's memory.
+The gateway is a confidential OpenID Connect client bound to one subject of one issuer.
+A browser signs in through the authorization code flow, and other clients present an
+access token issued for this client. Tokens, the client secret, codes and capabilities
+stay in this process's memory. Commands record an actor derived from the issuer and the
+subject, so records carry neither value.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ import json
 import secrets
 import ssl
 import time
+import unicodedata
 from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -33,11 +35,8 @@ import jwt
 from cryptography.fernet import Fernet, InvalidToken
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from heartwood.core_adapter.action_review import AUTOMATIC_REVIEW_ACTOR
 from heartwood.gateway._access import (
-    CAPABILITY_ACTOR,
     CAPABILITY_HEADER,
-    OPERATOR_ACTOR,
     AccessResponse,
     AccessUnavailableError,
     GatewayAccess,
@@ -79,19 +78,47 @@ _REFRESH_MARGIN_SECONDS = 30.0
 _TOKEN_EXCHANGE_GRANT = "urn:ietf:params:oauth:grant-type:token-exchange"
 _ACCESS_TOKEN_TYPE = "urn:ietf:params:oauth:token-type:access_token"
 
+# OpenID Connect limits a subject to 255 characters.
+_MAXIMUM_SUBJECT_LENGTH = 255
+RESEARCHER_ACTOR_PREFIX = "oidc-"
+
 type _TokenUse = Literal["id", "issued", "bearer"]
 
 
+def researcher_actor(issuer: str, subject: str) -> str:
+    """Return the actor that commands of one subject at one issuer record.
+
+    The actor is ``oidc-`` followed by the hexadecimal SHA-256 digest of the UTF-8
+    issuer, a zero byte and the UTF-8 subject. Neither value contains a zero byte or
+    another control character, so each pair has its own input and the same subject at
+    two issuers yields two actors. The actor follows the actor reference form, and
+    records that carry it reveal neither the issuer nor the subject.
+    """
+    if _has_control_character(issuer) or _has_control_character(subject):
+        raise ValueError("issuer and subject contain no control characters")
+    digest = hashlib.sha256(f"{issuer}\0{subject}".encode())
+    return f"{RESEARCHER_ACTOR_PREFIX}{digest.hexdigest()}"
+
+
+def _has_control_character(value: str) -> bool:
+    """Return whether a value holds a control character or an unpaired surrogate."""
+    return any(unicodedata.category(character) in {"Cc", "Cs"} for character in value)
+
+
 class IdentityDeployment(BaseModel):
-    """The manifest's ``[identity]`` table: one OpenID Connect client and one researcher."""
+    """The manifest's ``[identity]`` table: one OpenID Connect client and one researcher.
+
+    The subject is the provider's ``sub`` claim as it appears in tokens, in any form
+    the provider uses, such as a UUID, ``auth0|...``, a number, an opaque string or an
+    e-mail address.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     issuer: str = Field(min_length=1, max_length=2048)
     client_id: str = Field(min_length=1, max_length=255, pattern=r"^[\x21-\x7E]+$")
     client_secret_file: Path = Field(repr=False)
-    # The subject becomes the actor of every command, so it follows the actor reference form.
-    subject: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
+    subject: str = Field(min_length=1, max_length=_MAXIMUM_SUBJECT_LENGTH)
     provider_url: str | None = Field(default=None, min_length=1, max_length=2048)
     ca_file: Path | None = None
 
@@ -100,8 +127,21 @@ class IdentityDeployment(BaseModel):
         """Return the base URL where the gateway reaches the provider."""
         return self.issuer if self.provider_url is None else self.provider_url
 
+    @property
+    def actor(self) -> str:
+        """Return the actor that the researcher's commands record."""
+        return researcher_actor(self.issuer, self.subject)
+
     @model_validator(mode="after")
     def _validate(self) -> Self:
+        if (
+            _has_control_character(self.subject)
+            or any(unicodedata.category(character) == "Cf" for character in self.subject)
+            or self.subject.strip() != self.subject
+        ):
+            raise ValueError(
+                "identity subject has no control or format characters and no surrounding whitespace"
+            )
         for url in (self.issuer, self.provider):
             parts = urlsplit(url)
             try:
@@ -116,13 +156,12 @@ class IdentityDeployment(BaseModel):
                 or parts.query
                 or parts.fragment
                 or any(character.isspace() for character in url)
+                or _has_control_character(url)
             ):
                 raise ValueError(
                     "identity provider URLs are http(s) URLs without credentials, query or fragment"
                 )
             require_protected_transport(url)
-        if self.subject in {CAPABILITY_ACTOR, AUTOMATIC_REVIEW_ACTOR, OPERATOR_ACTOR}:
-            raise ValueError("identity subject names an actor the gateway reserves")
         for path in (self.client_secret_file, self.ca_file):
             if path is not None and not path.is_absolute():
                 raise ValueError("identity files are absolute paths")
@@ -181,7 +220,7 @@ class IdentityAccess:
         http: httpx.Client,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
-        """Bind one provider client and subject to one gateway route."""
+        """Bind one provider client and one subject of its issuer to one gateway route."""
         if ingress.mode != IDENTITY_INGRESS_MODE:
             raise IngressConfigurationError(
                 "the manifest's [identity] table requires identity-proxy ingress"
@@ -191,6 +230,8 @@ class IdentityAccess:
         self._client_id = deployment.client_id
         self._client_secret = client_secret
         self._subject = deployment.subject.encode()
+        # Commands record the actor; the subject itself stays in this process.
+        self._actor = deployment.actor
         self._base_url = f"{ingress.external_origin}{ingress.browser_base_path}"
         if not self._base_url.isascii():
             raise IngressConfigurationError(
@@ -245,11 +286,11 @@ class IdentityAccess:
         return None
 
     def principal(self, headers: Mapping[str, tuple[str, ...]]) -> str | None:
-        """Return the bound subject for a signed-in browser or a valid access token."""
+        """Return the researcher's actor for a signed-in browser or a valid access token."""
         for value in headers.get(CAPABILITY_HEADER, ()):
             with self._lock:
                 if self._login(value.strip()) is not None:
-                    return self._subject.decode()
+                    return self._actor
         authorization = headers.get("authorization", ())
         if len(authorization) != 1:
             return None
@@ -265,7 +306,7 @@ class IdentityAccess:
         with self._lock:
             if self._bearer is None or self._bearer.expires_at < expires_at:
                 self._bearer = _Bearer(token.strip(), expires_at)
-        return self._subject.decode()
+        return self._actor
 
     def exchange_launch_token(self, token: str) -> str | None:
         """Exchange the launch token of one sign-in for its capability exactly once."""
@@ -381,8 +422,7 @@ class IdentityAccess:
             claims.get("aud") not in (audience, [audience])
             or claims.get("azp") != self._client_id
             or claims.get("iss") != self._issuer
-            or not isinstance(subject, str)
-            or not secrets.compare_digest(subject.encode(), self._subject)
+            or not self._is_bound_subject(subject)
             or not isinstance(expiry, int)
             or isinstance(expiry, bool)
         ):
@@ -641,13 +681,17 @@ class IdentityAccess:
                 and not _IDENTITY_TOKEN_CLAIMS.intersection(claims)
                 and str(claims.get("typ")).lower() != "id"
             )
-        if (
-            not accepted
-            or not isinstance(subject, str)
-            or not secrets.compare_digest(subject.encode(), self._subject)
-        ):
+        if not accepted or not self._is_bound_subject(subject):
             raise _SignInRefusedError
         return claims
+
+    def _is_bound_subject(self, subject: object) -> bool:
+        """Return whether a claim is exactly the bound subject; the issuer is checked first."""
+        if not isinstance(subject, str):
+            return False
+        # A JSON string may hold an unpaired surrogate, which no manifest subject holds.
+        presented = subject.encode("utf-8", "surrogatepass")
+        return secrets.compare_digest(presented, self._subject)
 
     def _key(self, key_id: str) -> jwt.PyJWK:
         # A known key is used without waiting for a fetch that another request started.

@@ -13,9 +13,11 @@ import base64
 import datetime
 import hashlib
 import json
+import re
 import secrets
 import time
 import tomllib
+import unicodedata
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
@@ -51,6 +53,7 @@ from heartwood.gateway._access import (
     AccessUnavailableError,
     TokenExchangeRefusedError,
 )
+from heartwood.gateway._identity import researcher_actor
 from heartwood.gateway._mcp_policy import McpDestination, McpServerError
 from heartwood.gateway._mcp_servers import McpServerManager
 from heartwood.gateway.platform_fakes import (
@@ -69,6 +72,8 @@ _ISSUER = "https://id.example.test/realms/research"
 _CLIENT_ID = "hw-proj-demo"
 _CLIENT_SECRET = "synthetic-client-secret-0123456789"
 _SUBJECT = "researcher-7f3c"
+# The actor that the researcher's commands record, derived from the issuer and the subject.
+_ACTOR = researcher_actor(_ISSUER, _SUBJECT)
 # The client of the platform fakes' project, the authorized party of the tokens they accept.
 _FAKE_CLIENT_ID = f"hw-proj-{PROJECT_ID}"
 _ORIGIN = "https://research.example.test"
@@ -520,10 +525,11 @@ def test_browser_sign_in_records_the_verified_subject_and_keeps_tokens_in_memory
     body = asyncio.run(scenario())
 
     received = [event for event in body["events"] if event["kind"] == "command.received"]
-    assert received[0]["payload"]["actor_id"] == _SUBJECT
+    assert received[0]["payload"]["actor_id"] == _ACTOR
     assert _researcher_token(access) in provider.issued
     stored = b"".join(path.read_bytes() for path in workspace.rglob("*") if path.is_file())
-    assert _SUBJECT.encode() in stored
+    assert _ACTOR.encode() in stored
+    assert _SUBJECT.encode() not in stored
     for secret in (*provider.issued, _CLIENT_SECRET):
         assert secret.encode() not in stored
         assert secret not in repr(access)
@@ -651,7 +657,7 @@ def test_a_bearer_token_is_accepted_only_for_the_bound_subject_and_client(
     assert response[0] == status
     if status == 200:
         events = json.loads(response[2])["events"]
-        assert events[0]["payload"]["actor_id"] == _SUBJECT
+        assert events[0]["payload"]["actor_id"] == _ACTOR
     else:
         assert _refusal(response) == (401, "HW-INGRESS-004")
         assert not (tmp_path / "research" / ".heartwood" / "sessions").exists()
@@ -728,7 +734,7 @@ def test_an_unavailable_provider_is_asked_again_only_after_a_pause(tmp_path: Pat
     assert _get(access, "/identity/login").status_code == 302
     provider.failing = set()
     clock.now += 5
-    assert access.principal(_bearer(token)) == _SUBJECT
+    assert access.principal(_bearer(token)) == _ACTOR
 
 
 def test_the_callback_requires_the_cookie_of_the_browser_that_started_the_sign_in(
@@ -788,8 +794,8 @@ def test_an_elliptic_curve_provider_key_verifies(tmp_path: Path) -> None:
     provider.key, provider.algorithm = _EC_KEY, "ES256"
     access = _access(tmp_path, provider)
 
-    assert access.principal(_bearer(provider.token())) == _SUBJECT
-    assert access.principal(_capability(_sign_in(access, provider)[0])) == _SUBJECT
+    assert access.principal(_bearer(provider.token())) == _ACTOR
+    assert access.principal(_capability(_sign_in(access, provider)[0])) == _ACTOR
 
 
 def test_sign_in_request_binds_state_nonce_and_a_code_challenge(tmp_path: Path) -> None:
@@ -867,7 +873,7 @@ def test_sign_in_is_refused_unless_every_token_check_passes(
     provider = _Provider()
     access = _access(tmp_path, provider)
     # The keys are cached before the provider changes, as in a running gateway.
-    assert access.principal(_bearer(provider.token())) == _SUBJECT
+    assert access.principal(_bearer(provider.token())) == _ACTOR
     started = _get(access, "/identity/login")
     tamper(provider)
 
@@ -885,7 +891,7 @@ def test_an_authorized_party_with_several_audiences_signs_in(tmp_path: Path) -> 
     provider.access_claims = {"aud": [_CLIENT_ID, "account"], "azp": "other"}
     access = _access(tmp_path, provider)
 
-    assert access.principal(_capability(_sign_in(access, provider)[0])) == _SUBJECT
+    assert access.principal(_capability(_sign_in(access, provider)[0])) == _ACTOR
 
 
 def test_an_opaque_access_token_signs_in(tmp_path: Path) -> None:
@@ -895,7 +901,7 @@ def test_an_opaque_access_token_signs_in(tmp_path: Path) -> None:
 
     capability, _ = _sign_in(access, provider)
 
-    assert access.principal(_capability(capability)) == _SUBJECT
+    assert access.principal(_capability(capability)) == _ACTOR
     assert _researcher_token(access) in provider.issued
 
 
@@ -975,11 +981,11 @@ def test_sign_ins_in_progress_hold_no_state_and_live_sign_ins_are_bounded(
     assert _finish(access, oldest, provider.authorize(oldest.location)).status_code == 302
 
     capabilities = [_sign_in(access, provider)[0] for _ in range(8)]
-    assert access.principal(_capability(capabilities[0])) == _SUBJECT
-    assert access.principal(_capability(capabilities[-1])) == _SUBJECT
+    assert access.principal(_capability(capabilities[0])) == _ACTOR
+    assert access.principal(_capability(capabilities[-1])) == _ACTOR
     capabilities.append(_sign_in(access, provider)[0])
     assert access.principal(_capability(capabilities[0])) is None
-    assert access.principal(_capability(capabilities[-1])) == _SUBJECT
+    assert access.principal(_capability(capabilities[-1])) == _ACTOR
 
 
 def test_launch_token_is_single_use_and_short_lived(tmp_path: Path) -> None:
@@ -1012,7 +1018,7 @@ def test_a_sign_in_ends_with_its_refresh_token_or_its_access_token(
     capability, _ = _sign_in(access, provider)
 
     clock.now += ends_after - 1
-    assert access.principal(_capability(capability)) == _SUBJECT
+    assert access.principal(_capability(capability)) == _ACTOR
     clock.now += 1
     assert access.principal(_capability(capability)) is None
     assert access.principal(_capability("\ud800")) is None
@@ -1037,7 +1043,7 @@ def test_the_researcher_access_token_is_refreshed_before_it_expires(tmp_path: Pa
     assert provider.requests.count("token") == 2
     # The refreshed sign-in lasts for the new refresh token's lifetime.
     clock.now += 1799
-    assert access.principal(_capability(capability)) == _SUBJECT
+    assert access.principal(_capability(capability)) == _ACTOR
 
 
 def test_a_refresh_without_a_new_refresh_token_keeps_the_old_one(tmp_path: Path) -> None:
@@ -1063,7 +1069,7 @@ def test_a_refused_or_unavailable_refresh_never_returns_a_stale_token(tmp_path: 
     with pytest.raises(AccessUnavailableError):
         _researcher_token(access)
     provider.unreachable = False
-    assert access.principal(_capability(capability)) == _SUBJECT
+    assert access.principal(_capability(capability)) == _ACTOR
 
     provider._refresh_tokens.clear()
     assert _researcher_token(access) is None
@@ -1086,7 +1092,7 @@ def test_keys_are_fetched_again_for_an_unknown_key_at_a_bounded_rate(tmp_path: P
     provider = _Provider()
     clock = _Clock()
     access = _access(tmp_path, provider, clock=clock)
-    assert access.principal(_bearer(provider.token())) == _SUBJECT
+    assert access.principal(_bearer(provider.token())) == _ACTOR
     provider.key, provider.key_id = _OTHER_RSA_KEY, "key-2"
     rotated = provider.token()
 
@@ -1094,7 +1100,7 @@ def test_keys_are_fetched_again_for_an_unknown_key_at_a_bounded_rate(tmp_path: P
     assert access.principal(_bearer(rotated)) is None
     assert provider.requests.count("keys") == 1
     clock.now += 30
-    assert access.principal(_bearer(rotated)) == _SUBJECT
+    assert access.principal(_bearer(rotated)) == _ACTOR
     assert provider.requests.count("keys") == 2
     assert provider.requests.count("openid-configuration") == 1
 
@@ -1109,7 +1115,7 @@ def test_the_gateway_reaches_the_provider_at_its_own_url(tmp_path: Path) -> None
     started = _get(access, "/identity/login")
 
     assert str(started.location).startswith(f"{_ISSUER}/authorize?")
-    assert access.principal(_capability(_sign_in(access, provider)[0])) == _SUBJECT
+    assert access.principal(_capability(_sign_in(access, provider)[0])) == _ACTOR
     assert provider.requests == ["openid-configuration", "token", "keys"]
 
 
@@ -1414,14 +1420,17 @@ def test_access_reads_the_client_secret_and_certificate_authority(tmp_path: Path
         {"provider_url": ""},
         {"client_id": ""},
         {"client_id": "two words"},
+        {"issuer": "https://id.example.test/realms/\x00research"},
         {"subject": ""},
         {"subject": "line\nbreak"},
-        {"subject": "auth0|synthetic"},
-        {"subject": "researcher@example.test"},
-        {"subject": "s" * 129},
-        {"subject": "gateway"},
-        {"subject": "human"},
-        {"subject": "deployment-operator"},
+        {"subject": "zero\x00byte"},
+        {"subject": "delete\x7f"},
+        {"subject": " researcher"},
+        {"subject": "researcher "},
+        {"subject": "s" * 256},
+        {"subject": "unpaired\ud800"},
+        {"subject": "zero\u200bwidth"},
+        {"subject": "\u202eresearcher"},
         {"client_secret_file": "relative/secret"},
         {"ca_file": "relative/ca.pem"},
         {"allow_plain_http": True},
@@ -1750,9 +1759,9 @@ def test_a_bearer_token_is_the_subject_token_only_without_a_browser_sign_in(
     access = _access(tmp_path, provider, clock=clock)
     short = provider.token(exp=int(time.time()) + 120)
     bearer = provider.token()
-    assert access.principal(_bearer(bearer)) == _SUBJECT
+    assert access.principal(_bearer(bearer)) == _ACTOR
     # A token that expires earlier does not replace the one already held.
-    assert access.principal(_bearer(short)) == _SUBJECT
+    assert access.principal(_bearer(short)) == _ACTOR
 
     assert _researcher_token(access) == bearer
     from_bearer = access.service_token("svc-data", "heartwood-data")
@@ -1969,3 +1978,173 @@ def test_manifest_refuses_a_token_exchange_without_the_identity_table(tmp_path: 
 
     with pytest.raises(ProjectStateError, match=r"token exchange requires \[identity\]"):
         load_project_deployment(manifest, project_root=workspace, env={})
+
+
+# Subjects in the forms that OpenID Connect providers issue; all are synthetic.
+_SUBJECT_FORMS = {
+    "keycloak-uuid": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+    "auth0": "auth0|64ab12cd34ef56ab78cd90ef",
+    "numeric": "109876543210987654321",
+    "opaque": "AAAAAAAAAAAAAAAAAAAAAIkzqFVrSaSaFHy782bbtaQ",
+    "e-mail": "synthetic.researcher@example.test",
+    "non-ascii": "r\u00e9searcher",
+    "longest": "s" * 255,
+}
+
+
+def test_the_actor_is_derived_from_the_issuer_and_the_subject() -> None:
+    expected = hashlib.sha256(b"https://id.example.test/realms/research\x00researcher-7f3c")
+
+    assert researcher_actor(_ISSUER, _SUBJECT) == f"oidc-{expected.hexdigest()}"
+    # The same subject at two issuers, and pairs that only a separator tells apart,
+    # are different researchers.
+    assert researcher_actor(f"{_ISSUER}/", _SUBJECT) != _ACTOR
+    assert researcher_actor("https://a.example.test/x", "y") != researcher_actor(
+        "https://a.example.test/", "xy"
+    )
+    with pytest.raises(ValueError, match="control characters"):
+        researcher_actor(f"{_ISSUER}\x00", _SUBJECT)
+    for subject in _SUBJECT_FORMS.values():
+        actor = researcher_actor(_ISSUER, subject)
+        assert re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}", actor)
+        assert subject not in actor
+        assert researcher_actor("https://other.example.test/realms/research", subject) != actor
+
+
+@pytest.mark.parametrize("subject", _SUBJECT_FORMS.values(), ids=_SUBJECT_FORMS.keys())
+def test_any_subject_signs_in_and_records_only_its_derived_actor(
+    tmp_path: Path, subject: str
+) -> None:
+    provider = _Provider()
+    provider.subject = subject
+    access = _access(tmp_path, provider, subject=subject)
+    workspace = tmp_path / "research"
+    app = GatewayAsgiApp(_gateway(workspace), ingress=_ingress(), access=access)
+    actor = researcher_actor(_ISSUER, subject)
+    capability, _ = _sign_in(access, provider)
+
+    async def scenario() -> tuple[list[int], str]:
+        statuses: list[int] = []
+        for kind, headers in (
+            (CommandKind.PAUSE, {"x-heartwood-capability": capability}),
+            (CommandKind.RESUME, {"authorization": f"Bearer {provider.token()}"}),
+            (CommandKind.AUDIT_EXPORT, {"x-heartwood-capability": capability}),
+        ):
+            response = await _call(
+                app, "POST", "/sessions/session-1/commands", body=_command(kind), headers=headers
+            )
+            statuses.append(response[0])
+        exported = await _call(
+            app,
+            "GET",
+            "/sessions/session-1/audit-export",
+            headers={"x-heartwood-capability": capability},
+        )
+        statuses.append(exported[0])
+        return statuses, json.loads(exported[2])["content"]
+
+    statuses, export = asyncio.run(scenario())
+
+    assert statuses == [200, 200, 200, 200]
+    assert actor in export
+    events = _gateway(workspace).session_snapshot(session_id="session-1").events
+    received = [event for event in events if event.kind == "command.received"]
+    assert [event.payload["actor_id"] for event in received] == [actor] * 3
+    stored = b"".join(path.read_bytes() for path in workspace.rglob("*") if path.is_file())
+    assert actor.encode() in stored
+    for recorded in (stored, export.encode()):
+        assert subject.encode() not in recorded
+        assert _ISSUER.encode() not in recorded
+        assert json.dumps(subject).encode() not in recorded
+
+
+@pytest.mark.parametrize("subject", _SUBJECT_FORMS.values(), ids=_SUBJECT_FORMS.keys())
+def test_another_researcher_is_refused_whatever_the_subject_form(
+    tmp_path: Path, subject: str
+) -> None:
+    provider = _Provider()
+    provider.subject = subject
+    access = _access(tmp_path, provider, subject=subject)
+    others = [
+        *(other for other in _SUBJECT_FORMS.values() if other != subject),
+        *{subject.upper(), subject.lower(), unicodedata.normalize("NFD", subject)} - {subject},
+        f"{subject} ",
+        f"{subject}\x00",
+        subject[:-1],
+        f"{subject}x",
+    ]
+
+    for other in others:
+        assert access.principal(_bearer(provider.token(sub=other))) is None
+        provider.subject = other
+        started = _get(access, "/identity/login")
+        assert _finish(access, started, provider.authorize(started.location)).status_code == 403
+        provider.subject = subject
+    assert access.principal(_bearer(provider.token())) == researcher_actor(_ISSUER, subject)
+
+
+def test_the_same_subject_at_another_issuer_is_another_researcher(tmp_path: Path) -> None:
+    other_issuer = "https://other.example.test/realms/research"
+    provider = _Provider()
+    access = _access(tmp_path, provider)
+    # The other issuer signs with the same key, so only the issuer tells the two apart.
+    other = _Provider(issuer=other_issuer)
+    other_access = _access(tmp_path, other, issuer=other_issuer)
+
+    assert access.principal(_bearer(other.token())) is None
+    assert other_access.principal(_bearer(provider.token())) is None
+    assert access.principal(_bearer(provider.token())) == _ACTOR
+    assert other_access.principal(_bearer(other.token())) == researcher_actor(
+        other_issuer, _SUBJECT
+    )
+    assert researcher_actor(other_issuer, _SUBJECT) != _ACTOR
+
+
+def test_a_browser_sign_in_at_another_issuer_is_refused_for_the_same_subject(
+    tmp_path: Path,
+) -> None:
+    other_issuer = "https://other.example.test/realms/research"
+    provider = _Provider()
+    access = _access(tmp_path, provider)
+    started = _get(access, "/identity/login")
+    # The other issuer signs the identity token with the same key and subject.
+    provider.id_claims = {"iss": other_issuer}
+    assert _finish(access, started, provider.authorize(started.location)).status_code == 403
+    provider.id_claims = {}
+    started = _get(access, "/identity/login")
+    query = provider.authorize(started.location)
+    # The authorization response names another issuer.
+    named = query.replace(_ISSUER.replace(":", "%3A"), other_issuer.replace(":", "%3A"))
+    assert named != query
+    assert _finish(access, started, named).status_code == 403
+    assert access.principal(_capability(_sign_in(access, provider)[0])) == _ACTOR
+
+
+def test_a_subject_that_is_no_valid_text_is_refused(tmp_path: Path) -> None:
+    provider = _Provider()
+    access = _access(tmp_path, provider)
+    # A JSON string may hold an unpaired surrogate; it matches no configured subject.
+    claims = {**_claims(provider), "sub": "\ud800"}
+    token = jwt.encode(claims, _RSA_KEY, "RS256", headers={"kid": "key-1"})
+
+    assert access.principal(_bearer(token)) is None
+
+
+@pytest.mark.parametrize("subject", _SUBJECT_FORMS.values(), ids=_SUBJECT_FORMS.keys())
+def test_an_exchanged_token_must_name_the_bound_subject_in_any_form(
+    tmp_path: Path, subject: str
+) -> None:
+    provider = _Provider()
+    provider.subject = subject
+    access = _access(tmp_path, provider, subject=subject)
+    _sign_in(access, provider)
+    issued = provider.exchanged
+    other = next(form for form in _SUBJECT_FORMS.values() if form != subject)
+    provider.exchanged = lambda audience: provider._sign(
+        {**jwt.decode(issued(audience), options={"verify_signature": False}), "sub": other}
+    )
+
+    with pytest.raises(AccessUnavailableError):
+        access.service_token("svc-data", "heartwood-data")
+    provider.exchanged = issued
+    assert access.service_token("svc-data", "heartwood-data") is not None
