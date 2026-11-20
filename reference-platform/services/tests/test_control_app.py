@@ -19,6 +19,7 @@ from fakes import (
     AUDIENCE,
     HUB,
     ISSUER,
+    JOBS,
     OPERATOR,
     SYNTHETIC_PRICES,
     FakeKeycloak,
@@ -168,7 +169,7 @@ class Platform:
                 self.ledger,
                 clock=lambda: _NOW,
                 operators=ServiceTokens(self.reviews.review, AUDIENCE, frozenset({OPERATOR})),
-                contexts=ServiceTokens(self.reviews.review, AUDIENCE, frozenset({_DATA})),
+                contexts=ServiceTokens(self.reviews.review, AUDIENCE, frozenset({_DATA, JOBS})),
             )
         )
 
@@ -715,27 +716,32 @@ def test_an_identifier_that_two_subjects_share_names_neither(tmp_path: Path) -> 
         launches.subject_of(shared)
 
 
-def test_the_data_service_reads_the_launch_context_of_a_members_session(
+def test_the_data_and_job_services_read_the_launch_context_of_a_members_session(
     platform: Platform,
 ) -> None:
     launch = platform.launch(_BOB, "demo")
 
-    def read(subject: str, project: str, token: str) -> Any:  # noqa: ANN401
+    def read(subject: str, project: str, headers: dict[str, str]) -> Any:  # noqa: ANN401
         return platform.client.post(
-            f"/v1/projects/{project}/launch-context",
-            json={"subject": subject},
-            headers={"Authorization": f"Bearer {token}"},
+            f"/v1/projects/{project}/launch-context", json={"subject": subject}, headers=headers
         )
 
-    found = read(_BOB, "demo", "data-token")
-    assert found.status_code == 200
-    # Only the identity of the launch context, without its billing binding.
-    assert found.json() == {"project_context_id": launch["session"]}
-    assert read(_ALICE, "demo", "data-token").status_code == 404
-    assert read(_BOB, "other", "data-token").status_code == 403
+    for token in ("data-token", "jobs-token"):
+        service = {"Authorization": f"Bearer {token}"}
+        found = read(_BOB, "demo", service)
+        assert found.status_code == 200
+        # Only the identity of the launch context, without its billing binding.
+        assert found.json() == {"project_context_id": launch["session"]}
+        assert read(_ALICE, "demo", service).status_code == 404
+        assert read(_BOB, "other", service).status_code == 403
     # The spawner, operators and researchers do not read launch contexts this way.
-    for token in ("hub-token", "operator-token", "unknown"):
-        assert read(_BOB, "demo", token).status_code == 401
+    for headers in (
+        _HUB,
+        {"Authorization": "Bearer operator-token"},
+        {"Authorization": "Bearer unknown"},
+        platform.researcher(_BOB, "demo"),
+    ):
+        assert read(_BOB, "demo", headers).status_code == 401
     # The subject is a valid subject in the body, and the body stays small.
     for body in ({"subject": " padded"}, {"subject": _BOB, "project": "demo"}, {}):
         response = platform.client.post(
