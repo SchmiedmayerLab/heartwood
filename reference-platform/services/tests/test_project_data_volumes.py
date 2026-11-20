@@ -295,3 +295,22 @@ def test_an_invalid_plan_fails_the_launch_with_a_session_error(fixture: Fixture)
     )
     with pytest.raises(SessionError, match="invalid plan"):
         fixture.fill()
+
+
+def test_a_copy_pod_that_stays_after_its_job_fails_the_launch(fixture: Fixture) -> None:
+    name = f"hw-project-data-copy-{'a' * 16}"
+    fixture.kubernetes.objects[f"/api/v1/namespaces/{_NAMESPACE}/pods/{name}-x"] = {
+        "kind": "Pod",
+        "metadata": {"name": f"{name}-x", "namespace": _NAMESPACE, "labels": {"job-name": name}},
+    }
+    ticks = iter(range(0, 10_000, 30))
+    fixture.project_data = ProjectData(
+        Kubernetes(fixture.kubernetes.client()),
+        fixture.settings,
+        fixture.data.client(),
+        sleep=lambda _: None,
+        clock=lambda: float(next(ticks)),
+    )
+    with pytest.raises(SessionError, match="still being removed"):
+        fixture.fill()
+    assert not fixture.kubernetes.kind("Job", _NAMESPACE)
