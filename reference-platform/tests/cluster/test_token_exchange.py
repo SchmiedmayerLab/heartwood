@@ -89,9 +89,9 @@ class Platform:
 
 
 @pytest.fixture(scope="module")
-def platform(cluster: Cluster, staging_image: str) -> Iterator[Platform]:
+def platform(cluster: Cluster, probe_image: str) -> Iterator[Platform]:
     """Launch the first researcher in both projects, as the spawner would."""
-    with probe(cluster, "hw-identity-probe", staging_image) as pod:
+    with probe(cluster, "hw-identity-probe", probe_image) as pod:
         clients = {}
         try:
             for project in ("demo", "other"):

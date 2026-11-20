@@ -117,8 +117,8 @@ class Researcher:
 
 
 @pytest.fixture(scope="module")
-def researcher(cluster: Cluster, staging_image: str) -> Iterator[Researcher]:
-    with probe(cluster, "hw-estimate-probe", staging_image) as pod:
+def researcher(cluster: Cluster, probe_image: str) -> Iterator[Researcher]:
+    with probe(cluster, "hw-estimate-probe", probe_image) as pod:
         found = Researcher(cluster, pod)
         try:
             for project in ("demo", "other"):
