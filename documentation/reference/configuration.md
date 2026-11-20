@@ -351,7 +351,7 @@ private_address = false
 | `max_result_bytes` | Optional result limit from 1024 to 32768 bytes; default 16384 |
 | `call_timeout_seconds` | Optional limit for one request, from 1 to 300 seconds; default 30 |
 | `private_address` | Optional; `true` permits an RFC 1918 or unique local address for this exact origin, such as a cluster service; default `false`. Link-local and metadata addresses stay refused, and HTTPS stays required except on loopback. |
-| `ca_file` | Optional absolute PEM file of certificate authorities, such as a platform CA, that replaces the default certificate bundle for this origin; an `https` origin only; follows the rules for operator files |
+| `ca_file` | Optional absolute PEM file of certificate authorities, such as a platform CA, that replaces the default certificate bundle for this origin; an `https` origin only; follows the [rules for operator files](#identity) |
 | `token_exchange` | Optional table with `scope` and `audience`; the gateway then obtains this service's token by exchange for the signed-in researcher's token; requires `[identity]` |
 
 A destination with a `token_exchange` table takes no entered, stored or operator-supplied token.

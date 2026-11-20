@@ -1310,6 +1310,11 @@ def test_manifest_destination_ca_file_follows_the_operator_file_rules(tmp_path: 
     with pytest.raises(ProjectStateError, match=r"write-protected"):
         load_project_deployment(manifest, project_root=workspace)
     authority.chmod(0o644)
+    certificate = authority.read_bytes()
+    authority.write_text("not a certificate\n", encoding="utf-8")
+    with pytest.raises(ProjectStateError, match=r"HW-DEPLOY-001.*catalog is unusable"):
+        load_project_deployment(manifest, project_root=workspace)
+    authority.write_bytes(certificate)
     inside = tmp_path / "inside" / "research" / "ca.crt"
     manifest, workspace = _destination_manifest(tmp_path / "inside", {"ca_file": str(inside)})
     inside.write_bytes(authority.read_bytes())

@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import re
+import ssl
 import stat
 import tomllib
 from collections.abc import Mapping
@@ -273,6 +274,13 @@ def _read_manifest(
         for destination in mcp_destinations:
             if destination.ca_file is not None:
                 validate_operator_file(destination.ca_file, project)
+                try:
+                    ssl.create_default_context(cafile=str(destination.ca_file))
+                except (OSError, ValueError):
+                    raise DeploymentError(
+                        "deployment-manifest",
+                        f"the certificate authority file of {destination.service_id} is unusable",
+                    ) from None
         if "identity" not in record and any(item.token_exchange for item in mcp_destinations):
             raise DeploymentError(
                 "deployment-manifest", "an MCP destination's token exchange requires [identity]"

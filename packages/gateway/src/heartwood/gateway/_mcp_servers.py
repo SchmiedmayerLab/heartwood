@@ -608,16 +608,20 @@ class McpServerManager:
             parsed.port or (443 if parsed.scheme == "https" else 80),
             private_address=destination.private_address,
         )
+        verify: ssl.SSLContext | None = None
+        if destination.ca_file is not None:
+            try:
+                verify = ssl.create_default_context(cafile=str(destination.ca_file))
+            except (OSError, ValueError):
+                raise McpServerError(
+                    "mcp-unavailable", "the research service's certificate authority is unusable"
+                ) from None
         client = MCPClient(  # type: ignore[no-untyped-call]
             StreamableHttpTransport(
                 server.url,
                 auth=BearerAuth(token) if token else None,
                 max_sse_event_size=destination.max_result_bytes + 16 * 1024,
-                verify=(
-                    None
-                    if destination.ca_file is None
-                    else ssl.create_default_context(cafile=str(destination.ca_file))
-                ),
+                verify=verify,
             ),
             timeout=destination.call_timeout_seconds,
         )
