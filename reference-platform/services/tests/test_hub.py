@@ -12,6 +12,7 @@ import hashlib
 import importlib.util
 import json
 import subprocess
+from pathlib import Path
 from types import ModuleType
 from typing import Any
 
@@ -225,3 +226,87 @@ def test_only_project_server_names_reach_the_control_service() -> None:
     for name in ("x/../../../other/projects/demo", "..", "demo/x", "Demo", "", "demo%2F"):
         assert launch_path(subject, name) is None, name
     assert launch_path("../hub", "demo") is None
+
+
+class _Config:
+    """Attribute sections as the traitlets configuration object offers them."""
+
+    def __init__(self) -> None:
+        self.__dict__["sections"] = {}
+
+    def __getattr__(self, name: str) -> Any:  # noqa: ANN401
+        return self.sections.setdefault(name, _Section())
+
+
+class _Section:
+    pass
+
+
+def test_deleting_a_server_calls_the_control_service_only_for_a_project_name(
+    objects: list[dict[str, Any]], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import asyncio
+    import sys
+    import types
+
+    sent: list[tuple[str, str]] = []
+    deleted: list[str] = []
+
+    class HTTPError(Exception):
+        def __init__(self, status: int, message: str = "") -> None:
+            super().__init__(status, message)
+
+    class Response:
+        code = 204
+        body = b""
+
+    class Client:
+        async def fetch(self, request: Any, raise_error: bool = True) -> Response:  # noqa: ANN401, ARG002
+            sent.append((request.method, request.url))
+            return Response()
+
+    class Request:
+        def __init__(self, url: str, method: str, **_: Any) -> None:  # noqa: ANN401
+            self.url, self.method = url, method
+
+    class KubeSpawner:
+        def __init__(self, user: str, name: str) -> None:
+            self.user = types.SimpleNamespace(name=user)
+            self.name = name
+
+        async def delete_forever(self) -> None:
+            deleted.append(self.name)
+
+    tornado = types.ModuleType("tornado")
+    web = types.ModuleType("tornado.web")
+    web.HTTPError = HTTPError  # type: ignore[attr-defined]
+    httpclient = types.ModuleType("tornado.httpclient")
+    httpclient.AsyncHTTPClient = Client  # type: ignore[attr-defined]
+    httpclient.HTTPRequest = Request  # type: ignore[attr-defined]
+    kubespawner = types.ModuleType("kubespawner")
+    kubespawner.KubeSpawner = KubeSpawner  # type: ignore[attr-defined]
+    for name, module in (
+        ("tornado", tornado),
+        ("tornado.web", web),
+        ("tornado.httpclient", httpclient),
+        ("kubespawner", kubespawner),
+    ):
+        monkeypatch.setitem(sys.modules, name, module)
+    settings = json.loads(_named(objects, "ConfigMap", "heartwood-hub")["data"]["settings.json"])
+    secret, token = tmp_path / "client-secret", tmp_path / "token"
+    secret.write_text("synthetic\n", encoding="utf-8")
+    token.write_text("synthetic-token\n", encoding="utf-8")
+    settings |= {"client_secret_file": str(secret), "token_file": str(token)}
+    config = _Config()
+    _module().configure(config, settings)
+    spawner_class = config.JupyterHub.spawner_class
+    subject = "6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0001"
+
+    for name in ("x/../../../other/projects/demo", "Demo", ""):
+        asyncio.run(spawner_class(subject, name).delete_forever())
+    assert sent == []
+    asyncio.run(spawner_class(subject, "demo").delete_forever())
+    assert sent == [
+        ("DELETE", f"{settings['control_url']}/v1/researchers/{subject}/projects/demo/launch")
+    ]
+    assert deleted == ["x/../../../other/projects/demo", "Demo", "", "demo"]

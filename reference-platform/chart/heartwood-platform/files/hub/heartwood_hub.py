@@ -170,7 +170,8 @@ def configure(c: Any, settings: dict[str, Any]) -> None:  # noqa: ANN401
         if chosen not in (None, project):
             raise web.HTTPError(400, "The server name must be the chosen project.")
         path = launch_path(subject, project)
-        assert path is not None
+        if path is None:
+            raise web.HTTPError(400, "Start a named server for one of your projects.")
         status, launch = await control("PUT", path)
         if status in {403, 404}:
             raise web.HTTPError(403, "You are not a member of this project.")
@@ -187,6 +188,9 @@ def configure(c: Any, settings: dict[str, Any]) -> None:  # noqa: ANN401
         if current["storage"]["storage_class"]:
             spawner.storage_class = current["storage"]["storage_class"]
         spawner.service_account = pod["service_account"]
+        if spawner.pvc_name != pod["pvc_name"]:
+            # A new session of the server needs its own claim.
+            spawner._pvc_exists = False
         spawner.pvc_name = pod["pvc_name"]
         spawner.extra_labels = {**spawner.extra_labels, **pod["labels"]}
         spawner.volumes = pod["volumes"]

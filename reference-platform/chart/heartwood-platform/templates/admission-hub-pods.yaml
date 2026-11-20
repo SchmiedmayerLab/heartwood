@@ -68,7 +68,8 @@ spec:
         && (!('app.kubernetes.io/component' in object.metadata.labels)
         || object.metadata.labels['app.kubernetes.io/component'] == 'singleuser-server'))
       message: a gateway pod carries only the labels of a JupyterHub server and its session labels
-    # Some network plugins read pod annotations, such as additional networks.
+    # Some network plugins read pod annotations, such as additional networks. A mutating
+    # webhook that adds annotations to new pods makes this rule refuse gateway pods.
     - expression: >-
         !variables.pod || !has(object.metadata.annotations)
         || object.metadata.annotations.all(k, k.startsWith('hub.jupyter.org/'))
@@ -139,7 +140,8 @@ spec:
       message: a gateway pod runs as user 10001 without host access, with the default seccomp profile, a read-only root file system and no capabilities
     - expression: >-
         !variables.pod || (has(object.spec.volumes) && object.spec.volumes.all(v,
-        (v.name == 'source' && has(v.secret) && v.secret.secretName == object.spec.serviceAccountName)
+        (v.name == 'source' && has(v.secret) && v.secret.secretName == object.spec.serviceAccountName
+        && !has(v.secret.items))
         || (v.name == 'work' && has(v.emptyDir) && has(v.emptyDir.medium) && v.emptyDir.medium == 'Memory')
         || (v.name == 'tmp' && has(v.emptyDir))
         || (v.name == 'home' && has(v.persistentVolumeClaim) && v.persistentVolumeClaim.claimName == 'hw-home-' + variables.session)
