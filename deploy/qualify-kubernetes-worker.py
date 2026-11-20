@@ -56,6 +56,11 @@ _FIXTURE = "hw-qualification-fixture"
 _PROVIDER = "hw-qualification-provider"
 _CONTROLLER = "hw-qualification-controller"
 _LAUNCHER = "hw-qualification-launcher"
+# The conflict case labels the Sandbox resource whose deletions this webhook admits; the
+# label and port are _DELETE_CONFLICT_LABEL and _DELETE_CONFLICT_PORT of its case file.
+_CONFLICT_WEBHOOK = "hw-qualification-delete-conflict"
+_CONFLICT_LABEL = "qualification.heartwood/delete-conflict"
+_CONFLICT_PORT = 19674
 _PYTHON = "/opt/heartwood/.venv/bin/python"
 _SOURCES = (
     "deploy/qualify-kubernetes-worker.py",
@@ -373,7 +378,11 @@ def _call(cluster: Cluster, method: str, token: str) -> dict[str, Any]:
 
 
 def _provider_certificate(cluster: Cluster, host: str) -> dict[str, str]:
-    """Issue the synthetic model route a certificate from the platform's authority."""
+    """Issue the controller's listeners a certificate from the platform's authority.
+
+    The synthetic model route uses the full host name; the API server calls the admission
+    webhook at the Service's name without the cluster domain.
+    """
     authority = cluster.json("secret", "platform-ca", "--namespace", _PLATFORM)["data"]
     with TemporaryDirectory(prefix="qualification-ca-") as directory:
         work = Path(directory)
@@ -381,7 +390,8 @@ def _provider_certificate(cluster: Cluster, host: str) -> dict[str, str]:
             (work / name).write_bytes(base64.b64decode(authority[name]))
             (work / name).chmod(0o600)
         (work / "extensions").write_text(
-            f"subjectAltName=DNS:{host}\nbasicConstraints=critical,CA:FALSE\n"
+            f"subjectAltName=DNS:{host},DNS:{host.removesuffix('.cluster.local')}\n"
+            "basicConstraints=critical,CA:FALSE\n"
             "keyUsage=critical,digitalSignature\nextendedKeyUsage=serverAuth\n"
             "subjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid\n"
         )
@@ -514,14 +524,62 @@ def _fixture_objects(cluster: Cluster, launched: dict[str, Any], built: dict[str
     sandbox = {
         "namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": namespace}},
     }
+    certificate = _provider_certificate(cluster, host)
     cluster.apply(
         _secret(_FIXTURE, {"token": token}),
-        _secret(_PROVIDER, _provider_certificate(cluster, host)),
+        _secret(_PROVIDER, certificate),
         {
             "apiVersion": "v1",
             "kind": "Service",
             "metadata": {"name": _PROVIDER, "namespace": _SESSIONS},
-            "spec": {"selector": selector, "ports": [{"port": 19671, "targetPort": 19671}]},
+            "spec": {
+                "selector": selector,
+                "ports": [
+                    {"name": "model", "port": 19671, "targetPort": 19671},
+                    {"name": "conflict", "port": _CONFLICT_PORT, "targetPort": _CONFLICT_PORT},
+                ],
+            },
+        },
+        # The conflict case changes the Sandbox resource while the API server admits a
+        # deletion of it, so the deletion meets a conflict on every run. Only a Sandbox
+        # resource of the session that the case labeled reaches the controller, and the
+        # API server admits the deletion when the controller does not answer, so the
+        # case fails on the missing conflict rather than leaving a resource behind. The
+        # kind cluster's API server runs on the controller pod's node, and Calico admits
+        # connections from a pod's own node, so the controller's ingress policy admits it.
+        {
+            "apiVersion": "admissionregistration.k8s.io/v1",
+            "kind": "ValidatingWebhookConfiguration",
+            "metadata": {"name": _CONFLICT_WEBHOOK},
+            "webhooks": [
+                {
+                    "name": "delete-conflict.qualification.heartwood",
+                    "clientConfig": {
+                        "service": {
+                            "namespace": _SESSIONS,
+                            "name": _PROVIDER,
+                            "port": _CONFLICT_PORT,
+                            "path": "/delete",
+                        },
+                        "caBundle": base64.b64encode(certificate["ca.crt"].encode()).decode(),
+                    },
+                    "rules": [
+                        {
+                            "apiGroups": ["agents.x-k8s.io"],
+                            "apiVersions": ["*"],
+                            "resources": ["sandboxes"],
+                            "operations": ["DELETE"],
+                            "scope": "Namespaced",
+                        }
+                    ],
+                    "namespaceSelector": sandbox["namespaceSelector"],
+                    "objectSelector": {"matchLabels": {_CONFLICT_LABEL: "armed"}},
+                    "failurePolicy": "Ignore",
+                    "sideEffects": "NoneOnDryRun",
+                    "admissionReviewVersions": ["v1"],
+                    "timeoutSeconds": 10,
+                }
+            ],
         },
         # The synthetic model route stands where the platform's model service would. The
         # canary port admits every pod of the session namespace, so only the confinement
@@ -664,27 +722,30 @@ def _remove(cluster: Cluster, namespace: str | None) -> bool:
             cluster.kubectl("wait", "--for=delete", "namespace/" + namespace, "--timeout=300s")
             removed = True
     finally:
-        cluster.kubectl(
-            "delete",
-            "--namespace",
-            _SESSIONS,
-            "--ignore-not-found",
-            "--wait=false",
-            f"pod/{_CONTROLLER}",
-            f"pod/{_LAUNCHER}",
-            f"service/{_PROVIDER}",
-            f"networkpolicy/{_PROVIDER}",
-            f"secret/{_PROVIDER}",
-            f"secret/{_FIXTURE}",
-            f"serviceaccount/{_FIXTURE}",
-            "serviceaccount/hub",
-        )
-        cluster.kubectl(
-            "delete",
-            "--ignore-not-found",
-            f"clusterrolebinding/{_FIXTURE}",
-            f"clusterrole/{_FIXTURE}",
-        )
+        try:
+            cluster.kubectl(
+                "delete",
+                "--namespace",
+                _SESSIONS,
+                "--ignore-not-found",
+                "--wait=false",
+                f"pod/{_CONTROLLER}",
+                f"pod/{_LAUNCHER}",
+                f"service/{_PROVIDER}",
+                f"networkpolicy/{_PROVIDER}",
+                f"secret/{_PROVIDER}",
+                f"secret/{_FIXTURE}",
+                f"serviceaccount/{_FIXTURE}",
+                "serviceaccount/hub",
+            )
+        finally:
+            cluster.kubectl(
+                "delete",
+                "--ignore-not-found",
+                f"clusterrolebinding/{_FIXTURE}",
+                f"clusterrole/{_FIXTURE}",
+                f"validatingwebhookconfiguration/{_CONFLICT_WEBHOOK}",
+            )
     return removed
 
 

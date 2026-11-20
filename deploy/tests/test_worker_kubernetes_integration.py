@@ -20,6 +20,8 @@ import ssl
 import threading
 import time
 from collections.abc import Iterator
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from itertools import pairwise
 from pathlib import Path
 from typing import Any, Never
 from uuid import uuid4
@@ -697,68 +699,133 @@ def _policy_probe(
         fixture.outside("delete", "pod", name, "--wait")
 
 
-class _Writers:
-    """Change the Sandbox resource many times a second, as a controller in conflict would."""
+# The harness registers a validating admission webhook for the deletion of a Sandbox
+# resource that carries this label, served by this pod on this port; both values are
+# _CONFLICT_LABEL and _CONFLICT_PORT of deploy/qualify-kubernetes-worker.py.
+_DELETE_CONFLICT_LABEL = "qualification.heartwood/delete-conflict"
+_DELETE_CONFLICT_PORT = 19674
+_CONFLICTS = 3
 
-    def __init__(self, fixture: KubernetesFixture, name: str) -> None:
+
+class _ConflictingWriter:
+    """Change one Sandbox resource while the API server admits each of its first deletions.
+
+    The API server checks the preconditions of a deletion, asks admission, and deletes
+    only if the resource is unchanged since it read it. A change made while admission
+    waits makes the server read the resource again, find the deletion's resourceVersion
+    outdated and answer 409 Conflict, as when another writer lands between the driver's
+    lookup and its delete. Only processes on the node reach the listener, because the
+    controller's ingress policy admits no pod to its port.
+    """
+
+    def __init__(self, fixture: KubernetesFixture, name: str, conflicts: int) -> None:
+        self.name, self.namespace = name, fixture.namespace
         self.path = f"/apis/agents.x-k8s.io/v1beta1/namespaces/{fixture.namespace}/sandboxes/{name}"
         self.token = Path("/qualification/fixture/token").read_text().strip()
         self.context = ssl.create_default_context(
             cafile="/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
         )
-        self.stop = threading.Event()
-        self.patches = 0
-        self.threads = [threading.Thread(target=self._touch, args=(index,)) for index in range(6)]
+        self.remaining = conflicts
+        self.reviews: list[dict[str, Any]] = []
+        self.errors: list[str] = []
+        self.lock = threading.Lock()
+        owner = self
 
-    def _touch(self, index: int) -> None:
-        count = 0
-        while not self.stop.is_set():
-            count += 1
-            body = json.dumps(
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, _format: str, *_args: object) -> None:
+                pass
+
+            def do_POST(self) -> None:
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    request = json.loads(self.rfile.read(length))["request"]
+                    with owner.lock:
+                        owner._review(request)
+                    data = json.dumps(
+                        {
+                            "apiVersion": "admission.k8s.io/v1",
+                            "kind": "AdmissionReview",
+                            "response": {"uid": request["uid"], "allowed": True},
+                        }
+                    ).encode()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(data)))
+                    self.end_headers()
+                    self.wfile.write(data)
+                except Exception as error:
+                    owner.errors.append(f"{type(error).__name__}: {error}")
+                    self.send_error(500)
+
+        tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        tls.load_cert_chain(
+            "/qualification/provider/server/tls.crt", "/qualification/provider/server/tls.key"
+        )
+        self.server = ThreadingHTTPServer(("0.0.0.0", _DELETE_CONFLICT_PORT), Handler)
+        self.server.socket = tls.wrap_socket(self.server.socket, server_side=True)
+        self.thread = threading.Thread(target=self.server.serve_forever)
+
+    def _review(self, request: dict[str, Any]) -> None:
+        metadata = request["oldObject"]["metadata"]
+        record: dict[str, Any] = {
+            "user": request["userInfo"]["username"],
+            "operation": request["operation"],
+            "name": request["name"],
+            "preconditions": (request.get("options") or {}).get("preconditions"),
+            "uid": metadata["uid"],
+            "resource_version": metadata["resourceVersion"],
+        }
+        if (
+            request["operation"] == "DELETE"
+            and request["resource"]["resource"] == "sandboxes"
+            and request["namespace"] == self.namespace
+            and request["name"] == self.name
+            and not request.get("dryRun")
+            and self.remaining > 0
+        ):
+            self.remaining -= 1
+            record["changed_to"] = self._change(len(self.reviews))
+        self.reviews.append(record)
+
+    def _change(self, index: int) -> str:
+        """Patch the resource and return the resourceVersion the change gave it."""
+        connection = http.client.HTTPSConnection(
+            "kubernetes.default.svc", context=self.context, timeout=5
+        )
+        try:
+            connection.request(
+                "PATCH",
+                self.path,
+                json.dumps(
+                    {"metadata": {"annotations": {"qualification.heartwood/change": str(index)}}}
+                ),
                 {
-                    "metadata": {
-                        "annotations": {f"qualification.heartwood/touch-{index}": str(count)}
-                    }
-                }
+                    "Content-Type": "application/merge-patch+json",
+                    "Authorization": "Bearer " + self.token,
+                },
             )
-            try:
-                connection = http.client.HTTPSConnection(
-                    "kubernetes.default.svc", context=self.context, timeout=5
-                )
-                connection.request(
-                    "PATCH",
-                    self.path,
-                    body,
-                    {
-                        "Content-Type": "application/merge-patch+json",
-                        "Authorization": "Bearer " + self.token,
-                    },
-                )
-                response = connection.getresponse()
-                response.read()
-                connection.close()
-            except OSError:
-                continue
-            if response.status == 200:
-                self.patches += 1
-            elif response.status == 404:
-                return
+            response = connection.getresponse()
+            body = response.read()
+        finally:
+            connection.close()
+        if response.status != 200:
+            raise RuntimeError(f"The Sandbox resource change was answered {response.status}")
+        return str(json.loads(body)["metadata"]["resourceVersion"])
 
-    def __enter__(self) -> _Writers:
-        for thread in self.threads:
-            thread.start()
+    def __enter__(self) -> _ConflictingWriter:
+        self.thread.start()
         return self
 
     def __exit__(self, *_: object) -> None:
-        self.stop.set()
-        for thread in self.threads:
-            thread.join(timeout=10)
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=5)
 
 
 def test_kubernetes_conflicting_deletion_is_retried_until_absence(
     infrastructure: KubernetesFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A deletion that collides with another writer fails, and revocation sends it again."""
+    """A deletion that meets a changed Sandbox resource fails, and revocation sends it again."""
     from openshell import SandboxClient
 
     fixture = infrastructure
@@ -766,15 +833,18 @@ def test_kubernetes_conflicting_deletion_is_retried_until_absence(
     application = native._application(fixture)
     service = application._service("composition")
     answers: list[str] = []
+    sent: list[float] = []
     delete = SandboxClient.delete
 
     def recorded(client: SandboxClient, name: str, **options: Any) -> Any:  # noqa: ANN401
+        sent.append(time.monotonic())
         try:
             answer = delete(client, name, **options)
         except grpc.RpcError as error:
             answers.append(f"{error.code().name}: {error.details()}")
             raise
         answers.append(answer.outcome.name)
+        sent.append(time.monotonic())
         return answer
 
     try:
@@ -787,27 +857,57 @@ def test_kubernetes_conflicting_deletion_is_retried_until_absence(
         assert attempt.phase == "active"
         workload = f"{WORKSPACE}--hw-{attempt.intent.attempt_id.hex[:16]}"
         monkeypatch.setattr(SandboxClient, "delete", recorded)
-        started = time.monotonic()
-        with _Writers(fixture, workload) as writers:
-            time.sleep(1)
-            assert writers.patches > 0
-            threading.Timer(4, writers.stop.set).start()
+        with _ConflictingWriter(fixture, workload, _CONFLICTS) as writer:
+            # Only the deletion of a Sandbox resource with the label reaches the writer.
+            fixture.outside(
+                "label",
+                "sandboxes.agents.x-k8s.io",
+                workload,
+                f"{_DELETE_CONFLICT_LABEL}=armed",
+            )
+            started = time.monotonic()
             native._stop(application)
-        seconds = round(time.monotonic() - started, 1)
+            seconds = round(time.monotonic() - started, 1)
         native._assert_revoked(service)
-        conflicts = [answer for answer in answers if "retry deletion" in answer]
-        assert conflicts, answers
+        assert not writer.errors, writer.errors
+        # The driver reports each conflicting delete as an error, revocation sends the
+        # deletion again, and a delete that meets no change completes, all within the
+        # seven requests and 90 seconds of one revocation. A write by a controller between
+        # a lookup and its delete adds a conflict that admission never sees.
         assert answers[-1] == "COMPLETED"
-        # Revocation sends one deletion and repeats it at most six times.
-        assert len(answers) <= 7, answers
+        assert all("retry deletion" in answer for answer in answers[:-1]), answers
+        assert _CONFLICTS < len(answers) <= 7, answers
+        assert sent[-1] - sent[0] < 90
+        deletions = [
+            review
+            for review in writer.reviews
+            if review["operation"] == "DELETE" and review["name"] == workload
+        ]
+        # The writer changed the resource during the first three deletions it admitted,
+        # each of which therefore met a conflict, and left the later ones unchanged.
+        assert all("changed_to" in review for review in deletions[:_CONFLICTS]), deletions
+        assert all("changed_to" not in review for review in deletions[_CONFLICTS:])
+        assert _CONFLICTS < len(deletions) <= len(answers), deletions
+        for review in deletions:
+            # The OpenShell gateway's account sends each delete, with the resource's UID
+            # and resourceVersion as preconditions.
+            assert review["user"] == f"system:serviceaccount:{fixture.namespace}:openshell"
+            assert review["preconditions"] == {
+                "uid": review["uid"],
+                "resourceVersion": review["resource_version"],
+            }
+        # A delete reaches admission only with the current resourceVersion, so each
+        # admitted delete after a change followed a new lookup.
+        versions = [review["resource_version"] for review in deletions]
+        assert all(left != right for left, right in pairwise(versions)), versions
         _evidence(
             fixture,
             {
                 "drill_id": "kubernetes-delete-conflict.v1",
                 "attempt_id": str(attempt.intent.attempt_id),
                 "deletion_answers": answers,
-                "conflicting_answers": len(conflicts),
-                "sandbox_patches": writers.patches,
+                "conflicting_answers": len(answers) - 1,
+                "admission_reviews": deletions,
                 "seconds_until_revoked": seconds,
                 "objects_after_revocation": fixture.objects(),
                 "revoked_before_writer_release": True,
