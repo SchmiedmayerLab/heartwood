@@ -37,7 +37,7 @@ dependencies = [
     "openai==2.53.0",
     "packaging==26.3",
     "pydantic>=2.12",
-    "PyJWT[crypto]==2.15.0",
+    "PyJWT[crypto]==2.15.1",
     "starlette==1.10.0",
     "tomli-w==1.2.0",
     "uv==0.13.7",
