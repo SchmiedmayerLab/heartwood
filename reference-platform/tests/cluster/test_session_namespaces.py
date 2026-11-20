@@ -18,7 +18,7 @@ from collections.abc import Iterator
 from typing import Any
 
 import pytest
-from identity import curl
+from identity import curl, researcher
 from kube import PROBE_CA, Cluster
 
 _SESSIONS = "heartwood-sessions"
@@ -92,7 +92,7 @@ def _call(cluster: Cluster, method: str, subject: str, project: str) -> tuple[in
         "@-",
         "--write-out",
         "\n%{http_code}",
-        f"{_CONTROL}/v1/researchers/{subject}/projects/{project}/launch",
+        f"{_CONTROL}/v1/researchers/{researcher(subject)}/projects/{project}/launch",
         text_input=f"Authorization: Bearer {token.stdout.strip()}",
     )
     body, _, status = output.rpartition("\n")

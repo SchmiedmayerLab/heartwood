@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import re
 import subprocess
 from pathlib import Path
 from types import ModuleType
@@ -18,11 +19,13 @@ from typing import Any
 
 import pytest
 import yaml
+from heartwood_platform.control.researchers import RESEARCHER_ID_PATTERN, researcher_id
 from test_chart import _CHART, _TEMPLATE, _named
 
 # The digest of jupyterhub-4.4.5.tgz in https://hub.jupyter.org/helm-chart/index.yaml.
 _JUPYTERHUB_DIGEST = "27ad182c708244537f425a7ec3354d1a098776e7acd96b7f0d9a4d38f0cda415"
 _SESSION = "0123456789abcdef"
+_RESEARCHER = "r0123456789abcdef0123456789abcdef"
 
 
 def _module() -> ModuleType:
@@ -125,7 +128,7 @@ def test_the_arguments_of_the_hook_match_the_admission_policy(
     hub = _module()
     settings = json.loads(_named(objects, "ConfigMap", "heartwood-hub")["data"]["settings.json"])
     arguments = ["heartwood", "gateway", "serve"]
-    arguments += hub.gateway_arguments(settings, "6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0001", "demo")
+    arguments += hub.gateway_arguments(settings, _RESEARCHER, "demo")
     policy = _named(objects, "ValidatingAdmissionPolicy", "heartwood-hub-pods")
     (expression,) = [
         item["expression"]
@@ -138,7 +141,9 @@ def test_the_arguments_of_the_hook_match_the_admission_policy(
             assert f"args[{index}] == {json.dumps(value)}" in expression or (
                 f"args[{index}] == '{value}'" in expression
             )
-    assert arguments[14] == "/user/6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0001/demo"
+    assert arguments[14] == f"/user/{_RESEARCHER}/demo"
+    # The policy admits a base path of the researcher identifier form alone.
+    assert "'^/user/r[0-9a-f]{32}/" in expression
 
 
 def test_the_hook_mounts_the_secret_only_in_the_init_container(
@@ -204,6 +209,9 @@ def test_the_hub_signs_in_through_keycloak_and_calls_the_control_service_over_tl
     mounts = {mount["name"]: mount["mountPath"] for mount in hub["containers"][0]["volumeMounts"]}
     assert settings["ca_file"].startswith(mounts["platform-ca"])
     assert settings["token_file"].startswith(mounts["control-token"])
+    # The Hub reads the researcher identifier key from the control service's Secret.
+    assert volumes["researcher-ids"]["secret"]["secretName"] == "heartwood-researcher-ids"
+    assert settings["researcher_id_key_file"].startswith(mounts["researcher-ids"])
 
 
 def test_only_the_hub_and_the_proxy_reach_the_gateway_pods(objects: list[dict[str, Any]]) -> None:
@@ -221,11 +229,27 @@ def test_only_the_hub_and_the_proxy_reach_the_gateway_pods(objects: list[dict[st
 
 def test_only_project_server_names_reach_the_control_service() -> None:
     launch_path = _module().launch_path
-    subject = "6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0001"
-    assert launch_path(subject, "demo") == f"/v1/researchers/{subject}/projects/demo/launch"
+    expected = f"/v1/researchers/{_RESEARCHER}/projects/demo/launch"
+    assert launch_path(_RESEARCHER, "demo") == expected
     for name in ("x/../../../other/projects/demo", "..", "demo/x", "Demo", "", "demo%2F"):
-        assert launch_path(subject, name) is None, name
-    assert launch_path("../hub", "demo") is None
+        assert launch_path(_RESEARCHER, name) is None, name
+    # Only user names of the researcher identifier form reach a path, never a subject.
+    for user in ("../hub", "6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0001", _RESEARCHER.upper(), "r"):
+        assert launch_path(user, "demo") is None, user
+
+
+def test_the_hub_derives_the_control_services_researcher_identifier() -> None:
+    hub = _module()
+    issuer = "https://keycloak.example.test/realms/heartwood"
+    key = b"synthetic-researcher-id-key-0123456789"
+
+    for subject in ("6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0001", "auth0|64ab", "a@example.test"):
+        identifier = hub.researcher_id(issuer, subject, key)
+        assert identifier == researcher_id(issuer, subject, key)
+        assert re.fullmatch(RESEARCHER_ID_PATTERN, identifier)
+        assert hub.launch_path(identifier, "demo") is not None
+    assert hub.researcher_id(issuer, "a", key) != hub.researcher_id(f"{issuer}/x", "a", key)
+    assert hub.researcher_id(issuer, "a", key) != hub.researcher_id(issuer, "a", b"k" * 32)
 
 
 class _Config:
@@ -294,19 +318,35 @@ def test_deleting_a_server_calls_the_control_service_only_for_a_project_name(
         monkeypatch.setitem(sys.modules, name, module)
     settings = json.loads(_named(objects, "ConfigMap", "heartwood-hub")["data"]["settings.json"])
     secret, token = tmp_path / "client-secret", tmp_path / "token"
+    key = tmp_path / "researcher-ids"
     secret.write_text("synthetic\n", encoding="utf-8")
     token.write_text("synthetic-token\n", encoding="utf-8")
-    settings |= {"client_secret_file": str(secret), "token_file": str(token)}
+    key.write_text("synthetic-researcher-id-key-0123456789\n", encoding="utf-8")
+    settings |= {
+        "client_secret_file": str(secret),
+        "token_file": str(token),
+        "researcher_id_key_file": str(key),
+    }
     config = _Config()
     _module().configure(config, settings)
     spawner_class = config.JupyterHub.spawner_class
-    subject = "6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0001"
+    username = config.GenericOAuthenticator.username_claim
+    subject = "auth0|64ab12cd34ef56ab78cd90ef"
+    researcher = username({"sub": subject, "email": "synthetic@example.test"})
+    assert researcher == researcher_id(
+        settings["issuer"], subject, b"synthetic-researcher-id-key-0123456789"
+    )
+    for user_info in ({}, {"sub": ""}, {"sub": 7}):
+        with pytest.raises(HTTPError) as refused:
+            username(user_info)
+        assert refused.value.args == (403, "The sign-in names no subject.")
 
     for name in ("x/../../../other/projects/demo", "Demo", ""):
-        asyncio.run(spawner_class(subject, name).delete_forever())
-    assert sent == []
+        asyncio.run(spawner_class(researcher, name).delete_forever())
     asyncio.run(spawner_class(subject, "demo").delete_forever())
+    assert sent == []
+    asyncio.run(spawner_class(researcher, "demo").delete_forever())
     assert sent == [
-        ("DELETE", f"{settings['control_url']}/v1/researchers/{subject}/projects/demo/launch")
+        ("DELETE", f"{settings['control_url']}/v1/researchers/{researcher}/projects/demo/launch")
     ]
-    assert deleted == ["x/../../../other/projects/demo", "Demo", "", "demo"]
+    assert deleted == ["x/../../../other/projects/demo", "Demo", "", "demo", "demo"]

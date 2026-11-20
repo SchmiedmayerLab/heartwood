@@ -288,7 +288,7 @@ Keep a backup of the key with the deployment's other credentials.
 A lost key cannot be recovered: a gateway with a new key records new actors, and nothing links them to the earlier records of the same researcher.
 Replacing the key has the same effect, so a rotation starts a new series of actors for every researcher; keep the old key to compute the earlier actors when a researcher's records must be found.
 Of the gateway's files, only the deployment manifest, which the operator protects, contains the subject.
-A platform that places the subject in the gateway's base path or public origin, as the reference platform does with `/user/<subject>/<project>`, exposes it in URLs, the redirect URI and proxy logs.
+A platform that places the subject in the gateway's base path or public origin exposes it in URLs, the redirect URI and proxy logs; the reference platform names researchers there by a derived identifier.
 
 After a browser sign-in, the session header shows **Signed in as** with the identity token's `name` claim, or else its `preferred_username` claim, as a display value.
 The gateway keeps that value in memory with the sign-in, removes control and format characters other than the zero-width joiners, shortens it to 128 characters, and never writes it to session records, audit records or exports; it identifies nobody and authorizes nothing.

@@ -24,11 +24,16 @@ from typing import Any
 
 import pytest
 from hub import ORIGIN, Browser, gateway_pods, wait_for_gateway
-from identity import FIRST, PLATFORM, SECOND, SESSIONS, probe
+from identity import FIRST, PLATFORM, SECOND, SESSIONS, probe, researcher
 from kube import Cluster
 
 _HUB = f"system:serviceaccount:{PLATFORM}:hub"
-_BASE = f"/user/{FIRST}/demo"
+
+
+def _base() -> str:
+    return f"/user/{researcher(FIRST)}/demo"
+
+
 _PLAN = (
     Path(__file__).resolve().parents[3]
     / "fixtures"
@@ -56,9 +61,9 @@ def _json(cluster: Cluster, *arguments: str) -> Any:  # noqa: ANN401
 
 
 def _start(server: Server) -> None:
-    status, body = server.first.spawn(FIRST, "demo")
+    status, body = server.first.spawn(researcher(FIRST), "demo")
     assert status == 302, body[:300]
-    wait_for_gateway(server.first, _BASE)
+    wait_for_gateway(server.first, _base())
     (pod,) = gateway_pods(server.first.cluster)
     server.session = pod["metadata"]["labels"]["heartwood.platform/session"]
 
@@ -75,21 +80,23 @@ def server(cluster: Cluster, probe_image: str) -> Iterator[Server]:
         try:
             yield state
         finally:
-            state.first.hub_api("DELETE", f"/users/{FIRST}/servers/demo", {"remove": True})
+            state.first.hub_api(
+                "DELETE", f"/users/{researcher(FIRST)}/servers/demo", {"remove": True}
+            )
 
 
 def test_a_researcher_signs_in_to_the_hub_through_keycloak(server: Server) -> None:
     server.first.sign_in_to_hub()
-    status, user = server.first.hub_api("GET", f"/users/{FIRST}")
+    status, user = server.first.hub_api("GET", f"/users/{researcher(FIRST)}")
     assert status == 200, user
-    assert user["name"] == FIRST
+    assert user["name"] == researcher(FIRST)
 
 
 def test_the_hub_offers_only_the_researchers_projects(server: Server) -> None:
-    status, _, page = server.first.get(f"/hub/spawn/{FIRST}/demo")
+    status, _, page = server.first.get(f"/hub/spawn/{researcher(FIRST)}/demo")
     assert status == 200
     assert 'value="demo"' in page
-    status, _, page = server.first.get(f"/hub/spawn/{FIRST}/unknown")
+    status, _, page = server.first.get(f"/hub/spawn/{researcher(FIRST)}/unknown")
     assert 'value="unknown"' not in page
 
 
@@ -115,22 +122,22 @@ def test_a_named_server_starts_the_gateway_in_a_provisioned_session(
 
 
 def test_the_researcher_opens_the_gateway_through_the_hubs_proxy(server: Server) -> None:
-    server.capability = server.first.launch(_BASE)
-    status, _, page = server.first.get(f"{_BASE}/")
+    server.capability = server.first.launch(_base())
+    status, _, page = server.first.get(f"{_base()}/")
     assert status == 200
     assert "<title>" in page
     status, created = server.first.api(
-        _BASE, "POST", "/sessions", server.capability, {"title": "Hub"}
+        _base(), "POST", "/sessions", server.capability, {"title": "Hub"}
     )
     assert status == 201, created
     server.recorded = created
-    status, sessions = server.first.api(_BASE, "GET", "/sessions", server.capability)
+    status, sessions = server.first.api(_base(), "GET", "/sessions", server.capability)
     assert status == 200, sessions
 
 
 def test_the_gateway_plans_with_an_exchanged_token_over_tls(server: Server) -> None:
     status, projection = server.first.api(
-        _BASE, "POST", "/project/planning/refresh", server.capability
+        _base(), "POST", "/project/planning/refresh", server.capability
     )
     assert status == 200, projection
     assert projection["services"]["estimates"] == "available", projection
@@ -139,12 +146,12 @@ def test_the_gateway_plans_with_an_exchanged_token_over_tls(server: Server) -> N
     for evidence in prediction["evidence"]:
         evidence["project_context_id"] = server.session
     status, projection = server.first.api(
-        _BASE, "POST", "/project/planning/predictions", server.capability, prediction
+        _base(), "POST", "/project/planning/predictions", server.capability, prediction
     )
     assert status == 200, projection
     request = {"prediction": prediction["prediction"], "scope": "plan", "element_ids": []}
     status, projection = server.first.api(
-        _BASE, "POST", "/project/planning/estimates", server.capability, request
+        _base(), "POST", "/project/planning/estimates", server.capability, request
     )
     assert status == 200, projection
     (plan,) = projection["plans"]
@@ -160,11 +167,11 @@ def test_a_second_researcher_is_refused(server: Server, cluster: Cluster) -> Non
     second = server.second
     second.sign_in_to_hub()
     # Not a member of project other: the Hub offers it no server and refuses to start one.
-    status, page = second.spawn(SECOND, "other")
+    status, page = second.spawn(researcher(SECOND), "other")
     assert 'value="other"' not in page
     deadline = time.monotonic() + 120
     while time.monotonic() < deadline:
-        status, user = second.hub_api("GET", f"/users/{SECOND}")
+        status, user = second.hub_api("GET", f"/users/{researcher(SECOND)}")
         assert status == 200, user
         started = user["servers"].get("other")
         if started is None or not started["pending"]:
@@ -180,14 +187,14 @@ def test_a_second_researcher_is_refused(server: Server, cluster: Cluster) -> Non
     }
     assert sessions == {server.session}
     # The first researcher's server through the Hub's API.
-    status, _ = second.hub_api("POST", f"/users/{FIRST}/servers/other")
+    status, _ = second.hub_api("POST", f"/users/{researcher(FIRST)}/servers/other")
     # The Hub answers 404 for a user whom the caller may not see.
     assert status in {403, 404}
     # The first researcher's gateway, signed in as the second researcher.
-    status, _, body = second.sign_in_to_gateway(_BASE)
+    status, _, body = second.sign_in_to_gateway(_base())
     assert status == 403
     assert "HW-INGRESS-004" in body
-    status, answer = second.api(_BASE, "GET", "/sessions", None)
+    status, answer = second.api(_base(), "GET", "/sessions", None)
     assert status == 401, answer
 
 
@@ -392,11 +399,13 @@ def test_the_idle_culler_stops_the_server_and_keeps_the_session(
     assert not gateway_pods(cluster, server.session), "the culler did not stop the server"
     # The Hub has finished stopping it, so a new start is not taken for the old server.
     while time.monotonic() < deadline:
-        status, user = server.first.hub_api("GET", f"/users/{FIRST}")
+        status, user = server.first.hub_api("GET", f"/users/{researcher(FIRST)}")
         if status == 200 and "demo" not in user.get("servers", {}):
             break
         time.sleep(5)
-    assert "demo" not in server.first.hub_api("GET", f"/users/{FIRST}")[1].get("servers", {})
+    assert "demo" not in server.first.hub_api("GET", f"/users/{researcher(FIRST)}")[1].get(
+        "servers", {}
+    )
     # The session namespace, its OpenShell gateway and the server's volume stay.
     assert _json(cluster, "namespace", f"hw-s-{server.session}")
     claim = _json(
@@ -410,18 +419,18 @@ def test_a_restart_recovers_the_session(server: Server) -> None:
     _start(server)
     assert server.session == session
     # Tokens live in memory only, so the researcher signs in again after the restart.
-    server.capability = server.first.launch(_BASE)
-    status, sessions = server.first.api(_BASE, "GET", "/sessions", server.capability)
+    server.capability = server.first.launch(_base())
+    status, sessions = server.first.api(_base(), "GET", "/sessions", server.capability)
     assert status == 200, sessions
     listed = json.dumps(sessions)
     assert server.recorded["session_id"] in listed, (server.recorded, sessions)
-    status, _, _ = server.first.get(f"{ORIGIN}{_BASE}/")
+    status, _, _ = server.first.get(f"{ORIGIN}{_base()}/")
     assert status == 200
 
 
 def test_deleting_the_named_server_removes_the_session(server: Server, cluster: Cluster) -> None:
     status, answer = server.first.hub_api(
-        "DELETE", f"/users/{FIRST}/servers/demo", {"remove": True}
+        "DELETE", f"/users/{researcher(FIRST)}/servers/demo", {"remove": True}
     )
     assert status in {202, 204}, answer
     deadline = time.monotonic() + 300

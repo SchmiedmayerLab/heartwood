@@ -29,12 +29,17 @@ from identity import (
     exchange,
     probe,
     request,
+    researcher,
     secret,
     sign_in,
 )
 from kube import Cluster
 
-_BASE = f"/user/{FIRST}/other"
+
+def _base() -> str:
+    return f"/user/{researcher(FIRST)}/other"
+
+
 _OPERATOR = f"system:serviceaccount:{PLATFORM}:heartwood-operator"
 
 
@@ -50,22 +55,22 @@ class Server:
 
 
 def _start(server: Server) -> None:
-    status, body = server.browser.spawn(FIRST, "other")
+    status, body = server.browser.spawn(researcher(FIRST), "other")
     assert status == 302, body[:300]
-    wait_for_gateway(server.browser, _BASE)
+    wait_for_gateway(server.browser, _base())
     (pod,) = gateway_pods(server.browser.cluster, server.session or None)
     server.session = pod["metadata"]["labels"]["heartwood.platform/session"]
 
 
 def _stop(server: Server) -> None:
-    server.browser.hub_api("DELETE", f"/users/{FIRST}/servers/other")
+    server.browser.hub_api("DELETE", f"/users/{researcher(FIRST)}/servers/other")
     deadline = time.monotonic() + 120
     while gateway_pods(server.browser.cluster, server.session) and time.monotonic() < deadline:
         time.sleep(3)
     assert not gateway_pods(server.browser.cluster, server.session)
     # The Hub has finished stopping it, so the next start is not taken for the old server.
     while time.monotonic() < deadline:
-        status, user = server.browser.hub_api("GET", f"/users/{FIRST}")
+        status, user = server.browser.hub_api("GET", f"/users/{researcher(FIRST)}")
         if status == 200 and "other" not in user.get("servers", {}):
             return
         time.sleep(3)
@@ -73,14 +78,14 @@ def _stop(server: Server) -> None:
 
 
 def _sessions(server: Server) -> list[str]:
-    status, sessions = server.browser.api(_BASE, "GET", "/sessions", server.capability)
+    status, sessions = server.browser.api(_base(), "GET", "/sessions", server.capability)
     assert status == 200, sessions
     return [item["session_id"] for item in sessions["sessions"]]
 
 
 def _planning(server: Server) -> str:
     status, projection = server.browser.api(
-        _BASE, "POST", "/project/planning/refresh", server.capability
+        _base(), "POST", "/project/planning/refresh", server.capability
     )
     assert status == 200, projection
     estimates = projection["services"]["estimates"]
@@ -94,16 +99,18 @@ def server(cluster: Cluster, probe_image: str) -> Iterator[Server]:
         state = Server(Browser(cluster, pod, "researcher-one"), pod)
         state.browser.sign_in_to_hub()
         _start(state)
-        state.capability = state.browser.launch(_BASE)
+        state.capability = state.browser.launch(_base())
         status, created = state.browser.api(
-            _BASE, "POST", "/sessions", state.capability, {"title": "Recovery"}
+            _base(), "POST", "/sessions", state.capability, {"title": "Recovery"}
         )
         assert status == 201, created
         state.recorded = created["session_id"]
         try:
             yield state
         finally:
-            state.browser.hub_api("DELETE", f"/users/{FIRST}/servers/other", {"remove": True})
+            state.browser.hub_api(
+                "DELETE", f"/users/{researcher(FIRST)}/servers/other", {"remove": True}
+            )
 
 
 def test_a_failed_gateway_pod_restarts_with_its_retained_state(
@@ -122,12 +129,12 @@ def test_a_failed_gateway_pod_restarts_with_its_retained_state(
     # The Hub notices the stopped server; the researcher starts it again.
     deadline = time.monotonic() + 180
     while time.monotonic() < deadline:
-        status, user = server.browser.hub_api("GET", f"/users/{FIRST}")
+        status, user = server.browser.hub_api("GET", f"/users/{researcher(FIRST)}")
         if status == 200 and "other" not in user.get("servers", {}):
             break
         time.sleep(5)
     _start(server)
-    server.capability = server.browser.launch(_BASE)
+    server.capability = server.browser.launch(_base())
     assert server.recorded in _sessions(server)
 
 
@@ -163,7 +170,7 @@ def test_a_control_service_restart_keeps_the_session(server: Server, cluster: Cl
     _start(server)
     # The registry on the service's volume returns the same session.
     assert server.session == session
-    server.capability = server.browser.launch(_BASE)
+    server.capability = server.browser.launch(_base())
     assert server.recorded in _sessions(server)
     assert _planning(server) == "available"
 
@@ -209,7 +216,7 @@ def test_an_operator_rotates_the_project_client_secret(server: Server, cluster: 
         username="researcher-one",
         client_id="hw-proj-other",
         client_secret=current,
-        redirect_uri=f"{ORIGIN}{_BASE}/oauth_callback",
+        redirect_uri=f"{ORIGIN}{_base()}/oauth_callback",
     )
     for client_secret, expected in ((previous, 401), (current, 200)):
         status, _ = exchange(
@@ -227,7 +234,7 @@ def test_an_operator_rotates_the_project_client_secret(server: Server, cluster: 
 def test_the_next_start_uses_the_rotated_secret(server: Server) -> None:
     _stop(server)
     _start(server)
-    server.capability = server.browser.launch(_BASE)
+    server.capability = server.browser.launch(_base())
     assert _planning(server) == "available"
     assert server.recorded in _sessions(server)
 

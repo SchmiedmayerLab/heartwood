@@ -7,7 +7,8 @@
 """The HTTP interface of the control service.
 
 Every call is authorized here, independently of what Heartwood approved. Platform
-components call with a service account token and pass subject and project as data.
+components call with a service account token and name the researcher by identifier
+and the project in the path.
 A Heartwood gateway calls with a researcher's exchanged token, which names both, and
 reaches the planning tools over MCP with the same token.
 """
@@ -36,15 +37,16 @@ from heartwood_platform.control.launch import (
 from heartwood_platform.control.planning import MCP_PATH, UNAVAILABLE, create_planning_app
 from heartwood_platform.control.prices import PriceSheet
 from heartwood_platform.control.registry import NotAMemberError
+from heartwood_platform.control.researchers import RESEARCHER_ID_PATTERN
 from heartwood_platform.control.sessions import SessionError
 
-# Subjects and projects become part of redirect URIs and object names.
-Subject = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9-]{1,64}$")]
+# Researcher identifiers and projects become part of redirect URIs and object names.
+ResearcherId = Annotated[str, StringConstraints(pattern=RESEARCHER_ID_PATTERN)]
 ProjectId = Annotated[str, StringConstraints(pattern=r"^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$")]
 
 
 _LOGGER = logging.getLogger(__name__)
-_SUBJECT = TypeAdapter(Subject)
+_RESEARCHER = TypeAdapter(ResearcherId)
 _PROJECT_ID = TypeAdapter(ProjectId)
 
 
@@ -53,7 +55,7 @@ class LaunchRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    subject: Subject
+    researcher: ResearcherId
     project: ProjectId
 
 
@@ -108,7 +110,10 @@ def create_app(
 
     def launch_request(request: Request) -> LaunchRequest:
         return LaunchRequest.model_validate(
-            {"subject": request.path_params["subject"], "project": request.path_params["project"]}
+            {
+                "researcher": request.path_params["researcher"],
+                "project": request.path_params["project"],
+            }
         )
 
     def health(_: Request) -> Response:
@@ -116,19 +121,28 @@ def create_app(
 
     def projects(request: Request) -> Response:
         services.verify(_bearer(request))
-        subject = _SUBJECT.validate_python(request.path_params["subject"])
+        researcher = _RESEARCHER.validate_python(request.path_params["researcher"])
+        try:
+            subject = launches.subject_of(researcher)
+        except NotAMemberError:
+            return JSONResponse({"projects": []})
         return JSONResponse({"projects": launches.projects(subject)})
 
     def prepare(request: Request) -> Response:
         services.verify(_bearer(request))
         launch = launch_request(request)
-        prepared = launches.prepare(launch.subject, launch.project)
+        prepared = launches.prepare(launches.subject_of(launch.researcher), launch.project)
         return JSONResponse(prepared.model_dump(mode="json"))
 
     def delete(request: Request) -> Response:
         services.verify(_bearer(request))
         launch = launch_request(request)
-        launches.delete(launch.subject, launch.project)
+        try:
+            subject = launches.subject_of(launch.researcher)
+        except NotAMemberError:
+            # An identifier that names nobody has no session, so there is nothing to remove.
+            return Response(status_code=204)
+        launches.delete(subject, launch.project)
         return Response(status_code=204)
 
     def rotate(request: Request) -> Response:
@@ -152,11 +166,11 @@ def create_app(
         return JSONResponse(context.model_dump(mode="json"))
 
     planning = create_planning_app(launches, researchers, prices, clock)
-    launch_path = "/v1/researchers/{subject}/projects/{project}/launch"
+    launch_path = "/v1/researchers/{researcher}/projects/{project}/launch"
     return Starlette(
         routes=[
             Route("/healthz", health),
-            Route("/v1/researchers/{subject}/projects", handled(projects)),
+            Route("/v1/researchers/{researcher}/projects", handled(projects)),
             Route(launch_path, handled(prepare), methods=["PUT"]),
             Route(launch_path, handled(delete), methods=["DELETE"]),
             Route("/v1/projects/{project}/client-secret", handled(rotate), methods=["POST"]),

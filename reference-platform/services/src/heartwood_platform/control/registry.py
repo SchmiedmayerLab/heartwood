@@ -103,6 +103,16 @@ class Registry:
                     [(project.id, subject) for subject in sorted(project.members)],
                 )
 
+    def subjects(self) -> list[str]:
+        """Return every subject that is a member of a project or holds a session."""
+        with self._transaction() as connection:
+            return [
+                row[0]
+                for row in connection.execute(
+                    "SELECT subject FROM member UNION SELECT subject FROM session ORDER BY 1"
+                )
+            ]
+
     def has_project(self, project: str) -> bool:
         """Return whether the registry holds a project."""
         with self._transaction() as connection:

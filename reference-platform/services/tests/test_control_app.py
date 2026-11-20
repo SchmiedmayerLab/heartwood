@@ -11,6 +11,7 @@ import json
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 from fakes import (
@@ -26,12 +27,13 @@ from fakes import (
 )
 from heartwood_platform.common.kubernetes import Kubernetes
 from heartwood_platform.common.tokens import ResearcherTokens, ServiceTokens
-from heartwood_platform.control.__main__ import Settings, _actor_key
+from heartwood_platform.control.__main__ import Settings
 from heartwood_platform.control.app import create_app
 from heartwood_platform.control.keycloak import Keycloak
 from heartwood_platform.control.launch import LaunchService
 from heartwood_platform.control.prices import PriceSheet
-from heartwood_platform.control.registry import Project, Registry, Session
+from heartwood_platform.control.registry import NotAMemberError, Project, Registry, Session
+from heartwood_platform.control.researchers import read_key, researcher_id
 from heartwood_platform.control.sessions import ProvisionedSession, Sessions, SessionSettings
 from starlette.testclient import TestClient
 from test_hosted import HOSTED
@@ -50,7 +52,13 @@ _OBJECTS = (
     / "files"
     / "openshell-session.json"
 )
-_TEMPLATE = "https://hub.example.test/user/{subject}/{project}/oauth_callback"
+_TEMPLATE = "https://hub.example.test/user/{researcher}/{project}/oauth_callback"
+_RESEARCHER_KEY = b"synthetic-researcher-id-key-0123456789"
+
+
+def _id(subject: str) -> str:
+    """Return the researcher identifier that names a subject in paths and URLs."""
+    return researcher_id(ISSUER, subject, _RESEARCHER_KEY)
 
 
 class Platform:
@@ -87,7 +95,13 @@ class Platform:
             self.registry.session_ids,
         )
         launches = LaunchService(
-            self.registry, keycloak, sessions, "reference-platform", _TEMPLATE, clock=lambda: _NOW
+            self.registry,
+            keycloak,
+            sessions,
+            "reference-platform",
+            _TEMPLATE,
+            _id,
+            clock=lambda: _NOW,
         )
         self.client = TestClient(
             create_app(
@@ -102,7 +116,7 @@ class Platform:
 
     def launch(self, subject: str, project: str) -> dict[str, object]:
         response = self.client.put(
-            f"/v1/researchers/{subject}/projects/{project}/launch", headers=_HUB
+            f"/v1/researchers/{_id(subject)}/projects/{project}/launch", headers=_HUB
         )
         assert response.status_code == 200, response.text
         body = response.json()
@@ -124,7 +138,7 @@ def test_health_needs_no_token(platform: Platform) -> None:
 
 def test_spawner_lists_the_projects_of_a_researcher(platform: Platform) -> None:
     def projects(subject: str) -> object:
-        return platform.client.get(f"/v1/researchers/{subject}/projects", headers=_HUB).json()
+        return platform.client.get(f"/v1/researchers/{_id(subject)}/projects", headers=_HUB).json()
 
     assert projects(_ALICE) == {"projects": ["demo", "other"]}
     assert projects(_BOB) == {"projects": ["demo"]}
@@ -136,13 +150,13 @@ def test_launch_returns_the_registry_binding_and_prepares_the_project_client(
 ) -> None:
     launch = platform.launch(_BOB, "demo")
 
-    redirect_uri = f"https://hub.example.test/user/{_BOB}/demo/oauth_callback"
+    redirect_uri = f"https://hub.example.test/user/{_id(_BOB)}/demo/oauth_callback"
     context = PlatformLaunchContext.model_validate_json(
         platform.client.get("/v1/launch-context", headers=platform.researcher(_BOB, "demo")).content
     )
     assert launch == {
         "session": launch["session"],
-        "subject": _BOB,
+        "researcher": _id(_BOB),
         "project": "demo",
         "client_id": "hw-proj-demo",
         "redirect_uri": redirect_uri,
@@ -198,26 +212,31 @@ def test_relaunch_reuses_the_session_and_researchers_share_the_project_client(
 
 
 @pytest.mark.parametrize(
-    ("subject", "project", "status"),
+    ("researcher", "project", "status"),
     [
-        (_BOB, "other", 403),
-        (_BOB, "missing", 403),
-        ("unknown", "demo", 403),
-        (_BOB, "Demo", 422),
+        (_id(_BOB), "other", 403),
+        (_id(_BOB), "missing", 403),
+        (_id("unknown"), "demo", 403),
+        # An identifier under another key names nobody.
+        (researcher_id(ISSUER, _BOB, b"another-synthetic-key-0123456789ab"), "demo", 403),
+        (_id(_BOB), "Demo", 422),
+        # Paths name researchers by identifier, never by subject.
+        (_BOB, "demo", 422),
         ("bob@example.test", "demo", 422),
-        ("x" * 65, "demo", 422),
+        (_id(_BOB).upper(), "demo", 422),
+        (_id(_BOB)[:-1], "demo", 422),
     ],
 )
 def test_launch_outside_the_registry_is_refused_and_changes_nothing(
-    platform: Platform, subject: str, project: str, status: int
+    platform: Platform, researcher: str, project: str, status: int
 ) -> None:
     response = platform.client.put(
-        f"/v1/researchers/{subject}/projects/{project}/launch", headers=_HUB
+        f"/v1/researchers/{researcher}/projects/{project}/launch", headers=_HUB
     )
 
     assert response.status_code == status
     assert platform.keycloak.clients == {}
-    assert platform.registry.session(subject, project) is None
+    assert platform.registry.session_ids() == []
     assert platform.kubernetes.calls == []
 
 
@@ -233,10 +252,11 @@ def test_launch_outside_the_registry_is_refused_and_changes_nothing(
 def test_service_calls_need_an_accepted_service_account_token(
     platform: Platform, headers: dict[str, str]
 ) -> None:
-    launch = f"/v1/researchers/{_BOB}/projects/demo/launch"
+    launch = f"/v1/researchers/{_id(_BOB)}/projects/demo/launch"
 
     assert (
-        platform.client.get(f"/v1/researchers/{_BOB}/projects", headers=headers).status_code == 401
+        platform.client.get(f"/v1/researchers/{_id(_BOB)}/projects", headers=headers).status_code
+        == 401
     )
     assert platform.client.put(launch, headers=headers).status_code == 401
     assert platform.client.delete(launch, headers=headers).status_code == 401
@@ -248,10 +268,11 @@ def test_researcher_token_does_not_open_the_service_interface(platform: Platform
     platform.launch(_BOB, "demo")
     headers = platform.researcher(_BOB, "demo")
 
-    launch = f"/v1/researchers/{_ALICE}/projects/demo/launch"
+    launch = f"/v1/researchers/{_id(_ALICE)}/projects/demo/launch"
     assert platform.client.put(launch, headers=headers).status_code == 401
     assert (
-        platform.client.get(f"/v1/researchers/{_BOB}/projects", headers=headers).status_code == 401
+        platform.client.get(f"/v1/researchers/{_id(_BOB)}/projects", headers=headers).status_code
+        == 401
     )
     assert platform.client.get("/v1/launch-context", headers=_HUB).status_code == 401
 
@@ -280,7 +301,7 @@ def test_launch_context_follows_the_token_and_the_registry(platform: Platform) -
 def test_deletion_removes_the_session_and_its_redirect_uri(platform: Platform) -> None:
     first = platform.launch(_BOB, "demo")
     kept = platform.launch(_ALICE, "demo")
-    launch = f"/v1/researchers/{_BOB}/projects/demo/launch"
+    launch = f"/v1/researchers/{_id(_BOB)}/projects/demo/launch"
 
     assert platform.client.delete(launch, headers=_HUB).status_code == 204
     assert platform.client.delete(launch, headers=_HUB).status_code == 204
@@ -296,7 +317,9 @@ def test_deletion_removes_the_session_and_its_redirect_uri(platform: Platform) -
 def test_keycloak_failure_is_reported_as_an_unavailable_component(platform: Platform) -> None:
     platform.keycloak.secret = "rotated"
 
-    response = platform.client.put(f"/v1/researchers/{_BOB}/projects/demo/launch", headers=_HUB)
+    response = platform.client.put(
+        f"/v1/researchers/{_id(_BOB)}/projects/demo/launch", headers=_HUB
+    )
 
     assert response.status_code == 502
     assert response.json() == {"error": "a platform component is unavailable"}
@@ -318,6 +341,7 @@ def test_settings_refuse_duplicate_projects_and_other_template_fields(tmp_path: 
         "audience": AUDIENCE,
         "service_callers": [HUB],
         "redirect_uri_template": _TEMPLATE,
+        "researcher_id_key_file": "/etc/heartwood-control/researcher-ids/key",
         "keycloak": keycloak,
         "tls": {
             "certificate_file": "/etc/heartwood-control/tls/tls.crt",
@@ -341,10 +365,17 @@ def test_settings_refuse_duplicate_projects_and_other_template_fields(tmp_path: 
         "synthetic_prices": SYNTHETIC_PRICES,
     }
     assert Settings.model_validate_json(json.dumps(settings)).projects[0].id == "demo"
+    members = {**project, "members": ["auth0|64ab", "synthetic@example.test", _BOB]}
+    loaded = Settings.model_validate_json(json.dumps({**settings, "projects": [members]}))
+    assert loaded.projects[0].members == frozenset(members["members"])
 
     for change in (
         {"projects": [project, project]},
-        {"redirect_uri_template": "https://hub.example.test/{0}/{subject}/{project}"},
+        {"projects": [{**project, "members": [" padded"]}]},
+        {"projects": [{**project, "members": ["zero\u200bwidth"]}]},
+        {"projects": [{**project, "members": [""]}]},
+        {"redirect_uri_template": "https://hub.example.test/user/{subject}/{project}"},
+        {"redirect_uri_template": "https://hub.example.test/{0}/{researcher}/{project}"},
         {"platform_id": "two words"},
         # Keycloak is reached only over HTTPS.
         {"keycloak": {**keycloak, "url": "http://keycloak:8080"}},
@@ -389,7 +420,7 @@ def test_deletion_during_a_launch_waits_and_then_removes_everything(tmp_path: Pa
     sessions = SlowSessions()
     keycloak = FakeKeycloak()
     clients = Keycloak(keycloak.client(), "heartwood", "heartwood-control", lambda: keycloak.secret)
-    launches = LaunchService(registry, clients, sessions, "reference-platform", _TEMPLATE)
+    launches = LaunchService(registry, clients, sessions, "reference-platform", _TEMPLATE, _id)
 
     launches.prepare(_BOB, "demo")
     sessions.deletion.join()
@@ -468,7 +499,7 @@ def test_a_session_deleted_during_a_rotation_is_not_created_again(platform: Plat
 
     def deleted_after_listing(project: str) -> list[Session]:
         listed = original(project)
-        platform.client.delete(f"/v1/researchers/{_ALICE}/projects/demo/launch", headers=_HUB)
+        platform.client.delete(f"/v1/researchers/{_id(_ALICE)}/projects/demo/launch", headers=_HUB)
         return listed
 
     platform.registry.sessions_of = deleted_after_listing  # type: ignore[method-assign]
@@ -497,18 +528,86 @@ def test_a_session_that_cannot_be_prepared_is_reported_and_the_others_are_rewrit
 def test_the_actor_key_must_be_present_and_long_enough(tmp_path: Path) -> None:
     key = tmp_path / "actor-key"
     key.write_text("synthetic-actor-key-0123456789abcdef\n", encoding="utf-8")
-    assert _actor_key(key) == "synthetic-actor-key-0123456789abcdef"
+    assert read_key(key) == "synthetic-actor-key-0123456789abcdef"
 
     key.write_bytes(b"synthetic-actor-key-0123456789ab\xff")
     with pytest.raises(ValueError, match="not UTF-8") as error:
-        _actor_key(key)
+        read_key(key)
     assert error.value.__cause__ is None
     key.write_text("k" * 4097, encoding="utf-8")
     with pytest.raises(ValueError, match="exceeds 4096 bytes"):
-        _actor_key(key)
+        read_key(key)
     key.write_text("short\n", encoding="utf-8")
     with pytest.raises(ValueError, match="at least 32 bytes"):
-        _actor_key(key)
+        read_key(key)
     key.unlink()
     with pytest.raises(FileNotFoundError):
-        _actor_key(key)
+        read_key(key)
+
+
+@pytest.mark.parametrize(
+    "subject",
+    ["auth0|64ab12cd34ef56ab78cd90ef", "109876543210987654321", "synthetic@example.test"],
+)
+def test_any_subject_launches_by_its_identifier_and_no_url_names_it(
+    platform: Platform, subject: str
+) -> None:
+    platform.registry.synchronize(
+        [Project("demo", "grant-demo", "policy-1", frozenset({_ALICE, _BOB, subject}))]
+    )
+
+    projects = platform.client.get(f"/v1/researchers/{_id(subject)}/projects", headers=_HUB)
+    launch = platform.launch(subject, "demo")
+
+    assert projects.json() == {"projects": ["demo"]}
+    assert launch["researcher"] == _id(subject)
+    assert (
+        launch["redirect_uri"]
+        == f"https://hub.example.test/user/{_id(subject)}/demo/oauth_callback"
+    )
+    assert platform.keycloak.by_client_id("hw-proj-demo")["redirectUris"] == [
+        launch["redirect_uri"]
+    ]
+    assert subject not in json.dumps(launch)
+    secret = platform.kubernetes.kind("Secret", "heartwood-sessions")[f"hw-gw-{launch['session']}"]
+    assert subject not in base64.b64decode(secret["data"]["launch.json"]).decode()
+
+
+def test_a_removed_member_removes_its_session_by_its_identifier(platform: Platform) -> None:
+    launch = platform.launch(_BOB, "demo")
+    platform.registry.synchronize([Project("demo", "grant-demo", "policy-1", frozenset({_ALICE}))])
+
+    assert platform.registry.subjects() == sorted({_ALICE, _BOB})
+    response = platform.client.delete(
+        f"/v1/researchers/{_id(_BOB)}/projects/demo/launch", headers=_HUB
+    )
+
+    assert response.status_code == 204
+    assert launch["session"] not in platform.registry.session_ids()
+    assert platform.registry.subjects() == [_ALICE]
+
+
+def test_removing_the_launch_of_an_identifier_that_names_nobody_succeeds(
+    platform: Platform,
+) -> None:
+    response = platform.client.delete(
+        f"/v1/researchers/{_id('unknown')}/projects/demo/launch", headers=_HUB
+    )
+
+    assert response.status_code == 204
+    assert platform.kubernetes.calls == []
+    assert platform.keycloak.clients == {}
+
+
+def test_an_identifier_that_two_subjects_share_names_neither(tmp_path: Path) -> None:
+    registry = Registry(tmp_path / "control.sqlite3")
+    registry.synchronize([Project("demo", "grant-demo", "policy-1", frozenset({_ALICE, _BOB}))])
+    keycloak = FakeKeycloak()
+    clients = Keycloak(keycloak.client(), "heartwood", "heartwood-control", lambda: keycloak.secret)
+    shared = "r" + "0" * 32
+    launches = LaunchService(
+        registry, clients, cast(Any, None), "reference-platform", _TEMPLATE, lambda _: shared
+    )
+
+    with pytest.raises(NotAMemberError):
+        launches.subject_of(shared)

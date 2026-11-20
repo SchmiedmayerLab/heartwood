@@ -20,7 +20,7 @@ from typing import Any
 from urllib.parse import quote, urlencode
 
 import pytest
-from identity import curl
+from identity import curl, researcher
 from kube import PROBE_CA, Cluster
 
 _SESSIONS = "heartwood-sessions"
@@ -109,7 +109,7 @@ def _call(cluster: Cluster, method: str, url: str, token: str | None = None) -> 
 
 
 def _launch(subject: str, project: str) -> str:
-    return f"{_CONTROL}/v1/researchers/{subject}/projects/{project}/launch"
+    return f"{_CONTROL}/v1/researchers/{researcher(subject)}/projects/{project}/launch"
 
 
 def _redirect_uri_is_registered(cluster: Cluster, project: str, uri: str) -> bool:
@@ -205,7 +205,9 @@ def test_spawner_lists_the_projects_of_a_researcher(cluster: Cluster) -> None:
     token = _token(cluster)
 
     def projects(subject: str) -> Any:  # noqa: ANN401
-        return _call(cluster, "GET", f"{_CONTROL}/v1/researchers/{subject}/projects", token)
+        return _call(
+            cluster, "GET", f"{_CONTROL}/v1/researchers/{researcher(subject)}/projects", token
+        )
 
     assert projects(_FIRST) == (200, {"projects": ["demo", "other"]})
     assert projects(_SECOND) == (200, {"projects": ["demo"]})
@@ -219,7 +221,7 @@ def test_launch_outside_the_registry_is_refused(cluster: Cluster) -> None:
     assert not _redirect_uri_is_registered(
         cluster,
         "other",
-        f"http://proxy-public.{_SESSIONS}.svc.cluster.local/user/{_SECOND}/other/oauth_callback",
+        f"http://proxy-public.{_SESSIONS}.svc.cluster.local/user/{researcher(_SECOND)}/other/oauth_callback",
     )
 
 

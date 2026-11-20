@@ -15,9 +15,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import pytest
 from heartwood_platform.control.hosted import (
     HostedGateway,
     HostedGatewaySettings,
+    _table,
     sandbox_digests,
 )
 
@@ -58,7 +60,9 @@ _LAUNCH = PlatformLaunchContext(
 )
 
 
-def _files(session: str = "abc123") -> dict[str, str]:
+def _files(
+    session: str = "abc123", subject: str = "6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0001"
+) -> dict[str, str]:
     supervisor, sandbox = sandbox_digests(_OBJECTS.read_text(encoding="utf-8"))
     gateway = HostedGateway(
         HostedGatewaySettings.model_validate(HOSTED),
@@ -68,7 +72,7 @@ def _files(session: str = "abc123") -> dict[str, str]:
     )
     return gateway.files(
         session=session,
-        subject="6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0001",
+        subject=subject,
         client_id="hw-proj-demo",
         namespace=f"hw-s-{session}",
         launch_context=_LAUNCH,
@@ -149,3 +153,26 @@ def test_a_worker_image_without_a_registry_path_keeps_its_name() -> None:
         launch_context=_LAUNCH,
     )
     assert tomllib.loads(files["deployment.toml"])["worker"]["image_repository"] == "worker"
+
+
+@pytest.mark.parametrize(
+    "subject",
+    [
+        "auth0|64ab12cd34ef56ab78cd90ef",
+        "synthetic@example.test",
+        "r\u00e9searcher \U0001f600 \U00020000",
+        'quote " and backslash \\',
+    ],
+)
+def test_the_manifest_binds_a_subject_in_any_form_exactly(subject: str) -> None:
+    manifest = tomllib.loads(_files(subject=subject)["deployment.toml"])
+
+    assert manifest["identity"]["subject"] == subject
+
+
+def test_the_manifest_writer_escapes_what_toml_requires() -> None:
+    value = "".join(chr(code) for code in (*range(0x20), 0x7F, 0x85)) + "\U0001f600"
+
+    parsed = tomllib.loads(_table("", {"text": value, "list": [value, "plain"]}))
+
+    assert parsed == {"text": value, "list": [value, "plain"]}

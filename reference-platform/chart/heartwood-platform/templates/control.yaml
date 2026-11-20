@@ -11,7 +11,7 @@ SPDX-License-Identifier: MIT
 {{- range .Values.projects -}}
 {{- $projects = append $projects (dict "id" .id "billing_attribution_ref" .billingAttributionRef "policy_ref" .policyRef "members" (.members | default list)) -}}
 {{- end -}}
-{{- $keycloak := dict "url" "https://keycloak:8443" "ca_file" "/etc/heartwood-control/platform-ca/ca.crt" "issuer" (printf "%s/realms/heartwood" (include "heartwood.keycloakUrl" .)) "realm" "heartwood" "client_id" "heartwood-control" "client_secret_file" "/etc/heartwood-control/keycloak/client-secret" -}}
+{{- $keycloak := dict "url" "https://keycloak:8443" "ca_file" "/etc/heartwood-control/platform-ca/ca.crt" "issuer" (include "heartwood.issuer" .) "realm" "heartwood" "client_id" "heartwood-control" "client_secret_file" "/etc/heartwood-control/keycloak/client-secret" -}}
 {{- /* Without configured addresses, the Service address and the endpoints of the API server are read from the cluster. */ -}}
 {{- $apiServer := .Values.sessions.apiServer -}}
 {{- if not $apiServer -}}
@@ -49,8 +49,8 @@ SPDX-License-Identifier: MIT
 {{- $hostedWorker := dict "image" (required "hub.worker.image must name the worker image by digest" $worker.image) "sandbox_policy_sha256" $worker.sandboxPolicySha256 "policy" $worker.policy "cpu" $worker.cpu "memory" $worker.memory -}}
 {{- $modelRoute := dict "profile_id" $route.profileId "model" $route.model "endpoint" $route.endpoint "provider" $route.provider "placeholder_env" $route.placeholderEnv -}}
 {{- $hosted := dict "control_url" (printf "https://heartwood-control.%s.svc.cluster.local:8443" .Release.Namespace) "worker" $hostedWorker "model_route" $modelRoute -}}
-{{- $redirect := printf "%s/user/{subject}/{project}/oauth_callback" .Values.hub.publicOrigin -}}
-{{- dict "tls" $tls "hosted" $hosted "synthetic_prices" $syntheticPrices "sessions" $sessions "platform_id" .Values.control.platformId "database" "/var/lib/heartwood-control/control.sqlite3" "audience" "heartwood-control" "service_callers" .Values.control.serviceCallers "operator_callers" .Values.control.operatorCallers "redirect_uri_template" $redirect "keycloak" $keycloak "projects" $projects | toPrettyJson -}}
+{{- $redirect := printf "%s/user/{researcher}/{project}/oauth_callback" .Values.hub.publicOrigin -}}
+{{- dict "tls" $tls "hosted" $hosted "synthetic_prices" $syntheticPrices "sessions" $sessions "platform_id" .Values.control.platformId "database" "/var/lib/heartwood-control/control.sqlite3" "audience" "heartwood-control" "service_callers" .Values.control.serviceCallers "operator_callers" .Values.control.operatorCallers "redirect_uri_template" $redirect "researcher_id_key_file" "/etc/heartwood-control/researcher-ids/key" "keycloak" $keycloak "projects" $projects | toPrettyJson -}}
 {{- end }}
 # The key under which hosted gateways derive the actor that records name for a
 # researcher. Losing it breaks the link between earlier and later records of the same
@@ -69,6 +69,24 @@ metadata:
 type: Opaque
 data:
   actor-key: {{ include "heartwood.credential" (dict "context" . "name" "heartwood-actor-key" "key" "actor-key") }}
+---
+# The key of the researcher identifiers, which name researchers in the control
+# service's paths, the Hub's user names, the gateways' base paths and the redirect URIs
+# instead of their subjects. Replacing it renames every researcher, so their existing
+# servers and sessions are no longer reached under the new names. An existing Secret
+# keeps its value on upgrade, and uninstalling the chart leaves it in place.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: heartwood-researcher-ids
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/resource-policy: keep
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+type: Opaque
+data:
+  key: {{ include "heartwood.credential" (dict "context" . "name" "heartwood-researcher-ids" "key" "key") }}
 ---
 # The registry and the settings of the control service. It holds no credential.
 apiVersion: v1
@@ -181,6 +199,9 @@ spec:
             - name: actor-key
               mountPath: /etc/heartwood-control/actor-key
               readOnly: true
+            - name: researcher-ids
+              mountPath: /etc/heartwood-control/researcher-ids
+              readOnly: true
             - name: data
               mountPath: /var/lib/heartwood-control
             - name: tmp
@@ -211,6 +232,10 @@ spec:
         - name: actor-key
           secret:
             secretName: heartwood-actor-key
+        # The key under which the service matches researcher identifiers to subjects.
+        - name: researcher-ids
+          secret:
+            secretName: heartwood-researcher-ids
         # In memory, because the service copies its serving key here when it reloads it.
         - name: tmp
           emptyDir:

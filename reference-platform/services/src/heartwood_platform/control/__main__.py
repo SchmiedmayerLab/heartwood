@@ -21,18 +21,14 @@ from starlette.applications import Starlette
 from heartwood_platform.common.kubernetes import Kubernetes, in_cluster_client
 from heartwood_platform.common.serving import TlsSettings, serve
 from heartwood_platform.common.tokens import ResearcherTokens, ServiceTokens
-from heartwood_platform.control.app import ProjectId, Subject, create_app
+from heartwood_platform.control.app import ProjectId, create_app
 from heartwood_platform.control.hosted import HostedGateway, HostedGatewaySettings, sandbox_digests
 from heartwood_platform.control.keycloak import Keycloak
 from heartwood_platform.control.launch import LaunchService
 from heartwood_platform.control.prices import PriceSheet
 from heartwood_platform.control.registry import Project, Registry
+from heartwood_platform.control.researchers import Subject, read_key, researcher_id
 from heartwood_platform.control.sessions import ApiServerAddress, Sessions, SessionSettings
-
-# The gateways require at least this much key material for the researcher actor
-# (MINIMUM_ACTOR_KEY_BYTES in heartwood.gateway._identity).
-_MINIMUM_ACTOR_KEY_BYTES = 32
-_MAXIMUM_ACTOR_KEY_FILE_BYTES = 4096
 
 # The form of the references in a launch context.
 Reference = Annotated[str, StringConstraints(pattern=r"^\S{1,512}$")]
@@ -96,7 +92,10 @@ class Settings(_Settings):
     service_callers: frozenset[str]
     # Service accounts of platform operators, which may rotate project client secrets.
     operator_callers: frozenset[str] = frozenset()
+    # Contains ``{researcher}`` and ``{project}``; the researcher is a researcher identifier.
     redirect_uri_template: str
+    # The key of the researcher identifiers in paths, Hub user names and redirect URIs.
+    researcher_id_key_file: Path
     keycloak: KeycloakSettings
     # The serving certificate from the platform CA; the service serves only HTTPS.
     tls: TlsSettings
@@ -112,25 +111,10 @@ class Settings(_Settings):
         if len(set(identifiers)) != len(identifiers):
             raise ValueError("project identifiers must be unique")
         try:
-            self.redirect_uri_template.format(subject="subject", project="project")
+            self.redirect_uri_template.format(researcher="researcher", project="project")
         except (IndexError, KeyError) as error:
             raise ValueError("redirect_uri_template has an unknown field") from error
         return self
-
-
-def _actor_key(path: Path) -> str:
-    """Read the deployment's actor key; a missing or short key stops the service."""
-    content = path.read_bytes()
-    # The gateways read at most this many bytes, trailing newline included.
-    if len(content) > _MAXIMUM_ACTOR_KEY_FILE_BYTES:
-        raise ValueError(f"the actor key file exceeds {_MAXIMUM_ACTOR_KEY_FILE_BYTES} bytes")
-    try:
-        key = content.decode("utf-8").removesuffix("\n")
-    except UnicodeDecodeError:
-        raise ValueError("the actor key file is not UTF-8") from None
-    if len(key.encode()) < _MINIMUM_ACTOR_KEY_BYTES:
-        raise ValueError(f"the actor key needs at least {_MINIMUM_ACTOR_KEY_BYTES} bytes")
-    return key
 
 
 def build(settings: Settings, kubernetes: Kubernetes) -> Starlette:
@@ -178,7 +162,7 @@ def build(settings: Settings, kubernetes: Kubernetes) -> Starlette:
             container_defaults=namespaces.container_defaults,
             container_default_requests=namespaces.container_default_requests,
             platform_ca=namespaces.platform_ca_file.read_text(encoding="utf-8"),
-            actor_key=_actor_key(namespaces.actor_key_file),
+            actor_key=read_key(namespaces.actor_key_file),
             openshell_repository=namespaces.openshell_repository,
         ),
         registry.session_ids,
@@ -190,12 +174,15 @@ def build(settings: Settings, kubernetes: Kubernetes) -> Starlette:
         supervisor=supervisor,
         sandbox=sandbox,
     )
+    researcher_key = read_key(settings.researcher_id_key_file).encode()
+    issuer = settings.keycloak.issuer
     launches = LaunchService(
         registry,
         keycloak,
         sessions,
         settings.platform_id,
         settings.redirect_uri_template,
+        lambda subject: researcher_id(issuer, subject, researcher_key),
         hosted=hosted,
     )
     return create_app(

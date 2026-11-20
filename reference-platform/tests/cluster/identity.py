@@ -14,6 +14,8 @@ probe pod, written over standard input and checked, and never on a command line.
 from __future__ import annotations
 
 import base64
+import hashlib
+import hmac
 import html
 import json
 import re
@@ -189,8 +191,29 @@ def spawner_token(cluster: Cluster) -> str:
     return result.stdout.strip()
 
 
+# The researcher identifier key and the issuer of the installed chart, read once.
+_IDENTIFIERS: dict[str, Any] = {}
+
+
+def load_researcher_identifiers(cluster: Cluster) -> None:
+    """Read the key and the issuer under which the platform names researchers."""
+    result = cluster.kubectl(
+        "get", f"--namespace={PLATFORM}", "configmap", "heartwood-hub", "--output=json"
+    )
+    assert result.returncode == 0, result.stderr
+    settings = json.loads(json.loads(result.stdout)["data"]["settings.json"])
+    key = secret(cluster, PLATFORM, "heartwood-researcher-ids", "key").removesuffix("\n")
+    _IDENTIFIERS.update(issuer=settings["issuer"], key=key.encode())
+
+
+def researcher(subject: str) -> str:
+    """Return the researcher identifier that names a subject in paths and URLs."""
+    message = f"{_IDENTIFIERS['issuer']}\0{subject}".encode()
+    return f"r{hmac.new(_IDENTIFIERS['key'], message, hashlib.sha256).hexdigest()[:32]}"
+
+
 def launch_url(subject: str, project: str) -> str:
-    return f"{CONTROL}/v1/researchers/{subject}/projects/{project}/launch"
+    return f"{CONTROL}/v1/researchers/{researcher(subject)}/projects/{project}/launch"
 
 
 def secret(cluster: Cluster, namespace: str, name: str, key: str) -> str:
