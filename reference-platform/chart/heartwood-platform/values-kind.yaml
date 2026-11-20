@@ -14,11 +14,16 @@ projects:
     members:
       - 6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0001
       - 6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0002
+    budgets:
+      inference: "5"
+      compute: "50"
   - id: other
     billingAttributionRef: synthetic-grant-other
     policyRef: synthetic-policy-1
     members:
       - 6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0001
+    budgets:
+      inference: "1.5"
 
 researchers:
   - subject: 6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0001

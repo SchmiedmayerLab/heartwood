@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 import ssl
 import sys
+from decimal import Decimal
 from pathlib import Path
 from typing import Annotated, Any, Self
 
@@ -22,6 +23,7 @@ from heartwood_platform.common.kubernetes import Kubernetes, in_cluster_client
 from heartwood_platform.common.serving import TlsSettings, serve
 from heartwood_platform.common.tokens import ResearcherTokens, ServiceTokens
 from heartwood_platform.control.app import ProjectId, create_app
+from heartwood_platform.control.budgets import Allocation, Category, Ledger
 from heartwood_platform.control.hosted import HostedGateway, HostedGatewaySettings, sandbox_digests
 from heartwood_platform.control.keycloak import Keycloak
 from heartwood_platform.control.launch import LaunchService
@@ -32,6 +34,9 @@ from heartwood_platform.control.sessions import ApiServerAddress, Sessions, Sess
 
 # The form of the references in a launch context.
 Reference = Annotated[str, StringConstraints(pattern=r"^\S{1,512}$")]
+# An amount in the denomination of the price sheet, with at most 18 integer and 12
+# fractional digits.
+Amount = Annotated[str, StringConstraints(pattern=r"^(0|[1-9][0-9]{0,17})(\.[0-9]{1,12})?$")]
 
 
 class _Settings(BaseModel):
@@ -57,6 +62,20 @@ class ProjectSettings(_Settings):
     billing_attribution_ref: Reference
     policy_ref: Reference
     members: frozenset[Subject] = frozenset()
+    # The amounts allocated to each category of the project's work.
+    budgets: dict[Category, Amount] = Field(default_factory=dict)
+
+
+class InferenceSettings(_Settings):
+    """How much of its project's inference budget each session reserves."""
+
+    session_reservation: Amount
+
+    @model_validator(mode="after")
+    def _validate(self) -> Self:
+        if Decimal(self.session_reservation) == 0:
+            raise ValueError("session_reservation must be positive")
+        return self
 
 
 class ApiServerSettings(_Settings):
@@ -104,6 +123,7 @@ class Settings(_Settings):
     sessions: SessionNamespaceSettings
     projects: tuple[ProjectSettings, ...]
     synthetic_prices: PriceSheet
+    inference: InferenceSettings
 
     @model_validator(mode="after")
     def _validate(self) -> Self:
@@ -123,6 +143,12 @@ def build(settings: Settings, kubernetes: Kubernetes) -> Starlette:
     registry.synchronize(
         Project(project.id, project.billing_attribution_ref, project.policy_ref, project.members)
         for project in settings.projects
+    )
+    ledger = Ledger(settings.database)
+    ledger.synchronize(
+        Allocation(project.id, category, Decimal(amount))
+        for project in settings.projects
+        for category, amount in project.budgets.items()
     )
     client = httpx.Client(
         base_url=settings.keycloak.url,
@@ -184,12 +210,15 @@ def build(settings: Settings, kubernetes: Kubernetes) -> Starlette:
         settings.redirect_uri_template,
         lambda subject: researcher_id(issuer, subject, researcher_key),
         hosted=hosted,
+        ledger=ledger,
+        session_reservation=Decimal(settings.inference.session_reservation),
     )
     return create_app(
         launches,
         ResearcherTokens(settings.keycloak.issuer, settings.audience, keys),
         ServiceTokens(kubernetes.review_token, settings.audience, settings.service_callers),
         settings.synthetic_prices,
+        ledger,
         operators=ServiceTokens(
             kubernetes.review_token, settings.audience, settings.operator_callers
         )

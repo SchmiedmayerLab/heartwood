@@ -10,6 +10,7 @@ import base64
 import json
 import threading
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, cast
 
@@ -29,6 +30,7 @@ from heartwood_platform.common.kubernetes import Kubernetes
 from heartwood_platform.common.tokens import ResearcherTokens, ServiceTokens
 from heartwood_platform.control.__main__ import Settings
 from heartwood_platform.control.app import create_app
+from heartwood_platform.control.budgets import Allocation, Ledger
 from heartwood_platform.control.keycloak import Keycloak
 from heartwood_platform.control.launch import LaunchService
 from heartwood_platform.control.prices import PriceSheet
@@ -59,6 +61,18 @@ _RESEARCHER_KEY = b"synthetic-researcher-id-key-0123456789"
 def _id(subject: str) -> str:
     """Return the researcher identifier that names a subject in paths and URLs."""
     return researcher_id(ISSUER, subject, _RESEARCHER_KEY)
+
+
+class FakeInference:
+    """Reports what each session incurred, as the inference route measures it."""
+
+    def __init__(self) -> None:
+        self.incurred: dict[str, Decimal] = {}
+        self.settled: list[str] = []
+
+    def settle(self, session: str) -> Decimal:
+        self.settled.append(session)
+        return self.incurred.get(session, Decimal(0))
 
 
 class Platform:
@@ -94,6 +108,15 @@ class Platform:
             ),
             self.registry.session_ids,
         )
+        self.ledger = Ledger(directory / "control.sqlite3", clock=lambda: _NOW)
+        self.ledger.synchronize(
+            [
+                Allocation("demo", "inference", Decimal(5)),
+                Allocation("demo", "compute", Decimal(50)),
+                Allocation("other", "inference", Decimal("1.5")),
+            ]
+        )
+        self.inference = FakeInference()
         launches = LaunchService(
             self.registry,
             keycloak,
@@ -102,6 +125,9 @@ class Platform:
             _TEMPLATE,
             _id,
             clock=lambda: _NOW,
+            ledger=self.ledger,
+            session_reservation=Decimal(1),
+            inference=self.inference,
         )
         self.client = TestClient(
             create_app(
@@ -109,6 +135,7 @@ class Platform:
                 ResearcherTokens(ISSUER, AUDIENCE, self.key.key_set),
                 ServiceTokens(self.reviews.review, AUDIENCE, frozenset({HUB})),
                 PriceSheet.model_validate_json(json.dumps(SYNTHETIC_PRICES)),
+                self.ledger,
                 clock=lambda: _NOW,
                 operators=ServiceTokens(self.reviews.review, AUDIENCE, frozenset({OPERATOR})),
             )
@@ -363,6 +390,7 @@ def test_settings_refuse_duplicate_projects_and_other_template_fields(tmp_path: 
         },
         "projects": [project],
         "synthetic_prices": SYNTHETIC_PRICES,
+        "inference": {"session_reservation": "1"},
     }
     assert Settings.model_validate_json(json.dumps(settings)).projects[0].id == "demo"
     members = {**project, "members": ["auth0|64ab", "synthetic@example.test", _BOB]}
@@ -382,6 +410,10 @@ def test_settings_refuse_duplicate_projects_and_other_template_fields(tmp_path: 
         {"synthetic_prices": {**SYNTHETIC_PRICES, "runtime_profiles": "none"}},
         # The service serves only HTTPS, so its certificate and key are required.
         {"tls": {"certificate_file": "/etc/heartwood-control/tls/tls.crt"}},
+        # A session reserves a positive amount, and budgets are amounts of known kinds.
+        {"inference": {"session_reservation": "0"}},
+        {"projects": [{**project, "budgets": {"inference": "-1"}}]},
+        {"projects": [{**project, "budgets": {"storage": "1"}}]},
     ):
         with pytest.raises(ValueError, match="validation error"):
             Settings.model_validate_json(json.dumps({**settings, **change}))
@@ -420,7 +452,18 @@ def test_deletion_during_a_launch_waits_and_then_removes_everything(tmp_path: Pa
     sessions = SlowSessions()
     keycloak = FakeKeycloak()
     clients = Keycloak(keycloak.client(), "heartwood", "heartwood-control", lambda: keycloak.secret)
-    launches = LaunchService(registry, clients, sessions, "reference-platform", _TEMPLATE, _id)
+    ledger = Ledger(tmp_path / "control.sqlite3")
+    ledger.synchronize([Allocation("demo", "inference", Decimal(5))])
+    launches = LaunchService(
+        registry,
+        clients,
+        sessions,
+        "reference-platform",
+        _TEMPLATE,
+        _id,
+        ledger=ledger,
+        session_reservation=Decimal(1),
+    )
 
     launches.prepare(_BOB, "demo")
     sessions.deletion.join()
@@ -606,7 +649,14 @@ def test_an_identifier_that_two_subjects_share_names_neither(tmp_path: Path) -> 
     clients = Keycloak(keycloak.client(), "heartwood", "heartwood-control", lambda: keycloak.secret)
     shared = "r" + "0" * 32
     launches = LaunchService(
-        registry, clients, cast(Any, None), "reference-platform", _TEMPLATE, lambda _: shared
+        registry,
+        clients,
+        cast(Any, None),
+        "reference-platform",
+        _TEMPLATE,
+        lambda _: shared,
+        ledger=Ledger(tmp_path / "control.sqlite3"),
+        session_reservation=Decimal(1),
     )
 
     with pytest.raises(NotAMemberError):

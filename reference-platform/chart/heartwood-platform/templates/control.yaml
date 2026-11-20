@@ -9,7 +9,7 @@ SPDX-License-Identifier: MIT
 {{- define "heartwood.controlConfiguration" -}}
 {{- $projects := list -}}
 {{- range .Values.projects -}}
-{{- $projects = append $projects (dict "id" .id "billing_attribution_ref" .billingAttributionRef "policy_ref" .policyRef "members" (.members | default list)) -}}
+{{- $projects = append $projects (dict "id" .id "billing_attribution_ref" .billingAttributionRef "policy_ref" .policyRef "members" (.members | default list) "budgets" (.budgets | default dict)) -}}
 {{- end -}}
 {{- $keycloak := dict "url" "https://keycloak:8443" "ca_file" "/etc/heartwood-control/platform-ca/ca.crt" "issuer" (include "heartwood.issuer" .) "realm" "heartwood" "client_id" "heartwood-control" "client_secret_file" "/etc/heartwood-control/keycloak/client-secret" -}}
 {{- /* Without configured addresses, the Service address and the endpoints of the API server are read from the cluster. */ -}}
@@ -50,7 +50,7 @@ SPDX-License-Identifier: MIT
 {{- $modelRoute := dict "profile_id" $route.profileId "model" $route.model "endpoint" $route.endpoint "provider" $route.provider "placeholder_env" $route.placeholderEnv -}}
 {{- $hosted := dict "control_url" (printf "https://heartwood-control.%s.svc.cluster.local:8443" .Release.Namespace) "worker" $hostedWorker "model_route" $modelRoute -}}
 {{- $redirect := printf "%s/user/{researcher}/{project}/oauth_callback" .Values.hub.publicOrigin -}}
-{{- dict "tls" $tls "hosted" $hosted "synthetic_prices" $syntheticPrices "sessions" $sessions "platform_id" .Values.control.platformId "database" "/var/lib/heartwood-control/control.sqlite3" "audience" "heartwood-control" "service_callers" .Values.control.serviceCallers "operator_callers" .Values.control.operatorCallers "redirect_uri_template" $redirect "researcher_id_key_file" "/etc/heartwood-control/researcher-ids/key" "keycloak" $keycloak "projects" $projects | toPrettyJson -}}
+{{- dict "tls" $tls "hosted" $hosted "synthetic_prices" $syntheticPrices "sessions" $sessions "platform_id" .Values.control.platformId "database" "/var/lib/heartwood-control/control.sqlite3" "audience" "heartwood-control" "service_callers" .Values.control.serviceCallers "operator_callers" .Values.control.operatorCallers "redirect_uri_template" $redirect "researcher_id_key_file" "/etc/heartwood-control/researcher-ids/key" "inference" (dict "session_reservation" .Values.control.inference.sessionReservation) "keycloak" $keycloak "projects" $projects | toPrettyJson -}}
 {{- end }}
 # The key under which hosted gateways derive the actor that records name for a
 # researcher. Losing it breaks the link between earlier and later records of the same

@@ -14,12 +14,14 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Protocol
 
 import httpx
 from pydantic import BaseModel, ConfigDict
 
 from heartwood.schemas import PlatformLaunchContext
+from heartwood_platform.control.budgets import InsufficientBudgetError, Ledger
 from heartwood_platform.control.hosted import HostedGateway
 from heartwood_platform.control.keycloak import project_client
 from heartwood_platform.control.registry import NotAMemberError, Project, Registry, Session
@@ -56,6 +58,18 @@ class SessionNamespaces(Protocol):
 
     def remove(self, session: str) -> None:
         """Delete everything of a session."""
+
+
+class SessionInference(Protocol):
+    """The inference route of sessions, which measures what a session incurred."""
+
+    def settle(self, session: str) -> Decimal:
+        """Stop the inference of a session and return the amount it incurred."""
+
+
+def session_holder(session: str) -> str:
+    """Return the holder of a session's reservation in the ledger."""
+    return f"session:{session}"
 
 
 class Launch(BaseModel):
@@ -111,11 +125,20 @@ class LaunchService:
         researcher_id: Callable[[str], str],
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         hosted: HostedGateway | None = None,
+        *,
+        ledger: Ledger,
+        session_reservation: Decimal,
+        inference: SessionInference | None = None,
     ) -> None:
         """Launch sessions of one platform; ``hosted`` renders their gateways' files.
 
         ``researcher_id`` returns the researcher identifier of a subject, which names
         the researcher in the redirect URI and in the caller's paths.
+
+        Each session reserves ``session_reservation`` of its project's inference budget
+        in ``ledger`` at its first launch, or what is left of it, and settles the
+        reservation with what ``inference`` measured when it is deleted. Without an
+        inference route a session incurs nothing.
         """
         self._registry = registry
         self._clients = clients
@@ -125,6 +148,9 @@ class LaunchService:
         self._researcher_id = researcher_id
         self._clock = clock
         self._hosted = hosted
+        self._ledger = ledger
+        self._session_reservation = session_reservation
+        self._inference = inference
         # A launch waits for the session's gateway. A deletion that ran meanwhile
         # would leave what the launch writes afterwards, so both hold one lock for
         # each researcher and project.
@@ -190,6 +216,11 @@ class LaunchService:
     def _prepare(self, found: Project, subject: str, project: str) -> Launch:
         session = self._registry.session(subject, project, create=True)
         assert session is not None
+        # Admission: a session runs only with a reservation, which it keeps until it is
+        # deleted. A relaunch keeps the reservation of the first launch.
+        self._ledger.reserve(
+            project, "inference", session_holder(session.id), self._session_reservation
+        )
         provisioned = self._sessions.provision(session.id)
         redirect_uri = self._redirect_uri(session)
         self._clients.ensure_project_client(project)
@@ -270,7 +301,7 @@ class LaunchService:
                     continue
                 try:
                     self._prepare(found, listed.subject, project)
-                except (httpx.HTTPError, SessionError):
+                except (httpx.HTTPError, SessionError, InsufficientBudgetError):
                     rotation.failed.append(session.id)
                     continue
             rotation.rewritten.append(session.id)
@@ -282,6 +313,10 @@ class LaunchService:
             session = self._registry.session(subject, project)
             if session is None:
                 return
+            # Settled first, so a deletion that fails afterwards keeps the record of
+            # what the session incurred, and a repeated deletion completes the rest.
+            incurred = Decimal(0) if self._inference is None else self._inference.settle(session.id)
+            self._ledger.settle(session_holder(session.id), incurred)
             self._sessions.remove(session.id)
             self._clients.remove_redirect_uri(project, self._redirect_uri(session))
             self._registry.delete_session(subject, project)
