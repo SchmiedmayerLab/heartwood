@@ -232,6 +232,7 @@ At each launch the control service fills the session's project data volume with 
 A launch with an unchanged catalog reuses the filled claim.
 The claim carries the labels `heartwood.platform/session` and `heartwood.platform/project` and the annotation `heartwood.platform/content-sha256`.
 The reply to the launch and `launch.json` name it in `project_data` with its UID, its content digest, the mount path `/data` and the number of objects.
+The gateway's deployment manifest declares it in `[worker.project_data]` with the project of the launch context, so the gateway attaches it read-only to each worker and admission checks it; the default worker policy in `hub.worker.policy` lists `/data` read-only.
 A project without datasets has no project data volume.
 Until they expire, the URLs of a plan are readable by the ServiceAccount `openshell-certgen` of the OpenShell certificate Job, which reads Secrets of the session namespace, and by cluster administrators.
 The admission policy `heartwood-project-data-copy` keeps the label `heartwood.platform/role=project-data-copy`, which admits a pod to versitygw, to the pods that the Job controller creates for the control service's copy Jobs.
