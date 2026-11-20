@@ -823,6 +823,8 @@ A service on this path must enforce Heartwood's operation binding, as the [adapt
 It scopes each call to the project its credential allows, treats a repeated `operation_id` as the same operation, and returns `heartwood.platform-operation-observation.v1` as structured content.
 A read-only tool named as the destination's `observation_tool` reports an operation by `project_id` and `operation_id`.
 For an identifier it never received, it reports the status `failed` and refuses any later call with that identifier, so an operation whose request never arrived can be settled.
+A completed read-only operation, such as a catalog listing, returns what it read in the observation's optional `result` object.
+The released content is the observation that the observation tool reports, so the result reaches the model only through its release review and within `max_result_bytes`.
 
 Every call needs an outside operation review and a separate result release review; no review mode decides either.
 Disabling or disconnecting a server, changing its tools, or an expired token refuses pending calls, and completed remote work is not undone.
