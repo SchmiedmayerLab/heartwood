@@ -151,11 +151,11 @@ class Browser:
             f"{ORIGIN}/hub/api{path}",
             text_input=json.dumps(body) if body is not None else "",
         )
-        body, _, status = output.rpartition("\n")
+        answer, _, status = output.rpartition("\n")
         try:
-            return int(status), json.loads(body)
+            return int(status), json.loads(answer)
         except ValueError:
-            return int(status), body
+            return int(status), answer
 
     def sign_in_to_gateway(self, base: str) -> tuple[int, str, str]:
         """Sign in at a gateway behind the proxy; return the gateway's callback answer."""
