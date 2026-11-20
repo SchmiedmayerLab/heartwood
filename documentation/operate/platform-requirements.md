@@ -232,7 +232,7 @@ The gateway version does not satisfy the check.
 The decision is retained, with the reported version, driver and capabilities, in each worker attempt's evidence: an accepted gateway in the runtime binding and revocation evidence, a refused launch in the evidence that recorded the attempt as not created.
 The check relies on the gateway's own report: a gateway that reports a capability it does not implement passes, and Heartwood does not test the deletion behavior of the registered gateway.
 Both capability names come from the qualification build's patches; no upstream release reports them, so an unmodified upstream gateway is refused.
-The qualification build also reports `0.1.9+heartwood.2`, a local version that no upstream release uses, and the `gateway_build` entry of the [qualification evidence](../architecture/testing.md#native-qualification-evidence) records that version, its source revision and binary digests.
+The qualification build also reports `0.1.9+heartwood.3`, a local version that no upstream release uses, and the `gateway_build` entry of the [qualification evidence](../architecture/testing.md#native-qualification-evidence) records that version, its source revision and binary digests.
 Compare the deployed gateway with that record, or repeat native qualification against it and retain the evidence.
 
 The qualification build has two further behaviors that the unmodified upstream release lacks.
@@ -241,15 +241,23 @@ The qualification build has two further behaviors that the unmodified upstream r
   A missing Sandbox resource is still reported as absent.
   The driver reports capability `openshell.compute.delete-awaits-provisioning`, which Heartwood's check requires under an `openshell-kubernetes` manifest.
   Revocation through the Kubernetes driver sends such a deletion again.
-- A deletion that finds no sandbox under a workspace and name records that name in the gateway's store.
-  For 24 hours after the last such deletion, the gateway rejects a creation under that name before it asks the compute driver to create the sandbox.
-  The rejection has status `FAILED_PRECONDITION` and reason `SANDBOX_NAME_CONFIRMED_ABSENT` once the cleanup of the rejected creation's record completes; otherwise the error can have another status or lack the reason.
+- A deletion that finds no sandbox under a workspace and name records that name in the gateway's store and answers `ALREADY_ABSENT`.
+  For 24 hours after the last such deletion, the gateway rejects a creation under that name before it asks the compute driver to create the sandbox, with status `FAILED_PRECONDITION` and reason `SANDBOX_NAME_CONFIRMED_ABSENT`.
   A creation request that was still in flight when the deletion answered therefore creates no sandbox.
-  A deletion that is refused before the name is looked up, such as for a missing workspace or a missing role, records nothing.
-  The deletion of a sandbox that exists when the deletion starts leaves its name available.
-  The record lasts across a gateway restart as long as the store does.
-  The gateway reports it as capability `openshell.compute.create-rejects-deleted-name` on its compute driver.
+  The record lasts across a gateway restart as long as the store does, and the gateway removes expired records.
+  A deletion that finds a sandbox answers `COMPLETED`, `ACCEPTED` or an error for that sandbox and leaves its name available.
+  Only `ALREADY_ABSENT` is evidence that a name is absent; `NOT_FOUND`, such as for a caller without a role in the workspace, records nothing and is never evidence.
+  In a workspace that does not exist yet, only a caller who may create that workspace records the name.
+  A replayed `ALREADY_ABSENT` answer renews the record, and the gateway refuses the replay once a sandbox has the name.
+  A creation that the gateway recorded but had not sent to its driver when the gateway stopped is never started while its name is recorded, and the gateway deletes it.
+  Names longer than 19 bytes are never recorded; the gateway also refuses to create them.
+  The gateway reports this behavior as capability `openshell.compute.create-rejects-deleted-name` on its compute driver.
   With the Kubernetes driver, Heartwood records an unanswered creation as never created only through a gateway that reports this capability; without it the attempt stays fenced.
+
+These behaviors have limits that fail closed.
+In rare cases a name stays rejected until its record expires although a deletion found its sandbox: two concurrent deletions that both find the sandbox, a store outage longer than the gateway's retries, or a gateway crash between the record and its withdrawal.
+Gateway clocks that differ by more than 5 minutes, or that jump, can end a record's 24 hours early.
+The gateway removes at most 1,000 expired records per minute, so a caller that deletes absent names faster than that grows the store.
 
 ### Sensitive Data
 
