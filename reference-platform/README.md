@@ -475,7 +475,8 @@ Requests of users other than ServiceAccounts, such as a cluster administrator, a
 
 `sessions.stagingImages` lists the worker images of the sessions' deployment manifests; during a change of the worker image it lists the current and the next image, and an empty list denies every pod.
 
-`heartwood-project-data-copy` applies to pods and Jobs in session namespaces: only the control service creates Jobs named `hw-project-data-copy-*` that carry the label `heartwood.platform/role=project-data-copy`, only the Job controller creates pods with it for such a Job, and no update adds it.
+`heartwood-project-data-copy` applies to pods and Jobs in session namespaces: only the control service creates Jobs named `hw-project-data-copy-*` that carry the label `heartwood.platform/role=project-data-copy`, only the Job controller creates pods with it for such a Job, no update adds it, and an update of such a pod changes neither its specification nor its labels.
+The policy expects the Job controller to act as the ServiceAccount `kube-system:job-controller`, as controller managers do that run each controller with its own credentials, such as those of kubeadm and kind.
 
 `heartwood-session-services` applies to every Service in a namespace that carries the label `heartwood.platform/session`:
 the Service has the type `ClusterIP` and no external address.

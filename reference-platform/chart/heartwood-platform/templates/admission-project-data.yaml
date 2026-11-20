@@ -9,7 +9,10 @@ SPDX-License-Identifier: MIT
 {{- /*
 The label heartwood.platform/role=project-data-copy admits a pod of a session namespace to
 the object store. Only the copy Jobs of the control service carry it: the control service
-creates them, and the Job controller creates their pods.
+creates them, and the Job controller creates their pods, as the ServiceAccount
+kube-system:job-controller, which controller managers that use separate service account
+credentials for each controller, such as kubeadm's and kind's, do. An update changes
+neither the specification nor the labels of such a pod.
 */ -}}
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
@@ -52,7 +55,8 @@ spec:
   validations:
     - expression: >-
         request.resource.resource != 'pods' || !variables.copy
-        || (request.operation == 'UPDATE' && variables.copied)
+        || (request.operation == 'UPDATE' && variables.copied
+        && object.spec == oldObject.spec && object.metadata.labels == oldObject.metadata.labels)
         || (request.operation == 'CREATE'
         && request.userInfo.username == 'system:serviceaccount:kube-system:job-controller'
         && has(object.metadata.ownerReferences) && object.metadata.ownerReferences.size() == 1

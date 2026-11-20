@@ -295,10 +295,34 @@ class ProjectData:
         self._remove_copy(namespace, name)
         if not self._kubernetes.create(self._job(namespace, session, name, plan)):
             raise SessionError("a project data copy job exists under its name")
+        deadline = self._clock() + self._deadline(plan) + 60
+        try:
+            self._write_plan(namespace, session, name, plan)
+            while True:
+                job = self._kubernetes.get("Job", name, namespace) or {}
+                conditions = {
+                    item.get("type"): item.get("status")
+                    for item in job.get("status", {}).get("conditions", [])
+                }
+                if conditions.get("Complete") == "True":
+                    return True
+                if conditions.get("Failed") == "True" or self._clock() >= deadline:
+                    return False
+                self._sleep(2.0)
+        finally:
+            # The plan's URLs stay readable in the Secret until they expire, so it is
+            # removed as soon as the job ends.
+            self._remove_copy(namespace, name)
+
+    def _write_plan(self, namespace: str, session: str, name: str, plan: _Plan) -> None:
+        """Write the plan into a Secret that the copy job owns.
+
+        The job exists first, so the Secret can name it as its owner, and deleting the job
+        deletes the plan too; the job's pod waits until the Secret it mounts exists.
+        """
         job = self._kubernetes.get("Job", name, namespace)
         if job is None:
             raise SessionError("the project data copy job disappeared")
-        # The pod waits for its plan. The job owns it, so deleting the job deletes it too.
         content = json.dumps(plan.model_dump(mode="json"))
         self._kubernetes.create(
             {
@@ -321,23 +345,6 @@ class ProjectData:
                 "data": {"plan.json": base64.b64encode(content.encode()).decode()},
             }
         )
-        deadline = self._clock() + self._deadline(plan) + 60
-        try:
-            while True:
-                job = self._kubernetes.get("Job", name, namespace) or {}
-                conditions = {
-                    item.get("type"): item.get("status")
-                    for item in job.get("status", {}).get("conditions", [])
-                }
-                if conditions.get("Complete") == "True":
-                    return True
-                if conditions.get("Failed") == "True" or self._clock() >= deadline:
-                    return False
-                self._sleep(2.0)
-        finally:
-            # The plan's URLs stay readable in the Secret until they expire, so it is
-            # removed as soon as the job ends.
-            self._remove_copy(namespace, name)
 
     def _complete(self, claim: dict[str, Any], content: str) -> bool:
         metadata = claim.get("metadata", {})

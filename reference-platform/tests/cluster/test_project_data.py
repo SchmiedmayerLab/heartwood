@@ -41,7 +41,7 @@ from identity import (
 from identity import (
     researcher as researcher_id,
 )
-from kube import Cluster
+from kube import CONTROL, Cluster
 from test_estimates import Researcher
 
 DATA = "https://heartwood-data.heartwood-platform.svc.cluster.local:8443"
@@ -133,6 +133,86 @@ def _session_pod(
         yield name
     finally:
         cluster.kubectl("delete", f"--namespace={namespace}", f"pod/{name}", "--wait")
+
+
+@contextmanager
+def _copy_pod(cluster: Cluster, namespace: str, image: str) -> Iterator[str]:
+    """Run a pod with the copy label as the control service does: through a copy Job.
+
+    The admission policy admits the label only on pods that the Job controller creates
+    for the control service's copy Jobs, so the probe is such a Job's pod.
+    """
+    name = f"hw-project-data-copy-probe-{secrets.token_hex(4)}"
+    limits = {"cpu": "100m", "memory": "64Mi"}
+    job = {
+        "apiVersion": "batch/v1",
+        "kind": "Job",
+        "metadata": {"name": name, "namespace": namespace, "labels": _COPY_ROLE},
+        "spec": {
+            "backoffLimit": 0,
+            "template": {
+                "metadata": {"labels": _COPY_ROLE},
+                "spec": {
+                    "restartPolicy": "Never",
+                    "automountServiceAccountToken": False,
+                    "securityContext": {
+                        "runAsNonRoot": True,
+                        "runAsUser": 10001,
+                        "runAsGroup": 10001,
+                        "seccompProfile": {"type": "RuntimeDefault"},
+                    },
+                    "containers": [
+                        {
+                            "name": "agnhost",
+                            "image": image,
+                            "args": ["pause"],
+                            "securityContext": {
+                                "allowPrivilegeEscalation": False,
+                                "capabilities": {"drop": ["ALL"]},
+                            },
+                            "resources": {"limits": limits, "requests": limits},
+                            "volumeMounts": [
+                                {"name": "platform-ca", "mountPath": "/etc/platform-ca"}
+                            ],
+                        }
+                    ],
+                    "volumes": [{"name": "platform-ca", "configMap": {"name": "platform-ca"}}],
+                },
+            },
+        },
+    }
+    created = cluster.kubectl("create", "--filename", "-", actor=CONTROL, document=job)
+    assert created.returncode == 0, created.stderr
+    try:
+        # The Job controller creates the pod shortly after the Job.
+        for _ in range(60):
+            listed = _json(
+                cluster, f"--namespace={namespace}", "pods", f"--selector=job-name={name}"
+            )
+            if listed["items"]:
+                break
+            time.sleep(1)
+        ready = cluster.kubectl(
+            "wait",
+            f"--namespace={namespace}",
+            "--for=condition=Ready",
+            "pod",
+            f"--selector=job-name={name}",
+            "--timeout=120s",
+        )
+        assert ready.returncode == 0, ready.stderr
+        pod = _json(cluster, f"--namespace={namespace}", "pods", f"--selector=job-name={name}")
+        (item,) = pod["items"]
+        yield str(item["metadata"]["name"])
+    finally:
+        cluster.kubectl(
+            "delete",
+            f"--namespace={namespace}",
+            f"job/{name}",
+            "--cascade=foreground",
+            "--wait",
+            actor=CONTROL,
+        )
 
 
 def _run(cluster: Cluster, namespace: str, pod: str, *command: str) -> tuple[int, str]:
@@ -257,7 +337,7 @@ def test_object_urls_read_one_object_from_copy_pods_only(
     assert status == 200, access
     url = access["url"]
     assert "X-Amz-Expires=301" in url
-    with _session_pod(cluster, namespace, probe_image, _COPY_ROLE) as pod:
+    with _copy_pod(cluster, namespace, probe_image) as pod:
         code, output = _fetch(cluster, namespace, pod, url)
         body, _, http = output.rpartition("\n")
         assert (code, http) == (0, "200"), output
@@ -455,3 +535,27 @@ def test_only_copy_jobs_carry_the_copy_label(researcher: Researcher, probe_image
         )
         assert result.returncode != 0
         assert "copy Jobs carry the project data copy label" in result.stderr, result.stderr
+
+
+def test_a_running_copy_pod_cannot_be_changed(researcher: Researcher, probe_image: str) -> None:
+    cluster = researcher.cluster
+    namespace = f"hw-s-{researcher.sessions['demo']}"
+    with _copy_pod(cluster, namespace, probe_image) as pod:
+        patch = json.dumps({"spec": {"containers": [{"name": "agnhost", "image": probe_image}]}})
+        allowed = cluster.kubectl(
+            "patch", f"--namespace={namespace}", f"pod/{pod}", "--dry-run=server", "--patch", patch
+        )
+        assert allowed.returncode == 0, allowed.stderr
+        other = probe_image.replace("@sha256:", ":other@sha256:")
+        changed = json.dumps({"spec": {"containers": [{"name": "agnhost", "image": other}]}})
+        refused = cluster.kubectl(
+            "patch",
+            f"--namespace={namespace}",
+            f"pod/{pod}",
+            "--dry-run=server",
+            "--patch",
+            changed,
+            actor=f"system:serviceaccount:{namespace}:openshell",
+        )
+        assert refused.returncode != 0
+        assert "copy Jobs carry the project data copy label" in refused.stderr, refused.stderr
