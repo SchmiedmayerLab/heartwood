@@ -67,9 +67,9 @@ Every image in `values.yaml` is pinned by digest or has no default, and `values.
 `images.platformServices` has no default and is set at installation to the image built from `services/Dockerfile`.
 `images.openshellGateway` and `images.hostedGateway` have no default either.
 `images.hostedGateway` is the `hosted-gateway-image` stage of `images/Dockerfile`, and `hub.worker.image` names the worker image by digest.
-`values-kind.yaml` sets it to the published OpenShell 0.1.9 gateway and `sessions.stagingImages` to a small test image.
-Both are stand-ins, used when the chart is rendered or installed without the built images.
-The [Kubernetes Qualification workflow](../.github/workflows/kubernetes-qualification.yml) installs the chart with the gateway that `images/worker/candidate/gateway.json` builds with its recorded patches and with the worker image and the replacement worker image of the qualification by digest in `sessions.stagingImages`.
+`values-kind.yaml` sets `images.openshellGateway` to the published OpenShell 0.1.9 gateway, and `sessions.stagingImages` and `hub.worker.image` to a pinned agnhost test image.
+These three values are stand-ins, used when the chart is rendered or installed without the built images.
+The [Kubernetes Qualification workflow](../.github/workflows/kubernetes-qualification.yml) installs the chart with the gateway that `images/worker/candidate/gateway.json` builds with its recorded patches, the built hosted gateway image, the worker image of the qualification in `hub.worker.image`, and that worker image and the replacement worker image by digest in `sessions.stagingImages`.
 `images.openshellRepository` names a repository, such as a mirror, from which session pods pull the OpenShell supervisor and sandbox runtime images under their upstream names and digests; empty pulls them from `ghcr.io/nvidia/openshell`.
 Helm generates every credential at the first installation and keeps the existing value on an upgrade.
 The chart renders no credential from a fixed value.
