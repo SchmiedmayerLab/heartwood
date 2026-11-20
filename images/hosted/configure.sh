@@ -34,6 +34,10 @@ endpoint="$(/opt/heartwood/.venv/bin/python -I -c \
   "${source}/launch.json")"
 XDG_CONFIG_HOME="${work}/native" /usr/local/bin/openshell gateway add "${endpoint}" \
   --name openshell --local >/dev/null
+# The digest of the workers' effective sandbox policy is particular to this session's
+# OpenShell gateway, so it is learned there and written into the manifest.
+/opt/heartwood/.venv/bin/python -I -B /usr/local/libexec/heartwood-hosted-policy \
+  "${work}/deployment" "${work}/native"
 
 find "${work}" -mindepth 1 -type d -exec chmod 0700 {} +
 find "${work}" -mindepth 1 -type f -exec chmod 0600 {} +

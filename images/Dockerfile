@@ -252,6 +252,7 @@ RUN --mount=type=bind,from=hosted-openshell-cli,target=/mnt/openshell \
     tar --extract --gzip --file /mnt/openshell/openshell.tar.gz --directory /usr/local/bin openshell \
     && chown root:root /usr/local/bin/openshell && chmod 0555 /usr/local/bin/openshell
 COPY --chmod=0555 images/hosted/configure.sh /usr/local/libexec/heartwood-hosted-configure
+COPY --chmod=0444 images/hosted/policy.py /usr/local/libexec/heartwood-hosted-policy
 RUN install -d --mode=0755 /etc/heartwood /var/lib/heartwood /research
 
 USER heartwood

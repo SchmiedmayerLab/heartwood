@@ -317,12 +317,11 @@ hub:
     cpuGuarantee: 0.1
     memoryLimit: 2G
     memoryGuarantee: 512M
-  # The worker of each session's gateway. Set the policy and its effective digest from
-  # the qualification of the worker image and its model route. The default digest
-  # matches no policy, so no worker is admitted until it is set.
+  # The worker of each session's gateway: its image and sandbox policy. The gateway
+  # pod's init container learns the digest with which the session's OpenShell gateway
+  # admits the policy with the model route's provider.
   worker:
     image: ""
-    sandboxPolicySha256: "0000000000000000000000000000000000000000000000000000000000000000"
     policy:
       version: 1
       filesystem:

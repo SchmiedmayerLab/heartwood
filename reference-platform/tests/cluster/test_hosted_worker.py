@@ -14,9 +14,6 @@ diagnostic, and deleting the server settles what the session incurred. In projec
 an operator rotates the session's key: the attached worker fails, and the worker of the
 next start uses the new key. The second researcher cannot start a server of project
 small.
-
-The chart's hub.worker.sandboxPolicySha256 must hold the digest that route_policy.py
-prints for the installed chart.
 """
 
 from __future__ import annotations
@@ -78,8 +75,10 @@ class Server:
             time.sleep(3)
         raise AssertionError("the Hub did not stop the server")
 
-    def api(self, method: str, path: str, body: dict[str, Any] | None = None) -> tuple[int, Any]:
-        return self.browser.api(self.base, method, path, self.capability, body)
+    def api(
+        self, method: str, path: str, body: dict[str, Any] | None = None, max_time: int = 60
+    ) -> tuple[int, Any]:
+        return self.browser.api(self.base, method, path, self.capability, body, max_time)
 
     def connect(self) -> dict[str, Any]:
         status, catalog = self.api(
@@ -105,7 +104,10 @@ class Server:
             "created_at": datetime.now(UTC).isoformat(),
             "payload": payload,
         }
-        status, answer = self.api("POST", f"/sessions/{self.conversation}/commands", body)
+        # A command can start the session's worker before it answers.
+        status, answer = self.api(
+            "POST", f"/sessions/{self.conversation}/commands", body, max_time=600
+        )
         assert status == 200, answer
 
     def events(self) -> list[dict[str, Any]]:
@@ -142,19 +144,8 @@ def _errors(events: list[dict[str, Any]]) -> list[str]:
     return [str(event["payload"].get("code")) for event in _of(events, "error.recorded")]
 
 
-def _route_policy_is_qualified(cluster: Cluster) -> None:
-    result = cluster.kubectl(
-        "get", f"--namespace={PLATFORM}", "configmap", "heartwood-control", "--output=json"
-    )
-    configuration = json.loads(json.loads(result.stdout)["data"]["configuration.json"])
-    digest = configuration["hosted"]["worker"]["sandbox_policy_sha256"]
-    if set(digest) == {"0"}:
-        pytest.fail("set hub.worker.sandboxPolicySha256 to the digest of route_policy.py")
-
-
 @pytest.fixture(scope="module")
 def browser(cluster: Cluster, probe_image: str) -> Iterator[Browser]:
-    _route_policy_is_qualified(cluster)
     with probe(cluster, "hw-worker-browser", probe_image) as pod:
         found = Browser(cluster, pod, "researcher-one")
         found.sign_in_to_hub()
