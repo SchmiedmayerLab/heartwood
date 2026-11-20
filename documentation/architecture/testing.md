@@ -69,7 +69,13 @@ The protected self-hosted GPU workflow runs the same acceptance contract with ex
 ## Candidate Builds
 
 The default lock installs the patched SDK wheels from `vendor/runtime-wheels/`, which is not committed.
-`deploy/build-worker-candidate.py` builds them from immutable upstream archives and the patches in `images/worker/candidate/`, verifying source, patch, and build-tool hashes and using a fixed source timestamp.
+`deploy/build-worker-candidate.py` builds them from pinned upstream revisions and the patches in `images/worker/candidate/`, verifying source, patch, and build-tool hashes and using a fixed source timestamp.
+GitHub generates revision archives on request and does not keep their bytes stable, so each revision's `tree_sha256` is a SHA-256 digest of the extracted tree below the archive's single root directory.
+It covers every relative path, its kind (directory, file, executable file or symbolic link), each file's SHA-256 digest and each link's target; compression, timestamps, ownership, other mode bits and the root directory's name are not part of it.
+The build extracts the archive into an empty directory with Python's `data` filter, which refuses entries and links that leave that directory.
+It also refuses hard links and more than 1 GiB of extracted content, and stops before any patch or build step when the digest differs.
+Release assets, such as the OpenShell CLI and CMake, keep the archive digest `sha256`.
+When a pin moves, the mismatch error reports the digest of the tree it found.
 Each carried patch stays until a pinned upstream release provides its behavior and native qualification passes without it:
 
 | Patch | Purpose | Related upstream work | Why it remains | Upstream change that allows removal |
@@ -84,7 +90,7 @@ Each carried patch stays until a pinned upstream release provides its behavior a
 A patch, or one unit of it, is removed only when all of these hold:
 
 1. The pinned upstream release provides the behavior, shown by its own tests or by Heartwood's tests for that behavior against the unpatched release.
-2. The build no longer applies the patch: its file and its entry in `sources.json` or `gateway.json` are removed, the source revision and archive hash name that release, the local version suffix changes, or is dropped when no patch remains, and the wheels and lock are rebuilt.
+2. The build no longer applies the patch: its file and its entry in `sources.json` or `gateway.json` are removed, the source revision and tree hash name that release, the local version suffix changes, or is dropped when no patch remains, and the wheels and lock are rebuilt.
 3. Any Heartwood workaround that depended on the patch is removed, or the reason it stays is recorded in this table.
 4. The worker candidate workflow and native qualification pass without the patch.
 
@@ -116,10 +122,10 @@ uv run --no-project --python 3.12.15 deploy/build-worker-candidate.py \
 The binary is built with the Docker and Kubernetes compute drivers, and the image is built from the upstream `Dockerfile.gateway` of the pinned source.
 A gateway with more than one driver and no `compute_driver` setting selects a driver by detection, so every gateway configuration in this repository sets `compute_driver`.
 `--gateway-tests` runs the upstream deletion regressions first and needs 12 GiB of container memory; a failed or empty test run prevents packaging.
-The cache keeps source archives and the Cargo registry; compiled objects are keyed by the manifest, and Cargo rebuilds them when the enabled features change.
+The cache keeps the Cargo registry and the source archives, named by their recorded digest and verified again on every use; compiled objects are keyed by the manifest, and Cargo rebuilds them when the enabled features change.
 The record binds source, manifest, lockfile, enabled features, binary, and image identities; it establishes build provenance, not byte-identical gateway builds.
 These artifacts are qualification inputs, not a supported production gateway; an operator's gateway must provide the [behavior qualification depends on](../operate/platform-requirements.md).
-`deploy/build-records-fixture.py` builds a versitygw server from a digest-verified source archive using a pinned Go 1.26 image, read-only sources and a bounded build container; `go mod verify` checks the downloaded or restored module cache against the source's `go.sum` before the build.
+`deploy/build-records-fixture.py` builds a versitygw server from a source archive verified by the same tree digest using a pinned Go 1.26 image, read-only sources and a bounded build container; `go mod verify` checks the downloaded or restored module cache against the source's `go.sum` before the build.
 Its artifacts retain the source archive, license and notice, binary hash and build inputs; they provide synthetic storage behavior, not a records-service recommendation.
 
 ## Native Qualification
