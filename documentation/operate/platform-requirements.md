@@ -233,10 +233,11 @@ The image carries the labels `org.opencontainers.image.title=heartwood-sandbox-g
 
 The build establishes provenance, and a rebuild can produce other binary digests.
 The `gateway_build` entry of each [qualification evidence](../architecture/testing.md#native-qualification-evidence) records the exact build that the run qualified: the Docker run's evidence for `openshell-docker` and the [Kubernetes qualification](../architecture/testing.md#kubernetes-driver-qualification) evidence for `openshell-kubernetes`.
-That evidence covers a gateway whose version, source revision, manifest digest, features and binary digests equal the entry.
-A deployment that builds its own gateway therefore runs native qualification against that build on each driver it uses, the Kubernetes qualification for `openshell-kubernetes`, and retains that evidence.
+That evidence covers a gateway whose version, source revision, manifest digest, features and binary digests equal the entry, on the base image `images.gateway_base` of `gateway.json`, such as the gateway artifacts that the qualifying run retains.
+A deployment that builds its own gateway runs native qualification against that build and retains the evidence: the Docker qualification for `openshell-docker` and the Kubernetes qualification for `openshell-kubernetes`.
 
-To compare a running gateway with the evidence, compare the SHA-256 of `/usr/local/bin/openshell-gateway` in the image it runs with the `openshell-gateway` entry of the record's `binaries`, and the version the running gateway reports with the record's version.
+To compare a running gateway with the evidence, copy `/usr/local/bin/openshell-gateway` out of the image it runs, for example with `docker create` and `docker cp`, because the image has no shell, and compare its SHA-256 with the `openshell-gateway` entry of the record's `binaries`.
+Compare the image's base layers with `images.gateway_base`, and the version the running gateway reports with the record's version.
 Each worker attempt's evidence records the version, driver and capabilities the running gateway reported.
 
 #### Register
