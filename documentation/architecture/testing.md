@@ -70,11 +70,10 @@ The protected self-hosted GPU workflow runs the same acceptance contract with ex
 
 The default lock installs the patched SDK wheels from `vendor/runtime-wheels/`, which is not committed.
 `deploy/build-worker-candidate.py` builds them from pinned upstream revisions and the patches in `images/worker/candidate/`, verifying source, patch, and build-tool hashes and using a fixed source timestamp.
-GitHub generates revision archives on request and does not keep their bytes stable,
-so each revision's `tree_sha256` is a SHA-256 digest of the extracted tree below the archive's single root directory.
-It covers every relative path, its kind (directory, file, executable file or symbolic link), each file's SHA-256 digest and each link's target;
-compression, timestamps, ownership and the root directory's name are not part of it.
-The build extracts the archive into an empty directory with Python's `data` filter, which refuses entries and links that leave that directory, and stops before any patch or build step when the digest differs.
+GitHub generates revision archives on request and does not keep their bytes stable, so each revision's `tree_sha256` is a SHA-256 digest of the extracted tree below the archive's single root directory.
+It covers every relative path, its kind (directory, file, executable file or symbolic link), each file's SHA-256 digest and each link's target; compression, timestamps, ownership, other mode bits and the root directory's name are not part of it.
+The build extracts the archive into an empty directory with Python's `data` filter, which refuses entries and links that leave that directory.
+It also refuses hard links and more than 1 GiB of extracted content, and stops before any patch or build step when the digest differs.
 Release assets, such as the OpenShell CLI and CMake, keep the archive digest `sha256`.
 When a pin moves, the mismatch error reports the digest of the tree it found.
 Each carried patch stays until a pinned upstream release provides its behavior and native qualification passes without it:
