@@ -407,7 +407,7 @@ The `[planning]` table connects the gateway to a platform planning service, whic
 
 ```toml
 [planning]
-url = "https://control.platform.svc.cluster.local:8443/mcp"
+url = "https://heartwood-control.heartwood-platform.svc.cluster.local:8443/mcp"
 ca_file = "/etc/heartwood/deployment/platform-ca.crt"
 private_address = true
 launch_context_file = "/etc/heartwood/deployment/launch-context.json"
@@ -422,10 +422,11 @@ audience = "heartwood-control"
 | `url` | HTTPS URL of the service's MCP endpoint, without credentials, query or fragment; no private address without `private_address`, and never a link-local or metadata address |
 | `ca_file` | Optional absolute PEM file of certificate authorities that replaces the default certificate bundle for the service; follows the [rules for operator files](#identity) and must load |
 | `private_address` | Optional; `true` permits an RFC 1918 or unique local address, such as a cluster service; default `false` |
-| `launch_context_file` | Absolute operator file with the `heartwood.platform-launch-context.v1` document the platform issued for this gateway |
+| `launch_context_file` | Absolute operator file of at most 64 KiB with the `heartwood.platform-launch-context.v1` document the platform issued for this gateway; follows the [rules for operator files](#identity) |
 | `token_exchange` | Table with `scope` and `audience`; each call carries a token exchanged for the signed-in researcher's token |
 
 Without a live sign-in the planning service counts as unavailable, and an exchange the identity provider refuses counts as refused.
+The gateway reads the launch context once at start, and a changed `[planning]` table stops dispatch until the next start.
 
 ## Credential Binding Names
 

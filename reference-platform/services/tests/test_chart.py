@@ -416,6 +416,7 @@ def test_control_service_serves_only_https_with_a_certificate_of_the_platform_ca
     ).stdout.decode()
     for name in (
         "heartwood-control",
+        "heartwood-control.heartwood-platform",
         "heartwood-control.heartwood-platform.svc",
         "heartwood-control.heartwood-platform.svc.cluster.local",
     ):

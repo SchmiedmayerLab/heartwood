@@ -286,15 +286,7 @@ class HostedPlanningClient(McpPlanningClient):
         from fastmcp.client.transports import StreamableHttpTransport
 
         deployment = self.deployment
-        exchange = deployment.token_exchange
-        try:
-            token = self.tokens(exchange.scope, exchange.audience)
-        except AccessUnavailableError:
-            raise PlanningServiceError("unavailable") from None
-        except TokenExchangeRefusedError:
-            raise PlanningServiceError("refused") from None
-        if token is None:
-            raise PlanningServiceError("unavailable")
+        # The address and the authorities are checked before a token is exchanged.
         parts = urlsplit(deployment.url)
         try:
             check_resolved_host(
@@ -307,6 +299,15 @@ class HostedPlanningClient(McpPlanningClient):
             )
         except (McpServerError, OSError, ValueError):
             raise PlanningServiceError("unavailable") from None
+        exchange = deployment.token_exchange
+        try:
+            token = self.tokens(exchange.scope, exchange.audience)
+        except AccessUnavailableError:
+            raise PlanningServiceError("unavailable") from None
+        except TokenExchangeRefusedError:
+            raise PlanningServiceError("refused") from None
+        if token is None:
+            raise PlanningServiceError("unavailable")
         return StreamableHttpTransport(deployment.url, auth=token, verify=verify)
 
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import socket
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -37,7 +38,7 @@ from heartwood.gateway import (
     SessionGateway,
     planning_lines,
 )
-from heartwood.gateway._access import TokenExchangeRefusedError
+from heartwood.gateway._access import AccessUnavailableError, TokenExchangeRefusedError
 from heartwood.gateway._deployment import ProjectDeployment, load_project_deployment
 from heartwood.gateway._platform_planning import PlatformPlanningBinding
 from heartwood.gateway._project import ProjectStateError
@@ -1198,7 +1199,11 @@ def test_a_hosted_gateway_plans_over_tls_with_an_exchanged_token(
 
 @pytest.mark.parametrize(
     ("answer", "status"),
-    [(None, "unavailable"), (TokenExchangeRefusedError, "refused")],
+    [
+        (None, "unavailable"),
+        (TokenExchangeRefusedError, "refused"),
+        (AccessUnavailableError, "unavailable"),
+    ],
 )
 def test_a_hosted_gateway_without_an_exchanged_token_calls_no_service(
     tmp_path: Path, fakes: RunningFakes, answer: type[Exception] | None, status: str
@@ -1237,3 +1242,41 @@ def test_the_planning_table_requires_https_and_a_gateway_identity(tmp_path: Path
     )
     with pytest.raises(ValueError, match="gateway identity"):
         SessionGateway(deployment=deployment)
+
+
+def test_a_hosted_gateway_exchanges_no_token_for_an_unapproved_address(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    platform = certificate_authority(tmp_path, "platform")
+    # The service name resolves to a cluster address.
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.96.0.12", 0))],
+    )
+    requested: list[str] = []
+
+    def tokens(_scope: str, audience: str) -> str | None:
+        requested.append(audience)
+        return None
+
+    url = "https://control.synthetic.invalid/mcp"
+    outcomes = {}
+    for private_address in (False, True):
+        gateway = SessionGateway(
+            deployment=_hosted_deployment(
+                tmp_path / str(private_address), url, platform[0], private_address=private_address
+            ),
+            service_tokens=tokens,
+        )
+        try:
+            services = gateway.refresh_planning().services
+        finally:
+            gateway.stop()
+        assert services is not None
+        outcomes[private_address] = (services.budgets, list(requested))
+    # Without the opt-in no token is exchanged; with it the exchange is the next step.
+    assert outcomes == {
+        False: ("unavailable", []),
+        True: ("unavailable", [BUDGETS_AUDIENCE]),
+    }

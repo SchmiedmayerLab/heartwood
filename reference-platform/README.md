@@ -107,7 +107,8 @@ The chart value `projects` is the source of projects and members, and the servic
 
 The service serves only HTTPS on port 8443, with a certificate that the platform CA signs for the names of its Service (`heartwood-control`, `heartwood-control.heartwood-platform`, and the `.svc` and `.svc.cluster.local` forms), valid for 825 days and kept on an upgrade like the certificate of Keycloak.
 It checks its certificate files every minute and serves a changed certificate to new connections without a restart; a certificate that does not load with its key leaves the previous one in use.
-Its callers verify it against the platform CA alone, a Heartwood gateway through `ca_file` in the service's `[[mcp_destinations]]` entry, which also sets `private_address`, because the Service has a cluster address.
+Its callers verify it against the platform CA alone.
+A Heartwood gateway reaches its MCP endpoint as the planning service of its `[planning]` table, with `ca_file` naming a copy of `platform-ca.crt`, `private_address`, because the Service has a cluster address, and a `launch_context_file` holding the `launch_context` member of `launch.json`.
 
 | Request | Caller | Result |
 |---|---|---|
