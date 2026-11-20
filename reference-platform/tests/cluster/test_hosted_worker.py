@@ -263,10 +263,23 @@ def test_the_second_researcher_cannot_start_a_server_of_project_small(
         second.sign_in_to_hub()
         status, _, page = second.get(f"/hub/spawn/{SECOND}/small")
         assert 'value="small"' not in page
-        status, answer = second.hub_api("POST", f"/users/{SECOND}/servers/small")
-        assert status >= 400, answer
-        status, user = second.hub_api("GET", f"/users/{SECOND}")
-        assert "small" not in user.get("servers", {})
+        # The Hub accepts the request and the spawn hook refuses the start.
+        second.hub_api("POST", f"/users/{SECOND}/servers/small")
+        deadline = time.monotonic() + 120
+        started: dict[str, Any] | None = None
+        while time.monotonic() < deadline:
+            status, user = second.hub_api("GET", f"/users/{SECOND}")
+            assert status == 200, user
+            started = user["servers"].get("small")
+            if started is None or not started["pending"]:
+                break
+            time.sleep(3)
+        assert started is None or not started["ready"], started
+        assert not [
+            pod
+            for pod in gateway_pods(cluster)
+            if pod["metadata"]["labels"].get("hub.jupyter.org/username") == SECOND
+        ]
 
 
 @pytest.fixture(scope="module")
