@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from datetime import datetime
+from decimal import Decimal
 from typing import Any, Literal
 
 import httpx
@@ -75,7 +76,7 @@ class BudgetList(BaseModel):
     budgets: tuple[BudgetObservation, ...]
 
 
-def _amount(value: object) -> str:
+def _amount(value: Decimal) -> str:
     text = format(value, "f")
     return text.rstrip("0").rstrip(".") if "." in text else text
 

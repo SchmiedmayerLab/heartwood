@@ -64,7 +64,11 @@ class SessionInference(Protocol):
     """The inference route of sessions, which measures what a session incurred."""
 
     def settle(self, session: str) -> Decimal:
-        """Stop the inference of a session and return the amount it incurred."""
+        """Stop the inference of a session and return the amount it incurred.
+
+        A deletion that fails after settling settles again when it is repeated, so a
+        repeated call returns the same amount.
+        """
 
 
 def session_holder(session: str) -> str:
@@ -214,13 +218,20 @@ class LaunchService:
             return self._prepare(found, subject, project)
 
     def _prepare(self, found: Project, subject: str, project: str) -> Launch:
+        existed = self._registry.session(subject, project) is not None
         session = self._registry.session(subject, project, create=True)
         assert session is not None
         # Admission: a session runs only with a reservation, which it keeps until it is
-        # deleted. A relaunch keeps the reservation of the first launch.
-        self._ledger.reserve(
-            project, "inference", session_holder(session.id), self._session_reservation
-        )
+        # deleted. A relaunch keeps the reservation of the first launch, and a refused
+        # first launch leaves no session behind.
+        try:
+            self._ledger.reserve(
+                project, "inference", session_holder(session.id), self._session_reservation
+            )
+        except InsufficientBudgetError:
+            if not existed:
+                self._registry.delete_session(subject, project)
+            raise
         provisioned = self._sessions.provision(session.id)
         redirect_uri = self._redirect_uri(session)
         self._clients.ensure_project_client(project)
@@ -296,12 +307,13 @@ class LaunchService:
                     # A former member's session cannot start again, so its Secret stays.
                     continue
                 session = self._registry.session(listed.subject, project)
-                if session is None:
-                    # Deleted meanwhile; preparing it would create it again.
+                if session is None or self._ledger.held(session_holder(session.id)) is None:
+                    # Deleted meanwhile, or never admitted: preparing it would create or
+                    # admit it, and a rotation starts no work.
                     continue
                 try:
                     self._prepare(found, listed.subject, project)
-                except (httpx.HTTPError, SessionError, InsufficientBudgetError):
+                except (httpx.HTTPError, SessionError):
                     rotation.failed.append(session.id)
                     continue
             rotation.rewritten.append(session.id)

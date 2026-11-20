@@ -22,12 +22,15 @@ from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import Decimal, localcontext
 from pathlib import Path
 from typing import Literal
 
 Category = Literal["inference", "compute"]
 CATEGORIES: tuple[Category, ...] = ("inference", "compute")
+# Amounts have at most 18 integer and 12 fractional digits; sums of many of them stay
+# exact at this precision.
+_PRECISION = 60
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS budget (
@@ -114,11 +117,12 @@ class Ledger:
                 connection.execute(statement)
 
     @contextmanager
-    def _transaction(self) -> Iterator[sqlite3.Connection]:
+    def _transaction(self, *, write: bool = True) -> Iterator[sqlite3.Connection]:
         connection = sqlite3.connect(self._path, timeout=30, isolation_level=None)
         try:
             connection.execute("PRAGMA foreign_keys = ON")
-            connection.execute("BEGIN IMMEDIATE")
+            # A write takes the write lock at once, so its checks and changes see one state.
+            connection.execute("BEGIN IMMEDIATE" if write else "BEGIN")
             yield connection
             connection.execute("COMMIT")
         except BaseException:
@@ -155,13 +159,16 @@ class Ledger:
     def _balance(connection: sqlite3.Connection, row: tuple[str, str, str, str, int]) -> Balance:
         identifier, project, category, allocated, revision = row
         reserved = spent = Decimal(0)
-        for amount, state, incurred in connection.execute(
-            "SELECT amount, state, incurred FROM reservation WHERE budget_id = ?", (identifier,)
-        ):
-            if state == "held":
-                reserved += Decimal(amount)
-            else:
-                spent += Decimal(incurred)
+        with localcontext(prec=_PRECISION):
+            for amount, state, incurred in connection.execute(
+                "SELECT amount, state, incurred FROM reservation WHERE budget_id = ?",
+                (identifier,),
+            ):
+                if state == "held":
+                    reserved += Decimal(amount)
+                else:
+                    spent += Decimal(incurred)
+            available = Decimal(allocated) - reserved - spent
         assert category in CATEGORIES
         return Balance(
             budget_id=identifier,
@@ -170,13 +177,13 @@ class Ledger:
             allocated=Decimal(allocated),
             reserved=reserved,
             spent=spent,
-            available=Decimal(allocated) - reserved - spent,
+            available=available,
             revision=revision,
         )
 
     def balances(self, project: str) -> list[Balance]:
         """Return the budgets of a project with their amounts."""
-        with self._transaction() as connection:
+        with self._transaction(write=False) as connection:
             rows = connection.execute(
                 "SELECT id, project_id, category, allocated, revision FROM budget"
                 " WHERE project_id = ? ORDER BY category",
@@ -186,7 +193,7 @@ class Ledger:
 
     def held(self, holder: str) -> Reservation | None:
         """Return the reservation that a holder holds, if any."""
-        with self._transaction() as connection:
+        with self._transaction(write=False) as connection:
             return _reservation(connection, holder)
 
     def reserve(
@@ -236,8 +243,8 @@ class Ledger:
         The incurred amount is recorded in full, also when it exceeds the reservation.
         A holder without a reservation has nothing to settle.
         """
-        if incurred < 0:
-            raise ValueError("an incurred amount is not negative")
+        if not incurred.is_finite() or incurred < 0:
+            raise ValueError("an incurred amount is a finite amount that is not negative")
         with self._transaction() as connection:
             held = _reservation(connection, holder)
             if held is None:

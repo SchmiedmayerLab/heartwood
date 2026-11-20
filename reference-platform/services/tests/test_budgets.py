@@ -277,19 +277,42 @@ def test_another_project_or_a_missing_session_is_refused(
     assert result["content"][0]["text"] == message
 
 
-def test_a_rotation_reports_a_session_without_a_reservation_and_rewrites_the_others(
+def test_a_refused_first_launch_leaves_no_session_and_a_rotation_admits_nothing(
     platform: Platform,
 ) -> None:
     alice = str(platform.launch(_ALICE, "demo")["session"])
     platform.ledger.synchronize([Allocation("demo", "inference", Decimal(1))])
     refused = platform.client.put(f"/v1/researchers/{_id(_BOB)}/projects/demo/launch", headers=_HUB)
     assert refused.status_code == 409
-    bob = platform.registry.session(_BOB, "demo")
-    assert bob is not None
+    assert platform.registry.session(_BOB, "demo") is None
+    # Bob has no launch context, so the planning tools do not answer for him.
+    context = platform.client.get("/v1/launch-context", headers=platform.researcher(_BOB, "demo"))
+    assert context.status_code == 404
+    platform.ledger.synchronize([Allocation("demo", "inference", Decimal(5))])
 
     response = platform.client.post(
         "/v1/projects/demo/client-secret", headers={"Authorization": "Bearer operator-token"}
     )
 
     assert response.status_code == 200
-    assert response.json() == {"sessions": [alice], "failed": [bob.id]}
+    assert response.json() == {"sessions": [alice], "failed": []}
+    assert platform.registry.session(_BOB, "demo") is None
+    assert _balance(platform.ledger) == (5, 1, 0, 4)
+
+
+def test_amounts_of_the_largest_form_stay_exact(tmp_path: Path) -> None:
+    ledger = Ledger(tmp_path / "ledger.sqlite3")
+    largest = Decimal("999999999999999999.999999999999")
+    ledger.synchronize([Allocation("demo", "inference", largest)])
+
+    ledger.reserve("demo", "inference", "session:a", Decimal("0.000000000001"))
+
+    assert _balance(ledger) == (
+        largest,
+        Decimal("0.000000000001"),
+        0,
+        Decimal("999999999999999999.999999999998"),
+    )
+    for incurred in (Decimal("Infinity"), Decimal("NaN")):
+        with pytest.raises(ValueError, match="finite"):
+            ledger.settle("session:a", incurred)
