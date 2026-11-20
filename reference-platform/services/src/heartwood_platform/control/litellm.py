@@ -83,6 +83,7 @@ class LiteLLM:
         allowed_routes: Sequence[str],
         max_budget: Decimal,
         metadata: dict[str, str],
+        max_parallel_requests: int | None = None,
     ) -> str:
         """Create a key for listed models and routes, with a budget, and return it.
 
@@ -100,6 +101,11 @@ class LiteLLM:
                 "allowed_routes": list(allowed_routes),
                 "max_budget": _budget(max_budget),
                 "metadata": metadata,
+                **(
+                    {}
+                    if max_parallel_requests is None
+                    else {"max_parallel_requests": max_parallel_requests}
+                ),
             },
         )
         key = document.get("key")
@@ -135,7 +141,8 @@ class LiteLLM:
             return None
         if response.status_code != httpx.codes.OK:
             raise InferenceGatewayError(f"the proxy answered /key/info with {response.status_code}")
-        info = response.json().get("info")
+        document = response.json()
+        info = document.get("info") if isinstance(document, dict) else None
         if not isinstance(info, dict):
             raise InferenceGatewayError("the proxy answered /key/info without the key")
         budget = info.get("max_budget")

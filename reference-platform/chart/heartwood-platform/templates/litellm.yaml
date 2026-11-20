@@ -24,7 +24,11 @@ from the token prices of the model's runtime profile in syntheticPrices.
 {{- range $rate := $profile.rates -}}
 {{- range $sku := $prices.skuPrices -}}
 {{- if eq $sku.SkuPriceId $rate.skuPriceId -}}
-{{- $_ := set $costs (printf "%s_cost_per_token" (trimSuffix "_tokens" $rate.measure)) (printf "%.18f" (divf (float64 $sku.UnitPrice) (float64 $rate.quantityPerPricingUnit))) -}}
+{{- $cost := printf "%.18f" (divf (float64 $sku.UnitPrice) (float64 $rate.quantityPerPricingUnit)) -}}
+{{- if and (gt (float64 $sku.UnitPrice) 0.0) (eq (float64 $cost) 0.0) -}}
+{{- fail (printf "the price %s of %s is below the smallest cost per token that LiteLLM is given" $sku.SkuPriceId $model.name) -}}
+{{- end -}}
+{{- $_ := set $costs (printf "%s_cost_per_token" (trimSuffix "_tokens" $rate.measure)) $cost -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}

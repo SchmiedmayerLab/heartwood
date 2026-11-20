@@ -84,6 +84,9 @@ class SessionInference(Protocol):
         repeated call returns the same amount.
         """
 
+    def settled(self, session: str) -> bool:
+        """Return whether a session's inference is settled."""
+
     def forget(self, session: str) -> None:
         """Remove what is kept about a deleted session's inference."""
 
@@ -240,6 +243,9 @@ class LaunchService:
         existed = self._registry.session(subject, project) is not None
         session = self._registry.session(subject, project, create=True)
         assert session is not None
+        if self._inference is not None and self._inference.settled(session.id):
+            # A deletion settled the session and did not finish; it must be completed first.
+            raise SessionError("the session is being deleted")
         # Admission: a session runs only with a reservation, which it keeps until it is
         # deleted. A relaunch keeps the reservation of the first launch, and a refused
         # first launch leaves no session behind.

@@ -228,6 +228,7 @@ def test_a_launch_gives_the_worker_key_to_the_provider_and_a_discovery_key_to_th
     assert worker["allowed_routes"] == list(WORKER_ROUTES)
     assert worker["max_budget"] == pytest.approx(0.006 - 0.003584)
     assert worker["metadata"] == {"session": "abc", "project": "demo", "purpose": "worker"}
+    assert worker["max_parallel_requests"] == 1
     (discovery,) = [key for key in route.proxy.keys.values() if key is not worker]
     assert discovery["allowed_routes"] == list(DISCOVERY_ROUTES)
     assert discovery["models"] == ["synthetic-coder"]
@@ -264,9 +265,11 @@ def test_a_relaunch_keeps_the_worker_key_with_the_current_models(route: Route) -
 
     assert route.worker_key()[0] == first
     assert ("/key/update", {"key": first, "models": ["synthetic-coder"]}) in route.proxy.requests
-    # A new discovery key replaces the previous one.
-    assert not previous_discovery & set(route.proxy.keys)
+    # A gateway started before keeps the previous discovery key until the next launch.
+    assert previous_discovery <= set(route.proxy.keys)
     assert key_hash(files["model-discovery-key"]) in route.proxy.keys
+    route.inference.prepare("abc", "demo", Decimal("0.006"), _ROUTE)
+    assert not previous_discovery & set(route.proxy.keys)
     assert route.openshell.credentials == ["sk-generated-1"]
 
 
@@ -322,6 +325,40 @@ def test_rotation_carries_the_spending_and_replaces_the_provider_credential(rout
     assert route.openshell.credentials == ["sk-generated-1", "sk-generated-3"]
     route.proxy.spend(new, "0.001")
     assert route.inference.settle("abc") == Decimal("0.00225")
+
+
+def test_a_failed_rotation_keeps_the_previous_key_with_its_budget(route: Route) -> None:
+    route.inference.prepare("abc", "demo", Decimal("0.006"), _ROUTE)
+    old, _ = route.worker_key()
+    route.proxy.spend(old, "0.00125")
+    route.openshell.fail = "provider update"
+
+    with pytest.raises(ProviderError):
+        route.inference.rotate("abc", "demo", _ROUTE)
+
+    token, key = route.worker_key()
+    assert token == old
+    assert key["max_budget"] == pytest.approx(0.002416)
+    assert route.openshell.providers["platform-route"] == "sk-generated-1"
+    route.openshell.fail = None
+    route.inference.rotate("abc", "demo", _ROUTE)
+    assert route.worker_key()[0] != old
+
+
+def test_spending_that_does_not_stop_changing_is_not_recorded(route: Route) -> None:
+    route.inference.prepare("abc", "demo", Decimal("0.006"), _ROUTE)
+    token, _ = route.worker_key()
+
+    def sleep(seconds: float) -> None:
+        route.sleeps.append(seconds)
+        route.proxy.spend(token, "0.00001")
+        route.proxy.flush()
+
+    route.inference._sleep = sleep
+    with pytest.raises(InferenceGatewayError, match="did not stop changing"):
+        route.inference.settle("abc")
+    assert token in route.proxy.keys
+    assert not route.inference.settled("abc")
 
 
 def test_a_lost_provider_gets_a_rotated_key_at_the_next_launch(route: Route) -> None:

@@ -26,7 +26,7 @@ from datetime import UTC, datetime
 from decimal import Decimal, localcontext
 from pathlib import Path
 
-from heartwood_platform.control.litellm import KeyInfo, LiteLLM, key_hash
+from heartwood_platform.control.litellm import InferenceGatewayError, KeyInfo, LiteLLM, key_hash
 from heartwood_platform.control.openshell import OpenShellProviders
 from heartwood_platform.control.prices import PriceSheet
 
@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS session_key (
     session TEXT PRIMARY KEY,
     token TEXT NOT NULL,
     discovery TEXT,
+    retired TEXT,
     max_budget TEXT NOT NULL,
     carried TEXT NOT NULL,
     settled TEXT,
@@ -105,6 +106,9 @@ class SessionRoute:
 class _Keys:
     token: str
     discovery: str | None
+    # The discovery key before the current one, which a gateway started before the
+    # last launch may still hold; the next launch deletes it.
+    retired: str | None
     max_budget: Decimal
     carried: Decimal
     settled: Decimal | None
@@ -163,7 +167,7 @@ class ManagedInference:
     def _keys(self, session: str) -> _Keys | None:
         with self._transaction() as connection:
             row = connection.execute(
-                "SELECT token, discovery, max_budget, carried, settled FROM session_key"
+                "SELECT token, discovery, retired, max_budget, carried, settled FROM session_key"
                 " WHERE session = ?",
                 (session,),
             ).fetchone()
@@ -172,22 +176,25 @@ class ManagedInference:
         return _Keys(
             row[0],
             row[1],
-            Decimal(row[2]),
+            row[2],
             Decimal(row[3]),
-            None if row[4] is None else Decimal(row[4]),
+            Decimal(row[4]),
+            None if row[5] is None else Decimal(row[5]),
         )
 
     def _store(self, session: str, keys: _Keys) -> None:
         with self._transaction() as connection:
             connection.execute(
-                "INSERT INTO session_key VALUES (?, ?, ?, ?, ?, ?, ?)"
+                "INSERT INTO session_key VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
                 " ON CONFLICT (session) DO UPDATE SET token = excluded.token,"
-                " discovery = excluded.discovery, max_budget = excluded.max_budget,"
+                " discovery = excluded.discovery, retired = excluded.retired,"
+                " max_budget = excluded.max_budget,"
                 " carried = excluded.carried, settled = excluded.settled",
                 (
                     session,
                     keys.token,
                     keys.discovery,
+                    keys.retired,
                     str(keys.max_budget),
                     str(keys.carried),
                     None if keys.settled is None else str(keys.settled),
@@ -202,6 +209,9 @@ class ManagedInference:
             allowed_routes=WORKER_ROUTES,
             max_budget=max_budget,
             metadata={"session": session, "project": project, "purpose": "worker"},
+            # One request at a time: the proxy checks the spending before a request and
+            # counts its cost when it ends, so the budget leaves room for one request.
+            max_parallel_requests=1,
         )
 
     def prepare(
@@ -222,7 +232,7 @@ class ManagedInference:
             with localcontext(prec=_PRECISION):
                 budget = reservation - self.headroom
             key = self._generate(session, project, budget)
-            keys = _Keys(key_hash(key), None, budget, Decimal(0), None)
+            keys = _Keys(key_hash(key), None, None, budget, Decimal(0), None)
             self._store(session, keys)
             self._providers.apply(route.endpoint, route.client, key, replace=True)
         else:
@@ -236,10 +246,14 @@ class ManagedInference:
             max_budget=_DISCOVERY_BUDGET,
             metadata={"session": session, "project": project, "purpose": "discovery"},
         )
-        previous = keys.discovery
-        self._store(session, _Keys(keys.token, key_hash(discovery), *_rest(keys)))
-        if previous is not None:
-            self._proxy.delete_key(previous)
+        # The gateway started before this launch keeps the previous discovery key until
+        # it stops; the key before it is deleted.
+        self._store(
+            session,
+            _Keys(keys.token, key_hash(discovery), keys.discovery, *_rest(keys)),
+        )
+        if keys.retired is not None:
+            self._proxy.delete_key(keys.retired)
         return {"model-discovery-key": discovery}
 
     def _measure(self, token: str) -> Decimal:
@@ -255,14 +269,14 @@ class ManagedInference:
         for _ in range(self._polls):
             current = self._proxy.key_info(token)
             if current is None:
-                break
+                raise InferenceGatewayError("the key disappeared while its spending was read")
             if last is not None and current.spend == last.spend:
                 return current.spend
             last = current
             self._sleep(self._poll)
-        if last is None:
-            return info.spend
-        return last.spend
+        # Recording a reading that still changes could record too little; the settlement
+        # or rotation is repeated instead.
+        raise InferenceGatewayError("the key's spending did not stop changing")
 
     def _rotate(self, session: str, project: str, keys: _Keys, route: SessionRoute) -> _Keys:
         spend = self._measure(keys.token)
@@ -270,9 +284,17 @@ class ManagedInference:
             carried = keys.carried + spend
             budget = max(keys.max_budget - carried, Decimal(0))
         key = self._generate(session, project, budget)
-        rotated = _Keys(key_hash(key), keys.discovery, keys.max_budget, carried, None)
+        try:
+            self._providers.apply(route.endpoint, route.client, key, replace=True)
+        except BaseException:
+            # The provider keeps the previous key, which gets its budget back.
+            self._proxy.update_key(
+                keys.token, max_budget=max(keys.max_budget - keys.carried, Decimal(0))
+            )
+            self._proxy.delete_key(key_hash(key))
+            raise
+        rotated = _Keys(key_hash(key), keys.discovery, keys.retired, keys.max_budget, carried, None)
         self._store(session, rotated)
-        self._providers.apply(route.endpoint, route.client, key, replace=True)
         self._proxy.delete_key(keys.token)
         return rotated
 
@@ -298,13 +320,20 @@ class ManagedInference:
             spend = self._measure(keys.token)
             with localcontext(prec=_PRECISION):
                 settled = keys.carried + spend
-            keys = _Keys(keys.token, keys.discovery, keys.max_budget, keys.carried, settled)
+            keys = _Keys(
+                keys.token, keys.discovery, keys.retired, keys.max_budget, keys.carried, settled
+            )
             self._store(session, keys)
-        self._proxy.delete_key(keys.token)
-        if keys.discovery is not None:
-            self._proxy.delete_key(keys.discovery)
+        for token in (keys.token, keys.discovery, keys.retired):
+            if token is not None:
+                self._proxy.delete_key(token)
         assert keys.settled is not None
         return keys.settled
+
+    def settled(self, session: str) -> bool:
+        """Return whether a session's inference is settled and its keys are gone."""
+        keys = self._keys(session)
+        return keys is not None and keys.settled is not None
 
     def forget(self, session: str) -> None:
         """Remove the record of a deleted session's keys."""

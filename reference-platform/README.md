@@ -76,6 +76,7 @@ The [Kubernetes Qualification workflow](../.github/workflows/kubernetes-qualific
 Helm generates every credential at the first installation and keeps the existing value on an upgrade.
 The chart renders no credential from a fixed value.
 PostgreSQL keeps the credentials of the first installation and the Keycloak realm on its volume, so a new installation after `helm uninstall` needs the volume claims of the old one deleted first.
+It creates the roles and databases of Keycloak and LiteLLM only when its volume is new.
 
 ### Keycloak
 
@@ -300,7 +301,8 @@ Its administration interface is off, and only the control service holds its mast
 `inference.models` lists the route's models and has no default.
 Each model's `name` is the model name that LiteLLM offers and the runtime profile of `syntheticPrices` that prices its input and output tokens; LiteLLM records the cost of each request from these prices.
 `litellmParams` are the model's LiteLLM parameters, and `apiKeySecret` names a Secret key that LiteLLM sends to the model as its API key.
-`maxInputTokens` and `maxOutputTokens` bound one request, and `supportsToolCalls` declares tool support to the gateways.
+`maxInputTokens` and `maxOutputTokens` are the largest input and output of one request that the model accepts, and `supportsToolCalls` declares tool support to the gateways.
+LiteLLM does not enforce these limits, so they must not be lower than the limits the model itself enforces.
 LiteLLM trusts the platform CA alone for the models it calls.
 
 A hosted model, such as one on Vertex AI or Amazon Bedrock, is a model of the route with the LiteLLM parameters of its provider, the provider's credentials from a Secret through `inference.environment`, and `inference.trustPublicRoots`, with which LiteLLM also trusts the public roots of its image:
@@ -330,7 +332,7 @@ inference:
       maxOutputTokens: 8192
       supportsToolCalls: true
       litellmParams:
-        model: bedrock/anthropic.claude-sonnet-4-20250514-v1:0
+        model: bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0
         aws_region_name: us-east-1
 ```
 
@@ -340,10 +342,11 @@ The models of a deployment and their data handling are the operator's choice; th
 At its first launch a session gets one virtual key for its workers.
 The key lists the route's models and only the routes `/v1/chat/completions` and `/v1/models`, so it cannot read other keys, the models' addresses or their health.
 Its budget is the session's reservation minus the largest cost of one request to any model of the route, because LiteLLM checks a key's spending before each request and the last admitted request can end above the budget.
+The key allows one request at a time, so only one request can be admitted below the budget and end above it.
 A session whose project has no more than that cost available is refused.
 The control service creates the provider `hub.modelRoute.provider` in the workspace `research` of the session's OpenShell gateway with the key, through the pinned OpenShell command-line tool in the platform services image, and keeps only the key's SHA-256 hash.
 The provider's profile allows the key only in `POST` requests to LiteLLM's chat completions endpoint from `hub.modelRoute.binaries` of the worker image; a worker that attaches the provider sees a placeholder in `hub.modelRoute.placeholderEnv`.
-Each launch also gives the session a new discovery key, which may only list the route's models, and deletes the previous one.
+Each launch also gives the session a new discovery key, which may only list the route's models; the previous key stays valid for a gateway started before the launch, and the key before it is deleted.
 The gateway lists models with it through the model connection `hub.modelRoute.profileId` of its manifest, trusting the platform CA alone, and the manifest declares each model's limits and tool support.
 At a later launch the worker key keeps its budget and gets the route's current models, so a model removed from `inference.models` is refused from then on; a session whose OpenShell gateway lost the provider gets a rotated key.
 
@@ -351,6 +354,8 @@ LiteLLM refuses a request beyond a key's budget with HTTP 422 and the error type
 
 Deleting a session settles its key: the control service sets the key's budget to its recorded spending, which blocks it, waits `inference.settleWaitSeconds` for LiteLLM to record the spending of the last requests, reads the spending until it stops changing, records it with the spending of earlier keys of the session as what the session incurred, and deletes the keys.
 The recorded amount can exceed the key's budget by up to one request.
+When the spending does not stop changing, the deletion fails and is repeated.
+A session whose deletion settled its key and then failed is not launched again until the deletion completes.
 
 A platform operator rotates the worker key of a session with `POST /v1/researchers/{researcher}/projects/{project}/model-key`, accepted only from `control.operatorCallers`.
 The control service measures the old key's spending as at a deletion, creates a key with the remaining budget, replaces the provider's credential with it, deletes the old key and rewrites the gateway Secret.

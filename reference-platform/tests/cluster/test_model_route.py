@@ -262,12 +262,37 @@ def test_a_launch_gives_the_gateway_a_key_that_only_lists_models(
 
 def test_a_relaunch_replaces_the_discovery_key(proxy: Proxy, launched: dict[str, Any]) -> None:
     account = launched["gateway_service_account"]
-    before = secret(proxy.cluster, SESSIONS, account, "model-discovery-key")
+    first = secret(proxy.cluster, SESSIONS, account, "model-discovery-key")
+
+    def relaunch() -> str:
+        status, _ = request(
+            proxy.cluster,
+            proxy.pod,
+            "PUT",
+            launch_url(FIRST, "demo"),
+            spawner_token(proxy.cluster),
+        )
+        assert status == 200
+        return secret(proxy.cluster, SESSIONS, account, "model-discovery-key")
+
+    second = relaunch()
+    assert second != first
+    # A gateway started before the launch keeps its key until the next launch.
+    assert proxy.call(first, "GET", "/v1/models")[0] == 200
+    third = relaunch()
+    assert proxy.call(first, "GET", "/v1/models")[0] == 401
+    assert proxy.call(second, "GET", "/v1/models")[0] == 200
+    assert proxy.call(third, "GET", "/v1/models")[0] == 200
+
+
+def test_a_deletion_settles_and_revokes_the_keys(proxy: Proxy, launched: dict[str, Any]) -> None:
+    account = launched["gateway_service_account"]
+    discovery = secret(proxy.cluster, SESSIONS, account, "model-discovery-key")
     status, _ = request(
-        proxy.cluster, proxy.pod, "PUT", launch_url(FIRST, "demo"), spawner_token(proxy.cluster)
+        proxy.cluster, proxy.pod, "DELETE", launch_url(FIRST, "demo"), spawner_token(proxy.cluster)
     )
-    assert status == 200
-    after = secret(proxy.cluster, SESSIONS, account, "model-discovery-key")
-    assert after != before
-    assert proxy.call(before, "GET", "/v1/models")[0] == 401
-    assert proxy.call(after, "GET", "/v1/models")[0] == 200
+    assert status == 204
+    assert proxy.call(discovery, "GET", "/v1/models")[0] == 401
+    # Deleting a key that is gone succeeds, so a repeated settlement completes.
+    status, answer = proxy.call(proxy.master, "POST", "/key/delete", {"keys": [_hash(discovery)]})
+    assert status in {200, 404}, answer

@@ -71,7 +71,7 @@ class FakeInference:
 
     def __init__(self) -> None:
         self.incurred: dict[str, Decimal] = {}
-        self.settled: list[str] = []
+        self.settlements: list[str] = []
         self.budgets: dict[str, Decimal] = {}
         self.rotated: list[str] = []
         self.forgotten: list[str] = []
@@ -89,8 +89,11 @@ class FakeInference:
         self.rotated.append(session)
 
     def settle(self, session: str) -> Decimal:
-        self.settled.append(session)
+        self.settlements.append(session)
         return self.incurred.get(session, Decimal(0))
+
+    def settled(self, session: str) -> bool:
+        return session in self.settlements and session not in self.forgotten
 
     def forget(self, session: str) -> None:
         self.forgotten.append(session)

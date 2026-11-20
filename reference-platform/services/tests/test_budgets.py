@@ -187,11 +187,11 @@ def test_deletion_settles_what_the_session_incurred_and_releases_the_rest(
         )
         assert response.status_code == 204
 
-    assert platform.inference.settled == [bob, alice]
+    assert platform.inference.settlements == [bob, alice]
     assert _balance(platform.ledger) == (5, 0, Decimal("1.4"), Decimal("3.6"))
     # A repeated deletion settles nothing again.
     platform.client.delete(f"/v1/researchers/{_id(_BOB)}/projects/demo/launch", headers=_HUB)
-    assert platform.inference.settled == [bob, alice]
+    assert platform.inference.settlements == [bob, alice]
 
 
 class Overview:
@@ -351,3 +351,18 @@ def test_an_operator_rotates_the_model_key_of_a_session(platform: Platform) -> N
     assert response.status_code == 200
     assert response.json() == {"session": session}
     assert platform.inference.rotated == [session]
+
+
+def test_a_session_whose_deletion_did_not_finish_is_not_launched_again(
+    platform: Platform,
+) -> None:
+    session = str(platform.launch(_BOB, "demo")["session"])
+    platform.inference.settlements.append(session)
+
+    response = platform.client.put(
+        f"/v1/researchers/{_id(_BOB)}/projects/demo/launch", headers=_HUB
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {"error": "the session is being deleted"}
+    assert _balance(platform.ledger) == (5, 1, 0, 4)
