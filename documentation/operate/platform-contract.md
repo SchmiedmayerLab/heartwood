@@ -30,7 +30,7 @@ A schema describes a message; it does not enable a service, authorize a request,
 | [Controlled data](#controlled-data) controls | Selected read-only inputs current; quarantine and steward-approved release unavailable |
 | [Audit and records](#audit-and-records) | Signed checkpoints and deployment-bound evidence current; signer and records-service qualification is the platform's |
 | [Platform services](#platform-services) over MCP, outside operations, launch context and budgets | Draft; the content-bound [outside operation](#outside-operation-admission) authorization, [research MCP servers](#research-mcp-servers), [platform job operations](#platform-job-operations) and [planning against platform budgets](#planning-against-platform-budgets) are current, but built-in launchers install no planning service |
-| Verified OpenID Connect identity of one researcher per gateway, with `identity-proxy` ingress | Current, CI validated with a synthetic provider |
+| Verified OpenID Connect identity of one researcher per gateway, with `identity-proxy` ingress | Current, implemented and tested locally with a synthetic provider |
 | Launch of hosted per-project gateways by a platform | Unavailable |
 | Realtime voice | Unavailable |
 
@@ -98,7 +98,7 @@ Releases carry build attestations; separate artifact signatures, software bills 
 |---|---|---|---|
 | Workstation or container | The researcher | The operating system and the launch link | Current |
 | Platform workspace | The platform, in the researcher's workspace | The platform proxy | Current for the Terra terminal and notebook and the Stanford Carina terminal, CI validated |
-| Hosted per-project service | The platform, one gateway per researcher and project | The institution's identity provider, verified by Heartwood | Identity verification current, CI validated with a synthetic provider; platform launch unavailable |
+| Hosted per-project service | The platform, one gateway per researcher and project | The institution's identity provider, verified by Heartwood | Identity verification current, implemented and tested locally with a synthetic provider; platform launch unavailable |
 
 Gateway shutdown does not stop external jobs or storage charges.
 
