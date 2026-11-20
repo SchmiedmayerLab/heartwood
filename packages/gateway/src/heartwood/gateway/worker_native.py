@@ -421,6 +421,13 @@ class _NativeWorkerAttempt:
                         "skills": skills.sha256,
                         "specialists": request.specialists.fingerprint,
                         **({"client_tools": self._client_tools} if self._client_tools else {}),
+                        # The data a worker can read is part of what the attempt received.
+                        **(
+                            {"project_data": settings.project_data.model_dump(mode="json")}
+                            if isinstance(settings, KubernetesWorkerDeployment)
+                            and settings.project_data is not None
+                            else {}
+                        ),
                     },
                     sort_keys=True,
                     separators=(",", ":"),

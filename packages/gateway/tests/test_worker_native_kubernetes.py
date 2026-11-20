@@ -573,3 +573,97 @@ def test_a_sandbox_that_cannot_be_read_between_retries_keeps_the_attempt_fenced(
         kubernetes.attempt.revoke(kubernetes.record("fenced", runtime))
     assert len(requests) == 1
     assert kubernetes.removed == []
+
+
+_PROJECT_DATA = {
+    "claim_name": "hw-project-data-eeeeeeeeeeeeeeee",
+    "claim_uid": "6f1b8c2e-4d3a-4b5c-9e8f-0a1b2c3d4e5f",
+    "project": "demo",
+    "content_sha256": "e" * 64,
+    "mount_path": "/data",
+}
+
+
+def _with_project_data(
+    settings: KubernetesWorkerDeployment, *, listed: bool = True, **changes: object
+) -> KubernetesWorkerDeployment:
+    policy = json.loads(settings.policy_path.read_text())
+    policy["filesystem"]["read_only"] = [
+        path for path in policy["filesystem"]["read_only"] if path != "/data"
+    ] + (["/data"] if listed else [])
+    policy["filesystem"]["read_write"] = [
+        path for path in policy["filesystem"].get("read_write", []) if path != "/data"
+    ]
+    settings.policy_path.write_text(json.dumps(policy))
+    return KubernetesWorkerDeployment.model_validate(
+        {
+            **settings.model_dump(),
+            "policy_file_sha256": hashlib.sha256(settings.policy_path.read_bytes()).hexdigest(),
+            "project_data": {**_PROJECT_DATA, **changes},
+        }
+    )
+
+
+def test_project_data_is_attached_read_only_and_bound_into_the_input_identity(
+    kubernetes_deployment: tuple[KubernetesWorkerDeployment, ProjectContext],
+    monkeypatch: pytest.MonkeyPatch,
+    worker_api: _WorkerApiServer,
+) -> None:
+    settings, project = kubernetes_deployment
+    endpoint = f"http://127.0.0.1:{worker_api.server_address[1]}/"
+    prepared = _Kubernetes(
+        _with_project_data(_writable_workspace(settings)), project, monkeypatch, endpoint
+    )
+    request = prepared.attempt.request
+    plain = _with_project_data(prepared.kubernetes).model_copy(update={"project_data": None})
+    identities = {prepared.attempt.plan().input_manifest_sha256}
+    for changed in (
+        plain,
+        _with_project_data(prepared.kubernetes, content_sha256="f" * 64),
+        _with_project_data(prepared.kubernetes, claim_uid="6f1b8c2e-0000-4b5c-9e8f-0a1b2c3d4e5f"),
+    ):
+        attempt = worker_native._NativeWorkerAttempt(changed, request)
+        identities.add(attempt.plan().input_manifest_sha256)
+        release = attempt.plan().release_preparation
+        assert release is not None
+        release()
+    # Each declaration of project data yields its own input identity.
+    assert len(identities) == 4
+    runtime = prepared.attempt.launch(prepared.intent)
+    config = _as_dict(prepared.sandboxes.spec.template.driver_config)["kubernetes"]
+    assert config["volumes"][-1] == {
+        "name": "project-data",
+        "persistent_volume_claim": {"claim_name": _PROJECT_DATA["claim_name"], "read_only": True},
+    }
+    assert config["containers"]["agent"]["volume_mounts"][-1] == {
+        "name": "project-data",
+        "mount_path": "/data",
+        "read_only": True,
+    }
+    assert "/data" in prepared.sandboxes.spec.policy.filesystem.read_only
+    prepared.attempt.revoke(prepared.record("fenced", runtime))
+
+
+def test_a_policy_that_does_not_list_the_project_data_read_only_is_refused(
+    kubernetes_deployment: tuple[KubernetesWorkerDeployment, ProjectContext],
+) -> None:
+    settings, project = kubernetes_deployment
+    settings = _writable_workspace(settings)
+    with pytest.raises(WorkerAttemptError, match="native policy does not match"):
+        NativeWorkerControl(_with_project_data(settings, listed=False), project).policy()
+    writable = _with_project_data(settings)
+    policy = json.loads(writable.policy_path.read_text())
+    policy["filesystem"]["read_write"].append("/data")
+    writable.policy_path.write_text(json.dumps(policy))
+    with pytest.raises(WorkerAttemptError, match="native policy does not match"):
+        NativeWorkerControl(
+            writable.model_copy(
+                update={
+                    "policy_file_sha256": hashlib.sha256(
+                        writable.policy_path.read_bytes()
+                    ).hexdigest()
+                }
+            ),
+            project,
+        ).policy()
+    NativeWorkerControl(_with_project_data(settings), project).policy()

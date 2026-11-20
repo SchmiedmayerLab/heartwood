@@ -8,7 +8,8 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+import posixpath
+from pathlib import Path, PurePosixPath
 from typing import Annotated, ClassVar, Literal, Self
 from urllib.parse import urlsplit
 
@@ -96,6 +97,45 @@ class OpenShellWorkerDeployment(_WorkerSettings):
         return self
 
 
+# Paths that the worker or the driver already use; project data is mounted elsewhere.
+_RESERVED_MOUNTS = tuple(
+    PurePosixPath(path) for path in ("/inputs", "/skills", "/workspace", "/sandbox", "/opt", "/tmp")
+)
+
+
+class KubernetesProjectData(BaseModel):
+    """A platform-declared, read-only volume of the project's data.
+
+    The platform fills the claim before the gateway starts and names it here with the
+    identity the cluster gave it, the project it belongs to and the digest of its content.
+    """
+
+    model_config = _CONFIG
+
+    claim_name: _Name
+    claim_uid: str = Field(
+        pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    )
+    # The platform's project, which the claim's `heartwood.platform/project` label names.
+    project: _Name
+    content_sha256: Digest
+    mount_path: PurePosixPath
+
+    @model_validator(mode="after")
+    def _mount_elsewhere(self) -> Self:
+        path = self.mount_path
+        if (
+            not path.is_absolute()
+            or str(path) != posixpath.normpath(str(path))
+            or len(path.parts) < 2
+            or any(path.is_relative_to(r) or r.is_relative_to(path) for r in _RESERVED_MOUNTS)
+        ):
+            raise ValueError(
+                "Project data must be mounted at a canonical path apart from the worker's own"
+            )
+        return self
+
+
 class KubernetesWorkerDeployment(_WorkerSettings):
     """A Kubernetes deployment: sandboxes run as pods in one namespace of one cluster."""
 
@@ -123,6 +163,7 @@ class KubernetesWorkerDeployment(_WorkerSettings):
     # runtime that the workload pod's first init container installs.
     supervisor_image_digest: ImageDigest
     sandbox_image_digest: ImageDigest
+    project_data: KubernetesProjectData | None = None
 
     @model_validator(mode="after")
     def _explicit_kubernetes(self) -> Self:

@@ -194,6 +194,15 @@ class NativeWorkerControl:
                 isinstance(self.settings, KubernetesWorkerDeployment)
                 and "/workspace" not in policy.filesystem.read_write
             )
+            # The worker reads project data only where the policy lists it read-only.
+            or (
+                isinstance(self.settings, KubernetesWorkerDeployment)
+                and self.settings.project_data is not None
+                and (
+                    str(self.settings.project_data.mount_path) not in policy.filesystem.read_only
+                    or str(self.settings.project_data.mount_path) in policy.filesystem.read_write
+                )
+            )
         ):
             raise WorkerAttemptError(
                 "native policy does not match the qualified worker identity and projections"
