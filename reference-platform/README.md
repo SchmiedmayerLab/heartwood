@@ -149,7 +149,7 @@ The tool refuses a `project_id` other than the token's project, a researcher wit
 Every price applies to every project, because `SkuPriceEligibility` must be `{"IsGlobalScope": true}`.
 
 At a launch the service creates the Keycloak client `hw-proj-<project>` unless it exists: a confidential client with the authorization code flow and standard token exchange, without direct access grants and without a service account, and with the optional scopes `svc-control`, `svc-data` and `svc-jobs`.
-It adds the redirect URI of the researcher's gateway, from `control.redirectUriTemplate`, and serializes the updates of one client, because Keycloak replaces the whole client on an update.
+It adds the redirect URI of the researcher's gateway, `<hub.publicOrigin>/user/<subject>/<project>/oauth_callback`, and serializes the updates of one client, because Keycloak replaces the whole client on an update.
 Its Keycloak role `manage-clients` covers every client of the realm.
 
 ### Session Namespaces
