@@ -164,9 +164,14 @@ jobs:
         with:
           path: test-results/records-cache
           key: records-linux-amd64-${{ hashFiles('images/worker/candidate/records.json', 'deploy/build-records-fixture.py') }}
+      - name: Install pinned build tools
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          version: 0.13.7
+          python-version: 3.12.15
       - name: Build verified sources
         run: >-
-          python3 deploy/build-records-fixture.py
+          uv run --no-project --python 3.12.15 deploy/build-records-fixture.py
           --output test-results/records-tools --cache test-results/records-cache
       - name: Retain tools, corresponding sources and licenses
         uses: actions/upload-artifact@v7
