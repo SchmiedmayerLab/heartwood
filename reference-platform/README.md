@@ -277,11 +277,15 @@ It checks that each input exists before it submits the task.
 An input URL expires 300 seconds after the start deadline, and an output URL 300 seconds after the start deadline plus the task's run time limit.
 Task tags may not start with an underscore, which Funnel reads as instructions, or with `heartwood`; the service tags each task with `heartwood-operation` and its operation identifier.
 
-A repeated operation identifier with the same arguments returns the existing task, and other arguments are a conflict.
+An operation belongs to the researcher who sent it: another member of the project can neither observe nor cancel it.
+A repeated operation identifier with the same arguments returns the existing task, and other arguments or another researcher are a conflict.
 A request outside the project's entitlements or limits, with an image that the platform does not run, or with an input that the project does not hold, is recorded and reported as denied, and no task is created.
-The service records each submission in its SQLite database before it calls the executor.
-When the executor's reply is lost, a repetition or the status finds the task by its operation tag; a task that is not found within 120 seconds is reported as failed.
-Every minute the service lists each project's tasks and cancels those that no operation recorded, such as a task created around the service with a worker's credential.
+The platform does not select GPU types, so a request that names one is denied.
+The service records each submission in its SQLite database before it reserves the budget and calls the executor.
+When the executor's reply is lost or is a server error, a repetition or the status finds the task by its operation tag and a creation time after the record; a task that is not found within 120 seconds is reported as failed.
+A client error from the executor is reported as failed at once.
+Every minute the service lists each project's tasks that may still run and cancels those that no operation recorded, such as a task created around the service with the executor's credential.
+A proposal whose description or data scope is longer than 8192 characters is refused, because the researcher reviews it in full.
 
 | TES state | Status |
 |---|---|
@@ -297,7 +301,7 @@ The service cancels a task that does not start within the start deadline or runs
 A failure carries a fixed explanation: an exit code, a task that ran out of memory, a task killed with exit code 137 without an out-of-memory report, as when its pod is deleted or evicted, an input that could not be downloaded, an output that was not written, an image that could not be pulled, or a lost worker.
 System logs and task output are not passed on, because system logs contain presigned URLs.
 
-The service reserves a project's compute budget through the `JobBudgets` interface, for the task's hard limits at submission, and settles the reservation with the task's run time when the task ends.
+The service reserves a project's compute budget through the `JobBudgets` interface, for the task's hard limits at submission, and settles the reservation by its holder, `job/<project>/<operation>`, with the task's run time when the task ends.
 The control service offers no job reservations to other services, so the deployed service reserves nothing and says so in the limitations of its capabilities and proposals.
 
 The executor is reached only through the `TesExecutor` interface, with five operations: service information, create, get, list and cancel.

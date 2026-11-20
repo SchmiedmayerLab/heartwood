@@ -21,6 +21,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import NameOID
 from heartwood_platform.common.signing import Credentials, presign
+from heartwood_platform.jobs.__main__ import Settings
 from heartwood_platform.jobs.objects import ObjectNotFoundError, ProjectBucket, StoreObjects
 from heartwood_platform.jobs.platform import ControlContexts, NoSessionError, NotAMemberError
 from heartwood_platform.jobs.tes import HttpTesExecutor, TaskNotFoundError, TesTask
@@ -186,3 +187,54 @@ def test_launch_contexts_come_from_the_control_service_with_the_service_token(
     assert (seen[0].method, seen[0].url.path) == ("POST", "/v1/projects/demo/launch-context")
     assert all("alice" not in str(request.url) for request in seen)
     assert seen[0].headers["Authorization"] == "Bearer service-token"
+
+
+def _settings(**changes: object) -> dict[str, object]:
+    project = {
+        "id": "demo",
+        "executor": {
+            "url": "https://funnel-server.hw-jobs-demo.svc:8000",
+            "ca_file": "/ca.crt",
+            "user": "jobsvc",
+            "password_file": "/password",
+        },
+        "store": {"bucket": "hw-project-demo", "access_key_file": "/a", "secret_key_file": "/s"},
+        "max_cpu_cores": 1,
+        "max_ram_gb": 1,
+        "max_disk_gb": 1,
+        "max_runtime_seconds": 3600,
+    }
+    return {
+        "database": "/jobs.sqlite3",
+        "audience": "heartwood-jobs",
+        "issuer": "https://keycloak/realms/heartwood",
+        "keys_url": "https://keycloak/certs",
+        "keys_ca_file": "/ca.crt",
+        "tls": {"certificate_file": "/tls.crt", "key_file": "/tls.key"},
+        "control": {"url": "https://control:8443", "ca_file": "/ca.crt", "token_file": "/t"},
+        "store": {"endpoint": "https://versitygw:7070", "ca_file": "/ca.crt"},
+        "images": ["registry.example.test/task@sha256:" + "a" * 64],
+        "cpu_profile": "synthetic-batch-small",
+        "gpu_profile": "synthetic-batch-gpu",
+        "drs_host": "heartwood-data",
+        "projects": [project],
+        **changes,
+    }
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"images": ["registry.example.test/task:latest"]},
+        {"reconcile_seconds": 300},
+        {"start_deadline_seconds": 7 * 24 * 3600},
+        # Presigned URLs never travel in plain HTTP.
+        {"store": {"endpoint": "http://versitygw:7070", "ca_file": "/ca.crt"}},
+    ],
+)
+def test_the_configuration_refuses_tags_and_bounds_that_urls_cannot_cover(
+    changes: dict[str, object],
+) -> None:
+    Settings.model_validate(_settings())
+    with pytest.raises(ValueError, match=r"\S"):
+        Settings.model_validate(_settings(**changes))

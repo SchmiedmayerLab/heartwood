@@ -118,10 +118,10 @@ class Records:
                 connection.execute(statement)
 
     @contextmanager
-    def _transaction(self) -> Iterator[sqlite3.Connection]:
+    def _transaction(self, *, write: bool = True) -> Iterator[sqlite3.Connection]:
         connection = sqlite3.connect(self._path, timeout=30, isolation_level=None)
         try:
-            connection.execute("BEGIN IMMEDIATE")
+            connection.execute("BEGIN IMMEDIATE" if write else "BEGIN")
             yield connection
             connection.execute("COMMIT")
         except BaseException:
@@ -133,7 +133,7 @@ class Records:
 
     def get(self, project: str, operation_id: str) -> Operation | None:
         """Return an operation of a project."""
-        with self._transaction() as connection:
+        with self._transaction(write=False) as connection:
             row = connection.execute(
                 f"SELECT {', '.join(_COLUMNS)} FROM operation"
                 " WHERE project = ? AND operation_id = ?",
@@ -143,7 +143,7 @@ class Records:
 
     def by_task(self, project: str, task_id: str) -> Operation | None:
         """Return the operation that created a task."""
-        with self._transaction() as connection:
+        with self._transaction(write=False) as connection:
             row = connection.execute(
                 f"SELECT {', '.join(_COLUMNS)} FROM operation WHERE project = ? AND task_id = ?",
                 (project, task_id),
@@ -178,7 +178,7 @@ class Records:
 
     def open_submissions(self, project: str) -> list[Operation]:
         """Return the submissions of a project whose task has not ended or is unsettled."""
-        with self._transaction() as connection:
+        with self._transaction(write=False) as connection:
             rows = connection.execute(
                 f"SELECT {', '.join(_COLUMNS)} FROM operation"
                 " WHERE project = ? AND kind = 'submit' AND state != 'DENIED'"

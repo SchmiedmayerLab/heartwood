@@ -20,14 +20,20 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from starlette.applications import Starlette
 
 from heartwood_platform.common.serving import TlsSettings, serve
-from heartwood_platform.common.signing import Credentials
+from heartwood_platform.common.signing import MAX_EXPIRES_SECONDS, Credentials
 from heartwood_platform.common.tokens import ResearcherTokens
 from heartwood_platform.control.app import ProjectId
 from heartwood_platform.jobs.app import create_jobs_app
 from heartwood_platform.jobs.objects import ProjectBucket, StoreObjects
 from heartwood_platform.jobs.platform import ControlContexts
 from heartwood_platform.jobs.records import Records
-from heartwood_platform.jobs.service import JobService, ProjectPolicy, ServiceSettings
+from heartwood_platform.jobs.service import (
+    IMAGE,
+    URL_MARGIN_SECONDS,
+    JobService,
+    ProjectPolicy,
+    ServiceSettings,
+)
 from heartwood_platform.jobs.tes import HttpTesExecutor, TesExecutor
 
 _LOGGER = logging.getLogger(__name__)
@@ -102,8 +108,10 @@ class Settings(_Settings):
     control: ControlSettings
     store: StoreSettings
     images: frozenset[str]
-    start_deadline_seconds: int = Field(default=600, ge=30)
-    reconcile_seconds: float = Field(default=60, ge=5)
+    start_deadline_seconds: int = Field(default=600, ge=30, le=86400)
+    # Shorter than the margin of an input URL, so a missed start deadline is enforced
+    # before the task's URLs expire.
+    reconcile_seconds: float = Field(default=60, ge=5, lt=URL_MARGIN_SECONDS)
     cpu_profile: str
     gpu_profile: str
     drs_host: str
@@ -114,6 +122,12 @@ class Settings(_Settings):
         identifiers = [project.id for project in self.projects]
         if len(set(identifiers)) != len(identifiers):
             raise ValueError("project identifiers must be unique")
+        if any(IMAGE.fullmatch(image) is None for image in self.images):
+            raise ValueError("task images are named by digest")
+        # An output URL must stay valid for the whole task, within the signature's limit.
+        longest = max((project.max_runtime_seconds for project in self.projects), default=0)
+        if self.start_deadline_seconds + URL_MARGIN_SECONDS + longest > MAX_EXPIRES_SECONDS:
+            raise ValueError("start deadline and run time limit exceed the URL validity")
         return self
 
 
@@ -186,8 +200,9 @@ def reconcile_forever(service: JobService, interval: float, stop: threading.Even
         for project in service.projects():
             try:
                 cancelled = service.reconcile(project)
-            except (httpx.HTTPError, OSError) as error:
-                _LOGGER.warning("reconciling %s failed: %s", project, type(error).__name__)
+            except Exception:
+                # The loop enforces deadlines and cancels unrecorded tasks, so it never stops.
+                _LOGGER.exception("reconciling %s failed", project)
                 continue
             if cancelled:
                 _LOGGER.warning("cancelled %d unrecorded tasks of %s", len(cancelled), project)

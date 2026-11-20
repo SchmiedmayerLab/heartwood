@@ -14,6 +14,7 @@ The executor runs the tasks and is reached only through :class:`TesExecutor`.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import logging
@@ -21,7 +22,7 @@ import math
 import posixpath
 import re
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
@@ -50,12 +51,14 @@ from heartwood_platform.jobs.records import ConflictError, Operation, Records
 from heartwood_platform.jobs.tes import (
     PROGRESS,
     TERMINAL,
+    TaskFilter,
     TaskNotFoundError,
     TesExecutor,
     TesExecutorSpec,
     TesInput,
     TesOutput,
     TesResources,
+    TesState,
     TesTask,
     TesTaskView,
 )
@@ -70,12 +73,18 @@ OPERATION_TAG = "heartwood-operation"
 SUBMISSION_GRACE_SECONDS = 120
 # Seconds that a presigned URL stays valid beyond the latest moment the task needs it.
 URL_MARGIN_SECONDS = 300
+# Pages of tasks read in one listing, of 100 tasks each.
+MAX_PAGES = 100
+# The longest description and data scope of a proposal.
+MAX_DESCRIPTION = 8192
+# The states of tasks that may still run.
+ACTIVE: tuple[TesState, ...] = ("QUEUED", "INITIALIZING", "RUNNING", "PAUSED", "CANCELING")
 
 OperationId = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")]
 _NAME = r"^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}$"
 _FILE = r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
 _TAG_KEY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$")
-_IMAGE = re.compile(r"^\S+@sha256:[0-9a-f]{64}$")
+IMAGE = re.compile(r"^\S+@sha256:[0-9a-f]{64}$")
 
 type Status = Literal[
     "submitted", "queued", "running", "completed", "failed", "cancelled", "denied", "unknown"
@@ -341,12 +350,12 @@ class JobService:
     def _refusal(self, policy: ProjectPolicy, request: TaskRequest) -> str | None:
         """Return why the platform refuses a request, or None when the policy admits it."""
         resources = request.resources
-        if request.image not in self._settings.images or _IMAGE.fullmatch(request.image) is None:
+        if request.image not in self._settings.images or IMAGE.fullmatch(request.image) is None:
             return "The task image is not one the platform runs."
         if resources.gpu_count and not policy.gpu:
             return "The project holds no GPU entitlement."
-        if resources.gpu_type is not None and not resources.gpu_count:
-            return "A GPU type needs a GPU count."
+        if resources.gpu_type is not None:
+            return "The platform does not select GPU types."
         exceeded = [
             name
             for name, value, limit in (
@@ -405,15 +414,17 @@ class JobService:
             if request.inputs
             else "No project data"
         )
+        description = f"Run task {request.name} in {request.image}: {' '.join(request.command)}"
+        # The researcher approves this text, so it is never shortened.
+        if len(description) > MAX_DESCRIPTION or len(scope) > MAX_DESCRIPTION:
+            raise InvalidRequestError("the task is too long to describe for review")
         return PlatformOperationProposal(
             service_id=SERVICE_ID,
             tool=tool,
-            description=f"Run task {request.name} in {request.image}: {' '.join(request.command)}"[
-                :512
-            ],
+            description=description,
             runtime_profile_ref=self._usage(resources, 0).runtime_profile_ref,
             resource_limits=tuple(limits),
-            data_scope=scope[:1024],
+            data_scope=scope,
             destination=(
                 f"Project results {self._objects.output_location(caller.project, '<operation>')}"
                 if request.outputs
@@ -435,7 +446,11 @@ class JobService:
             if existing is not None:
                 if existing.kind == "absent":
                     raise InvalidRequestError("operation identifier was reported as not received")
-                if existing.kind != "submit" or existing.request_sha256 != digest:
+                if (
+                    existing.kind != "submit"
+                    or existing.subject != caller.subject
+                    or existing.request_sha256 != digest
+                ):
                     raise InvalidRequestError("operation identifier conflict")
                 return self._observe(caller, self._refresh(existing))
             now = self._clock()
@@ -461,38 +476,45 @@ class JobService:
                 ended_at=None,
             )
             refusal = self._refusal(policy, request)
-            if refusal is not None:
-                record = self._deny(record, refusal)
-                return self._observe(caller, record)
-            task = self._task(caller, operation_id, request)
+            task = self._task(caller, operation_id, request) if refusal is None else refusal
             if isinstance(task, str):
                 return self._observe(caller, self._deny(record, task))
-            holder = _holder(caller.project, operation_id)
-            reservation = None
+            # Recorded before the budget and the executor are called, so a reservation or
+            # a task whose reply is lost always has a record: the reservation is settled by
+            # its holder, and the task is found by its tag.
+            self._records.insert(record)
             if self._budgets is not None:
                 try:
                     reservation = self._budgets.reserve(
                         caller.project,
-                        holder,
+                        _holder(caller.project, operation_id),
                         self._usage(request.resources, request.resources.max_runtime_seconds),
                     )
                 except BudgetDeniedError as error:
-                    return self._observe(
-                        caller, self._deny(record, str(error) or "The budget denied it.")
+                    record = self._records.update(
+                        record,
+                        state="DENIED",
+                        detail=str(error) or "The budget denied it.",
+                        settled=True,
                     )
-            record = Operation(**{**record.__dict__, "reservation": reservation})
-            # Recorded before the executor is called, so a task whose reply is lost is
-            # found by its tag and never left without a record.
-            self._records.insert(record)
+                    return self._observe(caller, record)
+                except httpx.HTTPError:
+                    record = self._records.update(
+                        record,
+                        state="SYSTEM_ERROR",
+                        failure="The budget could not be reserved.",
+                        ended_at=self._clock(),
+                    )
+                    return self._observe(caller, self._settle(record))
+                record = self._records.update(record, reservation=reservation)
             try:
                 task_id = self._executors[caller.project].create(task)
-            except (httpx.TimeoutException, httpx.NetworkError):
-                _LOGGER.warning("the executor of %s did not answer a submission", caller.project)
-                return self._observe(caller, record)
-            except httpx.HTTPError as error:
-                _LOGGER.warning(
-                    "the executor of %s refused a submission: %s", caller.project, error
-                )
+            except httpx.HTTPStatusError as error:
+                if not error.response.is_client_error:
+                    # The task may exist; the status finds it by its tag.
+                    _LOGGER.warning("the executor of %s failed a submission", caller.project)
+                    return self._observe(caller, record)
+                _LOGGER.warning("the executor of %s refused a submission", caller.project)
                 record = self._records.update(
                     record,
                     state="SYSTEM_ERROR",
@@ -500,6 +522,10 @@ class JobService:
                     ended_at=self._clock(),
                 )
                 return self._observe(caller, self._settle(record))
+            except (httpx.HTTPError, ValueError):
+                # No reply, or a reply that names no task; the status finds it by its tag.
+                _LOGGER.warning("the executor of %s did not answer a submission", caller.project)
+                return self._observe(caller, record)
             record = self._records.update(record, state="QUEUED", task_id=task_id)
             return self._observe(caller, record)
 
@@ -578,10 +604,9 @@ class JobService:
                     started_at=None,
                     ended_at=None,
                 )
-                try:
-                    self._records.insert(record)
-                except ConflictError:
-                    record = self._records.get(caller.project, operation_id) or record
+                self._records.insert(record)
+            elif record.subject != caller.subject:
+                raise InvalidRequestError("operation not found")
             return self._observe(caller, self._refresh(record))
 
     # Cancellation.
@@ -596,51 +621,76 @@ class JobService:
             if existing is not None:
                 if existing.kind == "absent":
                     raise InvalidRequestError("operation identifier was reported as not received")
-                if existing.kind != "cancel" or existing.target != target:
+                if (
+                    existing.kind != "cancel"
+                    or existing.subject != caller.subject
+                    or existing.target != target
+                ):
                     raise InvalidRequestError("operation identifier conflict")
                 return self._observe(caller, existing)
             submitted = self._records.get(caller.project, target)
-            if submitted is None or submitted.kind != "submit":
+            if (
+                submitted is None
+                or submitted.kind != "submit"
+                or submitted.subject != caller.subject
+            ):
                 raise InvalidRequestError("operation not found")
             submitted = self._refresh(submitted)
             if submitted.state == "SUBMITTING":
                 raise InvalidRequestError("the executor has not confirmed the operation yet")
             if submitted.state not in TERMINAL and submitted.task_id is not None:
-                self._executors[caller.project].cancel(submitted.task_id)
+                self._cancel(submitted)
                 submitted = self._refresh(submitted)
             record = Operation(
-                **{
-                    **submitted.__dict__,
-                    "operation_id": operation_id,
-                    "kind": "cancel",
-                    "subject": caller.subject,
-                    "request_sha256": hashlib.sha256(target.encode()).hexdigest(),
-                    "state": "DONE",
-                    "target": target,
-                    "detail": None,
-                    "failure": None,
-                    "reservation": None,
-                    "settled": True,
-                    "task_id": None,
-                    "created_at": self._clock(),
-                }
+                project=caller.project,
+                operation_id=operation_id,
+                kind="cancel",
+                subject=caller.subject,
+                request_sha256=hashlib.sha256(target.encode()).hexdigest(),
+                state="DONE",
+                task_id=None,
+                target=target,
+                detail=None,
+                failure=None,
+                cpu_cores=0,
+                ram_gb=0,
+                gpu_count=0,
+                max_runtime_seconds=0,
+                reservation=None,
+                settled=True,
+                created_at=self._clock(),
+                started_at=None,
+                ended_at=None,
             )
             self._records.insert(record)
             return self._observe(caller, record)
 
     # Reconciliation.
 
-    def _find(self, project: str, operation_id: str) -> TesTaskView | None:
+    def _cancel(self, record: Operation) -> None:
+        """Cancel a record's task; a task the executor no longer has is observed as such."""
+        assert record.task_id is not None
+        with contextlib.suppress(TaskNotFoundError):
+            self._executors[record.project].cancel(record.task_id)
+
+    def _pages(self, project: str, filters: TaskFilter) -> Iterator[TesTaskView]:
         executor = self._executors[project]
         token: str | None = None
-        while True:
-            page = executor.list(token, view="BASIC")
-            for view in page.tasks:
-                if (view.tags or {}).get(OPERATION_TAG) == operation_id:
-                    return view
+        for _ in range(MAX_PAGES):
+            page = executor.list(token, view="BASIC", filters=filters)
+            yield from page.tasks
             token = page.next_page_token
             if not token:
-                return None
+                return
+        _LOGGER.warning("the task list of %s has more than %d pages", project, MAX_PAGES)
+
+    def _find(self, record: Operation) -> TesTaskView | None:
+        """Return the task that carries a submission's operation tag."""
+        filters = TaskFilter(tag_key=OPERATION_TAG, tag_value=record.operation_id)
+        for view in self._pages(record.project, filters):
+            if _adoptable(view, record):
+                return view
+        return None
 
     def _refresh(self, record: Operation) -> Operation:
         """Bring a submission up to date with its task, enforcing deadlines and settling."""
@@ -649,7 +699,7 @@ class JobService:
         now = self._clock()
         try:
             if record.state == "SUBMITTING":
-                found = self._find(record.project, record.operation_id)
+                found = self._find(record)
                 if found is not None:
                     record = self._records.update(record, state="QUEUED", task_id=found.id)
                 elif now - record.created_at > timedelta(seconds=SUBMISSION_GRACE_SECONDS):
@@ -714,8 +764,12 @@ class JobService:
 
     def _enforce(self, record: Operation, now: datetime) -> Operation:
         """Cancel a task that did not start in time or ran past its limit."""
-        if record.state in TERMINAL or record.task_id is None or record.failure is not None:
+        if record.state in TERMINAL or record.task_id is None:
             return record
+        if record.failure is not None:
+            # An earlier cancellation has not ended the task yet.
+            self._cancel(record)
+            return self._observe_task(record)
         failure = None
         if record.started_at is None:
             if now - record.created_at > timedelta(seconds=self._settings.start_deadline_seconds):
@@ -727,14 +781,18 @@ class JobService:
             )
         if failure is None:
             return record
-        self._executors[record.project].cancel(record.task_id)
-        record = self._records.update(record, failure=failure)
-        return self._observe_task(record)
+        self._cancel(record)
+        record = self._observe_task(record)
+        if record.state == "COMPLETE":
+            # The task ended before the cancellation reached it.
+            return record
+        return self._records.update(record, failure=failure)
 
     def _settle(self, record: Operation) -> Operation:
         if record.settled or record.state not in TERMINAL:
             return record
-        if self._budgets is not None and record.reservation is not None:
+        # A reservation is settled by its holder, also when the reply to it was lost.
+        if self._budgets is not None and record.kind == "submit":
             seconds = 0
             if record.started_at is not None and record.ended_at is not None:
                 seconds = max(0, math.ceil((record.ended_at - record.started_at).total_seconds()))
@@ -756,28 +814,28 @@ class JobService:
     def reconcile(self, project: str) -> list[str]:
         """Cancel the project's tasks that no operation recorded and refresh open operations.
 
-        A task created outside the job service, such as by a compromised worker, has no
-        record and is cancelled. Return the identifiers of the cancelled tasks.
+        A task created outside the job service, such as with a worker's credential, has no
+        record and is cancelled. One task or record that fails is logged and the others are
+        still reconciled. Return the identifiers of the cancelled tasks.
         """
         cancelled: list[str] = []
         executor = self._executors[project]
         with self._locks[project]:
-            token: str | None = None
-            while True:
-                page = executor.list(token, view="BASIC")
-                for view in page.tasks:
-                    if self._records.by_task(project, view.id) is not None:
-                        continue
-                    tagged = (view.tags or {}).get(OPERATION_TAG)
-                    record = None if tagged is None else self._records.get(project, tagged)
-                    if (
-                        record is not None
-                        and record.kind == "submit"
-                        and record.state == "SUBMITTING"
-                    ):
-                        self._records.update(record, state="QUEUED", task_id=view.id)
-                        continue
-                    if view.state not in TERMINAL:
+            for state in ACTIVE:
+                for view in self._pages(project, TaskFilter(state=state)):
+                    try:
+                        if self._records.by_task(project, view.id) is not None:
+                            continue
+                        tagged = (view.tags or {}).get(OPERATION_TAG)
+                        record = None if tagged is None else self._records.get(project, tagged)
+                        if (
+                            record is not None
+                            and record.kind == "submit"
+                            and record.state == "SUBMITTING"
+                            and _adoptable(view, record)
+                        ):
+                            self._records.update(record, state="QUEUED", task_id=view.id)
+                            continue
                         _LOGGER.warning(
                             "cancelling task %s of %s, which no operation recorded",
                             view.id,
@@ -785,11 +843,13 @@ class JobService:
                         )
                         executor.cancel(view.id)
                         cancelled.append(view.id)
-                token = page.next_page_token
-                if not token:
-                    break
+                    except Exception:
+                        _LOGGER.exception("reconciling task %s of %s failed", view.id, project)
             for record in self._records.open_submissions(project):
-                self._refresh(record)
+                try:
+                    self._refresh(record)
+                except Exception:
+                    _LOGGER.exception("refreshing %s of %s failed", record.operation_id, project)
         return cancelled
 
     # Observations.
@@ -831,6 +891,16 @@ class JobService:
             platform_record_ref=f"{SERVICE_ID}:{record.project}/{record.operation_id}",
             limitations=tuple(limitations),
         )
+
+
+def _adoptable(view: TesTaskView, record: Operation) -> bool:
+    """Whether a tagged task can be a submission's task: it was created after the record.
+
+    A holder of the executor's credential could plant a task with the tag of another
+    operation before that operation is submitted; such a task is not adopted.
+    """
+    created = _time(view.creation_time)
+    return created is not None and created >= record.created_at - timedelta(seconds=60)
 
 
 def _holder(project: str, operation_id: str) -> str:

@@ -155,6 +155,14 @@ class TaskNotFoundError(Exception):
 type View = Literal["MINIMAL", "BASIC", "FULL"]
 
 
+class TaskFilter(_Message):
+    """The TES 1.1 list filters the job service uses: one state, or one tag and its value."""
+
+    state: TesState | None = None
+    tag_key: str | None = None
+    tag_value: str | None = None
+
+
 class TesExecutor(Protocol):
     """The five TES operations the job service uses."""
 
@@ -167,8 +175,10 @@ class TesExecutor(Protocol):
     def get(self, task_id: str, view: View = "BASIC") -> TesTaskView:
         """Return a task, or raise :class:`TaskNotFoundError`."""
 
-    def list(self, page_token: str | None = None, view: View = "BASIC") -> TesTaskList:
-        """Return one page of tasks."""
+    def list(
+        self, page_token: str | None = None, view: View = "BASIC", filters: TaskFilter | None = None
+    ) -> TesTaskList:
+        """Return one page of the tasks that match ``filters``."""
 
     def cancel(self, task_id: str) -> None:
         """Cancel a task; cancelling a finished task leaves its state."""
@@ -230,11 +240,15 @@ class HttpTesExecutor:
         response = self._client.get(self._path(task_id), params={"view": view})
         return TesTaskView.model_validate(self._checked(response).json())
 
-    def list(self, page_token: str | None = None, view: View = "BASIC") -> TesTaskList:
-        """Return one page of tasks."""
+    def list(
+        self, page_token: str | None = None, view: View = "BASIC", filters: TaskFilter | None = None
+    ) -> TesTaskList:
+        """Return one page of the tasks that match ``filters``."""
         parameters = {"view": view, "page_size": "100"}
         if page_token:
             parameters["page_token"] = page_token
+        if filters is not None:
+            parameters.update(filters.model_dump(exclude_none=True))
         response = self._client.get("/v1/tasks", params=parameters)
         return TesTaskList.model_validate(self._checked(response).json())
 

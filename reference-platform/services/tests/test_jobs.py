@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import itertools
 import json
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -37,7 +37,9 @@ from heartwood_platform.jobs.service import (
 )
 from heartwood_platform.jobs.tes import (
     TERMINAL,
+    TaskFilter,
     TaskNotFoundError,
+    TesExecutor,
     TesExecutorLog,
     TesServiceInfo,
     TesTask,
@@ -58,6 +60,7 @@ ISSUER = "https://keycloak.example.test/realms/heartwood"
 AUDIENCE = "heartwood-jobs"
 ALICE = "0b9f5d1e-7c64-4f0e-9d53-6f6f3f0f1a01"
 BOB = "0b9f5d1e-7c64-4f0e-9d53-6f6f3f0f1a02"
+CAROL = "0b9f5d1e-7c64-4f0e-9d53-6f6f3f0f1a03"
 IMAGE = "registry.example.test/task@sha256:" + "a" * 64
 _ACCEPT = {"Accept": "application/json, text/event-stream"}
 _START = datetime(2026, 11, 20, 12, 0, tzinfo=UTC)
@@ -69,6 +72,7 @@ class _Task:
     task: TesTask
     state: str = "QUEUED"
     logs: tuple[TesTaskLog, ...] = ()
+    created: datetime = _START
 
 
 @dataclass
@@ -81,6 +85,7 @@ class FakeExecutor:
     # "unreachable": the connection fails before anything is created.
     failure: str | None = None
     page_size: int = 2
+    clock: Callable[[], datetime] = lambda: _START
     _ids: Iterator[int] = field(default_factory=itertools.count)
 
     def service_info(self) -> TesServiceInfo:
@@ -95,7 +100,7 @@ class FakeExecutor:
                 "refused", request=request, response=httpx.Response(400, request=request)
             )
         identifier = f"task-{next(self._ids):04d}"
-        self.tasks[identifier] = _Task(task)
+        self.tasks[identifier] = _Task(task, created=self.clock())
         if self.failure == "lost":
             raise httpx.ReadTimeout("lost reply")
         return identifier
@@ -108,17 +113,26 @@ class FakeExecutor:
             id=task_id,
             state=found.state,  # type: ignore[arg-type]
             tags=found.task.tags,
+            creation_time=found.created.isoformat(),
             logs=found.logs if view == "FULL" else None,
         )
 
-    def list(self, page_token: str | None = None, view: View = "BASIC") -> TesTaskList:
-        identifiers = sorted(self.tasks)
-        start = int(page_token or 0)
-        page = identifiers[start : start + self.page_size]
-        following = start + self.page_size
+    def list(
+        self, page_token: str | None = None, view: View = "BASIC", filters: TaskFilter | None = None
+    ) -> TesTaskList:
+        chosen = filters or TaskFilter()
+        identifiers = [
+            identifier
+            for identifier, item in sorted(self.tasks.items())
+            if (chosen.state is None or item.state == chosen.state)
+            and (chosen.tag_key is None or item.task.tags.get(chosen.tag_key) == chosen.tag_value)
+        ]
+        # Like Funnel, a page token is the last identifier of the previous page.
+        remaining = [item for item in identifiers if page_token is None or item > page_token]
+        page = remaining[: self.page_size]
         return TesTaskList(
             tasks=tuple(self.get(item, view) for item in page),
-            next_page_token=str(following) if following < len(identifiers) else None,
+            next_page_token=page[-1] if len(remaining) > self.page_size else None,
         )
 
     def cancel(self, task_id: str) -> None:
@@ -161,6 +175,8 @@ class FakeObjects:
 class FakeBudgets:
     """One compute allocation per project; usage is priced at one unit per core-second."""
 
+    # Whether the control service fails after it reserved.
+    unavailable: bool = False
     available: dict[str, int] = field(default_factory=lambda: {"demo": 100_000, "other": 0})
     held: dict[str, tuple[str, int]] = field(default_factory=dict)
     settled: dict[str, JobUsage] = field(default_factory=dict)
@@ -173,19 +189,23 @@ class FakeBudgets:
             raise BudgetDeniedError("Budget demo-compute has no availability.")
         self.available[project] -= amount
         self.held[holder] = (project, amount)
+        if self.unavailable:
+            raise httpx.ReadTimeout("lost reply")
         return holder
 
     def settle(self, holder: str, usage: JobUsage) -> None:
+        if holder not in self.held:
+            return
         project, amount = self.held.pop(holder)
         self.available[project] += amount - usage.cpu_cores * usage.seconds
         self.settled[holder] = usage
 
 
 class FakeContexts:
-    """Alice is a member of demo and other, Bob of demo only; Bob has no session in demo."""
+    """Alice is a member of demo and other, Bob and Carol of demo; Bob has no session."""
 
     def context(self, subject: str, project: str) -> str:
-        members = {"demo": {ALICE, BOB}, "other": {ALICE}}
+        members = {"demo": {ALICE, BOB, CAROL}, "other": {ALICE}}
         if subject not in members.get(project, set()):
             raise NotAMemberError
         if subject == BOB:
@@ -205,9 +225,12 @@ class Jobs:
         policy = ProjectPolicy(
             gpu=False, max_cpu_cores=4, max_ram_gb=8, max_disk_gb=10, max_runtime_seconds=7200
         )
+        for executor in self.executors.values():
+            executor.clock = lambda: self.now
+        executors: dict[str, TesExecutor] = dict(self.executors)
         self.service = JobService(
             Records(directory / "jobs.sqlite3"),
-            dict(self.executors),
+            executors,
             {"demo": policy, "other": ProjectPolicy(**{**policy.__dict__, "gpu": True})},
             self.objects,
             self.budgets,
@@ -772,3 +795,178 @@ def test_without_budgets_the_service_says_it_reserves_nothing(tmp_path: Path) ->
             in result["structuredContent"]["limitations"]
         )
         assert service.observe(client, "create_task", task()).status == "queued"
+
+
+def test_another_members_operations_are_neither_shown_nor_cancelled(
+    jobs: tuple[Jobs, TestClient],
+) -> None:
+    service, client = jobs
+    service.observe(client, "create_task", task())
+    carol = service.headers(subject=CAROL)
+    status = {"project_id": "demo", "operation_id": "op-1"}
+    assert "operation not found" in service.error(client, "get_task", status, headers=carol)
+    cancel = {"project_id": "demo", "operation_id": "c", "target_operation_id": "op-1"}
+    assert "operation not found" in service.error(client, "cancel_task", cancel, headers=carol)
+    assert "conflict" in service.error(client, "create_task", task(), headers=carol)
+    assert service.executors["demo"].cancelled == []
+    assert len(service.executors["demo"].tasks) == 1
+
+
+def test_a_gpu_type_is_denied(jobs: tuple[Jobs, TestClient]) -> None:
+    service, client = jobs
+    arguments = task(
+        project="other",
+        resources={"gpu_count": 1, "gpu_type": "nvidia-l4"},
+        inputs=[],
+    )
+    observed = service.observe(
+        client, "create_task", arguments, headers=service.headers(project="other")
+    )
+    assert observed.status == "denied"
+    assert observed.limitations == ("The platform does not select GPU types.",)
+
+
+def test_a_lost_reservation_reply_is_settled_by_its_holder(
+    jobs: tuple[Jobs, TestClient],
+) -> None:
+    service, client = jobs
+    budgets = service.budgets
+    assert budgets is not None
+    budgets.unavailable = True
+    observed = service.observe(client, "create_task", task())
+
+    assert observed.status == "failed"
+    assert observed.limitations[0] == "The budget could not be reserved."
+    assert budgets.held == {}
+    assert budgets.available["demo"] == 100_000
+    assert service.executors["demo"].tasks == {}
+
+
+def test_a_server_error_on_creation_leaves_the_task_to_be_found(
+    jobs: tuple[Jobs, TestClient], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, client = jobs
+    executor = service.executors["demo"]
+    original = executor.create
+
+    def create(created: TesTask) -> str:
+        original(created)
+        request = httpx.Request("POST", "https://executor/v1/tasks")
+        raise httpx.HTTPStatusError(
+            "bad gateway", request=request, response=httpx.Response(502, request=request)
+        )
+
+    monkeypatch.setattr(executor, "create", create)
+    assert service.observe(client, "create_task", task()).status == "submitted"
+    observed = service.observe(client, "get_task", {"project_id": "demo", "operation_id": "op-1"})
+    assert observed.status == "queued"
+    assert observed.backend_operation_ref == "task-0000"
+
+
+def test_a_refused_creation_fails_and_releases_the_reservation(
+    jobs: tuple[Jobs, TestClient],
+) -> None:
+    service, client = jobs
+    service.executors["demo"].failure = "refused"
+    observed = service.observe(client, "create_task", task())
+    assert observed.status == "failed"
+    assert service.budgets is not None
+    assert service.budgets.held == {}
+
+
+def test_a_task_planted_with_a_later_operations_tag_is_not_adopted(
+    jobs: tuple[Jobs, TestClient],
+) -> None:
+    service, client = jobs
+    executor = service.executors["demo"]
+    planted = executor.create(_sleeping({OPERATION_TAG: "op-1"}))
+    service.now = _START + timedelta(hours=1)
+    executor.failure = "unreachable"
+    assert service.observe(client, "create_task", task()).status == "submitted"
+    executor.failure = None
+
+    assert service.service.reconcile("demo") == [planted]
+    observed = service.observe(client, "get_task", {"project_id": "demo", "operation_id": "op-1"})
+    assert observed.status == "submitted"
+
+
+def test_an_unfinished_enforced_cancellation_is_sent_again(
+    jobs: tuple[Jobs, TestClient], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, client = jobs
+    service.observe(client, "create_task", task())
+    executor = service.executors["demo"]
+    calls: list[str] = []
+    monkeypatch.setattr(executor, "cancel", calls.append)
+    service.now = _START + timedelta(seconds=_DEADLINE + 1)
+    status = {"project_id": "demo", "operation_id": "op-1"}
+    assert service.observe(client, "get_task", status).status == "failed"
+    service.observe(client, "get_task", status)
+    assert calls == ["task-0000", "task-0000"]
+
+
+def test_a_task_that_completes_before_its_deadline_cancellation_is_completed(
+    jobs: tuple[Jobs, TestClient], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, client = jobs
+    service.observe(client, "create_task", task())
+    executor = service.executors["demo"]
+    executor.advance("task-0000", "RUNNING")
+    service.observe(client, "get_task", {"project_id": "demo", "operation_id": "op-1"})
+    monkeypatch.setattr(executor, "cancel", lambda _: executor.advance("task-0000", "COMPLETE"))
+    service.now = _START + timedelta(seconds=601)
+    observed = service.observe(client, "get_task", {"project_id": "demo", "operation_id": "op-1"})
+    assert observed.status == "completed"
+
+
+def test_cancelling_a_task_that_the_executor_lost(jobs: tuple[Jobs, TestClient]) -> None:
+    service, client = jobs
+    service.observe(client, "create_task", task())
+    service.executors["demo"].advance("task-0000", "RUNNING")
+    service.observe(client, "get_task", {"project_id": "demo", "operation_id": "op-1"})
+    del service.executors["demo"].tasks["task-0000"]
+    cancel = {"project_id": "demo", "operation_id": "c", "target_operation_id": "op-1"}
+    observed = service.observe(client, "cancel_task", cancel)
+    assert observed.limitations == ("Cancellation of op-1 observed TES state SYSTEM_ERROR.",)
+    target = service.observe(client, "get_task", {"project_id": "demo", "operation_id": "op-1"})
+    assert target.status == "failed"
+    assert "no longer has the task" in target.limitations[0]
+
+
+def test_a_proposal_too_long_to_review_is_refused(jobs: tuple[Jobs, TestClient]) -> None:
+    service, client = jobs
+    arguments = {"name": "long", "image": IMAGE, "command": ["x" * 4096] * 3}
+    message = service.error(
+        client,
+        "propose_task",
+        {"project_id": "demo", "tool": "create_task", "arguments": arguments},
+    )
+    assert "too long" in message
+
+
+def test_reconciliation_goes_on_after_a_failure(
+    jobs: tuple[Jobs, TestClient], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, _ = jobs
+    executor = service.executors["demo"]
+    first, second = executor.create(_sleeping({})), executor.create(_sleeping({}))
+    original = executor.cancel
+
+    def cancel(task_id: str) -> None:
+        if task_id == first:
+            raise TaskNotFoundError
+        original(task_id)
+
+    monkeypatch.setattr(executor, "cancel", cancel)
+    assert service.service.reconcile("demo") == [second]
+
+
+def _sleeping(tags: dict[str, str]) -> TesTask:
+    return TesTask.model_validate(
+        {
+            "name": "stray",
+            "resources": {"cpu_cores": 1, "ram_gb": 1},
+            "executors": [{"image": IMAGE, "command": ["sleep", "600"]}],
+            "tags": tags,
+        }
+    )
