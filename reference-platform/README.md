@@ -165,7 +165,7 @@ At each launch the control service brings the namespace `hw-s-<session>` to the 
 6. It sets the subjects of `heartwood-openshell-node-reader` to the OpenShell ServiceAccounts of all sessions in the registry whose removal has not begun.
 7. It creates the ServiceAccount `hw-gw-<session>` in `heartwood-sessions`, waits until the OpenShell gateway is ready, and replaces the Secret `hw-gw-<session>`.
 
-The Secret `hw-gw-<session>` holds `launch.json`, the secret of the project client, the OpenShell client certificate, key and CA certificate, and the platform CA certificate `platform-ca.crt`.
+The Secret `hw-gw-<session>` holds the gateway's deployment manifest `deployment.toml`, a `kubeconfig` for the session namespace that authenticates with the pod's ServiceAccount token, the worker policy `worker-policy.json`, the launch context `launch-context.json`, `launch.json`, the secret of the project client, the OpenShell client certificate, key and CA certificate, and the platform CA certificate `platform-ca.crt`.
 `launch.json` is the reply to the launch request: the session, the launch context, the namespace with its UID, the UID of `kube-system`, the gateway ServiceAccount and the OpenShell endpoint.
 The reply carries no credential.
 
