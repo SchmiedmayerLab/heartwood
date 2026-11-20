@@ -56,7 +56,7 @@ from heartwood.core_adapter.worker_attempts import (
     WorkerControlPlaneError,
     current_worker_attempt,
 )
-from heartwood.gateway._access import OPERATOR_ACTOR, ServiceTokens
+from heartwood.gateway._access import CAPABILITY_ACTOR, OPERATOR_ACTOR, ServiceTokens
 from heartwood.gateway._action_presentation import action_presentation
 from heartwood.gateway._action_settings import (
     ACTION_MODE_LAUNCH_SCOPE_DESCRIPTION,
@@ -2497,14 +2497,16 @@ class SessionGateway:
         source_id: str | None,
         expected_tree_sha256: str,
         approved: bool,
+        actor_id: str = CAPABILITY_ACTOR,
     ) -> SkillSettingsResponse:
-        """Install one signed, digest-pinned Skill after explicit approval."""
+        """Install one signed, digest-pinned Skill after explicit approval by one actor."""
         self._project_activity.initialize()
         self.skill_manager.install_catalog(
             name,
             source_id=source_id,
             expected_tree_sha256=expected_tree_sha256,
             approved=approved,
+            actor_id=actor_id,
         )
         self._reset_services()
         return self.skill_settings()
@@ -2523,13 +2525,15 @@ class SessionGateway:
         *,
         expected_tree_sha256: str,
         approved: bool,
+        actor_id: str = CAPABILITY_ACTOR,
     ) -> SkillSettingsResponse:
-        """Install one digest-pinned local, unreviewed Skill after approval."""
+        """Install one digest-pinned local, unreviewed Skill after approval by one actor."""
         self._project_activity.initialize()
         self.skill_manager.install_local(
             self._project_skill_source(source),
             expected_tree_sha256=expected_tree_sha256,
             approved=approved,
+            actor_id=actor_id,
         )
         self._reset_services()
         return self.skill_settings()
@@ -2542,10 +2546,10 @@ class SessionGateway:
 
     @gateway_operation
     @_serialized_state
-    def remove_skill(self, name: str) -> SkillSettingsResponse:
-        """Remove one installed extension and reset active conversations."""
+    def remove_skill(self, name: str, *, actor_id: str = CAPABILITY_ACTOR) -> SkillSettingsResponse:
+        """Remove one installed extension for one actor and reset active conversations."""
         try:
-            self.skill_manager.remove(name)
+            self.skill_manager.remove(name, actor_id=actor_id)
         finally:
             # A failure after the index change must not leave sessions with the Skill.
             self._reset_services()

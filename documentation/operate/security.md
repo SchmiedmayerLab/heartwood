@@ -279,6 +279,7 @@ The gateway compares the token's `iss` and `sub` claims with the bound issuer an
 Every accepted command records the researcher's actor, `oidc-` followed by the hexadecimal SHA-256 digest of the issuer, a zero byte and the subject, each encoded as UTF-8.
 The same subject at two issuers yields two actors, and a command cannot claim another actor.
 Session events, audit records and audit exports carry this actor and neither the subject nor the issuer.
+Skill installation, decision and removal records name the same actor.
 The digest is not keyed: anyone who knows or guesses an issuer and a subject, such as an e-mail address, can compute the actor and recognize that researcher's records.
 Of the gateway's files, only the deployment manifest, which the operator protects, contains the subject.
 A platform that places the subject in the gateway's base path or public origin, as the reference platform does with `/user/<subject>/<project>`, exposes it in URLs, the redirect URI and proxy logs.

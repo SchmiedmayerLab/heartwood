@@ -15,6 +15,7 @@ import hashlib
 import json
 import re
 import secrets
+import shutil
 import time
 import tomllib
 import unicodedata
@@ -34,6 +35,7 @@ from cryptography.hazmat.primitives.asymmetric import ec, rsa
 from cryptography.x509.oid import NameOID
 from pydantic import ValidationError
 
+from heartwood.audit import AuditLog
 from heartwood.core_adapter.external_actions import ExternalActionError
 from heartwood.gateway import (
     GatewayAsgiApp,
@@ -2148,3 +2150,80 @@ def test_an_exchanged_token_must_name_the_bound_subject_in_any_form(
         access.service_token("svc-data", "heartwood-data")
     provider.exchanged = issued
     assert access.service_token("svc-data", "heartwood-data") is not None
+
+
+def test_skill_installation_and_removal_record_the_researcher_actor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    provider = _Provider()
+    access = _access(tmp_path, provider)
+    workspace = tmp_path / "research"
+    gateway = _gateway(workspace)
+    app = GatewayAsgiApp(gateway, ingress=_ingress(), access=access)
+    capability = {"x-heartwood-capability": _sign_in(access, provider)[0]}
+    source = workspace / "skills" / "community-summary"
+    bundled = Path(__file__).resolve().parents[3] / "vendor/heartwood-skills/skills"
+    shutil.copytree(bundled / "aggregate-export", source)
+    skill_file = source / "SKILL.md"
+    skill_file.write_text(
+        skill_file.read_text(encoding="utf-8")
+        .replace("name: aggregate-export", "name: community-summary")
+        .replace(
+            'heartwood.id: "heartwood.research.aggregate-export"',
+            'heartwood.id: "example.community-summary"',
+        ),
+        encoding="utf-8",
+    )
+    catalog_actors: list[str] = []
+
+    def install_catalog(_name: str, *, actor_id: str, **_fields: object) -> object:
+        catalog_actors.append(actor_id)
+        return gateway.skill_manager.summaries()[0]
+
+    monkeypatch.setattr(gateway.skill_manager, "install_catalog", install_catalog)
+
+    async def scenario() -> list[int]:
+        inspected = await _call(
+            app,
+            "POST",
+            "/settings/skills/local/inspect",
+            body=json.dumps({"source": str(source)}).encode(),
+            headers=capability,
+        )
+        tree = json.loads(inspected[2])["tree_sha256"]
+        statuses = [inspected[0]]
+        for method, path, body in (
+            (
+                "POST",
+                "/settings/skills/local/install",
+                {"source": str(source), "expected_tree_sha256": tree, "approved": True},
+            ),
+            ("DELETE", "/settings/skills/community-summary", None),
+            (
+                "POST",
+                "/settings/skills/install",
+                {"name": "synthetic", "expected_tree_sha256": tree, "approved": True},
+            ),
+        ):
+            response = await _call(
+                app,
+                method,
+                path,
+                body=b"" if body is None else json.dumps(body).encode(),
+                headers=capability,
+            )
+            statuses.append(response[0])
+        return statuses
+
+    statuses = asyncio.run(scenario())
+
+    assert statuses == [200, 200, 200, 200]
+    audit = AuditLog(gateway.project.audit_dir / "skill-installations.jsonl").read()
+    assert [event.event_type for event in audit] == [
+        "skill.installation-decision",
+        "skill.activated",
+        "skill.deactivated",
+    ]
+    assert {event.payload["actor_id"] for event in audit} == {_ACTOR}
+    assert catalog_actors == [_ACTOR]
+    gateway.stop()

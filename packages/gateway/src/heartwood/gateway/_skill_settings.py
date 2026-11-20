@@ -469,12 +469,12 @@ class SkillManager:
         self._record_installation_result(installed, activated=True, actor_id=actor_id)
         return installed
 
-    def remove(self, name: str) -> None:
+    def remove(self, name: str, *, actor_id: str = "human") -> None:
         """Deactivate one installed Skill while retaining its immutable artifact."""
         with self._lifecycle_lock():
-            self._remove(name)
+            self._remove(name, actor_id=actor_id)
 
-    def _remove(self, name: str) -> None:
+    def _remove(self, name: str, *, actor_id: str) -> None:
         """Deactivate one installed Skill while holding the lifecycle lock."""
         try:
             removed = self.store.remove(name)
@@ -482,7 +482,7 @@ class SkillManager:
             raise SkillSettingsError(str(error)) from error
         # Record the committed removal from its index record; the removed artifact
         # is no longer loaded, so its directory is not reverified here.
-        self._record_removal(removed)
+        self._record_removal(removed, actor_id=actor_id)
 
     def active_skill_manifests(self) -> tuple[SkillManifest, ...]:
         """Return exactly the verified, active Skills that OpenHands may load."""
@@ -708,7 +708,7 @@ class SkillManager:
             decision="approved" if approved else "denied",
         )
 
-    def _record_removal(self, record: InstalledSkillRecord, *, actor_id: str = "human") -> None:
+    def _record_removal(self, record: InstalledSkillRecord, *, actor_id: str) -> None:
         self._append_audit(record, event="deactivated", actor_id=actor_id, decision=None)
 
     def _record_installation_result(
