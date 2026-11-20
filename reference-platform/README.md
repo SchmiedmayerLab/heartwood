@@ -481,11 +481,13 @@ runtime="$(bash reference-platform/cluster/push-image.sh heartwood heartwood-run
 bash reference-platform/cluster/install-chart.sh heartwood --set "images.platformServices=${image}" \
   --set "images.hostedGateway=${hosted}" --set "images.modelRuntime=${runtime}"
 (cd reference-platform/services && uv run pytest -c pyproject.toml ../tests/cluster --cluster-context kind-heartwood \
-  --ignore ../tests/cluster/test_hub_spawning.py)
+  --ignore ../tests/cluster/test_hub_spawning.py --ignore ../tests/cluster/test_hosted_recovery.py \
+  --ignore ../tests/cluster/test_hosted_worker.py)
 bash reference-platform/cluster/delete-cluster.sh heartwood
 ```
 
-The Hub's tests in `test_hub_spawning.py` start Heartwood gateways, which require an OpenShell gateway with the recorded patches, so they run with the images of [Worker Qualification](#worker-qualification).
+The Hub's tests in `test_hub_spawning.py`, `test_hosted_recovery.py` and `test_hosted_worker.py` start Heartwood gateways, which require an OpenShell gateway with the recorded patches, so they run with the images of [Worker Qualification](#worker-qualification).
+`test_hosted_worker.py` also needs the worker image in `hub.worker.image` and the effective digest of its sandbox policy in `hub.worker.sandboxPolicySha256`, which `tests/cluster/route_policy.py` prints for the installed chart.
 
 `create-cluster.sh` installs Calico and the Agent Sandbox controller from pinned manifests whose SHA-256 digests it verifies.
 It also starts a registry on the kind network.
@@ -535,6 +537,10 @@ bash reference-platform/cluster/install-chart.sh heartwood --set "images.platfor
   --set "images.openshellGateway=${gateway}" --set "images.openshellRepository=${openshell}" \
   --set "images.hostedGateway=${hosted}" --set "hub.worker.image=${worker}" \
   --set-json "sessions.stagingImages=${staging}"
+digest="$(cd reference-platform/services && uv run python ../tests/cluster/route_policy.py \
+  --cluster-context kind-heartwood)"
+bash reference-platform/cluster/install-chart.sh heartwood --reuse-values \
+  --set "hub.worker.sandboxPolicySha256=${digest}"
 (cd reference-platform/services && uv run pytest -c pyproject.toml ../tests/cluster \
   --cluster-context kind-heartwood --staging-image "${worker}")
 python3 deploy/qualify-kubernetes-worker.py run --cluster heartwood \

@@ -767,7 +767,11 @@ def test_control_service_configuration_holds_the_budgets() -> None:
     settings = Settings.model_validate_json(config["data"]["configuration.json"])
 
     budgets = {project.id: project.budgets for project in settings.projects}
-    assert budgets == {"demo": {"inference": "5", "compute": "50"}, "other": {"inference": "0.006"}}
+    assert budgets == {
+        "demo": {"inference": "5", "compute": "50"},
+        "other": {"inference": "1.5"},
+        "small": {"inference": "0.006"},
+    }
     assert settings.inference.session_reservation == "1"
 
 

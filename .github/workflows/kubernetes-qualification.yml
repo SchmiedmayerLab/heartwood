@@ -153,10 +153,18 @@ jobs:
           --set "images.modelRuntime=${MODEL_RUNTIME_IMAGE}"
           --set "hub.worker.image=${WORKER_IMAGE}"
           --set-json "sessions.stagingImages=${STAGING_IMAGES}"
-      - name: Test the installed chart
+      # Hosted workers are admitted with the digest of their effective sandbox policy,
+      # which covers the endpoint of the model route's provider.
+      - name: Set the sandbox policy digest of hosted workers
         working-directory: reference-platform/services
         run: |
           uv sync --locked
+          digest="$(uv run python ../tests/cluster/route_policy.py --cluster-context kind-heartwood)"
+          bash ../cluster/install-chart.sh heartwood --reuse-values \
+            --set "hub.worker.sandboxPolicySha256=${digest}"
+      - name: Test the installed chart
+        working-directory: reference-platform/services
+        run: |
           uv run pytest -c pyproject.toml ../tests/cluster --cluster-context kind-heartwood \
             --staging-image "${WORKER_IMAGE}" \
             --junitxml ../../test-results/kubernetes-qualification/platform-chart.xml

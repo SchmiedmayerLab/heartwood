@@ -209,7 +209,7 @@ def test_spawner_lists_the_projects_of_a_researcher(cluster: Cluster) -> None:
             cluster, "GET", f"{_CONTROL}/v1/researchers/{researcher(subject)}/projects", token
         )
 
-    assert projects(_FIRST) == (200, {"projects": ["demo", "other"]})
+    assert projects(_FIRST) == (200, {"projects": ["demo", "other", "small"]})
     assert projects(_SECOND) == (200, {"projects": ["demo"]})
 
 
