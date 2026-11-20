@@ -803,6 +803,7 @@ class KubernetesWorkerAdmission:
         if (
             _field(metadata, "uid") != data.claim_uid
             or _field(metadata, "annotations", _CONTENT_ANNOTATION) != data.content_sha256
+            or _field(metadata, "labels", "openshell.ai/sandbox-attachable") != "true"
             or _field(metadata, "labels", "openshell.ai/sandbox-attachable-workspace")
             != self.settings.workspace
             or any(

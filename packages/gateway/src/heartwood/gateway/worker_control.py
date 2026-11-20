@@ -18,6 +18,7 @@ import subprocess
 import sys
 from collections import deque
 from contextlib import suppress
+from pathlib import PurePosixPath
 from threading import Event, Thread
 from time import monotonic
 from typing import Any
@@ -200,7 +201,11 @@ class NativeWorkerControl:
                 and self.settings.project_data is not None
                 and (
                     str(self.settings.project_data.mount_path) not in policy.filesystem.read_only
-                    or str(self.settings.project_data.mount_path) in policy.filesystem.read_write
+                    # A Landlock rule covers everything below its path.
+                    or any(
+                        self.settings.project_data.mount_path.is_relative_to(PurePosixPath(path))
+                        for path in policy.filesystem.read_write
+                    )
                 )
             )
         ):

@@ -1833,6 +1833,25 @@ _CLAIM_KEY = "persistentvolumeclaim/hw-project-data-eeeeeeeeeeeeeeee"
             {"kind": "PersistentVolumeClaim", "name": "x"},
             "its declaration",
         ),
+        (
+            _CLAIM_KEY,
+            ("spec", "dataSourceRef"),
+            {"kind": "PersistentVolumeClaim", "name": "x"},
+            "its declaration",
+        ),
+        # A claim that the platform has not made attachable after its copy.
+        (
+            _CLAIM_KEY,
+            ("metadata", "labels", "openshell.ai/sandbox-attachable"),
+            _DELETE,
+            "its declaration",
+        ),
+        (
+            _CLAIM_KEY,
+            ("metadata", "labels", "openshell.ai/sandbox-attachable"),
+            "false",
+            "its declaration",
+        ),
         # The volume or its mount is writable.
         (
             "pod/hw--",
@@ -1908,23 +1927,13 @@ def test_a_second_mount_of_the_project_data_volume_is_refused(
 
 @pytest.mark.parametrize(
     "path",
-    [
-        "data",
-        "/",
-        "/data/../etc",
-        "/inputs",
-        "/inputs/data",
-        "/workspace/data",
-        "/sandbox",
-        "/opt/data",
-    ],
+    ["data", "/", "/data/../etc", "/datasets", "/usr", "/etc/ssl", "/inputs", "/workspace/data"],
 )
-def test_project_data_is_mounted_apart_from_the_workers_own_paths(
-    tmp_path: Path, path: str
-) -> None:
-    with pytest.raises(ValueError, match="apart from the worker's own"):
+def test_project_data_is_mounted_at_the_images_mount_point(tmp_path: Path, path: str) -> None:
+    # Elsewhere a volume could shadow part of the image whose digest admission pins.
+    with pytest.raises(ValueError, match="mounted at /data"):
         _settings(tmp_path, project_data=_project_data(mount_path=path))
-    assert _settings(tmp_path, project_data=_project_data(mount_path="/project/data")).project_data
+    assert _settings(tmp_path, project_data=_project_data(mount_path="/data/cohort")).project_data
 
 
 def test_the_driver_configuration_attaches_the_project_data_read_only(tmp_path: Path) -> None:
@@ -1944,3 +1953,25 @@ def test_the_driver_configuration_attaches_the_project_data_read_only(tmp_path: 
         "mount_path": "/data",
         "read_only": True,
     }
+
+
+@pytest.mark.parametrize(
+    ("volume", "path", "refusal"),
+    [
+        ("project-data", "/data", "read-only at its declared path"),
+        ("inputs", "/inputs", "projection mount is not read-only"),
+    ],
+)
+def test_a_read_only_claim_mounted_in_an_init_container_is_refused(
+    data_admission: KubernetesWorkerAdmission,
+    monkeypatch: pytest.MonkeyPatch,
+    volume: str,
+    path: str,
+    refusal: str,
+) -> None:
+    objects = _with_project_data(data_admission)
+    init = _workload(objects)["spec"]["initContainers"][1]
+    init["volumeMounts"].append({"mountPath": path, "name": volume, "readOnly": True})
+    _serve(data_admission, monkeypatch, objects)
+    with pytest.raises(WorkerAttemptError, match=refusal):
+        data_admission.inspect_worker(_SANDBOX_ID)

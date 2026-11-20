@@ -592,7 +592,7 @@ def _with_project_data(
         path for path in policy["filesystem"]["read_only"] if path != "/data"
     ] + (["/data"] if listed else [])
     policy["filesystem"]["read_write"] = [
-        path for path in policy["filesystem"].get("read_write", []) if path != "/data"
+        path for path in policy["filesystem"].get("read_write", []) if path not in {"/data", "/"}
     ]
     settings.policy_path.write_text(json.dumps(policy))
     return KubernetesWorkerDeployment.model_validate(
@@ -661,6 +661,22 @@ def test_a_policy_that_does_not_list_the_project_data_read_only_is_refused(
                 update={
                     "policy_file_sha256": hashlib.sha256(
                         writable.policy_path.read_bytes()
+                    ).hexdigest()
+                }
+            ),
+            project,
+        ).policy()
+    # A writable ancestor of the mount path covers it too.
+    ancestor = _with_project_data(settings)
+    policy = json.loads(ancestor.policy_path.read_text())
+    policy["filesystem"]["read_write"].append("/")
+    ancestor.policy_path.write_text(json.dumps(policy))
+    with pytest.raises(WorkerAttemptError, match="native policy does not match"):
+        NativeWorkerControl(
+            ancestor.model_copy(
+                update={
+                    "policy_file_sha256": hashlib.sha256(
+                        ancestor.policy_path.read_bytes()
                     ).hexdigest()
                 }
             ),

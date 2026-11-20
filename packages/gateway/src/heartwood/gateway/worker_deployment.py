@@ -97,10 +97,9 @@ class OpenShellWorkerDeployment(_WorkerSettings):
         return self
 
 
-# Paths that the worker or the driver already use; project data is mounted elsewhere.
-_RESERVED_MOUNTS = tuple(
-    PurePosixPath(path) for path in ("/inputs", "/skills", "/workspace", "/sandbox", "/opt", "/tmp")
-)
+# The worker image's mount point of project data. A volume elsewhere could shadow part of
+# the image, whose digest admission pins.
+PROJECT_DATA_ROOT = PurePosixPath("/data")
 
 
 class KubernetesProjectData(BaseModel):
@@ -124,15 +123,8 @@ class KubernetesProjectData(BaseModel):
     @model_validator(mode="after")
     def _mount_elsewhere(self) -> Self:
         path = self.mount_path
-        if (
-            not path.is_absolute()
-            or str(path) != posixpath.normpath(str(path))
-            or len(path.parts) < 2
-            or any(path.is_relative_to(r) or r.is_relative_to(path) for r in _RESERVED_MOUNTS)
-        ):
-            raise ValueError(
-                "Project data must be mounted at a canonical path apart from the worker's own"
-            )
+        if str(path) != posixpath.normpath(str(path)) or not path.is_relative_to(PROJECT_DATA_ROOT):
+            raise ValueError("Project data must be mounted at /data or a canonical path below it")
         return self
 
 

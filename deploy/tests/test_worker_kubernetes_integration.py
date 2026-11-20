@@ -1466,15 +1466,21 @@ print(json.dumps({'files':files,'writes':writes}))
 
 
 def _project_data() -> dict[str, str]:
+    """The declaration of the hosted gateway's manifest, which the reply to the launch matches."""
+    import tomllib
+
+    manifest = tomllib.loads(Path("/qualification/gateway/deployment.toml").read_text())
+    declared = dict(manifest["worker"]["project_data"])
     launch = json.loads(_LAUNCH.read_text())
     volume = launch["project_data"]
-    return {
+    assert declared == {
         "claim_name": volume["claim_name"],
         "claim_uid": volume["claim_uid"],
         "project": launch["project"],
         "content_sha256": volume["content_sha256"],
         "mount_path": volume["mount_path"],
     }
+    return declared
 
 
 def _content_sha256(files: dict[str, list[Any]]) -> str:
@@ -1572,20 +1578,22 @@ def _attached(change: str) -> Any:  # noqa: ANN401
     def changed(volumes: KubernetesWorkerVolumes) -> dict[str, Any]:
         config = original(volumes)
         for item in config["volumes"]:
-            if item["name"] == "project-data" and change == "writable":
+            if item["name"] == "project-data" and change == "writable-volume":
                 item["persistent_volume_claim"]["read_only"] = False
         for mount in config["containers"]["agent"]["volume_mounts"]:
             if mount["name"] == "project-data":
-                if change == "writable":
+                if change == "writable-mount":
                     mount["read_only"] = False
-                else:
-                    mount["mount_path"] = "/project-data"
+                elif change == "undeclared-path":
+                    mount["mount_path"] = "/data/elsewhere"
         return config
 
     return changed
 
 
-@pytest.mark.parametrize("change", ["writable", "another-project", "undeclared-path"])
+@pytest.mark.parametrize(
+    "change", ["writable-volume", "writable-mount", "another-project", "undeclared-path"]
+)
 def test_kubernetes_admission_refuses_project_data_out_of_its_declaration(
     infrastructure: KubernetesFixture, monkeypatch: pytest.MonkeyPatch, change: str
 ) -> None:
