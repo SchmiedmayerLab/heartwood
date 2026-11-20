@@ -21,6 +21,7 @@ import shutil
 import ssl
 import threading
 import time
+import tomllib
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from itertools import pairwise
@@ -1467,8 +1468,6 @@ print(json.dumps({'files':files,'writes':writes}))
 
 def _project_data() -> dict[str, str]:
     """The declaration of the hosted gateway's manifest, which the reply to the launch matches."""
-    import tomllib
-
     manifest = tomllib.loads(Path("/qualification/gateway/deployment.toml").read_text())
     declared = dict(manifest["worker"]["project_data"])
     launch = json.loads(_LAUNCH.read_text())

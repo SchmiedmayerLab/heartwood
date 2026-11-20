@@ -12,6 +12,7 @@ import hashlib
 import importlib
 import json
 import os
+import posixpath
 import re
 import signal
 import subprocess
@@ -201,9 +202,13 @@ class NativeWorkerControl:
                 and self.settings.project_data is not None
                 and (
                     str(self.settings.project_data.mount_path) not in policy.filesystem.read_only
-                    # A Landlock rule covers everything below its path.
+                    # A Landlock rule covers everything below its path, which must be
+                    # canonical so the comparison sees the path the kernel resolves.
                     or any(
-                        self.settings.project_data.mount_path.is_relative_to(PurePosixPath(path))
+                        not path.startswith("/")
+                        or path.startswith("//")
+                        or posixpath.normpath(path) != path
+                        or self.settings.project_data.mount_path.is_relative_to(PurePosixPath(path))
                         for path in policy.filesystem.read_write
                     )
                 )

@@ -302,11 +302,11 @@ mount_path = "/data"
 | `claim_uid` | UID the cluster gave the claim; a claim created again under the name has another UID |
 | `project` | The platform project the claim belongs to, which its label `heartwood.platform/project` names |
 | `content_sha256` | Digest of the claim's content, which its annotation `heartwood.platform/content-sha256` names |
-| `mount_path` | Normalized path at which the worker reads the data: `/data`, the worker image's mount point for it, or a path below it, so the volume never shadows part of the image |
+| `mount_path` | Normalized path at which the worker reads the data: `/data`, an empty directory in the worker image, or a path below it, so the volume never shadows part of the image |
 
 The driver configuration attaches the claim read-only on the volume and on the mount, and [admission](../architecture/system.md#kubernetes-worker-admission) refuses a worker whose volume differs from the declaration.
 The policy file must list `mount_path` under `filesystem.read_only`, and no entry under `filesystem.read_write` may be `mount_path` or a path above it.
-The claim must carry both OpenShell approval labels, with `workspace`, which the platform sets once the claim is filled.
+The claim must carry the label `openshell.ai/sandbox-attachable` set to `true` and the label `openshell.ai/sandbox-attachable-workspace` set to `workspace`, which the platform sets once the claim is filled.
 The declaration is part of each attempt's input identity.
 
 ### Model Connections
