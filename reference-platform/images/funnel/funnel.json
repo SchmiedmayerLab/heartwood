@@ -6,7 +6,8 @@
     "tag": "v0.12.3",
     "revision": "738ab75a7056321d82cf57d9781d0af5a4433da6",
     "url": "https://codeload.github.com/calypr/funnel/tar.gz/738ab75a7056321d82cf57d9781d0af5a4433da6",
-    "tree_sha256": "18d8b8ccba0ba451ff5e1fd5c41b1edbfa2de59c493da4b1a52f1d7e3b0cc7fe"
+    "tree_sha256": "18d8b8ccba0ba451ff5e1fd5c41b1edbfa2de59c493da4b1a52f1d7e3b0cc7fe",
+    "patched_tree_sha256": "bd10c1e5078395909526d6240476ebe4bbaabb75b6eaf1cdc37b817b66d0ac18"
   },
   "patches": [
     {
@@ -20,8 +21,10 @@
       "path": "0002-per-task-worker-credentials.patch",
       "sha256": "c3ae111d128629d2b51204d35cc3e71fbc1997b9f4246fa4e07f02a4c21a9af5",
       "purpose": "Per-task worker credentials. The server derives a Basic credential for each task from Server.WorkerCredentialKeyFile and stores it in the immutable Secret funnel-worker-credential-<task>, which the worker template mounts and RPCClient.CredentialFile reads. Such a credential may only get its own task, claim its execution and write its events.",
-      "upstream": "https://github.com/calypr/funnel/issues/1494",
-      "removal": "A Funnel release that issues each worker a credential limited to its own task and authorizes GetTask, WriteEvent and ClaimExecution against that task."
+      "upstream": null,
+      "removal": "A Funnel release that issues each worker a credential limited to its own task and authorizes GetTask, WriteEvent and ClaimExecution against that task.",
+      "related": "https://github.com/calypr/funnel/issues/1494",
+      "upstream_note": "No upstream issue proposes per-task credentials. The related issue proposes one authorization decision point in the server, which would not bind a credential to a task."
     }
   ],
   "images": {

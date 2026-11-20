@@ -523,8 +523,10 @@ uv run python ../tools/render_openshell.py --check  # compares it with a fresh r
 The job executor is Funnel, built from the source and the patches that `images/funnel/funnel.json` records.
 The manifest names the release tag, its revision and the archive of that revision.
 GitHub generates revision archives on request and does not keep their bytes stable, so the manifest records `tree_sha256`, the SHA-256 digest of the extracted tree: of each path, its kind, its executable bit, the digest of its content and the target of each link.
-`tools/prepare_funnel.py` downloads the archive, extracts it with the data filter, requires a single root directory whose tree matches the digest, verifies each patch against its SHA-256 digest and applies the patches in order with `git apply`, which refuses a patch that does not apply exactly.
-It writes the patched tree to `OUTPUT/funnel`, the build context of `images/funnel/Dockerfile`, and with `--image` builds the image.
+`tools/prepare_funnel.py` downloads the archive, extracts it with the data filter, and requires a single root directory whose tree matches the digest.
+It verifies each patch against its SHA-256 digest and applies the patches in order with `git apply`, isolated from the caller's git configuration, which refuses a patch that does not apply exactly.
+The patched tree must match `patched_tree_sha256`.
+It writes the patched tree to `OUTPUT/funnel`, where `OUTPUT` is an empty directory and the build context of `images/funnel/Dockerfile`, and with `--image` builds the image.
 With `--test` it first runs the tests of the packages that the patches change.
 The Go modules are verified against the source's `go.sum`, and the build and base images are pinned by digest.
 
@@ -533,7 +535,8 @@ The Go modules are verified against the source's `go.sum`, and the build and bas
 | `0001-optional-tls-for-server-listeners-and-rpc-client.patch` | TLS on the HTTP and gRPC listeners of the server and in the gRPC client of the workers, verified against a configured CA file; without the settings Funnel behaves as the release |
 | `0002-per-task-worker-credentials.patch` | A credential for each task, derived from a key file of the server and delivered to the task's worker in a Secret that the worker Job mounts; it may read only its own task, claim its execution and write its events |
 
-Each entry of the manifest also names the upstream issue and the upstream change that would allow its removal.
+Each entry of the manifest also names the upstream issue, or the related issue where none exists, and the upstream change that would allow its removal.
+When the pin changes, `prepare_funnel.py --print-tree-digest` prints the digest of the new archive, which is recorded only after it matches a reviewed checkout of the revision.
 
 ```bash
 python3 reference-platform/tools/prepare_funnel.py "${TMPDIR:-/tmp}/funnel-context" --image heartwood-funnel:candidate --test

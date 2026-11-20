@@ -1,24 +1,21 @@
-# syntax=docker/dockerfile:1.7
 # This source file is part of the Heartwood open-source project
 #
 # SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
 #
 # SPDX-License-Identifier: MIT
 
-# Image of the Funnel server and worker, built from the pinned source with the recorded
-# patches. Prepare the build context and build from the repository root:
-#   python3 reference-platform/tools/prepare_funnel.py CONTEXT
-#   docker build --file reference-platform/images/funnel/Dockerfile \
-#     --build-arg FUNNEL_VERSION=... --build-arg FUNNEL_REVISION=... CONTEXT
+# Image of the Funnel server and worker, built from the pinned source with the recorded patches.
+# prepare_funnel.py prepares the build context CONTEXT and builds from it:
+#   python3 reference-platform/tools/prepare_funnel.py CONTEXT --image TAG --test
 # The target test runs the tests of the packages that the patches change.
-# The base images are those of funnel.json.
+# The images are those of funnel.json.
 
 FROM golang:1.27.3-alpine@sha256:fa3d596898d9f126af7c01d14ee7597bab3f39cccf392ef36b69fe77cd681f18 AS build
-ENV CGO_ENABLED=0 GOFLAGS=-buildvcs=false
+ENV CGO_ENABLED=0 GOTOOLCHAIN=local GOFLAGS="-buildvcs=false -mod=readonly"
 WORKDIR /src
 COPY funnel/go.mod funnel/go.sum ./
 # Modules are verified against go.sum.
-RUN --mount=type=cache,target=/go/pkg/mod go mod download
+RUN --mount=type=cache,target=/go/pkg/mod go mod download && go mod verify
 COPY funnel/ ./
 ARG FUNNEL_VERSION
 ARG FUNNEL_REVISION
@@ -33,8 +30,8 @@ ARG FUNNEL_TESTS
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
     test -n "${FUNNEL_TESTS}" && go test -count=1 ${FUNNEL_TESTS}
 
-# The server runs as a non-root user and the worker as root in its own user namespace;
-# both are set by the pod templates.
+# The server runs as a non-root user and the worker as root in its own user namespace.
+# The pod templates set both.
 FROM gcr.io/distroless/static-debian13@sha256:1a64f46364620465ef9e9a8f5413757dfdf22695e050bbfd7303eeaf17a59383
 COPY --from=build /out/funnel /app/funnel
 COPY funnel/License.txt /usr/share/doc/funnel/License.txt

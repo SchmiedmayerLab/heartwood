@@ -13,6 +13,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 import re
 import tarfile
 from pathlib import Path
@@ -145,7 +146,9 @@ def _patch(name: str, old: str, new: str) -> bytes:
     ).encode()
 
 
-def _manifest(tmp_path: Path, patches: list[tuple[str, bytes, str | None]]) -> Path:
+def _manifest(
+    tmp_path: Path, patches: list[tuple[str, bytes, str | None]], patched: str | None = None
+) -> Path:
     directory = tmp_path / "recorded"
     directory.mkdir()
     entries = []
@@ -153,17 +156,116 @@ def _manifest(tmp_path: Path, patches: list[tuple[str, bytes, str | None]]) -> P
         (directory / name).write_bytes(content)
         entries.append({"path": name, "sha256": digest or hashlib.sha256(content).hexdigest()})
     source = _source(tmp_path, _archive(_TREE), _expected(tmp_path))
+    source["patched_tree_sha256"] = patched or "0" * 64
     manifest = directory / "funnel.json"
     manifest.write_text(json.dumps({"source": source, "patches": entries}))
     return manifest
 
 
-def test_patches_apply_in_order(tmp_path: Path) -> None:
+def _patched_digest(tmp_path: Path, content: bytes) -> str:
+    tree = dict(_TREE)
+    tree["main.go"] = (0o644, content)
+    staging = tmp_path / "patched"
+    with tarfile.open(fileobj=io.BytesIO(_archive(tree)), mode="r:gz") as bundle:
+        bundle.extractall(staging, filter="data")
+    digest = prepare_funnel.tree_digest(staging / "funnel-abc")
+    assert isinstance(digest, str)
+    return digest
+
+
+def test_patches_apply_in_order(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     first = _patch("main.go", "package main", "package first")
     second = _patch("main.go", "package first", "package second")
-    manifest = _manifest(tmp_path, [("0001.patch", first, None), ("0002.patch", second, None)])
+    patched = _patched_digest(tmp_path, b"package second\n")
+    manifest = _manifest(
+        tmp_path, [("0001.patch", first, None), ("0002.patch", second, None)], patched
+    )
+    # Neither the caller's repository nor its git configuration takes part.
+    monkeypatch.setenv("GIT_DIR", str(tmp_path / "elsewhere"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(tmp_path))
+    config = tmp_path / "gitconfig"
+    config.write_text("[apply]\n\tignoreWhitespace = change\n\twhitespace = fix\n")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(config))
     target = prepare_funnel.prepare(tmp_path / "out", manifest=manifest)
     assert (target / "main.go").read_text() == "package second\n"
+
+
+def test_a_patch_that_matches_only_without_whitespace_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = tmp_path / "gitconfig"
+    config.write_text("[apply]\n\tignoreWhitespace = change\n")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(config))
+    patch = _patch("main.go", "package  main", "package first")
+    manifest = _manifest(tmp_path, [("0001.patch", patch, None)])
+    with pytest.raises(prepare_funnel.SourceError, match="does not apply"):
+        prepare_funnel.prepare(tmp_path / "out", manifest=manifest)
+
+
+def test_a_patched_tree_with_another_digest_is_refused(tmp_path: Path) -> None:
+    patch = _patch("main.go", "package main", "package first")
+    manifest = _manifest(tmp_path, [("0001.patch", patch, None)])
+    with pytest.raises(prepare_funnel.SourceError, match="patched tree digest"):
+        prepare_funnel.prepare(tmp_path / "out", manifest=manifest)
+    assert not (tmp_path / "out" / "funnel").exists()
+
+
+def test_a_non_empty_output_is_refused(tmp_path: Path) -> None:
+    manifest = _manifest(tmp_path, [])
+    (tmp_path / "out").mkdir()
+    (tmp_path / "out" / "other").write_text("")
+    with pytest.raises(prepare_funnel.SourceError, match="not empty"):
+        prepare_funnel.prepare(tmp_path / "out", manifest=manifest)
+
+
+def test_a_tampered_cached_archive_is_refused(tmp_path: Path) -> None:
+    expected = _expected(tmp_path)
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    tree = dict(_TREE)
+    tree["main.go"] = (0o644, b"package tampered\n")
+    (cache / f"{expected}.tar.gz").write_bytes(_archive(tree))
+    source = {"url": "file:///nonexistent", "tree_sha256": expected}
+    with pytest.raises(prepare_funnel.SourceError, match="tree digest"):
+        prepare_funnel.extract(source, tmp_path / "x", cache)
+
+
+def test_an_oversized_archive_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    archive = _archive(_TREE)
+    monkeypatch.setattr(prepare_funnel, "MAX_ARCHIVE", len(archive) - 1)
+    with pytest.raises(prepare_funnel.SourceError, match="size limit"):
+        prepare_funnel.extract(_source(tmp_path, archive, "0" * 64), tmp_path / "x")
+
+
+def test_a_root_that_is_a_link_is_refused(tmp_path: Path) -> None:
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w") as bundle:
+        entry = tarfile.TarInfo("funnel-abc")
+        entry.type, entry.linkname = tarfile.SYMTYPE, "."
+        bundle.addfile(entry)
+    archive = gzip.compress(buffer.getvalue())
+    with pytest.raises(prepare_funnel.SourceError, match="one root"):
+        prepare_funnel.extract(_source(tmp_path, archive, "0" * 64), tmp_path / "x")
+
+
+@pytest.mark.parametrize("target", ["./main.go", "main.go/"])
+def test_link_targets_are_compared_as_written(tmp_path: Path, target: str) -> None:
+    trees = []
+    for name in ("plain", "other"):
+        root = tmp_path / name
+        root.mkdir()
+        (root / "main.go").write_text("package main\n")
+        (root / "alias.go").symlink_to("main.go" if name == "plain" else target)
+        trees.append(prepare_funnel.tree_digest(root))
+    assert trees[0] != trees[1]
+
+
+def test_a_special_file_is_refused(tmp_path: Path) -> None:
+    root = tmp_path / "tree"
+    root.mkdir()
+    os.mkfifo(root / "pipe")
+    with pytest.raises(prepare_funnel.SourceError, match="special file"):
+        prepare_funnel.tree_digest(root)
 
 
 def test_a_patch_with_another_digest_is_refused(tmp_path: Path) -> None:
@@ -191,7 +293,7 @@ def test_the_recorded_patches_match_their_digests() -> None:
         content = (_FUNNEL / patch["path"]).read_bytes()
         assert hashlib.sha256(content).hexdigest() == patch["sha256"]
         assert patch["purpose"]
-        assert patch["upstream"].startswith("https://")
+        assert (patch["upstream"] or patch["related"]).startswith("https://")
         assert patch["removal"]
     assert re.fullmatch(r"[0-9a-f]{40}", manifest["source"]["revision"])
     assert manifest["source"]["url"].endswith(manifest["source"]["revision"])
@@ -199,7 +301,10 @@ def test_the_recorded_patches_match_their_digests() -> None:
 
 def test_the_dockerfile_uses_the_recorded_images_by_digest() -> None:
     manifest = json.loads((_FUNNEL / "funnel.json").read_text())
-    stages = re.findall(r"^FROM (\S+)", (_FUNNEL / "Dockerfile").read_text(), re.MULTILINE)
+    dockerfile = (_FUNNEL / "Dockerfile").read_text()
+    # A syntax line would pull a frontend image by tag.
+    assert "# syntax=" not in dockerfile
+    stages = re.findall(r"^FROM (\S+)", dockerfile, re.MULTILINE)
     external = [stage for stage in stages if stage != "build"]
     assert external == [manifest["images"]["go"], manifest["images"]["base"]]
     assert all(re.search(r"@sha256:[0-9a-f]{64}$", image) for image in external)

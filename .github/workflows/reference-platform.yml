@@ -94,8 +94,7 @@ jobs:
         with:
           persist-credentials: false
           submodules: true
-      # Verifies the source tree and the patch digests, runs the tests of the patched
-      # packages and builds the image.
+      # Verifies the source tree and the patch digests, runs the tests of the patched packages and builds the image.
       - name: Build Funnel with its recorded patches
         run: >-
           python3 reference-platform/tools/prepare_funnel.py "${RUNNER_TEMP}/funnel"
