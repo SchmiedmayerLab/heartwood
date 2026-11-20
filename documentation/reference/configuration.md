@@ -306,6 +306,7 @@ mount_path = "/data"
 
 The driver configuration attaches the claim read-only on the volume and on the mount, and [admission](../architecture/system.md#kubernetes-worker-admission) refuses a worker whose volume differs from the declaration.
 The policy file must list `mount_path` under `filesystem.read_only`, and no entry under `filesystem.read_write` may be `mount_path` or a path above it.
+Each entry under `filesystem.read_write` must then be an absolute, normalized path.
 The claim must carry the label `openshell.ai/sandbox-attachable` set to `true` and the label `openshell.ai/sandbox-attachable-workspace` set to `workspace`, which the platform sets once the claim is filled.
 The declaration is part of each attempt's input identity.
 
