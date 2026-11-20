@@ -1866,7 +1866,6 @@ def test_kubernetes_data_catalog_research_task(infrastructure: KubernetesFixture
         service_tokens=researcher,
         platform_planning=planning,
     )
-    service = application._service("composition")
     try:
         application.add_mcp_server(
             McpServerAddRequest(
@@ -1885,6 +1884,8 @@ def test_kubernetes_data_catalog_research_task(infrastructure: KubernetesFixture
             ),
         )
         application.set_mcp_server_enabled("catalog", McpServerEnabledRequest(enabled=True))
+        # Enabled tools reach the sessions that start afterwards.
+        service = application._service("composition")
         names = {
             name: f"catalog__{name}_{digests[name][:8]}"
             for name in ("list_datasets", "list_objects", "resolve_object")
