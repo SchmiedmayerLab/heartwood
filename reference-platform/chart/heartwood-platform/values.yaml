@@ -241,9 +241,11 @@ inference:
   localModel:
     enabled: false
     alias: local-model
+    # maxBytes bounds the download, which also needs room in the pod's 8 GiB volume.
     model:
       url: ""
       sha256: ""
+      maxBytes: 4294967296
     contextSize: 4096
     threads: 2
     resources:

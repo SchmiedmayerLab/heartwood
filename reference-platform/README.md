@@ -365,15 +365,15 @@ A worker attached to the old key fails at its next request, and the next worker 
 ### Local Model
 
 `inference.localModel` serves a model on the cluster's CPUs with `llama-server` from `images.modelRuntime`, the `runtime-image` stage of `images/Dockerfile`, which has no default.
-The image holds no weights: an init container downloads `inference.localModel.model.url` over HTTPS at each start and checks its SHA-256 digest against `inference.localModel.model.sha256`.
+The image holds no weights: an init container downloads `inference.localModel.model.url` over HTTPS at each start, up to `inference.localModel.model.maxBytes`, and checks its SHA-256 digest against `inference.localModel.model.sha256`.
 `llama-server` serves HTTPS on port 8443 with a certificate that the platform CA signs for the names of its Service, and LiteLLM verifies it against the platform CA, so a server without that certificate receives no request.
-It requires the API key that Helm generates into the Secret `llama-server`, read with `--api-key-file`, and only LiteLLM holds the key; it runs with `--no-webui`.
+It requires the API key that Helm generates into the Secret `llama-server`, read with `--api-key-file`, and only LiteLLM receives the key; it runs with `--no-webui`.
 Its health and model list answer without the key, so the network policy admits only LiteLLM.
 The model is a model of the route, listed in `inference.models` with the name `inference.localModel.alias`, `api_base` `https://llama-server.<namespace>.svc.cluster.local:8443/v1` and `apiKeySecret` `{name: llama-server, key: api-key}`.
-When the runtime is not running, LiteLLM answers the model's requests with an error, and the worker's turn ends with it.
+When the runtime is not running, LiteLLM answers the model's requests with an error.
 
 `values-kind.yaml` serves Stories 260K, the small test model that `images/generic/local-runtime/models/stories260k.toml` pins, with a context of 4096 tokens.
-It shows the route, not a model for research tasks.
+It exists to test the route and is not suited to research tasks.
 
 ### Network Policies
 

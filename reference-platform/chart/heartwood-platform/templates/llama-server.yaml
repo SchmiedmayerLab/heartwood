@@ -71,7 +71,8 @@ spec:
             - /bin/sh
             - -c
             - >-
-              curl --fail --silent --show-error --location --proto =https --max-filesize 4294967296
+              curl --fail --silent --show-error --location --proto =https --retry 3 --retry-all-errors
+              --max-filesize {{ $local.model.maxBytes | int64 }}
               --output /models/model.gguf "${MODEL_URL}"
               && echo "${MODEL_SHA256}  /models/model.gguf" | sha256sum --check --strict --quiet
           env:

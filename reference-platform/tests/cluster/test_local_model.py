@@ -279,9 +279,12 @@ def test_a_stopped_or_squatted_runtime_fails_the_request_and_receives_no_prompt(
         assert ready.returncode == 0, ready.stderr
         status, answer = proxy.chat(key, LOCAL)
         assert status >= 500, answer
-        logs = cluster.kubectl("logs", f"--namespace={PLATFORM}", "pod/hw-squatter").stdout
-        assert "chat/completions" not in logs
-        assert "Say hello" not in logs
+        logs = cluster.kubectl("logs", f"--namespace={PLATFORM}", "pod/hw-squatter")
+        output = logs.stdout + logs.stderr
+        # LiteLLM connected and refused the squatter's certificate before sending anything.
+        assert "TLS handshake error" in output, output[-2000:]
+        assert "chat/completions" not in output
+        assert "Say hello" not in output
     finally:
         cluster.kubectl("delete", f"--namespace={PLATFORM}", "pod/hw-squatter", "--wait")
         cluster.kubectl("delete", f"--namespace={PLATFORM}", "secret/hw-squatter-tls")
