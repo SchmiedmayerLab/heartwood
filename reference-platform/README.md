@@ -117,11 +117,13 @@ A Heartwood gateway reaches its MCP endpoint as the planning service of its `[pl
 | `GET /v1/researchers/{subject}/projects` | Platform component | The projects that the researcher is a member of |
 | `PUT /v1/researchers/{subject}/projects/{project}/launch` | Platform component | The session with its namespace, the project client and the launch context; the session is created at the first launch |
 | `DELETE /v1/researchers/{subject}/projects/{project}/launch` | Platform component | The session, its namespace and its redirect URI are removed |
+| `POST /v1/projects/{project}/client-secret` | Platform operator | A new secret of the project client, written to Keycloak and to the gateway Secrets of the members' sessions; the reply lists the rewritten sessions and those that could not be prepared, see [Recovery and Client Secret Rotation](#recovery-and-client-secret-rotation) |
 | `GET /v1/launch-context` | Heartwood gateway | The launch context of the researcher and project that the token names |
 | `/mcp`, MCP over streamable HTTP | Heartwood gateway | The read-only tool `estimate_workload` |
 
 A platform component sends a projected service account token with the audience `heartwood-control`.
 The service verifies it with a TokenReview and accepts the service accounts in `control.serviceCallers`.
+A platform operator sends the same kind of token, and the service accepts it for the rotation only from the service accounts in `control.operatorCallers`.
 A Heartwood gateway sends a Keycloak access token that the project client obtained by token exchange.
 The service verifies its signature, issuer, expiry and type, requires `heartwood-control` as its only audience, and takes the project from the authorized party `hw-proj-<project>` and the researcher from the subject.
 Every request is checked against the registry, and the billing binding of a launch context comes from the registry only.
