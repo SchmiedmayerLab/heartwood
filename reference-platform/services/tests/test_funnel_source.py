@@ -92,12 +92,12 @@ def test_a_regenerated_archive_of_the_same_tree_verifies(tmp_path: Path) -> None
     checkout = prepare_funnel.extract(
         _source(tmp_path, regenerated, expected), tmp_path / "a", cache
     )
-    assert checkout.name == "renamed-abc"
+    assert checkout.name == "checkout"
     assert (checkout / "alias.go").readlink() == Path("main.go")
     # The verified archive is cached and verified again when it is read from the cache.
     assert (cache / f"{expected}.tar.gz").read_bytes() == regenerated
     source = {"url": "file:///nonexistent", "tree_sha256": expected}
-    assert prepare_funnel.extract(source, tmp_path / "b", cache).name == "renamed-abc"
+    assert prepare_funnel.extract(source, tmp_path / "b", cache).name == "checkout"
 
 
 @pytest.mark.parametrize("change", ["content", "mode", "link", "added", "removed", "second-root"])
@@ -125,7 +125,7 @@ def test_changed_source_content_fails_closed(tmp_path: Path, change: str) -> Non
     cache = tmp_path / "cache"
     with pytest.raises(prepare_funnel.SourceError):
         prepare_funnel.extract(_source(tmp_path, archive, expected), tmp_path / "x", cache)
-    assert not cache.exists()
+    assert not any(cache.iterdir())
 
 
 def test_an_archive_that_leaves_its_directory_is_refused(tmp_path: Path) -> None:
@@ -226,7 +226,7 @@ def test_a_tampered_cached_archive_is_refused(tmp_path: Path) -> None:
     tree["main.go"] = (0o644, b"package tampered\n")
     (cache / f"{expected}.tar.gz").write_bytes(_archive(tree))
     source = {"url": "file:///nonexistent", "tree_sha256": expected}
-    with pytest.raises(prepare_funnel.SourceError, match="tree digest"):
+    with pytest.raises(prepare_funnel.SourceError, match="tree_sha256 is"):
         prepare_funnel.extract(source, tmp_path / "x", cache)
 
 

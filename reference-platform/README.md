@@ -522,10 +522,10 @@ uv run python ../tools/render_openshell.py --check  # compares it with a fresh r
 
 The job executor is Funnel, built from the source and the patches that `images/funnel/funnel.json` records.
 The manifest names the release tag, its revision and the archive of that revision.
-GitHub generates revision archives on request and does not keep their bytes stable, so the manifest records `tree_sha256`, the SHA-256 digest of the extracted tree: of each path, its kind, its executable bit, the digest of its content and the target of each link.
-`tools/prepare_funnel.py` downloads the archive, extracts it with the data filter, and requires a single root directory whose tree matches the digest.
-It verifies each patch against its SHA-256 digest and applies the patches in order with `git apply`, isolated from the caller's git configuration, which refuses a patch that does not apply exactly.
-The patched tree must match `patched_tree_sha256`.
+GitHub generates revision archives on request and does not keep their bytes stable, so the manifest records `tree_sha256`, the SHA-256 digest of the extracted tree, computed over each path, its kind, its executable bit, the digest of its content and the target of each link.
+`tools/prepare_funnel.py` verifies the source with the same extraction and digest as `deploy/build-worker-candidate.py`: the data filter, bounds on the archive and extracted size, no hard links, and a single root directory whose tree matches the digest.
+It verifies each patch against its SHA-256 digest and applies the patches in order with `git apply`, which refuses a patch whose context does not match, isolated from the caller's git configuration.
+The patched tree must then match `patched_tree_sha256`.
 It writes the patched tree to `OUTPUT/funnel`, where `OUTPUT` is an empty directory and the build context of `images/funnel/Dockerfile`, and with `--image` builds the image.
 With `--test` it first runs the tests of the packages that the patches change.
 The Go modules are verified against the source's `go.sum`, and the build and base images are pinned by digest.

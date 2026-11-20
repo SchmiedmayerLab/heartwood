@@ -9,7 +9,7 @@
 The source is the revision archive that ``images/funnel/funnel.json`` names.
 GitHub generates revision archives on request and does not keep their bytes stable.
 The manifest records ``tree_sha256``, the digest of the extracted tree, instead.
-Each patch is verified by its SHA-256 digest and applied in order without fuzz.
+Each patch is verified by its SHA-256 digest and applied in order with git apply.
 The patched tree must match ``patched_tree_sha256``.
 It is written to ``OUTPUT/funnel``; ``OUTPUT`` is the build context of the Dockerfile.
 With ``--image TAG`` the image is built from that context.
@@ -23,24 +23,22 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import io
+import importlib.util
 import json
 import os
 import re
 import shutil
 import subprocess
 import sys
-import tarfile
-import urllib.request
-import zlib
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import ModuleType
 from typing import Any
 
 FUNNEL = Path(__file__).resolve().parents[1] / "images" / "funnel"
 MANIFEST = FUNNEL / "funnel.json"
-# The archive of the pinned revision is about 20 MiB.
-MAX_ARCHIVE = 128 * 1024 * 1024
+# The archive of the pinned revision is about 1.3 MiB.
+MAX_ARCHIVE = 64 * 1024 * 1024
 _DIGEST = re.compile(r"[0-9a-f]{64}")
 
 
@@ -48,38 +46,36 @@ class SourceError(Exception):
     """The source or a patch does not match the manifest."""
 
 
+def _load_candidate_builder() -> ModuleType:
+    """Load the source verification of ``deploy/build-worker-candidate.py``.
+
+    Funnel's source is verified by the same extraction and tree digest as the worker's
+    sources, so both follow one implementation.
+    """
+    path = Path(__file__).resolve().parents[2] / "deploy" / "build-worker-candidate.py"
+    specification = importlib.util.spec_from_file_location("build_worker_candidate", path)
+    if specification is None or specification.loader is None:
+        raise SourceError("the source verification cannot be loaded")
+    module = importlib.util.module_from_spec(specification)
+    specification.loader.exec_module(module)
+    return module
+
+
+_CANDIDATE = _load_candidate_builder()
+
+
 def _digest(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
 
 
 def tree_digest(root: Path) -> str:
-    """Identify a tree by its paths, kinds, executable bits, contents and link targets.
-
-    Archive metadata such as compression, timestamps and ownership is excluded.
-    A regenerated archive of the same revision therefore keeps its digest.
-    """
-    entries: list[tuple[bytes, bytes, bytes]] = []
-    pending = [root]
-    while pending:
-        directory = pending.pop()
-        with os.scandir(directory) as children:
-            for child in children:
-                path = os.fsencode(Path(child.path).relative_to(root).as_posix())
-                if child.is_symlink():
-                    # The raw target, since Path.readlink normalizes it.
-                    target = os.readlink(child.path)  # noqa: PTH115
-                    entries.append((path, b"symlink", os.fsencode(target)))
-                elif child.is_dir(follow_symlinks=False):
-                    entries.append((path, b"directory", b""))
-                    pending.append(Path(child.path))
-                elif child.is_file(follow_symlinks=False):
-                    executable = child.stat(follow_symlinks=False).st_mode & 0o100
-                    kind = b"executable" if executable else b"file"
-                    entries.append((path, kind, _digest(Path(child.path).read_bytes()).encode()))
-                else:
-                    raise SourceError("the source contains a special file")
-    # NUL cannot occur in a path or link target, so each record parses unambiguously.
-    return _digest(b"".join(b"\0".join(entry) + b"\0" for entry in sorted(entries)))
+    """Identify a tree by its paths, kinds, executable bits, contents and link targets."""
+    try:
+        digest = _CANDIDATE._tree_digest(root)
+    except ValueError as error:
+        raise SourceError(str(error)) from error
+    assert isinstance(digest, str)
+    return digest
 
 
 def _expected(source: dict[str, Any], key: str) -> str:
@@ -89,54 +85,21 @@ def _expected(source: dict[str, Any], key: str) -> str:
     return value
 
 
-def _archive(url: str, cached: Path | None) -> bytes:
-    if cached is not None and cached.exists():
-        with cached.open("rb") as stream:
-            content = stream.read(MAX_ARCHIVE + 1)
-    else:
-        with urllib.request.urlopen(url, timeout=120) as response:
-            content = bytes(response.read(MAX_ARCHIVE + 1))
-    if len(content) > MAX_ARCHIVE:
-        raise SourceError("the source archive exceeds its size limit")
-    return content
-
-
-def _unpack(content: bytes, staging: Path) -> Path:
-    staging.mkdir(parents=True)
-    try:
-        with tarfile.open(fileobj=io.BytesIO(content), mode="r:gz") as bundle:
-            # The data filter refuses paths and links that leave the staging directory.
-            bundle.extractall(staging, filter="data")
-    except (tarfile.TarError, EOFError, zlib.error) as error:
-        raise SourceError("the source archive is unsafe or unreadable") from error
-    # The root directory's name follows the repository name, which can change.
-    # Only one root may exist, so nothing unverified sits beside the checkout.
-    roots = list(staging.iterdir())
-    if len(roots) != 1 or roots[0].is_symlink() or not roots[0].is_dir():
-        raise SourceError("the source archive must have one root directory")
-    return roots[0]
-
-
 def extract(source: dict[str, Any], staging: Path, cache: Path | None = None) -> Path:
     """Extract the source into ``staging`` and return its verified root directory.
 
-    A cached archive is verified like a downloaded one.
-    Only an archive whose tree matched is cached.
+    A cached archive is verified like a downloaded one, and only an archive whose tree
+    matched is cached.
     """
-    expected = _expected(source, "tree_sha256")
-    cached = None if cache is None else cache / f"{expected}.tar.gz"
-    content = _archive(source["url"], cached)
-    root = _unpack(content, staging)
-    actual = tree_digest(root)
-    if actual != expected:
-        raise SourceError(f"the source tree digest is {actual}")
-    if cached is not None and not cached.exists():
-        cached.parent.mkdir(parents=True, exist_ok=True)
-        with TemporaryDirectory(dir=cached.parent) as temporary:
-            download = Path(temporary) / "archive"
-            download.write_bytes(content)
-            download.replace(cached)
-    return root
+    verified = {"url": source["url"], "tree_sha256": _expected(source, "tree_sha256")}
+    if cache is not None:
+        cache.mkdir(parents=True, exist_ok=True)
+    try:
+        checkout = _CANDIDATE._source(verified, staging, cache=cache, limit=MAX_ARCHIVE)
+    except ValueError as error:
+        raise SourceError(str(error)) from error
+    assert isinstance(checkout, Path)
+    return checkout
 
 
 def _git_environment(checkout: Path) -> dict[str, str]:
@@ -221,7 +184,14 @@ def print_tree_digest(manifest: Path = MANIFEST) -> str:
     """
     source = json.loads(manifest.read_text(encoding="utf-8"))["source"]
     with TemporaryDirectory() as temporary:
-        return tree_digest(_unpack(_archive(source["url"], None), Path(temporary) / "source"))
+        try:
+            extract({**source, "tree_sha256": "0" * 64}, Path(temporary) / "source")
+        except SourceError as error:
+            message = str(error)
+            if "tree_sha256 is " not in message:
+                raise
+            return message.rsplit(" ", 1)[1]
+    raise SourceError("the source unexpectedly matched an empty digest")
 
 
 def main() -> int:
@@ -243,6 +213,8 @@ def main() -> int:
             return 0
         if arguments.output is None:
             parser.error("OUTPUT is required")
+        if arguments.test and not arguments.image:
+            parser.error("--test requires --image")
         prepare(arguments.output, arguments.cache)
     except SourceError as error:
         print(f"prepare_funnel: {error}", file=sys.stderr)
