@@ -22,6 +22,7 @@ import argparse
 import json
 import re
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -44,7 +45,7 @@ _PROBE_IMAGE = (
 )
 # Runs in the pod: it creates a disposable sandbox as the hosted gateway would and
 # prints the policy digest of its admission.
-_PROGRAM = """import json,sys,time,tomllib
+_PROGRAM = """import json,secrets,sys,time,tomllib
 from pathlib import Path
 import openshell
 from google.protobuf.json_format import ParseDict
@@ -64,7 +65,7 @@ created=client.create(workspace=worker['workspace'],name=name,labels=labels,spec
   resources={'limits':{'cpu':worker['cpu'],'memory':worker['memory']}},
   labels={**labels,'heartwood.role':'worker'}),
  policy=policy,providers=[worker['provider']],
- environment={'SESSION_API_KEY':'policy-probe','HEARTWOOD_SKILL_PLATFORM':'generic'},
+ environment={'SESSION_API_KEY':secrets.token_urlsafe(32),'HEARTWOOD_SKILL_PLATFORM':'generic'},
  command=['/opt/heartwood/.venv/bin/python','-I','-B','-u','/opt/heartwood/images/worker/launch.py']))
 try:
  ready=client.wait_ready(name,workspace=worker['workspace'],timeout_seconds=240)
@@ -155,15 +156,21 @@ def policy_digest(cluster: Cluster) -> str:
                 },
             }
             cluster.apply(pod)
-            done = cluster.kubectl(
-                "wait",
-                f"--namespace={SESSIONS}",
-                "--for=jsonpath={.status.phase}=Succeeded",
-                f"pod/{_POD}",
-                "--timeout=300s",
-            )
+            phase = ""
+            deadline = time.monotonic() + 300
+            while phase not in {"Succeeded", "Failed"} and time.monotonic() < deadline:
+                time.sleep(3)
+                phase = cluster.kubectl(
+                    "get",
+                    f"--namespace={SESSIONS}",
+                    f"pod/{_POD}",
+                    "--output=jsonpath={.status.phase}",
+                ).stdout
             logs = cluster.kubectl("logs", f"--namespace={SESSIONS}", f"pod/{_POD}").stdout
-            assert done.returncode == 0, logs[-2000:]
+            if phase != "Succeeded":
+                described = cluster.kubectl("describe", f"--namespace={SESSIONS}", f"pod/{_POD}")
+                logs += described.stdout[-3000:]
+            assert phase == "Succeeded", logs[-4000:]
             found = re.search(r"^policy-hash ([0-9a-f]{64})$", logs, re.MULTILINE)
             assert found is not None, logs[-2000:]
             return found.group(1)
