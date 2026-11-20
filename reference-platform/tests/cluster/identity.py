@@ -40,12 +40,14 @@ ACCESS_TOKEN = "urn:ietf:params:oauth:token-type:access_token"
 
 
 @contextmanager
-def probe(cluster: Cluster, name: str, image: str) -> Iterator[str]:
-    """Run a pod with curl in heartwood-sessions."""
+def probe(
+    cluster: Cluster, name: str, image: str, labels: dict[str, str] | None = None
+) -> Iterator[str]:
+    """Run a pod with curl in heartwood-sessions, with labels when given."""
     pod = {
         "apiVersion": "v1",
         "kind": "Pod",
-        "metadata": {"name": name, "namespace": SESSIONS},
+        "metadata": {"name": name, "namespace": SESSIONS, "labels": labels or {}},
         "spec": {
             "automountServiceAccountToken": False,
             "securityContext": {
