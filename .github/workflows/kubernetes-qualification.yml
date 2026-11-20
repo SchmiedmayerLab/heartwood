@@ -154,13 +154,21 @@ jobs:
           --set "hub.worker.image=${WORKER_IMAGE}"
           --set-json "sessions.stagingImages=${STAGING_IMAGES}"
       # Hosted workers are admitted with the digest of their effective sandbox policy,
-      # which covers the endpoint of the model route's provider.
+      # which covers the endpoint of the model route's provider. The installation is
+      # repeated with the same images and the digest.
       - name: Set the sandbox policy digest of hosted workers
         working-directory: reference-platform/services
         run: |
           uv sync --locked
           digest="$(uv run python ../tests/cluster/route_policy.py --cluster-context kind-heartwood)"
-          bash ../cluster/install-chart.sh heartwood --reuse-values \
+          bash ../cluster/install-chart.sh heartwood \
+            --set "images.platformServices=${PLATFORM_SERVICES_IMAGE}" \
+            --set "images.openshellGateway=${GATEWAY_IMAGE}" \
+            --set "images.openshellRepository=${OPENSHELL_REPOSITORY}" \
+            --set "images.hostedGateway=${HOSTED_GATEWAY_IMAGE}" \
+            --set "images.modelRuntime=${MODEL_RUNTIME_IMAGE}" \
+            --set "hub.worker.image=${WORKER_IMAGE}" \
+            --set-json "sessions.stagingImages=${STAGING_IMAGES}" \
             --set "hub.worker.sandboxPolicySha256=${digest}"
       - name: Test the installed chart
         working-directory: reference-platform/services

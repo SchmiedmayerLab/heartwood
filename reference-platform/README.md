@@ -539,8 +539,11 @@ bash reference-platform/cluster/install-chart.sh heartwood --set "images.platfor
   --set-json "sessions.stagingImages=${staging}"
 digest="$(cd reference-platform/services && uv run python ../tests/cluster/route_policy.py \
   --cluster-context kind-heartwood)"
-bash reference-platform/cluster/install-chart.sh heartwood --reuse-values \
-  --set "hub.worker.sandboxPolicySha256=${digest}"
+bash reference-platform/cluster/install-chart.sh heartwood --set "images.platformServices=${image}" \
+  --set "images.modelRuntime=${runtime}" \
+  --set "images.openshellGateway=${gateway}" --set "images.openshellRepository=${openshell}" \
+  --set "images.hostedGateway=${hosted}" --set "hub.worker.image=${worker}" \
+  --set-json "sessions.stagingImages=${staging}" --set "hub.worker.sandboxPolicySha256=${digest}"
 (cd reference-platform/services && uv run pytest -c pyproject.toml ../tests/cluster \
   --cluster-context kind-heartwood --staging-image "${worker}")
 python3 deploy/qualify-kubernetes-worker.py run --cluster heartwood \
