@@ -21,6 +21,7 @@ from heartwood_platform.common.kubernetes import Kubernetes, in_cluster_client
 from heartwood_platform.common.serving import TlsSettings, serve
 from heartwood_platform.common.tokens import ResearcherTokens, ServiceTokens
 from heartwood_platform.control.app import ProjectId, Subject, create_app
+from heartwood_platform.control.hosted import HostedGateway, HostedGatewaySettings, sandbox_digests
 from heartwood_platform.control.keycloak import Keycloak
 from heartwood_platform.control.launch import LaunchService
 from heartwood_platform.control.prices import PriceSheet
@@ -90,6 +91,8 @@ class Settings(_Settings):
     keycloak: KeycloakSettings
     # The serving certificate from the platform CA; the service serves only HTTPS.
     tls: TlsSettings
+    # The files of each session's hosted gateway.
+    hosted: HostedGatewaySettings
     sessions: SessionNamespaceSettings
     projects: tuple[ProjectSettings, ...]
     synthetic_prices: PriceSheet
@@ -135,13 +138,14 @@ def build(settings: Settings, kubernetes: Kubernetes) -> Starlette:
         return document
 
     namespaces = settings.sessions
+    openshell_objects = namespaces.openshell_objects_file.read_text(encoding="utf-8")
     sessions = Sessions(
         kubernetes,
         SessionSettings(
             control_namespace=namespaces.control_namespace,
             control_account=namespaces.control_account,
             gateway_namespace=namespaces.gateway_namespace,
-            openshell_objects=namespaces.openshell_objects_file.read_text(encoding="utf-8"),
+            openshell_objects=openshell_objects,
             openshell_gateway_image=namespaces.openshell_gateway_image,
             api_server=tuple(
                 ApiServerAddress(address.cidr, address.port) for address in namespaces.api_server
@@ -154,8 +158,20 @@ def build(settings: Settings, kubernetes: Kubernetes) -> Starlette:
         ),
         registry.session_ids,
     )
+    supervisor, sandbox = sandbox_digests(openshell_objects)
+    hosted = HostedGateway(
+        settings.hosted,
+        issuer=settings.keycloak.issuer,
+        supervisor=supervisor,
+        sandbox=sandbox,
+    )
     launches = LaunchService(
-        registry, keycloak, sessions, settings.platform_id, settings.redirect_uri_template
+        registry,
+        keycloak,
+        sessions,
+        settings.platform_id,
+        settings.redirect_uri_template,
+        hosted=hosted,
     )
     return create_app(
         launches,

@@ -12,7 +12,8 @@
     "sessions",
     "control",
     "researchers",
-    "syntheticPrices"
+    "syntheticPrices",
+    "hub"
   ],
   "$defs": {
     "image": {
@@ -48,7 +49,8 @@
         "versitygw",
         "platformServices",
         "openshellGateway",
-        "openshellRepository"
+        "openshellRepository",
+        "hostedGateway"
       ],
       "properties": {
         "postgresql": {
@@ -70,6 +72,9 @@
           "description": "A registry repository without tag or digest, or empty.",
           "type": "string",
           "pattern": "^([a-z0-9][a-z0-9.-]*(:[0-9]+)?(/[a-z0-9][a-z0-9._-]*)*)?$"
+        },
+        "hostedGateway": {
+          "$ref": "#/$defs/image"
         }
       }
     },
@@ -256,8 +261,7 @@
       "required": [
         "platformId",
         "storage",
-        "serviceCallers",
-        "redirectUriTemplate"
+        "serviceCallers"
       ],
       "properties": {
         "platformId": {
@@ -272,10 +276,6 @@
             "type": "string",
             "pattern": "^system:serviceaccount:[a-z0-9-]+:[a-z0-9-]+$"
           }
-        },
-        "redirectUriTemplate": {
-          "type": "string",
-          "pattern": "^https?://[^{}\\s]+/[^\\s]*\\{subject\\}[^\\s]*\\{project\\}[^\\s]*$"
         }
       }
     },
@@ -465,6 +465,154 @@
           }
         }
       }
+    },
+    "hub": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "publicOrigin",
+        "trustedProxySources",
+        "storage",
+        "resources",
+        "worker",
+        "modelRoute"
+      ],
+      "properties": {
+        "publicOrigin": {
+          "description": "Scheme, host and optional port of the Hub's proxy.",
+          "type": "string",
+          "pattern": "^https?://[a-z0-9.-]+(:[0-9]{1,5})?$"
+        },
+        "trustedProxySources": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[0-9a-f.:]+/[0-9]{1,3}$"
+          }
+        },
+        "storage": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "capacity",
+            "storageClassName"
+          ],
+          "properties": {
+            "capacity": {
+              "type": "string"
+            },
+            "storageClassName": {
+              "type": "string"
+            }
+          }
+        },
+        "resources": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "cpuLimit",
+            "cpuGuarantee",
+            "memoryLimit",
+            "memoryGuarantee"
+          ],
+          "properties": {
+            "cpuLimit": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "cpuGuarantee": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "memoryLimit": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]*[KMG]$"
+            },
+            "memoryGuarantee": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]*[KMG]$"
+            }
+          }
+        },
+        "worker": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "image",
+            "sandboxPolicySha256",
+            "policy",
+            "cpu",
+            "memory"
+          ],
+          "properties": {
+            "image": {
+              "description": "The worker image by digest, or empty until it is set.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/image"
+                },
+                {
+                  "const": ""
+                }
+              ]
+            },
+            "sandboxPolicySha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "policy": {
+              "type": "object"
+            },
+            "cpu": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]*m?$"
+            },
+            "memory": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]*(Mi|Gi)$"
+            }
+          }
+        },
+        "modelRoute": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "profileId",
+            "model",
+            "endpoint",
+            "provider",
+            "placeholderEnv"
+          ],
+          "properties": {
+            "profileId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "model": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "endpoint": {
+              "type": "string",
+              "pattern": "^https://[^\\s?#]+$"
+            },
+            "provider": {
+              "type": "string",
+              "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+            },
+            "placeholderEnv": {
+              "type": "string",
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+            }
+          }
+        }
+      }
+    },
+    "jupyterhub": {
+      "description": "Values of the JupyterHub chart.",
+      "type": "object"
     }
   }
 }

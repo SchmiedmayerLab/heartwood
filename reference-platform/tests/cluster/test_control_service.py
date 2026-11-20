@@ -58,13 +58,7 @@ def caller(cluster: Cluster, probe_image: str) -> Iterator[None]:
             "volumes": [{"name": "platform-ca", "configMap": {"name": PROBE_CA}}],
         },
     }
-    account = {
-        "apiVersion": "v1",
-        "kind": "ServiceAccount",
-        "metadata": {"name": "hub", "namespace": _SESSIONS},
-    }
-    existed = cluster.kubectl("get", f"--namespace={_SESSIONS}", "serviceaccount/hub")
-    cluster.apply(pod, account)
+    cluster.apply(pod)
     ready = cluster.kubectl(
         "wait", f"--namespace={_SESSIONS}", "--for=condition=Ready", f"pod/{_POD}"
     )
@@ -73,13 +67,13 @@ def caller(cluster: Cluster, probe_image: str) -> Iterator[None]:
     for subject, project in ((_FIRST, "demo"), (_FIRST, "other"), (_SECOND, "demo")):
         _call(cluster, "DELETE", _launch(subject, project), _token(cluster))
     cluster.kubectl("delete", f"--namespace={_SESSIONS}", f"pod/{_POD}", "--wait")
-    if existed.returncode != 0:
-        cluster.kubectl("delete", f"--namespace={_SESSIONS}", "serviceaccount/hub")
 
 
 def _token(cluster: Cluster, account: str = "hub", audience: str = "heartwood-control") -> str:
+    """Return a token of the Hub's account, or of another account of the sessions namespace."""
+    namespace = "heartwood-platform" if account == "hub" else _SESSIONS
     result = cluster.kubectl(
-        "create", "token", account, f"--namespace={_SESSIONS}", f"--audience={audience}"
+        "create", "token", account, f"--namespace={namespace}", f"--audience={audience}"
     )
     assert result.returncode == 0, result.stderr
     return result.stdout.strip()

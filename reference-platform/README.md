@@ -57,6 +57,7 @@ The platform is for synthetic and open data only.
 | Keycloak | One Deployment that serves HTTPS on port 8443 and imports the realm `heartwood` at its first start |
 | Control service | One StatefulSet that serves HTTPS on port 8443, with the project registry, the launch interface and the provisioning of session namespaces |
 | versitygw | S3-compatible object store with one bucket `hw-project-<id>` for each entry in `projects` |
+| JupyterHub | The Hub, its proxy and the idle culler from the pinned Zero to JupyterHub chart 4.4.5, which start one Heartwood gateway for each researcher and project in `heartwood-sessions` |
 | Platform certificate authority | Secret `platform-ca` with the key, ConfigMap `platform-ca` with the certificate, which the control service copies into each session namespace and each gateway Secret, and the Secrets `keycloak-tls` and `heartwood-control-tls` with the serving certificates of Keycloak and the control service |
 | Session roles | Six fixed ClusterRoles for session namespaces, and the ServiceAccount and rights of the control service |
 | Admission policies | `heartwood-control-scope`, `heartwood-staging-shape` and `heartwood-session-services` |
@@ -64,7 +65,8 @@ The platform is for synthetic and open data only.
 
 Every image in `values.yaml` is pinned by digest or has no default, and `values.schema.json` rejects an image reference without a digest.
 `images.platformServices` has no default and is set at installation to the image built from `services/Dockerfile`.
-`images.openshellGateway` has no default either.
+`images.openshellGateway` and `images.hostedGateway` have no default either.
+`images.hostedGateway` is the `hosted-gateway-image` stage of `images/Dockerfile`, and `hub.worker.image` names the worker image by digest.
 `values-kind.yaml` sets it to the published OpenShell 0.1.9 gateway and `sessions.stagingImages` to a small test image.
 Both are stand-ins, used when the chart is rendered or installed without the built images.
 The [Kubernetes Qualification workflow](../.github/workflows/kubernetes-qualification.yml) installs the chart with the gateway that `images/worker/candidate/gateway.json` builds with its recorded patches and with the worker image and the replacement worker image of the qualification by digest in `sessions.stagingImages`.
@@ -176,13 +178,56 @@ A launch and a deletion of the same researcher and project run one after the oth
 The certificates and the key of a session do not rotate while the session exists.
 The control service reads the pods of every session namespace.
 
+### JupyterHub
+
+The chart depends on the Zero to JupyterHub chart 4.4.5, whose archive `charts/jupyterhub-4.4.5.tgz` the chart tests compare with the digest of the chart repository index.
+The Hub, the proxy `proxy-public` and the idle culler run in `heartwood-platform`; the chart's own RBAC, user scheduler, image pullers, placeholders and network policies are off.
+`files/hub/heartwood_hub.py` configures the Hub, which loads it from its `jupyterhub_config.d` directory and reads its settings from the ConfigMap `heartwood-hub` on each spawn.
+A change of that file takes effect after the Hub restarts.
+
+Researchers sign in to the Hub through Keycloak with the client `heartwood-hub`, whose secret Helm generates into the Secret `heartwood-hub-keycloak`.
+The Hub trusts the platform CA alone for Keycloak and the control service, and its user name is the subject of the researcher's token.
+Every account of the realm may sign in; the control service decides which projects a researcher may start.
+
+Each project of a researcher is one named server whose name is the project.
+The spawn form offers a server only the project of its name, after the Hub asks the control service for the researcher's projects with a projected token of the audience `heartwood-control`.
+Before each start the Hub asks the control service to prepare the session, and it refuses the start when the researcher is not a member of the project.
+It then starts the gateway pod in `heartwood-sessions` with the ServiceAccount `hw-gw-<session>`, the session label, the volume claim `hw-home-<session>` and the hosted gateway image.
+The init container runs `heartwood-hosted-configure`, which copies the Secret `hw-gw-<session>` into a memory volume with owner-only files, registers the session's OpenShell gateway with its client certificate, and creates the research and state directories on the claim.
+The gateway serves `heartwood gateway serve` with `identity-proxy` ingress under `/user/<subject>/<project>`, and accepts proxied requests only from `hub.trustedProxySources`.
+
+The control service writes the gateway's deployment manifest into the Secret: the identity of the researcher and the project client, the worker on the Kubernetes driver in the session namespace, and the control service as the `[planning]` service.
+`hub.worker` sets the worker image, its sandbox policy and the policy's effective digest from qualification, and `hub.modelRoute` the model route; the default route names an address that does not resolve.
+The default policy digest matches no policy, so no worker is admitted until qualified values are set.
+
+The idle culler stops a server after `jupyterhub.cull.timeout` seconds without traffic through the proxy.
+The server's volume claim, the session namespace and the OpenShell gateway stay, and the next start runs the same session; the researcher signs in again, because tokens live in the gateway's memory only.
+Deleting a named server deletes the session at the control service and the server's volume claim.
+
+The Role `heartwood-hub-spawner` in `heartwood-sessions` grants the Hub what KubeSpawner needs: pods `create`, `delete`, `list` and `watch`, volume claims `create`, `delete` and `get`, and events `list` and `watch`.
+It grants no access to Secrets or Services; KubeSpawner touches Secrets and Services only with internal TLS or per-server Services, which the chart leaves off.
+The Hub remains a trusted platform component: it can start the gateway of any session with that session's ServiceAccount and Secret, and delete pods and volume claims in `heartwood-sessions`.
+
+`heartwood-hub-pods` applies to the Hub's ServiceAccount in `heartwood-sessions`:
+
+- A pod carries its session label and the role label `hosted-gateway`, and uses the ServiceAccount `hw-gw-<session>` of that session.
+- A pod runs one init container and one container of `images.hostedGateway`; the init container runs only `heartwood-hosted-configure`, and the container only `heartwood gateway serve` with the fixed arguments above.
+- A pod mounts only its session's Secret, which only the init container mounts, empty directories, the volume claim `hw-home-<session>`, and its ServiceAccount token.
+- A pod sets only the environment variables that JupyterHub and KubeSpawner set and `HOME`, takes no value from another object, and has no lifecycle hook and no exec probe.
+- A pod runs as user `10001` without host access, with the default seccomp profile, a read-only root file system and no capabilities.
+- A volume claim is named `hw-home-<session>` and names no data source, volume or selector.
+
+`heartwood-sessions` enforces the restricted Pod Security Standard.
+
 ### Network Policies
 
 Both namespaces deny ingress by default.
 PostgreSQL accepts connections from Keycloak.
-Keycloak accepts connections from `heartwood-sessions`, from the control service and from its bootstrap Job.
-The control service accepts connections from `heartwood-sessions`.
+Keycloak accepts connections from `heartwood-sessions`, from the Hub, from the control service and from its bootstrap Job.
+The control service accepts connections from `heartwood-sessions` and from the Hub.
 versitygw accepts connections from its bootstrap Job.
+The proxy accepts researchers' connections on port 8000 from anywhere and configuration from the Hub on port 8001, and the Hub accepts connections from the proxy.
+A gateway pod accepts connections on port 8888 from the proxy and the Hub, and gateways do not reach each other.
 
 ### Session Roles and Admission Policies
 
@@ -267,10 +312,16 @@ bash reference-platform/cluster/create-cluster.sh heartwood
 bash reference-platform/cluster/network-policy-controls.sh heartwood test-results/kubernetes-qualification
 docker build --file reference-platform/services/Dockerfile --tag heartwood-platform-services:candidate .
 image="$(bash reference-platform/cluster/push-image.sh heartwood heartwood-platform-services:candidate)"
-bash reference-platform/cluster/install-chart.sh heartwood --set "images.platformServices=${image}"
-(cd reference-platform/services && uv run pytest -c pyproject.toml ../tests/cluster --cluster-context kind-heartwood)
+docker build --file images/Dockerfile --target hosted-gateway-image --tag heartwood-hosted-gateway:candidate .
+hosted="$(bash reference-platform/cluster/push-image.sh heartwood heartwood-hosted-gateway:candidate)"
+bash reference-platform/cluster/install-chart.sh heartwood --set "images.platformServices=${image}" \
+  --set "images.hostedGateway=${hosted}"
+(cd reference-platform/services && uv run pytest -c pyproject.toml ../tests/cluster --cluster-context kind-heartwood \
+  --ignore ../tests/cluster/test_hub_spawning.py)
 bash reference-platform/cluster/delete-cluster.sh heartwood
 ```
+
+The Hub's tests in `test_hub_spawning.py` start Heartwood gateways, which require an OpenShell gateway with the recorded patches, so they run with the images of [Worker Qualification](#worker-qualification).
 
 `create-cluster.sh` installs Calico and the Agent Sandbox controller from pinned manifests whose SHA-256 digests it verifies.
 It also starts a registry on the kind network.
@@ -312,8 +363,10 @@ worker="$(jq --raw-output .image_references.worker test-results/kubernetes-quali
 openshell="$(jq --raw-output .openshell_repository test-results/kubernetes-qualification/worker/images.json)"
 staging="$(jq --compact-output '[.image_references.worker, .image_references.replacement_worker]' \
   test-results/kubernetes-qualification/worker/images.json)"
+hosted="$(bash reference-platform/cluster/push-image.sh heartwood heartwood-hosted-gateway:qualification)"
 bash reference-platform/cluster/install-chart.sh heartwood --set "images.platformServices=${image}" \
   --set "images.openshellGateway=${gateway}" --set "images.openshellRepository=${openshell}" \
+  --set "images.hostedGateway=${hosted}" --set "hub.worker.image=${worker}" \
   --set-json "sessions.stagingImages=${staging}"
 (cd reference-platform/services && uv run pytest -c pyproject.toml ../tests/cluster \
   --cluster-context kind-heartwood --staging-image "${worker}")

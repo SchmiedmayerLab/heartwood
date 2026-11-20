@@ -1,0 +1,145 @@
+{{- /*
+This source file is part of the Heartwood open-source project
+
+SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+
+SPDX-License-Identifier: MIT
+*/ -}}
+
+{{- /*
+Confines what the Hub creates in the sessions namespace to the gateway pod of one
+session and its volume claim. A pod mounts Secrets of its namespace, so the policy
+admits only the hosted gateway image with its fixed commands, pairs the session's
+ServiceAccount with the session label and the session's Secret, and lets only the init
+container mount that Secret.
+*/ -}}
+{{- $image := .Values.images.hostedGateway -}}
+{{- $sources := .Values.hub.trustedProxySources -}}
+{{- $fixed := list "heartwood" "gateway" "serve" "--deployment" "/etc/heartwood/deployment/deployment.toml" "--ingress-mode" "identity-proxy" "--host" "0.0.0.0" "--port" "8888" "--public-origin" .Values.hub.publicOrigin "--base-path" -}}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: heartwood-hub-pods
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: {{ .Values.sessions.namespace }}
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["*"]
+        operations: [CREATE, UPDATE]
+        resources: [pods, persistentvolumeclaims]
+  matchConditions:
+    - name: hub
+      expression: request.userInfo.username == 'system:serviceaccount:{{ .Release.Namespace }}:hub'
+  variables:
+    - name: pod
+      expression: request.resource.resource == 'pods'
+    - name: claim
+      expression: request.resource.resource == 'persistentvolumeclaims'
+    - name: session
+      expression: >-
+        variables.pod && has(object.metadata.labels)
+        && 'heartwood.platform/session' in object.metadata.labels
+        ? object.metadata.labels['heartwood.platform/session'] : ''
+    - name: containers
+      expression: >-
+        !variables.pod ? [] : object.spec.containers
+        + (has(object.spec.initContainers) ? object.spec.initContainers : [])
+    - name: secretVolumes
+      expression: >-
+        !variables.pod || !has(object.spec.volumes) ? [] :
+        object.spec.volumes.filter(v, has(v.secret)).map(v, v.name)
+  validations:
+    - expression: >-
+        !variables.pod || (variables.session.matches('^[a-z0-9]{1,40}$')
+        && has(object.spec.serviceAccountName)
+        && object.spec.serviceAccountName == 'hw-gw-' + variables.session
+        && object.metadata.labels['heartwood.platform/role'] == 'hosted-gateway')
+      message: a gateway pod carries its session label and the role hosted-gateway, and uses the ServiceAccount hw-gw-<session>
+    - expression: >-
+        !variables.pod || (size(object.spec.containers) == 1
+        && has(object.spec.initContainers) && size(object.spec.initContainers) == 1
+        && !has(object.spec.ephemeralContainers)
+        && variables.containers.all(c, c.image == {{ $image | toJson }}))
+      message: a gateway pod runs one init container and one container of the hosted gateway image
+    - expression: >-
+        !variables.pod || (object.spec.initContainers[0].command == ['/usr/local/libexec/heartwood-hosted-configure']
+        && !has(object.spec.initContainers[0].args))
+      message: the init container of a gateway pod runs only the configuration script
+    - expression: >-
+        !variables.pod || (!has(object.spec.containers[0].command)
+        && has(object.spec.containers[0].args)
+        && size(object.spec.containers[0].args) == {{ add 15 (mul 2 (len $sources)) }}
+        {{- range $index, $value := $fixed }}
+        && object.spec.containers[0].args[{{ $index }}] == {{ $value | toJson }}
+        {{- end }}
+        && object.spec.containers[0].args[14].matches('^/user/[a-z0-9-]{1,64}/[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$')
+        {{- range $index, $source := $sources }}
+        && object.spec.containers[0].args[{{ add 15 (mul 2 $index) }}] == '--trusted-proxy-source'
+        && object.spec.containers[0].args[{{ add 16 (mul 2 $index) }}] == {{ $source | toJson }}
+        {{- end }})
+      message: a gateway pod serves the session's deployment manifest behind the Hub's proxy with fixed arguments
+    - expression: >-
+        !variables.pod || variables.containers.all(c, !has(c.envFrom)
+        && (!has(c.lifecycle) || (!has(c.lifecycle.postStart) && !has(c.lifecycle.preStop)))
+        && (!has(c.workingDir) || c.workingDir == '/research')
+        && (!has(c.env) || c.env.all(e, !has(e.valueFrom)
+        && (e.name.matches('^(JUPYTERHUB_[A-Z_]+|JPY_API_TOKEN|JUPYTER_IMAGE(_SPEC)?|MEM_(LIMIT|GUARANTEE)|CPU_(LIMIT|GUARANTEE))$')
+        || (e.name == 'HOME' && e.value == '/tmp'))))
+        && [has(c.livenessProbe) ? c.livenessProbe : {}, has(c.readinessProbe) ? c.readinessProbe : {},
+        has(c.startupProbe) ? c.startupProbe : {}].all(p, !has(p.exec)))
+      message: a gateway pod sets only the Hub's environment variables, no lifecycle hook and no exec probe
+    - expression: >-
+        !variables.pod || (has(object.spec.securityContext)
+        && has(object.spec.securityContext.runAsNonRoot) && object.spec.securityContext.runAsNonRoot
+        && has(object.spec.securityContext.seccompProfile)
+        && object.spec.securityContext.seccompProfile.type == 'RuntimeDefault'
+        && (!has(object.spec.securityContext.runAsUser) || object.spec.securityContext.runAsUser == 10001)
+        && (!has(object.spec.hostNetwork) || !object.spec.hostNetwork)
+        && (!has(object.spec.hostPID) || !object.spec.hostPID)
+        && (!has(object.spec.hostIPC) || !object.spec.hostIPC)
+        && (!has(object.spec.hostUsers) || !object.spec.hostUsers)
+        && !has(object.spec.nodeName) && !has(object.spec.runtimeClassName)
+        && variables.containers.all(c, has(c.securityContext)
+        && has(c.securityContext.allowPrivilegeEscalation) && !c.securityContext.allowPrivilegeEscalation
+        && (!has(c.securityContext.privileged) || !c.securityContext.privileged)
+        && has(c.securityContext.readOnlyRootFilesystem) && c.securityContext.readOnlyRootFilesystem
+        && has(c.securityContext.capabilities) && has(c.securityContext.capabilities.drop)
+        && 'ALL' in c.securityContext.capabilities.drop && !has(c.securityContext.capabilities.add)
+        && (!has(c.securityContext.runAsUser) || c.securityContext.runAsUser == 10001)
+        && (!has(c.securityContext.runAsNonRoot) || c.securityContext.runAsNonRoot)
+        && (!has(c.securityContext.seccompProfile) || c.securityContext.seccompProfile.type == 'RuntimeDefault')))
+      message: a gateway pod runs as user 10001 without host access, with the default seccomp profile, a read-only root file system and no capabilities
+    - expression: >-
+        !variables.pod || (has(object.spec.volumes) && object.spec.volumes.all(v,
+        (has(v.secret) && v.secret.secretName == object.spec.serviceAccountName)
+        || has(v.emptyDir)
+        || (has(v.persistentVolumeClaim) && v.persistentVolumeClaim.claimName == 'hw-home-' + variables.session)
+        || (has(v.projected) && v.projected.sources.all(s,
+        (has(s.serviceAccountToken) && !has(s.serviceAccountToken.audience))
+        || (has(s.configMap) && s.configMap.name == 'kube-root-ca.crt')
+        || has(s.downwardAPI)))))
+      message: a gateway pod mounts only its session's Secret, empty directories, its volume claim hw-home-<session> and its ServiceAccount token
+    - expression: >-
+        !variables.pod || (object.spec.containers[0].volumeMounts.all(m, !(m.name in variables.secretVolumes)))
+      message: only the init container of a gateway pod mounts the session's Secret
+    - expression: >-
+        !variables.claim || (object.metadata.name.matches('^hw-home-[a-z0-9]{1,40}$')
+        && !has(object.spec.dataSource) && !has(object.spec.dataSourceRef)
+        && !has(object.spec.volumeName) && !has(object.spec.selector))
+      message: the Hub's volume claims are named hw-home-<session> and name no data source or volume
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: heartwood-hub-pods
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+spec:
+  policyName: heartwood-hub-pods
+  validationActions: [Deny]

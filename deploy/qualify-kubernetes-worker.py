@@ -344,7 +344,7 @@ def _pod(name: str, image: str, **spec: Any) -> dict[str, Any]:  # noqa: ANN401
 def _launch(cluster: Cluster, method: str) -> dict[str, Any]:
     """Call the control service as the spawner would, from inside the cluster."""
     token = cluster.kubectl(
-        "create", "token", "hub", "--namespace", _SESSIONS, "--audience=heartwood-control"
+        "create", "token", "hub", "--namespace", _PLATFORM, "--audience=heartwood-control"
     )
     token = token.strip()
     reply = _call(cluster, method, token)
@@ -742,7 +742,6 @@ def _remove(cluster: Cluster, namespace: str | None) -> bool:
                 f"secret/{_PROVIDER}",
                 f"secret/{_FIXTURE}",
                 f"serviceaccount/{_FIXTURE}",
-                "serviceaccount/hub",
             )
         finally:
             cluster.kubectl(
@@ -786,11 +785,6 @@ def run(arguments: argparse.Namespace) -> None:
             f"pod/{_CONTROLLER}", f"pod/{_LAUNCHER}",
         )  # fmt: skip
         cluster.apply(
-            {
-                "apiVersion": "v1",
-                "kind": "ServiceAccount",
-                "metadata": {"name": "hub", "namespace": _SESSIONS},
-            },
             _pod(_LAUNCHER, built["image_references"]["controller"]),
         )
         cluster.kubectl(

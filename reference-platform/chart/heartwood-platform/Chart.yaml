@@ -11,3 +11,10 @@ type: application
 version: 0.5.1
 appVersion: "0.5.1"
 kubeVersion: ">=1.30.0-0"
+# JupyterHub with configurable-http-proxy and KubeSpawner, from the Zero to JupyterHub
+# chart. charts/ holds the archive, whose SHA-256 the chart tests compare with the
+# digest of the chart repository index.
+dependencies:
+  - name: jupyterhub
+    version: 4.4.5
+    repository: https://hub.jupyter.org/helm-chart/

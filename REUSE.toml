@@ -87,3 +87,16 @@ path = ["reference-platform/chart/heartwood-platform/files/openshell-session.jso
 precedence = "aggregate"
 SPDX-FileCopyrightText = ["2025-2026 NVIDIA CORPORATION & AFFILIATES", "2026 Stanford University and the project authors (see CONTRIBUTORS.md)"]
 SPDX-License-Identifier = "Apache-2.0"
+
+# The Zero to JupyterHub chart archive, byte for byte as the chart repository serves it.
+[[annotations]]
+path = ["reference-platform/chart/heartwood-platform/charts/jupyterhub-4.4.5.tgz"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2017 Project Jupyter Contributors"
+SPDX-License-Identifier = "BSD-3-Clause"
+
+[[annotations]]
+path = ["reference-platform/chart/heartwood-platform/Chart.lock"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Stanford University and the project authors (see CONTRIBUTORS.md)"
+SPDX-License-Identifier = "MIT"
