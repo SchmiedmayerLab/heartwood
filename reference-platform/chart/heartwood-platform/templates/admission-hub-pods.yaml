@@ -122,7 +122,7 @@ spec:
         && has(object.spec.securityContext.runAsNonRoot) && object.spec.securityContext.runAsNonRoot
         && has(object.spec.securityContext.seccompProfile)
         && object.spec.securityContext.seccompProfile.type == 'RuntimeDefault'
-        && has(object.spec.securityContext.runAsUser) && object.spec.securityContext.runAsUser == 10001
+        && (!has(object.spec.securityContext.runAsUser) || object.spec.securityContext.runAsUser == 10001)
         && (!has(object.spec.hostNetwork) || !object.spec.hostNetwork)
         && (!has(object.spec.hostPID) || !object.spec.hostPID)
         && (!has(object.spec.hostIPC) || !object.spec.hostIPC)
@@ -134,7 +134,8 @@ spec:
         && has(c.securityContext.readOnlyRootFilesystem) && c.securityContext.readOnlyRootFilesystem
         && has(c.securityContext.capabilities) && has(c.securityContext.capabilities.drop)
         && 'ALL' in c.securityContext.capabilities.drop && !has(c.securityContext.capabilities.add)
-        && (!has(c.securityContext.runAsUser) || c.securityContext.runAsUser == 10001)
+        && ((has(c.securityContext.runAsUser) && c.securityContext.runAsUser == 10001)
+        || (!has(c.securityContext.runAsUser) && has(object.spec.securityContext.runAsUser)))
         && (!has(c.securityContext.runAsNonRoot) || c.securityContext.runAsNonRoot)
         && (!has(c.securityContext.seccompProfile) || c.securityContext.seccompProfile.type == 'RuntimeDefault')))
       message: a gateway pod runs as user 10001 without host access, with the default seccomp profile, a read-only root file system and no capabilities
