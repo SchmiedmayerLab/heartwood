@@ -67,6 +67,8 @@ _UNSEEN = "unseen"
 # Answers stay well below the gateway's result limit, which counts the observation twice:
 # as structured content and as its text.
 DATASETS_PER_ANSWER = 10
+# The encoded size of a page's datasets, counted as the gateway sees them.
+PAGE_BYTES = 8 * 1024
 DESCRIPTION_CHARACTERS = 500
 OBJECTS_PER_ANSWER = 10
 
@@ -165,6 +167,12 @@ class _ExchangedTokens(TokenVerifier):
             scopes=[],
             claims={"sub": researcher.subject, "project": researcher.project},
         )
+
+
+def _encoded_size(item: dict[str, Any]) -> int:
+    """Return the bytes an item takes in a tool result: as JSON and as JSON inside a text."""
+    once = json.dumps(item, ensure_ascii=False)
+    return len(once.encode()) + len(json.dumps(once, ensure_ascii=False).encode())
 
 
 def _object(entry: Entry, hostname: str, mount_path: str) -> dict[str, Any]:
@@ -273,23 +281,29 @@ def create_catalog_app(
                     "denied",
                     limitations=("The project has no datasets from this offset on.",),
                 )
-            page = found[offset : offset + DATASETS_PER_ANSWER]
+            # A page ends before the dataset that would take it over its encoded size, but
+            # holds at least one dataset, which the catalog's length limits keep small.
+            page: list[dict[str, Any]] = []
+            size = 0
+            for dataset in found[offset : offset + DATASETS_PER_ANSWER]:
+                item = {
+                    "id": dataset.id,
+                    "name": dataset.name,
+                    "description": dataset.description[:DESCRIPTION_CHARACTERS],
+                    "created": dataset.created.isoformat(),
+                    "object_count": len(dataset.objects),
+                }
+                size += _encoded_size(item)
+                if page and size > PAGE_BYTES:
+                    break
+                page.append(item)
             following = offset + len(page)
             return observation(
                 context,
                 operation_id,
                 "completed",
                 result={
-                    "datasets": [
-                        {
-                            "id": dataset.id,
-                            "name": dataset.name,
-                            "description": dataset.description[:DESCRIPTION_CHARACTERS],
-                            "created": dataset.created.isoformat(),
-                            "object_count": len(dataset.objects),
-                        }
-                        for dataset in page
-                    ],
+                    "datasets": page,
                     "next_offset": following if following < len(found) else None,
                 },
                 limitations=(
@@ -313,15 +327,22 @@ def create_catalog_app(
         """
 
         def answer(project: str, context: str) -> PlatformOperationObservation:
-            entries = [
-                entry for entry in catalog.entries(project) if entry.dataset.id == dataset_id
-            ]
-            if not entries or not 0 <= offset < len(entries):
+            if dataset_id not in {dataset.id for dataset in catalog.datasets(project)}:
                 return observation(
                     context,
                     operation_id,
                     "denied",
-                    limitations=("The project has no dataset with this identifier and offset.",),
+                    limitations=("The project has no dataset with this identifier.",),
+                )
+            entries = [
+                entry for entry in catalog.entries(project) if entry.dataset.id == dataset_id
+            ]
+            if not 0 <= offset < len(entries):
+                return observation(
+                    context,
+                    operation_id,
+                    "denied",
+                    limitations=("The dataset has no objects from this offset on.",),
                 )
             page = entries[offset : offset + OBJECTS_PER_ANSWER]
             following = offset + len(page)

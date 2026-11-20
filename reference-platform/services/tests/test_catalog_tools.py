@@ -29,6 +29,7 @@ from heartwood_platform.data.catalog_tools import (
     create_catalog_app,
 )
 from heartwood_platform.data.signing import Credentials
+from mcp.types import CallToolResult
 from starlette.testclient import TestClient
 from test_data_service import _ALICE, _BOB, _catalog
 
@@ -182,7 +183,10 @@ def test_the_listing_names_the_projects_datasets_and_their_objects(
     assert denied.status == "denied"
 
 
-def test_answers_of_a_large_catalog_stay_below_the_result_limit(tmp_path: Path) -> None:
+@pytest.mark.parametrize("character", ["D", '"', "\u8840", "\U0001f9ec"])
+def test_answers_of_a_large_catalog_stay_below_the_result_limit(
+    tmp_path: Path, character: str
+) -> None:
     document = _catalog().model_dump(mode="json")
     dataset = document["projects"][0]["datasets"][0]
     dataset["objects"] = [
@@ -193,8 +197,8 @@ def test_answers_of_a_large_catalog_stay_below_the_result_limit(tmp_path: Path) 
         {
             **dataset,
             "id": f"synthetic-cohort-{index:02d}",
-            "name": "N" * 200,
-            "description": "D" * 2000,
+            "name": character * 200,
+            "description": character * 2000,
         }
         for index in range(30)
     ]
@@ -225,10 +229,11 @@ def test_answers_of_a_large_catalog_stay_below_the_result_limit(tmp_path: Path) 
         )
     for response in (listing, page):
         # The gateway counts the whole tool result against its limit, at most 32 KiB.
-        result = response.json()["result"]
-        assert len(json.dumps(result).encode()) < 24 * 1024
+        result = CallToolResult.model_validate(response.json()["result"])
+        assert len(result.model_dump_json(by_alias=True, exclude_none=True).encode()) < 24 * 1024
     listed = listing.json()["result"]["structuredContent"]["result"]
-    assert (len(listed["datasets"]), listed["next_offset"]) == (10, 10)
+    assert 1 <= len(listed["datasets"]) <= 10
+    assert listed["next_offset"] == len(listed["datasets"])
     assert len(listed["datasets"][0]["description"]) == 500
     objects = page.json()["result"]["structuredContent"]["result"]
     assert (len(objects["objects"]), objects["next_offset"]) == (10, None)
