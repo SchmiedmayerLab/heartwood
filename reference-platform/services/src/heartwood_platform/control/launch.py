@@ -23,7 +23,10 @@ from pydantic import BaseModel, ConfigDict
 from heartwood.schemas import PlatformLaunchContext
 from heartwood_platform.control.budgets import InsufficientBudgetError, Ledger
 from heartwood_platform.control.hosted import HostedGateway
+from heartwood_platform.control.inference import SessionRoute
 from heartwood_platform.control.keycloak import project_client
+from heartwood_platform.control.litellm import InferenceGatewayError
+from heartwood_platform.control.openshell import ProviderError
 from heartwood_platform.control.registry import NotAMemberError, Project, Registry, Session
 from heartwood_platform.control.sessions import ProvisionedSession, SessionError
 
@@ -61,7 +64,18 @@ class SessionNamespaces(Protocol):
 
 
 class SessionInference(Protocol):
-    """The inference route of sessions, which measures what a session incurred."""
+    """The model route of sessions: their keys, and what each session incurred."""
+
+    # The largest cost of one request, which a session's key budget leaves free.
+    headroom: Decimal
+
+    def prepare(
+        self, session: str, project: str, reservation: Decimal, route: SessionRoute
+    ) -> dict[str, str]:
+        """Give a session its keys and return the files for its gateway's Secret."""
+
+    def rotate(self, session: str, project: str, route: SessionRoute) -> None:
+        """Replace the key of a session's workers."""
 
     def settle(self, session: str) -> Decimal:
         """Stop the inference of a session and return the amount it incurred.
@@ -69,6 +83,9 @@ class SessionInference(Protocol):
         A deletion that fails after settling settles again when it is repeated, so a
         repeated call returns the same amount.
         """
+
+    def forget(self, session: str) -> None:
+        """Remove what is kept about a deleted session's inference."""
 
 
 def session_holder(session: str) -> str:
@@ -217,22 +234,35 @@ class LaunchService:
         with self._serialized(subject, project):
             return self._prepare(found, subject, project)
 
-    def _prepare(self, found: Project, subject: str, project: str) -> Launch:
+    def _prepare(
+        self, found: Project, subject: str, project: str, *, rotate_model_key: bool = False
+    ) -> Launch:
         existed = self._registry.session(subject, project) is not None
         session = self._registry.session(subject, project, create=True)
         assert session is not None
         # Admission: a session runs only with a reservation, which it keeps until it is
         # deleted. A relaunch keeps the reservation of the first launch, and a refused
         # first launch leaves no session behind.
+        minimum = Decimal(0) if self._inference is None else self._inference.headroom
         try:
-            self._ledger.reserve(
-                project, "inference", session_holder(session.id), self._session_reservation
+            reservation = self._ledger.reserve(
+                project,
+                "inference",
+                session_holder(session.id),
+                self._session_reservation,
+                minimum=minimum,
             )
         except InsufficientBudgetError:
             if not existed:
                 self._registry.delete_session(subject, project)
             raise
         provisioned = self._sessions.provision(session.id)
+        model_files: dict[str, str] = {}
+        if self._inference is not None:
+            route = SessionRoute(provisioned.openshell_endpoint, provisioned.openshell_client)
+            if rotate_model_key:
+                self._inference.rotate(session.id, project, route)
+            model_files = self._inference.prepare(session.id, project, reservation.amount, route)
         redirect_uri = self._redirect_uri(session)
         self._clients.ensure_project_client(project)
         self._clients.add_redirect_uri(project, redirect_uri)
@@ -266,6 +296,7 @@ class LaunchService:
             session.id,
             {
                 **hosted,
+                **model_files,
                 "launch.json": launch.model_dump_json(),
                 "keycloak-client-secret": self._clients.client_secret(project),
                 **{
@@ -313,11 +344,28 @@ class LaunchService:
                     continue
                 try:
                     self._prepare(found, listed.subject, project)
-                except (httpx.HTTPError, SessionError):
+                except (httpx.HTTPError, SessionError, InferenceGatewayError, ProviderError):
                     rotation.failed.append(session.id)
                     continue
             rotation.rewritten.append(session.id)
         return rotation
+
+    def rotate_model_key(self, subject: str, project: str) -> Launch:
+        """Replace the model key of a member's session and rewrite its gateway Secret.
+
+        The session's running workers fail at their next model request, and the next
+        worker uses the new key with the remaining budget.
+        """
+        found = self._registry.project(subject, project)
+        with self._serialized(subject, project):
+            session = self._registry.session(subject, project)
+            if (
+                session is None
+                or self._inference is None
+                or self._ledger.held(session_holder(session.id)) is None
+            ):
+                raise NoSessionError
+            return self._prepare(found, subject, project, rotate_model_key=True)
 
     def delete(self, subject: str, project: str) -> None:
         """Remove the session of a researcher in a project, whether or not it exists."""
@@ -332,3 +380,5 @@ class LaunchService:
             self._sessions.remove(session.id)
             self._clients.remove_redirect_uri(project, self._redirect_uri(session))
             self._registry.delete_session(subject, project)
+            if self._inference is not None:
+                self._inference.forget(session.id)

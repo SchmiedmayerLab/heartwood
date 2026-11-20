@@ -1,0 +1,70 @@
+{{- /*
+This source file is part of the Heartwood open-source project
+
+SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+
+SPDX-License-Identifier: MIT
+*/ -}}
+
+{{- /*
+LiteLLM accepts the control service, which manages keys, the supervisors of session
+sandboxes, which forward workers' requests with the session's key, and the Heartwood
+gateways, which list models with their discovery keys. Every caller presents a key.
+*/ -}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: litellm
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "heartwood.selector" (dict "context" . "component" "litellm") | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "heartwood.selector" (dict "context" . "component" "control") | nindent 14 }}
+        - namespaceSelector:
+            matchExpressions:
+              - key: heartwood.platform/session
+                operator: Exists
+          podSelector:
+            matchLabels:
+              openshell.ai/boundary-role: supervisor
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.sessions.namespace }}
+          podSelector:
+            matchLabels:
+              heartwood.platform/role: hosted-gateway
+      ports:
+        - protocol: TCP
+          port: 4000
+{{- if .Values.inference.syntheticModel.enabled }}
+---
+# The synthetic model answers LiteLLM only.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: synthetic-model
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "heartwood.selector" (dict "context" . "component" "synthetic-model") | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "heartwood.selector" (dict "context" . "component" "litellm") | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 8443
+{{- end }}

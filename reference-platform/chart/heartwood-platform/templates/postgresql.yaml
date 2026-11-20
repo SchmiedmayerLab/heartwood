@@ -17,6 +17,7 @@ type: Opaque
 data:
   postgres-password: {{ include "heartwood.credential" (dict "context" . "name" "postgresql" "key" "postgres-password") }}
   keycloak-password: {{ include "heartwood.credential" (dict "context" . "name" "postgresql" "key" "keycloak-password") }}
+  litellm-password: {{ include "heartwood.credential" (dict "context" . "name" "postgresql" "key" "litellm-password") }}
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -32,6 +33,10 @@ data:
     psql --set ON_ERROR_STOP=1 --username postgres --set password="${KEYCLOAK_PASSWORD}" <<'SQL'
     CREATE ROLE keycloak LOGIN PASSWORD :'password';
     CREATE DATABASE keycloak OWNER keycloak;
+    SQL
+    psql --set ON_ERROR_STOP=1 --username postgres --set password="${LITELLM_PASSWORD}" <<'SQL'
+    CREATE ROLE litellm LOGIN PASSWORD :'password';
+    CREATE DATABASE litellm OWNER litellm;
     SQL
 ---
 apiVersion: v1
@@ -88,6 +93,11 @@ spec:
                 secretKeyRef:
                   name: postgresql
                   key: keycloak-password
+            - name: LITELLM_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgresql
+                  key: litellm-password
           ports:
             - name: postgresql
               containerPort: 5432

@@ -30,7 +30,13 @@ _SERVICES = "images.platformServices=registry.example.test/services@sha256:" + "
 _GATEWAY = "images.openshellGateway=registry.example.test/gateway@sha256:" + "1" * 64
 _HOSTED = "images.hostedGateway=registry.example.test/hosted-gateway@sha256:" + "4" * 64
 _WORKER = "hub.worker.image=registry.example.test/worker@sha256:" + "5" * 64
+# The model route, which has no default either.
+_MODELS = (
+    'inference.models=[{"name":"synthetic-coder","maxInputTokens":32768,"maxOutputTokens":4096,'
+    '"litellmParams":{"model":"openai/synthetic-coder","api_base":"https://models.example.test/v1"}}]'
+)
 _IMAGES = ["--set", _SERVICES, "--set", _GATEWAY, "--set", _HOSTED, "--set", _WORKER]
+_IMAGES += ["--set-json", _MODELS]
 # Without a cluster, Helm cannot read the API server addresses.
 _API_SERVER = ["--set-json", 'sessions.apiServer=[{"cidr":"10.96.0.1/32","port":443}]']
 _IMAGES += _API_SERVER
@@ -642,6 +648,7 @@ def test_control_service_configuration_holds_the_registry(objects: list[dict[str
 
 def test_installation_needs_the_api_server_addresses() -> None:
     command = [*_BASE, "--set", _SERVICES, "--set", _GATEWAY, "--set", _HOSTED, "--set", _WORKER]
+    command += ["--set-json", _MODELS]
     result = subprocess.run(command, capture_output=True, text=True)
     assert result.returncode != 0
     assert "sessions.apiServer is empty" in result.stderr
@@ -759,7 +766,7 @@ def test_control_service_configuration_holds_the_budgets() -> None:
     settings = Settings.model_validate_json(config["data"]["configuration.json"])
 
     budgets = {project.id: project.budgets for project in settings.projects}
-    assert budgets == {"demo": {"inference": "5", "compute": "50"}, "other": {"inference": "1.5"}}
+    assert budgets == {"demo": {"inference": "5", "compute": "50"}, "other": {"inference": "0.006"}}
     assert settings.inference.session_reservation == "1"
 
 
@@ -772,6 +779,157 @@ def test_control_service_configuration_holds_the_budgets() -> None:
     ],
 )
 def test_schema_rejects_invalid_budgets(value: str, path: str) -> None:
+    result = subprocess.run([*_TEMPLATE, "--set-json", value], capture_output=True, text=True)
+    assert result.returncode != 0
+    assert path in result.stderr
+
+
+def _litellm(objects: list[dict[str, Any]]) -> dict[str, Any]:
+    config = yaml.safe_load(_named(objects, "ConfigMap", "litellm")["data"]["config.yaml"])
+    assert isinstance(config, dict)
+    return config
+
+
+def test_litellm_records_costs_from_the_price_sheet_and_trusts_the_platform_ca() -> None:
+    objects = _render("values-kind.yaml")
+    config = _litellm(objects)
+
+    (model,) = config["model_list"]
+    assert model["model_name"] == "synthetic-coder"
+    assert model["model_info"]["input_cost_per_token"] == pytest.approx(0.5 / 1_000_000)
+    assert model["model_info"]["output_cost_per_token"] == pytest.approx(1.5 / 1_000_000)
+    # A model without apiKeySecret gets no API key.
+    assert "api_key" not in model["litellm_params"]
+    assert config["litellm_settings"]["ssl_verify"] == "/etc/litellm/trust/ca.crt"
+    assert config["general_settings"]["master_key"] == "os.environ/LITELLM_MASTER_KEY"
+    deployment = _named(objects, "Deployment", "litellm")["spec"]["template"]["spec"]
+    (trust,) = deployment["initContainers"]
+    assert trust["command"][-1] == "cat /etc/litellm/platform-ca/ca.crt > /etc/litellm/trust/ca.crt"
+    (container,) = deployment["containers"]
+    assert "--ssl_certfile_path" in container["args"]
+    assert container["image"].startswith("ghcr.io/berriai/litellm-non_root:v1.110.0@sha256:")
+    assert deployment["securityContext"]["runAsUser"] == 65534
+    # The control service holds the master key; LiteLLM's pod mounts no service token.
+    assert deployment["automountServiceAccountToken"] is False
+    control = _named(objects, "StatefulSet", "heartwood-control")["spec"]["template"]["spec"]
+    assert {
+        "name": "litellm",
+        "secret": {"secretName": "litellm", "items": [{"key": "master-key", "path": "master-key"}]},
+    } in control["volumes"]
+
+
+def test_litellm_accepts_only_the_control_service_supervisors_and_gateways() -> None:
+    objects = _render("values-kind.yaml")
+    (rule,) = _named(objects, "NetworkPolicy", "litellm")["spec"]["ingress"]
+    assert rule["ports"] == [{"protocol": "TCP", "port": 4000}]
+    sources = rule["from"]
+    assert sources[0]["podSelector"]["matchLabels"]["app.kubernetes.io/component"] == "control"
+    assert sources[1] == {
+        "namespaceSelector": {
+            "matchExpressions": [{"key": "heartwood.platform/session", "operator": "Exists"}]
+        },
+        "podSelector": {"matchLabels": {"openshell.ai/boundary-role": "supervisor"}},
+    }
+    assert sources[2]["podSelector"] == {
+        "matchLabels": {"heartwood.platform/role": "hosted-gateway"}
+    }
+    (synthetic,) = _named(objects, "NetworkPolicy", "synthetic-model")["spec"]["ingress"]
+    assert synthetic["from"] == [
+        {
+            "podSelector": {
+                "matchLabels": {
+                    "app.kubernetes.io/name": "heartwood-platform",
+                    "app.kubernetes.io/instance": "heartwood-platform",
+                    "app.kubernetes.io/component": "litellm",
+                }
+            }
+        }
+    ]
+
+
+def test_the_hosted_model_example_renders_a_route_to_hosted_models() -> None:
+    readme = (_CHART.parents[1] / "README.md").read_text(encoding="utf-8")
+    section = readme.split("### Model Route", 1)[1]
+    example = yaml.safe_load(section.split("```yaml\n", 1)[1].split("```", 1)[0])
+    names = [model["name"] for model in example["inference"]["models"]]
+    rates = [
+        ("input_tokens", "synthetic-coder-input-list"),
+        ("output_tokens", "synthetic-coder-output-list"),
+    ]
+    profiles = [
+        {
+            "runtimeProfileRef": name,
+            "kind": "inference",
+            "rates": [
+                {"measure": measure, "skuPriceId": price, "quantityPerPricingUnit": "1000000"}
+                for measure, price in rates
+            ],
+        }
+        for name in names
+    ]
+    values = {**example, "syntheticPrices": {"runtimeProfiles": profiles}}
+    output = subprocess.run(
+        [
+            *_TEMPLATE,
+            "--set-json",
+            f"inference={json.dumps(example['inference'])}",
+            "--set-json",
+            f"syntheticPrices.runtimeProfiles={json.dumps(profiles)}",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    del values
+    objects = [item for item in yaml.safe_load_all(output) if item is not None]
+
+    config = _litellm(objects)
+    models = {model["model_name"]: model for model in config["model_list"]}
+    assert models["hosted-gemini"]["litellm_params"]["model"] == "vertex_ai/gemini-2.5-pro"
+    assert models["hosted-gemini"]["litellm_params"]["vertex_credentials"] == (
+        "os.environ/VERTEX_CREDENTIALS"
+    )
+    assert models["hosted-claude"]["litellm_params"]["aws_region_name"] == "us-east-1"
+    container = _named(objects, "Deployment", "litellm")["spec"]["template"]["spec"]
+    environment = {item["name"]: item for item in container["containers"][0]["env"]}
+    assert environment["VERTEX_CREDENTIALS"]["valueFrom"]["secretKeyRef"] == {
+        "name": "vertex-credentials",
+        "key": "credentials.json",
+    }
+    (trust,) = container["initContainers"]
+    assert "/etc/ssl/certs/ca-certificates.crt" in trust["command"][-1]
+    # The control service offers the hosted models to the sessions' keys.
+    configuration = json.loads(
+        _named(objects, "ConfigMap", "heartwood-control")["data"]["configuration.json"]
+    )
+    assert [model["name"] for model in configuration["inference"]["models"]] == names
+    assert configuration["hosted"]["model_route"]["model"] == "hosted-gemini"
+
+
+@pytest.mark.parametrize(
+    ("value", "path"),
+    [
+        (
+            'inference.models=[{"name":"unpriced","maxInputTokens":1,"maxOutputTokens":1,'
+            '"litellmParams":{"model":"openai/x"}}]',
+            "syntheticPrices has no inference runtime profile unpriced",
+        ),
+        (
+            'inference.models=[{"name":"synthetic-coder","maxInputTokens":1,"maxOutputTokens":1,'
+            '"litellmParams":{"model":"openai/x","api_key":"sk-in-values"}}]',
+            "/inference/models/0/litellmParams",
+        ),
+        (
+            'inference.environment=[{"name":"LITELLM_MASTER_KEY",'
+            '"secretKeyRef":{"name":"a","key":"b"}}]',
+            "/inference/environment/0/name",
+        ),
+        ("inference.models=[]", "inference.models must name at least one model"),
+    ],
+)
+def test_the_model_route_refuses_unpriced_models_and_credentials_in_values(
+    value: str, path: str
+) -> None:
     result = subprocess.run([*_TEMPLATE, "--set-json", value], capture_output=True, text=True)
     assert result.returncode != 0
     assert path in result.stderr

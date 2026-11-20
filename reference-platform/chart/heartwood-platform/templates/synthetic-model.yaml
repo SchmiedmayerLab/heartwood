@@ -1,0 +1,121 @@
+{{- /*
+This source file is part of the Heartwood open-source project
+
+SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+
+SPDX-License-Identifier: MIT
+*/ -}}
+
+{{- /*
+A deterministic model behind LiteLLM, for tests on a local cluster. It serves HTTPS with
+a certificate of the platform CA and accepts only its API key, which LiteLLM sends.
+*/ -}}
+{{- if .Values.inference.syntheticModel.enabled }}
+{{- $configuration := dict "models" (list "synthetic-coder") "api_key_file" "/etc/synthetic-model/key/api-key" "tls" (dict "certificate_file" "/etc/synthetic-model/tls/tls.crt" "key_file" "/etc/synthetic-model/tls/tls.key") -}}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: synthetic-model
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+type: Opaque
+data:
+  api-key: {{ include "heartwood.credential" (dict "context" . "name" "synthetic-model" "key" "api-key") }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: synthetic-model
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+data:
+  configuration.json: |
+    {{- $configuration | toPrettyJson | nindent 4 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: synthetic-model
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "heartwood.selector" (dict "context" . "component" "synthetic-model") | nindent 4 }}
+  ports:
+    - name: https
+      port: 8443
+      targetPort: https
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: synthetic-model
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "heartwood.selector" (dict "context" . "component" "synthetic-model") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "heartwood.selector" (dict "context" . "component" "synthetic-model") | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        {{- include "heartwood.podSecurityContext" 65532 | nindent 8 }}
+      containers:
+        - name: synthetic-model
+          image: {{ .Values.images.platformServices }}
+          args: [heartwood_platform.synthetic_model, /etc/synthetic-model/configuration/configuration.json]
+          securityContext:
+            {{- include "heartwood.containerSecurityContext" . | nindent 12 }}
+            readOnlyRootFilesystem: true
+          ports:
+            - name: https
+              containerPort: 8443
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: https
+              scheme: HTTPS
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          volumeMounts:
+            - name: configuration
+              mountPath: /etc/synthetic-model/configuration
+              readOnly: true
+            - name: key
+              mountPath: /etc/synthetic-model/key
+              readOnly: true
+            - name: tls
+              mountPath: /etc/synthetic-model/tls
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: configuration
+          configMap:
+            name: synthetic-model
+        - name: key
+          secret:
+            secretName: synthetic-model
+        - name: tls
+          secret:
+            secretName: synthetic-model-tls
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Mi
+{{- end }}

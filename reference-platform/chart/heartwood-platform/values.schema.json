@@ -13,7 +13,8 @@
     "control",
     "researchers",
     "syntheticPrices",
-    "hub"
+    "hub",
+    "inference"
   ],
   "$defs": {
     "image": {
@@ -50,7 +51,8 @@
         "platformServices",
         "openshellGateway",
         "openshellRepository",
-        "hostedGateway"
+        "hostedGateway",
+        "litellm"
       ],
       "properties": {
         "postgresql": {
@@ -74,6 +76,9 @@
           "pattern": "^([a-z0-9][a-z0-9.-]*(:[0-9]+)?(/[a-z0-9][a-z0-9._-]*)*)?$"
         },
         "hostedGateway": {
+          "$ref": "#/$defs/image"
+        },
+        "litellm": {
           "$ref": "#/$defs/image"
         }
       }
@@ -616,24 +621,20 @@
           "required": [
             "profileId",
             "model",
-            "endpoint",
             "provider",
-            "placeholderEnv"
+            "placeholderEnv",
+            "binaries",
+            "dataHandling"
           ],
           "properties": {
             "profileId": {
               "type": "string",
-              "minLength": 1,
-              "maxLength": 128
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
             },
             "model": {
+              "description": "A name of inference.models; empty selects the first.",
               "type": "string",
-              "minLength": 1,
-              "maxLength": 256
-            },
-            "endpoint": {
-              "type": "string",
-              "pattern": "^https://[^\\s?#]+$"
+              "pattern": "^([A-Za-z0-9][A-Za-z0-9._-]{0,127})?$"
             },
             "provider": {
               "type": "string",
@@ -642,6 +643,47 @@
             "placeholderEnv": {
               "type": "string",
               "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+            },
+            "binaries": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string",
+                "pattern": "^/\\S+$"
+              }
+            },
+            "dataHandling": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "destination",
+                "retentionAuthority",
+                "route"
+              ],
+              "properties": {
+                "destination": {
+                  "enum": [
+                    "same-compute",
+                    "institution-managed",
+                    "provider",
+                    "operator-defined"
+                  ]
+                },
+                "retentionAuthority": {
+                  "enum": [
+                    "deployment",
+                    "institution",
+                    "provider",
+                    "service-operator"
+                  ]
+                },
+                "route": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 240,
+                  "pattern": "\\S"
+                }
+              }
             }
           }
         }
@@ -650,6 +692,139 @@
     "jupyterhub": {
       "description": "Values of the JupyterHub chart.",
       "type": "object"
+    },
+    "inference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "models",
+        "environment",
+        "trustPublicRoots",
+        "settleWaitSeconds",
+        "syntheticModel"
+      ],
+      "properties": {
+        "models": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "maxInputTokens",
+              "maxOutputTokens",
+              "litellmParams"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+              },
+              "maxInputTokens": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10000000
+              },
+              "maxOutputTokens": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10000000
+              },
+              "supportsToolCalls": {
+                "type": "boolean"
+              },
+              "litellmParams": {
+                "description": "LiteLLM parameters of the model; api_key is set from apiKeySecret.",
+                "type": "object",
+                "required": [
+                  "model"
+                ],
+                "not": {
+                  "required": [
+                    "api_key"
+                  ]
+                }
+              },
+              "apiKeySecret": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "name",
+                  "key"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"
+                  },
+                  "key": {
+                    "type": "string",
+                    "pattern": "^[-._a-zA-Z0-9]+$"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "environment": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "secretKeyRef"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "pattern": "^[A-Z_][A-Z0-9_]*$",
+                "not": {
+                  "pattern": "^(LITELLM_|DATABASE_URL$|HW_MODEL_KEY_)"
+                }
+              },
+              "secretKeyRef": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "name",
+                  "key"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"
+                  },
+                  "key": {
+                    "type": "string",
+                    "pattern": "^[-._a-zA-Z0-9]+$"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "trustPublicRoots": {
+          "type": "boolean"
+        },
+        "settleWaitSeconds": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 600
+        },
+        "syntheticModel": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
     }
   }
 }

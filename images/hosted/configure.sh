@@ -18,7 +18,8 @@ home=/var/lib/heartwood-home
 # A restarted init container starts again from empty directories.
 rm -rf "${work}/deployment" "${work}/native"
 mkdir -p "${work}/deployment" "${work}/native" "${home}/research" "${home}/state"
-for name in deployment.toml platform-ca.crt actor-key kubeconfig worker-policy.json launch-context.json; do
+for name in deployment.toml platform-ca.crt actor-key kubeconfig worker-policy.json \
+  launch-context.json model-discovery-key; do
   cp "${source}/${name}" "${work}/deployment/${name}"
 done
 cp "${source}/keycloak-client-secret" "${work}/deployment/client-secret"

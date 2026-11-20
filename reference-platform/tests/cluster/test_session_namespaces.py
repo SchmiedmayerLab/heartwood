@@ -216,6 +216,7 @@ def test_openshell_gateway_is_ready_with_its_own_key_and_client_bundle(
         "kubeconfig",
         "worker-policy.json",
         "launch-context.json",
+        "model-discovery-key",
     }
     platform_ca = _json(cluster, "configmap", "platform-ca", f"--namespace={_PLATFORM}")
     assert files["platform-ca.crt"] == platform_ca["data"]["ca.crt"]
@@ -229,6 +230,7 @@ def test_openshell_gateway_is_ready_with_its_own_key_and_client_bundle(
         files["keycloak-client-secret"],
         files["openshell-tls.key"],
         files["actor-key"],
+        files["model-discovery-key"],
     ):
         assert credential not in json.dumps(launch)
 

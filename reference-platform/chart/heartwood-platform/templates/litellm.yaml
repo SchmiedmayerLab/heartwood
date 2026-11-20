@@ -1,0 +1,237 @@
+{{- /*
+This source file is part of the Heartwood open-source project
+
+SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+
+SPDX-License-Identifier: MIT
+*/ -}}
+
+{{- /*
+The LiteLLM proxy of the model route. Only the control service holds its master key; it
+creates one virtual key for each session's workers. LiteLLM records each request's cost
+from the token prices of the model's runtime profile in syntheticPrices.
+*/ -}}
+{{- define "heartwood.litellmConfiguration" -}}
+{{- $prices := .Values.syntheticPrices -}}
+{{- $models := list -}}
+{{- if not .Values.inference.models -}}
+{{- fail "inference.models must name at least one model" -}}
+{{- end -}}
+{{- range $index, $model := .Values.inference.models -}}
+{{- $costs := dict -}}
+{{- range $profile := $prices.runtimeProfiles -}}
+{{- if and (eq $profile.runtimeProfileRef $model.name) (eq $profile.kind "inference") -}}
+{{- range $rate := $profile.rates -}}
+{{- range $sku := $prices.skuPrices -}}
+{{- if eq $sku.SkuPriceId $rate.skuPriceId -}}
+{{- $_ := set $costs (printf "%s_cost_per_token" (trimSuffix "_tokens" $rate.measure)) (printf "%.18f" (divf (float64 $sku.UnitPrice) (float64 $rate.quantityPerPricingUnit))) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if ne (len $costs) 2 -}}
+{{- fail (printf "syntheticPrices has no inference runtime profile %s with input and output token prices" $model.name) -}}
+{{- end -}}
+{{- $parameters := deepCopy ($model.litellmParams | default dict) -}}
+{{- if $model.apiKeySecret -}}
+{{- $_ := set $parameters "api_key" (printf "os.environ/HW_MODEL_KEY_%d" $index) -}}
+{{- end -}}
+{{- $info := merge $costs (dict "max_input_tokens" $model.maxInputTokens "max_output_tokens" $model.maxOutputTokens) -}}
+{{- $models = append $models (dict "model_name" $model.name "litellm_params" $parameters "model_info" $info) -}}
+{{- end -}}
+{{- $general := dict "master_key" "os.environ/LITELLM_MASTER_KEY" "database_url" "os.environ/DATABASE_URL" "store_model_in_db" false -}}
+{{- $settings := dict "telemetry" false "ssl_verify" "/etc/litellm/trust/ca.crt" -}}
+{{- /* Costs in fixed-point form, which YAML reads as numbers; Go writes 5e-07, which it reads as text. */ -}}
+{{- regexReplaceAll "(_cost_per_token): [\"']([0-9.]+)[\"']" (dict "model_list" $models "general_settings" $general "litellm_settings" $settings | toYaml) "${1}: ${2}" -}}
+{{- end -}}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: litellm
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+type: Opaque
+data:
+  master-key: {{ include "heartwood.litellmMasterKey" . }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: litellm
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    {{- include "heartwood.litellmConfiguration" . | nindent 4 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: litellm
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "heartwood.selector" (dict "context" . "component" "litellm") | nindent 4 }}
+  ports:
+    - name: https
+      port: 4000
+      targetPort: https
+---
+# One replica: LiteLLM counts the spending of keys in memory before it records it, so
+# several replicas could each admit a request beyond a key's budget.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: litellm
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "heartwood.selector" (dict "context" . "component" "litellm") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "heartwood.selector" (dict "context" . "component" "litellm") | nindent 8 }}
+      annotations:
+        checksum/configuration: {{ include "heartwood.litellmConfiguration" . | sha256sum }}
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        {{- include "heartwood.podSecurityContext" 65534 | nindent 8 }}
+      initContainers:
+        # The trust store of LiteLLM's upstreams: the platform CA, and the public roots
+        # of the image with inference.trustPublicRoots.
+        - name: trust
+          image: {{ .Values.images.litellm }}
+          command:
+            - /bin/sh
+            - -c
+            - {{ ternary "cat /etc/ssl/certs/ca-certificates.crt /etc/litellm/platform-ca/ca.crt > /etc/litellm/trust/ca.crt" "cat /etc/litellm/platform-ca/ca.crt > /etc/litellm/trust/ca.crt" .Values.inference.trustPublicRoots | quote }}
+          securityContext:
+            {{- include "heartwood.containerSecurityContext" . | nindent 12 }}
+            readOnlyRootFilesystem: true
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 64Mi
+          volumeMounts:
+            - name: platform-ca
+              mountPath: /etc/litellm/platform-ca
+              readOnly: true
+            - name: trust
+              mountPath: /etc/litellm/trust
+      containers:
+        - name: litellm
+          image: {{ .Values.images.litellm }}
+          args:
+            - --config
+            - /etc/litellm/config/config.yaml
+            - --port
+            - "4000"
+            # LiteLLM serves only HTTPS, with its certificate from the platform CA.
+            - --ssl_keyfile_path
+            - /etc/litellm/tls/tls.key
+            - --ssl_certfile_path
+            - /etc/litellm/tls/tls.crt
+          securityContext:
+            {{- include "heartwood.containerSecurityContext" . | nindent 12 }}
+          env:
+            - name: LITELLM_MASTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: litellm
+                  key: master-key
+            - name: LITELLM_DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgresql
+                  key: litellm-password
+            - name: DATABASE_URL
+              value: postgresql://litellm:$(LITELLM_DATABASE_PASSWORD)@postgresql.{{ .Release.Namespace }}.svc.cluster.local:5432/litellm
+            - name: DISABLE_ADMIN_UI
+              value: "True"
+            - name: NO_DOCS
+              value: "True"
+            {{- range $index, $model := .Values.inference.models }}
+            {{- with $model.apiKeySecret }}
+            - name: HW_MODEL_KEY_{{ $index }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .name }}
+                  key: {{ .key }}
+            {{- end }}
+            {{- end }}
+            {{- range .Values.inference.environment }}
+            - name: {{ .name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .secretKeyRef.name }}
+                  key: {{ .secretKeyRef.key }}
+            {{- end }}
+          ports:
+            - name: https
+              containerPort: 4000
+          readinessProbe:
+            httpGet:
+              path: /health/readiness
+              port: https
+              scheme: HTTPS
+            periodSeconds: 10
+            timeoutSeconds: 5
+          startupProbe:
+            httpGet:
+              path: /health/liveliness
+              port: https
+              scheme: HTTPS
+            periodSeconds: 10
+            failureThreshold: 60
+          resources:
+            requests:
+              cpu: 100m
+              memory: 512Mi
+            limits:
+              memory: 2Gi
+          volumeMounts:
+            - name: configuration
+              mountPath: /etc/litellm/config
+              readOnly: true
+            - name: tls
+              mountPath: /etc/litellm/tls
+              readOnly: true
+            - name: trust
+              mountPath: /etc/litellm/trust
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: configuration
+          configMap:
+            name: litellm
+        - name: tls
+          secret:
+            secretName: litellm-tls
+        - name: platform-ca
+          configMap:
+            name: platform-ca
+            items:
+              - key: ca.crt
+                path: ca.crt
+        - name: trust
+          emptyDir:
+            sizeLimit: 4Mi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 1Gi

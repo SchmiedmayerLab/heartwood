@@ -29,12 +29,15 @@ from starlette.routing import Route
 
 from heartwood_platform.common.tokens import AuthenticationError, ResearcherTokens, ServiceTokens
 from heartwood_platform.control.budgets import InsufficientBudgetError, Ledger
+from heartwood_platform.control.inference import InferenceSetupError
 from heartwood_platform.control.launch import (
     LaunchService,
     NoClientError,
     NoSessionError,
     UnknownProjectError,
 )
+from heartwood_platform.control.litellm import InferenceGatewayError
+from heartwood_platform.control.openshell import ProviderError
 from heartwood_platform.control.planning import MCP_PATH, UNAVAILABLE, create_planning_app
 from heartwood_platform.control.prices import PriceSheet
 from heartwood_platform.control.registry import NotAMemberError
@@ -104,9 +107,15 @@ def create_app(
                 return _error(409, "the project's inference budget has nothing available")
             except ValidationError:
                 return _error(422, "invalid request")
-            except httpx.HTTPError:
-                # Keycloak or the Kubernetes API did not answer as expected.
+            except (httpx.HTTPError, InferenceGatewayError, ProviderError) as error:
+                # Keycloak, the Kubernetes API, LiteLLM or an OpenShell gateway did not
+                # answer as expected.
+                _LOGGER.warning("a platform component failed: %s", type(error).__name__)
+                if not isinstance(error, httpx.HTTPError):
+                    _LOGGER.warning("%s", error)
                 return _error(502, UNAVAILABLE)
+            except InferenceSetupError as error:
+                return _error(409, str(error))
             except SessionError as error:
                 return _error(503, str(error))
 
@@ -164,6 +173,15 @@ def create_app(
         )
         return JSONResponse({"sessions": rotation.rewritten, "failed": rotation.failed})
 
+    def rotate_model_key(request: Request) -> Response:
+        if operators is None:
+            raise AuthenticationError("no operator is configured")
+        operator = operators.verify(_bearer(request))
+        launch = launch_request(request)
+        rotated = launches.rotate_model_key(launches.subject_of(launch.researcher), launch.project)
+        _LOGGER.info("%s rotated the model key of session %s", operator, rotated.session)
+        return JSONResponse({"session": rotated.session})
+
     def launch_context(request: Request) -> Response:
         researcher = researchers.verify(_bearer(request))
         context = launches.context(researcher.subject, researcher.project)
@@ -178,6 +196,11 @@ def create_app(
             Route(launch_path, handled(prepare), methods=["PUT"]),
             Route(launch_path, handled(delete), methods=["DELETE"]),
             Route("/v1/projects/{project}/client-secret", handled(rotate), methods=["POST"]),
+            Route(
+                "/v1/researchers/{researcher}/projects/{project}/model-key",
+                handled(rotate_model_key),
+                methods=["POST"],
+            ),
             Route("/v1/launch-context", handled(launch_context)),
             Route(MCP_PATH, planning),
         ],

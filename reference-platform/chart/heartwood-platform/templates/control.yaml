@@ -47,10 +47,18 @@ SPDX-License-Identifier: MIT
 {{- $worker := .Values.hub.worker -}}
 {{- $route := .Values.hub.modelRoute -}}
 {{- $hostedWorker := dict "image" (required "hub.worker.image must name the worker image by digest" $worker.image) "sandbox_policy_sha256" $worker.sandboxPolicySha256 "policy" $worker.policy "cpu" $worker.cpu "memory" $worker.memory -}}
-{{- $modelRoute := dict "profile_id" $route.profileId "model" $route.model "endpoint" $route.endpoint "provider" $route.provider "placeholder_env" $route.placeholderEnv -}}
+{{- $litellm := printf "https://litellm.%s.svc.cluster.local:4000" .Release.Namespace -}}
+{{- $routeModels := list -}}
+{{- range .Values.inference.models -}}
+{{- $routeModels = append $routeModels (dict "name" .name "max_input_tokens" .maxInputTokens "max_output_tokens" .maxOutputTokens "supports_tool_calls" (.supportsToolCalls | default false)) -}}
+{{- end -}}
+{{- $workerModel := $route.model | default (index (.Values.inference.models | default (list (dict "name" ""))) 0).name -}}
+{{- $handling := dict "destination" $route.dataHandling.destination "retention_authority" $route.dataHandling.retentionAuthority "route" $route.dataHandling.route -}}
+{{- $modelRoute := dict "profile_id" $route.profileId "model" $workerModel "endpoint" (printf "%s/v1/chat/completions" $litellm) "provider" $route.provider "placeholder_env" $route.placeholderEnv "binaries" $route.binaries "data_handling" $handling -}}
+{{- $inference := dict "session_reservation" .Values.control.inference.sessionReservation "litellm_url" $litellm "master_key_file" "/etc/heartwood-control/litellm/master-key" "models" $routeModels "settle_wait_seconds" .Values.inference.settleWaitSeconds "openshell_cli" "/usr/local/bin/openshell" -}}
 {{- $hosted := dict "control_url" (printf "https://heartwood-control.%s.svc.cluster.local:8443" .Release.Namespace) "worker" $hostedWorker "model_route" $modelRoute -}}
 {{- $redirect := printf "%s/user/{researcher}/{project}/oauth_callback" .Values.hub.publicOrigin -}}
-{{- dict "tls" $tls "hosted" $hosted "synthetic_prices" $syntheticPrices "sessions" $sessions "platform_id" .Values.control.platformId "database" "/var/lib/heartwood-control/control.sqlite3" "audience" "heartwood-control" "service_callers" .Values.control.serviceCallers "operator_callers" .Values.control.operatorCallers "redirect_uri_template" $redirect "researcher_id_key_file" "/etc/heartwood-control/researcher-ids/key" "inference" (dict "session_reservation" .Values.control.inference.sessionReservation) "keycloak" $keycloak "projects" $projects | toPrettyJson -}}
+{{- dict "tls" $tls "hosted" $hosted "synthetic_prices" $syntheticPrices "sessions" $sessions "platform_id" .Values.control.platformId "database" "/var/lib/heartwood-control/control.sqlite3" "audience" "heartwood-control" "service_callers" .Values.control.serviceCallers "operator_callers" .Values.control.operatorCallers "redirect_uri_template" $redirect "researcher_id_key_file" "/etc/heartwood-control/researcher-ids/key" "inference" $inference "keycloak" $keycloak "projects" $projects | toPrettyJson -}}
 {{- end }}
 # The key under which hosted gateways derive the actor that records name for a
 # researcher. Losing it breaks the link between earlier and later records of the same
@@ -202,6 +210,9 @@ spec:
             - name: researcher-ids
               mountPath: /etc/heartwood-control/researcher-ids
               readOnly: true
+            - name: litellm
+              mountPath: /etc/heartwood-control/litellm
+              readOnly: true
             - name: data
               mountPath: /var/lib/heartwood-control
             - name: tmp
@@ -213,6 +224,13 @@ spec:
         - name: keycloak
           secret:
             secretName: heartwood-control-keycloak
+        # The LiteLLM master key, with which the service manages the sessions' keys.
+        - name: litellm
+          secret:
+            secretName: litellm
+            items:
+              - key: master-key
+                path: master-key
         - name: openshell
           configMap:
             name: heartwood-control-openshell
@@ -236,7 +254,8 @@ spec:
         - name: researcher-ids
           secret:
             secretName: heartwood-researcher-ids
-        # In memory, because the service copies its serving key here when it reloads it.
+        # In memory: the service copies its serving key here when it reloads it, and keeps
+        # the registrations of session OpenShell gateways here while it manages providers.
         - name: tmp
           emptyDir:
             medium: Memory
