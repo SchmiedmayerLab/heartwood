@@ -135,12 +135,12 @@ def _refusal(result: dict[str, Any]) -> str:
     return str(result["content"][0]["text"])
 
 
-def test_tool_is_listed_read_only(researcher: Researcher) -> None:
+def test_tools_are_listed_read_only(researcher: Researcher) -> None:
     status, answer = researcher.call(researcher.tokens["demo"]["control"], "tools/list", {})
     assert status == 200, answer
-    (tool,) = answer["result"]["tools"]
-    assert tool["name"] == "estimate_workload"
-    assert tool["annotations"]["readOnlyHint"] is True
+    tools = answer["result"]["tools"]
+    assert sorted(tool["name"] for tool in tools) == ["estimate_workload", "get_budgets"]
+    assert all(tool["annotations"]["readOnlyHint"] is True for tool in tools)
 
 
 def test_plan_is_priced_from_the_chart_price_sheet(researcher: Researcher) -> None:
