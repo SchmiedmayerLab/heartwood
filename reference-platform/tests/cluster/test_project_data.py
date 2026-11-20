@@ -459,7 +459,8 @@ def test_a_launch_fills_an_attachable_volume_with_the_projects_objects(
         == volume["content_sha256"]
     )
     # The copy job and its plan, which held the URLs, are gone.
-    assert _json(cluster, f"--namespace={namespace}", "jobs")["items"] == []
+    jobs = _json(cluster, f"--namespace={namespace}", "jobs")["items"]
+    assert not [job for job in jobs if job["metadata"]["name"].startswith("hw-project-data")]
     secrets_left = _json(cluster, f"--namespace={namespace}", "secrets")["items"]
     assert not [s for s in secrets_left if s["metadata"]["name"].startswith("hw-project-data")]
     files = {

@@ -275,6 +275,28 @@ spec:
         - protocol: TCP
           port: 8443
 ---
+# The data service reads the keys that sign researchers' tokens from Keycloak.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: keycloak-from-data
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "heartwood.selector" (dict "context" . "component" "keycloak") | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "heartwood.selector" (dict "context" . "component" "data") | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 8443
+---
 # The object store accepts the data bootstrap Job and the copy jobs of session namespaces,
 # which hold presigned URLs and no account.
 apiVersion: networking.k8s.io/v1

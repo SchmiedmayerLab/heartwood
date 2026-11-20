@@ -161,6 +161,17 @@ def test_the_object_store_accepts_only_its_jobs_and_copy_pods(
     }
 
 
+def test_the_data_service_reaches_keycloak_for_its_signing_keys(
+    objects: list[dict[str, Any]],
+) -> None:
+    policy = _named(objects, "NetworkPolicy", "keycloak-from-data")
+    assert policy["spec"]["podSelector"]["matchLabels"]["app.kubernetes.io/component"] == "keycloak"
+    (rule,) = policy["spec"]["ingress"]
+    (source,) = rule["from"]
+    assert source["podSelector"]["matchLabels"]["app.kubernetes.io/component"] == "data"
+    assert rule["ports"] == [{"protocol": "TCP", "port": 8443}]
+
+
 def test_the_data_service_reviews_tokens_and_holds_only_the_read_account(
     objects: list[dict[str, Any]],
 ) -> None:

@@ -434,6 +434,7 @@ Keycloak accepts connections from `heartwood-sessions`, from the Hub, from the c
 The control service accepts connections from `heartwood-sessions` and from the Hub.
 LiteLLM accepts connections on port 4000 from the control service, from the supervisors of session sandboxes and from the gateway pods in `heartwood-sessions`, and the synthetic model and `llama-server` accept connections from LiteLLM.
 versitygw accepts connections from its bootstrap Job, from the data bootstrap Job and from pods with the label `heartwood.platform/role=project-data-copy` in session namespaces.
+Keycloak also accepts connections from the data service.
 The data service accepts connections from `heartwood-sessions` and from the control service.
 The proxy accepts researchers' connections on port 8000 from anywhere and configuration from the Hub on port 8001, and the Hub accepts connections from the proxy.
 A gateway pod accepts connections on port 8888 from the proxy and the Hub, so gateways reach each other only through the proxy, where each gateway verifies its researcher.
