@@ -1473,8 +1473,17 @@ def test_only_the_original_approval_dispatches_a_retained_authorization(
     for other in (unrelated, command(service, record)):
         with pytest.raises(SessionRecoveryError, match="not been dispatched"):
             send(other)
-    with pytest.raises(CommandConflictError):
+    # The same approval from another actor, such as the researcher under an actor form
+    # that a changed gateway now records, is refused with its cause; other changed
+    # contents remain a conflict.
+    with pytest.raises(SessionRecoveryError, match="recorded for another actor"):
         send(approved.model_copy(update={"actor_id": "other"}))
+    for changed in (
+        {"created_at": "2026-01-02T00:00:00Z"},
+        {"created_at": "2026-01-02T00:00:00Z", "actor_id": "other"},
+    ):
+        with pytest.raises(CommandConflictError):
+            send(approved.model_copy(update=changed))
     # Reads and status checks never send a retained authorization.
     observations = len(platform.observations)
     assert service.reconcile() == ()
@@ -1490,6 +1499,28 @@ def test_only_the_original_approval_dispatches_a_retained_authorization(
     assert send(approved).replayed
     assert len(platform.submissions) == before + (0 if release else 1)
     assert len(worker.contexts) == int(release)
+
+
+@pytest.mark.parametrize("release", [False, True])
+def test_another_actor_withdraws_a_retained_authorization_without_dispatching_it(
+    setup: Setup, evidence: tuple[SessionCheckpointEvidence, MemoryS3], release: bool
+) -> None:
+    service, worker, platform = setup
+    _, client = evidence
+    record, approved, before = interrupted_authorization(setup, client, release)
+    client.unavailable = False
+    renamed = "oidc-" + "0" * 64
+    with pytest.raises(SessionRecoveryError, match="deny it to withdraw it"):
+        service.handle(approved.model_copy(update={"actor_id": renamed}))
+    denied = command(service, record, approved=False, actor=renamed)
+    service.handle(denied)
+    retained = result_latest(service) if release else latest(service)
+    assert retained.phase == "withdrawn"
+    assert retained.withdrawal is not None
+    assert retained.withdrawal.actor_id == renamed
+    assert service.store.unresolved_command_ids() == ()
+    assert len(platform.submissions) == before
+    assert worker.contexts == []
 
 
 @pytest.mark.parametrize("release", [False, True])
