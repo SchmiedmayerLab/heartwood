@@ -54,7 +54,7 @@ class Dataset(_Model):
     """A dataset of a project: its description and its objects."""
 
     id: DatasetId
-    name: Text
+    name: Annotated[str, StringConstraints(min_length=1, max_length=200, pattern=r"\S")]
     description: Text
     created: AwareDatetime
     objects: tuple[CatalogObject, ...] = Field(min_length=1)

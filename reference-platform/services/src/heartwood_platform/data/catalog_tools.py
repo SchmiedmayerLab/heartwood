@@ -66,7 +66,8 @@ CREATE TABLE IF NOT EXISTS operation (
 _UNSEEN = "unseen"
 # Answers stay well below the gateway's result limit, which counts the observation twice:
 # as structured content and as its text.
-MAX_DATASETS = 20
+DATASETS_PER_ANSWER = 10
+DESCRIPTION_CHARACTERS = 500
 OBJECTS_PER_ANSWER = 10
 
 
@@ -253,38 +254,51 @@ def create_catalog_app(
             raise ToolError("operation_id names another request") from None
 
     @server.tool(annotations=_READ_ONLY)
-    def list_datasets(project_id: str, operation_id: str) -> PlatformOperationObservation:
-        """List the project's datasets with their descriptions and object counts.
+    def list_datasets(
+        project_id: str, operation_id: str, offset: int = 0
+    ) -> PlatformOperationObservation:
+        """List up to ten of the project's datasets from ``offset`` on.
 
-        list_objects lists the objects of one dataset.
+        Each dataset has its name, the start of its description and its number of
+        objects; list_objects lists its objects. ``next_offset`` names the offset of the
+        next datasets, or is null after the last.
         """
 
         def answer(project: str, context: str) -> PlatformOperationObservation:
             found = catalog.datasets(project)
-            datasets = [
-                {
-                    "id": dataset.id,
-                    "name": dataset.name,
-                    "description": dataset.description,
-                    "created": dataset.created.isoformat(),
-                    "object_count": len(dataset.objects),
-                }
-                for dataset in found[:MAX_DATASETS]
-            ]
-            limitations = (
-                (f"The answer lists {MAX_DATASETS} of {len(found)} datasets.",)
-                if len(found) > MAX_DATASETS
-                else ()
-            )
+            if offset < 0 or (found and offset >= len(found)):
+                return observation(
+                    context,
+                    operation_id,
+                    "denied",
+                    limitations=("The project has no datasets from this offset on.",),
+                )
+            page = found[offset : offset + DATASETS_PER_ANSWER]
+            following = offset + len(page)
             return observation(
                 context,
                 operation_id,
                 "completed",
-                result={"datasets": datasets},
-                limitations=limitations,
+                result={
+                    "datasets": [
+                        {
+                            "id": dataset.id,
+                            "name": dataset.name,
+                            "description": dataset.description[:DESCRIPTION_CHARACTERS],
+                            "created": dataset.created.isoformat(),
+                            "object_count": len(dataset.objects),
+                        }
+                        for dataset in page
+                    ],
+                    "next_offset": following if following < len(found) else None,
+                },
+                limitations=(
+                    f"Each description lists at most {DESCRIPTION_CHARACTERS} characters; "
+                    "resolve_object returns an object's full description.",
+                ),
             )
 
-        return run(project_id, operation_id, {"tool": "list_datasets"}, answer)
+        return run(project_id, operation_id, {"tool": "list_datasets", "offset": offset}, answer)
 
     @server.tool(annotations=_READ_ONLY)
     def list_objects(

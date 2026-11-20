@@ -190,7 +190,13 @@ def test_answers_of_a_large_catalog_stay_below_the_result_limit(tmp_path: Path) 
         for index in range(200)
     ]
     document["projects"][0]["datasets"] = [
-        {**dataset, "id": f"synthetic-cohort-{index:02d}"} for index in range(30)
+        {
+            **dataset,
+            "id": f"synthetic-cohort-{index:02d}",
+            "name": "N" * 200,
+            "description": "D" * 2000,
+        }
+        for index in range(30)
     ]
     service = Catalog(tmp_path, document=document)
     with TestClient(service.app) as client:
@@ -220,9 +226,10 @@ def test_answers_of_a_large_catalog_stay_below_the_result_limit(tmp_path: Path) 
     for response in (listing, page):
         # The gateway counts the whole tool result against its limit, at most 32 KiB.
         result = response.json()["result"]
-        assert len(json.dumps(result).encode()) < 16 * 1024
-    assert len(listing.json()["result"]["structuredContent"]["result"]["datasets"]) == 20
-    assert listing.json()["result"]["structuredContent"]["limitations"]
+        assert len(json.dumps(result).encode()) < 24 * 1024
+    listed = listing.json()["result"]["structuredContent"]["result"]
+    assert (len(listed["datasets"]), listed["next_offset"]) == (10, 10)
+    assert len(listed["datasets"][0]["description"]) == 500
     objects = page.json()["result"]["structuredContent"]["result"]
     assert (len(objects["objects"]), objects["next_offset"]) == (10, None)
 

@@ -221,7 +221,7 @@ Its key lives in the Secret `versitygw-data`; the root account of versitygw in `
 
 The catalog tools follow Heartwood's operation binding for research MCP servers.
 Each takes `project_id` and `operation_id`, requires an exchanged token for `heartwood-data` of a project member, refuses a `project_id` other than the token's project, and returns a `heartwood.platform-operation-observation.v1` that names the launch context of the researcher's session, which the service reads from the control service.
-`list_datasets` returns up to 20 of the project's datasets in the observation's `result`, each with its description and its number of objects.
+`list_datasets` returns up to ten of the project's datasets from an offset on in the observation's `result`, each with its name, the first 500 characters of its description and its number of objects, and the offset of the next datasets.
 `list_objects` returns up to ten objects of one dataset from an offset on, each with its DRS identifier, size, checksum, media type and its path below `/data`, where workers read the project data volume, and the offset of the next objects.
 The answers stay far below the gateway's limit on a tool result, which counts the observation twice, as structured content and as text.
 `operation_id` must be a UUID, as the gateway sends it.
