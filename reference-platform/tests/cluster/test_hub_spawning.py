@@ -314,8 +314,9 @@ def test_the_hub_creates_only_gateway_pods_of_the_admitted_shape(
     cases = [
         ("hosted gateway image", changed(containers=other_image)),
         ("fixed arguments", changed(containers=shell)),
+        # The Secret in the container.
         (
-            "only the init container",
+            "exactly the volumes and paths",
             changed(containers=[{**containers[0], "volumeMounts": mounts}]),
         ),
         ("mounts only its session's Secret", changed(volumes=other_secret)),
