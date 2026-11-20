@@ -257,15 +257,17 @@ The qualification build has two further behaviors that the unmodified upstream r
 Heartwood sends the worker attempt's identifier as the `request_id` of its creation request.
 Within the gateway's replay window, counted from the completion of the first delivery, the gateway executes that request once: a repeated delivery receives the original result while the sandbox exists and is refused after its deletion.
 A creation delivered again after a revocation within that window therefore creates no sandbox.
-The window is the gateway setting `mutation_replay_window_seconds`, 24 hours by default; keep it at least that long, because a repeated delivery after the window is executed again.
-This request admission needs the gateway's JWT signing key or TLS private key to be readable, and a caller with a user identity, such as the mutual TLS client identity; otherwise every creation is refused before any work.
-Each admission holds one of the caller's admission slots, `mutation_admission_limit_per_caller` with a default of 1,000: a completed creation until its replay window ends, and a creation that failed until an operator reconciles it.
-When the slots are used up, the gateway refuses every creation with `RESOURCE_EXHAUSTED`, and Heartwood records each such attempt as not created after the gateway confirms its name absent.
-Size the limit for the creations and failed creations of one gateway identity within the window.
+The window is the gateway setting `mutation_replay_window_seconds`, 24 hours by default, the same time for which a name confirmed absent stays rejected; a repeated delivery after the window is executed again, so do not shorten it.
+This request admission needs the gateway's JWT signing key, or its TLS private key when it has no JWT signing key, to be readable, and the same on every gateway that shares a store; a rotated key makes earlier requests unreplayable.
+It also needs a caller with a user identity, such as the mutual TLS client identity.
+Otherwise every creation is refused before any work.
+Each admission holds one of the caller's admission slots, `mutation_admission_limit_per_caller` with a default of 1,000: a completed creation until its replay window ends, and a creation whose outcome the gateway did not record, such as a failed creation, until an operator reconciles it.
+When the slots are used up, the gateway refuses every creation with `RESOURCE_EXHAUSTED` before any work.
+Size the limit for the creations, and the creations without a recorded outcome, of the identity Heartwood uses at the sandbox gateway within the window.
 
 Some cases keep a name rejected until its record expires although a deletion found its sandbox: two concurrent deletions that both find the sandbox, contention on the record that outlasts the gateway's eight attempts, a store outage longer than the gateway's retries, an error on the deletion's second read, and a gateway crash between the record and its withdrawal.
 A sandbox that passed its own check and later meets the record of a deletion that found it cannot be started until that record expires.
-These cases make a name unavailable for longer and never report a sandbox absent.
+These cases delay a name or a sandbox until the record expires and never report a sandbox absent.
 Gateway clocks that differ by more than 5 minutes, or that jump, can end a record's 24 hours early; a creation still in flight can then create a sandbox after its name was confirmed absent, so gateways that share a store need synchronized clocks.
 The gateway removes at most 1,000 expired records per minute, so a caller that deletes absent names faster than that grows the store.
 

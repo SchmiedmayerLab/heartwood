@@ -706,7 +706,8 @@ def test_launch_binds_the_observed_runtime_and_admits_only_the_native_placeholde
     assert runtime.generation == "generation-1"
     assert str(runtime.endpoint) == native.endpoint
     assert native.sandboxes.deleted == []
-    # The gateway executes the creation at most once under the attempt's identifier.
+    # Within its replay window, the gateway executes the creation under the attempt's
+    # identifier once.
     assert native.sandboxes.request_ids == [str(native.intent.attempt_id)]
     spec = native.sandboxes.spec
     assert list(spec.providers) == [native.settings.provider]
