@@ -69,8 +69,9 @@ from heartwood.gateway.worker_volumes import (
 # A credential store can also answer with one of them after the gateway recorded the sandbox
 # and before it asks the driver; the gateway then removes that record or marks it deleting,
 # and revocation deletes whatever the gateway still reports. The request admission that the
-# attempt's `request_id` enables answers with them only before it admits the request. They
-# were checked against this gateway source revision and patch digests; recheck on any change.
+# attempt's `request_id` enables answers with them only before it looks up or writes an
+# admission, and Heartwood sends each creation once. They were checked against this gateway
+# source revision and patch digests; recheck on any change.
 _CREATION_REJECTED = ("INVALID_ARGUMENT", "PERMISSION_DENIED", "UNAUTHENTICATED")
 # A deletion the sandbox gateway cannot complete yet is sent again after each of these pauses,
 # in seconds, inside the deletion's time limit: seven requests, the last one 31.5 seconds
@@ -501,8 +502,9 @@ class _NativeWorkerAttempt:
             # Until the control plane answers, the creation may complete later.
             self._creation_uncertain = True
             try:
-                # With the attempt identifier as its request identifier, the gateway never
-                # executes a repeated delivery of this request, also after its deletion.
+                # With the attempt identifier as its request identifier, the gateway does not
+                # execute a repeated delivery of this request within its replay window, also
+                # after the sandbox's deletion.
                 created = self.control.client.create(
                     workspace=self.settings.workspace,
                     name=volumes.worker_name,

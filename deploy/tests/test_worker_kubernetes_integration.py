@@ -971,6 +971,20 @@ def test_kubernetes_unsent_creation_is_confirmed_absent(
         native._stop(application)
 
 
+def _reason(error: grpc.RpcError) -> str | None:
+    """The reason of the error details the gateway attaches to a refusal."""
+    from google.rpc import error_details_pb2, status_pb2
+
+    for key, value in error.trailing_metadata() or ():  # type: ignore[attr-defined]
+        if key == "grpc-status-details-bin":
+            status = status_pb2.Status.FromString(value)
+            for detail in status.details:
+                info = error_details_pb2.ErrorInfo()
+                if detail.Unpack(info):
+                    return str(info.reason)
+    return None
+
+
 def test_kubernetes_repeated_creation_is_not_executed_after_revocation(
     infrastructure: KubernetesFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1002,7 +1016,7 @@ def test_kubernetes_repeated_creation_is_not_executed_after_revocation(
         with pytest.raises(grpc.RpcError) as refused:
             fixture.control.create(**delivered)
         assert refused.value.code() == grpc.StatusCode.FAILED_PRECONDITION
-        assert "not executed again" in refused.value.details()
+        assert _reason(refused.value) == "REQUEST_REPLAY_UNAVAILABLE"
         time.sleep(10)
         assert fixture.objects() == []
         _evidence(

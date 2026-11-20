@@ -246,21 +246,27 @@ The qualification build has two further behaviors that the unmodified upstream r
   A creation request that was still in flight when the deletion answered therefore creates no sandbox.
   The record lasts across a gateway restart as long as the store does, and the gateway removes expired records.
   A deletion that finds a sandbox answers `COMPLETED`, `ACCEPTED` or an error for that sandbox and leaves its name available.
-  Only `ALREADY_ABSENT` is evidence that a name is absent; `NOT_FOUND`, such as for a caller without a role in the workspace, records nothing and is never evidence.
+  Only `ALREADY_ABSENT` is evidence that a name is absent; `NOT_FOUND` is never evidence, whether or not the deletion recorded the name, and a deletion by a caller without the required role in the workspace records nothing.
   In a workspace that does not exist yet, only a caller who may create that workspace records the name.
   A replayed `ALREADY_ABSENT` answer renews the record, and the gateway refuses the replay once a sandbox has the name.
-  A creation that the gateway recorded but had not sent to its driver when the gateway stopped is never started while its name is recorded, and the gateway deletes it.
+  A creation that the gateway recorded but had not sent to its driver when the gateway stopped is never started while its name is recorded, and the gateway's record sweep deletes it while the record is retained.
   Names longer than 19 bytes are never recorded; the gateway also refuses to create them.
   The gateway reports this behavior as capability `openshell.compute.create-rejects-deleted-name` on its compute driver.
   With the Kubernetes driver, Heartwood records an unanswered creation as never created only through a gateway that reports this capability; without it the attempt stays fenced.
 
 Heartwood sends the worker attempt's identifier as the `request_id` of its creation request.
-The gateway then executes that request at most once: within its replay window, 24 hours by default, a repeated delivery receives the original result while the sandbox exists and is refused after its deletion.
-A creation delivered again after a revocation therefore creates no sandbox.
+Within the gateway's replay window, counted from the completion of the first delivery, the gateway executes that request once: a repeated delivery receives the original result while the sandbox exists and is refused after its deletion.
+A creation delivered again after a revocation within that window therefore creates no sandbox.
+The window is the gateway setting `mutation_replay_window_seconds`, 24 hours by default; keep it at least that long, because a repeated delivery after the window is executed again.
+This request admission needs the gateway's JWT signing key or TLS private key to be readable, and a caller with a user identity, such as the mutual TLS client identity; otherwise every creation is refused before any work.
+Each admission holds one of the caller's admission slots, `mutation_admission_limit_per_caller` with a default of 1,000: a completed creation until its replay window ends, and a creation that failed until an operator reconciles it.
+When the slots are used up, the gateway refuses every creation with `RESOURCE_EXHAUSTED`, and Heartwood records each such attempt as not created after the gateway confirms its name absent.
+Size the limit for the creations and failed creations of one gateway identity within the window.
 
-These behaviors have limits that fail closed.
-In rare cases a name stays rejected until its record expires although a deletion found its sandbox: two concurrent deletions that both find the sandbox, a store outage longer than the gateway's retries, or a gateway crash between the record and its withdrawal.
-Gateway clocks that differ by more than 5 minutes, or that jump, can end a record's 24 hours early.
+Some cases keep a name rejected until its record expires although a deletion found its sandbox: two concurrent deletions that both find the sandbox, contention on the record that outlasts the gateway's eight attempts, a store outage longer than the gateway's retries, an error on the deletion's second read, and a gateway crash between the record and its withdrawal.
+A sandbox that passed its own check and later meets the record of a deletion that found it cannot be started until that record expires.
+These cases make a name unavailable for longer and never report a sandbox absent.
+Gateway clocks that differ by more than 5 minutes, or that jump, can end a record's 24 hours early; a creation still in flight can then create a sandbox after its name was confirmed absent, so gateways that share a store need synchronized clocks.
 The gateway removes at most 1,000 expired records per minute, so a caller that deletes absent names faster than that grows the store.
 
 ### Sensitive Data
