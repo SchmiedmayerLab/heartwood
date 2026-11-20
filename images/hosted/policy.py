@@ -52,8 +52,9 @@ def main() -> None:
         sandbox_pb2.SandboxPolicy(),
     )
     workspace = worker["workspace"]
-    # The gateway refuses a name that a deletion found absent, so each probe has its own.
-    name = f"policy-probe-{secrets.token_hex(6)}"
+    # The gateway refuses a name that a deletion found absent, so each probe has its own;
+    # a name has at most 19 characters.
+    name = f"probe-{secrets.token_hex(6)}"
     labels = {"heartwood.project": "policy-probe", "heartwood.attempt": name}
     created = client.create(
         workspace=workspace,
