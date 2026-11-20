@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, ValidationError
 
 from heartwood_platform.common.kubernetes import Kubernetes
 from heartwood_platform.control.sessions import SessionError
@@ -131,7 +131,10 @@ class ProjectData:
             json={"subject": subject, "project": project},
         )
         response.raise_for_status()
-        plan = _Plan.model_validate_json(response.content)
+        try:
+            plan = _Plan.model_validate_json(response.content)
+        except ValidationError:
+            raise SessionError("the data service answered with an invalid plan") from None
         if plan.project != project:
             raise SessionError("the data service planned another project")
         return plan
@@ -204,6 +207,9 @@ class ProjectData:
             "metadata": {"name": name, "namespace": namespace, "labels": labels},
             "spec": {
                 "backoffLimit": 0,
+                # A job that outlives a control service restart is removed with its plan,
+                # which the job owns.
+                "ttlSecondsAfterFinished": 600,
                 # The job may run as long as its URLs stay valid, which the data service
                 # sized to the objects.
                 "activeDeadlineSeconds": self._deadline(plan),
@@ -287,6 +293,12 @@ class ProjectData:
         """Run one copy job to its end and return whether it succeeded."""
         name = f"hw-project-data-copy-{plan.content_sha256[:16]}"
         self._remove_copy(namespace, name)
+        if not self._kubernetes.create(self._job(namespace, session, name, plan)):
+            raise SessionError("a project data copy job exists under its name")
+        job = self._kubernetes.get("Job", name, namespace)
+        if job is None:
+            raise SessionError("the project data copy job disappeared")
+        # The pod waits for its plan. The job owns it, so deleting the job deletes it too.
         content = json.dumps(plan.model_dump(mode="json"))
         self._kubernetes.create(
             {
@@ -296,13 +308,19 @@ class ProjectData:
                     "name": name,
                     "namespace": namespace,
                     "labels": {_SESSION_LABEL: session, _ROLE_LABEL: _COPY_ROLE},
+                    "ownerReferences": [
+                        {
+                            "apiVersion": "batch/v1",
+                            "kind": "Job",
+                            "name": name,
+                            "uid": job["metadata"]["uid"],
+                        }
+                    ],
                 },
                 "type": "Opaque",
                 "data": {"plan.json": base64.b64encode(content.encode()).decode()},
             }
         )
-        if not self._kubernetes.create(self._job(namespace, session, name, plan)):
-            raise SessionError("a project data copy job exists under its name")
         deadline = self._clock() + self._deadline(plan) + 60
         try:
             while True:
@@ -347,6 +365,11 @@ class ProjectData:
         claim = kubernetes.get("PersistentVolumeClaim", name, namespace)
         if claim is not None and claim["metadata"].get("deletionTimestamp") is not None:
             raise SessionError("the project data volume is being deleted")
+        if (
+            claim is not None
+            and (claim["metadata"].get("annotations") or {}).get(_CONTENT) != plan.content_sha256
+        ):
+            raise SessionError("a project data volume of other content has the volume's name")
         if claim is None or not self._complete(claim, plan.content_sha256):
             if claim is None:
                 kubernetes.create(self._claim(namespace, session, project, plan))

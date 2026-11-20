@@ -256,7 +256,7 @@ def test_object_urls_read_one_object_from_copy_pods_only(
     )
     assert status == 200, access
     url = access["url"]
-    assert "X-Amz-Expires=61" in url
+    assert "X-Amz-Expires=301" in url
     with _session_pod(cluster, namespace, probe_image, _COPY_ROLE) as pod:
         code, output = _fetch(cluster, namespace, pod, url)
         body, _, http = output.rpartition("\n")
@@ -324,6 +324,20 @@ def test_object_urls_read_one_object_from_copy_pods_only(
         expired = _fetch(cluster, namespace, pod, brief)[1]
         assert expired.endswith("\n403")
         assert "expired" in expired
+        # A copy pod reaches nothing else, such as Keycloak.
+        code, _ = _run(
+            cluster,
+            namespace,
+            pod,
+            "curl",
+            "--silent",
+            "--max-time",
+            "10",
+            "--cacert",
+            "/etc/platform-ca/ca.crt",
+            "https://keycloak.heartwood-platform.svc.cluster.local:8443/health",
+        )
+        assert code != 0
     # Pods without the copy label, in the session namespace and in heartwood-sessions,
     # do not reach the object store.
     with _session_pod(cluster, namespace, probe_image, {}) as pod:
@@ -407,3 +421,37 @@ def test_a_second_launch_reuses_the_filled_volume(researcher: Researcher) -> Non
         secret(cluster, SESSIONS, f"hw-gw-{researcher.sessions['demo']}", "launch.json")
     )["project_data"]
     assert after == before
+
+
+def test_only_copy_jobs_carry_the_copy_label(researcher: Researcher, probe_image: str) -> None:
+    cluster = researcher.cluster
+    namespace = f"hw-s-{researcher.sessions['demo']}"
+    pod = {
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "metadata": {"name": "hw-copy-label-probe", "namespace": namespace, "labels": _COPY_ROLE},
+        "spec": {
+            "automountServiceAccountToken": False,
+            "securityContext": {"runAsNonRoot": True, "seccompProfile": {"type": "RuntimeDefault"}},
+            "containers": [
+                {
+                    "name": "probe",
+                    "image": probe_image,
+                    "securityContext": {
+                        "runAsUser": 10001,
+                        "allowPrivilegeEscalation": False,
+                        "capabilities": {"drop": ["ALL"]},
+                    },
+                    "resources": {"limits": {"cpu": "100m", "memory": "64Mi"}},
+                }
+            ],
+        },
+    }
+    # The OpenShell gateway creates pods in the session namespace, and the copy label is
+    # refused to it, as to the cluster administrator.
+    for actor in (f"system:serviceaccount:{namespace}:openshell", None):
+        result = cluster.kubectl(
+            "create", "--dry-run=server", "--filename", "-", actor=actor, document=pod
+        )
+        assert result.returncode != 0
+        assert "copy Jobs carry the project data copy label" in result.stderr, result.stderr

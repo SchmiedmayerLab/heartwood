@@ -48,7 +48,7 @@ class DataService:
 
     def _handle(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
-        expires = (datetime.now(UTC) + timedelta(seconds=61)).isoformat()
+        expires = (datetime.now(UTC) + timedelta(seconds=301)).isoformat()
         return httpx.Response(
             200,
             json={
@@ -155,7 +155,8 @@ def test_the_copy_job_runs_restricted_without_credentials(fixture: Fixture) -> N
     pod = spec["template"]["spec"]
     (container,) = pod["containers"]
     assert spec["backoffLimit"] == 0
-    assert 60 <= spec["activeDeadlineSeconds"] <= 61
+    assert 299 <= spec["activeDeadlineSeconds"] <= 301
+    assert spec["ttlSecondsAfterFinished"] == 600
     assert spec["template"]["metadata"]["labels"]["heartwood.platform/role"] == "project-data-copy"
     assert pod["automountServiceAccountToken"] is False
     assert pod["securityContext"]["runAsNonRoot"] is True
@@ -173,6 +174,8 @@ def test_the_copy_job_runs_restricted_without_credentials(fixture: Fixture) -> N
         "data": {"persistentVolumeClaim"},
     }
     (secret,) = secrets
+    (owner,) = secret["metadata"]["ownerReferences"]
+    assert (owner["kind"], owner["name"]) == ("Job", job["metadata"]["name"])
     plan = json.loads(base64.b64decode(secret["data"]["plan.json"]))
     assert [item["path"] for item in plan["objects"]] == [
         "cohort/participants.csv",
@@ -273,4 +276,22 @@ def test_an_unavailable_data_service_fails_the_launch(fixture: Fixture) -> None:
         httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(503))),
     )
     with pytest.raises(httpx.HTTPStatusError):
+        fixture.fill()
+
+
+def test_a_claim_of_other_content_under_the_name_is_refused(fixture: Fixture) -> None:
+    fixture.kubernetes.job_outcomes = ["Complete"]
+    fixture.fill()
+    fixture.claim()["metadata"]["annotations"]["heartwood.platform/content-sha256"] = "f" * 64
+    with pytest.raises(SessionError, match="other content"):
+        fixture.fill()
+
+
+def test_an_invalid_plan_fails_the_launch_with_a_session_error(fixture: Fixture) -> None:
+    fixture.project_data = ProjectData(
+        Kubernetes(fixture.kubernetes.client()),
+        fixture.settings,
+        httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(200, json={}))),
+    )
+    with pytest.raises(SessionError, match="invalid plan"):
         fixture.fill()

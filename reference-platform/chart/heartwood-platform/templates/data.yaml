@@ -12,6 +12,7 @@ to the catalog objects. The catalog comes from projects[].datasets; each file of
 is read from files/datasets/<dataset>/<file>, and its size and checksum are computed here.
 */ -}}
 {{- define "heartwood.dataCatalog" -}}
+{{- $total := 0 -}}
 {{- $mimeTypes := dict "csv" "text/csv" "tsv" "text/tab-separated-values" "md" "text/markdown" "json" "application/json" "txt" "text/plain" -}}
 {{- $projects := list -}}
 {{- range $project := .Values.projects -}}
@@ -23,12 +24,20 @@ is read from files/datasets/<dataset>/<file>, and its size and checksum are comp
 {{- if not $content -}}
 {{- fail (printf "files/datasets/%s/%s is missing or empty" $dataset.id $file) -}}
 {{- end -}}
+{{- $total = add $total (len $content) -}}
 {{- $extension := splitList "." $file | last -}}
 {{- $objects = append $objects (dict "name" $file "size" (len $content) "sha256" (sha256sum $content) "mime_type" (get $mimeTypes $extension | default "text/plain")) -}}
 {{- end -}}
 {{- $datasets = append $datasets (dict "id" $dataset.id "name" $dataset.name "description" $dataset.description "created" $dataset.created "objects" $objects) -}}
 {{- end -}}
 {{- $projects = append $projects (dict "id" $project.id "members" ($project.members | default list) "datasets" $datasets) -}}
+{{- if and $datasets (not $.Values.sessions.attemptStorageClass.provisioner) -}}
+{{- fail "projects with datasets need sessions.attemptStorageClass.provisioner for their project data volumes" -}}
+{{- end -}}
+{{- end -}}
+{{- /* The bootstrap Job reads the files from one ConfigMap, which holds at most 1 MiB. */ -}}
+{{- if gt $total 786432 -}}
+{{- fail "the files of projects[].datasets exceed 768 KiB, the limit of the dataset ConfigMap" -}}
 {{- end -}}
 {{- dict "projects" $projects | toJson -}}
 {{- end }}
@@ -352,7 +361,8 @@ spec:
             - |
               set -eu
               if versitygw admin list-users | grep -q "^${DATA_ACCESS_KEY} "; then
-                echo "The data account exists."
+                # A replaced secret of the account takes effect at the store.
+                versitygw admin update-user --access "${DATA_ACCESS_KEY}" --secret "${DATA_SECRET_KEY}" --role user
               else
                 versitygw admin create-user --access "${DATA_ACCESS_KEY}" --secret "${DATA_SECRET_KEY}" --role user
               fi

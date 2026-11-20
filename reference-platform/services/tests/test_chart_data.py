@@ -216,3 +216,30 @@ def test_the_control_service_fills_project_data_with_the_services_image(
     }
     storage = _named(objects, "StorageClass", "heartwood-project-data")
     assert storage["provisioner"] == "rancher.io/local-path"
+
+
+def test_the_copy_label_policy_fails_closed_and_denies(objects: list[dict[str, Any]]) -> None:
+    policy = _named(objects, "ValidatingAdmissionPolicy", "heartwood-project-data-copy")
+    assert policy["spec"]["failurePolicy"] == "Fail"
+    assert policy["spec"]["matchConstraints"]["namespaceSelector"] == {
+        "matchExpressions": [{"key": "heartwood.platform/session", "operator": "Exists"}]
+    }
+    binding = _named(objects, "ValidatingAdmissionPolicyBinding", "heartwood-project-data-copy")
+    assert binding["spec"]["validationActions"] == ["Deny"]
+
+
+def test_datasets_need_the_storage_class_of_project_data_volumes() -> None:
+    result = subprocess.run(
+        [
+            *_TEMPLATE,
+            "--values",
+            str(_CHART / "values-kind.yaml"),
+            "--set",
+            "sessions.attemptStorageClass.provisioner=",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "sessions.attemptStorageClass.provisioner" in result.stderr

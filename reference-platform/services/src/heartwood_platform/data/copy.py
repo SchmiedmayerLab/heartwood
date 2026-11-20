@@ -113,7 +113,6 @@ def copy(plan: Plan, client: httpx.Client, directory: Path) -> None:
         target.parent.mkdir(mode=_DIRECTORY_MODE, exist_ok=True)
         target.parent.chmod(_DIRECTORY_MODE)
         _download(client, planned, target)
-    directory.chmod(_DIRECTORY_MODE)
 
 
 def main() -> None:

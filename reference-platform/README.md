@@ -64,7 +64,7 @@ The platform is for synthetic and open data only.
 | JupyterHub | The Hub, its proxy and the idle culler from the pinned Zero to JupyterHub chart 4.4.5, which start one Heartwood gateway for each researcher and project in `heartwood-sessions` |
 | Platform certificate authority | Secret `platform-ca` with the key, ConfigMap `platform-ca` with the certificate, which the control service copies into each session namespace and each gateway Secret, and the Secrets `keycloak-tls`, `heartwood-control-tls`, `heartwood-data-tls`, `versitygw-tls`, `litellm-tls`, `synthetic-model-tls` and `llama-server-tls` with the serving certificates of those services |
 | Session roles | Six fixed ClusterRoles for session namespaces, the ServiceAccount and rights of the control service, the ServiceAccount `heartwood-operator`, which identifies platform operators at the control service and has no Kubernetes rights, and the Role `heartwood-hub-spawner` of the Hub in `heartwood-sessions` |
-| Admission policies | `heartwood-control-scope`, `heartwood-staging-shape`, `heartwood-staging-names`, `heartwood-session-services` and `heartwood-hub-pods` |
+| Admission policies | `heartwood-control-scope`, `heartwood-staging-shape`, `heartwood-staging-names`, `heartwood-session-services`, `heartwood-hub-pods` and `heartwood-project-data-copy` |
 | OpenShell objects | `files/openshell-session.json`, the objects of one session namespace |
 
 Every image in `values.yaml` is pinned by digest or has no default, and `values.schema.json` rejects an image reference without a digest.
@@ -195,6 +195,8 @@ Each entry of `projects[].datasets` names a dataset, its description, its creati
 The chart computes the size and the SHA-256 checksum of each file, and the bootstrap Job `heartwood-data-bootstrap` writes the files into the project's bucket under `datasets/<dataset>/<file>`.
 An object's DRS identifier is `<dataset>.<file>`, so a dataset identifier names one dataset on the whole platform.
 The files in `files/datasets` are synthetic.
+The bootstrap Job reads all dataset files from one ConfigMap, so together they may hold at most 768 KiB, and rendering fails above that.
+Projects with datasets need `sessions.attemptStorageClass.provisioner`, whose StorageClass `heartwood-project-data` holds the project data volumes; rendering fails without it.
 
 The service serves only HTTPS on port 8443, with a certificate that the platform CA signs for the names of its Service, like the control service.
 
@@ -210,7 +212,7 @@ The project comes from the token: an object of another project does not exist fo
 The control service sends a projected service account token with the audience `heartwood-data`, which the data service verifies with a TokenReview, and names the researcher and the project, whose membership the data service checks.
 
 A URL is a presigned S3 request of the data service's versitygw account `heartwood-data`, signed for one object and the method `GET`.
-It stays valid for 60 seconds plus one second for each MiB of the object, up to one hour.
+It stays valid for 300 seconds, which covers starting the copy pod, plus one second for each MiB of the object, up to one hour.
 The account reads the objects of every project bucket through a bucket policy and can neither write nor list.
 Its key lives in the Secret `versitygw-data`; the root account of versitygw in `versitygw-root` is used only by versitygw and the bootstrap Jobs.
 
@@ -220,10 +222,10 @@ At each launch the control service fills the session's project data volume with 
 
 1. It asks the data service for the access plan of the researcher and project.
 2. It applies the network policy `hw-project-data-copy-egress`, which lets pods with the label `heartwood.platform/role=project-data-copy` reach DNS and versitygw, and creates the volume claim `hw-project-data-<digest>` with the StorageClass `heartwood-project-data`, named after the first 16 hexadecimal digits of the content digest.
-3. It writes the plan into a Secret and runs a copy Job in the session namespace with the platform services image, the plan, the platform CA certificate and the claim.
+3. It runs a copy Job in the session namespace with the platform services image, the platform CA certificate and the claim, and writes the plan into a Secret that the Job owns, so deleting the Job deletes the plan.
    The copy pod runs under the restricted Pod Security Standard without a service account token and without a credential of versitygw.
    It downloads each object over HTTPS, verifies its size and checksum, and writes it to `<dataset>/<file>`, readable by every user.
-4. It deletes the Job and the Secret when the Job ends.
+4. It deletes the Job and the Secret when the Job ends; a Job that a restart of the control service left behind is deleted with its Secret ten minutes after it ended.
    A failed Job is run again with a new plan and new URLs, up to three times, and then the launch fails.
 5. After a successful copy it adds the labels with which the OpenShell driver attaches the claim to the sandboxes of the workspace `research`, and deletes the session's claims of earlier content.
 
@@ -231,7 +233,8 @@ A launch with an unchanged catalog reuses the filled claim.
 The claim carries the labels `heartwood.platform/session` and `heartwood.platform/project` and the annotation `heartwood.platform/content-sha256`.
 The reply to the launch and `launch.json` name it in `project_data` with its UID, its content digest, the mount path `/data` and the number of objects.
 A project without datasets has no project data volume.
-The URLs of a plan are readable in the Secret and the Job's pod by principals that read Secrets or pods in the session namespace, until they expire.
+Until they expire, the URLs of a plan are readable by the ServiceAccount `openshell-certgen` of the OpenShell certificate Job, which reads Secrets of the session namespace, and by cluster administrators.
+The admission policy `heartwood-project-data-copy` keeps the label `heartwood.platform/role=project-data-copy`, which admits a pod to versitygw, to the pods that the Job controller creates for the control service's copy Jobs.
 
 ### Session Namespaces
 
@@ -471,6 +474,8 @@ A Heartwood gateway may open exec sessions into pods named `hw-staging-*`, so no
 Requests of users other than ServiceAccounts, such as a cluster administrator, are outside the policy, so controllers must create pods with their own ServiceAccount credentials, as `kube-controller-manager --use-service-account-credentials` does on kind and kubeadm clusters.
 
 `sessions.stagingImages` lists the worker images of the sessions' deployment manifests; during a change of the worker image it lists the current and the next image, and an empty list denies every pod.
+
+`heartwood-project-data-copy` applies to pods and Jobs in session namespaces: only the control service creates Jobs named `hw-project-data-copy-*` that carry the label `heartwood.platform/role=project-data-copy`, only the Job controller creates pods with it for such a Job, and no update adds it.
 
 `heartwood-session-services` applies to every Service in a namespace that carries the label `heartwood.platform/session`:
 the Service has the type `ClusterIP` and no external address.

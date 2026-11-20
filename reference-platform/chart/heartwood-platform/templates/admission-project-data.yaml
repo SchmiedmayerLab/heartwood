@@ -1,0 +1,76 @@
+{{- /*
+This source file is part of the Heartwood open-source project
+
+SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+
+SPDX-License-Identifier: MIT
+*/ -}}
+
+{{- /*
+The label heartwood.platform/role=project-data-copy admits a pod of a session namespace to
+the object store. Only the copy Jobs of the control service carry it: the control service
+creates them, and the Job controller creates their pods.
+*/ -}}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: heartwood-project-data-copy
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector:
+      matchExpressions:
+        - key: heartwood.platform/session
+          operator: Exists
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+      - apiGroups: [batch]
+        apiVersions: ["v1"]
+        operations: [CREATE, UPDATE]
+        resources: [jobs]
+  variables:
+    - name: role
+      expression: "'heartwood.platform/role'"
+    - name: copy
+      expression: >-
+        has(object.metadata.labels) && variables.role in object.metadata.labels
+        && object.metadata.labels[variables.role] == 'project-data-copy'
+    - name: copied
+      expression: >-
+        oldObject != null && has(oldObject.metadata.labels) && variables.role in oldObject.metadata.labels
+        && oldObject.metadata.labels[variables.role] == 'project-data-copy'
+    - name: templateCopy
+      expression: >-
+        request.resource.resource == 'jobs' && has(object.spec.template.metadata)
+        && has(object.spec.template.metadata.labels) && variables.role in object.spec.template.metadata.labels
+        && object.spec.template.metadata.labels[variables.role] == 'project-data-copy'
+  validations:
+    - expression: >-
+        request.resource.resource != 'pods' || !variables.copy
+        || (request.operation == 'UPDATE' && variables.copied)
+        || (request.operation == 'CREATE'
+        && request.userInfo.username == 'system:serviceaccount:kube-system:job-controller'
+        && has(object.metadata.ownerReferences) && object.metadata.ownerReferences.size() == 1
+        && object.metadata.ownerReferences[0].kind == 'Job'
+        && object.metadata.ownerReferences[0].name.startsWith('hw-project-data-copy-'))
+      message: only the pods of the control service's copy Jobs carry the project data copy label
+    - expression: >-
+        request.resource.resource != 'jobs' || !(variables.copy || variables.templateCopy)
+        || (request.userInfo.username == 'system:serviceaccount:{{ .Release.Namespace }}:heartwood-control'
+        && object.metadata.name.startsWith('hw-project-data-copy-'))
+      message: only the control service creates Jobs that carry the project data copy label
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: heartwood-project-data-copy
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+spec:
+  policyName: heartwood-project-data-copy
+  validationActions: [Deny]

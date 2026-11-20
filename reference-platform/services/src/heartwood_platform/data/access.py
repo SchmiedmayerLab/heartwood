@@ -22,9 +22,10 @@ from datetime import datetime, timedelta
 from heartwood_platform.data.catalog import Entry
 from heartwood_platform.data.signing import Credentials, presign
 
-# The validity of a URL: a fixed allowance for the connection, plus one second for each
-# MiB at the slowest transfer rate the platform supports, up to one hour.
-BASE_SECONDS = 60
+# The validity of a URL: a fixed allowance for starting the copy pod, which may include
+# provisioning its volume and pulling its image, plus one second for each MiB at the
+# slowest transfer rate the platform supports, up to one hour.
+BASE_SECONDS = 300
 SECONDS_PER_MIB = 1
 MAX_SECONDS = 3600
 _MIB = 1024 * 1024

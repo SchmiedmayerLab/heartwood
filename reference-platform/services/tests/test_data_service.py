@@ -160,9 +160,9 @@ def test_signing_refuses_invalid_requests(changes: dict[str, object]) -> None:
 
 
 def test_access_validity_grows_with_the_object_size_up_to_an_hour() -> None:
-    assert access_seconds(0) == 60
-    assert access_seconds(1) == 61
-    assert access_seconds(100 * 1024 * 1024) == 160
+    assert access_seconds(0) == 300
+    assert access_seconds(1) == 301
+    assert access_seconds(100 * 1024 * 1024) == 400
     assert access_seconds(10**12) == MAX_SECONDS
 
 
@@ -252,7 +252,7 @@ def test_access_is_a_url_for_the_object_that_expires_with_its_size(service: Serv
         "versitygw:7070",
         "/hw-project-demo/datasets/synthetic-cohort/README.md",
     )
-    assert query["X-Amz-Expires"] == ["61"]
+    assert query["X-Amz-Expires"] == ["301"]
     assert query["X-Amz-Credential"][0].startswith("data/20261119/us-east-1/s3/")
     assert query["X-Amz-SignedHeaders"] == ["host"]
     missing = service.client.get(
@@ -282,7 +282,7 @@ def test_the_control_service_receives_the_access_plan_of_a_members_project(
     }
     for item in plan["objects"]:
         assert "/hw-project-demo/datasets/synthetic-cohort/" in item["url"]
-        assert datetime.fromisoformat(item["expires_at"]) == _NOW + timedelta(seconds=61)
+        assert datetime.fromisoformat(item["expires_at"]) == _NOW + timedelta(seconds=301)
     assert Plan.model_validate(plan).content_sha256 == plan["content_sha256"]
 
 
@@ -337,6 +337,8 @@ def _store(objects: dict[str, bytes], status: int = 200) -> httpx.Client:
 
 
 def test_copy_writes_verified_objects_readable_by_every_user(tmp_path: Path) -> None:
+    # The volume's root belongs to another user, so the copy leaves its mode alone.
+    tmp_path.chmod(0o777)
     (tmp_path / "lost+found").mkdir()
     (tmp_path / "leftover").write_text("from a failed job")
     copy(_copy_plan(_CONTENT), _store(_CONTENT), tmp_path)
@@ -345,6 +347,7 @@ def test_copy_writes_verified_objects_readable_by_every_user(tmp_path: Path) -> 
     assert written.stat().st_mode & 0o777 == 0o644
     assert (tmp_path / "synthetic-cohort").stat().st_mode & 0o777 == 0o755
     assert sorted(path.name for path in tmp_path.iterdir()) == ["lost+found", "synthetic-cohort"]
+    assert tmp_path.stat().st_mode & 0o777 == 0o777
 
 
 @pytest.mark.parametrize(
