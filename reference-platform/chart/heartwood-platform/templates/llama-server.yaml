@@ -1,0 +1,188 @@
+{{- /*
+This source file is part of the Heartwood open-source project
+
+SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+
+SPDX-License-Identifier: MIT
+*/ -}}
+
+{{- /*
+The local model runtime of the model route. llama-server serves HTTPS with a certificate
+of the platform CA, which LiteLLM verifies, and requires its API key, which only LiteLLM
+holds. Its health and model list answer without the key; the network policy admits only
+LiteLLM.
+*/ -}}
+{{- if .Values.inference.localModel.enabled }}
+{{- $local := .Values.inference.localModel -}}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: llama-server
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+type: Opaque
+data:
+  api-key: {{ include "heartwood.credential" (dict "context" . "name" "llama-server" "key" "api-key") }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: llama-server
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "heartwood.selector" (dict "context" . "component" "llama-server") | nindent 4 }}
+  ports:
+    - name: https
+      port: 8443
+      targetPort: https
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llama-server
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "heartwood.selector" (dict "context" . "component" "llama-server") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "heartwood.selector" (dict "context" . "component" "llama-server") | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        {{- include "heartwood.podSecurityContext" 10001 | nindent 8 }}
+      initContainers:
+        # The weights are not in the image: they are downloaded and checked at each start.
+        - name: model
+          image: {{ required "images.modelRuntime must name the runtime image by digest" .Values.images.modelRuntime }}
+          command:
+            - /bin/sh
+            - -c
+            - >-
+              curl --fail --silent --show-error --location --proto =https --max-filesize 4294967296
+              --output /models/model.gguf "${MODEL_URL}"
+              && echo "${MODEL_SHA256}  /models/model.gguf" | sha256sum --check --strict --quiet
+          env:
+            - name: MODEL_URL
+              value: {{ required "inference.localModel.model.url is required" $local.model.url | quote }}
+            - name: MODEL_SHA256
+              value: {{ required "inference.localModel.model.sha256 is required" $local.model.sha256 | quote }}
+          securityContext:
+            {{- include "heartwood.containerSecurityContext" . | nindent 12 }}
+            readOnlyRootFilesystem: true
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          volumeMounts:
+            - name: models
+              mountPath: /models
+            - name: tmp
+              mountPath: /tmp
+      containers:
+        - name: llama-server
+          image: {{ .Values.images.modelRuntime }}
+          command: [/opt/llama.cpp/llama-server]
+          args:
+            - --model
+            - /models/model.gguf
+            - --alias
+            - {{ $local.alias | quote }}
+            - --host
+            - 0.0.0.0
+            - --port
+            - "8443"
+            - --ssl-key-file
+            - /etc/llama-server/tls/tls.key
+            - --ssl-cert-file
+            - /etc/llama-server/tls/tls.crt
+            # The key comes from a file, so it is in neither the pod's arguments nor its
+            # process list.
+            - --api-key-file
+            - /etc/llama-server/key/api-key
+            - --no-webui
+            - --ctx-size
+            - {{ $local.contextSize | quote }}
+            - --threads
+            - {{ $local.threads | quote }}
+          securityContext:
+            {{- include "heartwood.containerSecurityContext" . | nindent 12 }}
+            readOnlyRootFilesystem: true
+          ports:
+            - name: https
+              containerPort: 8443
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: https
+              scheme: HTTPS
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: {{ $local.resources.cpu | quote }}
+              memory: {{ $local.resources.memory | quote }}
+          volumeMounts:
+            - name: models
+              mountPath: /models
+              readOnly: true
+            - name: key
+              mountPath: /etc/llama-server/key
+              readOnly: true
+            - name: tls
+              mountPath: /etc/llama-server/tls
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: models
+          emptyDir:
+            sizeLimit: 8Gi
+        - name: key
+          secret:
+            secretName: llama-server
+        - name: tls
+          secret:
+            secretName: llama-server-tls
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+---
+# The runtime answers LiteLLM only.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: llama-server
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "heartwood.selector" (dict "context" . "component" "llama-server") | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "heartwood.selector" (dict "context" . "component" "litellm") | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 8443
+{{- end }}
