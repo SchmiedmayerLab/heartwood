@@ -63,6 +63,13 @@ def _stop(server: Server) -> None:
     while gateway_pods(server.browser.cluster, server.session) and time.monotonic() < deadline:
         time.sleep(3)
     assert not gateway_pods(server.browser.cluster, server.session)
+    # The Hub has finished stopping it, so the next start is not taken for the old server.
+    while time.monotonic() < deadline:
+        status, user = server.browser.hub_api("GET", f"/users/{FIRST}")
+        if status == 200 and "other" not in user.get("servers", {}):
+            return
+        time.sleep(3)
+    raise AssertionError("the Hub did not stop the server")
 
 
 def _sessions(server: Server) -> list[str]:
