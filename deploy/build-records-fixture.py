@@ -11,16 +11,20 @@ import hashlib
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import tarfile
 import urllib.request
+import zlib
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "images/worker/candidate/records.json"
 MAX_ARCHIVE = 50 * 1024 * 1024
+MAX_EXTRACTED = 1024 * 1024 * 1024
 
 
 def digest(path: Path) -> str:
@@ -28,23 +32,85 @@ def digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def source_archive(url: str, expected: str, cache: Path) -> bytes:
-    """Bound and verify downloads and cached bytes before extraction."""
+def tree_digest(root: Path) -> str:
+    """Identify an extracted tree by its paths, kinds, executable bits, contents and links.
+
+    This matches `_tree_digest` in `build-worker-candidate.py`.
+    """
+    entries: list[tuple[bytes, bytes, bytes]] = []
+    pending = [root]
+    while pending:
+        directory = pending.pop()
+        for child in directory.iterdir():
+            path = os.fsencode(child.relative_to(root).as_posix())
+            if child.is_symlink():
+                # The raw target, since `Path.readlink` normalizes it.
+                entries.append((path, b"symlink", os.fsencode(os.readlink(child))))  # noqa: PTH115
+            elif child.is_dir():
+                entries.append((path, b"directory", b""))
+                pending.append(child)
+            elif child.is_file():
+                kind = b"executable" if child.lstat().st_mode & 0o100 else b"file"
+                entries.append((path, kind, digest(child).encode()))
+            else:
+                raise ValueError("Records fixture source contains a special file")
+    # NUL cannot occur in a path or link target, so each record parses unambiguously.
+    return hashlib.sha256(
+        b"".join(b"\0".join(entry) + b"\0" for entry in sorted(entries))
+    ).hexdigest()
+
+
+def source_checkout(source: dict[str, Any], staging: Path, cache: Path) -> tuple[Path, bytes]:
+    """Bound downloads and cached bytes, then verify the extracted tree before use.
+
+    GitHub generates revision archives on request and does not keep their bytes stable,
+    so the reviewed digest covers the extracted content instead of the archive.
+    """
+    expected = source["tree_sha256"]
+    if not re.fullmatch(r"[0-9a-f]{64}", expected):
+        raise ValueError("Records fixture source digest must be a SHA-256 hex digest")
     path = cache / (expected + ".tar.gz")
     if path.exists():
         with path.open("rb") as stream:
             content = stream.read(MAX_ARCHIVE + 1)
     else:
-        with urllib.request.urlopen(url, timeout=60) as response:
+        with urllib.request.urlopen(source["url"], timeout=60) as response:
             content = response.read(MAX_ARCHIVE + 1)
-    if len(content) > MAX_ARCHIVE or hashlib.sha256(content).hexdigest() != expected:
-        raise ValueError("Records fixture source digest or size mismatch")
+    if len(content) > MAX_ARCHIVE:
+        raise ValueError("Records fixture source exceeds its size limit")
+    staging.mkdir(parents=True)
+    extracted = 0
+
+    def admit(member: tarfile.TarInfo, destination: str) -> tarfile.TarInfo | None:
+        nonlocal extracted
+        extracted += member.size
+        if member.islnk() or extracted > MAX_EXTRACTED:
+            raise tarfile.FilterError(member)
+        return tarfile.data_filter(member, destination)
+
+    try:
+        with tarfile.open(fileobj=io.BytesIO(content), mode="r:gz") as bundle:
+            bundle.extractall(staging, filter=admit)
+    except (tarfile.TarError, EOFError, zlib.error) as error:
+        # The data filter also refuses paths and links that leave the staging directory.
+        raise ValueError("Records fixture source is unsafe or unreadable") from error
+    # The root directory's name follows the repository name, which can change.
+    roots = list(staging.iterdir())
+    if (
+        len(roots) != 1
+        or roots[0].is_symlink()
+        or not roots[0].is_dir()
+        or tree_digest(roots[0]) != expected
+    ):
+        raise ValueError("Records fixture source digest mismatch")
+    # A fixed name keeps the unverified root name out of build paths and mounts.
+    checkout = roots[0].rename(staging / "checkout")
     if not path.exists():
         with TemporaryDirectory(dir=cache) as temporary:
             staged = Path(temporary) / "download"
             staged.write_bytes(content)
             staged.replace(path)
-    return content
+    return checkout, content
 
 
 def build(output: Path, cache: Path) -> None:
@@ -82,12 +148,7 @@ def build(output: Path, cache: Path) -> None:
     with TemporaryDirectory(prefix="records-build-", dir=output) as temporary:
         staging = Path(temporary)
         for name, source in manifest["sources"].items():
-            archive = source_archive(source["url"], source["sha256"], cache / "archives")
-            with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz") as bundle:
-                bundle.extractall(staging, filter="data")
-            checkout = staging / source["directory"]
-            if not checkout.is_dir():
-                raise ValueError("Records source archive root is missing")
+            checkout, archive = source_checkout(source, staging / name, cache / "archives")
             for notice in source["notices"]:
                 shutil.copyfile(checkout / notice, output / f"{notice}.{name}")
             (output / f"{name}-source.tar.gz").write_bytes(archive)
