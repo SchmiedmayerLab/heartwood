@@ -108,6 +108,7 @@ EXPECTED_CASES = {
             "test_kubernetes_admission_refuses_another_supervisor_image",
             "test_kubernetes_admission_refuses_an_added_network_policy",
             "test_kubernetes_staging_requires_the_default_deny_policy",
+            "test_kubernetes_staging_name_workspace_creates_no_pod",
             "test_kubernetes_staging_transfers_a_large_input_within_the_request_limit",
             "test_kubernetes_lost_creation_reply_is_revoked_during_provisioning",
             "test_kubernetes_revoked_worker_is_replaced_for_the_next_command",

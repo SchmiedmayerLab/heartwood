@@ -292,6 +292,11 @@ RBAC cannot name namespaces that are created at run time, so ValidatingAdmission
 - A volume claim is named `hw-attempt-*`, uses the StorageClass `heartwood-attempt` and names no data source, volume or selector.
 - An exec session opens only into pods named `hw-staging-*`. Attach and port-forward requests are denied.
 
+`heartwood-staging-names` applies to the pods and Sandbox resources that a ServiceAccount creates in a namespace that carries the label `heartwood.platform/session`:
+a pod or Sandbox resource whose name, or generated name, begins with `hw-staging` is admitted only from a ServiceAccount `hw-gw-*` in `heartwood-sessions`.
+A Heartwood gateway may open exec sessions into pods named `hw-staging-*`, so no other component, such as the OpenShell gateway or the Agent Sandbox controller for an OpenShell workspace of that name, creates a pod under such a name.
+Requests of users other than ServiceAccounts, such as a cluster administrator, are outside the policy.
+
 `sessions.stagingImages` lists the worker images of the sessions' deployment manifests; during a change of the worker image it lists the current and the next image, and an empty list denies every pod.
 
 `heartwood-session-services` applies to every Service in a namespace that carries the label `heartwood.platform/session`:

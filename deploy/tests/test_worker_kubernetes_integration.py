@@ -12,6 +12,7 @@ the gateway, pod admission, staging into volume claims and deletion through the 
 
 from __future__ import annotations
 
+import contextlib
 import http.client
 import json
 import os
@@ -1033,6 +1034,70 @@ def test_kubernetes_repeated_creation_is_not_executed_after_revocation(
         )
     finally:
         native._stop(application)
+
+
+def test_kubernetes_staging_name_workspace_creates_no_pod(
+    infrastructure: KubernetesFixture,
+) -> None:
+    """A sandbox in a workspace with a staging name never gets a pod of that name."""
+    from openshell import WorkspaceClient
+    from openshell._proto import openshell_pb2 as pb
+
+    fixture = infrastructure
+    # The gateway's client certificate can create a workspace; its sandboxes would carry
+    # the workspace name, which the gateway's credential may open exec sessions into.
+    workspace, name = "hw-staging-q", "case"
+    workspaces = WorkspaceClient.from_sandbox_client(fixture.control)
+    workspaces.create(workspace)
+    labels = {"heartwood.project": fixture.identity, "heartwood.attempt": name}
+    refusal: str | None = None
+    try:
+        try:
+            fixture.control.create(
+                workspace=workspace,
+                name=name,
+                labels=labels,
+                spec=pb.SandboxSpec(
+                    template=pb.SandboxTemplate(
+                        image=fixture.worker,
+                        resources={"limits": {"cpu": "1", "memory": "2Gi"}},
+                        labels={**labels, "heartwood.role": "worker"},
+                    ),
+                    policy=fixture.policy,
+                    command=[PYTHON, "-I", "-c", "import time; time.sleep(600)"],
+                ),
+            )
+        except grpc.RpcError as error:
+            refusal = error.code().name
+        staged: list[str] = []
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            listed = json.loads(
+                fixture.outside("get", "sandboxes.agents.x-k8s.io,pods", "--output=json")
+            )
+            staged = [
+                f"{item['kind']}/{item['metadata']['name']}"
+                for item in listed["items"]
+                if item["metadata"]["name"].startswith("hw-staging")
+            ]
+            assert staged == []
+            time.sleep(2)
+    finally:
+        with contextlib.suppress(grpc.RpcError):
+            fixture.control.delete(
+                name, workspace=workspace, allow_missing=True, timeout_seconds=90
+            )
+        with contextlib.suppress(grpc.RpcError):
+            workspaces.delete(workspace, allow_missing=True)
+    _evidence(
+        fixture,
+        {
+            "drill_id": "kubernetes-staging-name.v1",
+            "workspace": workspace,
+            "creation_refusal": refusal,
+            "objects_named_hw_staging": staged,
+        },
+    )
 
 
 def _refused_launch(

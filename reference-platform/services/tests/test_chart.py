@@ -206,7 +206,13 @@ def test_control_service_reads_the_platform_ca_certificate(objects: list[dict[st
 
 
 @pytest.mark.parametrize(
-    "name", ["heartwood-control-scope", "heartwood-staging-shape", "heartwood-session-services"]
+    "name",
+    [
+        "heartwood-control-scope",
+        "heartwood-staging-shape",
+        "heartwood-staging-names",
+        "heartwood-session-services",
+    ],
 )
 def test_admission_policies_fail_closed_and_deny(objects: list[dict[str, Any]], name: str) -> None:
     assert _named(objects, "ValidatingAdmissionPolicy", name)["spec"]["failurePolicy"] == "Fail"
@@ -616,3 +622,17 @@ def test_the_operator_account_may_only_rotate_client_secrets(
     operator = "system:serviceaccount:heartwood-platform:heartwood-operator"
     assert configuration["operator_callers"] == [operator]
     assert operator not in configuration["service_callers"]
+
+
+def test_staging_names_are_left_to_the_gateway_accounts_of_the_sessions_namespace(
+    objects: list[dict[str, Any]],
+) -> None:
+    policy = _named(objects, "ValidatingAdmissionPolicy", "heartwood-staging-names")["spec"]
+    selector = policy["matchConstraints"]["namespaceSelector"]
+    assert selector == {
+        "matchExpressions": [{"key": "heartwood.platform/session", "operator": "Exists"}]
+    }
+    (rule,) = policy["validations"]
+    assert rule["expression"] == (
+        "request.userInfo.username.startsWith('system:serviceaccount:heartwood-sessions:hw-gw-')"
+    )
