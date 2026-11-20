@@ -13,6 +13,7 @@ the gateway, pod admission, staging into volume claims and deletion through the 
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import http.client
 import json
 import os
@@ -1107,7 +1108,9 @@ def test_kubernetes_staging_name_workspace_creates_no_pod(
 
 
 def _refused_launch(
-    fixture: KubernetesFixture, method: str, **deployment: str
+    fixture: KubernetesFixture,
+    method: str,
+    **deployment: Any,  # noqa: ANN401
 ) -> tuple[SessionService, str, list[str]]:
     """Run one launch that the adapter must refuse, and return why it did."""
     refusals: list[str] = []
@@ -1439,3 +1442,177 @@ def test_kubernetes_migrated_project_serves_through_the_operator_manifest(
     infrastructure: KubernetesFixture,
 ) -> None:
     lifecycle.test_native_migrated_project_serves_through_the_operator_manifest(infrastructure)
+
+
+# The session's project data volume, as the control service declared it to the gateway.
+_LAUNCH = Path("/qualification/gateway/launch.json")
+_DATA_MARKER = "Synthetic project data check."
+# Lists every file of the volume with its size and checksum, then tries three writes.
+_DATA_PROBE = """import hashlib,json,os
+from pathlib import Path
+root=Path('/data')
+files={p.relative_to(root).as_posix():[p.stat().st_size,hashlib.sha256(p.read_bytes()).hexdigest()]
+ for p in sorted(root.rglob('*')) if p.is_file()}
+writes={}
+for name,write in (('new-file',lambda:(root/'written').write_text('x')),
+ ('existing-file',lambda:open(next(p for p in root.rglob('*') if p.is_file()),'a').close()),
+ ('new-directory',lambda:(root/'directory').mkdir())):
+    try:
+        write();writes[name]='written'
+    except OSError as error:
+        writes[name]=os.strerror(error.errno)
+print(json.dumps({'files':files,'writes':writes}))
+"""
+
+
+def _project_data() -> dict[str, str]:
+    launch = json.loads(_LAUNCH.read_text())
+    volume = launch["project_data"]
+    return {
+        "claim_name": volume["claim_name"],
+        "claim_uid": volume["claim_uid"],
+        "project": launch["project"],
+        "content_sha256": volume["content_sha256"],
+        "mount_path": volume["mount_path"],
+    }
+
+
+def _content_sha256(files: dict[str, list[Any]]) -> str:
+    """The platform's content digest of a volume: identifier, path, size and checksum."""
+    manifest = sorted(
+        (
+            {"id": path.replace("/", ".", 1), "path": path, "size": size, "sha256": sha256}
+            for path, (size, sha256) in files.items()
+        ),
+        key=lambda item: str(item["path"]),
+    )
+    return hashlib.sha256(
+        json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def test_kubernetes_project_data_is_read_only_at_its_declared_path(
+    infrastructure: KubernetesFixture,
+) -> None:
+    """The worker reads the platform's copy of the project data, and every write fails."""
+    fixture = infrastructure
+    declared = _project_data()
+    fixture.provider.scripts[_DATA_MARKER] = [
+        ("terminal", {"command": "wc -l /data/synthetic-cohort/participants.csv"}),
+        ("finish", {"message": "Synthetic project data read."}),
+    ]
+    settings = fixture.deployment(WorkerInputManifest(files=()), project_data=declared)
+    application = native._application(fixture, deployment=settings)
+    service = application._service("composition")
+    try:
+        native._submit(application, CommandKind.CHAT, {"prompt": _DATA_MARKER})
+        attempt_id, worker = lifecycle._worker(application)
+        attempt = service.worker_attempt()
+        assert attempt is not None
+        input_identity = attempt.intent.input_manifest_sha256
+        lifecycle._approve(application, lifecycle._pending(application, tool="terminal"))
+        lifecycle._settle(application)
+        (execution,) = lifecycle._executions(application)
+        assert execution["exit_code"] == 0, execution
+        observation = fixture.exec(worker, [PYTHON, "-I", "-B", "-c", _DATA_PROBE])
+        assert observation.exit_code == 0, observation.stderr
+        observed = json.loads(observation.stdout)
+        # The bytes the worker reads are the content the platform declared.
+        assert observed["files"]
+        assert _content_sha256(observed["files"]) == declared["content_sha256"]
+        assert observed["writes"] == dict.fromkeys(
+            ("new-file", "existing-file", "new-directory"), "Read-only file system"
+        )
+        (record,) = json.loads((fixture.output / WORKER_PODS).read_text())
+        admitted = record["admission"]["project_data"]
+        assert {key: admitted[key] for key in ("claim_name", "claim_uid", "project")} == {
+            key: declared[key] for key in ("claim_name", "claim_uid", "project")
+        }
+        assert admitted["content_sha256"] == declared["content_sha256"]
+        (pod,) = [
+            item
+            for item in json.loads(fixture.outside("get", "pods", "--output=json"))["items"]
+            if item["metadata"]["name"] == f"{WORKSPACE}--{worker}"
+        ]
+        (volume,) = [item for item in pod["spec"]["volumes"] if item["name"] == "project-data"]
+        mounts = [
+            mount
+            for container in pod["spec"]["containers"] + pod["spec"]["initContainers"]
+            for mount in container.get("volumeMounts", [])
+            if mount["name"] == "project-data"
+        ]
+    finally:
+        native._stop(application)
+    _settled(service, "revoked")
+    # The claim stays for the next worker of the session.
+    claim = json.loads(
+        fixture.outside("get", "persistentvolumeclaim", declared["claim_name"], "--output=json")
+    )
+    assert claim["metadata"]["uid"] == declared["claim_uid"]
+    _evidence(
+        fixture,
+        {
+            "drill_id": "kubernetes-project-data.v1",
+            "attempt_id": attempt_id,
+            "declared": declared,
+            "admission": admitted,
+            "volume": volume,
+            "mounts": mounts,
+            "worker_files": observed["files"],
+            "worker_writes": observed["writes"],
+            "input_manifest_sha256": input_identity,
+        },
+    )
+
+
+def _attached(change: str) -> Any:  # noqa: ANN401
+    """The adapter's driver configuration with the project data attached otherwise."""
+    original = KubernetesWorkerVolumes.driver_config
+
+    def changed(volumes: KubernetesWorkerVolumes) -> dict[str, Any]:
+        config = original(volumes)
+        for item in config["volumes"]:
+            if item["name"] == "project-data" and change == "writable":
+                item["persistent_volume_claim"]["read_only"] = False
+        for mount in config["containers"]["agent"]["volume_mounts"]:
+            if mount["name"] == "project-data":
+                if change == "writable":
+                    mount["read_only"] = False
+                else:
+                    mount["mount_path"] = "/project-data"
+        return config
+
+    return changed
+
+
+@pytest.mark.parametrize("change", ["writable", "another-project", "undeclared-path"])
+def test_kubernetes_admission_refuses_project_data_out_of_its_declaration(
+    infrastructure: KubernetesFixture, monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+    fixture = infrastructure
+    declared = _project_data()
+    if change == "another-project":
+        declared["project"] = "other"
+        refusal = "native project data volume belongs to another project"
+    else:
+        monkeypatch.setattr(KubernetesWorkerVolumes, "driver_config", _attached(change))
+        refusal = "native project data volume is not mounted read-only at its declared path"
+    service, attempt_id, refusals = _refused_launch(
+        fixture, "inspect_worker", project_data=declared
+    )
+    assert refusals == [refusal]
+    _settled(service, "revoked")
+    (record,) = json.loads((fixture.output / WORKER_PODS).read_text())
+    _evidence(
+        fixture,
+        {
+            "drill_id": "kubernetes-admission-project-data.v1",
+            "change": change,
+            "attempt_id": attempt_id,
+            "refusal": refusals[0],
+            "declared": declared,
+            "admission": record["admission"],
+            "objects_after_revocation": fixture.objects(),
+            "provider_requests": 0,
+        },
+    )
