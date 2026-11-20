@@ -205,14 +205,7 @@ def _copy_pod(cluster: Cluster, namespace: str, image: str) -> Iterator[str]:
         (item,) = pod["items"]
         yield str(item["metadata"]["name"])
     finally:
-        cluster.kubectl(
-            "delete",
-            f"--namespace={namespace}",
-            f"job/{name}",
-            "--cascade=foreground",
-            "--wait",
-            actor=CONTROL,
-        )
+        cluster.kubectl("delete", f"--namespace={namespace}", f"job/{name}", "--wait")
 
 
 def _run(cluster: Cluster, namespace: str, pod: str, *command: str) -> tuple[int, str]:

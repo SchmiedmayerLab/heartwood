@@ -280,11 +280,17 @@ class ProjectData:
         return max(60, int((latest - now).total_seconds()))
 
     def _remove_copy(self, namespace: str, name: str) -> None:
-        """Delete the copy job and its pods, then its plan, and wait until the job is gone."""
-        self._kubernetes.delete("Job", name, namespace, propagation="Foreground")
+        """Delete the copy job, its plan and its pods, and wait until none of them is left.
+
+        The job is deleted in the background and its pods are awaited by its label, which
+        does not depend on the garbage collector finishing a foreground deletion.
+        """
+        self._kubernetes.delete("Job", name, namespace, propagation="Background")
         self._kubernetes.delete("Secret", name, namespace)
         deadline = self._clock() + 120
-        while self._kubernetes.get("Job", name, namespace) is not None:
+        while self._kubernetes.get("Job", name, namespace) is not None or self._kubernetes.list(
+            "Pod", namespace, f"job-name={name}"
+        ):
             if self._clock() >= deadline:
                 raise SessionError("an earlier project data copy is still being removed")
             self._sleep(1.0)

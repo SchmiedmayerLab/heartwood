@@ -139,7 +139,7 @@ def test_a_successful_copy_makes_the_claim_attachable_and_removes_the_job(
     assert not fixture.kubernetes.kind("Secret", _NAMESPACE)
     job_deletions = [d for d in fixture.kubernetes.deletions if d[0].startswith(_JOBS)]
     assert job_deletions
-    assert all(policy == "Foreground" for _, policy in job_deletions)
+    assert all(policy == "Background" for _, policy in job_deletions)
     (request,) = fixture.data.requests
     assert request.headers["Authorization"] == "Bearer control-data-token"
     assert json.loads(request.content) == {"subject": "researcher-1", "project": "demo"}

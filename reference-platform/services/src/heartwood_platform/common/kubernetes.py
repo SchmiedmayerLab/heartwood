@@ -45,6 +45,7 @@ _RESOURCES = {
     "Namespace": ("/api/v1", "namespaces", False),
     "ConfigMap": ("/api/v1", "configmaps", True),
     "PersistentVolumeClaim": ("/api/v1", "persistentvolumeclaims", True),
+    "Pod": ("/api/v1", "pods", True),
     "LimitRange": ("/api/v1", "limitranges", True),
     "ResourceQuota": ("/api/v1", "resourcequotas", True),
     "Secret": ("/api/v1", "secrets", True),
