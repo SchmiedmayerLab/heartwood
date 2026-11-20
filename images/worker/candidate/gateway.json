@@ -4,8 +4,7 @@
   "version": "0.1.8+heartwood.3",
   "source": {
     "url": "https://codeload.github.com/NVIDIA/OpenShell/tar.gz/f3d976590d3eb1379690a2abaf0f0e26c21d487d",
-    "sha256": "a89136244db8b5ef693ce48eeb7d1dc819df3b6fa91022172428db1351683ab8",
-    "directory": "OpenShell-f3d976590d3eb1379690a2abaf0f0e26c21d487d",
+    "tree_sha256": "e16ba93b689d0ab3ac51fdbc9d8b5521afec623cd350067403a629368738b2f7",
     "revision": "f3d976590d3eb1379690a2abaf0f0e26c21d487d"
   },
   "patches": [
