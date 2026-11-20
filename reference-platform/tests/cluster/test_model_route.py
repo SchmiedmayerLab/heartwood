@@ -216,12 +216,29 @@ def test_a_key_beyond_its_budget_is_refused_and_its_spending_is_recorded(proxy: 
     assert proxy.chat(key)[0] == 401
 
 
+def _launch(proxy: Proxy) -> dict[str, Any]:
+    """Launch the first researcher's session of demo; a launch can be repeated."""
+    for _ in range(3):
+        try:
+            status, launch = request(
+                proxy.cluster,
+                proxy.pod,
+                "PUT",
+                launch_url(FIRST, "demo"),
+                spawner_token(proxy.cluster),
+            )
+        except AssertionError:
+            # The request ended after its time limit while the session's gateway started.
+            continue
+        assert status == 200, launch
+        assert isinstance(launch, dict)
+        return launch
+    raise AssertionError("the launch did not complete")
+
+
 @pytest.fixture(scope="module")
 def launched(proxy: Proxy) -> Iterator[dict[str, Any]]:
-    status, launch = request(
-        proxy.cluster, proxy.pod, "PUT", launch_url(FIRST, "demo"), spawner_token(proxy.cluster)
-    )
-    assert status == 200, launch
+    launch = _launch(proxy)
     try:
         yield launch
     finally:
@@ -265,14 +282,7 @@ def test_a_relaunch_replaces_the_discovery_key(proxy: Proxy, launched: dict[str,
     first = secret(proxy.cluster, SESSIONS, account, "model-discovery-key")
 
     def relaunch() -> str:
-        status, _ = request(
-            proxy.cluster,
-            proxy.pod,
-            "PUT",
-            launch_url(FIRST, "demo"),
-            spawner_token(proxy.cluster),
-        )
-        assert status == 200
+        _launch(proxy)
         return secret(proxy.cluster, SESSIONS, account, "model-discovery-key")
 
     second = relaunch()
