@@ -1309,6 +1309,60 @@ def test_kubernetes_cancellation_settles_without_repeating_the_effect(
     lifecycle.test_native_cancellation_settles_without_repeating_the_effect(infrastructure)
 
 
+# Fills memory past the container's limit, so the kernel ends the workload container.
+_EXHAUST_MEMORY = "chunks = []\nwhile True:\n    chunks.append(b'x' * (64 * 1024 * 1024))\n"
+
+
+def test_kubernetes_worker_container_is_never_restarted(
+    infrastructure: KubernetesFixture,
+) -> None:
+    """A workload container that ends stays ended, so its writable layer ends with the worker."""
+    from openshell._proto import openshell_pb2 as pb
+
+    fixture = infrastructure
+    name, sandbox_id = fixture.create_probe(fixture.worker, memory="512Mi")
+    pod = f"{WORKSPACE}--{name}"
+    try:
+        ready = fixture.control.wait_ready(name, workspace=WORKSPACE, timeout_seconds=240)
+        assert ready.id == sandbox_id
+        written = fixture.exec(name, ["/bin/sh", "-c", "printf written > /workspace/probe"])
+        assert written.exit_code == 0, written.stderr
+        spec = json.loads(fixture.outside("get", "pod", pod, "--output=json"))["spec"]
+        assert spec["restartPolicy"] == "Never"
+        with contextlib.suppress(grpc.RpcError):
+            fixture.exec(name, [PYTHON, "-I", "-c", _EXHAUST_MEMORY], timeout=120)
+        agent: dict[str, Any] = {}
+        deadline = time.monotonic() + 180
+        while time.monotonic() < deadline:
+            status = json.loads(fixture.outside("get", "pod", pod, "--output=json"))["status"]
+            (agent,) = [item for item in status["containerStatuses"] if item["name"] == "agent"]
+            if "terminated" in agent["state"]:
+                break
+            time.sleep(2)
+        assert "terminated" in agent["state"], agent
+        # The container stays ended, and the gateway no longer reports the sandbox ready.
+        time.sleep(30)
+        status = json.loads(fixture.outside("get", "pod", pod, "--output=json"))["status"]
+        (agent,) = [item for item in status["containerStatuses"] if item["name"] == "agent"]
+        assert agent["restartCount"] == 0, agent
+        assert "terminated" in agent["state"], agent
+        phase = fixture.control.get(name, workspace=WORKSPACE).phase
+        assert phase != pb.SANDBOX_PHASE_READY, phase
+        _evidence(
+            fixture,
+            {
+                "drill_id": "kubernetes-worker-container-lifetime.v1",
+                "sandbox_id": sandbox_id,
+                "restart_policy": spec["restartPolicy"],
+                "agent_termination": agent["state"]["terminated"].get("reason"),
+                "agent_restarts": agent["restartCount"],
+                "sandbox_phase_after": phase,
+            },
+        )
+    finally:
+        fixture.revoke_probes()
+
+
 _SYMLINK_PROBE = """import json,os
 from pathlib import Path
 workspace,link=Path('/workspace'),Path('/workspace-link')
