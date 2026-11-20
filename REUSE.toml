@@ -74,6 +74,19 @@ precedence = "aggregate"
 SPDX-FileCopyrightText = ["2025-2026 NVIDIA CORPORATION & AFFILIATES", "2026 Stanford University and the project authors (see CONTRIBUTORS.md)"]
 SPDX-License-Identifier = "Apache-2.0"
 
+[[annotations]]
+path = ["reference-platform/images/funnel/funnel.json"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Stanford University and the project authors (see CONTRIBUTORS.md)"
+SPDX-License-Identifier = "MIT"
+
+# Changes to Funnel, which is MIT-licensed.
+[[annotations]]
+path = ["reference-platform/images/funnel/0001-optional-tls-for-server-listeners-and-rpc-client.patch", "reference-platform/images/funnel/0002-per-task-worker-credentials.patch"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = ["2017 Oregon Health and Science University Computational Biology", "2026 Stanford University and the project authors (see CONTRIBUTORS.md)"]
+SPDX-License-Identifier = "MIT"
+
 # The built-in client scopes of the pinned Keycloak release, as it exports them.
 [[annotations]]
 path = ["reference-platform/chart/heartwood-platform/files/keycloak-client-scopes.json"]
