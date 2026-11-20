@@ -37,10 +37,9 @@ spec:
   matchConditions:
     - name: service-account
       expression: request.userInfo.username.startsWith('system:serviceaccount:')
+    # The API server fills in a generated name before validating admission.
     - name: staging-name
-      expression: >-
-        (has(object.metadata.name) && object.metadata.name.startsWith('hw-staging'))
-        || (has(object.metadata.generateName) && object.metadata.generateName.startsWith('hw-staging'))
+      expression: has(object.metadata.name) && object.metadata.name.startsWith('hw-staging')
   validations:
     - expression: >-
         request.userInfo.username.startsWith('system:serviceaccount:{{ .Values.sessions.namespace }}:hw-gw-')

@@ -294,7 +294,12 @@ def session(cluster: Cluster, probe_image: str) -> Iterator[None]:
         ],
     }
     writers_binding = _binding(
-        "pod-and-sandbox-writers", _account("openshell", _NAMESPACE), name="writers"
+        "pod-and-sandbox-writers",
+        _account("openshell", _NAMESPACE),
+        # Accounts that only look like a gateway account, for the namespace part of the rule.
+        _account("hw-gw-policytest", _NAMESPACE),
+        _account("other", "heartwood-sessions"),
+        name="writers",
     )
     writers_binding["roleRef"]["kind"] = "Role"
     # A Role without rules, which authorization lets anyone bind.
@@ -1132,6 +1137,18 @@ def test_staging_names_are_left_to_the_gateway_accounts(
             "openshell-staging-pod-generated-name",
             _OPENSHELL_ACTOR,
             _changed(_changed(pod, "metadata.name"), "metadata.generateName", "hw-staging-"),
+            _STAGING_NAME,
+        ),
+        (
+            "gateway-name-in-the-session-namespace",
+            f"system:serviceaccount:{_NAMESPACE}:hw-gw-policytest",
+            pod,
+            _STAGING_NAME,
+        ),
+        (
+            "other-account-in-the-sessions-namespace",
+            "system:serviceaccount:heartwood-sessions:other",
+            pod,
             _STAGING_NAME,
         ),
         (

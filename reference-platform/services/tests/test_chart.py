@@ -632,6 +632,19 @@ def test_staging_names_are_left_to_the_gateway_accounts_of_the_sessions_namespac
     assert selector == {
         "matchExpressions": [{"key": "heartwood.platform/session", "operator": "Exists"}]
     }
+    assert policy["matchConstraints"]["resourceRules"] == [
+        {"apiGroups": [""], "apiVersions": ["*"], "operations": ["CREATE"], "resources": ["pods"]},
+        {
+            "apiGroups": ["agents.x-k8s.io"],
+            "apiVersions": ["*"],
+            "operations": ["CREATE"],
+            "resources": ["sandboxes"],
+        },
+    ]
+    assert [condition["name"] for condition in policy["matchConditions"]] == [
+        "service-account",
+        "staging-name",
+    ]
     (rule,) = policy["validations"]
     assert rule["expression"] == (
         "request.userInfo.username.startsWith('system:serviceaccount:heartwood-sessions:hw-gw-')"

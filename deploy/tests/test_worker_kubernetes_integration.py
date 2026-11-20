@@ -1051,6 +1051,7 @@ def test_kubernetes_staging_name_workspace_creates_no_pod(
     workspaces.create(workspace)
     labels = {"heartwood.project": fixture.identity, "heartwood.attempt": name}
     refusal: str | None = None
+    refusal_details = ""
     try:
         try:
             fixture.control.create(
@@ -1068,7 +1069,7 @@ def test_kubernetes_staging_name_workspace_creates_no_pod(
                 ),
             )
         except grpc.RpcError as error:
-            refusal = error.code().name
+            refusal, refusal_details = error.code().name, str(error.details())
         staged: list[str] = []
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
@@ -1078,7 +1079,7 @@ def test_kubernetes_staging_name_workspace_creates_no_pod(
             staged = [
                 f"{item['kind']}/{item['metadata']['name']}"
                 for item in listed["items"]
-                if item["metadata"]["name"].startswith("hw-staging")
+                if item["metadata"]["name"].startswith(workspace)
             ]
             assert staged == []
             time.sleep(2)
@@ -1089,12 +1090,17 @@ def test_kubernetes_staging_name_workspace_creates_no_pod(
             )
         with contextlib.suppress(grpc.RpcError):
             workspaces.delete(workspace, allow_missing=True)
+    # The driver creates the Sandbox resource during the creation request, so the admission
+    # policy's refusal is the request's error.
+    assert refusal is not None
+    assert "heartwood-staging-names" in refusal_details, refusal_details
     _evidence(
         fixture,
         {
             "drill_id": "kubernetes-staging-name.v1",
             "workspace": workspace,
             "creation_refusal": refusal,
+            "creation_refusal_details": refusal_details,
             "objects_named_hw_staging": staged,
         },
     )
