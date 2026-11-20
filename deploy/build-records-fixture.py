@@ -24,6 +24,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "images/worker/candidate/records.json"
 MAX_ARCHIVE = 50 * 1024 * 1024
+MAX_EXTRACTED = 1024 * 1024 * 1024
 
 
 def digest(path: Path) -> str:
@@ -78,9 +79,18 @@ def source_checkout(source: dict[str, Any], staging: Path, cache: Path) -> tuple
     if len(content) > MAX_ARCHIVE:
         raise ValueError("Records fixture source exceeds its size limit")
     staging.mkdir(parents=True)
+    extracted = 0
+
+    def admit(member: tarfile.TarInfo, destination: str) -> tarfile.TarInfo | None:
+        nonlocal extracted
+        extracted += member.size
+        if member.islnk() or extracted > MAX_EXTRACTED:
+            raise tarfile.FilterError(member)
+        return tarfile.data_filter(member, destination)
+
     try:
         with tarfile.open(fileobj=io.BytesIO(content), mode="r:gz") as bundle:
-            bundle.extractall(staging, filter="data")
+            bundle.extractall(staging, filter=admit)
     except (tarfile.TarError, EOFError, zlib.error) as error:
         # The data filter also refuses paths and links that leave the staging directory.
         raise ValueError("Records fixture source is unsafe or unreadable") from error
@@ -93,7 +103,8 @@ def source_checkout(source: dict[str, Any], staging: Path, cache: Path) -> tuple
         or tree_digest(roots[0]) != expected
     ):
         raise ValueError("Records fixture source digest mismatch")
-    checkout = roots[0]
+    # A fixed name keeps the unverified root name out of build paths and mounts.
+    checkout = roots[0].rename(staging / "checkout")
     if not path.exists():
         with TemporaryDirectory(dir=cache) as temporary:
             staged = Path(temporary) / "download"
