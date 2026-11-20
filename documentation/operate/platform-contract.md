@@ -29,7 +29,7 @@ A schema describes a message; it does not enable a service, authorize a request,
 | [Agent isolation](#agent-isolation) of the complete worker | Current for the OpenShell Docker reference adapter; qualified only against the qualification-only sandbox gateway build |
 | [Controlled data](#controlled-data) controls | Selected read-only inputs current; quarantine and steward-approved release unavailable |
 | [Audit and records](#audit-and-records) | Signed checkpoints and deployment-bound evidence current; signer and records-service qualification is the platform's |
-| [Platform services](#platform-services) over MCP, outside operations, launch context and budgets | Draft; the content-bound [outside operation](#outside-operation-admission) authorization, [research MCP servers](#research-mcp-servers), [platform job operations](#platform-job-operations) and [planning against platform budgets](#planning-against-platform-budgets) are current, but built-in launchers install no planning service |
+| [Platform services](#platform-services) over MCP, outside operations, launch context and budgets | Draft; the content-bound [outside operation](#outside-operation-admission) authorization, [research MCP servers](#research-mcp-servers), [platform job operations](#platform-job-operations) and [planning against platform budgets](#planning-against-platform-budgets) are current; `heartwood gateway serve` installs a planning service only from a deployment manifest's `[planning]` table |
 | Verified OpenID Connect identity of one researcher per gateway, with `identity-proxy` ingress | Current, implemented and tested locally with a synthetic provider |
 | Launch of hosted per-project gateways by a platform | Unavailable |
 | Realtime voice | Unavailable |
@@ -507,7 +507,9 @@ There is one open release review per operation, denial is final for it, and an i
 
 A trusted Python embedding connects a planning service by passing `SessionGateway(platform_planning=PlatformPlanningBinding(launch, client))`.
 `launch` is the platform's launch context and `client` a `PlanningServiceClient`, such as `McpPlanningClient` for the MCP tools above.
-The gateway requires protected state for it, and `heartwood gateway serve` and the other built-in launchers install none.
+The gateway requires protected state for it.
+`heartwood gateway serve` installs a binding from a deployment manifest's [`[planning]` table](../reference/configuration.md#planning-service): the launch context comes from an operator file, and each call carries a token exchanged for the signed-in researcher's token.
+The other built-in launchers install none.
 Without a binding, the planning projection reports that planning is not offered, and every interface hides it.
 
 The gateway does the following and nothing more:

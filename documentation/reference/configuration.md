@@ -150,6 +150,7 @@ checkpoint_evidence = false
 | `[model_connections]`, `[model_metadata]` | Optional platform model connections and model declarations; see [Model Connections](#model-connections) |
 | `[[mcp_destinations]]` | Optional origins for research MCP servers; requires `[worker]`; see [MCP Destinations](#mcp-destinations) |
 | `[identity]` | Optional OpenID Connect client and researcher; required by `identity-proxy` ingress and refused with every other mode; see [Identity](#identity) |
+| `[planning]` | Optional planning service and platform launch context; requires `[identity]`; see [Planning Service](#planning-service) |
 
 Any other key, at any level, is rejected.
 The manifest must be an absolute path that traverses no symbolic link, lie outside the research directory and the state root, be a regular file of at most 64 KiB owned by root or the gateway user, and not be writable by group or others.
@@ -399,6 +400,32 @@ cancel_tool = "cancel_task"
 Each origin may appear once, and the section requires `[worker]`.
 Without the section, every research MCP server is refused.
 A changed destination list counts as a manifest change beyond its policy, which stops dispatch until the next start.
+
+### Planning Service
+
+The `[planning]` table connects the gateway to a platform planning service, which reports budgets and estimates for the [planning projection](../operate/platform-contract.md#planning-against-platform-budgets).
+
+```toml
+[planning]
+url = "https://control.platform.svc.cluster.local:8443/mcp"
+ca_file = "/etc/heartwood/deployment/platform-ca.crt"
+private_address = true
+launch_context_file = "/etc/heartwood/deployment/launch-context.json"
+
+[planning.token_exchange]
+scope = "svc-control"
+audience = "heartwood-control"
+```
+
+| Key | Requirement |
+|---|---|
+| `url` | HTTPS URL of the service's MCP endpoint, without credentials, query or fragment; no private address without `private_address`, and never a link-local or metadata address |
+| `ca_file` | Optional absolute PEM file of certificate authorities that replaces the default certificate bundle for the service; follows the [rules for operator files](#identity) and must load |
+| `private_address` | Optional; `true` permits an RFC 1918 or unique local address, such as a cluster service; default `false` |
+| `launch_context_file` | Absolute operator file with the `heartwood.platform-launch-context.v1` document the platform issued for this gateway |
+| `token_exchange` | Table with `scope` and `audience`; each call carries a token exchanged for the signed-in researcher's token |
+
+Without a live sign-in the planning service counts as unavailable, and an exchange the identity provider refuses counts as refused.
 
 ## Credential Binding Names
 

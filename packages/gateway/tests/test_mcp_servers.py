@@ -13,11 +13,9 @@ from the deterministic token issuer and accept the gateway's operation binding.
 from __future__ import annotations
 
 import asyncio
-import http.server
 import json
 import socket
 import ssl
-import subprocess
 import threading
 import uuid
 from collections.abc import Callable, Iterator
@@ -88,6 +86,7 @@ from heartwood.schemas import (
     PolicyProfile,
 )
 from heartwood.session import CommandKind, EventKind, SessionCommand
+from packages.gateway.tests.tls_fixtures import certificate_authority, https_server
 
 _AUDIENCE = "https://catalog.synthetic.invalid"
 _SERVICE_ID = "synthetic-catalog"
@@ -512,74 +511,11 @@ def test_connections_apply_the_destinations_opt_in(
     assert reached == ["https://catalog.platform.svc/mcp"]
 
 
-def _authority(directory: Path, name: str) -> tuple[Path, Path]:
-    """A test certificate authority: its certificate and key."""
-    certificate, key = directory / f"{name}.crt", directory / f"{name}.key"
-    subprocess.run(
-        [
-            "openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256",
-            "-nodes", "-days", "1", "-subj", f"/CN={name}",
-            "-addext", "basicConstraints=critical,CA:TRUE",
-            "-addext", "keyUsage=critical,keyCertSign",
-            "-keyout", str(key), "-out", str(certificate),
-        ],
-        check=True,
-        capture_output=True,
-    )  # fmt: skip
-    return certificate, key
-
-
-@contextmanager
-def _https_server(directory: Path, authority: tuple[Path, Path]) -> Iterator[int]:
-    """Serve 200 over HTTPS on 127.0.0.1 with a localhost certificate of ``authority``."""
-    key, request, certificate = (directory / name for name in ("tls.key", "tls.csr", "tls.crt"))
-    subprocess.run(
-        [
-            "openssl", "req", "-new", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256",
-            "-nodes", "-subj", "/CN=localhost", "-keyout", str(key), "-out", str(request),
-        ],
-        check=True,
-        capture_output=True,
-    )  # fmt: skip
-    extensions = directory / "tls.ext"
-    extensions.write_text("subjectAltName=DNS:localhost\n", encoding="utf-8")
-    subprocess.run(
-        [
-            "openssl", "x509", "-req", "-in", str(request), "-CA", str(authority[0]),
-            "-CAkey", str(authority[1]), "-days", "1", "-extfile", str(extensions),
-            "-out", str(certificate),
-        ],
-        check=True,
-        capture_output=True,
-    )  # fmt: skip
-
-    class Answer(http.server.BaseHTTPRequestHandler):
-        def do_GET(self) -> None:
-            self.send_response(200)
-            self.send_header("Content-Length", "0")
-            self.end_headers()
-
-        def log_message(self, *_args: object) -> None:
-            pass
-
-    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    context.load_cert_chain(certificate, key)
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Answer)
-    server.socket = context.wrap_socket(server.socket, server_side=True)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield server.server_address[1]
-    finally:
-        server.shutdown()
-        server.server_close()
-
-
 def test_a_destination_ca_file_replaces_the_default_trust(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    platform = _authority(tmp_path, "platform")
-    other = _authority(tmp_path, "other")
+    platform = certificate_authority(tmp_path, "platform")
+    other = certificate_authority(tmp_path, "other")
     monkeypatch.setattr(
         socket,
         "getaddrinfo",
@@ -623,10 +559,8 @@ def test_a_destination_ca_file_replaces_the_default_trust(
     assert default is None
     assert isinstance(trusted, ssl.SSLContext)
     # The context trusts the platform CA and nothing else.
-    for authority, accepted in ((platform, True), (other, False)):
-        served = tmp_path / authority[0].stem
-        served.mkdir()
-        with _https_server(served, authority) as port:
+    for issuer, accepted in ((platform, True), (other, False)):
+        with https_server(tmp_path / issuer[0].stem, issuer) as port:
             address = f"https://localhost:{port}/"
             if accepted:
                 assert httpx.get(address, verify=trusted).status_code == 200
@@ -1300,7 +1234,7 @@ def test_manifest_destinations_require_worker_isolation(tmp_path: Path) -> None:
 def test_manifest_destination_ca_file_follows_the_operator_file_rules(tmp_path: Path) -> None:
     authority = tmp_path / "operator" / "ca.crt"
     authority.parent.mkdir()
-    _authority(authority.parent, "ca")
+    certificate_authority(authority.parent, "ca")
     manifest, workspace = _destination_manifest(tmp_path, {"ca_file": str(authority)})
     # A safe file passes, and the next check, worker isolation, refuses the manifest.
     with pytest.raises(ProjectStateError, match=r"worker isolation"):

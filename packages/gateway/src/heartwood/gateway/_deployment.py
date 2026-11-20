@@ -32,6 +32,7 @@ from heartwood.gateway._model_catalog import (
     ModelConnection,
     model_connections_from_mapping,
 )
+from heartwood.gateway._platform_planning import PlanningDeployment
 from heartwood.gateway._project import ProjectContext, ProjectStateError
 from heartwood.gateway._project_config import ProjectConfig, ProjectConfigStore
 from heartwood.gateway._readiness import (
@@ -57,7 +58,7 @@ from heartwood.model_policy import (
     validate_policy_restriction,
 )
 from heartwood.persistence import read_private_text
-from heartwood.schemas import PlatformModelMetadataManifest, PolicyProfile
+from heartwood.schemas import PlatformLaunchContext, PlatformModelMetadataManifest, PolicyProfile
 
 _SCHEMA = "heartwood.project-deployment.v1"
 _FIELDS = {"schema_version", "project_id", "workspace", "state_root", "policy"}
@@ -68,6 +69,7 @@ _OPTIONAL_FIELDS = {
     "model_connections",
     "model_metadata",
     "mcp_destinations",
+    "planning",
     "identity",
 }
 
@@ -105,6 +107,9 @@ class ProjectDeployment:
     mcp_destinations: tuple[McpDestination, ...] = ()
     # The OpenID Connect client and the one researcher an identity-proxy gateway accepts.
     identity: IdentityDeployment | None = None
+    # The planning service and the launch context the platform issued for this gateway.
+    planning: PlanningDeployment | None = None
+    platform_launch: PlatformLaunchContext | None = None
     manifest: Path | None = None
     manifest_sha256: str | None = None
 
@@ -290,6 +295,12 @@ def _read_manifest(
             raise DeploymentError(
                 "deployment-manifest", "MCP destinations require complete worker isolation"
             )
+    planning: PlanningDeployment | None = None
+    platform_launch: PlatformLaunchContext | None = None
+    if "planning" in record:
+        if "identity" not in record:
+            raise DeploymentError("deployment-manifest", "the planning service requires [identity]")
+        planning, platform_launch = _planning(record["planning"], project)
     return ProjectDeployment(
         project=project,
         policy=policy,
@@ -301,6 +312,8 @@ def _read_manifest(
             record.get("model_connections"), record.get("model_metadata")
         ),
         mcp_destinations=mcp_destinations,
+        planning=planning,
+        platform_launch=platform_launch,
         manifest=resolved,
         manifest_sha256=hashlib.sha256(content.encode()).hexdigest(),
     )
@@ -322,6 +335,38 @@ def _identity(table: object, project: ProjectContext) -> IdentityDeployment:
     if identity.ca_file is not None:
         validate_operator_file(identity.ca_file, project)
     return identity
+
+
+def _planning(
+    table: object, project: ProjectContext
+) -> tuple[PlanningDeployment, PlatformLaunchContext]:
+    """Load the planning table, its certificate authorities and its launch context."""
+    try:
+        planning = PlanningDeployment.model_validate(table)
+    except ValidationError as error:
+        details = "; ".join(
+            f"{'.'.join(str(part) for part in item['loc']) or 'planning'}: {item['msg']}"
+            for item in error.errors(include_input=False, include_url=False)
+        )
+        raise DeploymentError("deployment-manifest", f"invalid planning table: {details}") from None
+    validate_operator_file(planning.launch_context_file, project)
+    if planning.ca_file is not None:
+        validate_operator_file(planning.ca_file, project)
+        try:
+            ssl.create_default_context(cafile=str(planning.ca_file))
+        except (OSError, ValueError):
+            raise DeploymentError(
+                "deployment-manifest", "the planning certificate authority file is unusable"
+            ) from None
+    try:
+        launch = PlatformLaunchContext.model_validate_json(
+            read_private_text(planning.launch_context_file, max_bytes=64 * 1024)
+        )
+    except (OSError, ValueError):
+        raise DeploymentError(
+            "deployment-manifest", "the platform launch context file is unusable"
+        ) from None
+    return planning, launch
 
 
 def _model_connections(connections: object, metadata: object) -> tuple[ModelConnection, ...]:
