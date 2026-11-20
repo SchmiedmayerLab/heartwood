@@ -233,7 +233,8 @@ The client secret of a project is rotated through the control service by a platf
 It answers with the rewritten sessions and with the sessions it could not prepare, whose Secrets keep the previous secret until the next start of their server writes them again.
 A project without a client, because nobody has launched in it yet, has nothing to rotate and receives HTTP 409.
 A former member's session keeps the previous secret, which Keycloak refuses.
-A running gateway keeps the tokens it exchanged before the rotation until they expire, and its next exchange fails until its server starts again; deleting the gateway pods of the listed sessions ends them at once.
+A running gateway keeps the tokens it exchanged before the rotation until they expire; afterwards its exchanges fail, and the researcher's sign-in ends when the gateway can no longer refresh it, until its server starts again.
+Deleting the gateway pods of the listed sessions ends them at once.
 
 ```bash
 token="$(kubectl --namespace heartwood-platform create token heartwood-operator --audience heartwood-control)"
