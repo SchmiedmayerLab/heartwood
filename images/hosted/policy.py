@@ -27,7 +27,6 @@ import openshell
 from google.protobuf.json_format import ParseDict
 from openshell._proto import openshell_pb2, sandbox_pb2
 
-_NAME = "policy-probe"
 _DIGEST = re.compile(r'^sandbox_policy_sha256 = "[0-9a-f]{64}"$', re.MULTILINE)
 
 
@@ -53,12 +52,12 @@ def main() -> None:
         sandbox_pb2.SandboxPolicy(),
     )
     workspace = worker["workspace"]
-    labels = {"heartwood.project": _NAME, "heartwood.attempt": _NAME}
-    # A probe left by an interrupted start is removed first.
-    client.delete(_NAME, workspace=workspace, allow_missing=True, timeout_seconds=90)
+    # The gateway refuses a name that a deletion found absent, so each probe has its own.
+    name = f"policy-probe-{secrets.token_hex(6)}"
+    labels = {"heartwood.project": "policy-probe", "heartwood.attempt": name}
     created = client.create(
         workspace=workspace,
-        name=_NAME,
+        name=name,
         labels=labels,
         spec=openshell_pb2.SandboxSpec(
             template=openshell_pb2.SandboxTemplate(
@@ -82,7 +81,7 @@ def main() -> None:
         ),
     )
     try:
-        ready = client.wait_ready(_NAME, workspace=workspace, timeout_seconds=240)
+        ready = client.wait_ready(name, workspace=workspace, timeout_seconds=240)
         admission = ready.status.configuration_admission
         if (
             ready.id != created.id
@@ -93,9 +92,9 @@ def main() -> None:
             raise SystemExit("the session's OpenShell gateway did not admit the worker policy")
         digest = admission.policy_hash
     finally:
-        client.delete(_NAME, workspace=workspace, allow_missing=True, timeout_seconds=90)
+        client.delete(name, workspace=workspace, allow_missing=True, timeout_seconds=90)
         client.wait_deleted(
-            _NAME, workspace=workspace, expected_sandbox_id=created.id, timeout_seconds=90
+            name, workspace=workspace, expected_sandbox_id=created.id, timeout_seconds=90
         )
     updated, count = _DIGEST.subn(f'sandbox_policy_sha256 = "{digest}"', text)
     if count != 1:
