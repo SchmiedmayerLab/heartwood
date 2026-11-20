@@ -86,6 +86,11 @@ test("supports the researcher conversation and session workflow", async ({
   await expect(
     page.getByRole("heading", { name: "Set up Heartwood" }),
   ).toBeVisible();
+  await expect(
+    page
+      .getByLabel("Session context")
+      .getByText("Synthetic Researcher", { exact: true }),
+  ).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(
     page.getByRole("button", { name: "Close", exact: true }),
@@ -1347,6 +1352,9 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
         },
       ],
     }),
+  );
+  await page.route("**/settings/identity", (route) =>
+    json(route, { display_name: "Synthetic Researcher" }),
   );
   await page.route("**/settings/specialists", (route) =>
     json(route, {

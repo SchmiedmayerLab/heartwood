@@ -82,6 +82,8 @@ _ACCESS_TOKEN_TYPE = "urn:ietf:params:oauth:token-type:access_token"
 # OpenID Connect limits a subject to 255 characters.
 _MAXIMUM_SUBJECT_LENGTH = 255
 RESEARCHER_ACTOR_PREFIX = "oidc-"
+_MAXIMUM_DISPLAY_NAME_LENGTH = 128
+_JOINERS = frozenset({"\u200c", "\u200d"})
 MINIMUM_ACTOR_KEY_BYTES = 32
 
 type _TokenUse = Literal["id", "issued", "bearer"]
@@ -181,6 +183,8 @@ class _Login:
     expires_at: float
     launch_token: str | None
     launch_expires_at: float
+    # A display value from the identity token; it authorizes nothing and is never recorded.
+    display_name: str | None = None
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -323,6 +327,18 @@ class IdentityAccess:
             if self._bearer is None or self._bearer.expires_at < expires_at:
                 self._bearer = _Bearer(token.strip(), expires_at)
         return self._actor
+
+    def display_name(self, headers: Mapping[str, tuple[str, ...]]) -> str | None:
+        """Return the name of the browser sign-in that the request's capability belongs to.
+
+        Bearer tokens carry no identity token, so a request with one has no name to show.
+        """
+        for value in headers.get(CAPABILITY_HEADER, ()):
+            with self._lock:
+                login = self._login(value.strip())
+                if login is not None:
+                    return login.display_name
+        return None
 
     def exchange_launch_token(self, token: str) -> str | None:
         """Exchange the launch token of one sign-in for its capability exactly once."""
@@ -541,12 +557,14 @@ class IdentityAccess:
         id_token = payload.get("id_token")
         if not isinstance(id_token, str):
             raise AccessUnavailableError(502)
-        returned = self._verified(id_token, "id").get("nonce")
+        claims = self._verified(id_token, "id")
+        returned = claims.get("nonce")
         if not isinstance(returned, str) or not secrets.compare_digest(
             returned.encode(), nonce.encode()
         ):
             raise _SignInRefusedError
         login = self._tokens(payload, refresh_token=None)
+        login.display_name = _display_name(claims)
         capability = secrets.token_urlsafe(32)
         launch_token = secrets.token_urlsafe(32)
         login.launch_token = launch_token
@@ -862,6 +880,23 @@ def _one(query: Mapping[str, list[str]], name: str) -> str:
     if len(values) != 1 or not values[0]:
         raise _SignInRefusedError
     return values[0]
+
+
+def _display_name(claims: Mapping[str, Any]) -> str | None:
+    """Return the ``name`` claim, else ``preferred_username``, as a short display value."""
+    for claim in ("name", "preferred_username"):
+        value = claims.get(claim)
+        if not isinstance(value, str):
+            continue
+        # Joiners stay, because some names and emoji sequences need them.
+        shown = "".join(
+            character
+            for character in value
+            if unicodedata.category(character) not in {"Cc", "Cf", "Cs"} or character in _JOINERS
+        ).strip()
+        if shown:
+            return shown[:_MAXIMUM_DISPLAY_NAME_LENGTH].strip()
+    return None
 
 
 def _seconds(value: object) -> float | None:

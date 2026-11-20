@@ -50,6 +50,7 @@ AsgiScope = Mapping[str, object]
 AsgiSend = Callable[[AsgiMessage], Awaitable[None]]
 _HEAD_TAG = re.compile(r"<head\b[^>]*>", re.IGNORECASE)
 _MAX_REQUEST_BODY_BYTES = 1_048_576
+_SIGN_IN_DISPLAY_PATH = "/settings/identity"
 _MAX_AUTH_FRAME_BYTES = 8192
 _AUTH_FRAME_TIMEOUT_SECONDS = 5.0
 
@@ -185,6 +186,11 @@ class GatewayAsgiApp:
             )
             return
         if actor_id is not None:
+            display_name = (
+                await asyncio.to_thread(self.access.display_name, headers)
+                if request.path == _SIGN_IN_DISPLAY_PATH and method == "GET"
+                else None
+            )
             response = await asyncio.to_thread(
                 self.rest.handle,
                 RestRequest(
@@ -195,6 +201,7 @@ class GatewayAsgiApp:
                     ),
                     body=decoded_body,
                     actor_id=actor_id,
+                    display_name=display_name,
                 ),
             )
             await _send_json_response(send, status_code=response.status_code, body=response.body)

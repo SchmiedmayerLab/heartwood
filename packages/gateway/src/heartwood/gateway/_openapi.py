@@ -196,6 +196,12 @@ _REST_OPERATIONS = (
     ),
     _Operation(
         "GET",
+        "/settings/identity",
+        "Read the display name of the signed-in researcher",
+        api.SignInDisplayResponse,
+    ),
+    _Operation(
+        "GET",
         "/settings/specialists",
         "Inspect specialist settings",
         api.SpecialistSettingsResponse,

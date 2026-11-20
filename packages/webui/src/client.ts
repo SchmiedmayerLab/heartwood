@@ -73,6 +73,7 @@ import type {
   SkillRefreshRequest,
   SkillSettings,
   SkillSummary,
+  SignInDisplay,
   SpecialistSettings,
   WorkflowCatalog,
   SubscriptionDeviceLoginRequest,
@@ -167,6 +168,7 @@ export interface HeartwoodClient {
   cancelModelTransfer(transferId: string): Promise<ModelTransfer>;
   getSkillSettings(): Promise<SkillSettings>;
   getSpecialistSettings(): Promise<SpecialistSettings>;
+  getSignInDisplay(): Promise<SignInDisplay>;
   getResearchWorkflows(): Promise<WorkflowCatalog>;
   getVerificationEnvironment(): Promise<PythonEnvironmentSnapshot>;
   getExperimentRecords(): Promise<ExperimentCollection>;
@@ -706,6 +708,12 @@ export class GatewayClient implements HeartwoodClient {
         this.basePath,
         this.url("/settings/specialists"),
       ),
+    );
+  }
+
+  async getSignInDisplay(): Promise<SignInDisplay> {
+    return parseJsonResponse<SignInDisplay>(
+      await authenticatedFetch(this.basePath, this.url("/settings/identity")),
     );
   }
 

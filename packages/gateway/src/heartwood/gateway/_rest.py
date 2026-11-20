@@ -97,6 +97,8 @@ class RestRequest:
     path: str
     body: str = ""
     actor_id: str = "human"
+    # A display value of the request's sign-in, for the interface only.
+    display_name: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -256,6 +258,11 @@ class RestGateway:
                 return _error(409, "Experiment records require integrity recovery")
         if (request.method, parts) in _PLANNING_ROUTES:
             return self._handle_planning(_PLANNING_ROUTES[request.method, parts], request.body)
+        if parts == ("settings", "identity") and request.method == "GET":
+            return RestResponse(
+                status_code=200,
+                body=_json_object(self.gateway.sign_in_display(request.display_name)),
+            )
         if parts == ("settings", "specialists") and request.method == "GET":
             try:
                 specialist_settings = self.gateway.specialist_settings()

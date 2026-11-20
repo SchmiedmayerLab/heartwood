@@ -47,6 +47,8 @@ from heartwood.gateway import (
     LaunchCapability,
     ProjectContext,
     ProjectStateError,
+    RestGateway,
+    RestRequest,
     SessionGateway,
     load_project_deployment,
     select_gateway_access,
@@ -2289,4 +2291,87 @@ def test_skill_installation_and_removal_record_the_researcher_actor(
     ]
     assert {event.payload["actor_id"] for event in audit} == {_ACTOR}
     assert catalog_actors == [_ACTOR]
+    gateway.stop()
+
+
+@pytest.mark.parametrize(
+    ("claims", "shown"),
+    [
+        (
+            {"name": "Synthetic Researcher", "preferred_username": "synthetic"},
+            "Synthetic Researcher",
+        ),
+        ({"preferred_username": "synthetic.researcher"}, "synthetic.researcher"),
+        ({"name": "  ", "preferred_username": "synthetic"}, "synthetic"),
+        ({"name": 7, "preferred_username": ["synthetic"]}, None),
+        ({}, None),
+        ({"name": "Synthetic‮\nResearcher\x00"}, "SyntheticResearcher"),
+        ({"name": "n" * 300}, "n" * 128),
+        (
+            {"name": "\u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645"},
+            "\u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645",
+        ),
+    ],
+    ids=[
+        "name",
+        "preferred-username",
+        "blank-name",
+        "not-text",
+        "none",
+        "controls",
+        "long",
+        "joiner",
+    ],
+)
+def test_the_sign_in_shows_a_display_name_and_records_none(
+    tmp_path: Path, claims: dict[str, Any], shown: str | None
+) -> None:
+    provider = _Provider()
+    provider.id_claims = claims
+    access = _access(tmp_path, provider)
+    workspace = tmp_path / "research"
+    app = GatewayAsgiApp(_gateway(workspace), ingress=_ingress(), access=access)
+    capability = {"x-heartwood-capability": _sign_in(access, provider)[0]}
+
+    async def scenario() -> tuple[tuple[int, dict[str, str], bytes], ...]:
+        signed_in = await _call(app, "GET", "/settings/identity", headers=capability)
+        bearer = await _call(
+            app,
+            "GET",
+            "/settings/identity",
+            headers={"authorization": f"Bearer {provider.token()}"},
+        )
+        refused = await _call(app, "GET", "/settings/identity")
+        await _call(
+            app,
+            "POST",
+            "/sessions/session-1/commands",
+            body=_command(CommandKind.AUDIT_EXPORT),
+            headers=capability,
+        )
+        exported = await _call(app, "GET", "/sessions/session-1/audit-export", headers=capability)
+        return signed_in, bearer, refused, exported
+
+    signed_in, bearer, refused, exported = asyncio.run(scenario())
+
+    assert (signed_in[0], json.loads(signed_in[2])) == (200, {"display_name": shown})
+    # A bearer token carries no identity token, so there is no name to show.
+    assert (bearer[0], json.loads(bearer[2])) == (200, {"display_name": None})
+    assert _refusal(refused) == (401, "HW-INGRESS-004")
+    if shown is not None:
+        stored = b"".join(path.read_bytes() for path in workspace.rglob("*") if path.is_file())
+        for recorded in (stored, exported[2]):
+            assert shown.encode() not in recorded
+            assert json.dumps(shown).encode() not in recorded
+
+
+def test_a_launch_capability_gateway_shows_no_display_name(tmp_path: Path) -> None:
+    capability = LaunchCapability.generate()
+    secret = vars(capability)["_secret"].decode()
+    gateway = _gateway(tmp_path / "research")
+
+    response = RestGateway(gateway).handle(RestRequest(method="GET", path="/settings/identity"))
+
+    assert capability.display_name({"x-heartwood-capability": (secret,)}) is None
+    assert (response.status_code, response.body) == (200, {"display_name": None})
     gateway.stop()

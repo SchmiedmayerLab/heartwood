@@ -289,7 +289,10 @@ A lost key cannot be recovered: a gateway with a new key records new actors, and
 Replacing the key has the same effect, so a rotation starts a new series of actors for every researcher; keep the old key to compute the earlier actors when a researcher's records must be found.
 Of the gateway's files, only the deployment manifest, which the operator protects, contains the subject.
 A platform that places the subject in the gateway's base path or public origin, as the reference platform does with `/user/<subject>/<project>`, exposes it in URLs, the redirect URI and proxy logs.
-The gateway shows no name from the token's claims and stores none.
+
+After a browser sign-in, the session header shows **Signed in as** with the identity token's `name` claim, or else its `preferred_username` claim, as a display value.
+The gateway keeps that value in memory with the sign-in, removes control and format characters other than the zero-width joiners, shortens it to 128 characters, and never writes it to session records, audit records or exports; it identifies nobody and authorizes nothing.
+A request with a bearer token has no identity token, so it has no display value.
 
 Records that name the same researcher by another actor, such as the subject itself, remain readable and are not rewritten.
 An outside approval that was authorized under another actor and not dispatched is not dispatched for the current actor: a retry of that approval is refused with a message that it was recorded for another actor, and the researcher denies it to withdraw it.

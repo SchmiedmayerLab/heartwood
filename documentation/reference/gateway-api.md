@@ -67,6 +67,7 @@ Readiness and capabilities decide whether a route can do useful work in a deploy
 | Workspace | `GET /sessions/{session_id}/workspace/tree`, `/file`, `/changes`, `/diff` | Bounded project inspection; `file` and `diff` take a `path` query parameter |
 | Action review | `GET /settings/actions`; `PUT /settings/actions/review` | Review mode, default, scope, and selection |
 | Models | `/settings/models` and its `active`, `source`, `catalog`, `connect`, `repository`, `profiles`, `artifacts`, `downloads`, `imports`, `transfers`, `subscription/device`, and `validation` operations | Model selection, validation, and managed model files |
+| Sign-in display | `GET /settings/identity` | `{"display_name": ...}`: the display value of the request's browser sign-in with `identity-proxy` ingress, otherwise `null`; never recorded |
 | Credentials | `GET /settings/credentials`; `DELETE /settings/credentials/{connection_id}` | Credential status, or removal of a saved binding; removal does not revoke a provider key |
 | Skills and specialists | `/settings/skills` with `inspect`, `install`, `local/inspect`, `local/install`, `refresh`, and `DELETE /settings/skills/{name}`; `GET /settings/specialists` | Skill review and installation, specialist roles |
 | Research services | `GET`, `POST /settings/mcp-servers`; `DELETE /settings/mcp-servers/{server_id}`; `POST .../test`; `PUT .../tools`, `.../enabled` | [Research MCP servers](../operate/platform-contract.md#research-mcp-servers): list, add, test and list tools, select reviewed tools, enable or disable, disconnect |

@@ -212,6 +212,7 @@ from heartwood.schemas import (
     ProjectReadinessResponse,
     SessionListResponse,
     SessionSummaryResponse,
+    SignInDisplayResponse,
     SkillSettingsResponse,
     SkillSummaryResponse,
     SpecialistSettingsResponse,
@@ -2473,6 +2474,15 @@ class SessionGateway:
             # A failure after a persisted revocation must not leave sessions with the Skill.
             self._reset_services()
         return self.skill_settings()
+
+    @gateway_operation
+    def sign_in_display(self, display_name: str | None) -> SignInDisplayResponse:
+        """Return the display value of the request's sign-in for the interface.
+
+        The access method supplies the value from process memory; the gateway records
+        nothing of it.
+        """
+        return api_response(SignInDisplayResponse, {"display_name": display_name})
 
     @gateway_operation
     def specialist_settings(self) -> SpecialistSettingsResponse:

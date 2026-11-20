@@ -65,6 +65,7 @@ import type {
   SessionSummary,
   SkillSettings,
   SkillSummary,
+  SignInDisplay,
   SpecialistSettings,
   WorkflowCatalog,
   StartupPlan,
@@ -1082,6 +1083,12 @@ class FakeClient implements HeartwoodClient {
     return Promise.resolve(specialistSettings());
   }
 
+  signInName: string | null = null;
+
+  getSignInDisplay(): Promise<SignInDisplay> {
+    return Promise.resolve({ display_name: this.signInName });
+  }
+
   getResearchWorkflows(): Promise<WorkflowCatalog> {
     return Promise.resolve({ workflows: [] });
   }
@@ -1354,6 +1361,29 @@ describe("App", () => {
       await screen.findByRole("heading", { name: "Main session" }),
     ).toBeInTheDocument();
     expect(client.currentSessions).toHaveLength(1);
+  });
+
+  it("shows the sign-in display name only when the gateway provides one", async () => {
+    const client = new FakeClient();
+    client.signInName = "Synthetic Researcher";
+    const view = render(
+      <App client={client} initialSessionId="session-test" />,
+    );
+
+    // The header mounts again when the session loads, so it is looked up each time.
+    const shown = await screen.findByText("Synthetic Researcher");
+    expect(shown).toHaveAttribute("title", "Synthetic Researcher");
+    const context = shown.closest("dl");
+    expect(context).toHaveAttribute("aria-label", "Session context");
+    expect(
+      within(context as HTMLElement).getByText("Signed in as"),
+    ).toBeInTheDocument();
+    view.unmount();
+
+    const unnamed = new FakeClient();
+    render(<App client={unnamed} initialSessionId="session-test" />);
+    await screen.findByLabelText("Session context");
+    expect(screen.queryByText("Signed in as")).not.toBeInTheDocument();
   });
 
   it("shows the effective deployment policy and its manifest source", async () => {
