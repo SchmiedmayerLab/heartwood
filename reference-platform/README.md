@@ -224,21 +224,28 @@ The Hub remains a trusted platform component: it can start the gateway of any se
 ### Recovery and Client Secret Rotation
 
 A session's state lives on the server's volume claim and in the control service's registry, so a gateway pod that fails, a Hub that restarts and a control service that restarts leave it intact.
-A Hub restart keeps running gateways and their routes, because the Hub stops no servers when it starts.
+A Hub restart keeps running gateways and their routes: the Hub leaves its servers running when it stops, and the proxy runs in its own pod.
 After a failed gateway pod, the researcher starts the server again and signs in again.
 
 The client secret of a project is rotated through the control service by a platform operator, whose ServiceAccount `heartwood-operator` has no Kubernetes rights.
 `control.operatorCallers` lists the accounts that may rotate; no other caller may.
-`POST /v1/projects/<project>/client-secret` replaces the secret in Keycloak, which then refuses the previous one, and writes the new secret into the Secret `hw-gw-<session>` of every session of the project, and it answers with those sessions.
+`POST /v1/projects/<project>/client-secret` replaces the secret in Keycloak, which then refuses the previous one, and writes the new secret into the Secret `hw-gw-<session>` of every session of a current member of the project.
+It answers with the rewritten sessions and with the sessions it could not prepare, whose Secrets keep the previous secret until the next start of their server writes them again.
+A project without a client, because nobody has launched in it yet, has nothing to rotate and receives HTTP 409.
+A former member's session keeps the previous secret, which Keycloak refuses.
 A running gateway keeps the tokens it exchanged before the rotation until they expire, and its next exchange fails until its server starts again; deleting the gateway pods of the listed sessions ends them at once.
 
 ```bash
 token="$(kubectl --namespace heartwood-platform create token heartwood-operator --audience heartwood-control)"
 kubectl --namespace heartwood-platform get configmap platform-ca --output 'jsonpath={.data.ca\.crt}' > platform-ca.crt
 kubectl --namespace heartwood-platform port-forward statefulset/heartwood-control 8443:8443 &
+sleep 3
 curl --cacert platform-ca.crt --resolve heartwood-control:8443:127.0.0.1 --request POST \
   --header @<(printf 'Authorization: Bearer %s' "${token}") https://heartwood-control:8443/v1/projects/demo/client-secret
+kill %1
 ```
+
+The control service logs which operator account rotated which project.
 
 Attempt keys are generated for each worker attempt, so a new attempt never reuses the key of an earlier one.
 

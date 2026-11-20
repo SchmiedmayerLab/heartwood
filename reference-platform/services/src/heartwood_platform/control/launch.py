@@ -11,16 +11,18 @@ from __future__ import annotations
 import threading
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Protocol
 
+import httpx
 from pydantic import BaseModel, ConfigDict
 
 from heartwood.schemas import PlatformLaunchContext
 from heartwood_platform.control.hosted import HostedGateway
 from heartwood_platform.control.keycloak import project_client
 from heartwood_platform.control.registry import NotAMemberError, Project, Registry, Session
-from heartwood_platform.control.sessions import ProvisionedSession
+from heartwood_platform.control.sessions import ProvisionedSession, SessionError
 
 
 class ProjectClients(Protocol):
@@ -76,6 +78,22 @@ class Launch(BaseModel):
 
 class NoSessionError(Exception):
     """The researcher has not launched a session in the project."""
+
+
+class UnknownProjectError(Exception):
+    """The registry holds no such project."""
+
+
+class NoClientError(Exception):
+    """The project has no Keycloak client yet, because nobody has launched in it."""
+
+
+@dataclass
+class Rotation:
+    """The sessions whose gateway Secrets a rotation rewrote, and those it could not."""
+
+    rewritten: list[str] = field(default_factory=list)
+    failed: list[str] = field(default_factory=list)
 
 
 class LaunchService:
@@ -196,30 +214,39 @@ class LaunchService:
             raise NoSessionError
         return self._context(found, session)
 
-    def rotate_client_secret(self, project: str) -> list[str]:
+    def rotate_client_secret(self, project: str) -> Rotation:
         """Replace the secret of a project's client and rewrite the gateway Secrets.
 
-        Each session of the project is prepared again under its lock, which writes the
-        new secret into its gateway Secret. A running gateway keeps the previous secret,
-        which Keycloak no longer accepts, until its server starts again. Returns the
-        sessions whose gateway Secrets were rewritten.
+        Each session of a current member is prepared again under its lock, which writes
+        the new secret into its gateway Secret. A running gateway keeps the previous
+        secret, which Keycloak no longer accepts, until its server starts again. A
+        session that cannot be prepared is reported, and the others are still rewritten.
         """
         if not self._registry.has_project(project):
-            raise NotAMemberError
-        self._clients.rotate_client_secret(project)
-        rewritten = []
-        for session in self._registry.sessions_of(project):
-            with self._serialized(session.subject, project):
+            raise UnknownProjectError
+        try:
+            self._clients.rotate_client_secret(project)
+        except LookupError:
+            raise NoClientError from None
+        rotation = Rotation()
+        for listed in self._registry.sessions_of(project):
+            with self._serialized(listed.subject, project):
                 try:
-                    found = self._registry.project(session.subject, project)
+                    found = self._registry.project(listed.subject, project)
                 except NotAMemberError:
                     # A former member's session cannot start again, so its Secret stays.
                     continue
-                if self._registry.session(session.subject, project) is None:
+                session = self._registry.session(listed.subject, project)
+                if session is None:
+                    # Deleted meanwhile; preparing it would create it again.
                     continue
-                self._prepare(found, session.subject, project)
-            rewritten.append(session.id)
-        return rewritten
+                try:
+                    self._prepare(found, listed.subject, project)
+                except (httpx.HTTPError, SessionError):
+                    rotation.failed.append(session.id)
+                    continue
+            rotation.rewritten.append(session.id)
+        return rotation
 
     def delete(self, subject: str, project: str) -> None:
         """Remove the session of a researcher in a project, whether or not it exists."""

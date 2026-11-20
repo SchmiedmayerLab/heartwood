@@ -31,7 +31,7 @@ from heartwood_platform.control.app import create_app
 from heartwood_platform.control.keycloak import Keycloak
 from heartwood_platform.control.launch import LaunchService
 from heartwood_platform.control.prices import PriceSheet
-from heartwood_platform.control.registry import Project, Registry
+from heartwood_platform.control.registry import Project, Registry, Session
 from heartwood_platform.control.sessions import ProvisionedSession, Sessions, SessionSettings
 from starlette.testclient import TestClient
 from test_hosted import HOSTED
@@ -415,6 +415,7 @@ def test_an_operator_rotates_a_project_client_secret_into_every_gateway_secret(
 
     assert response.status_code == 200, response.text
     assert set(response.json()["sessions"]) == {alice["session"], bob["session"]}
+    assert response.json()["failed"] == []
     after = _gateway_secret(platform, alice["session"])
     assert after != before
     assert _gateway_secret(platform, bob["session"]) == after
@@ -427,7 +428,64 @@ def test_only_operators_rotate_and_only_existing_projects(platform: Platform) ->
         response = platform.client.post("/v1/projects/demo/client-secret", headers=headers)
         assert response.status_code == 401
     response = platform.client.post("/v1/projects/missing/client-secret", headers=_OPERATOR)
-    assert response.status_code == 403
+    assert response.status_code == 404
     response = platform.client.post("/v1/projects/Not_A_Project/client-secret", headers=_OPERATOR)
     assert response.status_code == 422
     assert platform.keycloak.rotations == {}
+
+
+def test_a_project_without_a_client_has_nothing_to_rotate(platform: Platform) -> None:
+    response = platform.client.post("/v1/projects/demo/client-secret", headers=_OPERATOR)
+
+    assert response.status_code == 409
+    assert response.json() == {"error": "the project has no client yet"}
+    assert platform.keycloak.rotations == {}
+
+
+def test_a_former_members_session_keeps_its_secret(platform: Platform) -> None:
+    alice, bob = platform.launch(_ALICE, "demo"), platform.launch(_BOB, "demo")
+    before = _gateway_secret(platform, bob["session"])
+    platform.registry.synchronize(
+        [
+            Project("demo", "grant-demo", "policy-1", frozenset({_ALICE})),
+            Project("other", "grant-other", "policy-1", frozenset({_ALICE})),
+        ]
+    )
+
+    response = platform.client.post("/v1/projects/demo/client-secret", headers=_OPERATOR)
+
+    assert response.status_code == 200
+    assert response.json()["sessions"] == [alice["session"]]
+    assert _gateway_secret(platform, bob["session"]) == before
+
+
+def test_a_session_deleted_during_a_rotation_is_not_created_again(platform: Platform) -> None:
+    alice = platform.launch(_ALICE, "demo")
+    original = platform.registry.sessions_of
+
+    def deleted_after_listing(project: str) -> list[Session]:
+        listed = original(project)
+        platform.client.delete(f"/v1/researchers/{_ALICE}/projects/demo/launch", headers=_HUB)
+        return listed
+
+    platform.registry.sessions_of = deleted_after_listing  # type: ignore[method-assign]
+    response = platform.client.post("/v1/projects/demo/client-secret", headers=_OPERATOR)
+
+    assert response.status_code == 200
+    assert response.json()["sessions"] == []
+    assert platform.registry.session(_ALICE, "demo") is None
+    assert f"hw-gw-{alice['session']}" not in platform.kubernetes.kind(
+        "Secret", "heartwood-sessions"
+    )
+
+
+def test_a_session_that_cannot_be_prepared_is_reported_and_the_others_are_rewritten(
+    platform: Platform,
+) -> None:
+    alice, bob = platform.launch(_ALICE, "demo"), platform.launch(_BOB, "demo")
+    platform.kubernetes.failing.add(("GET", f"/api/v1/namespaces/hw-s-{alice['session']}"))
+
+    response = platform.client.post("/v1/projects/demo/client-secret", headers=_OPERATOR)
+
+    assert response.status_code == 200
+    assert response.json() == {"sessions": [bob["session"]], "failed": [alice["session"]]}
