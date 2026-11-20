@@ -111,6 +111,7 @@ export type ExperimentPath = string;
 export type Digest = string;
 export type ExperimentStatus =
   "started" | "interrupted" | "resumed" | "succeeded" | "failed" | "cancelled";
+export type JsonValue = any;
 export type PlanningServiceStatus =
   "unchecked" | "available" | "not-offered" | "unavailable" | "refused";
 export type MetadataText = string;
@@ -1391,6 +1392,9 @@ export interface PlatformOperationObservation {
   operation_id: string;
   platform_record_ref: string;
   project_context_id: string;
+  result?: {
+    [k: string]: JsonValue;
+  } | null;
   schema_version?: "heartwood.platform-operation-observation.v1";
   service_id: string;
   status:
