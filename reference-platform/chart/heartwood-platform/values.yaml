@@ -335,7 +335,7 @@ hub:
       version: 1
       filesystem:
         include_workdir: true
-        read_only: [/usr, /bin, /lib, /etc, /proc, /dev/urandom, /opt, /inputs, /skills]
+        read_only: [/usr, /bin, /lib, /etc, /proc, /dev/urandom, /opt, /inputs, /skills, /data]
         read_write: [/tmp, /dev/null, /home/heartwood, /dev/pts, /dev/ptmx, /workspace]
       landlock:
         compatibility: hard_requirement

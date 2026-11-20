@@ -254,3 +254,14 @@ def test_datasets_need_the_storage_class_of_project_data_volumes() -> None:
     )
     assert result.returncode != 0
     assert "sessions.attemptStorageClass.provisioner" in result.stderr
+
+
+def test_project_data_is_attached_to_the_workspace_of_hosted_gateways(
+    objects: list[dict[str, Any]],
+) -> None:
+    configuration = json.loads(
+        _named(objects, "ConfigMap", "heartwood-control")["data"]["configuration.json"]
+    )
+    configuration["project_data"]["workspace"] = "other"
+    with pytest.raises(ValueError, match="workspace research"):
+        ControlSettings.model_validate_json(json.dumps(configuration))
