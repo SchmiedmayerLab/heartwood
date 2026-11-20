@@ -212,6 +212,10 @@ def test_openshell_gateway_is_ready_with_its_own_key_and_client_bundle(
         "openshell-tls.crt",
         "openshell-tls.key",
         "platform-ca.crt",
+        "deployment.toml",
+        "kubeconfig",
+        "worker-policy.json",
+        "launch-context.json",
     }
     platform_ca = _json(cluster, "configmap", "platform-ca", f"--namespace={_PLATFORM}")
     assert files["platform-ca.crt"] == platform_ca["data"]["ca.crt"]
