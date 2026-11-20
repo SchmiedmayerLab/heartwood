@@ -10,9 +10,7 @@
       "repository": "OpenHands/software-agent-sdk",
       "revision": "365f886933cfe70e4c7ae44722699ab1cc8f411e",
       "url": "https://codeload.github.com/OpenHands/software-agent-sdk/tar.gz/365f886933cfe70e4c7ae44722699ab1cc8f411e",
-      "sha256": "8069d533af40f51dd93a1b51e3f28b03e1ec66dc0b156c48a884d15a6adec3aa",
-      "size": 6001238,
-      "directory": "software-agent-sdk-365f886933cfe70e4c7ae44722699ab1cc8f411e",
+      "tree_sha256": "b602f877b122f64b28a6d69c33fb7c534eaef8ff17a6b4cd792e457b5a5fd986",
       "patches": [
         {
           "path": "conversation-admission.patch",
@@ -52,9 +50,7 @@
       "repository": "ai-openshell/sdk-python",
       "revision": "575d68e5fd40ecc1aad56932229b9d789dbd6cba",
       "url": "https://codeload.github.com/ai-openshell/sdk-python/tar.gz/575d68e5fd40ecc1aad56932229b9d789dbd6cba",
-      "sha256": "586a8f4a5d365144767c4caebd9f7b948ec1f0e8a63af1346135199bca2d1394",
-      "size": 224851,
-      "directory": "sdk-python-575d68e5fd40ecc1aad56932229b9d789dbd6cba",
+      "tree_sha256": "fd5e86feaa652150d1297213483c9b20f03b202a2c3ac592e8d4b42b74680b5f",
       "patches": [
         {
           "path": "sandbox-admission.patch",
