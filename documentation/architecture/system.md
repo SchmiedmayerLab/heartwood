@@ -103,7 +103,7 @@ Before starting the server it registers the image's own verified advisory specia
 It runs in an OpenShell sandbox created through OpenShell's Docker or Kubernetes driver, with `/inputs` and `/skills` mounted read-only and `/workspace` as its working directory.
 With `openshell-kubernetes`, the driver mounts the sandbox's workspace claim at `/sandbox`, and `/workspace` is the image's own directory on the container's writable layer.
 The workload pod's restart policy is `Never`, which admission requires, so the kubelet never restarts the worker's container.
-When that container ends, the gateway records a terminal error and Heartwood revokes the attempt, so `/workspace` lasts exactly as long as the worker.
+When that container ends, the sandbox gateway no longer reports the sandbox ready, and Heartwood fences the attempt at its next runtime observation and revokes it, so `/workspace` lasts as long as the worker.
 The sandbox has no network of its own (`network=none`); its only routes are those the OpenShell policy and supervisor permit.
 
 The gateway reaches the worker through an `openshell forward service` tunnel on loopback and authenticates every request with a per-attempt `SESSION_API_KEY`.

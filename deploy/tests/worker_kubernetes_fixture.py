@@ -348,7 +348,7 @@ class KubernetesFixture:
             worker, arguments, workspace=WORKSPACE, timeout_seconds=timeout, no_login_shell=True
         )
 
-    def create_probe(self, image: str, *, memory: str = "2Gi") -> tuple[str, str]:
+    def create_probe(self, image: str) -> tuple[str, str]:
         """Create a disposable sandbox with the workers' provider, policy and limits."""
         from openshell._proto import openshell_pb2 as pb
 
@@ -362,7 +362,7 @@ class KubernetesFixture:
             spec=pb.SandboxSpec(
                 template=pb.SandboxTemplate(
                     image=image,
-                    resources={"limits": {"cpu": "1", "memory": memory}},
+                    resources={"limits": {"cpu": "1", "memory": "2Gi"}},
                     labels={**labels, "heartwood.role": "worker"},
                 ),
                 policy=self.policy,

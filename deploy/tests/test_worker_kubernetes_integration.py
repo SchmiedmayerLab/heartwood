@@ -1320,13 +1320,11 @@ def test_kubernetes_worker_container_is_never_restarted(
     from openshell._proto import openshell_pb2 as pb
 
     fixture = infrastructure
-    name, sandbox_id = fixture.create_probe(fixture.worker, memory="512Mi")
+    name, sandbox_id = fixture.create_probe(fixture.worker)
     pod = f"{WORKSPACE}--{name}"
     try:
         ready = fixture.control.wait_ready(name, workspace=WORKSPACE, timeout_seconds=240)
         assert ready.id == sandbox_id
-        written = fixture.exec(name, ["/bin/sh", "-c", "printf written > /workspace/probe"])
-        assert written.exit_code == 0, written.stderr
         spec = json.loads(fixture.outside("get", "pod", pod, "--output=json"))["spec"]
         assert spec["restartPolicy"] == "Never"
         with contextlib.suppress(grpc.RpcError):
@@ -1345,7 +1343,7 @@ def test_kubernetes_worker_container_is_never_restarted(
         status = json.loads(fixture.outside("get", "pod", pod, "--output=json"))["status"]
         (agent,) = [item for item in status["containerStatuses"] if item["name"] == "agent"]
         assert agent["restartCount"] == 0, agent
-        assert "terminated" in agent["state"], agent
+        assert agent["state"].get("terminated", {}).get("reason") == "OOMKilled", agent
         phase = fixture.control.get(name, workspace=WORKSPACE).phase
         assert phase != pb.SANDBOX_PHASE_READY, phase
         _evidence(
