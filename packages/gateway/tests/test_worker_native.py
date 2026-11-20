@@ -1782,7 +1782,8 @@ def test_a_worker_container_the_engine_still_lists_keeps_an_absent_attempt_fence
     ):
         with pytest.raises(WorkerAttemptError, match="remains after control-plane revocation"):
             revoke(native.record("fenced", None))
-    assert native.sandboxes.absence_requests != []
+    name = "hw-" + native.intent.attempt_id.hex[:16]
+    assert native.sandboxes.absence_requests == [name, name]
 
 
 @pytest.mark.parametrize(

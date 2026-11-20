@@ -233,17 +233,17 @@ The image carries the labels `org.opencontainers.image.title=heartwood-sandbox-g
 
 The build establishes provenance, and a rebuild can produce other binary digests.
 The `gateway_build` entry of each [qualification evidence](../architecture/testing.md#native-qualification-evidence) records the exact build that the run qualified: the Docker run's evidence for `openshell-docker` and the [Kubernetes qualification](../architecture/testing.md#kubernetes-driver-qualification) evidence for `openshell-kubernetes`.
-That evidence covers a gateway whose version, source revision, manifest digest, features and binary digests equal the entry, such as the gateway artifacts of the qualifying run.
-For a gateway built separately, repeat native qualification against it and retain that evidence.
+That evidence covers a gateway whose version, source revision, manifest digest, features and binary digests equal the entry.
+A deployment that builds its own gateway therefore runs native qualification against that build on each driver it uses, the Kubernetes qualification for `openshell-kubernetes`, and retains that evidence.
+
+To compare a running gateway with the evidence, compare the SHA-256 of `/usr/local/bin/openshell-gateway` in the image it runs with the `openshell-gateway` entry of the record's `binaries`, and the version the running gateway reports with the record's version.
+Each worker attempt's evidence records the version, driver and capabilities the running gateway reported.
 
 #### Register
 
 Register the gateway's endpoint and mutual TLS identity with `openshell gateway add` under the manifest's `native_config_home`, and name it in the deployment manifest's [`gateway` key](../reference/configuration.md#managed-worker).
 In the gateway's own configuration file, set exactly one compute driver under `[openshell.gateway]`: `compute_driver = "docker"` for `openshell-docker` or `compute_driver = "kubernetes"` for `openshell-kubernetes`, because a gateway with both drivers and no selection chooses one by detection.
 The reference platform deploys the image per session namespace from its `images.openshellGateway` value, by digest.
-
-To compare a running gateway with the record, compare the image it runs with the record's image identifier and labels, and the version the running gateway reports with the record's version.
-Each worker attempt's evidence records the version, driver and capabilities the running gateway reported.
 
 Before it serves, launches a worker or reconciles a retained attempt, Heartwood reads the registered gateway's info through the `GetGatewayInfo` API.
 It requires exactly one compute driver whose negotiated capabilities include the three capabilities listed under [Behavior](#behavior), and otherwise stops with `HW-WORKER-001` before any sandbox, volume or deletion request.
