@@ -93,6 +93,8 @@ class HostedGatewaySettings(_Settings):
 
     # The control service's own HTTPS URL, which gateways call for planning.
     control_url: str = Field(pattern=r"^https://[^/\s]+$")
+    # The data service's HTTPS origin, whose catalog tools researchers may enable.
+    data_url: str | None = Field(default=None, pattern=r"^https://[^/\s]+$")
     worker: HostedWorkerSettings
     model_route: ModelRouteSettings
 
@@ -114,6 +116,24 @@ def _table(name: str, values: dict[str, object]) -> str:
     lines = [f"[{name}]"] if name else []
     lines += [f"{key} = {_toml(item)}" for key, item in values.items()]
     return "\n".join(lines) + "\n"
+
+
+def _catalog_destination(origin: str) -> str:
+    """The data catalog as a research MCP destination, reached with an exchanged token."""
+    destination: dict[str, object] = {
+        "service_id": "heartwood-data",
+        "origin": origin,
+        "tools": ["list_datasets", "resolve_object"],
+        "observation_tool": "get_operation",
+        "private_address": True,
+        "ca_file": f"{_DEPLOYMENT}/platform-ca.crt",
+    }
+    exchange: dict[str, object] = {"scope": "svc-data", "audience": "heartwood-data"}
+    return (
+        "[[mcp_destinations]]\n"
+        + _table("", destination)
+        + _table("mcp_destinations.token_exchange", exchange)
+    )
 
 
 class HostedGateway:
@@ -307,6 +327,7 @@ class HostedGateway:
                     "planning.token_exchange",
                     {"scope": "svc-control", "audience": "heartwood-control"},
                 ),
+                "" if settings.data_url is None else _catalog_destination(settings.data_url),
             ]
         )
         # The token file and the cluster CA come from the pod's projected ServiceAccount

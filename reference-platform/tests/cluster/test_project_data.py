@@ -23,6 +23,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import pytest
 from heartwood_platform.data.signing import Credentials, presign
@@ -553,3 +554,60 @@ def test_a_running_copy_pod_cannot_be_changed(researcher: Researcher, probe_imag
         )
         assert refused.returncode != 0
         assert "copy Jobs carry the project data copy label" in refused.stderr, refused.stderr
+
+
+def _tool(researcher: Researcher, token: str | None, name: str, **arguments: str) -> Any:  # noqa: ANN401
+    body = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {"name": name, "arguments": arguments},
+    }
+    status, answer = request(researcher.cluster, researcher.pod, "POST", f"{DATA}/mcp", token, body)
+    assert status == 200, answer
+    return answer["result"]
+
+
+def test_the_catalog_tools_answer_for_the_session_of_the_token(researcher: Researcher) -> None:
+    token = researcher.tokens["demo"]["data"]
+    operation = str(uuid4())
+    listed = _tool(researcher, token, "list_datasets", project_id="demo", operation_id=operation)
+    assert listed["isError"] is False, listed
+    observation = listed["structuredContent"]
+    assert observation["project_context_id"] == researcher.sessions["demo"]
+    assert observation["status"] == "completed"
+    (dataset,) = observation["result"]["datasets"]
+    assert dataset["id"] == "synthetic-cohort"
+    # The kept observation answers the same identifier, and another request is refused.
+    kept = _tool(researcher, token, "get_operation", project_id="demo", operation_id=operation)
+    assert kept["structuredContent"] == observation
+    conflict = _tool(
+        researcher,
+        token,
+        "resolve_object",
+        object_id="synthetic-cohort.README.md",
+        project_id="demo",
+        operation_id=operation,
+    )
+    assert conflict["isError"] is True
+    denied = _tool(
+        researcher,
+        token,
+        "resolve_object",
+        object_id="synthetic-panel.panel.csv",
+        project_id="demo",
+        operation_id=str(uuid4()),
+    )
+    assert denied["structuredContent"]["status"] == "denied"
+    # The token of project demo cannot name project other.
+    other = _tool(researcher, token, "list_datasets", project_id="other", operation_id=str(uuid4()))
+    assert other["isError"] is True
+    status, _ = request(
+        researcher.cluster,
+        researcher.pod,
+        "POST",
+        f"{DATA}/mcp",
+        researcher.tokens["demo"]["control"],
+        {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
+    )
+    assert status == 401

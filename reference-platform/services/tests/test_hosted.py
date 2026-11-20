@@ -36,6 +36,7 @@ _OBJECTS = (
 )
 HOSTED: dict[str, Any] = {
     "control_url": "https://heartwood-control.heartwood-platform.svc.cluster.local:8443",
+    "data_url": "https://heartwood-data.heartwood-platform.svc.cluster.local:8443",
     "worker": {
         "image": "registry.example.test:5000/heartwood-worker:candidate@sha256:" + "2" * 64,
         "policy": {"version": 1, "process": {"runAsUser": "10001"}},
@@ -238,3 +239,18 @@ def test_the_manifest_declares_the_sessions_project_data_volume() -> None:
         "content_sha256": "e" * 64,
         "mount_path": "/data",
     }
+
+
+def test_the_manifest_offers_the_data_catalog_with_an_exchanged_token() -> None:
+    manifest = tomllib.loads(_files()["deployment.toml"])
+    assert manifest["mcp_destinations"] == [
+        {
+            "service_id": "heartwood-data",
+            "origin": "https://heartwood-data.heartwood-platform.svc.cluster.local:8443",
+            "tools": ["list_datasets", "resolve_object"],
+            "observation_tool": "get_operation",
+            "private_address": True,
+            "ca_file": "/etc/heartwood/deployment/platform-ca.crt",
+            "token_exchange": {"scope": "svc-data", "audience": "heartwood-data"},
+        }
+    ]
