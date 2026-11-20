@@ -207,7 +207,8 @@ hub:
   # in-cluster address of the proxy Service.
   publicOrigin: "http://proxy-public.heartwood-platform.svc.cluster.local"
   # Networks from which gateways accept proxied requests: the pod network that holds the
-  # proxy. Network policies admit only the proxy and the Hub to the gateway pods.
+  # proxy. Required: a gateway does not start without at least one range. Network
+  # policies admit only the proxy and the Hub to the gateway pods.
   trustedProxySources: []
   # Volume of one named server, which holds its research and state directories.
   storage:
