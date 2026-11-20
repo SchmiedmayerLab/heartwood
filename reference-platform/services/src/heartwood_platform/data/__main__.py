@@ -15,6 +15,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
@@ -26,6 +27,7 @@ from heartwood_platform.common.tokens import ResearcherTokens, ServiceTokens
 from heartwood_platform.data.access import ObjectAccess
 from heartwood_platform.data.app import create_app
 from heartwood_platform.data.catalog import Catalog
+from heartwood_platform.data.catalog_tools import Operations, create_catalog_app
 from heartwood_platform.data.signing import Credentials
 
 
@@ -52,6 +54,14 @@ class ObjectStoreSettings(_Settings):
     secret_key_file: Path
 
 
+class ControlSettings(_Settings):
+    """Where the data service reads researchers' launch contexts."""
+
+    url: str = Field(pattern=r"^https://[^/]+$")
+    # A projected service account token for the control service.
+    token_file: Path
+
+
 class Settings(_Settings):
     """The configuration file of the data service."""
 
@@ -65,6 +75,11 @@ class Settings(_Settings):
     object_store: ObjectStoreSettings
     tls: TlsSettings
     catalog: Catalog
+    # The service's records of catalog operations.
+    database: Path
+    # Where workers read a project data volume, which catalog answers name.
+    volume_mount_path: str = Field(pattern=r"^/[a-z0-9][a-z0-9/_-]*$")
+    control: ControlSettings
 
 
 def build(
@@ -95,13 +110,45 @@ def build(
             store.secret_key_file.read_text(encoding="utf-8").strip(),
         )
 
+    researchers = ResearcherTokens(settings.keycloak.issuer, settings.audience, keys)
+    control = httpx.Client(
+        base_url=settings.control.url,
+        timeout=30,
+        verify=ssl.create_default_context(cafile=settings.keycloak.ca_file),
+    )
+
+    def launch_context(subject: str, project: str) -> str:
+        token = settings.control.token_file.read_text(encoding="utf-8").strip()
+        response = control.post(
+            f"/v1/projects/{quote(project, safe='')}/launch-context",
+            json={"subject": subject},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        if response.status_code in {httpx.codes.FORBIDDEN, httpx.codes.NOT_FOUND}:
+            raise LookupError(subject, project)
+        response.raise_for_status()
+        context = response.json().get("project_context_id")
+        if not isinstance(context, str) or not context:
+            raise LookupError(subject, project)
+        return context
+
+    tools = create_catalog_app(
+        settings.catalog,
+        researchers,
+        Operations(settings.database),
+        launch_context,
+        hostname=settings.hostname,
+        mount_path=settings.volume_mount_path,
+        clock=clock,
+    )
     return create_app(
         settings.catalog,
-        ResearcherTokens(settings.keycloak.issuer, settings.audience, keys),
+        researchers,
         ServiceTokens(kubernetes.review_token, settings.audience, settings.service_callers),
         ObjectAccess(store.endpoint, store.region, credentials, clock),
         hostname=settings.hostname,
         platform_id=settings.platform_id,
+        catalog_tools=tools,
     )
 
 

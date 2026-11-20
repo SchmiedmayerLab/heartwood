@@ -48,7 +48,8 @@ is read from files/datasets/<dataset>/<file>, and its size and checksum are comp
 {{- $store := dict "endpoint" (printf "https://versitygw.%s.svc.cluster.local:7070" .Release.Namespace) "region" "us-east-1" "access_key_file" "/etc/heartwood-data/store/access-key" "secret_key_file" "/etc/heartwood-data/store/secret-key" -}}
 {{- $tls := dict "certificate_file" "/etc/heartwood-data/tls/tls.crt" "key_file" "/etc/heartwood-data/tls/tls.key" -}}
 {{- $callers := list (printf "system:serviceaccount:%s:heartwood-control" .Release.Namespace) -}}
-{{- dict "platform_id" .Values.control.platformId "hostname" $hostname "audience" "heartwood-data" "service_callers" $callers "keycloak" $keycloak "object_store" $store "tls" $tls "catalog" (include "heartwood.dataCatalog" . | fromJson) | toPrettyJson -}}
+{{- $control := dict "url" "https://heartwood-control:8443" "token_file" "/var/run/secrets/heartwood/control/token" -}}
+{{- dict "platform_id" .Values.control.platformId "hostname" $hostname "audience" "heartwood-data" "service_callers" $callers "keycloak" $keycloak "object_store" $store "tls" $tls "catalog" (include "heartwood.dataCatalog" . | fromJson) "database" "/var/lib/heartwood-data/data.sqlite3" "volume_mount_path" "/data" "control" $control | toPrettyJson -}}
 {{- end }}
 
 {{- /* The objects of every dataset, by DRS identifier, and where the bootstrap Job writes them. */ -}}
@@ -162,15 +163,17 @@ spec:
       port: 8443
       targetPort: https
 ---
-# The service keeps no state: the catalog comes from its configuration.
+# One replica: the records of catalog operations are one SQLite database. The catalog
+# comes from the configuration.
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   name: heartwood-data
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "heartwood.labels" . | nindent 4 }}
 spec:
+  serviceName: heartwood-data
   replicas: 1
   selector:
     matchLabels:
@@ -225,6 +228,11 @@ spec:
               readOnly: true
             - name: tmp
               mountPath: /tmp
+            - name: data
+              mountPath: /var/lib/heartwood-data
+            - name: control-token
+              mountPath: /var/run/secrets/heartwood/control
+              readOnly: true
       volumes:
         - name: configuration
           configMap:
@@ -249,6 +257,45 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: 16Mi
+        # The service's token for the control service, which reports launch contexts.
+        - name: control-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  audience: heartwood-control
+                  expirationSeconds: 3600
+                  path: token
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- include "heartwood.storageClass" . | nindent 8 }}
+        resources:
+          requests:
+            storage: 256Mi
+---
+# The data service reads launch contexts from the control service.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: heartwood-control-from-data
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "heartwood.selector" (dict "context" . "component" "control") | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "heartwood.selector" (dict "context" . "component" "data") | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 8443
 ---
 # Heartwood gateways call the DRS endpoints, and the control service asks for access plans.
 apiVersion: networking.k8s.io/v1

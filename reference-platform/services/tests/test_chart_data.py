@@ -179,7 +179,7 @@ def test_the_data_service_reviews_tokens_and_holds_only_the_read_account(
     assert role["rules"] == [
         {"apiGroups": ["authentication.k8s.io"], "resources": ["tokenreviews"], "verbs": ["create"]}
     ]
-    spec = _named(objects, "Deployment", "heartwood-data")["spec"]["template"]["spec"]
+    spec = _named(objects, "StatefulSet", "heartwood-data")["spec"]["template"]["spec"]
     secrets = {volume["secret"]["secretName"] for volume in spec["volumes"] if "secret" in volume}
     assert secrets == {"versitygw-data", "heartwood-data-tls"}
     settings = _configuration(objects)

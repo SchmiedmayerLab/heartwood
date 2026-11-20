@@ -19,6 +19,7 @@ from collections.abc import Callable
 from typing import Annotated
 
 import httpx
+from fastmcp.server.http import StarletteWithLifespan
 from pydantic import BaseModel, ConfigDict, StringConstraints, ValidationError
 from starlette.applications import Starlette
 from starlette.concurrency import run_in_threadpool
@@ -98,10 +99,12 @@ def create_app(
     *,
     hostname: str,
     platform_id: str,
+    catalog_tools: StarletteWithLifespan | None = None,
 ) -> Starlette:
     """Build the application over a catalog, the token verifiers and object access.
 
-    ``hostname`` is the DRS host name of this service, as it appears in DRS URIs.
+    ``hostname`` is the DRS host name of this service, as it appears in DRS URIs, and
+    ``catalog_tools`` the MCP application of the catalog tools.
     """
 
     def handled(endpoint: Callable[[Request], Response]) -> Callable[[Request], Response]:
@@ -197,7 +200,9 @@ def create_app(
             Route(f"{DRS_PREFIX}/objects/{{object_id}}", handled(get_object)),
             Route(f"{DRS_PREFIX}/objects/{{object_id}}/access/{{access_id}}", handled(get_access)),
             Route("/v1/volume-plans", read_body, methods=["POST"]),
-        ]
+            *([] if catalog_tools is None else [Route("/mcp", catalog_tools)]),
+        ],
+        lifespan=None if catalog_tools is None else catalog_tools.lifespan,
     )
 
 
