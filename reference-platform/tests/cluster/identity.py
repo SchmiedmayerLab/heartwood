@@ -82,25 +82,59 @@ def probe(cluster: Cluster, name: str, image: str) -> Iterator[str]:
         cluster.kubectl("delete", f"--namespace={SESSIONS}", f"pod/{name}", "--wait")
 
 
+def write_private(cluster: Cluster, pod: str, text: str) -> str:
+    """Write ``text`` to a new file that only the probe reads, and return its path.
+
+    Data sent to ``kubectl exec`` on standard input can arrive incomplete, so the
+    write reports the size it wrote and is repeated until the size matches.
+    """
+    path = f"/scratch/{secrets.token_hex(8)}.data"
+    expected = len(text.encode())
+    for _ in range(5):
+        written = cluster.kubectl(
+            "exec",
+            "--stdin",
+            f"--namespace={SESSIONS}",
+            pod,
+            "--",
+            "sh",
+            "-c",
+            f"umask 077 && cat > {path} && wc -c < {path}",
+            text_input=text,
+        )
+        if written.returncode == 0 and written.stdout.strip() == str(expected):
+            return path
+    raise AssertionError(f"the probe did not receive {expected} bytes")
+
+
 def curl(cluster: Cluster, pod: str, *arguments: str, text_input: str = "") -> str:
-    """Run curl in the probe pod and return its output."""
-    result = cluster.kubectl(
-        "exec",
-        "--stdin",
-        f"--namespace={SESSIONS}",
-        pod,
-        "--",
-        "curl",
-        "--silent",
-        "--show-error",
-        "--max-time",
-        "60",
-        # Keycloak is verified against the platform CA alone.
-        "--cacert",
-        "/etc/platform-ca/ca.crt",
-        *arguments,
-        text_input=text_input,
-    )
+    """Run curl in the probe pod and return its output.
+
+    Arguments that read standard input (``@-``) read ``text_input`` from a file that
+    is written and checked first.
+    """
+    path = write_private(cluster, pod, text_input) if text_input else None
+    if path is not None:
+        arguments = tuple(f"@{path}" if argument == "@-" else argument for argument in arguments)
+    try:
+        result = cluster.kubectl(
+            "exec",
+            f"--namespace={SESSIONS}",
+            pod,
+            "--",
+            "curl",
+            "--silent",
+            "--show-error",
+            "--max-time",
+            "60",
+            # Keycloak is verified against the platform CA alone.
+            "--cacert",
+            "/etc/platform-ca/ca.crt",
+            *arguments,
+        )
+    finally:
+        if path is not None:
+            cluster.kubectl("exec", f"--namespace={SESSIONS}", pod, "--", "rm", "-f", path)
     assert result.returncode == 0, result.stderr
     return result.stdout
 
@@ -121,19 +155,7 @@ def request(
         headers.append("Content-Type: application/json")
     # The headers hold the token, so they reach curl through a file that only the
     # probe reads, and the body through standard input.
-    path = f"/scratch/{secrets.token_hex(8)}.headers"
-    written = cluster.kubectl(
-        "exec",
-        "--stdin",
-        f"--namespace={SESSIONS}",
-        pod,
-        "--",
-        "sh",
-        "-c",
-        f"umask 077 && cat > {path}",
-        text_input="\n".join(headers),
-    )
-    assert written.returncode == 0, written.stderr
+    path = write_private(cluster, pod, "\n".join(headers))
     arguments = ["--request", method, "--header", f"@{path}", "--write-out", "\n%{http_code}"]
     if body is not None:
         arguments += ["--data-binary", "@-"]
@@ -193,22 +215,10 @@ def token_request(
     arguments = ["--data", "@-", "--write-out", "\n%{http_code}"]
     path = None
     if basic is not None:
-        path = f"/scratch/{secrets.token_hex(8)}.headers"
         credentials = base64.b64encode(
             f"{quote(basic[0], safe='')}:{quote(basic[1], safe='')}".encode()
         ).decode()
-        written = cluster.kubectl(
-            "exec",
-            "--stdin",
-            f"--namespace={SESSIONS}",
-            pod,
-            "--",
-            "sh",
-            "-c",
-            f"umask 077 && cat > {path}",
-            text_input=f"Authorization: Basic {credentials}",
-        )
-        assert written.returncode == 0, written.stderr
+        path = write_private(cluster, pod, f"Authorization: Basic {credentials}")
         arguments += ["--header", f"@{path}"]
     try:
         output = curl(cluster, pod, *arguments, f"{REALM}/{endpoint}", text_input=urlencode(form))

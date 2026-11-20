@@ -15,6 +15,7 @@ from typing import Any
 from urllib.parse import urlencode
 
 import pytest
+from identity import curl
 from kube import PROBE_CA, Cluster
 
 _KEYCLOAK = "https://keycloak.heartwood-platform.svc.cluster.local:8443"
@@ -45,10 +46,16 @@ def probe(cluster: Cluster, staging_image: str) -> Iterator[None]:
                         "allowPrivilegeEscalation": False,
                         "capabilities": {"drop": ["ALL"]},
                     },
-                    "volumeMounts": [{"name": "platform-ca", "mountPath": "/etc/platform-ca"}],
+                    "volumeMounts": [
+                        {"name": "platform-ca", "mountPath": "/etc/platform-ca"},
+                        {"name": "scratch", "mountPath": "/scratch"},
+                    ],
                 }
             ],
-            "volumes": [{"name": "platform-ca", "configMap": {"name": PROBE_CA}}],
+            "volumes": [
+                {"name": "platform-ca", "configMap": {"name": PROBE_CA}},
+                {"name": "scratch", "emptyDir": {"medium": "Memory"}},
+            ],
         },
     }
     try:
@@ -75,24 +82,7 @@ def _secret(cluster: Cluster, name: str, key: str) -> str:
 
 
 def _curl(cluster: Cluster, *arguments: str, text_input: str = "") -> str:
-    result = cluster.kubectl(
-        "exec",
-        "--stdin",
-        f"--namespace={_SESSIONS}",
-        _POD,
-        "--",
-        "curl",
-        "--silent",
-        "--show-error",
-        "--max-time",
-        "30",
-        "--cacert",
-        "/etc/platform-ca/ca.crt",
-        *arguments,
-        text_input=text_input,
-    )
-    assert result.returncode == 0, result.stderr
-    return result.stdout
+    return curl(cluster, _POD, *arguments, text_input=text_input)
 
 
 def _token(cluster: Cluster, realm: str, form: dict[str, str]) -> dict[str, Any]:

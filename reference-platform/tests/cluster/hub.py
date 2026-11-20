@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import parse_qs, urlencode, urlsplit
 
-from identity import PLATFORM, SESSIONS, curl, secret
+from identity import PLATFORM, SESSIONS, curl, secret, write_private
 from kube import Cluster
 
 ORIGIN = "http://proxy-public.heartwood-platform.svc.cluster.local"
@@ -191,19 +191,7 @@ class Browser:
             lines.append(f"X-Heartwood-Capability: {capability}")
         if body is not None:
             lines.append("Content-Type: application/json")
-        headers = f"/scratch/{secrets.token_hex(8)}.headers"
-        written = self.cluster.kubectl(
-            "exec",
-            "--stdin",
-            f"--namespace={SESSIONS}",
-            self.pod,
-            "--",
-            "sh",
-            "-c",
-            f"umask 077 && cat > {headers}",
-            text_input="\n".join(lines),
-        )
-        assert written.returncode == 0, written.stderr
+        headers = write_private(self.cluster, self.pod, "\n".join(lines))
         arguments = [
             "--request",
             method,
