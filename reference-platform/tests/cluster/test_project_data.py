@@ -577,7 +577,16 @@ def test_the_catalog_tools_answer_for_the_session_of_the_token(researcher: Resea
     assert observation["project_context_id"] == researcher.sessions["demo"]
     assert observation["status"] == "completed"
     (dataset,) = observation["result"]["datasets"]
-    assert dataset["id"] == "synthetic-cohort"
+    assert (dataset["id"], dataset["object_count"]) == ("synthetic-cohort", 3)
+    objects = _tool(
+        researcher,
+        token,
+        "list_objects",
+        dataset_id="synthetic-cohort",
+        project_id="demo",
+        operation_id=str(uuid4()),
+    )["structuredContent"]["result"]["objects"]
+    assert "/data/synthetic-cohort/measurements.csv" in {item["path"] for item in objects}
     # The kept observation answers the same identifier, and another request is refused.
     kept = _tool(researcher, token, "get_operation", project_id="demo", operation_id=operation)
     assert kept["structuredContent"] == observation

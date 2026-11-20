@@ -445,6 +445,13 @@ class PlatformOperationObservation(_PlanningRecord):
         default=None, exclude_if=lambda value: value is None
     )
 
+    @model_validator(mode="after")
+    def completed_result(self) -> Self:
+        """Only a completed operation reports what it returned."""
+        if self.result is not None and self.status != "completed":
+            raise ValueError("only a completed operation carries a result")
+        return self
+
 
 class PlatformOperationProposal(_PlanningRecord):
     """What the platform would run for exact operation arguments; it authorizes nothing.

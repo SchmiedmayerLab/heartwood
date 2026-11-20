@@ -265,3 +265,25 @@ def test_project_data_is_attached_to_the_workspace_of_hosted_gateways(
     configuration["project_data"]["workspace"] = "other"
     with pytest.raises(ValueError, match="workspace research"):
         ControlSettings.model_validate_json(json.dumps(configuration))
+
+
+def test_only_the_data_service_reads_launch_contexts_from_the_control_service(
+    objects: list[dict[str, Any]],
+) -> None:
+    data = "system:serviceaccount:heartwood-platform:heartwood-data"
+    configuration = _named(objects, "ConfigMap", "heartwood-control")["data"]["configuration.json"]
+    assert ControlSettings.model_validate_json(configuration).context_callers == {data}
+    settings = _configuration(objects)
+    assert settings.control.url == "https://heartwood-control:8443"
+    spec = _named(objects, "StatefulSet", "heartwood-data")["spec"]["template"]["spec"]
+    (token,) = [volume for volume in spec["volumes"] if volume["name"] == "control-token"]
+    source = token["projected"]["sources"][0]["serviceAccountToken"]
+    assert source["audience"] == "heartwood-control"
+    assert Path(settings.control.token_file).name == source["path"]
+    policy = _named(objects, "NetworkPolicy", "heartwood-control-from-data")
+    assert policy["spec"]["podSelector"]["matchLabels"]["app.kubernetes.io/component"] == "control"
+    (rule,) = policy["spec"]["ingress"]
+    assert rule["ports"] == [{"protocol": "TCP", "port": 8443}]
+    (source_pods,) = rule["from"]
+    assert set(source_pods) == {"podSelector"}
+    assert source_pods["podSelector"]["matchLabels"]["app.kubernetes.io/component"] == "data"

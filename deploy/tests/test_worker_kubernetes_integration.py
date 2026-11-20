@@ -1738,8 +1738,16 @@ def _until(application: Any, found: Any, what: str, timeout: float = 180) -> Any
     raise AssertionError(f"No {what} within {timeout} seconds")
 
 
-def _reviewed_call(application: Any, tool: str) -> dict[str, Any]:  # noqa: ANN401
-    """Approve the worker's call, its outside operation and the release of its result."""
+def _reviewed_call(
+    application: Any,  # noqa: ANN401
+    tool: str,
+    received: list[str],
+) -> dict[str, Any]:
+    """Approve the worker's call, its outside operation and the release of its result.
+
+    ``received`` holds what reached the model; the result records how many requests the
+    model had made before its result was released.
+    """
     from heartwood.core_adapter.external_actions import external_action_records
     from heartwood.core_adapter.external_results import external_result_records
 
@@ -1785,6 +1793,7 @@ def _reviewed_call(application: Any, tool: str) -> dict[str, Any]:  # noqa: ANN4
         ),
         "result release review",
     )
+    before = len(received)
     lifecycle._approve(application, release.proposal.group_id)
     assert observed.observation is not None
     operation = observed.observation.operation
@@ -1796,6 +1805,8 @@ def _reviewed_call(application: Any, tool: str) -> dict[str, Any]:  # noqa: ANN4
         "project_context_id": operation.project_context_id,
         "result": operation.result,
         "limitations": list(operation.limitations),
+        "service_id": operation.service_id,
+        "requests_before_release": before,
     }
 
 
@@ -1826,7 +1837,8 @@ def test_kubernetes_data_catalog_research_task(infrastructure: KubernetesFixture
     destination = McpDestination(
         service_id="heartwood-data",
         origin=_DATA_ORIGIN,
-        tools=("list_datasets", "resolve_object"),
+        tools=("list_datasets", "list_objects", "resolve_object"),
+        max_result_bytes=32768,
         observation_tool="get_operation",
         private_address=True,
         ca_file=researcher.ca_file,
@@ -1868,18 +1880,20 @@ def test_kubernetes_data_catalog_research_task(infrastructure: KubernetesFixture
             McpServerToolsRequest(
                 tools=[
                     McpToolChoice(name=name, sha256=digests[name])
-                    for name in ("list_datasets", "resolve_object")
+                    for name in ("list_datasets", "list_objects", "resolve_object")
                 ]
             ),
         )
         application.set_mcp_server_enabled("catalog", McpServerEnabledRequest(enabled=True))
         names = {
             name: f"catalog__{name}_{digests[name][:8]}"
-            for name in ("list_datasets", "resolve_object")
+            for name in ("list_datasets", "list_objects", "resolve_object")
         }
         finish = ("finish", {"message": "Waiting for the reviewed catalog result."})
         fixture.provider.scripts[_CATALOG_MARKER] = [
             (names["list_datasets"], {}),
+            finish,
+            (names["list_objects"], {"dataset_id": "synthetic-cohort"}),
             finish,
             (names["resolve_object"], {"object_id": "synthetic-cohort.participants.csv"}),
             finish,
@@ -1891,9 +1905,11 @@ def test_kubernetes_data_catalog_research_task(infrastructure: KubernetesFixture
         ]
         native._submit(application, CommandKind.CHAT, {"prompt": _CATALOG_MARKER})
         attempt_id, worker = lifecycle._worker(application)
-        listed = _reviewed_call(application, names["list_datasets"])
-        resolved = _reviewed_call(application, names["resolve_object"])
-        refused = _reviewed_call(application, names["resolve_object"])
+        received = fixture.provider.received
+        listed = _reviewed_call(application, names["list_datasets"], received)
+        objects = _reviewed_call(application, names["list_objects"], received)
+        resolved = _reviewed_call(application, names["resolve_object"], received)
+        refused = _reviewed_call(application, names["resolve_object"], received)
         lifecycle._approve(application, lifecycle._pending(application, tool="terminal"))
         lifecycle._settle(application)
         executions = lifecycle._executions(application)
@@ -1901,23 +1917,36 @@ def test_kubernetes_data_catalog_research_task(infrastructure: KubernetesFixture
     finally:
         native._stop(application)
     _settled(service, "revoked")
-    # The catalog listed the project's dataset with the worker's data paths.
+    calls = [listed, objects, resolved, refused]
+    for call in calls:
+        assert call["service_id"] == "heartwood-data"
+        assert call["project_context_id"] == context.project_context_id
+    # The catalog listed the project's dataset, its objects with the worker's data paths,
+    # and resolved one object.
     assert listed["status"] == "completed"
-    assert listed["project_context_id"] == context.project_context_id
     (dataset,) = listed["result"]["datasets"]
     assert dataset["id"] == "synthetic-cohort"
-    paths = {item["path"] for item in dataset["objects"]}
-    assert "/data/synthetic-cohort/participants.csv" in paths
     assert "synthetic-panel" not in json.dumps(listed["result"])
-    assert resolved["status"] == "completed"
-    assert resolved["result"]["object"]["path"] == "/data/synthetic-cohort/participants.csv"
+    paths = {item["path"] for item in objects["result"]["objects"]}
+    assert "/data/synthetic-cohort/participants.csv" in paths
+    found = resolved["result"]["object"]
+    assert found["path"] == "/data/synthetic-cohort/participants.csv"
     # The object of the other project is denied, with no result.
     assert refused["status"] == "denied"
     assert refused["result"] is None
-    # Every released result reached the model through its reviewed release.
-    seen = fixture.provider.received[-1]
-    assert "/data/synthetic-cohort/participants.csv" in seen
-    assert "denied" in seen
+    assert refused["limitations"] == ["The project has no object with this identifier."]
+    # Each answer reached the model only after the review of its release: a value only
+    # that answer holds is absent from every earlier request and present afterwards.
+    markers = [
+        (listed, dataset["description"]),
+        (objects, "/data/synthetic-cohort/measurements.csv"),
+        (resolved, found["self_uri"]),
+        (refused, refused["limitations"][0]),
+    ]
+    for call, marker in markers:
+        before = call["requests_before_release"]
+        assert not any(marker in request for request in received[:before]), marker
+        assert any(marker in request for request in received[before:]), marker
     assert [item["exit_code"] for item in executions][-1] == 0
     assert read.exit_code == 0
     assert str(read.stdout).startswith("participant_id,")
@@ -1927,7 +1956,7 @@ def test_kubernetes_data_catalog_research_task(infrastructure: KubernetesFixture
         {
             "drill_id": "kubernetes-data-catalog.v1",
             "attempt_id": attempt_id,
-            "calls": [listed, resolved, refused],
+            "calls": calls,
             "worker_read": str(read.stdout),
             "exchanged_audiences": sorted({audience for _, audience in researcher.exchanged}),
         },

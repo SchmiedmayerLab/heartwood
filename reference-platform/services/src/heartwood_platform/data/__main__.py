@@ -30,6 +30,8 @@ from heartwood_platform.data.catalog import Catalog
 from heartwood_platform.data.catalog_tools import Operations, create_catalog_app
 from heartwood_platform.data.signing import Credentials
 
+_LOGGER = logging.getLogger(__name__)
+
 
 class _Settings(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -126,6 +128,10 @@ def build(
         )
         if response.status_code in {httpx.codes.FORBIDDEN, httpx.codes.NOT_FOUND}:
             raise LookupError(subject, project)
+        if response.status_code == httpx.codes.UNAUTHORIZED:
+            # A wrong audience or caller list, which an operator corrects.
+            _LOGGER.warning("the control service refused the data service's token")
+            raise PermissionError(subject, project)
         response.raise_for_status()
         context = response.json().get("project_context_id")
         if not isinstance(context, str) or not context:

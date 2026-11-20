@@ -247,7 +247,8 @@ def test_the_manifest_offers_the_data_catalog_with_an_exchanged_token() -> None:
         {
             "service_id": "heartwood-data",
             "origin": "https://heartwood-data.heartwood-platform.svc.cluster.local:8443",
-            "tools": ["list_datasets", "resolve_object"],
+            "tools": ["list_datasets", "list_objects", "resolve_object"],
+            "max_result_bytes": 32768,
             "observation_tool": "get_operation",
             "private_address": True,
             "ca_file": "/etc/heartwood/deployment/platform-ca.crt",

@@ -123,8 +123,9 @@ def _catalog_destination(origin: str) -> str:
     destination: dict[str, object] = {
         "service_id": "heartwood-data",
         "origin": origin,
-        "tools": ["list_datasets", "resolve_object"],
+        "tools": ["list_datasets", "list_objects", "resolve_object"],
         "observation_tool": "get_operation",
+        "max_result_bytes": 32768,
         "private_address": True,
         "ca_file": f"{_DEPLOYMENT}/platform-ca.crt",
     }

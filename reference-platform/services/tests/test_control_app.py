@@ -729,7 +729,8 @@ def test_the_data_service_reads_the_launch_context_of_a_members_session(
 
     found = read(_BOB, "demo", "data-token")
     assert found.status_code == 200
-    assert found.json()["project_context_id"] == launch["session"]
+    # Only the identity of the launch context, without its billing binding.
+    assert found.json() == {"project_context_id": launch["session"]}
     assert read(_ALICE, "demo", "data-token").status_code == 404
     assert read(_BOB, "other", "data-token").status_code == 403
     # The spawner, operators and researchers do not read launch contexts this way.

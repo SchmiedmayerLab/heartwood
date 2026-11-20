@@ -29,6 +29,7 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 import httpx
 from fastmcp import FastMCP
@@ -63,6 +64,10 @@ CREATE TABLE IF NOT EXISTS operation (
 """
 # The request digest of an identifier first seen by get_operation, which no tool request has.
 _UNSEEN = "unseen"
+# Answers stay well below the gateway's result limit, which counts the observation twice:
+# as structured content and as its text.
+MAX_DATASETS = 20
+OBJECTS_PER_ANSWER = 10
 
 
 class OperationConflictError(Exception):
@@ -186,7 +191,11 @@ def create_catalog_app(
         mask_error_details=True,
     )
 
-    def caller(project_id: str) -> tuple[str, str, str]:
+    def caller(project_id: str, operation_id: str) -> tuple[str, str, str]:
+        try:
+            UUID(operation_id)
+        except ValueError:
+            raise ToolError("operation_id is not an operation identifier") from None
         token = get_access_token()
         if token is None:
             raise ToolError("authentication required")
@@ -197,6 +206,8 @@ def create_catalog_app(
             context = launch_context(subject, project)
         except LookupError:
             raise ToolError("no session in the project") from None
+        except PermissionError:
+            raise ToolError("the control service refused the data service") from None
         except httpx.HTTPError:
             raise ToolError("the control service is unavailable") from None
         return subject, project, context
@@ -232,7 +243,7 @@ def create_catalog_app(
         request: dict[str, Any],
         answer: Callable[[str, str], PlatformOperationObservation],
     ) -> PlatformOperationObservation:
-        subject, project, context = caller(project_id)
+        subject, project, context = caller(project_id, operation_id)
         digest = hashlib.sha256(json.dumps(request, sort_keys=True).encode()).hexdigest()
         try:
             return operations.record(
@@ -243,34 +254,83 @@ def create_catalog_app(
 
     @server.tool(annotations=_READ_ONLY)
     def list_datasets(project_id: str, operation_id: str) -> PlatformOperationObservation:
-        """List the project's datasets and their objects.
+        """List the project's datasets with their descriptions and object counts.
 
-        Each object has its DRS identifier, size, SHA-256 checksum, media type and the
-        path at which workers of the project's sessions read it.
+        list_objects lists the objects of one dataset.
         """
 
         def answer(project: str, context: str) -> PlatformOperationObservation:
+            found = catalog.datasets(project)
             datasets = [
                 {
                     "id": dataset.id,
                     "name": dataset.name,
                     "description": dataset.description,
                     "created": dataset.created.isoformat(),
+                    "object_count": len(dataset.objects),
+                }
+                for dataset in found[:MAX_DATASETS]
+            ]
+            limitations = (
+                (f"The answer lists {MAX_DATASETS} of {len(found)} datasets.",)
+                if len(found) > MAX_DATASETS
+                else ()
+            )
+            return observation(
+                context,
+                operation_id,
+                "completed",
+                result={"datasets": datasets},
+                limitations=limitations,
+            )
+
+        return run(project_id, operation_id, {"tool": "list_datasets"}, answer)
+
+    @server.tool(annotations=_READ_ONLY)
+    def list_objects(
+        dataset_id: str, project_id: str, operation_id: str, offset: int = 0
+    ) -> PlatformOperationObservation:
+        """List up to ten objects of one of the project's datasets, from ``offset`` on.
+
+        Each object has its DRS identifier, size, SHA-256 checksum, media type and the
+        path at which workers of the project's sessions read it. ``next_offset`` names
+        the offset of the next objects, or is null after the last. A dataset the project
+        does not have is denied.
+        """
+
+        def answer(project: str, context: str) -> PlatformOperationObservation:
+            entries = [
+                entry for entry in catalog.entries(project) if entry.dataset.id == dataset_id
+            ]
+            if not entries or not 0 <= offset < len(entries):
+                return observation(
+                    context,
+                    operation_id,
+                    "denied",
+                    limitations=("The project has no dataset with this identifier and offset.",),
+                )
+            page = entries[offset : offset + OBJECTS_PER_ANSWER]
+            following = offset + len(page)
+            return observation(
+                context,
+                operation_id,
+                "completed",
+                result={
+                    "dataset_id": dataset_id,
                     "objects": [
                         {
                             key: value
                             for key, value in _object(entry, hostname, mount_path).items()
                             if key in {"id", "name", "size", "mime_type", "checksums", "path"}
                         }
-                        for entry in catalog.entries(project)
-                        if entry.dataset.id == dataset.id
+                        for entry in page
                     ],
-                }
-                for dataset in catalog.datasets(project)
-            ]
-            return observation(context, operation_id, "completed", result={"datasets": datasets})
+                    "next_offset": following if following < len(entries) else None,
+                },
+            )
 
-        return run(project_id, operation_id, {"tool": "list_datasets"}, answer)
+        request = {"tool": "list_objects", "dataset_id": dataset_id, "offset": offset}
+        return run(project_id, operation_id, request, answer)
 
     @server.tool(annotations=_READ_ONLY)
     def resolve_object(
@@ -307,7 +367,7 @@ def create_catalog_app(
         An identifier the service has not seen is recorded as a failed operation, so no
         later request can use it.
         """
-        subject, project, context = caller(project_id)
+        subject, project, context = caller(project_id, operation_id)
         return operations.observe(
             (subject, project, operation_id),
             lambda: observation(

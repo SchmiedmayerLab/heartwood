@@ -208,7 +208,7 @@ The service serves only HTTPS on port 8443, with a certificate that the platform
 | `GET /ga4gh/drs/v1/objects/{object_id}` | Heartwood gateway | The DRS object: name, size, SHA-256 checksum, media type, creation time and the access method `https` |
 | `GET /ga4gh/drs/v1/objects/{object_id}/access/https` | Heartwood gateway | A URL that reads the object from versitygw |
 | `POST /v1/volume-plans` | Control service | Every object of a project with its path in a project data volume, its checksum and a URL, and the digest of the volume's content |
-| `/mcp`, MCP over streamable HTTP | Heartwood gateway | The read-only catalog tools `list_datasets`, `resolve_object` and `get_operation` |
+| `/mcp`, MCP over streamable HTTP | Heartwood gateway | The read-only catalog tools `list_datasets`, `list_objects`, `resolve_object` and `get_operation` |
 
 A Heartwood gateway sends a Keycloak access token that the project client obtained by token exchange for the audience `heartwood-data`, verified like the tokens of the control service.
 The project comes from the token: an object of another project does not exist for the caller and receives HTTP 404, and a researcher whom `projects[].members` does not list receives HTTP 403.
@@ -221,13 +221,17 @@ Its key lives in the Secret `versitygw-data`; the root account of versitygw in `
 
 The catalog tools follow Heartwood's operation binding for research MCP servers.
 Each takes `project_id` and `operation_id`, requires an exchanged token for `heartwood-data` of a project member, refuses a `project_id` other than the token's project, and returns a `heartwood.platform-operation-observation.v1` that names the launch context of the researcher's session, which the service reads from the control service.
-`list_datasets` returns the project's datasets in the observation's `result`, each object with its DRS identifier, size, checksum, media type and its path below `/data`, where workers read the project data volume.
-`resolve_object` returns the DRS object of one identifier with its path, and denies an identifier that names no object of the project.
+`list_datasets` returns up to 20 of the project's datasets in the observation's `result`, each with its description and its number of objects.
+`list_objects` returns up to ten objects of one dataset from an offset on, each with its DRS identifier, size, checksum, media type and its path below `/data`, where workers read the project data volume, and the offset of the next objects.
+The answers stay far below the gateway's limit on a tool result, which counts the observation twice, as structured content and as text.
+`operation_id` must be a UUID, as the gateway sends it.
+`resolve_object` returns the DRS object of one identifier with its path, and denies an identifier that names no object of the project, as `list_objects` denies a dataset the project does not have.
 The service keeps each observation by researcher, project and operation identifier in a SQLite database on its volume: a repeated identifier with the same request returns the kept observation, and one with another request is refused.
 `get_operation` reports a kept operation and records an identifier it has not seen as failed, so that identifier is refused afterwards.
 
-The control service writes the catalog into each hosted gateway's deployment manifest as an `[[mcp_destinations]]` entry with the service identifier `heartwood-data`, the two selectable tools, `get_operation` as observation tool, the platform CA and the token exchange for `svc-data`.
-A researcher adds it as a research service at `https://heartwood-data.heartwood-platform.svc.cluster.local:8443/mcp`, reviews and selects its tools, and enables it; each call is then an outside operation with its own review and result release.
+The control service writes the catalog into each hosted gateway's deployment manifest as an `[[mcp_destinations]]` entry with the service identifier `heartwood-data`, the three selectable tools, `get_operation` as observation tool, a result limit of 32 KiB, the platform CA and the token exchange for `svc-data`.
+A researcher adds it as a research service at `https://heartwood-data.<release namespace>.svc.cluster.local:8443/mcp`, reviews and selects its tools, and enables it; each call is then an outside operation with its own review and result release.
+The control service answers the data service's request for a launch context with the context's identifier only.
 
 ### Project Data Volumes
 

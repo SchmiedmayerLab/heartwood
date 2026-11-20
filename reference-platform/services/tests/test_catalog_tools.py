@@ -21,6 +21,7 @@ from fakes import ISSUER, SigningKey, TokenReviews
 from heartwood_platform.common.tokens import ResearcherTokens, ServiceTokens
 from heartwood_platform.data.access import ObjectAccess
 from heartwood_platform.data.app import create_app
+from heartwood_platform.data.catalog import Catalog as CatalogModel
 from heartwood_platform.data.catalog_tools import (
     MCP_PATH,
     OBSERVATION_TOOL,
@@ -39,11 +40,11 @@ _HOST = "heartwood-data.heartwood-platform.svc.cluster.local:8443"
 
 
 class Catalog:
-    def __init__(self, directory: Path) -> None:
+    def __init__(self, directory: Path, document: dict[str, Any] | None = None) -> None:
         self.key = SigningKey()
         self.contexts = {(_ALICE, "demo"): "session-alice-demo", (_BOB, "demo"): "session-bob"}
         self.unavailable = False
-        catalog = _catalog()
+        catalog = _catalog() if document is None else CatalogModel.model_validate(document)
         researchers = ResearcherTokens(ISSUER, "heartwood-data", self.key.key_set)
         tools = create_catalog_app(
             catalog,
@@ -124,13 +125,18 @@ def test_every_tool_is_read_only_and_takes_the_operation_binding(
 ) -> None:
     service, client = catalog
     tools = _rpc(client, service.headers(), "tools/list", {}).json()["result"]["tools"]
-    assert {tool["name"] for tool in tools} == {"list_datasets", "resolve_object", OBSERVATION_TOOL}
+    assert {tool["name"] for tool in tools} == {
+        "list_datasets",
+        "list_objects",
+        "resolve_object",
+        OBSERVATION_TOOL,
+    }
     for tool in tools:
         assert tool["annotations"]["readOnlyHint"] is True
         assert {"project_id", "operation_id"} <= set(tool["inputSchema"]["required"])
 
 
-def test_the_listing_names_each_object_with_its_checksum_and_data_path(
+def test_the_listing_names_the_projects_datasets_and_their_objects(
     catalog: tuple[Catalog, TestClient],
 ) -> None:
     service, client = catalog
@@ -143,13 +149,90 @@ def test_the_listing_names_each_object_with_its_checksum_and_data_path(
     assert observed.operation_id == operation
     assert observed.service_id == "heartwood-data"
     result: Any = observed.result
-    assert result is not None
     (dataset,) = result["datasets"]
-    assert dataset["id"] == "synthetic-cohort"
-    paths = {item["path"] for item in dataset["objects"]}
-    assert paths == {"/data/synthetic-cohort/participants.csv", "/data/synthetic-cohort/README.md"}
+    assert (dataset["id"], dataset["object_count"]) == ("synthetic-cohort", 2)
     # Another project's dataset is not listed.
-    assert "other-panel" not in json.dumps(observed.result)
+    assert "other-panel" not in json.dumps(result)
+    objects = _observation(
+        _call(
+            client,
+            service.headers(),
+            "list_objects",
+            dataset_id="synthetic-cohort",
+            project_id="demo",
+            operation_id=str(uuid4()),
+        )
+    )
+    listed: Any = objects.result
+    assert {item["path"] for item in listed["objects"]} == {
+        "/data/synthetic-cohort/participants.csv",
+        "/data/synthetic-cohort/README.md",
+    }
+    assert listed["next_offset"] is None
+    denied = _observation(
+        _call(
+            client,
+            service.headers(),
+            "list_objects",
+            dataset_id="other-panel",
+            project_id="demo",
+            operation_id=str(uuid4()),
+        )
+    )
+    assert denied.status == "denied"
+
+
+def test_answers_of_a_large_catalog_stay_below_the_result_limit(tmp_path: Path) -> None:
+    document = _catalog().model_dump(mode="json")
+    dataset = document["projects"][0]["datasets"][0]
+    dataset["objects"] = [
+        {**dataset["objects"][0], "name": f"part-{index:04d}-of-a-long-synthetic-name.csv"}
+        for index in range(200)
+    ]
+    document["projects"][0]["datasets"] = [
+        {**dataset, "id": f"synthetic-cohort-{index:02d}"} for index in range(30)
+    ]
+    service = Catalog(tmp_path, document=document)
+    with TestClient(service.app) as client:
+        listing = _rpc(
+            client,
+            service.headers(),
+            "tools/call",
+            {
+                "name": "list_datasets",
+                "arguments": {"project_id": "demo", "operation_id": str(uuid4())},
+            },
+        )
+        page = _rpc(
+            client,
+            service.headers(),
+            "tools/call",
+            {
+                "name": "list_objects",
+                "arguments": {
+                    "dataset_id": "synthetic-cohort-00",
+                    "project_id": "demo",
+                    "operation_id": str(uuid4()),
+                    "offset": 190,
+                },
+            },
+        )
+    for response in (listing, page):
+        # The gateway counts the whole tool result against its limit, at most 32 KiB.
+        result = response.json()["result"]
+        assert len(json.dumps(result).encode()) < 16 * 1024
+    assert len(listing.json()["result"]["structuredContent"]["result"]["datasets"]) == 20
+    assert listing.json()["result"]["structuredContent"]["limitations"]
+    objects = page.json()["result"]["structuredContent"]["result"]
+    assert (len(objects["objects"]), objects["next_offset"]) == (10, None)
+
+
+def test_an_operation_identifier_must_be_a_uuid(catalog: tuple[Catalog, TestClient]) -> None:
+    service, client = catalog
+    refused = _call(
+        client, service.headers(), "get_operation", project_id="demo", operation_id="x" * 5000
+    )
+    assert refused["isError"] is True
 
 
 def test_an_object_resolves_to_its_drs_object_and_data_path(

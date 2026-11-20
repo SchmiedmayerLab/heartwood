@@ -208,7 +208,8 @@ def create_app(
         project = _PROJECT_ID.validate_python(request.path_params["project"])
         read = ContextRequest.model_validate_json(body)
         context = launches.context(read.subject, project)
-        return JSONResponse(context.model_dump(mode="json"))
+        # A service needs the identity of the session's launch context, and no billing data.
+        return JSONResponse({"project_context_id": context.project_context_id})
 
     async def read_service_context(request: Request) -> Response:
         # The subject travels in the body, so that no subject appears in a URL.

@@ -825,6 +825,8 @@ A read-only tool named as the destination's `observation_tool` reports an operat
 For an identifier it never received, it reports the status `failed` and refuses any later call with that identifier, so an operation whose request never arrived can be settled.
 A completed read-only operation, such as a catalog listing, returns what it read in the observation's optional `result` object.
 The released content is the observation that the observation tool reports, so the result reaches the model only through its release review and within `max_result_bytes`.
+That limit applies to the whole tool result, in which an MCP server sends the structured content and usually its text again, so a service bounds its answers, for example by listing in pages.
+Only an observation with the status `completed` carries a `result`.
 
 Every call needs an outside operation review and a separate result release review; no review mode decides either.
 Disabling or disconnecting a server, changing its tools, or an expired token refuses pending calls, and completed remote work is not undone.
