@@ -289,7 +289,7 @@ A refusal by the provider is reported as `HW-INGRESS-004` and an unreachable pro
 
 ### Token Handling
 
-The gateway keeps the researcher's access and refresh tokens, exchanged service tokens, the client secret and capabilities in process memory.
+The gateway keeps the researcher's access and refresh tokens, exchanged service tokens, the client secret, authorization codes and capabilities in process memory.
 They are not written to project files, protected state, events, audit exports or logs, and they are not passed to agent tools or to the model.
 Without a [`[worker]`](../reference/configuration.md#deployment-manifest) table, agent tools run as the gateway's operating-system user and can read the client secret file and, where the operating system permits it, the gateway's memory.
 A deployment with `[identity]` should therefore also configure a worker.
