@@ -265,6 +265,7 @@ The qualified sandbox gateway rejects deletion of a sandbox whose provisioning h
 The attempt therefore stays fenced and its revocation keeps being retried; a sandbox that appears under the attempt's unique name with its full identity is deleted, and the attempt is recorded as revoked.
 With the Kubernetes driver and a sandbox gateway that reports `openshell.compute.create-rejects-deleted-name`, revocation asks the gateway by deleting the attempt's name with `allow_missing`.
 The answer `ALREADY_ABSENT` records `not-created`, because that gateway rejects a later creation under the name.
+Each creation request carries the attempt's identifier as its `request_id`, so the gateway never executes a repeated delivery of it, also after the sandbox was deleted.
 Only `ALREADY_ABSENT` counts as the gateway's confirmation; `NOT_FOUND` from a deletion is never evidence of absence.
 A completed or accepted deletion is followed as the deletion of the sandbox whose identity the gateway returns, and records `revoked`.
 Any other answer keeps the attempt fenced.

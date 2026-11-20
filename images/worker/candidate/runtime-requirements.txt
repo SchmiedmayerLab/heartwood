@@ -2449,8 +2449,8 @@ openhands-tools==1.62.0+heartwood.3 \
     # via
     #   -r images/worker/candidate/runtime.in
     #   openhands-agent-server
-openshell==0.1.9+heartwood.1 \
-    --hash=sha256:44e9f055fb42469d083afd492d866e72dce928601aa618f94ab6edb95c2e8abc
+openshell==0.1.9+heartwood.2 \
+    --hash=sha256:4f628d5f8cc9b451ad1be2de16ff453c3f82dc88ef053b22454ba9c95b18a87f
     # via -r images/worker/candidate/runtime.in
 opentelemetry-api==1.45.2 \
     --hash=sha256:2cbd737377e710ee740d261c94e93fa0f08e6d037c18f17513cc0a2d94479a34 \

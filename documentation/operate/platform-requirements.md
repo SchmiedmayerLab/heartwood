@@ -254,6 +254,10 @@ The qualification build has two further behaviors that the unmodified upstream r
   The gateway reports this behavior as capability `openshell.compute.create-rejects-deleted-name` on its compute driver.
   With the Kubernetes driver, Heartwood records an unanswered creation as never created only through a gateway that reports this capability; without it the attempt stays fenced.
 
+Heartwood sends the worker attempt's identifier as the `request_id` of its creation request.
+The gateway then executes that request at most once: within its replay window, 24 hours by default, a repeated delivery receives the original result while the sandbox exists and is refused after its deletion.
+A creation delivered again after a revocation therefore creates no sandbox.
+
 These behaviors have limits that fail closed.
 In rare cases a name stays rejected until its record expires although a deletion found its sandbox: two concurrent deletions that both find the sandbox, a store outage longer than the gateway's retries, or a gateway crash between the record and its withdrawal.
 Gateway clocks that differ by more than 5 minutes, or that jump, can end a record's 24 hours early.
