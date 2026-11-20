@@ -6,8 +6,7 @@
     "versitygw": {
       "revision": "72f75bd0f4c67a7663d3c56b80f05a44f6732db8",
       "url": "https://codeload.github.com/versity/versitygw/tar.gz/72f75bd0f4c67a7663d3c56b80f05a44f6732db8",
-      "directory": "versitygw-72f75bd0f4c67a7663d3c56b80f05a44f6732db8",
-      "sha256": "b8066fed8342ada7a3828ba12c87cf8c5187e684e70b8ead0be16f7160884033",
+      "tree_sha256": "f53661bd2586a3a0a07832fbbfe6f7085bfa727ea246d6eee9559e4bb652fb71",
       "package": "./cmd/versitygw",
       "notices": ["LICENSE", "NOTICE"]
     }
