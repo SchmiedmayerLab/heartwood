@@ -277,7 +277,7 @@ Every accepted command records the verified subject as its actor.
 
 ### Service Tokens
 
-A platform service whose [destination](../reference/configuration.md#mcp-destinations) declares a `token_exchange` receives a token that the gateway obtains by OAuth token exchange.
+A platform service whose [destination](../reference/configuration.md#mcp-destinations) or [planning table](../reference/configuration.md#planning-service) declares a `token_exchange` receives a token that the gateway obtains by OAuth token exchange.
 The gateway authenticates as its client and presents the researcher's access token as the subject token, with the scope and audience from the manifest; neither value comes from a request, the agent or project content.
 The service receives a token with its own audience, the gateway's client as authorized party and the researcher as subject, as the [platform contract](platform-contract.md#service-tokens) specifies.
 The subject token is the access token of the latest browser sign-in, which the gateway refreshes; while no browser sign-in is live, it is the latest-expiring access token that a client presented as a bearer token, until that token expires.
