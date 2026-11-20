@@ -1101,7 +1101,7 @@ def test_kubernetes_staging_name_workspace_creates_no_pod(
             "workspace": workspace,
             "creation_refusal": refusal,
             "creation_refusal_details": refusal_details,
-            "objects_named_hw_staging": staged,
+            "objects_of_the_workspace": staged,
         },
     )
 

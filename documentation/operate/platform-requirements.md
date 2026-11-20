@@ -197,6 +197,7 @@ An admission policy limits what it creates there to pods of the staging shape, w
 The staging pod runs the worker image, so the policy admits each worker image the deployment manifests name, the current and the next one during a change of the image.
 The reference platform ships this as the ValidatingAdmissionPolicy `heartwood-staging-shape`.
 Because such exec sessions are admitted by pod name, no other ServiceAccount may create a pod or a Sandbox resource whose name begins with `hw-staging` in the namespace; the reference platform ships this as the ValidatingAdmissionPolicy `heartwood-staging-names`.
+The policy applies to ServiceAccounts, so the cluster's controllers must create pods with their own ServiceAccount credentials, as `kube-controller-manager --use-service-account-credentials=true` does.
 
 The [sandbox gateway](#sandbox-gateway), with these settings:
 
