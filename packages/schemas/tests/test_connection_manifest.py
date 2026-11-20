@@ -41,6 +41,7 @@ def test_manifest_round_trip_preserves_supported_fields() -> None:
         "base_url": "https://models.example/v1",
         "api_key_env": None,
         "api_key_file": None,
+        "ca_file": "/etc/heartwood/deployment/platform-ca.crt",
         "api_version": "v1",
         "aws_region_name": "region-1",
         "aws_profile_name": "research",

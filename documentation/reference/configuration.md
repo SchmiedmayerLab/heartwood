@@ -329,6 +329,7 @@ The gateway validates connections as described in [Inference](../operate/platfor
 Each declaration must name a connection in `[model_connections]` and declare its model once, and `[model_metadata]` requires `[model_connections]`.
 `[policy]` must still permit each connection's endpoints, credential reference and data destination.
 Credential references name a variable or mounted file; the manifest never holds the credential.
+An `openai` or `openai-compatible` connection with an `https` catalog endpoint may name `ca_file`, an absolute PEM file of certificate authorities that replaces the default certificate bundle for model discovery, such as a platform CA; it follows the rules for operator files and must load as a certificate authority file.
 An invalid table stops the launch with [`HW-DEPLOY-001`](troubleshooting.md#hw-deploy-001-deployment-manifest-is-unavailable-or-invalid).
 
 ### MCP Destinations
