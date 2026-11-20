@@ -294,11 +294,22 @@ def test_the_hub_creates_only_gateway_pods_of_the_admitted_shape(
         {
             **containers[0],
             "volumeMounts": [
-                {**mount, "subPath": "deployment"} if mount["mountPath"] == "/research" else mount
+                {**mount, "name": "work", "subPath": "deployment"}
+                if mount["mountPath"] == "/research"
+                else mount
                 for mount in containers[0]["volumeMounts"]
             ],
         }
     ]
+    # A volume named like the ServiceAccount token volume that carries the Secret.
+    token_like = [
+        *pod["spec"]["volumes"],
+        {
+            "name": "kube-api-access-x",
+            "projected": {"sources": [{"secret": {"name": f"hw-gw-{server.session}"}}]},
+        },
+    ]
+    annotated = {**pod["metadata"], "annotations": {"k8s.v1.cni.cncf.io/networks": "other"}}
     # The init container writing the copies onto the server's volume.
     persisted = [
         {
@@ -332,6 +343,8 @@ def test_the_hub_creates_only_gateway_pods_of_the_admitted_shape(
         ("exactly the volumes and paths", changed(initContainers=persisted)),
         ("configuration script", changed(initContainers=sidecar)),
         ("cluster's DNS", changed(hostAliases=[{"ip": "10.0.0.1", "hostnames": ["keycloak"]}])),
+        ("its ServiceAccount token", changed(volumes=token_like)),
+        ("only annotations of JupyterHub", {**changed(), "metadata": annotated}),
         (
             "only the labels",
             {**changed(), "metadata": {**pod["metadata"], "labels": labels}},

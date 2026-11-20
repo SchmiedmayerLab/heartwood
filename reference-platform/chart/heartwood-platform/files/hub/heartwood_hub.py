@@ -22,6 +22,7 @@ import json
 import re
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 # A directory mount of the chart's ConfigMap, which kubelet updates after an upgrade.
 SETTINGS = Path("/usr/local/etc/heartwood/hub/config/settings.json")
@@ -31,6 +32,17 @@ CONFIGURE = "/usr/local/libexec/heartwood-hosted-configure"
 _PROJECT = re.compile(r"^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$")
 # The subject form that the control service accepts in its paths.
 _SUBJECT = re.compile(r"^[A-Za-z0-9-]{1,64}$")
+
+
+def launch_path(subject: str, project: str) -> str | None:
+    """Return the control service's launch path of a researcher's project server.
+
+    A server name may hold any character, including an encoded slash, so only names of
+    the project form, and subjects of the control service's form, reach a path.
+    """
+    if not _SUBJECT.fullmatch(subject) or not _PROJECT.fullmatch(project):
+        return None
+    return f"/v1/researchers/{quote(subject, safe='')}/projects/{quote(project, safe='')}/launch"
 
 
 def profiles(projects: list[str], server: str) -> list[dict[str, Any]]:
@@ -138,7 +150,7 @@ def configure(c: Any, settings: dict[str, Any]) -> None:  # noqa: ANN401
     async def projects(subject: str) -> list[str]:
         if not _SUBJECT.fullmatch(subject):
             return []
-        status, answer = await control("GET", f"/v1/researchers/{subject}/projects")
+        status, answer = await control("GET", f"/v1/researchers/{quote(subject, safe='')}/projects")
         if status != 200 or not isinstance(answer, dict):
             return []
         return [item for item in answer.get("projects", []) if isinstance(item, str)]
@@ -157,9 +169,9 @@ def configure(c: Any, settings: dict[str, Any]) -> None:  # noqa: ANN401
         chosen = (spawner.user_options or {}).get("profile")
         if chosen not in (None, project):
             raise web.HTTPError(400, "The server name must be the chosen project.")
-        status, launch = await control(
-            "PUT", f"/v1/researchers/{subject}/projects/{project}/launch"
-        )
+        path = launch_path(subject, project)
+        assert path is not None
+        status, launch = await control("PUT", path)
         if status in {403, 404}:
             raise web.HTTPError(403, "You are not a member of this project.")
         if status != 200 or not isinstance(launch, dict):
@@ -196,10 +208,10 @@ def configure(c: Any, settings: dict[str, Any]) -> None:  # noqa: ANN401
 
         async def delete_forever(self) -> None:
             """Remove the session at the control service with the named server."""
-            if self.name:
-                status, _ = await control(
-                    "DELETE", f"/v1/researchers/{self.user.name}/projects/{self.name}/launch"
-                )
+            # A name outside the project form never started a server, so it has no session.
+            path = launch_path(self.user.name, self.name or "")
+            if path is not None:
+                status, _ = await control("DELETE", path)
                 if status not in {200, 204, 404}:
                     raise web.HTTPError(502, "The platform could not remove the session.")
             await super().delete_forever()

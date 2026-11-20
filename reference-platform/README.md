@@ -213,9 +213,9 @@ The Hub remains a trusted platform component: it can start the gateway of any se
 
 - A pod carries its session label and the role label `hosted-gateway`, and uses the ServiceAccount `hw-gw-<session>` of that session.
 - A pod runs one init container and one container of `images.hostedGateway`; the init container runs only `heartwood-hosted-configure`, and the container only `heartwood gateway serve` with the fixed arguments above.
-- A pod carries only the labels of a JupyterHub server and its session labels.
-- A pod mounts only its session's Secret, a memory volume, a temporary volume, the volume claim `hw-home-<session>` and its ServiceAccount token, and each container mounts exactly the volumes, paths and subdirectories of the layout above, so only the init container mounts the Secret and the copies stay in the memory volume.
-- A pod sets only the environment variables that JupyterHub and KubeSpawner set and `HOME`, takes no value from another object, has no lifecycle hook, no exec probe and the default termination message, and resolves names through the cluster's DNS only.
+- A pod carries only the labels of a JupyterHub server and its session labels, and only annotations under `hub.jupyter.org/`.
+- A pod mounts only its session's Secret, a memory volume, a temporary volume, the volume claim `hw-home-<session>` and the standard ServiceAccount token volume, and each container mounts exactly the volumes, paths and subdirectories of the layout above, so only the init container mounts the Secret and the copies stay in the memory volume.
+- A pod sets only environment variables of the names that JupyterHub and KubeSpawner use and `HOME`, with literal values, has no lifecycle hook, no exec probe, no probe of another host and the default termination message, and resolves names through the cluster's DNS only.
 - A pod runs as user `10001` without host access, with the default seccomp profile, a read-only root file system and no capabilities.
 - A volume claim is named `hw-home-<session>` and names no data source, volume or selector.
 

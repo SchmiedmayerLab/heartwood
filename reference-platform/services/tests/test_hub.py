@@ -102,6 +102,7 @@ def test_hub_pods_are_admitted_only_in_the_gateway_shape(objects: list[dict[str,
         "configuration script",
         "fixed arguments",
         "default termination message",
+        "only annotations of JupyterHub",
         "cluster's DNS",
         "without host access",
         "its volume claim hw-home-<session>",
@@ -215,3 +216,12 @@ def test_only_the_hub_and_the_proxy_reach_the_gateway_pods(objects: list[dict[st
     }
     namespace = _named(objects, "Namespace", "heartwood-sessions")
     assert namespace["metadata"]["labels"]["pod-security.kubernetes.io/enforce"] == "restricted"
+
+
+def test_only_project_server_names_reach_the_control_service() -> None:
+    launch_path = _module().launch_path
+    subject = "6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0001"
+    assert launch_path(subject, "demo") == f"/v1/researchers/{subject}/projects/demo/launch"
+    for name in ("x/../../../other/projects/demo", "..", "demo/x", "Demo", "", "demo%2F"):
+        assert launch_path(subject, name) is None, name
+    assert launch_path("../hub", "demo") is None

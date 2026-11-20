@@ -68,6 +68,11 @@ spec:
         && (!('app.kubernetes.io/component' in object.metadata.labels)
         || object.metadata.labels['app.kubernetes.io/component'] == 'singleuser-server'))
       message: a gateway pod carries only the labels of a JupyterHub server and its session labels
+    # Some network plugins read pod annotations, such as additional networks.
+    - expression: >-
+        !variables.pod || !has(object.metadata.annotations)
+        || object.metadata.annotations.all(k, k.startsWith('hub.jupyter.org/'))
+      message: a gateway pod carries only annotations of JupyterHub
     - expression: >-
         !variables.pod || (size(object.spec.containers) == 1
         && has(object.spec.initContainers) && size(object.spec.initContainers) == 1
@@ -99,11 +104,12 @@ spec:
         && (e.name.matches('^(JUPYTERHUB_[A-Z_]+|JPY_API_TOKEN|JUPYTER_IMAGE(_SPEC)?|MEM_(LIMIT|GUARANTEE)|CPU_(LIMIT|GUARANTEE))$')
         || (e.name == 'HOME' && e.value == '/tmp'))))
         && [has(c.livenessProbe) ? c.livenessProbe : {}, has(c.readinessProbe) ? c.readinessProbe : {},
-        has(c.startupProbe) ? c.startupProbe : {}].all(p, !has(p.exec))
+        has(c.startupProbe) ? c.startupProbe : {}].all(p, !has(p.exec)
+        && (!has(p.httpGet) || !has(p.httpGet.host)) && (!has(p.tcpSocket) || !has(p.tcpSocket.host)))
         && !has(c.volumeDevices)
         && (!has(c.terminationMessagePath) || c.terminationMessagePath == '/dev/termination-log')
         && (!has(c.terminationMessagePolicy) || c.terminationMessagePolicy == 'File'))
-      message: a gateway pod sets only the Hub's environment variables, no lifecycle hook, no exec probe and the default termination message
+      message: a gateway pod sets only the Hub's environment variables, no lifecycle hook, no exec probe, no probe of another host and the default termination message
     # The gateway resolves Keycloak, the control service and the API server through the
     # cluster's DNS only.
     - expression: >-
@@ -115,7 +121,7 @@ spec:
         && has(object.spec.securityContext.runAsNonRoot) && object.spec.securityContext.runAsNonRoot
         && has(object.spec.securityContext.seccompProfile)
         && object.spec.securityContext.seccompProfile.type == 'RuntimeDefault'
-        && (!has(object.spec.securityContext.runAsUser) || object.spec.securityContext.runAsUser == 10001)
+        && has(object.spec.securityContext.runAsUser) && object.spec.securityContext.runAsUser == 10001
         && (!has(object.spec.hostNetwork) || !object.spec.hostNetwork)
         && (!has(object.spec.hostPID) || !object.spec.hostPID)
         && (!has(object.spec.hostIPC) || !object.spec.hostIPC)
@@ -137,10 +143,14 @@ spec:
         || (v.name == 'work' && has(v.emptyDir) && has(v.emptyDir.medium) && v.emptyDir.medium == 'Memory')
         || (v.name == 'tmp' && has(v.emptyDir))
         || (v.name == 'home' && has(v.persistentVolumeClaim) && v.persistentVolumeClaim.claimName == 'hw-home-' + variables.session)
-        || (v.name.startsWith('kube-api-access-') && has(v.projected) && v.projected.sources.all(s,
-        (has(s.serviceAccountToken) && !has(s.serviceAccountToken.audience))
-        || (has(s.configMap) && s.configMap.name == 'kube-root-ca.crt')
-        || has(s.downwardAPI)))))
+        || (v.name.startsWith('kube-api-access-') && has(v.projected) && size(v.projected.sources) == 3
+        && v.projected.sources.exists(s, has(s.serviceAccountToken)
+        && !has(s.serviceAccountToken.audience) && s.serviceAccountToken.path == 'token')
+        && v.projected.sources.exists(s, has(s.configMap) && s.configMap.name == 'kube-root-ca.crt'
+        && size(s.configMap.items) == 1 && s.configMap.items[0].key == 'ca.crt' && s.configMap.items[0].path == 'ca.crt')
+        && v.projected.sources.exists(s, has(s.downwardAPI) && size(s.downwardAPI.items) == 1
+        && s.downwardAPI.items[0].path == 'namespace'
+        && s.downwardAPI.items[0].fieldRef.fieldPath == 'metadata.namespace'))))
       message: a gateway pod mounts only its session's Secret, a memory volume, a temporary volume, its volume claim hw-home-<session> and its ServiceAccount token
     # The init container writes the copies of the Secret into the memory volume, and the
     # container reads them only where the gateway expects them.
