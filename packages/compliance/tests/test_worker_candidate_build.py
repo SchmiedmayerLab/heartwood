@@ -6,13 +6,16 @@
 
 from __future__ import annotations
 
+import gzip
 import hashlib
 import importlib.util
+import io
 import json
 import os
 import shutil
 import subprocess
 import sys
+import tarfile
 import tomllib
 import zipfile
 from pathlib import Path
@@ -97,6 +100,225 @@ def test_source_cache_is_reverified_before_extraction(
     assert not (tmp_path / "staging").exists()
 
 
+type _Tree = dict[str, tuple[int | str, bytes]]
+
+_TREE: _Tree = {
+    "LICENSE": (0o644, b"Synthetic license"),
+    "bin/tool": (0o755, b"#!/bin/sh\n"),
+    "src/module.py": (0o644, b"VALUE = 1\n"),
+    "src/alias.py": ("module.py", b""),
+}
+
+
+def _archive(
+    tree: _Tree,
+    root: str = "Upstream-abc",
+    *,
+    regenerated: bool = False,
+) -> bytes:
+    """Build a revision archive; a regenerated one differs only in archive metadata."""
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w", format=tarfile.PAX_FORMAT) as bundle:
+        if not regenerated:
+            bundle.pax_headers = {"comment": "abc"}
+        directories = sorted({str(Path(name).parent) for name in tree} - {"."})
+        for name in ["", *directories]:
+            entry = tarfile.TarInfo(f"{root}/{name}".rstrip("/"))
+            entry.type, entry.mode = tarfile.DIRTYPE, 0o775 if regenerated else 0o755
+            bundle.addfile(entry)
+        for name, (mode, content) in sorted(tree.items(), reverse=regenerated):
+            entry = tarfile.TarInfo(f"{root}/{name}")
+            entry.mtime, entry.uname = (1, "regenerated") if regenerated else (0, "")
+            if isinstance(mode, str):
+                entry.type, entry.linkname = tarfile.SYMTYPE, mode
+                bundle.addfile(entry)
+            else:
+                entry.mode, entry.size = mode, len(content)
+                bundle.addfile(entry, io.BytesIO(content))
+    return gzip.compress(buffer.getvalue(), compresslevel=1 if regenerated else 9, mtime=0)
+
+
+def _tree_digest(builder: ModuleType, tree: _Tree, path: Path) -> str:
+    archive = path.with_suffix(".tar.gz")
+    archive.write_bytes(_archive(tree))
+    with pytest.raises(ValueError, match="tree_sha256 is ") as failure:
+        builder._source({"url": archive.as_uri(), "tree_sha256": "0" * 64}, path)
+    return str(failure.value).rsplit(" ", 1)[1]
+
+
+def _serve(monkeypatch: pytest.MonkeyPatch, builder: ModuleType, archive: bytes) -> list[str]:
+    requests: list[str] = []
+
+    def urlopen(url: str, **_kwargs: object) -> io.BytesIO:
+        requests.append(url)
+        return io.BytesIO(archive)
+
+    monkeypatch.setattr(builder.urllib.request, "urlopen", urlopen)
+    return requests
+
+
+def test_regenerated_revision_archive_verifies_by_content(
+    builder: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    expected = _tree_digest(builder, _TREE, tmp_path / "reviewed")
+    regenerated = _archive(_TREE, "renamed-abc", regenerated=True)
+    assert regenerated != _archive(_TREE)
+    source = {"url": "https://example.invalid/abc", "tree_sha256": expected}
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    requests = _serve(monkeypatch, builder, regenerated)
+    checkout = builder._source(source, tmp_path / "first", cache=cache)
+    assert checkout.name == "renamed-abc"
+    assert (checkout / "src/alias.py").readlink() == Path("module.py")
+    assert os.access(checkout / "bin/tool", os.X_OK)
+    assert requests == [source["url"]]
+    # A cached archive with other bytes but the same content is accepted without a download.
+    assert (cache / f"{expected}.tar.gz").read_bytes() == regenerated
+    (cache / f"{expected}.tar.gz").write_bytes(_archive(_TREE))
+    builder._source(source, tmp_path / "second", cache=cache)
+    assert requests == [source["url"]]
+
+
+@pytest.mark.parametrize(
+    "change",
+    ["content", "mode", "link", "added", "removed", "renamed", "directory", "second-root"],
+)
+def test_changed_revision_content_fails_closed(
+    builder: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+    expected = _tree_digest(builder, _TREE, tmp_path / "reviewed")
+    tree: _Tree = dict(_TREE)
+    if change == "content":
+        tree["src/module.py"] = (0o644, b"VALUE = 2\n")
+    elif change == "mode":
+        tree["LICENSE"] = (0o755, tree["LICENSE"][1])
+    elif change == "link":
+        tree["src/alias.py"] = ("../LICENSE", b"")
+    elif change == "added":
+        tree["src/added.py"] = (0o644, b"")
+    elif change == "removed":
+        del tree["bin/tool"]
+    elif change == "renamed":
+        tree["src/renamed.py"] = tree.pop("src/module.py")
+    archive = _archive(tree)
+    if change in {"directory", "second-root"}:
+        buffer = io.BytesIO(gzip.decompress(archive))
+        with tarfile.open(fileobj=buffer, mode="a") as bundle:
+            entry = tarfile.TarInfo(
+                "Upstream-abc/empty" if change == "directory" else "Other-abc/hook.py"
+            )
+            if change == "directory":
+                entry.type = tarfile.DIRTYPE
+                bundle.addfile(entry)
+            else:
+                bundle.addfile(entry, io.BytesIO(b""))
+        archive = gzip.compress(buffer.getvalue())
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    _serve(monkeypatch, builder, archive)
+    with pytest.raises(ValueError, match="digest mismatch"):
+        builder._source(
+            {"url": "https://example.invalid/abc", "tree_sha256": expected},
+            tmp_path / "staging",
+            cache=cache,
+        )
+    assert not list(cache.iterdir())
+
+
+@pytest.mark.parametrize(
+    ("name", "link"),
+    [
+        ("../outside", None),
+        ("/heartwood-absolute-entry", None),
+        ("Upstream-abc/escape", "../../outside"),
+        ("Upstream-abc/escape", "/"),
+    ],
+)
+def test_revision_archive_cannot_write_outside_staging(
+    builder: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+    link: str | None,
+) -> None:
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w") as bundle:
+        entry = tarfile.TarInfo(name)
+        if link is None:
+            bundle.addfile(entry, io.BytesIO(b""))
+        else:
+            entry.type, entry.linkname = tarfile.SYMTYPE, link
+            bundle.addfile(entry)
+            bundle.addfile(tarfile.TarInfo(name + "/written"), io.BytesIO(b""))
+    _serve(monkeypatch, builder, gzip.compress(buffer.getvalue()))
+    work = tmp_path / "work"
+    with pytest.raises(ValueError, match="digest mismatch"):
+        builder._source({"url": "https://example.invalid", "tree_sha256": "0" * 64}, work / "a")
+    assert [path.name for path in work.iterdir()] == ["a"]
+    assert not (tmp_path / "outside").exists()
+    assert not Path("/heartwood-absolute-entry").exists()
+    assert not Path("/written").exists()
+
+
+@pytest.mark.parametrize(
+    "digests",
+    [{}, {"sha256": "a" * 64, "tree_sha256": "a" * 64}, {"tree_sha256": "../outside"}],
+)
+def test_source_records_exactly_one_digest(
+    builder: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, digests: dict[str, str]
+) -> None:
+    _serve(monkeypatch, builder, b"")
+    with pytest.raises(ValueError, match=r"exactly one|hex digest"):
+        builder._source(
+            {"url": "https://example.invalid", **digests}, tmp_path / "staging", cache=tmp_path
+        )
+
+
+def test_records_fixture_verifies_the_same_tree_digest(
+    builder: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = importlib.util.spec_from_file_location(
+        "records_fixture", _ROOT / "deploy/build-records-fixture.py"
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    records = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(records)
+    expected = _tree_digest(builder, _TREE, tmp_path / "reviewed")
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    monkeypatch.setattr(
+        records.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: io.BytesIO(_archive(_TREE, "renamed", regenerated=True)),
+    )
+    source = {"url": "https://example.invalid", "tree_sha256": expected}
+    checkout, _ = records.source_checkout(source, tmp_path / "first", cache)
+    assert records.tree_digest(checkout) == expected
+    changed: _Tree = {**_TREE, "LICENSE": (0o644, b"Changed license")}
+    (cache / f"{expected}.tar.gz").write_bytes(_archive(changed))
+    with pytest.raises(ValueError, match="digest mismatch"):
+        records.source_checkout(source, tmp_path / "second", cache)
+
+
+def test_generated_revision_archives_are_pinned_by_content() -> None:
+    candidate = _ROOT / "images/worker/candidate"
+    gateway = json.loads((candidate / "gateway.json").read_text())
+    sources = [
+        gateway["source"],
+        *gateway["cmake"].values(),
+        *gateway["cli"].values(),
+        *json.loads((candidate / "sources.json").read_text())["sources"].values(),
+        *json.loads((candidate / "records.json").read_text())["sources"].values(),
+    ]
+    for source in sources:
+        generated = source["url"].startswith("https://codeload.github.com/")
+        assert generated == ("tree_sha256" in source) != ("sha256" in source), source["url"]
+        if generated:
+            assert source["url"].endswith("/tar.gz/" + source["revision"])
+            assert "directory" not in source
+
+
 @pytest.fixture
 def builder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ModuleType:
     spec = importlib.util.spec_from_file_location(
@@ -124,7 +346,7 @@ def builder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ModuleType:
                 "sources": {
                     "synthetic": {
                         "url": "https://example.invalid/source.tar.gz",
-                        "sha256": "a" * 64,
+                        "tree_sha256": "a" * 64,
                         "patches": [
                             {"path": "reviewed.patch", "sha256": hashlib.sha256(patch).hexdigest()}
                         ],

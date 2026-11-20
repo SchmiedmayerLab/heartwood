@@ -18,6 +18,7 @@ import tarfile
 import tomllib
 import urllib.request
 import zipfile
+import zlib
 from email.parser import Parser
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -38,6 +39,33 @@ def _verified(path: Path, expected: str) -> bytes:
     return data
 
 
+def _tree_digest(root: Path) -> str:
+    """Identify an extracted tree by its paths, kinds, executable bits, contents and links.
+
+    Archive metadata such as compression, timestamps and ownership is excluded,
+    so a regenerated archive of the same revision keeps its digest.
+    """
+    entries: list[tuple[bytes, bytes, bytes]] = []
+    pending = [root]
+    while pending:
+        directory = pending.pop()
+        for child in directory.iterdir():
+            path = os.fsencode(child.relative_to(root).as_posix())
+            if child.is_symlink():
+                # The raw target, since `Path.readlink` normalizes it.
+                entries.append((path, b"symlink", os.fsencode(os.readlink(child))))  # noqa: PTH115
+            elif child.is_dir():
+                entries.append((path, b"directory", b""))
+                pending.append(child)
+            elif child.is_file():
+                kind = b"executable" if child.lstat().st_mode & 0o100 else b"file"
+                entries.append((path, kind, _digest(child.read_bytes()).encode()))
+            else:
+                raise ValueError("Candidate source contains a special file")
+    # NUL cannot occur in a path or link target, so each record parses unambiguously.
+    return _digest(b"".join(b"\0".join(entry) + b"\0" for entry in sorted(entries)))
+
+
 def _source(
     source: dict[str, Any],
     staging: Path,
@@ -45,28 +73,57 @@ def _source(
     cache: Path | None = None,
     limit: int = _MAX_ARCHIVE,
 ) -> Path:
-    """Extract only digest-verified upstream bytes into an isolated build directory."""
-    cached = cache / (source["sha256"] + ".tar.gz") if cache is not None else None
+    """Extract only verified upstream content into an isolated build directory.
+
+    Release assets are verified by their archive digest `sha256`.
+    Archives that the host generates on request, such as GitHub's revision archives,
+    are not byte-stable and are verified by `tree_sha256`, the digest of the tree below
+    their single root directory.
+    """
+    if ("sha256" in source) == ("tree_sha256" in source):
+        raise ValueError("Candidate source must record exactly one of sha256 and tree_sha256")
+    expected = source.get("sha256") or source["tree_sha256"]
+    if not re.fullmatch(r"[0-9a-f]{64}", expected):
+        raise ValueError("Candidate source digest must be a SHA-256 hex digest")
+    cached = cache / (expected + ".tar.gz") if cache is not None else None
     if cached is not None and cached.exists():
-        archive = _verified(cached, source["sha256"])
+        with cached.open("rb") as stream:
+            archive = stream.read(limit + 1)
     else:
         with urllib.request.urlopen(source["url"], timeout=60) as response:
             archive = response.read(limit + 1)
-        if len(archive) > limit or _digest(archive) != source["sha256"]:
-            raise ValueError("Candidate source digest mismatch")
-        if cached is not None:
-            # Concurrent builders may cache identical verified content.
-            with TemporaryDirectory(dir=cache) as temporary:
-                download = Path(temporary) / "archive"
-                download.write_bytes(archive)
-                download.replace(cached)
     if len(archive) > limit:
         raise ValueError("Candidate source exceeds its size limit")
-    with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz") as bundle:
-        bundle.extractall(staging, filter="data")
-    checkout = staging / str(source["directory"])
-    if not checkout.is_dir():
-        raise ValueError("Candidate archive root missing")
+    if "sha256" in source and _digest(archive) != expected:
+        raise ValueError("Candidate source digest mismatch")
+    staging.mkdir(parents=True)
+    try:
+        with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz") as bundle:
+            bundle.extractall(staging, filter="data")
+    except (tarfile.TarError, EOFError, zlib.error) as error:
+        # The data filter also refuses paths and links that leave the staging directory.
+        message = "Candidate source digest mismatch: unreadable or unsafe archive"
+        raise ValueError(message) from error
+    if "tree_sha256" in source:
+        # The root directory's name follows the repository name, which can change.
+        # Only one root may exist, so nothing unverified sits beside the checkout.
+        roots = list(staging.iterdir())
+        if len(roots) != 1 or roots[0].is_symlink() or not roots[0].is_dir():
+            raise ValueError("Candidate source digest mismatch: archive must have one root")
+        checkout = roots[0]
+        actual = _tree_digest(checkout)
+        if actual != expected:
+            raise ValueError(f"Candidate source digest mismatch: tree_sha256 is {actual}")
+    else:
+        checkout = staging / str(source["directory"])
+        if not checkout.is_dir():
+            raise ValueError("Candidate archive root missing")
+    if cached is not None and not cached.exists():
+        # Concurrent builders may cache identical verified content.
+        with TemporaryDirectory(dir=cache) as temporary:
+            download = Path(temporary) / "archive"
+            download.write_bytes(archive)
+            download.replace(cached)
     return checkout
 
 
