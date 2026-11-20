@@ -85,6 +85,7 @@ def test_manifest_binds_the_researcher_the_session_worker_and_the_planning_servi
         "issuer": "https://keycloak.example.test/realms/heartwood",
         "client_id": "hw-proj-demo",
         "client_secret_file": "/etc/heartwood/deployment/client-secret",
+        "actor_key_file": "/etc/heartwood/deployment/actor-key",
         "subject": "6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0001",
         "ca_file": "/etc/heartwood/deployment/platform-ca.crt",
     }

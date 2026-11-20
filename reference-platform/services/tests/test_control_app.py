@@ -26,7 +26,7 @@ from fakes import (
 )
 from heartwood_platform.common.kubernetes import Kubernetes
 from heartwood_platform.common.tokens import ResearcherTokens, ServiceTokens
-from heartwood_platform.control.__main__ import Settings
+from heartwood_platform.control.__main__ import Settings, _actor_key
 from heartwood_platform.control.app import create_app
 from heartwood_platform.control.keycloak import Keycloak
 from heartwood_platform.control.launch import LaunchService
@@ -82,6 +82,7 @@ class Platform:
                 container_defaults={"cpu": "500m"},
                 container_default_requests={"cpu": "100m"},
                 platform_ca="-----BEGIN CERTIFICATE-----\n",
+                actor_key="synthetic-actor-key-0123456789abcdef",
             ),
             self.registry.session_ids,
         )
@@ -178,6 +179,7 @@ def test_gateway_secret_holds_the_launch_and_the_credentials_and_the_reply_holds
         "openshell-tls.crt": f"tls.crt of hw-s-{launch['session']}",
         "openshell-tls.key": f"tls.key of hw-s-{launch['session']}",
         "platform-ca.crt": "-----BEGIN CERTIFICATE-----\n",
+        "actor-key": "synthetic-actor-key-0123456789abcdef",
     }
     files.pop("platform-ca.crt")
     for credential in files.values():
@@ -333,6 +335,7 @@ def test_settings_refuse_duplicate_projects_and_other_template_fields(tmp_path: 
             "container_defaults": {"cpu": "500m"},
             "container_default_requests": {"cpu": "100m"},
             "platform_ca_file": "/etc/heartwood-control/platform-ca/ca.crt",
+            "actor_key_file": "/etc/heartwood-control/actor-key/actor-key",
         },
         "projects": [project],
         "synthetic_prices": SYNTHETIC_PRICES,
@@ -489,3 +492,23 @@ def test_a_session_that_cannot_be_prepared_is_reported_and_the_others_are_rewrit
 
     assert response.status_code == 200
     assert response.json() == {"sessions": [bob["session"]], "failed": [alice["session"]]}
+
+
+def test_the_actor_key_must_be_present_and_long_enough(tmp_path: Path) -> None:
+    key = tmp_path / "actor-key"
+    key.write_text("synthetic-actor-key-0123456789abcdef\n", encoding="utf-8")
+    assert _actor_key(key) == "synthetic-actor-key-0123456789abcdef"
+
+    key.write_bytes(b"synthetic-actor-key-0123456789ab\xff")
+    with pytest.raises(ValueError, match="not UTF-8") as error:
+        _actor_key(key)
+    assert error.value.__cause__ is None
+    key.write_text("k" * 4097, encoding="utf-8")
+    with pytest.raises(ValueError, match="exceeds 4096 bytes"):
+        _actor_key(key)
+    key.write_text("short\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="at least 32 bytes"):
+        _actor_key(key)
+    key.unlink()
+    with pytest.raises(FileNotFoundError):
+        _actor_key(key)

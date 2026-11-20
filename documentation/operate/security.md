@@ -276,11 +276,17 @@ Other clients send `Authorization: Bearer` with an access token of the same issu
 A token that carries a `nonce`, `at_hash` or `c_hash` claim, or a `typ` claim of `ID`, is an identity token and is refused as a bearer token.
 The gateway compares the token's `iss` and `sub` claims with the bound issuer and subject exactly, character for character, for the browser sign-in and for bearer tokens.
 
-Every accepted command records the researcher's actor, `oidc-` followed by the hexadecimal SHA-256 digest of the issuer, a zero byte and the subject, each encoded as UTF-8.
-The same subject at two issuers yields two actors, and a command cannot claim another actor.
+Every accepted command records the researcher's actor, `oidc-` followed by the hexadecimal HMAC-SHA-256 of the issuer, a zero byte and the subject, each encoded as UTF-8, under the deployment's actor key.
+The same subject at two issuers yields two actors, two deployments with different keys yield two actors for the same researcher, and a command cannot claim another actor.
 Session events, audit records and audit exports carry this actor and neither the subject nor the issuer.
 Skill installation, decision and removal records name the same actor.
-The digest is not keyed: anyone who knows or guesses an issuer and a subject, such as an e-mail address, can compute the actor and recognize that researcher's records.
+Without the key, knowing an issuer and a subject, such as an e-mail address, is not enough to compute the actor.
+Every gateway of the deployment holds the key in a file, so whoever can read a gateway's files can compute the actor of any researcher whose subject they know.
+
+The operator provides the key as a credential, the file that `actor_key_file` names in the [`[identity]` table](../reference/configuration.md#identity), and the gateway does not start without it.
+Keep a backup of the key with the deployment's other credentials.
+A lost key cannot be recovered: a gateway with a new key records new actors, and nothing links them to the earlier records of the same researcher.
+Replacing the key has the same effect, so a rotation starts a new series of actors for every researcher; keep the old key to compute the earlier actors when a researcher's records must be found.
 Of the gateway's files, only the deployment manifest, which the operator protects, contains the subject.
 A platform that places the subject in the gateway's base path or public origin, as the reference platform does with `/user/<subject>/<project>`, exposes it in URLs, the redirect URI and proxy logs.
 The gateway shows no name from the token's claims and stores none.

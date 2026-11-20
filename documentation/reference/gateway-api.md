@@ -44,7 +44,7 @@ The capability arrives in one of two ways:
 - The researcher opens the launch link; the page sends its one-time token to `POST /launch` as `{"token":"…"}` and receives `{"capability":"…"}`. The route still validates ingress, and the token works once.
 - The operator starts the gateway with [`--capability-fd`](cli.md#gateway-serve), and an authenticated proxy adds the header only for the owning researcher.
 
-With [`identity-proxy` ingress](../operate/security.md#researcher-identity) the gateway verifies the researcher itself and records an actor derived from the verified issuer and subject, `oidc-` followed by a SHA-256 digest.
+With [`identity-proxy` ingress](../operate/security.md#researcher-identity) the gateway verifies the researcher itself and records an actor derived from the verified issuer and subject, `oidc-` followed by an HMAC-SHA-256 under the deployment's actor key.
 A browser signs in at `GET /identity/login`, returns through `GET /oauth_callback`, and exchanges the launch token of that sign-in at `POST /launch`.
 Other clients send `Authorization: Bearer` with an access token whose audience contains the gateway's client and whose issuer and subject are the bound researcher's.
 

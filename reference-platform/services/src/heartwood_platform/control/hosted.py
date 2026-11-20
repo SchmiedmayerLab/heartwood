@@ -149,6 +149,7 @@ class HostedGateway:
                         "issuer": self._issuer,
                         "client_id": client_id,
                         "client_secret_file": f"{_DEPLOYMENT}/client-secret",
+                        "actor_key_file": f"{_DEPLOYMENT}/actor-key",
                         "subject": subject,
                         "ca_file": f"{_DEPLOYMENT}/platform-ca.crt",
                     },

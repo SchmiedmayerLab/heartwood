@@ -205,6 +205,33 @@ def test_control_service_reads_the_platform_ca_certificate(objects: list[dict[st
     assert "ca.crt" in _named(objects, "ConfigMap", "platform-ca")["data"]
 
 
+def test_control_service_reads_the_generated_actor_key(objects: list[dict[str, Any]]) -> None:
+    configuration = json.loads(
+        _named(objects, "ConfigMap", "heartwood-control")["data"]["configuration.json"]
+    )
+    path = Path(configuration["sessions"]["actor_key_file"])
+    secret = _named(objects, "Secret", "heartwood-actor-key")
+    spec = _named(objects, "StatefulSet", "heartwood-control")["spec"]["template"]["spec"]
+    (volume,) = [
+        item
+        for item in spec["volumes"]
+        if item.get("secret", {}).get("secretName") == "heartwood-actor-key"
+    ]
+    (mount,) = [
+        item for item in spec["containers"][0]["volumeMounts"] if item["name"] == volume["name"]
+    ]
+
+    assert len(base64.b64decode(secret["data"][path.name])) >= 32
+    assert Path(mount["mountPath"]) == path.parent
+    assert mount["readOnly"] is True
+    # Only the control service mounts the key; gateways receive it in their own Secret.
+    assert [
+        document["metadata"]["name"]
+        for document in objects
+        if "heartwood-actor-key" in json.dumps(document.get("spec", {}))
+    ] == ["heartwood-control"]
+
+
 @pytest.mark.parametrize(
     "name",
     [

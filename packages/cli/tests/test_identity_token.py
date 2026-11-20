@@ -28,6 +28,7 @@ from heartwood.gateway._identity import researcher_actor
 _ISSUER = "https://id.example.test/realms/research"
 _PROVIDER_TEXT = "synthetic provider detail"
 _TOKEN = "synthetic.access.token"
+_ACTOR_KEY = b"synthetic-actor-key-0123456789abcdef"
 
 
 class _Provider:
@@ -312,6 +313,7 @@ def test_a_device_sign_in_token_reaches_the_gateway_as_the_derived_actor(
             issuer=_ISSUER,
             client_id="hw-proj-demo",
             client_secret_file=tmp_path / "client-secret",
+            actor_key_file=tmp_path / "actor-key",
             subject=subject,
         ),
         IngressPolicy.create(
@@ -321,11 +323,12 @@ def test_a_device_sign_in_token_reaches_the_gateway_as_the_derived_actor(
             trusted_proxy_sources=("10.0.0.0/24",),
         ),
         client_secret="synthetic-client-secret",
+        actor_key=_ACTOR_KEY,
         http=httpx.Client(transport=httpx.MockTransport(gateway_provider)),
     )
 
     actor = access.principal({"authorization": (f"Bearer {printed}",)})
-    assert actor == researcher_actor(_ISSUER, subject)
+    assert actor == researcher_actor(_ISSUER, subject, _ACTOR_KEY)
     assert subject not in actor
     other = token("auth0|another-synthetic-researcher")
     assert access.principal({"authorization": (f"Bearer {other}",)}) is None

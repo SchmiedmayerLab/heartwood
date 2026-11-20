@@ -211,6 +211,7 @@ def test_openshell_gateway_is_ready_with_its_own_key_and_client_bundle(
         "openshell-tls.crt",
         "openshell-tls.key",
         "platform-ca.crt",
+        "actor-key",
         "deployment.toml",
         "kubeconfig",
         "worker-policy.json",
@@ -218,11 +219,17 @@ def test_openshell_gateway_is_ready_with_its_own_key_and_client_bundle(
     }
     platform_ca = _json(cluster, "configmap", "platform-ca", f"--namespace={_PLATFORM}")
     assert files["platform-ca.crt"] == platform_ca["data"]["ca.crt"]
+    actor_key = _json(cluster, "secret", "heartwood-actor-key", f"--namespace={_PLATFORM}")
+    assert files["actor-key"] == base64.b64decode(actor_key["data"]["actor-key"]).decode()
     assert json.loads(files["launch.json"]) == launch
     bundle = _json(cluster, "secret", "openshell-client-tls", f"--namespace={namespace}")
     assert files["openshell-tls.crt"] == base64.b64decode(bundle["data"]["tls.crt"]).decode()
     assert launch["openshell_endpoint"] == f"https://openshell.{namespace}.svc.cluster.local:8080"
-    for credential in (files["keycloak-client-secret"], files["openshell-tls.key"]):
+    for credential in (
+        files["keycloak-client-secret"],
+        files["openshell-tls.key"],
+        files["actor-key"],
+    ):
         assert credential not in json.dumps(launch)
 
 

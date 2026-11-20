@@ -434,6 +434,9 @@ def _identity_launch(tmp_path: Path, *, identity_table: bool) -> list[str]:
     secret = tmp_path / "client-secret"
     secret.write_text("synthetic-client-secret-0123456789\n")
     secret.chmod(0o600)
+    actor_key = secret.with_name("actor-key")
+    actor_key.write_text("synthetic-actor-key-0123456789abcdef\n")
+    actor_key.chmod(0o600)
     record: dict[str, object] = {
         "schema_version": "heartwood.project-deployment.v1",
         "project_id": project_id,
@@ -446,6 +449,7 @@ def _identity_launch(tmp_path: Path, *, identity_table: bool) -> list[str]:
             "issuer": "https://id.example.test/realms/research",
             "client_id": "hw-proj-demo",
             "client_secret_file": str(secret),
+            "actor_key_file": str(actor_key),
             "subject": "researcher-7f3c",
         }
     manifest = tmp_path / "deployment.toml"

@@ -10,13 +10,14 @@ The gateway is a confidential OpenID Connect client bound to one subject of one 
 A browser signs in through the authorization code flow, and other clients present an
 access token issued for this client. Tokens, the client secret, codes and capabilities
 stay in this process's memory. Commands record an actor derived from the issuer and the
-subject, so records carry neither value.
+subject with a deployment key, so records carry neither value.
 """
 
 from __future__ import annotations
 
 import base64
 import hashlib
+import hmac
 import json
 import secrets
 import ssl
@@ -81,22 +82,26 @@ _ACCESS_TOKEN_TYPE = "urn:ietf:params:oauth:token-type:access_token"
 # OpenID Connect limits a subject to 255 characters.
 _MAXIMUM_SUBJECT_LENGTH = 255
 RESEARCHER_ACTOR_PREFIX = "oidc-"
+MINIMUM_ACTOR_KEY_BYTES = 32
 
 type _TokenUse = Literal["id", "issued", "bearer"]
 
 
-def researcher_actor(issuer: str, subject: str) -> str:
+def researcher_actor(issuer: str, subject: str, key: bytes) -> str:
     """Return the actor that commands of one subject at one issuer record.
 
-    The actor is ``oidc-`` followed by the hexadecimal SHA-256 digest of the UTF-8
-    issuer, a zero byte and the UTF-8 subject. Neither value contains a zero byte or
-    another control character, so each pair has its own input and the same subject at
-    two issuers yields two actors. The actor follows the actor reference form, and
-    records that carry it reveal neither the issuer nor the subject.
+    The actor is ``oidc-`` followed by the hexadecimal HMAC-SHA-256 of the UTF-8
+    issuer, a zero byte and the UTF-8 subject, under the deployment's actor key.
+    Neither value contains a zero byte or another control character, so each pair has
+    its own input and the same subject at two issuers yields two actors. The actor
+    follows the actor reference form; without the key, nobody can compute it from an
+    issuer and a subject, and records that carry it reveal neither.
     """
     if _has_control_character(issuer) or _has_control_character(subject):
         raise ValueError("issuer and subject contain no control characters")
-    digest = hashlib.sha256(f"{issuer}\0{subject}".encode())
+    if len(key) < MINIMUM_ACTOR_KEY_BYTES:
+        raise ValueError("the actor key is too short")
+    digest = hmac.new(key, f"{issuer}\0{subject}".encode(), hashlib.sha256)
     return f"{RESEARCHER_ACTOR_PREFIX}{digest.hexdigest()}"
 
 
@@ -118,6 +123,7 @@ class IdentityDeployment(BaseModel):
     issuer: str = Field(min_length=1, max_length=2048)
     client_id: str = Field(min_length=1, max_length=255, pattern=r"^[\x21-\x7E]+$")
     client_secret_file: Path = Field(repr=False)
+    actor_key_file: Path = Field(repr=False)
     subject: str = Field(min_length=1, max_length=_MAXIMUM_SUBJECT_LENGTH)
     provider_url: str | None = Field(default=None, min_length=1, max_length=2048)
     ca_file: Path | None = None
@@ -126,11 +132,6 @@ class IdentityDeployment(BaseModel):
     def provider(self) -> str:
         """Return the base URL where the gateway reaches the provider."""
         return self.issuer if self.provider_url is None else self.provider_url
-
-    @property
-    def actor(self) -> str:
-        """Return the actor that the researcher's commands record."""
-        return researcher_actor(self.issuer, self.subject)
 
     @model_validator(mode="after")
     def _validate(self) -> Self:
@@ -162,7 +163,7 @@ class IdentityDeployment(BaseModel):
                     "identity provider URLs are http(s) URLs without credentials, query or fragment"
                 )
             require_protected_transport(url)
-        for path in (self.client_secret_file, self.ca_file):
+        for path in (self.client_secret_file, self.actor_key_file, self.ca_file):
             if path is not None and not path.is_absolute():
                 raise ValueError("identity files are absolute paths")
         return self
@@ -217,6 +218,7 @@ class IdentityAccess:
         ingress: IngressPolicy,
         *,
         client_secret: str,
+        actor_key: bytes,
         http: httpx.Client,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -230,8 +232,12 @@ class IdentityAccess:
         self._client_id = deployment.client_id
         self._client_secret = client_secret
         self._subject = deployment.subject.encode()
-        # Commands record the actor; the subject itself stays in this process.
-        self._actor = deployment.actor
+        # Commands record the actor; the subject and the key stay in this process.
+        if len(actor_key) < MINIMUM_ACTOR_KEY_BYTES:
+            raise IngressConfigurationError(
+                f"identity actor key must hold at least {MINIMUM_ACTOR_KEY_BYTES} bytes"
+            )
+        self._actor = researcher_actor(deployment.issuer, deployment.subject, actor_key)
         self._base_url = f"{ingress.external_origin}{ingress.browser_base_path}"
         if not self._base_url.isascii():
             raise IngressConfigurationError(
@@ -259,7 +265,11 @@ class IdentityAccess:
 
     @classmethod
     def create(cls, deployment: IdentityDeployment, ingress: IngressPolicy) -> IdentityAccess:
-        """Read the client secret and prepare the connection to the provider."""
+        """Read the client secret and actor key and prepare the connection to the provider."""
+        try:
+            actor_key = read_private_text(deployment.actor_key_file, max_bytes=4096)
+        except (OSError, ValueError):
+            raise IngressConfigurationError("identity actor key file is unavailable") from None
         try:
             secret = read_private_text(deployment.client_secret_file, max_bytes=4096)
             verify: ssl.SSLContext | bool = (
@@ -279,7 +289,13 @@ class IdentityAccess:
         http = httpx.Client(
             timeout=_PROVIDER_TIMEOUT_SECONDS, verify=verify, follow_redirects=False
         )
-        return cls(deployment, ingress, client_secret=secret, http=http)
+        return cls(
+            deployment,
+            ingress,
+            client_secret=secret,
+            actor_key=actor_key.removesuffix("\n").encode(),
+            http=http,
+        )
 
     def launch_url(self, ingress: IngressPolicy) -> str | None:  # noqa: ARG002
         """Issue no launch link: the researcher signs in at the gateway's URL."""

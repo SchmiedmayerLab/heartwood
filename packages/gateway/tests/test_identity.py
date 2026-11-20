@@ -12,6 +12,7 @@ import asyncio
 import base64
 import datetime
 import hashlib
+import hmac
 import json
 import re
 import secrets
@@ -75,7 +76,8 @@ _CLIENT_ID = "hw-proj-demo"
 _CLIENT_SECRET = "synthetic-client-secret-0123456789"
 _SUBJECT = "researcher-7f3c"
 # The actor that the researcher's commands record, derived from the issuer and the subject.
-_ACTOR = researcher_actor(_ISSUER, _SUBJECT)
+_ACTOR_KEY = b"synthetic-actor-key-0123456789abcdef"
+_ACTOR = researcher_actor(_ISSUER, _SUBJECT, _ACTOR_KEY)
 # The client of the platform fakes' project, the authorized party of the tokens they accept.
 _FAKE_CLIENT_ID = f"hw-proj-{PROJECT_ID}"
 _ORIGIN = "https://research.example.test"
@@ -305,6 +307,7 @@ def _deployment(tmp_path: Path, **fields: object) -> IdentityDeployment:
             "issuer": _ISSUER,
             "client_id": _CLIENT_ID,
             "client_secret_file": str(tmp_path / "client-secret"),
+            "actor_key_file": str(tmp_path / "actor-key"),
             "subject": _SUBJECT,
             **fields,
         }
@@ -323,6 +326,7 @@ def _access(
         _deployment(tmp_path, **fields),
         _ingress() if ingress is None else ingress,
         client_secret=_CLIENT_SECRET,
+        actor_key=_ACTOR_KEY,
         http=provider.client(),
         clock=_Clock() if clock is None else clock,
     )
@@ -1211,6 +1215,7 @@ def test_unusable_provider_documents_are_reported_without_their_text(
         _deployment(tmp_path),
         _ingress(),
         client_secret=_CLIENT_SECRET,
+        actor_key=_ACTOR_KEY,
         http=httpx.Client(
             transport=httpx.MockTransport(
                 lambda request: (
@@ -1335,6 +1340,14 @@ def _write_secret(tmp_path: Path, content: str = f"{_CLIENT_SECRET}\n") -> Path:
     path = tmp_path / "client-secret"
     path.write_text(content)
     path.chmod(0o600)
+    _write_actor_key(tmp_path)
+    return path
+
+
+def _write_actor_key(tmp_path: Path, content: bytes = _ACTOR_KEY + b"\n") -> Path:
+    path = tmp_path / "actor-key"
+    path.write_bytes(content)
+    path.chmod(0o600)
     return path
 
 
@@ -1352,7 +1365,13 @@ def test_identity_and_its_ingress_mode_require_each_other(tmp_path: Path) -> Non
     with pytest.raises(IngressConfigurationError, match=r"accepts no capability descriptor"):
         select_gateway_access(_ingress(), identity=identity, capability_descriptor=3)
     with pytest.raises(IngressConfigurationError, match=r"requires identity-proxy ingress"):
-        IdentityAccess(identity, loopback, client_secret=_CLIENT_SECRET, http=_Provider().client())
+        IdentityAccess(
+            identity,
+            loopback,
+            client_secret=_CLIENT_SECRET,
+            actor_key=_ACTOR_KEY,
+            http=_Provider().client(),
+        )
     with pytest.raises(IngressConfigurationError, match=r"ASCII"):
         _access(tmp_path, _Provider(), ingress=_ingress(base="/user/r\u00e9searcher"))
     gateway = _gateway(tmp_path / "research")
@@ -1405,6 +1424,30 @@ def test_access_reads_the_client_secret_and_certificate_authority(tmp_path: Path
     secret.unlink()
     with pytest.raises(IngressConfigurationError, match=r"unavailable"):
         IdentityAccess.create(_deployment(tmp_path), _ingress())
+
+
+def test_access_requires_the_actor_key_at_start(tmp_path: Path) -> None:
+    _write_secret(tmp_path)
+    loopback_provider = {"issuer": "http://127.0.0.1:9/realms/research"}
+    deployment = _deployment(tmp_path, **loopback_provider)
+
+    access = IdentityAccess.create(deployment, _ingress())
+    assert vars(access)["_actor"] == researcher_actor(
+        loopback_provider["issuer"], _SUBJECT, _ACTOR_KEY
+    )
+    assert _ACTOR_KEY.decode() not in repr(deployment)
+    # Another deployment's key gives the same researcher another actor.
+    _write_actor_key(tmp_path, b"another-synthetic-actor-key-0123456789\n")
+    other = IdentityAccess.create(deployment, _ingress())
+    assert vars(other)["_actor"] != vars(access)["_actor"]
+
+    _write_actor_key(tmp_path, b"too-short\n")
+    with pytest.raises(IngressConfigurationError, match=r"at least 32 bytes") as error:
+        IdentityAccess.create(deployment, _ingress())
+    assert "too-short" not in str(error.value)
+    (tmp_path / "actor-key").unlink()
+    with pytest.raises(IngressConfigurationError, match=r"actor key file is unavailable"):
+        IdentityAccess.create(deployment, _ingress())
 
 
 @pytest.mark.parametrize(
@@ -1484,6 +1527,7 @@ def _identity_table(tmp_path: Path, **fields: object) -> dict[str, Any]:
         "issuer": _ISSUER,
         "client_id": _CLIENT_ID,
         "client_secret_file": str(_write_secret(tmp_path)),
+        "actor_key_file": str(tmp_path / "actor-key"),
         "subject": _SUBJECT,
         **fields,
     }
@@ -1511,6 +1555,13 @@ def test_manifest_binds_the_identity_table(tmp_path: Path) -> None:
             "identity table: client_secret",
         ),
         (lambda table, _path: table.pop("subject"), "identity table: subject"),
+        (lambda table, _path: table.pop("actor_key_file"), "identity table: actor_key_file"),
+        (lambda _table, path: (path / "actor-key").chmod(0o640), "actor key requires owner-only"),
+        (lambda _table, path: (path / "actor-key").unlink(), "unavailable or invalid"),
+        (
+            lambda table, _path: table.update(actor_key_file="relative/actor-key"),
+            "absolute paths",
+        ),
         (lambda _table, path: (path / "client-secret").chmod(0o640), "owner-only"),
         (lambda _table, path: (path / "client-secret").chmod(0o604), "owner-only"),
         (lambda _table, path: (path / "client-secret").chmod(0o622), "write-protected"),
@@ -1995,22 +2046,32 @@ _SUBJECT_FORMS = {
 
 
 def test_the_actor_is_derived_from_the_issuer_and_the_subject() -> None:
-    expected = hashlib.sha256(b"https://id.example.test/realms/research\x00researcher-7f3c")
+    expected = hmac.new(
+        _ACTOR_KEY, b"https://id.example.test/realms/research\x00researcher-7f3c", hashlib.sha256
+    )
 
-    assert researcher_actor(_ISSUER, _SUBJECT) == f"oidc-{expected.hexdigest()}"
+    assert researcher_actor(_ISSUER, _SUBJECT, _ACTOR_KEY) == f"oidc-{expected.hexdigest()}"
+    # Two deployments with different keys record different actors for the same researcher.
+    other_key = b"another-synthetic-actor-key-0123456789"
+    assert researcher_actor(_ISSUER, _SUBJECT, other_key) != _ACTOR
+    with pytest.raises(ValueError, match="too short"):
+        researcher_actor(_ISSUER, _SUBJECT, b"short")
     # The same subject at two issuers, and pairs that only a separator tells apart,
     # are different researchers.
-    assert researcher_actor(f"{_ISSUER}/", _SUBJECT) != _ACTOR
-    assert researcher_actor("https://a.example.test/x", "y") != researcher_actor(
-        "https://a.example.test/", "xy"
+    assert researcher_actor(f"{_ISSUER}/", _SUBJECT, _ACTOR_KEY) != _ACTOR
+    assert researcher_actor("https://a.example.test/x", "y", _ACTOR_KEY) != researcher_actor(
+        "https://a.example.test/", "xy", _ACTOR_KEY
     )
     with pytest.raises(ValueError, match="control characters"):
-        researcher_actor(f"{_ISSUER}\x00", _SUBJECT)
+        researcher_actor(f"{_ISSUER}\x00", _SUBJECT, _ACTOR_KEY)
     for subject in _SUBJECT_FORMS.values():
-        actor = researcher_actor(_ISSUER, subject)
+        actor = researcher_actor(_ISSUER, subject, _ACTOR_KEY)
         assert re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}", actor)
         assert subject not in actor
-        assert researcher_actor("https://other.example.test/realms/research", subject) != actor
+        assert (
+            researcher_actor("https://other.example.test/realms/research", subject, _ACTOR_KEY)
+            != actor
+        )
 
 
 @pytest.mark.parametrize("subject", _SUBJECT_FORMS.values(), ids=_SUBJECT_FORMS.keys())
@@ -2022,7 +2083,7 @@ def test_any_subject_signs_in_and_records_only_its_derived_actor(
     access = _access(tmp_path, provider, subject=subject)
     workspace = tmp_path / "research"
     app = GatewayAsgiApp(_gateway(workspace), ingress=_ingress(), access=access)
-    actor = researcher_actor(_ISSUER, subject)
+    actor = researcher_actor(_ISSUER, subject, _ACTOR_KEY)
     capability, _ = _sign_in(access, provider)
 
     async def scenario() -> tuple[list[int], str]:
@@ -2082,7 +2143,9 @@ def test_another_researcher_is_refused_whatever_the_subject_form(
         started = _get(access, "/identity/login")
         assert _finish(access, started, provider.authorize(started.location)).status_code == 403
         provider.subject = subject
-    assert access.principal(_bearer(provider.token())) == researcher_actor(_ISSUER, subject)
+    assert access.principal(_bearer(provider.token())) == researcher_actor(
+        _ISSUER, subject, _ACTOR_KEY
+    )
 
 
 def test_the_same_subject_at_another_issuer_is_another_researcher(tmp_path: Path) -> None:
@@ -2097,9 +2160,9 @@ def test_the_same_subject_at_another_issuer_is_another_researcher(tmp_path: Path
     assert other_access.principal(_bearer(provider.token())) is None
     assert access.principal(_bearer(provider.token())) == _ACTOR
     assert other_access.principal(_bearer(other.token())) == researcher_actor(
-        other_issuer, _SUBJECT
+        other_issuer, _SUBJECT, _ACTOR_KEY
     )
-    assert researcher_actor(other_issuer, _SUBJECT) != _ACTOR
+    assert researcher_actor(other_issuer, _SUBJECT, _ACTOR_KEY) != _ACTOR
 
 
 def test_a_browser_sign_in_at_another_issuer_is_refused_for_the_same_subject(

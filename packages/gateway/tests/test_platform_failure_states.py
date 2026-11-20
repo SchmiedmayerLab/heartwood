@@ -324,11 +324,13 @@ def test_identity_refusals_carry_the_fixture_diagnostic(
                 "issuer": "https://identity.synthetic.invalid",
                 "client_id": "hw-proj-synthetic",
                 "client_secret_file": str(tmp_path / "client-secret"),
+                "actor_key_file": str(tmp_path / "actor-key"),
                 "subject": "auth0|synthetic-researcher",
             }
         ),
         ingress,
         client_secret=_SECRET,
+        actor_key=_SECRET.encode(),
         http=httpx.Client(transport=httpx.MockTransport(unreachable)),
     )
     gateway = SessionGateway(project=ProjectContext(tmp_path), env={}, backend_id="deterministic")

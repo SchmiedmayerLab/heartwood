@@ -190,7 +190,7 @@ The [managed evidence contract](../operate/audit-checkpoints.md#automatic-eviden
 The retention declaration also does not implement storage lifecycle controls; the deployment records system remains responsible for authoritative storage and policy enforcement.
 
 Exact action arguments, commands, affected paths, file content, patches, tool output, and failure text stay out of the content-minimized audit payload.
-Each command records the actor that the gateway assigns: `human` for the launch capability, `gateway` for automatic decisions, and with [`identity-proxy` ingress](../operate/security.md#researcher-identity) an identifier derived from the provider's issuer and subject, so records written under that identifier carry no subject or e-mail address of the researcher.
+Each command records the actor that the gateway assigns: `human` for the launch capability, `gateway` for automatic decisions, and with [`identity-proxy` ingress](../operate/security.md#researcher-identity) an identifier derived from the provider's issuer and subject under a deployment key, so records written under that identifier carry no subject or e-mail address of the researcher.
 Model-route decisions keep the route's declared [data handling](../models/index.md#data-and-compliance-boundary): destination, retention authority and route description, with no credential reference or value.
 Scientific code, input, environment, and output declarations belong in separate [experiment records](experiments.md), not in the security audit payload.
 An operator-requested checkpoint can retain their exact project export as a separate file, with only its digest, byte count, filename, and binding version recorded in the terminal audit-export event.

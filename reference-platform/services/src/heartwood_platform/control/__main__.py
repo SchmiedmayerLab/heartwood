@@ -29,6 +29,11 @@ from heartwood_platform.control.prices import PriceSheet
 from heartwood_platform.control.registry import Project, Registry
 from heartwood_platform.control.sessions import ApiServerAddress, Sessions, SessionSettings
 
+# The gateways require at least this much key material for the researcher actor
+# (MINIMUM_ACTOR_KEY_BYTES in heartwood.gateway._identity).
+_MINIMUM_ACTOR_KEY_BYTES = 32
+_MAXIMUM_ACTOR_KEY_FILE_BYTES = 4096
+
 # The form of the references in a launch context.
 Reference = Annotated[str, StringConstraints(pattern=r"^\S{1,512}$")]
 
@@ -78,6 +83,7 @@ class SessionNamespaceSettings(_Settings):
     container_defaults: dict[str, str]
     container_default_requests: dict[str, str]
     platform_ca_file: Path
+    actor_key_file: Path
     openshell_repository: str = ""
 
 
@@ -110,6 +116,21 @@ class Settings(_Settings):
         except (IndexError, KeyError) as error:
             raise ValueError("redirect_uri_template has an unknown field") from error
         return self
+
+
+def _actor_key(path: Path) -> str:
+    """Read the deployment's actor key; a missing or short key stops the service."""
+    content = path.read_bytes()
+    # The gateways read at most this many bytes, trailing newline included.
+    if len(content) > _MAXIMUM_ACTOR_KEY_FILE_BYTES:
+        raise ValueError(f"the actor key file exceeds {_MAXIMUM_ACTOR_KEY_FILE_BYTES} bytes")
+    try:
+        key = content.decode("utf-8").removesuffix("\n")
+    except UnicodeDecodeError:
+        raise ValueError("the actor key file is not UTF-8") from None
+    if len(key.encode()) < _MINIMUM_ACTOR_KEY_BYTES:
+        raise ValueError(f"the actor key needs at least {_MINIMUM_ACTOR_KEY_BYTES} bytes")
+    return key
 
 
 def build(settings: Settings, kubernetes: Kubernetes) -> Starlette:
@@ -157,6 +178,7 @@ def build(settings: Settings, kubernetes: Kubernetes) -> Starlette:
             container_defaults=namespaces.container_defaults,
             container_default_requests=namespaces.container_default_requests,
             platform_ca=namespaces.platform_ca_file.read_text(encoding="utf-8"),
+            actor_key=_actor_key(namespaces.actor_key_file),
             openshell_repository=namespaces.openshell_repository,
         ),
         registry.session_ids,

@@ -20,7 +20,7 @@ import secrets
 import threading
 import time
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from heartwood_platform.common.kubernetes import Kubernetes
@@ -64,6 +64,8 @@ class SessionSettings:
     container_default_requests: dict[str, str]
     # The platform CA certificate in PEM form, which sandbox supervisors trust.
     platform_ca: str
+    # The deployment's actor key, which each hosted gateway receives as ``actor-key``.
+    actor_key: str = field(repr=False)
     # The repository from which session pods pull the supervisor and sandbox runtime
     # images, each under its upstream name and digest. Empty keeps OPENSHELL_REPOSITORY.
     openshell_repository: str = ""
@@ -390,9 +392,14 @@ class Sessions:
         """Replace the configuration Secret of a session's Heartwood gateway.
 
         The Secret also carries the platform CA certificate as ``platform-ca.crt``, the
-        only authority the gateway trusts for Keycloak and the platform services.
+        only authority the gateway trusts for Keycloak and the platform services, and
+        the deployment's actor key as ``actor-key``.
         """
-        files = {**files, "platform-ca.crt": self._settings.platform_ca}
+        files = {
+            **files,
+            "platform-ca.crt": self._settings.platform_ca,
+            "actor-key": self._settings.actor_key,
+        }
         namespace = self._settings.gateway_namespace
         name = gateway_account(session)
         # The service may create and delete Secrets there, and not read or update them.

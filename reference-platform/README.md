@@ -167,7 +167,7 @@ At each launch the control service brings the namespace `hw-s-<session>` to the 
 6. It sets the subjects of `heartwood-openshell-node-reader` to the OpenShell ServiceAccounts of all sessions in the registry whose removal has not begun.
 7. It creates the ServiceAccount `hw-gw-<session>` in `heartwood-sessions`, waits until the OpenShell gateway is ready, and replaces the Secret `hw-gw-<session>`.
 
-The Secret `hw-gw-<session>` holds the gateway's deployment manifest `deployment.toml`, a `kubeconfig` for the session namespace that authenticates with the pod's ServiceAccount token, the worker policy `worker-policy.json`, the launch context `launch-context.json`, `launch.json`, the secret of the project client, the OpenShell client certificate, key and CA certificate, and the platform CA certificate `platform-ca.crt`.
+The Secret `hw-gw-<session>` holds the gateway's deployment manifest `deployment.toml`, a `kubeconfig` for the session namespace that authenticates with the pod's ServiceAccount token, the worker policy `worker-policy.json`, the launch context `launch-context.json`, `launch.json`, the secret of the project client, the OpenShell client certificate, key and CA certificate, the platform CA certificate `platform-ca.crt`, and the deployment's actor key `actor-key`.
 `launch.json` is the reply to the launch request: the session, the launch context, the namespace with its UID, the UID of `kube-system`, the gateway ServiceAccount and the OpenShell endpoint.
 The reply carries no credential.
 
@@ -199,7 +199,11 @@ The init container runs `heartwood-hosted-configure`, which copies the Secret `h
 The gateway mounts the copies read-only at `/etc/heartwood/deployment` and the registration at `/etc/heartwood/native` from the memory volume, and the research and state directories at `/research` and `/var/lib/heartwood` from the claim; `templates/_hub.tpl` lists these mounts.
 The gateway serves `heartwood gateway serve` with `identity-proxy` ingress under `/user/<subject>/<project>`, and accepts proxied requests only from `hub.trustedProxySources`.
 Hosted sessions launch for subjects of 1 to 64 lowercase letters, digits and `-`, such as Keycloak's UUIDs, because the subject is part of the gateway path, the control service paths and the redirect URI, where it also appears in URLs and proxy logs.
-The gateway records an actor derived from the issuer and the subject, as [Researcher Identity](../documentation/operate/security.md#researcher-identity) describes.
+The gateway records an actor derived from the issuer and the subject under the deployment's actor key, as [Researcher Identity](../documentation/operate/security.md#researcher-identity) describes.
+Helm generates that key at the first installation into the Secret `heartwood-actor-key`, keeps it on upgrades and leaves it in place on `helm uninstall`; a render without cluster access, such as `helm template`, generates a new value.
+The control service reads the key when it starts and copies it into each gateway's Secret as `actor-key`.
+Back up the Secret with the deployment's other credentials: a lost or replaced key gives every researcher new actors that nothing links to earlier records.
+After replacing the key, restart the control service; a gateway keeps recording under the earlier key until its server starts again, which writes the new key into its Secret.
 
 The control service writes the gateway's deployment manifest into the Secret: the identity of the researcher and the project client, the worker on the Kubernetes driver in the session namespace, and the control service as the `[planning]` service.
 `hub.worker` sets the worker image, its sandbox policy and the policy's effective digest from qualification, and `hub.modelRoute` the model route; the default route names an address that does not resolve.
