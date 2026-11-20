@@ -261,10 +261,12 @@ The window is the gateway setting `mutation_replay_window_seconds`, 24 hours by 
 This request admission needs the gateway's JWT signing key, or its TLS private key when it has no JWT signing key, to be readable, and the same on every gateway that shares a store; a rotated key makes earlier requests unreplayable.
 It also needs a caller with a user identity, such as the mutual TLS client identity.
 Otherwise every creation is refused before any work.
-Each admission holds one of the caller's admission slots, `mutation_admission_limit_per_caller` with a default of 1,000: a completed creation until its replay window ends, and a creation whose outcome the gateway did not record, such as a failed creation or a creation refused under a name confirmed absent, until an operator reconciles it as the OpenShell API error documentation describes.
+Each admission holds one of the caller's admission slots, `mutation_admission_limit_per_caller` with a default of 1,000.
+A completed creation holds its slot until its replay window ends.
+A creation whose outcome the gateway did not record, such as a failed creation or a creation refused under a name confirmed absent, holds its slot for as long as the gateway's store keeps it, and OpenShell provides no operation that releases it.
 The slots count every mutation with a request identifier from the same caller identity, also those of other clients that use the identity Heartwood uses at the sandbox gateway.
-When the slots are used up, the gateway refuses every such request with `RESOURCE_EXHAUSTED` before any work; it gives the same status while its admission workers are busy.
-Size the limit for the completed creations within the window plus every creation without a recorded outcome that is not yet reconciled.
+When the slots are used up, the gateway refuses every such request with `RESOURCE_EXHAUSTED` before any work; it gives the same status in other cases before any work, such as while its admission workers are busy.
+Size the limit for the completed creations within the window plus every creation without a recorded outcome over the lifetime of the gateway's store.
 
 Some cases keep a name rejected until its record expires although a deletion found its sandbox: two concurrent deletions that both find the sandbox, contention on the record that outlasts the gateway's eight attempts, a store outage longer than the gateway's retries, an error on the deletion's second read, and a gateway crash between the record and its withdrawal.
 A sandbox that passed its own check and later meets the record of a deletion that found it cannot be started until that record expires.
