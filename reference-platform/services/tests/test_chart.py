@@ -437,6 +437,9 @@ def test_control_service_serves_only_https_with_a_certificate_of_the_platform_ca
     }
     assert [port["containerPort"] for port in container["ports"]] == [8443]
     assert container["readinessProbe"]["httpGet"]["scheme"] == "HTTPS"
+    # A reload copies the key into the temporary directory, which stays in memory.
+    (temporary,) = [item for item in spec["volumes"] if item["name"] == "tmp"]
+    assert temporary["emptyDir"]["medium"] == "Memory"
     service = _named(objects, "Service", "heartwood-control")
     assert [port["port"] for port in service["spec"]["ports"]] == [8443]
 

@@ -44,14 +44,21 @@ class CertificateReloader:
 
     New connections use the new certificate; established connections keep theirs. A pair
     that does not load, such as a certificate with another key, leaves the previous one
-    in use and is tried again at the next check.
+    in use and is tried again at the next check. The context keeps one certificate for
+    each key type, so a replacement keeps the key type of the certificate it replaces.
+    The private copy of each pair is written to the temporary directory, which the chart
+    keeps in memory.
     """
 
     def __init__(self, context: ssl.SSLContext, settings: TlsSettings) -> None:
-        """Serve with ``context`` and reload it from the files of ``settings``."""
+        """Serve with ``context`` and load it from the files of ``settings``.
+
+        Nothing counts as loaded until the first :meth:`reload`, so the context then serves
+        exactly the bytes that the reloader compares later.
+        """
         self._context = context
         self._settings = settings
-        self._loaded = self._content()
+        self._loaded = (b"", b"")
 
     def _content(self) -> tuple[bytes, bytes]:
         return self._settings.certificate_file.read_bytes(), self._settings.key_file.read_bytes()
@@ -89,25 +96,36 @@ class CertificateReloader:
             self.reload()
 
 
-async def _serve(config: uvicorn.Config, reloader: CertificateReloader) -> None:
-    watching = asyncio.create_task(reloader.watch())
-    try:
-        await uvicorn.Server(config).serve()
-    finally:
-        watching.cancel()
-
-
-def serve(application: ASGIApp, tls: TlsSettings, *, port: int = PORT) -> None:
-    """Serve ``application`` over HTTPS only, reloading the certificate when it changes."""
+def _configure(
+    application: ASGIApp, tls: TlsSettings, *, host: str, port: int
+) -> tuple[uvicorn.Config, CertificateReloader]:
     config = uvicorn.Config(
         application,
-        host="0.0.0.0",
+        host=host,
         port=port,
         log_config=None,
         ssl_certfile=tls.certificate_file,
         ssl_keyfile=tls.key_file,
     )
     config.load()
-    assert config.ssl is not None
+    if config.ssl is None:
+        raise RuntimeError("the server has no TLS context")
     config.ssl.minimum_version = ssl.TLSVersion.TLSv1_2
-    asyncio.run(_serve(config, CertificateReloader(config.ssl, tls)))
+    reloader = CertificateReloader(config.ssl, tls)
+    if not reloader.reload():
+        raise RuntimeError("the serving certificate does not load")
+    return config, reloader
+
+
+async def _serve(server: uvicorn.Server, reloader: CertificateReloader, interval: float) -> None:
+    watching = asyncio.create_task(reloader.watch(interval))
+    try:
+        await server.serve()
+    finally:
+        watching.cancel()
+
+
+def serve(application: ASGIApp, tls: TlsSettings, *, port: int = PORT) -> None:
+    """Serve ``application`` over HTTPS only, reloading the certificate when it changes."""
+    config, reloader = _configure(application, tls, host="0.0.0.0", port=port)
+    asyncio.run(_serve(uvicorn.Server(config), reloader, RELOAD_SECONDS))

@@ -346,6 +346,7 @@ def _launch(cluster: Cluster, method: str) -> dict[str, Any]:
     token = cluster.kubectl(
         "create", "token", "hub", "--namespace", _SESSIONS, "--audience=heartwood-control"
     )
+    token = token.strip()
     reply = _call(cluster, method, token)
     attempts = 1
     # A launch is idempotent, and the spawner repeats one that the control service answers

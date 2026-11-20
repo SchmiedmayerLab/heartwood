@@ -14,10 +14,13 @@ import socket
 import ssl
 import subprocess
 import threading
+import time
 from pathlib import Path
 
 import pytest
-from heartwood_platform.common.serving import CertificateReloader, TlsSettings
+import uvicorn
+from heartwood_platform.common.serving import CertificateReloader, TlsSettings, _configure, _serve
+from starlette.types import Receive, Scope, Send
 
 
 def _certificate(directory: Path, name: str) -> tuple[Path, Path]:
@@ -75,6 +78,7 @@ def test_a_replaced_certificate_is_served_to_new_connections(
 ) -> None:
     settings, context = mounted
     reloader = CertificateReloader(context, settings)
+    assert reloader.reload() is True
     first = _served(context)
     assert reloader.reload() is False
 
@@ -92,6 +96,7 @@ def test_a_certificate_with_another_key_keeps_the_previous_one(
 ) -> None:
     settings, context = mounted
     reloader = CertificateReloader(context, settings)
+    assert reloader.reload() is True
     first = _served(context)
     certificate, key = _certificate(tmp_path, "second")
     shutil.copy(certificate, settings.certificate_file)
@@ -110,6 +115,7 @@ def test_missing_files_keep_the_previous_certificate(
 ) -> None:
     settings, context = mounted
     reloader = CertificateReloader(context, settings)
+    assert reloader.reload() is True
     first = _served(context)
     settings.key_file.unlink()
 
@@ -117,11 +123,12 @@ def test_missing_files_keep_the_previous_certificate(
     assert _served(context) == first
 
 
-def test_the_check_runs_on_the_event_loop(
+def test_the_watch_reloads_changed_files(
     mounted: tuple[TlsSettings, ssl.SSLContext], tmp_path: Path
 ) -> None:
     settings, context = mounted
     reloader = CertificateReloader(context, settings)
+    assert reloader.reload() is True
     certificate, key = _certificate(tmp_path, "second")
     shutil.copy(certificate, settings.certificate_file)
     shutil.copy(key, settings.key_file)
@@ -133,3 +140,76 @@ def test_the_check_runs_on_the_event_loop(
 
     asyncio.run(watch_briefly())
     assert _served(context) == _der(certificate)
+
+
+def _free_port() -> int:
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port: int = probe.getsockname()[1]
+        return port
+
+
+async def _answer(scope: Scope, _receive: Receive, send: Send) -> None:
+    if scope["type"] == "http":
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"served"})
+
+
+def _client() -> ssl.SSLContext:
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    return context
+
+
+def _certificate_at(port: int) -> bytes:
+    with (
+        socket.create_connection(("127.0.0.1", port), timeout=5) as raw,
+        _client().wrap_socket(raw) as connection,
+    ):
+        served = connection.getpeercert(binary_form=True)
+    assert served is not None
+    return served
+
+
+def test_the_server_serves_tls_1_2_or_later_only_and_reloads_its_certificate(
+    mounted: tuple[TlsSettings, ssl.SSLContext], tmp_path: Path
+) -> None:
+    settings, _ = mounted
+    port = _free_port()
+    config, reloader = _configure(_answer, settings, host="127.0.0.1", port=port)
+    assert config.ssl is not None
+    # The context that the server uses refuses protocol versions before TLS 1.2.
+    assert config.ssl.minimum_version == ssl.TLSVersion.TLSv1_2
+    server = uvicorn.Server(config)
+    thread = threading.Thread(target=asyncio.run, args=(_serve(server, reloader, 0.05),))
+    thread.start()
+    try:
+        for _ in range(200):
+            if server.started:
+                break
+            time.sleep(0.05)
+        assert server.started
+        assert _certificate_at(port) == _der(settings.certificate_file)
+
+        # Plain HTTP gets no HTTP answer.
+        with socket.create_connection(("127.0.0.1", port), timeout=5) as raw:
+            raw.sendall(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            try:
+                answer = raw.recv(64)
+            except ConnectionResetError:
+                answer = b""
+        assert not answer.startswith(b"HTTP/")
+
+        certificate, key = _certificate(tmp_path, "second")
+        shutil.copy(certificate, settings.certificate_file)
+        shutil.copy(key, settings.key_file)
+        for _ in range(200):
+            if _certificate_at(port) == _der(certificate):
+                break
+            time.sleep(0.05)
+        assert _certificate_at(port) == _der(certificate)
+    finally:
+        server.should_exit = True
+        thread.join(timeout=10)
+    assert not thread.is_alive()

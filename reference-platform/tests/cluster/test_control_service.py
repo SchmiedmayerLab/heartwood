@@ -259,8 +259,12 @@ def test_control_service_serves_only_https_with_a_certificate_of_the_platform_ca
 ) -> None:
     # _call trusts only the platform CA, so an answer shows the certificate of the CA.
     assert _call(cluster, "GET", f"{_CONTROL}/v1/launch-context")[0] == 401
-    # Without the platform CA the certificate is not trusted, and plain HTTP is not served.
-    for arguments in ((_CONTROL + "/healthz",), (_CONTROL.replace("https", "http") + "/healthz",)):
+    # Without the platform CA the certificate is not trusted (curl exit 60), and plain HTTP
+    # receives no HTTP answer (exit 52, an empty reply, or 56, a reset connection).
+    for url, exits in (
+        (f"{_CONTROL}/healthz", {60}),
+        (_CONTROL.replace("https", "http") + "/healthz", {52, 56}),
+    ):
         result = cluster.kubectl(
             "exec",
             f"--namespace={_SESSIONS}",
@@ -272,11 +276,9 @@ def test_control_service_serves_only_https_with_a_certificate_of_the_platform_ca
             "10",
             "--output",
             "/dev/null",
-            "--write-out",
-            "%{http_code}",
-            *arguments,
+            url,
         )
-        assert result.returncode != 0 or result.stdout.strip() == "400", result.stdout
+        assert result.returncode in exits, (url, result.returncode, result.stderr)
     # The service itself listens on no plain HTTP port.
     result = cluster.kubectl(
         "exec",

@@ -180,8 +180,11 @@ spec:
             items:
               - key: ca.crt
                 path: ca.crt
+        # In memory, because the service copies its serving key here when it reloads it.
         - name: tmp
-          emptyDir: {}
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Mi
   volumeClaimTemplates:
     - metadata:
         name: data
