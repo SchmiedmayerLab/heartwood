@@ -70,6 +70,9 @@ class SyntheticProvider:
             ("finish", {"message": "Synthetic aggregate check completed."}),
         ]
         self.scripts: dict[str, list[tuple[str, dict[str, Any]]]] = {}
+        # The user and tool message contents of each request, so a case can check what
+        # reached the model.
+        self.received: list[str] = []
         self._request_lock = threading.Lock()
         owner = self
 
@@ -120,6 +123,15 @@ class SyntheticProvider:
                         route = routes[0] if routes else None
                         script = owner.scripts[route] if route is not None else owner.script
                         index = sum(item.get("route") == route for item in owner.observations)
+                        owner.received.append(
+                            json.dumps(
+                                [
+                                    message.get("content")
+                                    for message in body.get("messages", [])
+                                    if message.get("role") in {"user", "tool"}
+                                ]
+                            )
+                        )
                         owner.observations.append(
                             {
                                 "path": self.path,

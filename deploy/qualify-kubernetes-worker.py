@@ -487,6 +487,12 @@ def _secret(name: str, data: dict[str, str]) -> dict[str, Any]:
     }
 
 
+def _researcher_password(cluster: Cluster) -> str:
+    """Return the synthetic password of the session's researcher, researcher-one."""
+    secret = cluster.json("secret", "keycloak-researchers", "--namespace", _PLATFORM)
+    return base64.b64decode(secret["data"]["researcher-one"]).decode()
+
+
 def _fixture_objects(cluster: Cluster, launched: dict[str, Any], built: dict[str, Any]) -> None:
     """Create the controller pod and what only the qualification adds around a session."""
     namespace, session = launched["namespace"], launched["session"]
@@ -564,7 +570,8 @@ def _fixture_objects(cluster: Cluster, launched: dict[str, Any], built: dict[str
     }
     certificate = _provider_certificate(cluster, host)
     cluster.apply(
-        _secret(_FIXTURE, {"token": token}),
+        # The session's researcher signs in at the project client in the catalog case.
+        _secret(_FIXTURE, {"token": token, "researcher-password": _researcher_password(cluster)}),
         _secret(_PROVIDER, certificate),
         {
             "apiVersion": "v1",
