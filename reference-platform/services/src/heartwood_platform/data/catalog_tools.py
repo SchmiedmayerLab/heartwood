@@ -64,8 +64,9 @@ CREATE TABLE IF NOT EXISTS operation (
 """
 # The request digest of an identifier first seen by get_operation, which no tool request has.
 _UNSEEN = "unseen"
-# Answers stay well below the gateway's result limit, which counts the observation twice:
-# as structured content and as its text.
+# Answers stay well below the gateway's result limit, which counts the observation twice,
+# as structured content and as its text: a dataset page by PAGE_BYTES, an object page by
+# its count, since object names and identifiers are short ASCII.
 DATASETS_PER_ANSWER = 10
 # The encoded size of a page's datasets, counted as the gateway sees them.
 PAGE_BYTES = 8 * 1024

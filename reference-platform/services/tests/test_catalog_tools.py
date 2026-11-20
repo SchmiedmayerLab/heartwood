@@ -181,6 +181,20 @@ def test_the_listing_names_the_projects_datasets_and_their_objects(
         )
     )
     assert denied.status == "denied"
+    assert denied.limitations == ("The project has no dataset with this identifier.",)
+    beyond = _observation(
+        _call(
+            client,
+            service.headers(),
+            "list_objects",
+            dataset_id="synthetic-cohort",
+            offset=99,
+            project_id="demo",
+            operation_id=str(uuid4()),
+        )
+    )
+    assert beyond.status == "denied"
+    assert beyond.limitations == ("The dataset has no objects from this offset on.",)
 
 
 @pytest.mark.parametrize("character", ["D", '"', "\u8840", "\U0001f9ec"])
