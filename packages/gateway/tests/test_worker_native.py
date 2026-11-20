@@ -1712,7 +1712,14 @@ def test_an_uncertain_creation_that_arrived_first_is_deleted_and_revoked(
 
 
 @pytest.mark.parametrize(
-    "answer", ["UNSPECIFIED", "COMPLETED-without-identity", "NOT_FOUND", "INTERNAL"]
+    "answer",
+    [
+        "UNSPECIFIED",
+        "COMPLETED-without-identity",
+        "ACCEPTED-without-identity",
+        "NOT_FOUND",
+        "INTERNAL",
+    ],
 )
 def test_any_other_answer_to_the_absence_question_keeps_a_docker_attempt_fenced(
     native: _Native, monkeypatch: pytest.MonkeyPatch, answer: str
@@ -1727,12 +1734,55 @@ def test_any_other_answer_to_the_absence_question_keeps_a_docker_attempt_fenced(
             return SimpleNamespace(outcome=outcome.UNSPECIFIED, sandbox_id=None)
         if answer == "COMPLETED-without-identity":
             return SimpleNamespace(outcome=outcome.COMPLETED, sandbox_id=None)
+        if answer == "ACCEPTED-without-identity":
+            return SimpleNamespace(outcome=outcome.ACCEPTED, sandbox_id=None)
         raise native.sandboxes.error(getattr(native.sandboxes.grpc.StatusCode, answer))
 
     monkeypatch.setattr(native.sandboxes, "delete", answered)
     with pytest.raises(WorkerAttemptError, match="absence after an unresolved creation"):
         native.attempt.revoke(native.record("fenced", None))
     assert native.docker.volumes != {}
+
+
+def test_a_creation_that_arrives_before_the_absence_question_is_deleted_and_revoked(
+    native: _Native, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    land = _lose_creation_response(native, monkeypatch)
+    with pytest.raises(WorkerAttemptError, match="outside reconciliation"):
+        native.attempt.launch(native.intent)
+    delete = native.sandboxes.delete
+
+    def arrives_first(name: str, **options: Any) -> SimpleNamespace:  # noqa: ANN401
+        # The creation lands after the lookup found nothing and before the deletion.
+        if options.get("allow_missing"):
+            land()
+        return delete(name, **options)
+
+    monkeypatch.setattr(native.sandboxes, "delete", arrives_first)
+    evidence = native.attempt.revoke(native.record("fenced", None))
+    # The gateway's deletion reports the sandbox it removed; the ordinary deletion that
+    # follows finds nothing, and absence is still observed before the attempt is revoked.
+    assert (evidence.outcome, evidence.sandbox_id) == ("revoked", "sandbox-1")
+    name = "hw-" + native.intent.attempt_id.hex[:16]
+    assert native.sandboxes.absence_requests == [name]
+    assert native.sandboxes.deleted == [name]
+    assert not native.sandboxes.running
+
+
+def test_a_worker_container_the_engine_still_lists_keeps_an_absent_attempt_fenced(
+    native: _Native, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _lose_creation_response(native, monkeypatch)
+    with pytest.raises(WorkerAttemptError, match="outside reconciliation"):
+        native.attempt.launch(native.intent)
+    native.docker.containers.append("leftover-worker")
+    for revoke in (
+        native.attempt.revoke,
+        worker_native.native_worker_reconciler(native.settings, native.project),
+    ):
+        with pytest.raises(WorkerAttemptError, match="remains after control-plane revocation"):
+            revoke(native.record("fenced", None))
+    assert native.sandboxes.absence_requests != []
 
 
 @pytest.mark.parametrize(

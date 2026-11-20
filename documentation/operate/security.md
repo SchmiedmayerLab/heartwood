@@ -356,7 +356,7 @@ Confirm each control before researchers add project data, and again after each u
 - deny network egress except reviewed model and package endpoints;
 - keep provider secrets in a keyring, mounted secret or managed identity, and production checkpoint keys in an independently authorized signer;
 - list `allowed_action_review_modes` explicitly, with only the modes evaluated for the deployment;
-- for an isolated worker, confirm that the sandbox gateway provides the [behavior native qualification depends on](platform-requirements.md#sandbox-gateway) before declaring its version;
+- for an isolated worker, confirm that the sandbox gateway is the [qualified build](platform-requirements.md#sandbox-gateway) and record its version;
 - pin release artifacts, images, model revisions and Skill versions;
 - collect content-minimized operational logs outside project outputs;
 - validate backup, retention, deletion and incident-response procedures; and
