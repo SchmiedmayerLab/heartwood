@@ -131,7 +131,7 @@ A gateway with more than one driver and no `compute_driver` setting selects a dr
 `--gateway-tests` first runs the gateway's deletion tests and the library tests of the Kubernetes driver crate, which include the tests of the three patches to those crates, and needs 12 GiB of container memory; a failed or empty test run prevents packaging.
 The cache keeps the Cargo registry and the source archives, named by their recorded digest and verified again on every use; compiled objects are keyed by the manifest, and Cargo rebuilds them when the enabled features change.
 The record binds source, manifest, lockfile, enabled features, binary, and image identities; it establishes build provenance, not byte-identical gateway builds.
-Deployments use these artifacts or a build that is qualified in the same way, as described in [Sandbox Gateway](../operate/platform-requirements.md#sandbox-gateway).
+Deployments run a gateway binary that a qualification run recorded, or qualify their own build in the same way, as described in [Sandbox Gateway](../operate/platform-requirements.md#sandbox-gateway).
 `deploy/build-records-fixture.py` builds a versitygw server from a source archive verified by the same tree digest using a pinned Go 1.26 image, read-only sources and a bounded build container; `go mod verify` checks the downloaded or restored module cache against the source's `go.sum` before the build.
 Its artifacts retain the source archive, license and notice, binary hash and build inputs; they provide synthetic storage behavior, not a records-service recommendation.
 
