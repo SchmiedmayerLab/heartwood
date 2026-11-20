@@ -1525,9 +1525,11 @@ def test_kubernetes_project_data_is_read_only_at_its_declared_path(
         # The bytes the worker reads are the content the platform declared.
         assert observed["files"]
         assert _content_sha256(observed["files"]) == declared["content_sha256"]
-        assert observed["writes"] == dict.fromkeys(
-            ("new-file", "existing-file", "new-directory"), "Read-only file system"
-        )
+        # A new file and directory fail on the read-only mount, whose root every user may
+        # write to on a writable volume; an existing file belongs to the copy's user.
+        writes = observed["writes"]
+        assert writes["new-file"] == writes["new-directory"] == "Read-only file system"
+        assert writes["existing-file"] in {"Read-only file system", "Permission denied"}
         (record,) = json.loads((fixture.output / WORKER_PODS).read_text())
         admitted = record["admission"]["project_data"]
         assert {key: admitted[key] for key in ("claim_name", "claim_uid", "project")} == {
@@ -1579,20 +1581,16 @@ def _attached(change: str) -> Any:  # noqa: ANN401
         for item in config["volumes"]:
             if item["name"] == "project-data" and change == "writable-volume":
                 item["persistent_volume_claim"]["read_only"] = False
+        # The sandbox gateway itself refuses a writable mount of a read-only volume.
         for mount in config["containers"]["agent"]["volume_mounts"]:
-            if mount["name"] == "project-data":
-                if change == "writable-mount":
-                    mount["read_only"] = False
-                elif change == "undeclared-path":
-                    mount["mount_path"] = "/data/elsewhere"
+            if mount["name"] == "project-data" and change == "undeclared-path":
+                mount["mount_path"] = "/data/elsewhere"
         return config
 
     return changed
 
 
-@pytest.mark.parametrize(
-    "change", ["writable-volume", "writable-mount", "another-project", "undeclared-path"]
-)
+@pytest.mark.parametrize("change", ["writable-volume", "another-project", "undeclared-path"])
 def test_kubernetes_admission_refuses_project_data_out_of_its_declaration(
     infrastructure: KubernetesFixture, monkeypatch: pytest.MonkeyPatch, change: str
 ) -> None:
