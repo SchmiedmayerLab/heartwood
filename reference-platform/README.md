@@ -59,7 +59,7 @@ The platform is for synthetic and open data only.
 | versitygw | S3-compatible object store with one bucket `hw-project-<id>` for each entry in `projects` |
 | JupyterHub | The Hub, its proxy and the idle culler from the pinned Zero to JupyterHub chart 4.4.5, which start one Heartwood gateway for each researcher and project in `heartwood-sessions` |
 | Platform certificate authority | Secret `platform-ca` with the key, ConfigMap `platform-ca` with the certificate, which the control service copies into each session namespace and each gateway Secret, and the Secrets `keycloak-tls` and `heartwood-control-tls` with the serving certificates of Keycloak and the control service |
-| Session roles | Six fixed ClusterRoles for session namespaces, the ServiceAccount and rights of the control service, and the Role `heartwood-hub-spawner` of the Hub in `heartwood-sessions` |
+| Session roles | Six fixed ClusterRoles for session namespaces, the ServiceAccount and rights of the control service, the ServiceAccount `heartwood-operator` of platform operators without Kubernetes rights, and the Role `heartwood-hub-spawner` of the Hub in `heartwood-sessions` |
 | Admission policies | `heartwood-control-scope`, `heartwood-staging-shape`, `heartwood-session-services` and `heartwood-hub-pods` |
 | OpenShell objects | `files/openshell-session.json`, the objects of one session namespace |
 
