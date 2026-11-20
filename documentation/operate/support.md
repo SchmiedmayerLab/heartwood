@@ -36,11 +36,11 @@ Support levels follow [Testing and Evidence](../architecture/testing.md#claims),
 |---|---|
 | Workstation, container and native installation with local execution | CI validated |
 | Terra terminal and notebook, Stanford Carina terminal | CI validated |
-| Isolated worker on a dedicated Linux Docker engine with OpenShell | Native qualification against the qualification-only sandbox gateway build, with synthetic and benign workloads |
+| Isolated worker on a dedicated Linux Docker engine with OpenShell | Native qualification against the [sandbox gateway build](platform-requirements.md#sandbox-gateway), with synthetic and benign workloads |
 | Sensitive or regulated data | Not supported in any configuration |
 
-Releases do not include a worker image or a production sandbox gateway.
-Native qualification evidence binds one commit, one set of image contents and one host, and does not transfer to a rebuilt image, another architecture or another sandbox gateway; see [Gateway Behavior Behind Native Qualification](platform-requirements.md#gateway-behavior-behind-native-qualification).
+Releases do not publish a worker image or a sandbox gateway image; the sandbox gateway is built from the release's commit as described in [Sandbox Gateway](platform-requirements.md#sandbox-gateway).
+Native qualification evidence binds one commit, one set of image contents and one host, and does not transfer to a rebuilt image, another architecture or another sandbox gateway; see [Sandbox Gateway](platform-requirements.md#sandbox-gateway).
 Live-platform qualification is stated separately from CI validation and expires when a material platform, driver, runtime, model, sandbox or policy component changes.
 
 ## Update Cadence

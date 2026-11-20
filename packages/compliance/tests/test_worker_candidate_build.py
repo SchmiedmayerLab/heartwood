@@ -67,7 +67,7 @@ def test_gateway_rejects_changed_inputs_before_docker(
     images = {"rust": "rust@sha256:" + "1" * 64}
     manifest = {
         "schema_version": 1,
-        "purpose": "qualification-only",
+        "purpose": "deployable",
         "images": images,
         "patches": [{"path": patch.name, "sha256": hashlib.sha256(patch.read_bytes()).hexdigest()}],
     }
@@ -704,6 +704,7 @@ def test_gateway_build_enables_and_records_both_compute_drivers(
     builder: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     manifest = {
+        "purpose": "deployable",
         "version": "0.1.9+heartwood.1",
         "source": {"revision": "reviewed"},
         "patches": [],
@@ -752,6 +753,14 @@ def test_gateway_build_enables_and_records_both_compute_drivers(
     record = json.loads((output / "gateway-build-record.json").read_text())
     assert record["features"] == features
     assert record["build"] == build
+    # The image carries the deployable identity that the record retains.
+    assert record["labels"] == {
+        "org.opencontainers.image.title": "heartwood-sandbox-gateway",
+        "org.opencontainers.image.version": "0.1.9+heartwood.1",
+        "org.opencontainers.image.revision": "reviewed",
+    }
+    for name, value in record["labels"].items():
+        assert package[package.index(f"{name}={value}") - 1] == "--label"
 
 
 def test_gateway_configurations_select_their_compute_driver() -> None:

@@ -124,7 +124,7 @@ Launch happens once per session service, on the session's first backend read:
 2. The gateway stages the manifest's `inputs` (at most 128 files, 16 MiB each and 64 MiB in total) and a [Skill projection](skills.md#worker-projection) into a private directory under the state root.
    One input identity digest binds the inputs, the Skill selection, the specialist catalog fingerprint, and any client-tool specifications.
 3. The session journals the attempt intent before any sandbox exists.
-4. The launcher connects to the registered OpenShell gateway with its mutual TLS identity, reads its info, and requires exactly one compute driver, of the implementation the manifest's `driver` selects, that reports both [deletion capabilities](../operate/platform-requirements.md#gateway-behavior-behind-native-qualification) revocation evidence depends on.
+4. The launcher connects to the registered OpenShell gateway with its mutual TLS identity, reads its info, and requires exactly one compute driver, of the implementation the manifest's `driver` selects, that reports the three [capabilities](../operate/platform-requirements.md#sandbox-gateway) revocation evidence depends on.
    A missing capability or an unreadable report stops serving at start with `HW-WORKER-001`, and stops a later launch or reconciliation before any sandbox, volume, or deletion request.
    A launch refused this way reports `HW-WORKER-001` in the session and is recorded as revoked without a created worker.
    The decision and the reported gateway version, driver, and capabilities are retained with the attempt: an accepted report in its runtime binding and revocation evidence, a refused one in its revocation evidence.
@@ -260,17 +260,15 @@ Launch refuses to proceed when either identity changed after preparation.
 Reconciliation observes the infrastructure named by the current deployment manifest only when both identities match the attempt's record; otherwise the attempt stays fenced with `HW-WORKER-002` and nothing is observed or removed, because absence on other infrastructure is not evidence of revocation.
 Attempt records are versioned: records written before launches retained these identities remain readable, name no infrastructure, and are never reconciled against the current one.
 The qualified sandbox gateway answers a creation request with `INVALID_ARGUMENT`, `PERMISSION_DENIED` or `UNAUTHENTICATED` only before it records or requests the sandbox, so the gateway process that received such a rejection records later absence as `not-created`.
-After any other failed or unanswered creation request, absence of the sandbox is never recorded as `not-created`; reconciliation treats an attempt without a recorded runtime the same way, because the process that received the response has ended.
-The qualified sandbox gateway rejects deletion of a sandbox whose provisioning has not settled, but it does not report a creation request it has not recorded yet, so absence cannot show that such a request will not still create the sandbox.
-The attempt therefore stays fenced and its revocation keeps being retried; a sandbox that appears under the attempt's unique name with its full identity is deleted, and the attempt is recorded as revoked.
-With the Kubernetes driver and a sandbox gateway that reports `openshell.compute.create-rejects-deleted-name`, revocation asks the gateway by deleting the attempt's name with `allow_missing`.
-The answer `ALREADY_ABSENT` records `not-created`, because that gateway rejects a later creation under the name.
+After any other failed or unanswered creation request, absence of the sandbox alone is never recorded as `not-created`; reconciliation treats an attempt without a recorded runtime the same way, because the process that received the response has ended.
+The sandbox gateway rejects deletion of a sandbox whose provisioning has not settled, but it does not report a creation request it has not recorded yet, so absence cannot show that such a request will not still create the sandbox.
+Revocation therefore asks the gateway, on both drivers, by deleting the attempt's name with `allow_missing`.
+The answer `ALREADY_ABSENT` records `not-created`, because the required gateway rejects a later creation under the name.
 Each creation request carries the attempt's identifier as its `request_id`, so within the gateway's replay window the gateway does not execute a repeated delivery of it, also after the sandbox was deleted.
 Only `ALREADY_ABSENT` counts as the gateway's confirmation; `NOT_FOUND` from a deletion is never evidence of absence.
 A completed or accepted deletion is followed as the deletion of the sandbox whose identity the gateway returns, and records `revoked`.
-Any other answer keeps the attempt fenced.
-In both cases the cluster must also show no object of the attempt.
-Resolving such an attempt from absence requires a sandbox gateway that rejects or reports later creations under a name whose absence it confirmed.
+Any other answer keeps the attempt fenced, and its revocation keeps being retried.
+In every case the Docker engine or the cluster must also show no object of the attempt.
 The native forwarder runs under a small supervisor in its own process group, which ends the whole group when the gateway's end of a pipe closes, so no forwarder outlives the gateway process, however that process ends.
 OpenShell deletion is name-scoped rather than conditional on a generation; unique attempt names and identity checks do not replace control-plane authorization.
 
@@ -513,9 +511,9 @@ The application's default lock installs patched OpenHands and OpenShell SDK whee
 `deploy/build-worker-candidate.py --bootstrap` builds them there from pinned upstream revisions, verified by the digest of their extracted source tree, and the reviewed patches in `images/worker/candidate/`, or verifies existing wheels against the digests in `sources.json`.
 The patches add the remote-event and configuration-admission hooks the trust boundary requires; the gateway refuses to construct a managed worker on an SDK without them.
 
-The OpenShell gateway is also built from pinned source with the deletion patches recorded in `images/worker/candidate/gateway.json`, as version `0.1.9+heartwood.3` with the purpose `qualification-only`; each patch makes the gateway report its behavior as a compute driver capability.
+The OpenShell gateway is also built from pinned source with the deletion patches recorded in `images/worker/candidate/gateway.json`, as version `0.1.9+heartwood.3` with the purpose `deployable`; each patch makes the gateway report its behavior as a compute driver capability.
 The build contains the Docker and Kubernetes compute drivers, and each gateway configuration in this repository selects one with `compute_driver`.
-Heartwood ships no production OpenShell gateway: a deployment's gateway is checked only by the capabilities it reports, and it must separately provide the [behavior native qualification depends on](../operate/platform-requirements.md).
+Native qualification and deployments use this [sandbox gateway build](../operate/platform-requirements.md#sandbox-gateway); a deployment's gateway is checked only by the capabilities it reports, and the operator compares it with the qualification record.
 
 Native qualification runs the installed application, worker image, and qualification gateway through the complete boundary and produces commit-bound, verifiable evidence; [Testing and Evidence](testing.md) describes the cases, evidence, and verification.
 Qualification uses synthetic data and does not establish sensitive-data readiness or institutional approval.

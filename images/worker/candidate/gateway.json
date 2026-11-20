@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "purpose": "qualification-only",
+  "purpose": "deployable",
   "version": "0.1.9+heartwood.3",
   "source": {
     "url": "https://codeload.github.com/NVIDIA/OpenShell/tar.gz/ce58cf8e9b953281352d98a637e41616295b1318",
