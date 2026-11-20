@@ -390,6 +390,13 @@ def test_the_idle_culler_stops_the_server_and_keeps_the_session(
     while gateway_pods(cluster, server.session) and time.monotonic() < deadline:
         time.sleep(10)
     assert not gateway_pods(cluster, server.session), "the culler did not stop the server"
+    # The Hub has finished stopping it, so a new start is not taken for the old server.
+    while time.monotonic() < deadline:
+        status, user = server.first.hub_api("GET", f"/users/{FIRST}")
+        if status == 200 and "demo" not in user.get("servers", {}):
+            break
+        time.sleep(5)
+    assert "demo" not in server.first.hub_api("GET", f"/users/{FIRST}")[1].get("servers", {})
     # The session namespace, its OpenShell gateway and the server's volume stay.
     assert _json(cluster, "namespace", f"hw-s-{server.session}")
     claim = _json(
