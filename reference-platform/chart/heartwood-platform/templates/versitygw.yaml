@@ -58,7 +58,18 @@ spec:
       containers:
         - name: versitygw
           image: {{ .Values.images.versitygw }}
-          args: [--health, /health, --iam-dir, /data/iam, posix, /data/buckets]
+          # The store serves only HTTPS, with its certificate from the platform CA.
+          args:
+            - --cert
+            - /etc/versitygw/tls/tls.crt
+            - --key
+            - /etc/versitygw/tls/tls.key
+            - --health
+            - /health
+            - --iam-dir
+            - /data/iam
+            - posix
+            - /data/buckets
           securityContext:
             {{- include "heartwood.containerSecurityContext" . | nindent 12 }}
             readOnlyRootFilesystem: true
@@ -80,6 +91,7 @@ spec:
             httpGet:
               path: /health
               port: s3
+              scheme: HTTPS
             periodSeconds: 5
           resources:
             requests:
@@ -90,6 +102,13 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /data
+            - name: tls
+              mountPath: /etc/versitygw/tls
+              readOnly: true
+      volumes:
+        - name: tls
+          secret:
+            secretName: versitygw-tls
       initContainers:
         - name: directories
           image: {{ .Values.images.versitygw }}
@@ -163,7 +182,10 @@ spec:
             {{- end }}
           env:
             - name: ADMIN_ENDPOINT_URL
-              value: http://versitygw:7070
+              value: https://versitygw:7070
+            # The admin client verifies the store against the platform CA alone.
+            - name: SSL_CERT_FILE
+              value: /etc/versitygw/ca/ca.crt
             - name: ADMIN_ACCESS_KEY
               valueFrom:
                 secretKeyRef:
@@ -180,4 +202,15 @@ spec:
               memory: 32Mi
             limits:
               memory: 128Mi
+          volumeMounts:
+            - name: platform-ca
+              mountPath: /etc/versitygw/ca
+              readOnly: true
+      volumes:
+        - name: platform-ca
+          configMap:
+            name: platform-ca
+            items:
+              - key: ca.crt
+                path: ca.crt
 {{- end }}

@@ -217,6 +217,7 @@ def test_launch_returns_the_registry_binding_and_prepares_the_project_client(
         "kube_system_uid": "uid-0",
         "gateway_service_account": f"hw-gw-{launch['session']}",
         "openshell_endpoint": f"https://openshell.hw-s-{launch['session']}.svc.cluster.local:8080",
+        "project_data": None,
     }
     assert context == PlatformLaunchContext(
         project_context_id=str(launch["session"]),

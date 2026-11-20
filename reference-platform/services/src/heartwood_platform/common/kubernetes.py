@@ -44,6 +44,7 @@ def in_cluster_client(directory: Path = _SERVICE_ACCOUNT) -> httpx.Client:
 _RESOURCES = {
     "Namespace": ("/api/v1", "namespaces", False),
     "ConfigMap": ("/api/v1", "configmaps", True),
+    "PersistentVolumeClaim": ("/api/v1", "persistentvolumeclaims", True),
     "LimitRange": ("/api/v1", "limitranges", True),
     "ResourceQuota": ("/api/v1", "resourcequotas", True),
     "Secret": ("/api/v1", "secrets", True),
@@ -104,13 +105,31 @@ class Kubernetes:
         assert isinstance(document, dict)
         return document
 
-    def delete(self, kind: str, name: str, namespace: str | None = None) -> None:
+    def list(self, kind: str, namespace: str, selector: str) -> list[dict[str, Any]]:
+        """Return the objects of a kind in a namespace that a label selector selects."""
+        response = self._client.get(
+            _collection(kind, namespace), params={"labelSelector": selector}
+        )
+        response.raise_for_status()
+        items = response.json().get("items")
+        if not isinstance(items, list):
+            raise ValueError(f"the {kind} listing has no items")
+        return items
+
+    def delete(
+        self, kind: str, name: str, namespace: str | None = None, *, propagation: str | None = None
+    ) -> None:
         """Delete an object, whether or not it exists or is already being deleted.
 
         The API server answers a repeated deletion of a namespace that is still being
-        emptied with a conflict.
+        emptied with a conflict. ``propagation`` sets the deletion's propagation policy:
+        with ``Foreground``, the object stays until its dependents, such as a Job's pods,
+        are deleted.
         """
-        response = self._client.delete(f"{_collection(kind, namespace)}/{name}")
+        response = self._client.delete(
+            f"{_collection(kind, namespace)}/{name}",
+            params={} if propagation is None else {"propagationPolicy": propagation},
+        )
         if response.status_code not in {httpx.codes.NOT_FOUND, httpx.codes.CONFLICT}:
             response.raise_for_status()
 

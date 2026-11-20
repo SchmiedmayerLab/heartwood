@@ -146,6 +146,10 @@ rules:
   - apiGroups: [""]
     resources: [serviceaccounts, configmaps, services, persistentvolumeclaims, resourcequotas, limitranges]
     verbs: [create, get, patch, update, delete]
+  # Finds the session's project data volumes of earlier content.
+  - apiGroups: [""]
+    resources: [persistentvolumeclaims]
+    verbs: [list]
   - apiGroups: [apps]
     resources: [statefulsets]
     verbs: [create, get, patch, update, delete]

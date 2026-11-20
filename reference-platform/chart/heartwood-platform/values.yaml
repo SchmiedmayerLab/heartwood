@@ -38,6 +38,9 @@ storageClassName: ""
 # Synthetic projects of the registry. Each project gets an object store bucket and a
 # Keycloak client scope project-<id> that the command line client can request.
 # members lists the Keycloak subject identifiers of the researchers of a project.
+# datasets lists the project's synthetic or open datasets in the data catalog. Each file
+# is read from files/datasets/<dataset id>/<file> of this chart, loaded into the
+# project's bucket and copied into the project data volume of each session.
 projects: []
 #  - id: demo
 #    billingAttributionRef: synthetic-grant-demo
@@ -48,6 +51,12 @@ projects: []
 #    budgets:
 #      inference: "20"
 #      compute: "50"
+#    datasets:
+#      - id: synthetic-cohort
+#        name: Synthetic cohort
+#        description: Synthetic participants and measurements.
+#        created: "2026-11-01T00:00:00Z"
+#        files: [participants.csv]
 
 # Synthetic researcher accounts of the Keycloak realm. subject is the identifier of the
 # account and the subject of its tokens. Each account gets a generated password in the
