@@ -24,7 +24,7 @@ _POD = "hw-keycloak-probe"
 
 
 @pytest.fixture(scope="module", autouse=True)
-def probe(cluster: Cluster, staging_image: str) -> Iterator[None]:
+def probe(cluster: Cluster, probe_image: str) -> Iterator[None]:
     """A pod in the sessions namespace that trusts only the platform CA."""
     pod = {
         "apiVersion": "v1",
@@ -40,7 +40,7 @@ def probe(cluster: Cluster, staging_image: str) -> Iterator[None]:
             "containers": [
                 {
                     "name": "agnhost",
-                    "image": staging_image,
+                    "image": probe_image,
                     "args": ["pause"],
                     "securityContext": {
                         "allowPrivilegeEscalation": False,
