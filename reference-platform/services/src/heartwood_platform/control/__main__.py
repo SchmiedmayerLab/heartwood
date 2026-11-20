@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import logging
 import ssl
 import sys
 from pathlib import Path
@@ -190,6 +191,7 @@ def build(settings: Settings, kubernetes: Kubernetes) -> Starlette:
 
 def main() -> None:
     """Serve the control service with the configuration file named on the command line."""
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
     settings = Settings.model_validate_json(Path(sys.argv[1]).read_text(encoding="utf-8"))
     application = build(settings, Kubernetes(in_cluster_client()))
     serve(application, settings.tls)
