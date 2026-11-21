@@ -39,13 +39,18 @@ spec:
     - name: labels
       expression: "has(object.spec.template.metadata.labels) ? object.spec.template.metadata.labels : {}"
     - name: task
-      expression: "'heartwood.platform/task' in variables.labels ? variables.labels['heartwood.platform/task'] : ''"
+      expression: >-
+        'heartwood.platform/task' in variables.labels
+        ? string(variables.labels['heartwood.platform/task']) : ''
+    # The labels of the Job itself.
+    - name: jobLabels
+      expression: "has(object.metadata.labels) ? object.metadata.labels : {}"
     # The name of the pod that the worker's token is bound to.
     - name: workerPod
       expression: >-
         'authentication.kubernetes.io/pod-name' in request.userInfo.extra &&
         size(request.userInfo.extra['authentication.kubernetes.io/pod-name']) == 1
-        ? request.userInfo.extra['authentication.kubernetes.io/pod-name'][0] : ''
+        ? string(request.userInfo.extra['authentication.kubernetes.io/pod-name'][0]) : ''
   validations:
     - expression: request.operation == 'CREATE'
       message: workers may not change Jobs
@@ -57,10 +62,16 @@ spec:
       message: worker-created Jobs must be named after their task
     # Funnel finds executor Jobs by the label app, and the API server adds the Job's
     # selector labels to the pod template before admission.
+    # Each label is compared on its own, so every comparison is between strings.
     - expression: >-
-        has(object.metadata.labels) && object.metadata.labels == {'app': 'funnel-executor',
-        'heartwood.platform/role': 'funnel-executor', 'heartwood.platform/task': variables.task}
-        && variables.labels['app'] == 'funnel-executor'
+        size(variables.jobLabels) == 3
+        && 'app' in variables.jobLabels && variables.jobLabels['app'] == 'funnel-executor'
+        && 'heartwood.platform/role' in variables.jobLabels
+        && variables.jobLabels['heartwood.platform/role'] == 'funnel-executor'
+        && 'heartwood.platform/task' in variables.jobLabels
+        && variables.jobLabels['heartwood.platform/task'] == variables.task
+        && 'app' in variables.labels && variables.labels['app'] == 'funnel-executor'
+        && 'heartwood.platform/role' in variables.labels
         && variables.labels['heartwood.platform/role'] == 'funnel-executor'
         && variables.labels.all(k, k in ['app', 'heartwood.platform/role', 'heartwood.platform/task',
         'job-name', 'controller-uid', 'batch.kubernetes.io/job-name', 'batch.kubernetes.io/controller-uid'])
