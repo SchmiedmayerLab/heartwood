@@ -10,9 +10,11 @@ from __future__ import annotations
 
 import io
 import json
+import subprocess
 import sys
 import tarfile
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 from uuid import uuid4
 
@@ -46,6 +48,9 @@ class _Cluster:
         self.objects: dict[tuple[str, str], dict[str, Any]] = {}
         self.calls: list[tuple[str, ...]] = []
         self.copied: dict[str, dict[str, tuple[int, bytes | None]]] = {}
+        # Members of each archive that standard input drops, as a stream cut at a boundary.
+        self.dropped: dict[str, int] = {}
+        self.extra: dict[str, dict[str, tuple[int, bytes | None]]] = {}
         self.failing: str | None = None
         self.pod_phases = ["Pending", "Running"]
         self.terminating: dict[tuple[str, str], int] = {}
@@ -98,6 +103,8 @@ class _Cluster:
             created["status"] = {}
             self.objects[resource, name] = created
             return b""
+        if verb == "exec" and "--stdin" not in arguments:
+            return self._digest(*arguments[1:])
         if verb == "exec":
             assert stdin is not None
             pod = self.objects["pod", arguments[1]]
@@ -110,13 +117,16 @@ class _Cluster:
                 "--file=-",
             )
             assert pod["status"]["phase"] == "Running"
+            mount = arguments[8].removeprefix("--directory=/")
             with tarfile.open(fileobj=io.BytesIO(stdin)) as archive:
-                self.copied[arguments[8].removeprefix("--directory=/")] = {
+                members = archive.getmembers()
+                kept = members[: len(members) - self.dropped.get(mount, 0)]
+                self.copied[mount] = {
                     member.name: (
                         member.mode,
                         None if member.isdir() else archive.extractfile(member).read(),  # type: ignore[union-attr]
                     )
-                    for member in archive.getmembers()
+                    for member in kept
                 }
             return b""
         assert verb == "delete"
@@ -132,6 +142,36 @@ class _Cluster:
         ):
             del self.objects[resource, name]
         return b""
+
+    def _digest(self, pod: str, *arguments: str) -> bytes:
+        """Run the staging pod's digest script on the tree its copy created."""
+        assert self.objects["pod", pod]["status"]["phase"] == "Running"
+        container, separator, python, *flags, script, mount, lost_and_found = arguments
+        assert (container, separator, python, flags) == (
+            "--container=stage",
+            "--",
+            "/opt/heartwood/.venv/bin/python",
+            ["-I", "-B", "-c"],
+        )
+        with TemporaryDirectory() as root:
+            tree = Path(root)
+            entries = {**self.copied[mount.removeprefix("/")], **self.extra.get(mount[1:], {})}
+            for name, (mode, content) in sorted(entries.items()):
+                path = tree / name
+                if content is None:
+                    path.mkdir(parents=True, exist_ok=True)
+                else:
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(content)
+                path.chmod(mode)
+            result = subprocess.run(
+                [sys.executable, "-I", "-B", "-c", script, root, lost_and_found],
+                capture_output=True,
+                check=False,
+            )
+        if result.returncode != 0:
+            raise WorkerAttemptError("native Kubernetes operation requires reconciliation")
+        return result.stdout
 
     def _get(self, resource: str, *arguments: str) -> bytes:
         if arguments == ("--output=json",):
@@ -551,6 +591,105 @@ def test_a_failed_cluster_request_stops_staging_and_revocation_removes_what_exis
         volumes.stage(sources)
     volumes.remove_after_revocation()
     assert cluster.names("pod") == cluster.names(_CLAIM) == []
+
+
+def test_staging_compares_each_staged_tree_with_its_archive_in_the_pod(
+    volumes: KubernetesWorkerVolumes, cluster: _Cluster, sources: dict[str, Path]
+) -> None:
+    volumes.stage(sources)
+    checks = [call for call in cluster.calls if call[0] == "exec" and "--stdin" not in call]
+    assert [call[-2:] for call in checks] == [
+        ("/inputs", "skip-lost-found"),
+        ("/skills", "skip-lost-found"),
+    ]
+    # Each check follows the copy into the same claim.
+    copies = [call for call in cluster.calls if call[0] == "exec"]
+    assert [call[8] if "--stdin" in call else call[-2] for call in copies] == [
+        "--directory=/inputs",
+        "/inputs",
+        "--directory=/skills",
+        "/skills",
+    ]
+
+
+@pytest.mark.parametrize("change", ["truncated", "added", "mode"])
+def test_a_staged_tree_that_differs_from_its_archive_stops_staging_before_the_worker(
+    volumes: KubernetesWorkerVolumes, cluster: _Cluster, sources: dict[str, Path], change: str
+) -> None:
+    if change == "truncated":
+        # The stream ended at a member boundary, which tar accepts.
+        cluster.dropped["inputs"] = 1
+    elif change == "added":
+        cluster.extra["inputs"] = {"planted.txt": (0o644, b"not staged\n")}
+    else:
+        cluster.extra["inputs"] = {"data/table.csv": (0o755, b"synthetic,1\n")}
+    with pytest.raises(WorkerAttemptError, match="does not match the staged snapshot"):
+        volumes.stage(sources)
+    # Nothing follows the failed check: no further copy, and the pod stays for revocation.
+    assert cluster.calls[-1][-2] == "/inputs"
+    assert "skills" not in cluster.copied
+    assert cluster.names("pod") == [volumes.staging_name]
+    with pytest.raises(WorkerAttemptError, match="cannot repeat"):
+        volumes.stage(sources)
+    volumes.remove_after_revocation()
+    assert cluster.names("pod") == cluster.names(_CLAIM) == []
+
+
+def test_a_filesystem_recovery_directory_in_a_claim_is_not_staged_content(
+    volumes: KubernetesWorkerVolumes, cluster: _Cluster, sources: dict[str, Path]
+) -> None:
+    cluster.extra["inputs"] = {"lost+found": (0o700, None)}
+    volumes.stage(sources)
+    assert cluster.names("pod") == []
+
+
+def test_a_snapshot_entry_named_like_the_recovery_directory_is_compared(
+    volumes: KubernetesWorkerVolumes, cluster: _Cluster, sources: dict[str, Path]
+) -> None:
+    (sources["inputs"] / "lost+found").mkdir(mode=0o700)
+    cluster.extra["inputs"] = {"lost+found/planted.txt": (0o644, b"not staged\n")}
+    with pytest.raises(WorkerAttemptError, match="does not match the staged snapshot"):
+        volumes.stage(sources)
+
+
+def test_the_pod_digest_script_reports_the_digest_of_an_extracted_archive(
+    tmp_path: Path, sources: dict[str, Path]
+) -> None:
+    archive = worker_kubernetes._archive(sources["skills"])
+    extracted = tmp_path / "extracted"
+    extracted.mkdir()
+    with tarfile.open(fileobj=io.BytesIO(archive)) as members:
+        members.extractall(extracted, filter="fully_trusted")
+    reported = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-B",
+            "-c",
+            worker_kubernetes._TREE_DIGEST_SCRIPT,
+            str(extracted),
+            "skip-lost-found",
+        ],
+        capture_output=True,
+        check=True,
+    )
+    assert reported.stdout.decode().strip() == worker_kubernetes._tree_digest(archive)
+    (extracted / "synthetic" / "link").symlink_to("run.sh")
+    refused = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-B",
+            "-c",
+            worker_kubernetes._TREE_DIGEST_SCRIPT,
+            str(extracted),
+            "x",
+        ],
+        capture_output=True,
+        check=False,
+    )
+    assert refused.returncode != 0
+    assert refused.stdout == b""
 
 
 @pytest.mark.parametrize("change", ["replaced", "restarted", "ended", "relabeled"])
