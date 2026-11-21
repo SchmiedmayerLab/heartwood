@@ -14,11 +14,11 @@ from pathlib import Path
 from typing import Annotated, Any, Self
 
 import httpx
-import uvicorn
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 from starlette.applications import Starlette
 
 from heartwood_platform.common.kubernetes import Kubernetes, in_cluster_client
+from heartwood_platform.common.serving import TlsSettings, serve
 from heartwood_platform.common.tokens import ResearcherTokens, ServiceTokens
 from heartwood_platform.control.app import ProjectId, Subject, create_app
 from heartwood_platform.control.keycloak import Keycloak
@@ -88,6 +88,8 @@ class Settings(_Settings):
     service_callers: frozenset[str]
     redirect_uri_template: str
     keycloak: KeycloakSettings
+    # The serving certificate from the platform CA; the service serves only HTTPS.
+    tls: TlsSettings
     sessions: SessionNamespaceSettings
     projects: tuple[ProjectSettings, ...]
     synthetic_prices: PriceSheet
@@ -167,7 +169,7 @@ def main() -> None:
     """Serve the control service with the configuration file named on the command line."""
     settings = Settings.model_validate_json(Path(sys.argv[1]).read_text(encoding="utf-8"))
     application = build(settings, Kubernetes(in_cluster_client()))
-    uvicorn.run(application, host="0.0.0.0", port=8080, log_config=None)
+    serve(application, settings.tls)
 
 
 if __name__ == "__main__":

@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import socket
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -20,6 +21,7 @@ from typing import Any, Literal, cast
 from uuid import uuid4
 
 import pytest
+import tomli_w
 from fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel
@@ -36,7 +38,10 @@ from heartwood.gateway import (
     SessionGateway,
     planning_lines,
 )
+from heartwood.gateway._access import AccessUnavailableError, TokenExchangeRefusedError
+from heartwood.gateway._deployment import ProjectDeployment, load_project_deployment
 from heartwood.gateway._platform_planning import PlatformPlanningBinding
+from heartwood.gateway._project import ProjectStateError
 from heartwood.gateway._rest import RestGateway, RestRequest
 from heartwood.gateway.platform_conformance import McpEndpoint
 from heartwood.gateway.platform_fakes import (
@@ -59,6 +64,7 @@ from heartwood.schemas import (
     WorkloadPrediction,
 )
 from heartwood.schemas.planning import PlanningEstimateRequest, PlanningProjection
+from packages.gateway.tests.tls_fixtures import certificate_authority, serve_tls
 
 _EXAMPLES = Path(__file__).parents[3] / "fixtures/synthetic/platform-contract"
 _LAUNCH = SYNTHETIC_LAUNCH_CONTEXTS[0]
@@ -1102,3 +1108,175 @@ def test_shared_lines_repeat_what_each_revision_and_estimate_states() -> None:
         )
         == 3
     )
+
+
+def _hosted_deployment(
+    tmp_path: Path, url: str, ca_file: Path, **planning: object
+) -> ProjectDeployment:
+    """Load a manifest with an identity and a planning service, as a hosted gateway does."""
+    operator = tmp_path / "operator"
+    operator.mkdir(mode=0o700, parents=True, exist_ok=True)
+    secret = operator / "client-secret"
+    secret.write_text("synthetic-client-secret\n", encoding="utf-8")
+    secret.chmod(0o600)
+    launch = operator / "launch-context.json"
+    launch.write_text(_LAUNCH.model_dump_json(), encoding="utf-8")
+    launch.chmod(0o600)
+    workspace = tmp_path / "research"
+    workspace.mkdir(exist_ok=True)
+    (tmp_path / "protected").mkdir(mode=0o700, exist_ok=True)
+    project_id = str(uuid4())
+    manifest = operator / "deployment.toml"
+    manifest.write_text(
+        tomli_w.dumps(
+            {
+                "schema_version": "heartwood.project-deployment.v1",
+                "project_id": project_id,
+                "workspace": str(workspace),
+                "state_root": str(tmp_path / "protected" / project_id),
+                "policy": {"policy_id": "deployment", "platform_id": "generic"},
+                "identity": {
+                    "issuer": "https://id.synthetic.invalid/realms/research",
+                    "client_id": "hw-proj-synthetic",
+                    "client_secret_file": str(secret),
+                    "subject": "synthetic-researcher",
+                },
+                "planning": {
+                    "url": url,
+                    "ca_file": str(ca_file),
+                    "launch_context_file": str(launch),
+                    "token_exchange": {"scope": "svc-control", "audience": BUDGETS_AUDIENCE},
+                    **planning,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    manifest.chmod(0o600)
+    return load_project_deployment(manifest, project_root=workspace, env={})
+
+
+def test_a_hosted_gateway_plans_over_tls_with_an_exchanged_token(
+    tmp_path: Path, fakes: RunningFakes
+) -> None:
+    platform = certificate_authority(tmp_path, "platform")
+    other = certificate_authority(tmp_path, "other")
+    requested: list[tuple[str, str]] = []
+
+    def tokens(scope: str, audience: str) -> str:
+        requested.append((scope, audience))
+        return fakes.issuer.exchange(audience=audience)
+
+    with serve_tls(fakes.budgets.app, tmp_path / "served", platform) as origin:
+        deployment = _hosted_deployment(tmp_path, f"{origin}/mcp", platform[0])
+        assert deployment.platform_launch == _LAUNCH
+        gateway = SessionGateway(deployment=deployment, service_tokens=tokens)
+        try:
+            projection = gateway.refresh_planning()
+            assert projection.services is not None
+            assert (projection.services.budgets, projection.services.estimates) == (
+                "available",
+                "available",
+            )
+            gateway.record_plan_prediction(_prediction(1))
+            (plan,) = _estimate(gateway, 1).plans
+            (revision,) = plan.revisions
+            assert revision.overview.estimates
+        finally:
+            gateway.stop()
+        assert set(requested) == {("svc-control", BUDGETS_AUDIENCE)}
+
+        # A service whose certificate comes from another authority is not trusted.
+        untrusted = _hosted_deployment(tmp_path / "other", f"{origin}/mcp", other[0])
+        gateway = SessionGateway(deployment=untrusted, service_tokens=tokens)
+        try:
+            projection = gateway.refresh_planning()
+            assert projection.services is not None
+            assert projection.services.budgets == "unavailable"
+        finally:
+            gateway.stop()
+
+
+@pytest.mark.parametrize(
+    ("answer", "status"),
+    [
+        (None, "unavailable"),
+        (TokenExchangeRefusedError, "refused"),
+        (AccessUnavailableError, "unavailable"),
+    ],
+)
+def test_a_hosted_gateway_without_an_exchanged_token_calls_no_service(
+    tmp_path: Path, fakes: RunningFakes, answer: type[Exception] | None, status: str
+) -> None:
+    platform = certificate_authority(tmp_path, "platform")
+
+    def tokens(_scope: str, _audience: str) -> str | None:
+        if answer is not None:
+            raise answer
+        return None
+
+    with serve_tls(fakes.budgets.app, tmp_path / "served", platform) as origin:
+        gateway = SessionGateway(
+            deployment=_hosted_deployment(tmp_path, f"{origin}/mcp", platform[0]),
+            service_tokens=tokens,
+        )
+        try:
+            projection = gateway.refresh_planning()
+        finally:
+            gateway.stop()
+    assert projection.services is not None
+    assert projection.services.budgets == status
+
+
+def test_the_planning_table_requires_https_and_a_gateway_identity(tmp_path: Path) -> None:
+    platform = certificate_authority(tmp_path, "platform")
+    with pytest.raises(ProjectStateError, match="HTTPS"):
+        _hosted_deployment(tmp_path / "plain", "http://127.0.0.1:8080/mcp", platform[0])
+    with pytest.raises(ProjectStateError, match="private address"):
+        _hosted_deployment(tmp_path / "private", "https://10.96.0.12:8443/mcp", platform[0])
+    assert _hosted_deployment(
+        tmp_path / "cluster", "https://10.96.0.12:8443/mcp", platform[0], private_address=True
+    ).planning
+    deployment = _hosted_deployment(
+        tmp_path / "bound", "https://10.96.0.12/mcp", platform[0], private_address=True
+    )
+    with pytest.raises(ValueError, match="gateway identity"):
+        SessionGateway(deployment=deployment)
+
+
+def test_a_hosted_gateway_exchanges_no_token_for_an_unapproved_address(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    platform = certificate_authority(tmp_path, "platform")
+    # The service name resolves to a cluster address.
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.96.0.12", 0))],
+    )
+    requested: list[str] = []
+
+    def tokens(_scope: str, audience: str) -> str | None:
+        requested.append(audience)
+        return None
+
+    url = "https://control.synthetic.invalid/mcp"
+    outcomes = {}
+    for private_address in (False, True):
+        gateway = SessionGateway(
+            deployment=_hosted_deployment(
+                tmp_path / str(private_address), url, platform[0], private_address=private_address
+            ),
+            service_tokens=tokens,
+        )
+        try:
+            services = gateway.refresh_planning().services
+        finally:
+            gateway.stop()
+        assert services is not None
+        outcomes[private_address] = (services.budgets, list(requested))
+    # Without the opt-in no token is exchanged; with it the exchange is the next step.
+    assert outcomes == {
+        False: ("unavailable", []),
+        True: ("unavailable", [BUDGETS_AUDIENCE]),
+    }

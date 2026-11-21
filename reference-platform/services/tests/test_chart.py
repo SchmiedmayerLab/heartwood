@@ -393,6 +393,58 @@ def test_keycloak_serves_only_https_with_a_certificate_of_the_platform_ca(
     assert configuration["keycloak"]["issuer"].startswith("https://")
 
 
+def test_control_service_serves_only_https_with_a_certificate_of_the_platform_ca(
+    objects: list[dict[str, Any]], tmp_path: Path
+) -> None:
+    authority = tmp_path / "ca.crt"
+    authority.write_bytes(
+        base64.b64decode(_named(objects, "Secret", "platform-ca")["data"]["tls.crt"])
+    )
+    secret = _named(objects, "Secret", "heartwood-control-tls")
+    assert secret["type"] == "kubernetes.io/tls"
+    serving = tmp_path / "control.crt"
+    serving.write_bytes(base64.b64decode(secret["data"]["tls.crt"]))
+    subprocess.run(
+        ["openssl", "verify", "-CAfile", str(authority), str(serving)],
+        check=True,
+        capture_output=True,
+    )
+    text = subprocess.run(
+        ["openssl", "x509", "-noout", "-ext", "subjectAltName", "-in", str(serving)],
+        check=True,
+        capture_output=True,
+    ).stdout.decode()
+    for name in (
+        "heartwood-control",
+        "heartwood-control.heartwood-platform",
+        "heartwood-control.heartwood-platform.svc",
+        "heartwood-control.heartwood-platform.svc.cluster.local",
+    ):
+        assert f"DNS:{name}," in f"{text.strip()},"
+
+    configuration = json.loads(
+        _named(objects, "ConfigMap", "heartwood-control")["data"]["configuration.json"]
+    )
+    # One mounted CA file serves the trust in Keycloak and the copies for sessions.
+    assert configuration["keycloak"]["ca_file"] == configuration["sessions"]["platform_ca_file"]
+    spec = _named(objects, "StatefulSet", "heartwood-control")["spec"]["template"]["spec"]
+    (volume,) = [item for item in spec["volumes"] if "secret" in item and item["name"] == "tls"]
+    assert volume["secret"]["secretName"] == "heartwood-control-tls"
+    (container,) = spec["containers"]
+    (mount,) = [item for item in container["volumeMounts"] if item["name"] == "tls"]
+    tls = configuration["tls"]
+    assert {Path(tls["certificate_file"]).parent, Path(tls["key_file"]).parent} == {
+        Path(mount["mountPath"])
+    }
+    assert [port["containerPort"] for port in container["ports"]] == [8443]
+    assert container["readinessProbe"]["httpGet"]["scheme"] == "HTTPS"
+    # A reload copies the key into the temporary directory, which stays in memory.
+    (temporary,) = [item for item in spec["volumes"] if item["name"] == "tmp"]
+    assert temporary["emptyDir"]["medium"] == "Memory"
+    service = _named(objects, "Service", "heartwood-control")
+    assert [port["port"] for port in service["spec"]["ports"]] == [8443]
+
+
 def test_gke_values_set_only_cluster_specific_keys() -> None:
     values = yaml.safe_load((_CHART / "values-gke.yaml").read_text(encoding="utf-8"))
     assert set(values) <= {"storageClassName", "gpu", "sessions"}
@@ -482,7 +534,7 @@ def test_control_service_configuration_holds_the_registry(objects: list[dict[str
                     }
                 }
             ],
-            "ports": [{"protocol": "TCP", "port": 8080}],
+            "ports": [{"protocol": "TCP", "port": 8443}],
         }
     ]
 

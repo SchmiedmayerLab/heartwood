@@ -29,7 +29,7 @@ from kube import PROBE_CA, Cluster
 
 SESSIONS = "heartwood-sessions"
 PLATFORM = "heartwood-platform"
-CONTROL = "http://heartwood-control.heartwood-platform.svc.cluster.local:8080"
+CONTROL = "https://heartwood-control.heartwood-platform.svc.cluster.local:8443"
 KEYCLOAK = "https://keycloak.heartwood-platform.svc.cluster.local:8443"
 REALM = f"{KEYCLOAK}/realms/heartwood/protocol/openid-connect"
 FIRST = "6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0001"

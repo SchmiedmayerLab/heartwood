@@ -17,11 +17,16 @@ import subprocess
 import sys
 import threading
 from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import ModuleType
 from typing import Any
 
 import pytest
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.x509.oid import NameOID
 
 _ROOT = Path(__file__).resolve().parents[3]
 _COMMIT = "1" * 40
@@ -239,6 +244,10 @@ def test_the_launch_token_is_sent_again_when_it_reaches_the_pod_incomplete(
     sent: list[str] = []
 
     class Cluster:
+        def json(self, *arguments: str) -> dict[str, Any]:
+            assert arguments == ("configmap", "platform-ca", "--namespace", "heartwood-platform")
+            return {"data": {"ca.crt": _authority()}}
+
         def kubectl(self, *arguments: str, stdin: str | None = None) -> str:
             assert stdin is not None
             # The first attempt reaches the pod shortened, as kubectl exec can deliver it.
@@ -261,3 +270,22 @@ def test_the_launch_token_is_sent_again_when_it_reaches_the_pod_incomplete(
     assert len(sent) == 2
     # Only the complete token reached the control service.
     assert received == ["Bearer synthetic-token"]
+
+
+def _authority() -> str:
+    """Return a synthetic CA certificate, which the launch script loads as its trust."""
+    key = ec.generate_private_key(ec.SECP256R1())
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Synthetic Platform CA")])
+    now = datetime.now(UTC)
+    certificate = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(minutes=1))
+        .not_valid_after(now + timedelta(days=1))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
+        .sign(key, hashes.SHA256())
+    )
+    return certificate.public_bytes(serialization.Encoding.PEM).decode()

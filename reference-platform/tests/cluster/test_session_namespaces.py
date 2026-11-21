@@ -23,7 +23,7 @@ from kube import PROBE_CA, Cluster
 
 _SESSIONS = "heartwood-sessions"
 _PLATFORM = "heartwood-platform"
-_CONTROL = "http://heartwood-control.heartwood-platform.svc.cluster.local:8080"
+_CONTROL = "https://heartwood-control.heartwood-platform.svc.cluster.local:8443"
 _FIRST = "6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0001"
 _SECOND = "6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0002"
 _POLICY = "ValidatingAdmissionPolicy 'heartwood-control-scope'"
@@ -218,7 +218,10 @@ def test_openshell_gateway_is_ready_with_its_own_key_and_client_bundle(
         "openshell-ca.crt",
         "openshell-tls.crt",
         "openshell-tls.key",
+        "platform-ca.crt",
     }
+    platform_ca = _json(cluster, "configmap", "platform-ca", f"--namespace={_PLATFORM}")
+    assert files["platform-ca.crt"] == platform_ca["data"]["ca.crt"]
     assert json.loads(files["launch.json"]) == launch
     bundle = _json(cluster, "secret", "openshell-client-tls", f"--namespace={namespace}")
     assert files["openshell-tls.crt"] == base64.b64decode(bundle["data"]["tls.crt"]).decode()
