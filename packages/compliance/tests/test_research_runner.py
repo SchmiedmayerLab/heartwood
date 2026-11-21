@@ -692,7 +692,7 @@ def test_baseline_uses_reviewed_tools_and_a_separate_process_to_reproduce_and_re
             budget=ExecutionBudget(maximum_seconds=20),
         )
         assert verified.stop == "finished"
-        assert all(check.status == "passed" for check in verified.record.checks)
+        assert [check for check in verified.record.checks if check.status != "passed"] == []
         assert verification_llm.call_count == 3
     finally:
         verification_gateway.stop()
