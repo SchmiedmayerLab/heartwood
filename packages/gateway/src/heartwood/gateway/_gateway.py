@@ -2919,7 +2919,7 @@ class SessionGateway:
         try:
             if active_service is not reconciled and self._read_under_lock(active_service):
                 active_service.reconcile()
-            return active_service.replay_events()
+            return active_service.replay_complete_reports()
         finally:
             if close_service:
                 active_service.close(record_closure=False)
@@ -3325,7 +3325,7 @@ class SessionGateway:
         active: list[str] = []
         for session_id, service in self._services.items():
             projection = project_session(
-                service.replay_events(),
+                service.replay_complete_reports(),
                 session_id=session_id,
                 streaming_text=self._streaming_text.get(session_id, ""),
                 stream_epoch=self._stream_epoch,
