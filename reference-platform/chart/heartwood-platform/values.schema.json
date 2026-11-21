@@ -479,9 +479,9 @@
       ],
       "properties": {
         "publicOrigin": {
-          "description": "HTTPS scheme, host and optional port of the Hub's proxy.",
+          "description": "HTTPS scheme, DNS host name and optional port of the Hub's proxy.",
           "type": "string",
-          "pattern": "^https://[a-z0-9.-]+(:[0-9]{1,5})?$"
+          "pattern": "^https://[a-z0-9.-]*[a-z][a-z0-9.-]*(:[0-9]{1,5})?$"
         },
         "trustedProxySources": {
           "type": "array",
