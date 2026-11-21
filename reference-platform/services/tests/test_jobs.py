@@ -1065,3 +1065,25 @@ def test_gpu_counts_and_active_tasks_are_bounded(jobs: tuple[Jobs, TestClient]) 
     observed = service.observe(client, "create_task", task("busy-4"))
     assert observed.status == "denied"
     assert observed.limitations == ("The project already runs 4 tasks, its limit.",)
+
+
+def test_an_executor_that_returns_another_operations_task_fails_the_submission(
+    jobs: tuple[Jobs, TestClient], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, client = jobs
+    service.observe(client, "create_task", task())
+    executor = service.executors["demo"]
+    original = executor.create
+
+    def reused(created: TesTask) -> str:
+        original(created)
+        return "task-0000"
+
+    monkeypatch.setattr(executor, "create", reused)
+    observed = service.observe(client, "create_task", task("op-2"))
+    assert observed.status == "failed"
+    assert observed.limitations[0] == "The executor did not accept the task."
+    first = service.observe(client, "get_task", {"project_id": "demo", "operation_id": "op-1"})
+    assert first.backend_operation_ref == "task-0000"
+    # The task the executor created for op-2 has no record and is cancelled.
+    assert service.service.reconcile("demo") == ["task-0001"]

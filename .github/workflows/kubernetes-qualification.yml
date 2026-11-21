@@ -115,6 +115,12 @@ jobs:
           image="$(bash reference-platform/cluster/push-image.sh heartwood \
             heartwood-platform-services:candidate)"
           echo "PLATFORM_SERVICES_IMAGE=${image}" >> "${GITHUB_ENV}"
+      - name: Build the Funnel image and push it to the cluster registry
+        run: |
+          python3 reference-platform/tools/prepare_funnel.py "${RUNNER_TEMP}/funnel" \
+            --image heartwood-funnel:candidate
+          image="$(bash reference-platform/cluster/push-image.sh heartwood heartwood-funnel:candidate)"
+          echo "FUNNEL_IMAGE=${image}" >> "${GITHUB_ENV}"
       - name: Push the hosted gateway image to the cluster registry
         run: |
           image="$(bash reference-platform/cluster/push-image.sh heartwood \
@@ -151,6 +157,7 @@ jobs:
           --set "images.openshellRepository=${OPENSHELL_REPOSITORY}"
           --set "images.hostedGateway=${HOSTED_GATEWAY_IMAGE}"
           --set "images.modelRuntime=${MODEL_RUNTIME_IMAGE}"
+          --set "images.funnel=${FUNNEL_IMAGE}"
           --set "hub.worker.image=${WORKER_IMAGE}"
           --set-json "sessions.stagingImages=${STAGING_IMAGES}"
       - name: Test the installed chart

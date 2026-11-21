@@ -1,0 +1,51 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{.TaskId}}-{{.JobId}}
+  namespace: {{.JobsNamespace}}
+  labels:
+    app: funnel-executor
+    heartwood.platform/role: funnel-executor
+    heartwood.platform/task: "{{.TaskId}}"
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: funnel-executor
+        heartwood.platform/role: funnel-executor
+        heartwood.platform/task: "{{.TaskId}}"
+    spec:
+      restartPolicy: Never
+      serviceAccountName: funnel-executor
+      automountServiceAccountToken: false
+      hostUsers: false
+      enableServiceLinks: false
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: executor
+          image: {{printf "%q" .Image}}
+          imagePullPolicy: IfNotPresent
+          {{- if .UseShell}}
+          command: ["/bin/sh", "-c"]
+          args: [{{printf "%q" (index .Command 0)}}]
+          {{- else}}
+          command:
+          {{- range .Command}}
+            - {{printf "%q" .}}
+          {{- end}}
+          {{- end}}
+          workingDir: {{printf "%q" .Workdir}}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: "{{.Cpus}}"
+              memory: "{{.RamGb}}G"
+            limits:
+              cpu: "{{.Cpus}}"
+              memory: "{{.RamGb}}G"

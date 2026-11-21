@@ -31,6 +31,9 @@ images:
   modelRuntime: ""
   # The LiteLLM proxy, the non-root image of its release.
   litellm: ghcr.io/berriai/litellm-non_root:v1.110.0@sha256:825dc1814bbdb30f8800ea5f5b8f405a265747c6f3feeb765f28dbcc60049196
+  # Image of the Funnel server and worker, built by reference-platform/tools/prepare_funnel.py
+  # from the pinned source with the recorded patches. It has no default: set it by digest.
+  funnel: ""
 
 # StorageClass of the platform's own volumes. Empty selects the cluster default.
 storageClassName: ""
@@ -57,6 +60,8 @@ projects: []
 #        description: Synthetic participants and measurements.
 #        created: "2026-11-01T00:00:00Z"
 #        files: [participants.csv]
+#    # Whether the project may request GPUs for its jobs.
+#    gpu: false
 
 # Synthetic researcher accounts of the Keycloak realm. subject is the identifier of the
 # account and the subject of its tokens. Each account gets a generated password in the
@@ -80,6 +85,9 @@ control:
     # launch, or what is left of it. The session keeps the reservation until it is
     # deleted, and a project without an available amount cannot start a session.
     sessionReservation: "1"
+  # Further service accounts that may read the launch context of a member's session; the
+  # data service and the job service always may.
+  contextCallers: []
 
 # Synthetic prices of the control service's estimates, for development and tests.
 # They are not the prices of any provider.
@@ -465,6 +473,45 @@ jupyterhub:
     every: 300
     users: false
     removeNamedServers: false
+
+# Batch jobs. The job service runs each project's tasks on that project's own executor,
+# in the namespace hw-jobs-<project>.
+jobs:
+  # The TES executor. Funnel is the only one the chart provides.
+  executor: funnel
+  # Volume of the job service's operation records.
+  storage: 1Gi
+  # Volume of each project's executor database.
+  executorStorage: 1Gi
+  # Workspace volume of each task, for its inputs and outputs.
+  workspaceStorage: 1Gi
+  # Task images the platform runs, by digest. An empty list denies every task.
+  taskImages: []
+  # Seconds a task may wait to start before the job service cancels it.
+  startDeadlineSeconds: 600
+  # ResourceQuota of each project's jobs namespace. The chart adds the GPU quota
+  # requests.nvidia.com/gpu from the GPU entitlement and the limits below.
+  quota:
+    requests.cpu: "4"
+    requests.memory: 8Gi
+    limits.cpu: "4"
+    limits.memory: 8Gi
+    pods: "20"
+    persistentvolumeclaims: "20"
+    requests.storage: 20Gi
+    count/jobs.batch: "40"
+  # The largest task of each project.
+  limits:
+    maxCpuCores: 2
+    maxRamGb: 4
+    maxDiskGb: 1
+    maxRuntimeSeconds: 3600
+    # GPUs of one task, for projects with the GPU entitlement.
+    maxGpuCount: 1
+    # Tasks of one project that wait or run at once.
+    maxActiveTasks: 4
+  # The host of the data service's DRS URIs, which proposals name.
+  drsHost: heartwood-data.heartwood-platform.svc.cluster.local
 
 # Placement of GPU pods. Set per cluster.
 gpu:
