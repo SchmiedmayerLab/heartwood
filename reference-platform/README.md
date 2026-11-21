@@ -343,7 +343,9 @@ The network policies and the admission policy select pods by the role labels `he
 
 For each task, the server creates the worker Job from `files/funnel/worker-job.yaml`, the workspace claim `<task>-workspace` and the Secret `funnel-worker-credential-<task>`, which only that worker Job mounts.
 The worker creates the executor Job from `files/funnel/executor-job.yaml`: the task image as the only container, as `funnel-executor` without a token, with `hostUsers: false`, the task's CPU and memory as requests and limits, and the workspace claim.
-The executor template sets no GPU limit and no toleration, so an executor Job requests no GPU.
+Funnel sets the executor container's `nvidia.com/gpu` request and limit to the GPU count admitted by the job service.
+For a positive count in a GPU-entitled project, the executor template adds the toleration for `nvidia.com/gpu=present:NoSchedule`.
+CPU tasks receive no GPU toleration.
 Worker and executor run as root in their own user namespaces, without capabilities and without privilege escalation; the server runs as a non-root user.
 
 The ValidatingAdmissionPolicy `heartwood-funnel-worker-jobs` applies to the Jobs that a `funnel-worker` ServiceAccount creates in a jobs namespace.
@@ -690,6 +692,7 @@ The Go modules are verified against the source's `go.sum`, and the build and bas
 |---|---|
 | `0001-optional-tls-for-server-listeners-and-rpc-client.patch` | TLS on the HTTP and gRPC listeners of the server and in the gRPC client of the workers, verified against a configured CA file; without the settings Funnel behaves as the release |
 | `0002-per-task-worker-credentials.patch` | A credential for each task, derived from a key file of the server and delivered to the task's worker in a Secret that the worker Job mounts; it may read only its own task, claim its execution and write its events |
+| `0003-executor-template-gpu-count.patch` | Pass the validated GPU count to the executor Job template |
 
 Each entry of the manifest also names the upstream issue, or the related issue where none exists, and the upstream change that would allow its removal.
 When the pin changes, `prepare_funnel.py --print-tree-digest` prints the digest of the new archive, which is recorded only after it matches a reviewed checkout of the revision.

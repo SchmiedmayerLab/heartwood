@@ -288,6 +288,7 @@ def test_the_recorded_patches_match_their_digests() -> None:
     assert [patch["sha256"] for patch in manifest["patches"]] == [
         "96792eb97cbfc9c5d59afca8cea5591e7082ac0297f5a3a72e9794fd69033e47",
         "c3ae111d128629d2b51204d35cc3e71fbc1997b9f4246fa4e07f02a4c21a9af5",
+        "1bc477092afef735d14813b5423fe5eabfb39f8794b3573d0137ea7af30aa6ab",
     ]
     for patch in manifest["patches"]:
         content = (_FUNNEL / patch["path"]).read_bytes()

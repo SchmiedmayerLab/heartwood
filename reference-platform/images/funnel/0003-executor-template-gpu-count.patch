@@ -1,0 +1,31 @@
+diff --git a/internal/worker/kubernetes.go b/internal/worker/kubernetes.go
+--- a/internal/worker/kubernetes.go
++++ b/internal/worker/kubernetes.go
+@@ -170,4 +170,5 @@
+ 		"Env":                kcmd.Env,
+ 		"Cpus":               kcmd.Resources.CpuCores,
++		"GPUCount":           kcmd.GPUCount,
+ 		"RamGb":              kcmd.Resources.RamGb,
+ 		"DiskGb":             kcmd.Resources.DiskGb,
+diff --git a/internal/worker/kubernetes_executor_test.go b/internal/worker/kubernetes_executor_test.go
+--- a/internal/worker/kubernetes_executor_test.go
++++ b/internal/worker/kubernetes_executor_test.go
+@@ -231,4 +231,6 @@
+   name: {{.TaskId}}-{{.JobId}}
+   namespace: {{.JobsNamespace}}
++  annotations:
++    gpu-count: "{{.GPUCount}}"
+ spec:
+   template:
+@@ -314,4 +316,11 @@
+ 				t.Fatalf("get submitted executor job: %v", err)
+ 			}
++			wantCount := tt.wantGPU
++			if wantCount == "" {
++				wantCount = "0"
++			}
++			if got := job.Annotations["gpu-count"]; got != wantCount {
++				t.Fatalf("executor template GPUCount = %q, want %q", got, wantCount)
++			}
+ 			containers := job.Spec.Template.Spec.Containers
+ 			if len(containers) != 2 || containers[0].Name != "executor" || containers[1].Name != "sidecar" {

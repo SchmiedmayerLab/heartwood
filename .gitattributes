@@ -4,3 +4,6 @@
 
 # Unified diffs encode an empty context line with one space; preserve their bytes.
 images/worker/candidate/*.patch whitespace=-blank-at-eol,-blank-at-eof
+
+# A context line in a Go patch starts with one space before the source indentation.
+reference-platform/images/funnel/*.patch whitespace=-space-before-tab
