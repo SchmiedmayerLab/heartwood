@@ -489,7 +489,8 @@ jobs:
   taskImages: []
   # Seconds a task may wait to start before the job service cancels it.
   startDeadlineSeconds: 600
-  # ResourceQuota of each project's jobs namespace.
+  # ResourceQuota of each project's jobs namespace. The chart adds the GPU quota
+  # requests.nvidia.com/gpu from the GPU entitlement and the limits below.
   quota:
     requests.cpu: "4"
     requests.memory: 8Gi

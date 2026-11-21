@@ -83,6 +83,8 @@ spec:
         object.spec.parallelism == 1 && object.spec.completions == 1 && object.spec.backoffLimit == 0
         && (!has(object.spec.completionMode) || object.spec.completionMode == 'NonIndexed')
         && (!has(object.spec.suspend) || object.spec.suspend == false)
+        && !has(object.spec.podFailurePolicy) && variables.pod.restartPolicy == 'Never'
+        && variables.pod.containers.all(c, !has(c.restartPolicy) && !has(c.restartPolicyRules))
       message: worker-created Jobs run one pod once
     - expression: has(variables.pod.serviceAccountName) && variables.pod.serviceAccountName == 'funnel-executor'
       message: worker-created Jobs must run as funnel-executor
@@ -100,14 +102,15 @@ spec:
       message: worker-created Jobs have one container and no init or ephemeral containers or pull secrets
     - expression: "variables.pod.containers.all(c, !has(c.envFrom) && (!has(c.env) || c.env.all(e, !has(e.valueFrom))))"
       message: worker-created Jobs must not reference Secrets or ConfigMaps in their environment
-    # The API server sets the default scheduler before admission, and Funnel may render
-    # an empty node selector and toleration list.
+    # The API server sets the default scheduler before admission; an empty node selector
+    # or toleration list chooses nothing.
     - expression: >-
         !has(variables.pod.nodeName)
         && (!has(variables.pod.nodeSelector) || size(variables.pod.nodeSelector) == 0)
         && !has(variables.pod.affinity)
         && (!has(variables.pod.tolerations) || size(variables.pod.tolerations) == 0)
         && !has(variables.pod.priorityClassName) && !has(variables.pod.runtimeClassName)
+        && !has(variables.pod.schedulingGates) && !has(variables.pod.topologySpreadConstraints)
         && (!has(variables.pod.schedulerName) || variables.pod.schedulerName == 'default-scheduler')
         && !has(variables.pod.resourceClaims) && !has(variables.pod.hostname) && !has(variables.pod.subdomain)
       message: worker-created Jobs must not choose their node, scheduling, runtime or host name

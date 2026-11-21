@@ -270,3 +270,18 @@ def test_gpus_are_bounded_by_the_quota_of_each_project(objects: list[dict[str, A
     assert "worker-created Jobs run one pod once" in {
         item["message"] for item in policy["validations"]
     }
+
+
+def test_worker_created_jobs_run_without_a_pod_failure_policy(
+    objects: list[dict[str, Any]],
+) -> None:
+    policy = _named(objects, "ValidatingAdmissionPolicy", "heartwood-funnel-worker-jobs")["spec"]
+    (rule,) = [
+        item["expression"]
+        for item in policy["validations"]
+        if item["message"] == "worker-created Jobs run one pod once"
+    ]
+    assert "!has(object.spec.podFailurePolicy)" in rule
+    assert "restartPolicy == 'Never'" in rule
+    # A container's own restart policy or rules would run it again inside the pod.
+    assert "!has(c.restartPolicy) && !has(c.restartPolicyRules)" in rule

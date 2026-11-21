@@ -511,6 +511,20 @@ def _executor_job(task: str = _TASK, **changes: Any) -> dict[str, Any]:  # noqa:
     return job
 
 
+def _restarting_job(container: dict[str, Any]) -> dict[str, Any]:
+    job = _executor_job()
+    job["spec"]["template"]["spec"]["containers"][0].update(container)
+    return job
+
+
+def _failure_policy_job() -> dict[str, Any]:
+    job = _executor_job()
+    job["spec"]["podFailurePolicy"] = {
+        "rules": [{"action": "Ignore", "onPodConditions": [{"type": "DisruptionTarget"}]}]
+    }
+    return job
+
+
 def test_a_worker_may_create_an_executor_job_of_its_own_task(
     cluster: Cluster, worker_token: tuple[str, str]
 ) -> None:
@@ -551,12 +565,50 @@ def test_a_worker_may_create_an_executor_job_of_its_own_task(
         (_executor_job(pod={"nodeSelector": {"kubernetes.io/hostname": "x"}}), "scheduling"),
         (_executor_job(pod={"tolerations": [{"operator": "Exists"}]}), "scheduling"),
         (_executor_job(pod={"priorityClassName": "system-node-critical"}), "scheduling"),
+        (_executor_job(pod={"schedulingGates": [{"name": "hold"}]}), "scheduling"),
+        (
+            _executor_job(
+                pod={
+                    "topologySpreadConstraints": [
+                        {
+                            "maxSkew": 1,
+                            "topologyKey": "kubernetes.io/hostname",
+                            "whenUnsatisfiable": "DoNotSchedule",
+                        }
+                    ]
+                }
+            ),
+            "scheduling",
+        ),
+        # Each Job runs its one pod once, and the pod runs its container once.
+        (_failure_policy_job(), "run one pod once"),
+        (_executor_job(pod={"restartPolicy": "OnFailure"}), "run one pod once"),
     ],
 )
 def test_a_worker_may_not_create_any_other_job(
     cluster: Cluster, worker_token: tuple[str, str], job: dict[str, Any], message: str
 ) -> None:
     assert message in _as_worker(cluster, worker_token[0], job)
+
+
+@pytest.mark.parametrize(
+    "container",
+    [
+        {"restartPolicy": "Always"},
+        {
+            "restartPolicy": "Never",
+            "restartPolicyRules": [
+                {"action": "Restart", "exitCodes": {"operator": "In", "values": [1]}}
+            ],
+        },
+    ],
+)
+def test_a_worker_may_not_let_its_executor_container_restart(
+    cluster: Cluster, worker_token: tuple[str, str], container: dict[str, Any]
+) -> None:
+    # The API server keeps a container's own restart policy and rules with the
+    # ContainerRestartRules feature, which the kind node version enables by default.
+    assert "run one pod once" in _as_worker(cluster, worker_token[0], _restarting_job(container))
 
 
 def test_a_worker_may_not_choose_the_selector_of_its_job(
