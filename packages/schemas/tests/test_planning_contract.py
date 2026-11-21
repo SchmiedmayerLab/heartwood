@@ -491,3 +491,31 @@ def test_unrelated_partial_total_cannot_excuse_unrepresented_operation_element()
     )
     parsed = OperationSetProposal.model_validate_json(json.dumps(value))
     assert parsed.estimates[0].element_estimates[-1].cost.coverage == "unknown"
+
+
+def test_only_a_completed_operation_carries_a_result() -> None:
+    from heartwood.schemas import PlatformOperationObservation
+
+    observed = {
+        "project_context_id": "context",
+        "operation_id": "operation",
+        "service_id": "service",
+        "backend_operation_ref": "reference",
+        "observed_at": "2026-11-19T12:00:00Z",
+        "platform_record_ref": "record",
+        "result": {"datasets": []},
+    }
+    completed = PlatformOperationObservation.model_validate_json(
+        json.dumps({**observed, "status": "completed"})
+    )
+    assert completed.result == {"datasets": []}
+    for status in ("failed", "denied", "running"):
+        with pytest.raises(ValidationError, match="completed operation"):
+            PlatformOperationObservation.model_validate_json(
+                json.dumps({**observed, "status": status})
+            )
+    # Without a result, a dump stays as it was.
+    absent = PlatformOperationObservation.model_validate_json(
+        json.dumps({**observed, "status": "failed", "result": None})
+    )
+    assert "result" not in absent.model_dump(mode="json")

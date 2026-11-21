@@ -144,6 +144,8 @@ class Settings(_Settings):
     service_callers: frozenset[str]
     # Service accounts of platform operators, which may rotate project client secrets.
     operator_callers: frozenset[str] = frozenset()
+    # Service accounts of platform services that read researchers' launch contexts.
+    context_callers: frozenset[str] = frozenset()
     # Contains ``{researcher}`` and ``{project}``; the researcher is a researcher identifier.
     redirect_uri_template: str
     # The key of the researcher identifiers in paths, Hub user names and redirect URIs.
@@ -338,6 +340,9 @@ def build(settings: Settings, kubernetes: Kubernetes) -> Starlette:
             kubernetes.review_token, settings.audience, settings.operator_callers
         )
         if settings.operator_callers
+        else None,
+        contexts=ServiceTokens(kubernetes.review_token, settings.audience, settings.context_callers)
+        if settings.context_callers
         else None,
     )
 

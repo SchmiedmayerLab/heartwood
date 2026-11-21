@@ -1621,3 +1621,344 @@ def test_kubernetes_admission_refuses_project_data_out_of_its_declaration(
             "provider_requests": 0,
         },
     )
+
+
+_KEYCLOAK = "https://keycloak.heartwood-platform.svc.cluster.local:8443/realms/heartwood"
+_DATA_ORIGIN = "https://heartwood-data.heartwood-platform.svc.cluster.local:8443"
+_CONTROL_ORIGIN = "https://heartwood-control.heartwood-platform.svc.cluster.local:8443"
+_CATALOG_MARKER = "Synthetic catalog research task."
+_EXCHANGE = "urn:ietf:params:oauth:grant-type:token-exchange"
+_ACCESS_TOKEN = "urn:ietf:params:oauth:token-type:access_token"
+
+
+class _Researcher:
+    """The session's researcher, signed in at the project client, and the token exchange.
+
+    It stands in for the hosted gateway's browser sign-in: the researcher signs in with
+    the authorization code flow, and each call exchanges the sign-in for one service's
+    scope and audience, with the project client's secret, as the gateway does.
+    """
+
+    def __init__(self, private: Path) -> None:
+        import httpx
+
+        launch = json.loads(_LAUNCH.read_text())
+        self.client_id = launch["client_id"]
+        self.redirect_uri = launch["redirect_uri"]
+        self.secret = Path("/qualification/gateway/keycloak-client-secret").read_text().strip()
+        self.ca_file = private / "platform-ca.crt"
+        self.ca_file.write_bytes(Path("/qualification/gateway/platform-ca.crt").read_bytes())
+        self.ca_file.chmod(0o600)
+        self.http = httpx.Client(
+            verify=ssl.create_default_context(cafile=str(self.ca_file)), timeout=30
+        )
+        self.exchanged: list[tuple[str, str]] = []
+        self._sign_in()
+
+    def _token(self, form: dict[str, str]) -> dict[str, Any]:
+        response = self.http.post(
+            f"{_KEYCLOAK}/protocol/openid-connect/token",
+            data=form,
+            auth=(self.client_id, self.secret),
+        )
+        response.raise_for_status()
+        answer = response.json()
+        assert isinstance(answer, dict)
+        return answer
+
+    def _sign_in(self) -> None:
+        import html
+        import re
+        import secrets as random
+        from urllib.parse import parse_qs, urlsplit
+
+        state = random.token_urlsafe(16)
+        page = self.http.get(
+            f"{_KEYCLOAK}/protocol/openid-connect/auth",
+            params={
+                "response_type": "code",
+                "client_id": self.client_id,
+                "redirect_uri": self.redirect_uri,
+                "scope": "openid",
+                "state": state,
+            },
+        )
+        form = re.search(r'<form[^>]*id="kc-form-login"[^>]*action="([^"]+)"', page.text)
+        assert form is not None, page.text[:400]
+        password = Path("/qualification/fixture/researcher-password").read_text().strip()
+        answer = self.http.post(
+            html.unescape(form.group(1)),
+            data={"username": "researcher-one", "password": password},
+            follow_redirects=False,
+        )
+        location = answer.headers.get("location", "")
+        assert location.startswith(self.redirect_uri), answer.status_code
+        returned = parse_qs(urlsplit(location).query)
+        assert returned["state"] == [state]
+        self.tokens = self._token(
+            {
+                "grant_type": "authorization_code",
+                "code": returned["code"][0],
+                "redirect_uri": self.redirect_uri,
+            }
+        )
+        self.expires = time.monotonic() + float(self.tokens["expires_in"])
+
+    def __call__(self, scope: str, audience: str) -> str:
+        if time.monotonic() > self.expires - 60:
+            self.tokens = self._token(
+                {"grant_type": "refresh_token", "refresh_token": self.tokens["refresh_token"]}
+            )
+            self.expires = time.monotonic() + float(self.tokens["expires_in"])
+        exchanged = self._token(
+            {
+                "grant_type": _EXCHANGE,
+                "subject_token": self.tokens["access_token"],
+                "subject_token_type": _ACCESS_TOKEN,
+                "requested_token_type": _ACCESS_TOKEN,
+                "scope": scope,
+                "audience": audience,
+            }
+        )
+        self.exchanged.append((scope, audience))
+        token = exchanged["access_token"]
+        assert isinstance(token, str)
+        return token
+
+
+def _until(application: Any, found: Any, what: str, timeout: float = 180) -> Any:  # noqa: ANN401
+    """Reconcile the session until ``found`` returns a value."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        application.wait_for_session_idle(session_id="composition", timeout=1)
+        value = found(application._service("composition"))
+        if value:
+            return value
+        time.sleep(1)
+    raise AssertionError(f"No {what} within {timeout} seconds")
+
+
+def _reviewed_call(
+    application: Any,  # noqa: ANN401
+    tool: str,
+    received: list[str],
+) -> dict[str, Any]:
+    """Approve the worker's call, its outside operation and the release of its result.
+
+    ``received`` holds what reached the model; the result records how many requests the
+    model had made before its result was released.
+    """
+    from heartwood.core_adapter.external_actions import external_action_records
+    from heartwood.core_adapter.external_results import external_result_records
+
+    lifecycle._approve(application, lifecycle._pending(application, tool=tool))
+    lifecycle._settle(application)
+    record = _until(
+        application,
+        lambda service: next(
+            (
+                item
+                for item in external_action_records(service.replay_events()).values()
+                if item.phase == "proposed" and item.proposal.request.tool_name == tool
+            ),
+            None,
+        ),
+        "outside review",
+    )
+    request = json.loads(record.proposal.request.request_json)
+    lifecycle._approve(application, record.proposal.group_id)
+    observed = _until(
+        application,
+        lambda service: (
+            item
+            if (
+                item := external_action_records(service.replay_events())[
+                    record.proposal.operation_id
+                ]
+            ).terminal
+            else None
+        ),
+        "observation",
+    )
+    release = _until(
+        application,
+        lambda service: next(
+            (
+                item
+                for item in external_result_records(service.replay_events()).values()
+                if item.proposal.operation_id == record.proposal.operation_id
+                and item.phase == "proposed"
+            ),
+            None,
+        ),
+        "result release review",
+    )
+    before = len(received)
+    lifecycle._approve(application, release.proposal.group_id)
+    assert observed.observation is not None
+    operation = observed.observation.operation
+    return {
+        "tool": tool,
+        "operation_id": str(record.proposal.operation_id),
+        "request": request,
+        "status": operation.status,
+        "project_context_id": operation.project_context_id,
+        "result": operation.result,
+        "limitations": list(operation.limitations),
+        "service_id": operation.service_id,
+        "requests_before_release": before,
+    }
+
+
+def test_kubernetes_data_catalog_research_task(infrastructure: KubernetesFixture) -> None:
+    """A synthetic research task lists, resolves and reads a dataset through the catalog."""
+    from heartwood.gateway._mcp_policy import McpDestination, TokenExchange
+    from heartwood.gateway._platform_planning import (
+        HostedPlanningClient,
+        PlanningDeployment,
+        PlatformPlanningBinding,
+    )
+    from heartwood.schemas import (
+        McpServerAddRequest,
+        McpServerEnabledRequest,
+        McpServerTestRequest,
+        McpServerToolsRequest,
+        McpToolChoice,
+        PlatformLaunchContext,
+    )
+
+    fixture = infrastructure
+    researcher = _Researcher(fixture.private)
+    launch = json.loads(_LAUNCH.read_text())
+    context = PlatformLaunchContext.model_validate_json(json.dumps(launch["launch_context"]))
+    context_file = fixture.private / "launch-context.json"
+    context_file.write_text(context.model_dump_json())
+    context_file.chmod(0o600)
+    destination = McpDestination(
+        service_id="heartwood-data",
+        origin=_DATA_ORIGIN,
+        tools=("list_datasets", "list_objects", "resolve_object"),
+        max_result_bytes=32768,
+        observation_tool="get_operation",
+        private_address=True,
+        ca_file=researcher.ca_file,
+        token_exchange=TokenExchange(scope="svc-data", audience="heartwood-data"),
+    )
+    planning = PlatformPlanningBinding(
+        context,
+        HostedPlanningClient(
+            PlanningDeployment(
+                url=f"{_CONTROL_ORIGIN}/mcp",
+                ca_file=researcher.ca_file,
+                private_address=True,
+                token_exchange=TokenExchange(scope="svc-control", audience="heartwood-control"),
+                launch_context_file=context_file,
+            ),
+            researcher,
+            project_id=context.project_id,
+        ),
+    )
+    settings = fixture.deployment(WorkerInputManifest(files=()), project_data=_project_data())
+    application = native._application(
+        fixture,
+        deployment=settings,
+        mcp_destinations=(destination,),
+        service_tokens=researcher,
+        platform_planning=planning,
+    )
+    try:
+        application.add_mcp_server(
+            McpServerAddRequest(
+                server_id="catalog", label="Project data catalog", url=f"{_DATA_ORIGIN}/mcp"
+            )
+        )
+        tested = application.test_mcp_server("catalog", McpServerTestRequest())
+        digests = {tool["name"]: tool["sha256"] for tool in tested["tools"]}
+        application.select_mcp_tools(
+            "catalog",
+            McpServerToolsRequest(
+                tools=[
+                    McpToolChoice(name=name, sha256=digests[name])
+                    for name in ("list_datasets", "list_objects", "resolve_object")
+                ]
+            ),
+        )
+        application.set_mcp_server_enabled("catalog", McpServerEnabledRequest(enabled=True))
+        # Enabled tools reach the sessions that start afterwards.
+        service = application._service("composition")
+        names = {
+            name: f"catalog__{name}_{digests[name][:8]}"
+            for name in ("list_datasets", "list_objects", "resolve_object")
+        }
+        finish = ("finish", {"message": "Waiting for the reviewed catalog result."})
+        fixture.provider.scripts[_CATALOG_MARKER] = [
+            (names["list_datasets"], {}),
+            finish,
+            (names["list_objects"], {"dataset_id": "synthetic-cohort"}),
+            finish,
+            (names["resolve_object"], {"object_id": "synthetic-cohort.participants.csv"}),
+            finish,
+            # An object of the researcher's other project, which the catalog denies.
+            (names["resolve_object"], {"object_id": "synthetic-panel.panel.csv"}),
+            finish,
+            ("terminal", {"command": "head -n 3 /data/synthetic-cohort/participants.csv"}),
+            ("finish", {"message": "Synthetic catalog task completed."}),
+        ]
+        native._submit(application, CommandKind.CHAT, {"prompt": _CATALOG_MARKER})
+        attempt_id, worker = lifecycle._worker(application)
+        received = fixture.provider.received
+        listed = _reviewed_call(application, names["list_datasets"], received)
+        objects = _reviewed_call(application, names["list_objects"], received)
+        resolved = _reviewed_call(application, names["resolve_object"], received)
+        refused = _reviewed_call(application, names["resolve_object"], received)
+        lifecycle._approve(application, lifecycle._pending(application, tool="terminal"))
+        lifecycle._settle(application)
+        executions = lifecycle._executions(application)
+        read = fixture.exec(worker, ["head", "-n", "3", "/data/synthetic-cohort/participants.csv"])
+    finally:
+        native._stop(application)
+    _settled(service, "revoked")
+    calls = [listed, objects, resolved, refused]
+    for call in calls:
+        assert call["service_id"] == "heartwood-data"
+        assert call["project_context_id"] == context.project_context_id
+    # The catalog listed the project's dataset, its objects with the worker's data paths,
+    # and resolved one object.
+    assert listed["status"] == "completed"
+    (dataset,) = listed["result"]["datasets"]
+    assert dataset["id"] == "synthetic-cohort"
+    assert "synthetic-panel" not in json.dumps(listed["result"])
+    paths = {item["path"] for item in objects["result"]["objects"]}
+    assert "/data/synthetic-cohort/participants.csv" in paths
+    found = resolved["result"]["object"]
+    assert found["path"] == "/data/synthetic-cohort/participants.csv"
+    # The object of the other project is denied, with no result.
+    assert refused["status"] == "denied"
+    assert refused["result"] is None
+    assert refused["limitations"] == ["The project has no object with this identifier."]
+    # Each answer reached the model only after the review of its release: a value only
+    # that answer holds is absent from every earlier request and present afterwards.
+    markers = [
+        (listed, dataset["description"]),
+        (objects, "/data/synthetic-cohort/measurements.csv"),
+        (resolved, found["self_uri"]),
+        (refused, refused["limitations"][0]),
+    ]
+    for call, marker in markers:
+        before = call["requests_before_release"]
+        assert not any(marker in request for request in received[:before]), marker
+        assert any(marker in request for request in received[before:]), marker
+    assert [item["exit_code"] for item in executions][-1] == 0
+    assert read.exit_code == 0
+    assert str(read.stdout).startswith("participant_id,")
+    assert set(researcher.exchanged) >= {("svc-data", "heartwood-data")}
+    _evidence(
+        fixture,
+        {
+            "drill_id": "kubernetes-data-catalog.v1",
+            "attempt_id": attempt_id,
+            "calls": calls,
+            "worker_read": str(read.stdout),
+            "exchanged_audiences": sorted({audience for _, audience in researcher.exchanged}),
+        },
+    )

@@ -123,6 +123,7 @@ EXPECTED_CASES = {
             "test_kubernetes_admission_refuses_project_data_out_of_its_declaration[writable-volume]",
             "test_kubernetes_admission_refuses_project_data_out_of_its_declaration[another-project]",
             "test_kubernetes_admission_refuses_project_data_out_of_its_declaration[undeclared-path]",
+            "test_kubernetes_data_catalog_research_task",
         )
     ),
 }
