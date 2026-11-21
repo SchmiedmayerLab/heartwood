@@ -234,20 +234,23 @@ def configure(c: Any, settings: dict[str, Any]) -> None:  # noqa: ANN401
             body: Any = None,  # noqa: ANN401
             client: Any = None,  # noqa: ANN401
         ) -> Any:  # noqa: ANN401
-            if client is None:
-                if not proxy_clients:
-                    proxy_clients.append(
-                        AsyncHTTPClient(
-                            force_instance=True,
-                            defaults={
-                                "ca_certs": settings["ca_file"],
-                                "validate_cert": True,
-                                "prepare_curl_callback": platform_ca_only,
-                            },
-                        )
+            # A client that a caller passes is not used: every request trusts the platform
+            # CA alone.
+            del client
+            if not proxy_clients:
+                proxy_clients.append(
+                    AsyncHTTPClient(
+                        force_instance=True,
+                        defaults={
+                            "ca_certs": settings["ca_file"],
+                            "validate_cert": True,
+                            "prepare_curl_callback": platform_ca_only,
+                        },
                     )
-                client = proxy_clients[0]
-            return await super().api_request(path, method=method, body=body, client=client)
+                )
+            return await super().api_request(
+                path, method=method, body=body, client=proxy_clients[0]
+            )
 
     class HeartwoodSpawner(KubeSpawner):  # type: ignore[misc]
         """A KubeSpawner whose named servers are Heartwood gateways."""
