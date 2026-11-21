@@ -581,15 +581,32 @@ def test_gateway_tests_require_positive_results_and_preserve_build_limits(
 
     monkeypatch.setattr(builder.subprocess, "run", run)
     if result == "passed":
-        record = builder._gateway_tests(container, "rust@sha256:" + "a" * 64, tmp_path)
-        assert record["passed"] == 4
-        assert (
-            record["log_sha256"]
-            == hashlib.sha256((tmp_path / "gateway-tests.log").read_bytes()).hexdigest()
-        )
+        records = builder._gateway_tests(container, "rust@sha256:" + "a" * 64, tmp_path)
+        assert [record["suite"] for record in records] == ["gateway", "kubernetes-driver"]
+        for record, command in zip(records, observed, strict=True):
+            log = tmp_path / f"{record['suite']}-tests.log"
+            assert record["command"] == command
+            assert record["passed"] == 4
+            assert record["log_sha256"] == hashlib.sha256(log.read_bytes()).hexdigest()
+        driver = observed[1]
+        assert driver[driver.index("--memory") + 1] == "12g"
+        assert driver[driver.index("cargo") :] == [
+            "cargo",
+            "test",
+            "--locked",
+            "--release",
+            "--package",
+            "openshell-driver-kubernetes",
+            "--lib",
+            "--jobs",
+            "1",
+        ]
+        assert json.loads((tmp_path / "kubernetes-driver-test-command.json").read_text()) == driver
     else:
         with pytest.raises(ValueError, match="nonempty passing suite"):
             builder._gateway_tests(container, "rust@sha256:" + "a" * 64, tmp_path)
+        # A suite without a passing result stops the run before the next suite.
+        assert len(observed) == 1
     assert container == original
     command = observed[0]
     assert command[command.index("--memory") + 1] == "12g"

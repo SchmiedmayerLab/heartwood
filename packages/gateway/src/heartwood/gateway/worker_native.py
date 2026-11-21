@@ -63,6 +63,8 @@ _CREATION_REJECTED_GATEWAY = (
     (
         "f36989e0cddf843d79ee8d43376704c4358decc906ad3c92bf40db6c429534c1",
         "206aab5e89fcb6f338781e3b51c2b54bb7502483a06fadca6f482aef9bcc41ee",
+        "5cf974a3e13b892367adf3ab531780852f7a200b08bd947801de980ae7561e37",
+        "17deeff1efc9f1791478b2e0e5104cf6cd4ef49d40bbdadd90d2c128a76fa6d0",
     ),
 )
 

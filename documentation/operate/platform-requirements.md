@@ -160,7 +160,7 @@ The reference adapter needs an operator-controlled Docker engine; it does not ha
 ### Gateway Behavior Behind Native Qualification
 
 Heartwood does not distribute a production sandbox gateway.
-Native qualification runs against a gateway built only for qualification from the upstream OpenShell revision and the two patches recorded in `images/worker/candidate/gateway.json`.
+Native qualification runs against a gateway built only for qualification from the upstream OpenShell revision and the patches recorded in `images/worker/candidate/gateway.json`.
 Its revocation and cleanup evidence depends on two behaviors of that build that the unmodified upstream release at the same revision lacks:
 
 - The Docker driver rejects deletion of a sandbox whose provisioning has not settled, instead of abandoning the provisioning task; without it, a container request already sent to Docker can produce a worker after the gateway reported the sandbox deleted and Heartwood recorded its absence.
@@ -177,8 +177,22 @@ The gateway version does not satisfy the check.
 The decision is retained, with the reported version, driver and capabilities, in each worker attempt's evidence: an accepted gateway in the runtime binding and revocation evidence, a refused launch in the evidence that recorded the attempt as not created.
 The check relies on the gateway's own report: a gateway that reports a capability it does not implement passes, and Heartwood does not test the deletion behavior of the registered gateway.
 Both capability names come from the qualification build's patches; no upstream release reports them, so an unmodified upstream gateway is refused.
-The qualification build also reports `0.1.9+heartwood.1`, a local version that no upstream release uses, and the `gateway_build` entry of the [qualification evidence](../architecture/testing.md#native-qualification-evidence) records that version, its source revision and binary digests.
+The qualification build also reports `0.1.9+heartwood.2`, a local version that no upstream release uses, and the `gateway_build` entry of the [qualification evidence](../architecture/testing.md#native-qualification-evidence) records that version, its source revision and binary digests.
 Compare the deployed gateway with that record, or repeat native qualification against it and retain the evidence.
+
+The qualification build has two further behaviors that the unmodified upstream release lacks.
+
+- The Kubernetes driver reports a delete that the Kubernetes API answers with a conflict as an error, because the Sandbox resource may still exist; the upstream release reports that delete as absence.
+  A missing Sandbox resource is still reported as absent.
+  The driver reports capability `openshell.compute.delete-awaits-provisioning`, which Heartwood's check requires under an `openshell-kubernetes` manifest.
+- A deletion that finds no sandbox under a workspace and name records that name in the gateway's store.
+  For 24 hours after the last such deletion, the gateway rejects a creation under that name before it asks the compute driver to create the sandbox.
+  The rejection has status `FAILED_PRECONDITION` and reason `SANDBOX_NAME_CONFIRMED_ABSENT` once the cleanup of the rejected creation's record completes; otherwise the error can have another status or lack the reason.
+  A creation request that was still in flight when the deletion answered therefore creates no sandbox.
+  A deletion that is refused before the name is looked up, such as for a missing workspace or a missing role, records nothing.
+  The deletion of a sandbox that exists when the deletion starts leaves its name available.
+  The record lasts across a gateway restart as long as the store does.
+  The gateway reports it as capability `openshell.compute.create-rejects-deleted-name` on its compute driver.
 
 ### Sensitive Data
 

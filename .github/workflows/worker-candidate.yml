@@ -90,6 +90,8 @@ jobs:
             test-results/gateway-candidate/gateway-build-record.json
             test-results/gateway-candidate/gateway-test-command.json
             test-results/gateway-candidate/gateway-tests.log
+            test-results/gateway-candidate/kubernetes-driver-test-command.json
+            test-results/gateway-candidate/kubernetes-driver-tests.log
           include-hidden-files: true
           retention-days: 14
 

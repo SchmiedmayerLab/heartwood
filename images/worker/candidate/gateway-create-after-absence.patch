@@ -1,0 +1,271 @@
+diff --git a/crates/openshell-server/src/compute/mod.rs b/crates/openshell-server/src/compute/mod.rs
+index 5d80faf..162ddbc 100644
+--- a/crates/openshell-server/src/compute/mod.rs
++++ b/crates/openshell-server/src/compute/mod.rs
+@@ -372,6 +372,18 @@ struct DeleteTransition {
+ /// An explicit delete of a sandbox already marked deleting calls the driver again.
+ pub(crate) const DELETE_RETRIES_DELETING: &str = "openshell.compute.delete-retries-deleting";
+ 
++/// A creation is rejected under a name that a deletion found absent.
++pub(crate) const CREATE_REJECTS_DELETED_NAME: &str =
++    "openshell.compute.create-rejects-deleted-name";
++/// One record per workspace and name, written when a deletion finds no sandbox.
++const CONFIRMED_ABSENT_NAME_OBJECT_TYPE: &str = "sandbox_name_confirmed_absent_v1";
++/// How long a name stays rejected after the last deletion that found it absent.
++const CONFIRMED_ABSENT_NAME_RETENTION_MS: i64 = 24 * 60 * 60 * 1000;
++
++fn confirmed_absent_name_retained(recorded_at_ms: i64, now_ms: i64) -> bool {
++    now_ms < recorded_at_ms.saturating_add(CONFIRMED_ABSENT_NAME_RETENTION_MS)
++}
++
+ /// Result of trying to claim ownership of a sandbox's delete operation.
+ #[derive(Debug)]
+ enum BeginDelete {
+@@ -1028,13 +1040,16 @@ impl ComputeRuntime {
+             capabilities.extension.clone(),
+         )
+         .map_err(|error| ComputeError::Message(error.to_string()))?;
+-        // The gateway, not the driver, retries deletion. Gateway info exposes
+-        // only negotiated driver capabilities, so report it with them.
++        // The gateway, not the driver, retries deletion and rejects creation
++        // under a deleted name. Gateway info exposes only negotiated driver
++        // capabilities, so report them there.
+         let supported = &mut negotiated_extension.supported_capabilities;
+-        if !supported.iter().any(|capability| capability == DELETE_RETRIES_DELETING) {
+-            supported.push(DELETE_RETRIES_DELETING.to_string());
+-            supported.sort();
++        for provided in [DELETE_RETRIES_DELETING, CREATE_REJECTS_DELETED_NAME] {
++            if !supported.iter().any(|capability| capability == provided) {
++                supported.push(provided.to_string());
++            }
+         }
++        supported.sort();
+         info!(
+             configured_driver = %driver_name,
+             advertised_driver = %capabilities.driver_name,
+@@ -1785,6 +1800,18 @@ impl ComputeRuntime {
+             }
+         };
+ 
++        // Checked after the sandbox is persisted and before the driver is
++        // called. A deletion records absence before it reads the name, so
++        // either it finds this sandbox or this check finds its record.
++        if let Err(status) = self
++            .ensure_name_not_confirmed_absent(sandbox.object_workspace(), sandbox.object_name())
++            .await
++        {
++            return Err(self
++                .compensate_failed_create(&sandbox, lifecycle_guard, None, status)
++                .await);
++        }
++
+         if let Err(status) = Box::pin(crate::grpc::policy::initialize_policy_history(
+             self.store.as_ref(),
+             &sandbox,
+@@ -3382,6 +3409,18 @@ impl ComputeRuntime {
+             .get_message_by_name::<Sandbox>(workspace, name)
+             .await
+             .map_err(|e| Status::internal(format!("fetch sandbox failed: {e}")))?;
++        let candidate = match candidate {
++            Some(candidate) => Some(candidate),
++            None => {
++                // Record the absence, then read again. A creation that
++                // persisted first is deleted below; a later one is rejected.
++                self.record_confirmed_absent_name(workspace, name).await?;
++                self.store
++                    .get_message_by_name::<Sandbox>(workspace, name)
++                    .await
++                    .map_err(|e| Status::internal(format!("fetch sandbox failed: {e}")))?
++            }
++        };
+         let Some(candidate) = candidate else {
+             if allow_missing {
+                 return Ok(DeleteSandboxResult {
+@@ -3407,6 +3446,55 @@ impl ComputeRuntime {
+         self.delete_sandbox_target(target, preconditions).await
+     }
+ 
++    async fn record_confirmed_absent_name(
++        &self,
++        workspace: &str,
++        name: &str,
++    ) -> Result<(), Status> {
++        // An upsert by workspace and name: a repeated deletion renews the record.
++        self.store
++            .put_if(
++                CONFIRMED_ABSENT_NAME_OBJECT_TYPE,
++                &uuid::Uuid::new_v4().to_string(),
++                name,
++                workspace,
++                &[],
++                None,
++                WriteCondition::Unconditional,
++            )
++            .await
++            .map(|_| ())
++            .map_err(|e| Status::internal(format!("record sandbox absence failed: {e}")))
++    }
++
++    async fn ensure_name_not_confirmed_absent(
++        &self,
++        workspace: &str,
++        name: &str,
++    ) -> Result<(), Status> {
++        let record = self
++            .store
++            .get_by_name(CONFIRMED_ABSENT_NAME_OBJECT_TYPE, workspace, name)
++            .await
++            .map_err(|e| Status::internal(format!("fetch sandbox absence record failed: {e}")))?;
++        let retained = record.is_some_and(|record| {
++            confirmed_absent_name_retained(
++                record.updated_at_ms,
++                crate::persistence::current_time_ms(),
++            )
++        });
++        if retained {
++            return Err(openshell_core::rpc_error::failed_precondition(
++                "SANDBOX_NAME_CONFIRMED_ABSENT",
++                format!(
++                    "sandbox name '{name}' was confirmed absent to a deletion; \
++                     create the sandbox under another name"
++                ),
++            ));
++        }
++        Ok(())
++    }
++
+     pub(crate) async fn delete_sandbox_by_id(
+         &self,
+         sandbox_id: &str,
+@@ -15229,6 +15317,123 @@ mod tests {
+         stop_watch_loop(shutdown_tx, watch_handle).await;
+     }
+ 
++    #[tokio::test]
++    async fn delete_of_an_absent_name_rejects_its_later_creation() {
++        let driver = ControlledDriver::new();
++        // The driver never created the rejected sandbox, so it reports it absent.
++        driver.set_delete_outcome(ControlledDeleteOutcome::Ok(false));
++        let runtime = test_runtime(driver.clone()).await;
++
++        let absent = runtime
++            .delete_sandbox_allow_missing("default", "sandbox-a", true)
++            .await
++            .unwrap();
++        assert_eq!(
++            absent.outcome,
++            openshell_core::proto::DeletionOutcome::AlreadyAbsent
++        );
++        let missing = runtime
++            .delete_sandbox_allow_missing("default", "sandbox-b", false)
++            .await
++            .unwrap_err();
++        assert_eq!(missing.code(), Code::NotFound);
++
++        for (id, name) in [("sb-a", "sandbox-a"), ("sb-b", "sandbox-b")] {
++            let rejected = runtime
++                .create_sandbox(
++                    sandbox_record(id, name, SandboxPhase::Provisioning),
++                    None,
++                    false,
++                )
++                .await
++                .unwrap_err();
++            assert_eq!(rejected.code(), Code::FailedPrecondition);
++            assert!(rejected.message().contains("confirmed absent"));
++            assert!(
++                runtime
++                    .store
++                    .get_message_by_name::<Sandbox>("default", name)
++                    .await
++                    .unwrap()
++                    .is_none()
++            );
++        }
++        assert_eq!(driver.create_calls.load(Ordering::SeqCst), 0);
++
++        // Other names are unaffected.
++        runtime
++            .create_sandbox(
++                sandbox_record("sb-c", "sandbox-c", SandboxPhase::Provisioning),
++                None,
++                false,
++            )
++            .await
++            .unwrap();
++        assert_eq!(driver.create_calls.load(Ordering::SeqCst), 1);
++    }
++
++    #[tokio::test]
++    async fn delete_of_an_absent_name_renews_one_record_until_retention_ends() {
++        let runtime = test_runtime(Arc::new(TestDriver::default())).await;
++        runtime
++            .delete_sandbox_allow_missing("default", "sandbox-a", true)
++            .await
++            .unwrap();
++        let record = runtime
++            .store
++            .get_by_name(CONFIRMED_ABSENT_NAME_OBJECT_TYPE, "default", "sandbox-a")
++            .await
++            .unwrap()
++            .unwrap();
++        assert!(
++            runtime
++                .ensure_name_not_confirmed_absent("default", "sandbox-a")
++                .await
++                .is_err()
++        );
++
++        // A repeated deletion renews the one record instead of adding another.
++        runtime
++            .delete_sandbox_allow_missing("default", "sandbox-a", true)
++            .await
++            .unwrap();
++        let renewed = runtime
++            .store
++            .get_by_name(CONFIRMED_ABSENT_NAME_OBJECT_TYPE, "default", "sandbox-a")
++            .await
++            .unwrap()
++            .unwrap();
++        assert_eq!(renewed.id, record.id);
++        assert!(renewed.resource_version > record.resource_version);
++
++        let recorded = renewed.updated_at_ms;
++        let retention = CONFIRMED_ABSENT_NAME_RETENTION_MS;
++        assert!(confirmed_absent_name_retained(recorded, recorded + retention - 1));
++        assert!(!confirmed_absent_name_retained(recorded, recorded + retention));
++    }
++
++    #[tokio::test]
++    async fn delete_of_an_existing_sandbox_keeps_its_name_available() {
++        let driver = ControlledDriver::new();
++        let runtime = test_runtime(driver.clone()).await;
++        let sandbox = sandbox_record("sb-1", "sandbox-a", SandboxPhase::Ready);
++        runtime.store.put_message(&sandbox).await.unwrap();
++
++        runtime
++            .delete_sandbox("default", "sandbox-a")
++            .await
++            .unwrap();
++
++        assert!(
++            runtime
++                .store
++                .get_by_name(CONFIRMED_ABSENT_NAME_OBJECT_TYPE, "default", "sandbox-a")
++                .await
++                .unwrap()
++                .is_none()
++        );
++    }
++
+     #[tokio::test]
+     async fn concurrent_duplicate_deletes_retry_unconfirmed_cleanup() {
+         let driver = ControlledDriver::new();
+@@ -18493,6 +18698,7 @@ mod tests {
+             .negotiated_extension
+             .supported_capabilities;
+         assert!(supported.iter().any(|c| c == DELETE_RETRIES_DELETING));
++        assert!(supported.iter().any(|c| c == CREATE_REJECTS_DELETED_NAME));
+         assert!(supported.is_sorted());
+     }
+ 
