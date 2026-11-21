@@ -149,7 +149,7 @@ No interface command can record a decision as `gateway`.
 ## Outside Operations and Result Releases
 
 An outside operation sends a request from the worker to a deployment service; an outside result release passes that service's result to the worker and its model.
-Heartwood ships no outside-service adapter, and `heartwood gateway serve` installs none; outside operations exist only where a trusted launcher that embeds the gateway supplies one.
+Calls to [research MCP servers](../operate/platform-contract.md#research-mcp-servers) are outside operations; other services need a trusted launcher that embeds the gateway and supplies an adapter.
 See the [Platform Contract](../operate/platform-contract.md#outside-operation-admission).
 
 Where a deployment provides outside operations, each one is reviewed separately from the tool call that proposed it, under the title **Outside Operation** or **Outside Result Release**.

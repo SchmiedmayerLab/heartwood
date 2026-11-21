@@ -281,6 +281,42 @@ _DIAGNOSTICS: dict[str, DiagnosticDefinition] = {
         "/reference/troubleshooting/#hw-skill-002-bundled-skills-do-not-match-this-release",
         "path-sensitive",
     ),
+    "mcp-destination": DiagnosticDefinition(
+        "HW-MCP-001",
+        "Research service destination is not allowed",
+        "Use a server at an origin the deployment approves, or ask the operator to add it.",
+        "/reference/troubleshooting/#hw-mcp-001-research-service-destination-is-not-allowed",
+    ),
+    "mcp-credential": DiagnosticDefinition(
+        "HW-MCP-002",
+        "Research service credential is expired",
+        "Enter a current token for the server, then test it again.",
+        "/reference/troubleshooting/#hw-mcp-002-research-service-credential-is-expired",
+    ),
+    "mcp-tool-changed": DiagnosticDefinition(
+        "HW-MCP-003",
+        "Research service tool changed after review",
+        "Test the server, review the changed tools and select them again.",
+        "/reference/troubleshooting/#hw-mcp-003-research-service-tool-changed-after-review",
+    ),
+    "mcp-worker-required": DiagnosticDefinition(
+        "HW-MCP-004",
+        "Research services require an isolated worker",
+        "Start Heartwood with a deployment manifest that configures an isolated worker.",
+        "/reference/troubleshooting/#hw-mcp-004-research-services-require-an-isolated-worker",
+    ),
+    "mcp-unavailable": DiagnosticDefinition(
+        "HW-MCP-005",
+        "Research service is unavailable or refused the request",
+        "Check the server URL and credential, then test the server again.",
+        "/reference/troubleshooting/#hw-mcp-005-research-service-is-unavailable-or-refused-the-request",
+    ),
+    "mcp-binding": DiagnosticDefinition(
+        "HW-MCP-006",
+        "Research service tool cannot be selected",
+        "Select tools the deployment allows that accept a project and operation identifier.",
+        "/reference/troubleshooting/#hw-mcp-006-research-service-tool-cannot-be-selected",
+    ),
     "worker-gateway-capability": DiagnosticDefinition(
         "HW-WORKER-001",
         "Sandbox gateway lacks a required deletion capability",

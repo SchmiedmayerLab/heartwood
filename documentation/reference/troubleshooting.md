@@ -33,6 +33,7 @@ Codes use `HW-{AREA}-{NNN}`.
 | `COMPUTE` | Scheduler allocation, GPU, memory, and scratch storage |
 | `TERRA` | Terra-specific project and compute requirements |
 | `WORKER` | Managed worker sandbox gateway |
+| `MCP` | Research MCP server destinations, credentials and tool review |
 | `ENV` | Readiness checks without a more specific code |
 
 Numbers `001` to `899` are assigned in sequence within an area and never reused; `900` to `999` are generic fallbacks.
@@ -288,6 +289,49 @@ In a source checkout, run `git submodule update --init` and discard local change
 Restoring tracked files does not remove git-ignored files inside a Skill folder, such as `__pycache__/` or `.DS_Store`, and any extra file changes the Skill's digest; list them with `git -C vendor/heartwood-skills status --ignored skills` and delete them.
 In a native installation, reinstall the same release; in a container, use the published image unchanged.
 A warning names entries in the bundled Skill directory that are not part of the release, such as `.DS_Store`; Heartwood never loads them, and you can delete them.
+
+## Research Services
+
+Research MCP servers are managed in the browser's Research services panel or with `heartwood services`.
+[Research MCP Servers](../operate/platform-contract.md#research-mcp-servers) describes how calls are reviewed.
+
+### `HW-MCP-001`: Research Service Destination Is Not Allowed
+
+The server URL is not at an origin listed in the deployment manifest's `mcp_destinations`, or it resolves to a private, link-local or metadata address.
+Without a deployment manifest, or with no listed destinations, every research service is refused.
+Plain HTTP is accepted only on loopback.
+A private address, such as a cluster service, is accepted only when the operator sets `private_address` for that destination; link-local and metadata addresses never are.
+Ask the operator to add the exact origin, or use a server at an approved origin.
+
+### `HW-MCP-002`: Research Service Credential Is Expired
+
+The token held for the server has an expiry time in the past, so the gateway does not send it.
+Enter a current token when you test the server again.
+Heartwood reads the expiry from the token; the service still verifies the token itself.
+
+### `HW-MCP-003`: Research Service Tool Changed After Review
+
+A tool's definition differs from the definition you reviewed.
+A test that lists a changed definition removes the tool from the enabled set, a pending call to it is not sent, and a selection with an outdated digest is refused.
+Test the server, compare the listed tools, and select them again.
+
+### `HW-MCP-004`: Research Services Require an Isolated Worker
+
+Research service calls run only in sessions with an isolated worker, because each call needs outside review.
+Start the gateway with a deployment manifest that configures an isolated worker and lists MCP destinations.
+`heartwood services` can still manage the servers of such a deployment.
+
+### `HW-MCP-005`: Research Service Is Unavailable or Refused the Request
+
+The server did not answer, refused the credential, redirected to another origin, or did not list its tools.
+Heartwood follows redirects only within the same origin.
+The MCP client reports a refused credential and an unavailable service the same way, so check both the URL and the token.
+
+### `HW-MCP-006`: Research Service Tool Cannot Be Selected
+
+The deployment does not list the tool for the server's origin, or the tool does not accept a `project_id` and an `operation_id`.
+Heartwood supplies both values so the service can scope the call and recognize a repeated operation.
+Tools without them cannot be selected.
 
 ## Deployment Manifests
 

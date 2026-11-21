@@ -77,6 +77,11 @@ export type {
   LocalModelQualification,
   LocalModelRuntime,
   LocalModelTier,
+  McpServerAddRequest,
+  McpServerEnabledRequest,
+  McpServerTestRequest,
+  McpServerToolsRequest,
+  McpToolChoice,
   ModelCatalogRequest,
   ModelConnectRequest,
   ModelDownloadRequest,
@@ -141,6 +146,9 @@ export type ModelSnapshot = Api.ModelSnapshotResponse;
 export type ModelArtifacts = Api.ModelArtifactsResponse;
 export type ModelTransfer = Api.ModelTransferResponse;
 export type ModelTransferPlan = Api.ModelTransferPlanResponse;
+export type McpServer = Api.McpServerResponse;
+export type McpServers = Api.McpServersResponse;
+export type McpServerTest = Api.McpServerTestResponse;
 export type SkillSummary = Api.SkillSummaryResponse;
 export type SkillSettings = Api.SkillSettingsResponse;
 export type SpecialistRole = Api.SpecialistRoleResponse;

@@ -264,6 +264,22 @@ const localModelChoice = (
   ...overrides,
 });
 
+const noMcpServers = (): Awaited<
+  ReturnType<HeartwoodClient["getMcpServers"]>
+> => ({
+  availability: "unavailable",
+  unavailable_reason: "research services run only in isolated worker sessions",
+  unavailable_code: "HW-MCP-004",
+  destinations: [],
+  credential_store: {
+    backends: ["process"],
+    default_backend: "process",
+    persistence_available: false,
+    persistence_description: "Current Heartwood process only",
+  },
+  servers: [],
+});
+
 class FakeClient implements HeartwoodClient {
   commands: SessionCommand[] = [];
   auditExportCalls = 0;
@@ -1151,6 +1167,30 @@ class FakeClient implements HeartwoodClient {
   removeSkill(name: string): Promise<SkillSettings> {
     this.installedSkill = `removed:${name}`;
     return Promise.resolve({ skills: [bundledSkill()] });
+  }
+
+  getMcpServers(): ReturnType<HeartwoodClient["getMcpServers"]> {
+    return Promise.resolve(noMcpServers());
+  }
+
+  addMcpServer(): ReturnType<HeartwoodClient["addMcpServer"]> {
+    return Promise.resolve(noMcpServers());
+  }
+
+  testMcpServer(): ReturnType<HeartwoodClient["testMcpServer"]> {
+    return Promise.reject(new Error("No research services configured"));
+  }
+
+  selectMcpTools(): ReturnType<HeartwoodClient["selectMcpTools"]> {
+    return Promise.resolve(noMcpServers());
+  }
+
+  setMcpServerEnabled(): ReturnType<HeartwoodClient["setMcpServerEnabled"]> {
+    return Promise.resolve(noMcpServers());
+  }
+
+  disconnectMcpServer(): ReturnType<HeartwoodClient["disconnectMcpServer"]> {
+    return Promise.resolve(noMcpServers());
   }
 
   saveModelProfile(profile: ModelProfileDraft): Promise<ModelSettings> {

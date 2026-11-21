@@ -1140,6 +1140,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
 
         <UtilitySheet
           actionModeLockedReason={actionModeLockedReason}
+          servicesClient={resolvedClient}
           actions={actionSettings}
           artifacts={modelArtifacts}
           panel={panel}

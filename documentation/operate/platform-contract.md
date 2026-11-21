@@ -29,7 +29,7 @@ A schema describes a message; it does not enable a service, authorize a request,
 | [Agent isolation](#agent-isolation) of the complete worker | Current for the OpenShell Docker reference adapter; qualified only against the qualification-only sandbox gateway build |
 | [Controlled data](#controlled-data) controls | Selected read-only inputs current; quarantine and steward-approved release unavailable |
 | [Audit and records](#audit-and-records) | Signed checkpoints and deployment-bound evidence current; signer and records-service qualification is the platform's |
-| [Platform services](#platform-services) over MCP, outside operations, launch context and budgets | Draft; the content-bound [outside operation](#outside-operation-admission) authorization is current, but no outside-service adapter ships and built-in launchers install none |
+| [Platform services](#platform-services) over MCP, outside operations, launch context and budgets | Draft; the content-bound [outside operation](#outside-operation-admission) authorization and [research MCP servers](#research-mcp-servers) are current |
 | Hosted per-project gateways with verified OpenID Connect identity | Unavailable |
 | Realtime voice | Unavailable |
 
@@ -276,7 +276,8 @@ The signer interface is `POST /v1/checkpoints/sign`, accepting `heartwood.audit-
 ### Platform Services
 
 The service, operation, task and budget messages are draft.
-Heartwood disables MCP servers in its OpenHands configuration and advertises no platform service.
+The agent's OpenHands configuration contains no MCP server.
+The gateway is the MCP client: [research MCP servers](#research-mcp-servers) reach the worker only as reviewed outside operations.
 
 #### Service Discovery
 
@@ -420,8 +421,8 @@ A successful HTTP exchange does not establish that an asynchronous research acti
 A trusted Python embedding can connect platform services to the research session.
 It supplies a session-scoped `ExternalActionAdapter` through `SessionGateway(external_actions_factory=...)` and the SDK `ClientToolSpec` definitions through `native_worker_plan_factory(client_tools=...)`.
 The worker registers those tools; their acknowledgement proposes an operation and does not execute it.
-No production outside-service adapter ships with Heartwood: `heartwood gateway serve` and the other built-in launchers install none, and the gateway has no HTTP route for registering adapters or creating proposals.
-The interface is exercised only by embedding launchers such as the native qualification fixture.
+`heartwood gateway serve` installs one adapter, for [research MCP servers](#research-mcp-servers), when the deployment manifest lists MCP destinations.
+The gateway has no HTTP route for registering other adapters or creating proposals; other services need an embedding launcher such as the native qualification fixture.
 
 To offer outside operations, a platform or embedding launcher must provide:
 
@@ -442,6 +443,7 @@ The adapter's contract:
 
 `SessionService.propose_external_action` turns a retained worker proposal into a review with a gateway-issued operation identifier, the complete request, input digests, destination, worker identity, policy revision and a five-minute validity interval.
 The approve and deny commands bind the full proposal digest.
+While another operation on the same service is being submitted or has an unknown outcome, the gateway neither proposes nor sends another one; reconciliation through `observe` comes first.
 Immediately before submission the gateway rechecks the live worker attempt, project, policy, actor entitlement, validity and input contents, and submits the verified bytes without reopening worker paths.
 
 The decision and submission intent are journaled before the service is contacted; with managed evidence, the authorization is retained outside first, even in buffered mode.
@@ -631,11 +633,67 @@ The data and job services verify each token's signature, issuer, audience and ex
 Their tools carry the four required annotations: submission and cancellation are not read-only, and cancellation is marked destructive.
 `running_platform_fakes()` starts the inference, data and job fakes with one token issuer and returns their endpoints and service profiles.
 
+### Research MCP Servers
+
+The gateway connects to research services as an MCP client, with OpenHands' public `MCPClient` over Streamable HTTP.
+The agent receives no MCP configuration and no credential.
+A session's worker sees each enabled tool as a fixed client tool, and a call to it becomes an [outside operation](#outside-operation-admission).
+
+```mermaid
+sequenceDiagram
+    participant W as Worker
+    participant G as Gateway
+    participant R as Researcher
+    participant S as Research service
+    W->>G: Client tool call with arguments
+    G->>R: Outside operation review
+    R->>G: Approve
+    G->>S: tools/list, then tools/call with project_id and operation_id
+    S->>G: Operation observation
+    G->>R: Result release review
+    R->>G: Approve
+    G->>W: Released result as message content
+```
+
+The deployment manifest lists each allowed origin under [`mcp_destinations`](../reference/configuration.md#mcp-destinations), with the tools researchers may select there.
+Researchers add servers at those origins, test them, select tools and enable them through the gateway, the CLI or the browser.
+Project configuration keeps each server's URL and the reviewed definition of each selected tool.
+It holds no credential and no credential reference.
+
+| Control | Behavior |
+|---|---|
+| Destinations | Only exact listed origins. HTTPS is required except on loopback. Literal and resolved private, link-local and metadata addresses are refused before each connection, including their NAT64, IPv4-compatible and IPv4-translated forms. Private addresses are permitted only at an origin whose destination sets `private_address`, such as a cluster service. Only public addresses, and private ones with the opt-in, are permitted; link-local addresses and `fd00:ec2::/32` are always refused. Public metadata addresses, such as `168.63.129.16`, are not recognized. The client resolves the name again, so the platform's egress controls bound the connection itself. A manifest without destinations refuses every server. |
+| Redirects | The client follows a redirect only within the same origin and sends no request to another origin. |
+| Credentials | A bearer token is entered through the gateway and kept in its credential store under a binding derived from the destination's `service_id`, or supplied by the operator in the environment variable of that name, so a token is sent only to its own service. The deployment's credential backends apply. The token never reaches the worker, model context, session records or exports. |
+| Authentication state | The gateway reads the token's expiry and refuses an expired token before sending it. A token entered with a test or a selection is kept only after the server accepted it. The service still verifies the token. |
+| Tools | A tool must be listed for its origin and accept `project_id` and `operation_id`. A test shows each tool's complete definition, the parameters the agent fills in and the definition's digest. The researcher selects a tool together with that digest, and the gateway lists the tools again and refuses a selection whose definition differs. |
+| Tool changes | Each selected tool keeps the SHA-256 of its reviewed definition. A test that lists a different definition removes the tool from the enabled set, and the gateway compares the definition again before it sends a call. A changed definition needs a new selection. |
+| Result size | A result larger than the destination's `max_result_bytes`, at most 32 KiB, is refused after it is read. Event-stream frames are limited during transfer. |
+| Resources and prompts | Not used. A test reports whether the server advertises them. |
+| Sessions | Tools are bound to sessions with an isolated worker only. Other sessions get none. |
+
+A service on this path must enforce Heartwood's operation binding, as the [adapter contract](#outside-operation-admission) requires.
+It scopes each call to the project its credential allows, treats a repeated `operation_id` as the same operation, and returns `heartwood.platform-operation-observation.v1` as structured content.
+A read-only tool named as the destination's `observation_tool` reports an operation by `project_id` and `operation_id`.
+For an identifier it never received, it reports the status `failed` and refuses any later call with that identifier, so an operation whose request never arrived can be settled.
+
+Every call needs an outside operation review and a separate result release review; no review mode decides either.
+Disabling or disconnecting a server, changing its tools, or an expired token refuses pending calls, and completed remote work is not undone.
+A call whose reply is lost or times out is recorded with an unknown outcome.
+The gateway reconciles it through the observation tool, and until then it neither opens review of another call to the same service nor sends one already reviewed.
+An operation reported as submitted, queued or running is observed again until it finishes, and its result release is offered on the next check after that.
+
+Heartwood cancels no remote work.
+Denying a review sends nothing.
+A call still running at the destination's `call_timeout_seconds` is abandoned and recorded with an unknown outcome, and the service may still complete it.
+Pausing the session waits for a call in progress to end.
+The service's own cancel tool can be selected like any other tool, but it receives the new call's `operation_id`, so it cannot name an earlier operation.
+
 ### MCP Client Behavior
 
 `packages/gateway/tests/test_mcp_compatibility.py` runs OpenHands' public MCP client against explicitly configured Streamable HTTP servers built on these fakes.
 It records what the client does with such a server.
-Heartwood configures no MCP server in its OpenHands settings.
+The agent's OpenHands settings contain no MCP server.
 Tests marked as expected failures state behavior that Heartwood requires and the client does not provide.
 
 | Area | Client behavior |

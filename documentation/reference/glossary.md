@@ -213,6 +213,9 @@ SPDX-License-Identifier: MIT
 **Records service**
 : The deployment-owned storage service that retains signed audit checkpoints outside the project.
 
+**Research MCP server**
+: An MCP server at a deployment-approved origin that the gateway calls as a client; its selected tools reach a worker as client tools, and every call is an outside operation.
+
 **Research Skill**
 : A versioned instruction package with declared tools, metadata, and workflow guidance available to the OpenHands agent.
 

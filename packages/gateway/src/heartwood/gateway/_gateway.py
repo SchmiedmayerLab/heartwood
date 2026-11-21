@@ -89,6 +89,12 @@ from heartwood.gateway._local_model_lifecycle import LocalModelLifecycle
 from heartwood.gateway._local_models import (
     HuggingFaceModelRepository,
 )
+from heartwood.gateway._mcp_policy import McpDestination
+from heartwood.gateway._mcp_servers import (
+    McpOutsideAdapter,
+    McpServerManager,
+    advance_outside_calls,
+)
 from heartwood.gateway._model_artifacts import (
     ModelArtifactCatalog,
     load_model_artifact_catalog,
@@ -177,6 +183,12 @@ from heartwood.schemas import (
     CredentialSettingsResponse,
     JsonValue,
     LocalModelImportResponse,
+    McpServerAddRequest,
+    McpServerEnabledRequest,
+    McpServersResponse,
+    McpServerTestRequest,
+    McpServerTestResponse,
+    McpServerToolsRequest,
     ModelArtifactsResponse,
     ModelCallDecision,
     ModelCatalogResponse,
@@ -473,6 +485,7 @@ class SessionGateway:
         | None = None,
         checkpoint_evidence_factory: Callable[[str], SessionCheckpointEvidence] | None = None,
         external_actions_factory: Callable[[str], ExternalActionAdapter] | None = None,
+        mcp_destinations: Sequence[McpDestination] | None = None,
         subscription_provider: SubscriptionProvider | None = None,
         workspace_inspector: WorkspaceInspector | None = None,
         skill_source_registry: SkillSourceRegistry | None = None,
@@ -488,12 +501,15 @@ class SessionGateway:
             if (
                 deployment_policy is not None
                 or model_connections is not None
+                or mcp_destinations is not None
                 or (project is not None and project != deployment.project)
             ):
                 raise ValueError(
-                    "A deployment binding supplies its own project, policy and model connections"
+                    "A deployment binding supplies its own project, policy, model connections "
+                    "and MCP destinations"
                 )
             project, deployment_policy = deployment.project, deployment.policy
+            mcp_destinations = deployment.mcp_destinations
             model_connections = (*BUILT_IN_MODEL_CONNECTIONS, *deployment.model_connections)
         self._deployment = deployment
         # A manifest change that cannot apply safely stops dispatch until the next start.
@@ -522,6 +538,10 @@ class SessionGateway:
             raise ValueError("Outside services require protected state and owned native workers")
         if worker_reconciler is not None and worker_plan_factory is None:
             raise ValueError("Worker reconciliation requires managed workers")
+        if external_actions_factory is not None and mcp_destinations:
+            raise ValueError(
+                "Research MCP servers and another outside service cannot share a gateway"
+            )
         self._external_actions_factory = external_actions_factory
         self._worker_plan_factory = worker_plan_factory
         self._worker_reconciler = worker_reconciler
@@ -595,6 +615,17 @@ class SessionGateway:
             env=self.env,
             use_system_keyring=env is None,
         )
+        self.mcp_servers = McpServerManager(
+            config_store=self.config_store,
+            credential_store=self.credential_store,
+            destinations=() if mcp_destinations is None else mcp_destinations,
+            # A command-line gateway manages the servers of a deployment whose sessions run
+            # in workers; it binds tools to sessions only with a worker of its own.
+            worker_available=worker_plan_factory is not None
+            or (deployment is not None and deployment.worker is not None),
+        )
+        # The research service adapter of each worker session, by service identity.
+        self._mcp_adapters: dict[int, McpOutsideAdapter] = {}
         self.subscription_provider = subscription_provider or OpenHandsOpenAISubscription()
         self.workspace_inspector = workspace_inspector or WorkspaceInspector(self.project)
         resource_root = _runtime_resource_root()
@@ -2284,6 +2315,60 @@ class SessionGateway:
         return self.local_models.model_transfer_status(transfer_id)
 
     @gateway_operation
+    def mcp_server_settings(self) -> McpServersResponse:
+        """Return research MCP servers, the deployment destinations and enabled tool sets."""
+        return api_response(McpServersResponse, self.mcp_servers.settings())
+
+    @gateway_operation
+    def add_mcp_server(self, request: McpServerAddRequest) -> McpServersResponse:
+        """Add a server at an approved origin without contacting or enabling it."""
+        return api_response(
+            McpServersResponse,
+            self.mcp_servers.add(
+                request.server_id, request.label, request.url, request.token, request.remember
+            ),
+        )
+
+    @gateway_operation
+    def test_mcp_server(
+        self, server_id: str, request: McpServerTestRequest
+    ) -> McpServerTestResponse:
+        """Connect to a server, list its tools and compare them with the reviewed definitions."""
+        return api_response(
+            McpServerTestResponse,
+            self.mcp_servers.test(server_id, request.token, request.remember),
+        )
+
+    @gateway_operation
+    def select_mcp_tools(
+        self, server_id: str, request: McpServerToolsRequest
+    ) -> McpServersResponse:
+        """Record the researcher's review of tool definitions from the latest test."""
+        return api_response(
+            McpServersResponse,
+            self.mcp_servers.select_tools(
+                server_id,
+                [(item.name, item.sha256) for item in request.tools],
+                token=request.token,
+                remember=request.remember,
+            ),
+        )
+
+    @gateway_operation
+    def set_mcp_server_enabled(
+        self, server_id: str, request: McpServerEnabledRequest
+    ) -> McpServersResponse:
+        """Enable or disable a server; running sessions refuse calls to a disabled server."""
+        return api_response(
+            McpServersResponse, self.mcp_servers.set_enabled(server_id, request.enabled)
+        )
+
+    @gateway_operation
+    def disconnect_mcp_server(self, server_id: str) -> McpServersResponse:
+        """Remove a server and forget its token; completed remote work is not undone."""
+        return api_response(McpServersResponse, self.mcp_servers.disconnect(server_id))
+
+    @gateway_operation
     def skill_settings(self) -> SkillSettingsResponse:
         """Return the shared bundled, installed, and signed-catalog projection."""
         return api_response(
@@ -2465,6 +2550,10 @@ class SessionGateway:
                 raise ValueError("Managed worker session is unavailable")
             return worker.context()
 
+        mcp_adapter: McpOutsideAdapter | None = None
+        if self._worker_plan_factory is not None and self._external_actions_factory is None:
+            bound = self.mcp_servers.bound_tools()
+            mcp_adapter = McpOutsideAdapter(self.mcp_servers, bound) if bound else None
         backend = self._backend(
             model_settings=configuration.model_settings,
             selected_model=configuration.local_model,
@@ -2489,7 +2578,7 @@ class SessionGateway:
             external_actions=(
                 self._external_actions_factory(session_id)
                 if self._external_actions_factory is not None
-                else None
+                else mcp_adapter
             ),
             workflow_evaluator=ResearchStageEvaluator(
                 self.workspace_inspector,
@@ -2518,10 +2607,13 @@ class SessionGateway:
                         policy=service.policy_profile,
                         skills=self.skill_manager,
                         specialists=backend.specialist_catalog,
+                        client_tools=() if mcp_adapter is None else mcp_adapter.client_tools,
                     ),
                     self._worker_plan_factory,
                 )
                 self._worker_sessions[id(service)] = worker
+                if mcp_adapter is not None:
+                    self._mcp_adapters[id(service)] = mcp_adapter
         if self._parallel_review_preparer is not None:
             from heartwood.gateway._openhands_sdk import OpenHandsSdkBackend
             from heartwood.gateway._workflow_review_execution import bind_workflow_review_execution
@@ -2704,6 +2796,9 @@ class SessionGateway:
             return None
         try:
             service.reconcile()
+            adapter = self._mcp_adapters.get(id(service))
+            if adapter is not None:
+                advance_outside_calls(service, adapter)
         except RuntimeError:
             with self._state_lock:
                 if self._services.get(session_id) is service:
@@ -3245,6 +3340,7 @@ class SessionGateway:
             if worker.wait_closed(0):
                 del self._releasing[session_id]
                 self._worker_sessions.pop(id(service), None)
+                self._mcp_adapters.pop(id(service), None)
                 continue
             failed.append(session_id)
             if worker.revocation_pending:
@@ -3275,6 +3371,7 @@ class SessionGateway:
         if not worker.close():
             return False
         self._worker_sessions.pop(id(service), None)
+        self._mcp_adapters.pop(id(service), None)
         return True
 
     @_serialized_state

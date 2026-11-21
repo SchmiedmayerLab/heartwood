@@ -58,7 +58,13 @@ import {
   ShieldCheck,
   Trash2,
 } from "lucide-react";
-import { Fragment, useEffect, useRef, useState } from "react";
+import {
+  type ComponentProps,
+  Fragment,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { modelProfileLabel } from "../modelPresentation";
 import type {
   ActionReviewMode,
@@ -94,10 +100,12 @@ import type {
   StartupPlan,
   SubscriptionDeviceLogin,
 } from "../types";
+import { ResearchServices } from "./ResearchServices";
 import type { UtilityPanel } from "./SessionRail";
 
 interface UtilitySheetProps {
   actionModeLockedReason: string | null;
+  servicesClient: ComponentProps<typeof ResearchServices>["client"];
   actions: ActionSettings | null;
   artifacts: ModelArtifacts | null;
   panel: UtilityPanel;
@@ -182,6 +190,9 @@ export const UtilitySheet = (props: UtilitySheetProps) => (
       : null}
       {props.panel === "specialists" ?
         <SpecialistsContent {...props} />
+      : null}
+      {props.panel === "services" ?
+        <ResearchServices client={props.servicesClient} />
       : null}
       {props.panel === "settings" || props.panel === "action-review" ?
         <SettingsContent key={props.panel} {...props} />

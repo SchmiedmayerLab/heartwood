@@ -33,6 +33,11 @@ from heartwood.gateway._local_model_contract import (
     managed_model_parsers_compatible,
 )
 from heartwood.gateway._local_models import LocalModelChoice, ModelRepositoryError
+from heartwood.gateway._mcp_policy import (
+    McpServerSetting,
+    mcp_server_from_mapping,
+    mcp_server_mapping,
+)
 from heartwood.gateway._model_catalog import (
     BUILT_IN_MODEL_CONNECTIONS,
     ModelCatalogError,
@@ -76,6 +81,7 @@ _TOP_LEVEL_FIELDS = {
     "audit",
     "connections",
     "local_model",
+    "mcp_servers",
     "models",
     "model_source",
     "platform_id",
@@ -398,6 +404,8 @@ class ProjectConfig:
     model_settings: ModelSettings = field(default_factory=ModelSettings)
     additional_connections: tuple[ModelConnection, ...] = ()
     local_model: LocalModelSelection | None = None
+    # Research MCP servers; deployment destinations decide at use which ones may connect.
+    mcp_servers: tuple[McpServerSetting, ...] = ()
     schema_version: str = _CONFIG_SCHEMA_VERSION
 
     def validate(self, project: ProjectContext) -> None:
@@ -416,8 +424,13 @@ class ProjectConfig:
             self.model_settings.validate()
             for connection in self.additional_connections:
                 connection.validate()
-        except (ActionSettingsError, ModelCatalogError, ModelSettingsError) as error:
+            for server in self.mcp_servers:
+                server.validate()
+        except (ActionSettingsError, ModelCatalogError, ModelSettingsError, ValueError) as error:
             raise ProjectConfigError(str(error)) from error
+        server_ids = [server.server_id for server in self.mcp_servers]
+        if len(server_ids) != len(set(server_ids)):
+            raise ProjectConfigError("MCP server identifiers must be unique")
         if self.action_settings.review_mode not in {
             None,
             *self.policy.allowed_action_review_modes,
@@ -712,6 +725,13 @@ def project_config_from_mapping(value: object, *, project: ProjectContext) -> Pr
     additional = tuple(connection for connection in connections if connection.source == "platform")
     local_value = value.get("local_model")
     local_model = None if local_value is None else _local_model_from_mapping(local_value)
+    servers = value.get("mcp_servers", [])
+    if not isinstance(servers, list):
+        raise ProjectConfigError("mcp_servers must be an array of tables")
+    try:
+        mcp_servers = tuple(mcp_server_from_mapping(item) for item in servers)
+    except ValueError as error:
+        raise ProjectConfigError(str(error)) from error
     config = ProjectConfig(
         schema_version=_CONFIG_SCHEMA_VERSION,
         platform_id=platform_id,
@@ -722,6 +742,7 @@ def project_config_from_mapping(value: object, *, project: ProjectContext) -> Pr
         additional_connections=additional,
         policy=policy,
         local_model=local_model,
+        mcp_servers=mcp_servers,
     )
     config.validate(project)
     return config
@@ -755,6 +776,8 @@ def _config_mapping(config: ProjectConfig) -> dict[str, object]:
         models["active_profile"] = config.model_settings.active_profile
     if config.local_model is not None:
         result["local_model"] = _without_none(asdict(config.local_model))
+    if config.mcp_servers:
+        result["mcp_servers"] = [mcp_server_mapping(server) for server in config.mcp_servers]
     return result
 
 

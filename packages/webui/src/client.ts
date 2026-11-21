@@ -28,6 +28,13 @@ import type {
   JsonValue,
   LocalModelImportRequest,
   LocalModelImportResult,
+  McpServerAddRequest,
+  McpServerEnabledRequest,
+  McpServers,
+  McpServerTestRequest,
+  McpServerToolsRequest,
+  McpServerTest,
+  McpToolChoice,
   ModelCatalog,
   ModelCatalogRequest,
   ModelConnectRequest,
@@ -175,6 +182,16 @@ export interface HeartwoodClient {
     expectedTreeSha256: string,
   ): Promise<SkillSettings>;
   removeSkill(name: string): Promise<SkillSettings>;
+  getMcpServers(): Promise<McpServers>;
+  addMcpServer(request: McpServerAddRequest): Promise<McpServers>;
+  testMcpServer(
+    serverId: string,
+    token: string | null,
+    remember: boolean,
+  ): Promise<McpServerTest>;
+  selectMcpTools(serverId: string, tools: McpToolChoice[]): Promise<McpServers>;
+  setMcpServerEnabled(serverId: string, enabled: boolean): Promise<McpServers>;
+  disconnectMcpServer(serverId: string): Promise<McpServers>;
 }
 
 export const createCommand = (
@@ -819,6 +836,81 @@ export class GatewayClient implements HeartwoodClient {
         this.url(`/settings/skills/${encodeURIComponent(name)}`),
         {
           method: "DELETE",
+        },
+      ),
+    );
+  }
+
+  async getMcpServers(): Promise<McpServers> {
+    return parseJsonResponse<McpServers>(
+      await authenticatedFetch(
+        this.basePath,
+        this.url("/settings/mcp-servers"),
+      ),
+    );
+  }
+
+  async addMcpServer(request: McpServerAddRequest): Promise<McpServers> {
+    return this.sendMcp<McpServers>("", "POST", request);
+  }
+
+  async testMcpServer(
+    serverId: string,
+    token: string | null,
+    remember: boolean,
+  ): Promise<McpServerTest> {
+    return this.sendMcp<McpServerTest>(
+      `/${encodeURIComponent(serverId)}/test`,
+      "POST",
+      { remember, token } satisfies McpServerTestRequest,
+    );
+  }
+
+  async selectMcpTools(
+    serverId: string,
+    tools: McpToolChoice[],
+  ): Promise<McpServers> {
+    return this.sendMcp<McpServers>(
+      `/${encodeURIComponent(serverId)}/tools`,
+      "PUT",
+      { tools } satisfies McpServerToolsRequest,
+    );
+  }
+
+  async setMcpServerEnabled(
+    serverId: string,
+    enabled: boolean,
+  ): Promise<McpServers> {
+    return this.sendMcp<McpServers>(
+      `/${encodeURIComponent(serverId)}/enabled`,
+      "PUT",
+      { enabled } satisfies McpServerEnabledRequest,
+    );
+  }
+
+  async disconnectMcpServer(serverId: string): Promise<McpServers> {
+    return parseJsonResponse<McpServers>(
+      await authenticatedFetch(
+        this.basePath,
+        this.url(`/settings/mcp-servers/${encodeURIComponent(serverId)}`),
+        { method: "DELETE" },
+      ),
+    );
+  }
+
+  private async sendMcp<Response>(
+    suffix: string,
+    method: "POST" | "PUT",
+    request: object,
+  ): Promise<Response> {
+    return parseJsonResponse<Response>(
+      await authenticatedFetch(
+        this.basePath,
+        this.url(`/settings/mcp-servers${suffix}`),
+        {
+          body: JSON.stringify(request),
+          headers: { "Content-Type": "application/json" },
+          method,
         },
       ),
     );

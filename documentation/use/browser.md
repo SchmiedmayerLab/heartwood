@@ -56,6 +56,7 @@ Where a deployment provides [outside operations](actions-audit.md#outside-operat
 - Inspect task progress, model-call totals, and specialist status below the conversation.
 - Open **Research** to run a [research workflow](research-workflows.md); **Project Experiment Records** there lists recorded workflow stages and scripts across the project.
 - Open **Specialists** to see the [research specialists](specialists.md) and **Skills** to see [Skills](skills.md).
+- Open **Research services** to add, test, enable, disable, or disconnect [research MCP servers](../operate/platform-contract.md#research-mcp-servers); each server shows its destination, token state, reviewed tools and the tools enabled for new sessions.
 - Open **Activity & audit** for route decisions, tool results, and errors, and use **Export audit** to download the scrubbed [audit export](actions-audit.md#audit-export).
 - Use the appearance button in the session header to switch between light and dark mode.
 

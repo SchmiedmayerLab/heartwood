@@ -24,6 +24,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from heartwood.adapters.platform import select_platform_adapter
 from heartwood.gateway._diagnostics import diagnostic_for
+from heartwood.gateway._mcp_policy import McpDestination, mcp_destinations_from_mapping
 from heartwood.gateway._model_catalog import (
     ModelCatalogError,
     ModelConnection,
@@ -54,7 +55,14 @@ from heartwood.schemas import PlatformModelMetadataManifest, PolicyProfile
 
 _SCHEMA = "heartwood.project-deployment.v1"
 _FIELDS = {"schema_version", "project_id", "workspace", "state_root", "policy"}
-_OPTIONAL_FIELDS = {"worker", "evidence", "requirements", "model_connections", "model_metadata"}
+_OPTIONAL_FIELDS = {
+    "worker",
+    "evidence",
+    "requirements",
+    "model_connections",
+    "model_metadata",
+    "mcp_destinations",
+}
 
 
 class DeploymentError(ProjectStateError):
@@ -86,6 +94,8 @@ class ProjectDeployment:
     requirements: DeploymentRequirements = field(default_factory=DeploymentRequirements)
     # Platform connections, with any model declarations, that the manifest supplies.
     model_connections: tuple[ModelConnection, ...] = ()
+    # Origins the gateway may connect to as an MCP client; empty refuses every connection.
+    mcp_destinations: tuple[McpDestination, ...] = ()
     manifest: Path | None = None
     manifest_sha256: str | None = None
 
@@ -248,6 +258,17 @@ def _read_manifest(
                 "managed checkpoint evidence requires complete worker isolation"
             )
         validate_evidence_deployment(evidence, project)
+    mcp_destinations: tuple[McpDestination, ...] = ()
+    if "mcp_destinations" in record:
+        # Research services run only through outside review, which needs the worker boundary.
+        if worker is None:
+            raise DeploymentError(
+                "deployment-manifest", "MCP destinations require complete worker isolation"
+            )
+        try:
+            mcp_destinations = mcp_destinations_from_mapping(record["mcp_destinations"])
+        except ValueError as error:
+            raise DeploymentError("deployment-manifest", str(error)) from None
     return ProjectDeployment(
         project=project,
         policy=policy,
@@ -257,6 +278,7 @@ def _read_manifest(
         model_connections=_model_connections(
             record.get("model_connections"), record.get("model_metadata")
         ),
+        mcp_destinations=mcp_destinations,
         manifest=resolved,
         manifest_sha256=hashlib.sha256(content.encode()).hexdigest(),
     )

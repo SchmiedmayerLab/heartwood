@@ -22,6 +22,11 @@ export type HeartwoodApiContract =
   | ActionReviewRequest
   | CustomLocalModelDownloadRequest
   | LocalModelImportRequest
+  | McpServerAddRequest
+  | McpServerEnabledRequest
+  | McpServerTestRequest
+  | McpServerToolsRequest
+  | McpToolChoice
   | ModelCatalogRequest
   | ModelConnectRequest
   | ModelDownloadRequest
@@ -58,6 +63,9 @@ export type ApiResponse =
   | ProjectReadinessResponse
   | SessionListResponse
   | SessionSummaryResponse
+  | McpServerResponse
+  | McpServersResponse
+  | McpServerTestResponse
   | SkillSettingsResponse
   | SkillSummaryResponse
   | SpecialistSettingsResponse
@@ -654,6 +662,103 @@ export interface SessionSummaryResponse {
   updated_at: string;
 }
 /**
+ * One research MCP server without credential values or references.
+ */
+export interface McpServerResponse {
+  authentication: McpAuthenticationResponse;
+  destination: "allowed" | "refused";
+  enabled: boolean;
+  enabled_tools: string[];
+  label: string;
+  origin: string;
+  server_id: string;
+  service_id: string | null;
+  tools: McpSelectedToolResponse[];
+  url: string;
+}
+/**
+ * Authentication state the gateway judges from the token it holds.
+ */
+export interface McpAuthenticationResponse {
+  expires_at: string | null;
+  status: "missing" | "valid" | "expired" | "unknown-expiry";
+}
+/**
+ * One researcher-selected tool and its reviewed definition digest.
+ */
+export interface McpSelectedToolResponse {
+  annotations: McpToolAnnotationsResponse;
+  definition: string;
+  description: string;
+  name: string;
+  parameters: string;
+  sha256: string;
+  status: "ready" | "changed" | "missing" | "disallowed" | "unsupported";
+  worker_tool: string;
+}
+/**
+ * Behavior hints a server advertises for a tool; never authorization.
+ */
+export interface McpToolAnnotationsResponse {
+  destructive: boolean | null;
+  idempotent: boolean | null;
+  open_world: boolean | null;
+  read_only: boolean | null;
+}
+/**
+ * Research MCP servers, destinations and availability.
+ */
+export interface McpServersResponse {
+  availability: "available" | "unavailable";
+  credential_store: CredentialStoreAvailabilityResponse;
+  destinations: McpDestinationResponse[];
+  servers: McpServerResponse[];
+  unavailable_code: string | null;
+  unavailable_reason: string | null;
+}
+/**
+ * One deployment-approved origin and the tools researchers may select there.
+ */
+export interface McpDestinationResponse {
+  credential_binding: string;
+  max_result_bytes: number;
+  origin: string;
+  private_address: boolean;
+  service_id: string;
+  tools: string[];
+}
+/**
+ * The result of connecting to one server and listing its tools.
+ */
+export interface McpServerTestResponse {
+  prompts: McpCapabilityResponse;
+  resources: McpCapabilityResponse;
+  server: McpServerResponse;
+  tools: McpDiscoveredToolResponse[];
+}
+/**
+ * Whether a server advertises a capability Heartwood does not use.
+ */
+export interface McpCapabilityResponse {
+  advertised: boolean;
+  support: "unsupported";
+}
+/**
+ * One tool listed by a test; listing authorizes nothing.
+ */
+export interface McpDiscoveredToolResponse {
+  accepts_operation_binding: boolean;
+  allowed: boolean;
+  annotations: McpToolAnnotationsResponse;
+  changed: boolean;
+  definition: string;
+  description: string;
+  name: string;
+  parameters: string;
+  selected: boolean;
+  sha256: string;
+}
+/**
  * Bundled and explicitly installed Skills.
  */
 export interface SkillSettingsResponse {
@@ -1120,6 +1225,47 @@ export interface LocalModelImportRequest {
   path: string;
   repository: string;
   revision: string;
+}
+/**
+ * Add one research MCP server at a deployment-approved origin.
+ */
+export interface McpServerAddRequest {
+  label: string;
+  remember?: boolean;
+  server_id: string;
+  token?: string | null;
+  url: string;
+}
+/**
+ * Enable or disable one research MCP server for new sessions.
+ */
+export interface McpServerEnabledRequest {
+  enabled: boolean;
+}
+/**
+ * Connect to one research MCP server and list its tools.
+ */
+export interface McpServerTestRequest {
+  remember?: boolean;
+  token?: string | null;
+}
+/**
+ * Select reviewed tool definitions of one research MCP server.
+ */
+export interface McpServerToolsRequest {
+  remember?: boolean;
+  token?: string | null;
+  /**
+   * @maxItems 64
+   */
+  tools: McpToolChoice[];
+}
+/**
+ * One tool and the digest of the definition the researcher reviewed.
+ */
+export interface McpToolChoice {
+  name: string;
+  sha256: string;
 }
 /**
  * Discover models from one configured connection.

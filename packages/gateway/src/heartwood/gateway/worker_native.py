@@ -84,11 +84,14 @@ def native_worker_plan_factory(
     def prepare(request: WorkerSessionRequest) -> WorkerSessionPlan:
         if request.project != project:
             raise WorkerAttemptError("native worker deployment belongs to another project")
-        return _NativeWorkerAttempt(
-            settings,
-            request,
-            client_tools=tuple(ClientToolSpec.model_validate_json(spec) for spec in specifications),
-        ).plan()
+        client_tools = (
+            *(ClientToolSpec.model_validate_json(spec) for spec in specifications),
+            *request.client_tools,
+        )
+        names = [spec.name for spec in client_tools]
+        if len(names) != len(set(names)):
+            raise WorkerAttemptError("worker client tool names must be unique")
+        return _NativeWorkerAttempt(settings, request, client_tools=client_tools).plan()
 
     return prepare
 
