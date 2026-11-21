@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import subprocess
 import sys
 import tarfile
@@ -51,6 +52,8 @@ class _Cluster:
         # Members of each archive that standard input drops, as a stream cut at a boundary.
         self.dropped: dict[str, int] = {}
         self.extra: dict[str, dict[str, tuple[int, bytes | None]]] = {}
+        self.links: dict[str, dict[str, str]] = {}
+        self.reported_before = b""
         self.failing: str | None = None
         self.pod_phases = ["Pending", "Running"]
         self.terminating: dict[tuple[str, str], int] = {}
@@ -164,14 +167,19 @@ class _Cluster:
                     path.parent.mkdir(parents=True, exist_ok=True)
                     path.write_bytes(content)
                 path.chmod(mode)
+            for name, target in self.links.get(mount[1:], {}).items():
+                (tree / name).symlink_to(target)
+            # The filesystem's own directory belongs to user 0; here, to the test's user.
+            local = script.replace("owner = 0\n", f"owner = {os.getuid()}\n")
+            assert local != script
             result = subprocess.run(
-                [sys.executable, "-I", "-B", "-c", script, root, lost_and_found],
+                [sys.executable, "-I", "-B", "-c", local, root, lost_and_found],
                 capture_output=True,
                 check=False,
             )
         if result.returncode != 0:
             raise WorkerAttemptError("native Kubernetes operation requires reconciliation")
-        return result.stdout
+        return self.reported_before + result.stdout
 
     def _get(self, resource: str, *arguments: str) -> bytes:
         if arguments == ("--output=json",):
@@ -638,9 +646,58 @@ def test_a_staged_tree_that_differs_from_its_archive_stops_staging_before_the_wo
 def test_a_filesystem_recovery_directory_in_a_claim_is_not_staged_content(
     volumes: KubernetesWorkerVolumes, cluster: _Cluster, sources: dict[str, Path]
 ) -> None:
-    cluster.extra["inputs"] = {"lost+found": (0o700, None)}
+    # Group permissions are what fsGroup adds to the filesystem's own directory.
+    cluster.extra["inputs"] = {
+        "lost+found": (0o770, None),
+        "lost+found/recovered": (0o600, b"block\n"),
+    }
     volumes.stage(sources)
     assert cluster.names("pod") == []
+
+
+def test_a_recovery_directory_open_to_other_users_is_not_skipped(
+    volumes: KubernetesWorkerVolumes, cluster: _Cluster, sources: dict[str, Path]
+) -> None:
+    cluster.extra["inputs"] = {"lost+found": (0o755, None)}
+    with pytest.raises(WorkerAttemptError, match="requires reconciliation"):
+        volumes.stage(sources)
+    assert "skills" not in cluster.copied
+
+
+@pytest.mark.parametrize("change", ["link", "output"])
+def test_a_claim_with_a_link_or_a_report_with_other_output_stops_staging(
+    volumes: KubernetesWorkerVolumes, cluster: _Cluster, sources: dict[str, Path], change: str
+) -> None:
+    if change == "link":
+        cluster.links["inputs"] = {"data/link": "table.csv"}
+        expected = "requires reconciliation"
+    else:
+        cluster.reported_before = b"warning: synthetic\n"
+        expected = "does not match the staged snapshot"
+    with pytest.raises(WorkerAttemptError, match=expected):
+        volumes.stage(sources)
+    assert "skills" not in cluster.copied
+    assert cluster.names("pod") == [volumes.staging_name]
+
+
+def test_a_snapshot_that_cannot_be_compared_stops_staging_before_any_request(
+    volumes: KubernetesWorkerVolumes,
+    cluster: _Cluster,
+    sources: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unencodable(_source: Path) -> bytes:
+        stream = io.BytesIO()
+        with tarfile.open(fileobj=stream, mode="w", format=tarfile.PAX_FORMAT) as archive:
+            member = tarfile.TarInfo("bad\udcff")
+            member.size = 0
+            archive.addfile(member, io.BytesIO(b""))
+        return stream.getvalue()
+
+    monkeypatch.setattr(worker_kubernetes, "_archive", unencodable)
+    with pytest.raises(WorkerAttemptError, match="canonical private snapshots"):
+        volumes.stage(sources)
+    assert cluster.calls == []
 
 
 def test_a_snapshot_entry_named_like_the_recovery_directory_is_compared(
@@ -683,7 +740,7 @@ def test_the_pod_digest_script_reports_the_digest_of_an_extracted_archive(
             "-c",
             worker_kubernetes._TREE_DIGEST_SCRIPT,
             str(extracted),
-            "x",
+            "keep-lost-found",
         ],
         capture_output=True,
         check=False,
