@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import json
+import secrets
 import threading
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -58,6 +59,7 @@ _OBJECTS = (
 )
 _TEMPLATE = "https://hub.example.test/user/{researcher}/{project}/oauth_callback"
 _RESEARCHER_KEY = b"synthetic-researcher-id-key-0123456789"
+_ACTOR_KEY = secrets.token_urlsafe(32)
 
 
 def _id(subject: str) -> str:
@@ -134,7 +136,7 @@ class Platform:
                 container_defaults={"cpu": "500m"},
                 container_default_requests={"cpu": "100m"},
                 platform_ca="-----BEGIN CERTIFICATE-----\n",
-                actor_key="synthetic-actor-key-0123456789abcdef",
+                actor_key=_ACTOR_KEY,
             ),
             self.registry.session_ids,
         )
@@ -253,7 +255,7 @@ def test_gateway_secret_holds_the_launch_and_the_credentials_and_the_reply_holds
         "openshell-tls.crt": f"tls.crt of hw-s-{launch['session']}",
         "openshell-tls.key": f"tls.key of hw-s-{launch['session']}",
         "platform-ca.crt": "-----BEGIN CERTIFICATE-----\n",
-        "actor-key": "synthetic-actor-key-0123456789abcdef",
+        "actor-key": _ACTOR_KEY,
     }
     files.pop("platform-ca.crt")
     for credential in files.values():
