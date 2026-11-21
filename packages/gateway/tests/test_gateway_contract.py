@@ -25,6 +25,7 @@ import heartwood.core_adapter._state as session_state
 from heartwood.audit import AuditLog
 from heartwood.core_adapter import (
     AgentBackend,
+    BackendConfirmationRequestEvent,
     BackendErrorCode,
     BackendErrorEvent,
     BackendEvent,
@@ -33,10 +34,13 @@ from heartwood.core_adapter import (
     BackendSubagent,
     BackendSubagentEvent,
     BackendSubagentStatus,
+    BackendToolCallEvent,
     DeterministicAgentBackend,
     PendingActionGroup,
+    ProposedToolCall,
     SessionResult,
     SessionService,
+    pending_action_group,
 )
 from heartwood.core_adapter._state import FileSessionStore
 from heartwood.core_adapter.session_activity import session_activity
@@ -63,6 +67,7 @@ from heartwood.gateway import (
     SkillSettingsError,
 )
 from heartwood.gateway._openhands_sdk import OpenHandsSdkError
+from heartwood.schemas import AuditEvent
 from heartwood.schemas.review import ReviewCandidate, ReviewProposals
 from heartwood.session import CommandKind, EventKind, JsonValue, SessionCommand, SessionEvent
 from heartwood.skills import SkillManifest
@@ -220,6 +225,69 @@ def test_idle_wait_allows_pause_and_invalidates_a_replaced_service(
                 future.result(timeout=2)
             finally:
                 gateway.stop()
+
+
+def test_a_projection_waits_for_the_reviews_that_a_backend_report_requests(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    action = ProposedToolCall(
+        tool_call_id="call-1", tool_name="file_editor", risk="low", summary="Write one file"
+    )
+    group = pending_action_group((action,))
+    assert group is not None
+    reconciled, committed, proceed = Event(), Event(), Event()
+    reconcile = SessionService.reconcile
+    commit = FileSessionStore.commit_event
+
+    def reconcile_then_wait(self: SessionService) -> tuple[SessionEvent, ...]:
+        events = reconcile(self)
+        if not reconciled.is_set():
+            # The report starts after this read reconciled and before it reads the journal.
+            reconciled.set()
+            assert committed.wait(timeout=5)
+        return events
+
+    def commit_and_wait(
+        self: FileSessionStore, event: SessionEvent, audit_event: AuditEvent
+    ) -> None:
+        commit(self, event, audit_event)
+        if event.payload.get("status") == BackendLifecycle.WAITING_FOR_CONFIRMATION.value:
+            committed.set()
+            assert proceed.wait(timeout=5)
+
+    gateway = _gateway(tmp_path)
+    try:
+        with gateway._state_lock:
+            gateway._project_activity.initialize()
+            backend = gateway._service("session-1").backend
+        assert isinstance(backend, DeterministicAgentBackend)
+        monkeypatch.setattr(SessionService, "reconcile", reconcile_then_wait)
+        monkeypatch.setattr(FileSessionStore, "commit_event", commit_and_wait)
+        report = (
+            BackendToolCallEvent(tool_call=action),
+            BackendLifecycleEvent(lifecycle=BackendLifecycle.WAITING_FOR_CONFIRMATION),
+            BackendConfirmationRequestEvent(tool_call=action, action_group_id=group.group_id),
+        )
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            projection = executor.submit(gateway.session_projection, session_id="session-1")
+            assert reconciled.wait(timeout=5)
+            reported = executor.submit(backend._event_sink, report)
+            assert committed.wait(timeout=5)
+            # The read waits for the rest of the report, so it never shows a run that
+            # waits for no review.
+            try:
+                with pytest.raises(TimeoutError):
+                    projection.result(timeout=0.5)
+            finally:
+                proceed.set()
+            reported.result(timeout=5)
+            result = projection.result(timeout=5)
+        assert result.lifecycle.status == SessionLifecycle.WAITING_FOR_CONFIRMATION
+        assert result.pending_approval is not None
+        assert [item.tool_call_id for item in result.pending_approval.actions] == ["call-1"]
+    finally:
+        proceed.set()
+        gateway.stop()
 
 
 def test_a_backend_report_after_a_pause_leaves_resume_available(tmp_path: Path) -> None:
@@ -1046,6 +1114,8 @@ class _BlockingSessionService:
     def replay_events(self) -> tuple[SessionEvent, ...]:
         return ()
 
+    replay_complete_reports = replay_events
+
     def reconcile(self) -> tuple[SessionEvent, ...]:
         return ()
 
@@ -1075,6 +1145,8 @@ class _FailingSessionService:
     def replay_events(self) -> tuple[SessionEvent, ...]:
         return self.events
 
+    replay_complete_reports = replay_events
+
     def reconcile(self) -> tuple[SessionEvent, ...]:
         return ()
 
@@ -1102,6 +1174,8 @@ class _ClosingSessionService:
 
     def replay_events(self) -> tuple[SessionEvent, ...]:
         return ()
+
+    replay_complete_reports = replay_events
 
     def reconcile(self) -> tuple[SessionEvent, ...]:
         return ()
@@ -1132,6 +1206,8 @@ class _PublishingCloseSessionService:
 
     def replay_events(self) -> tuple[SessionEvent, ...]:
         return ()
+
+    replay_complete_reports = replay_events
 
     def reconcile(self) -> tuple[SessionEvent, ...]:
         return ()
@@ -1194,6 +1270,8 @@ class _RacingFinalSessionService:
 
     def replay_events(self) -> tuple[SessionEvent, ...]:
         return tuple(self.events)
+
+    replay_complete_reports = replay_events
 
     def reconcile(self) -> tuple[SessionEvent, ...]:
         return ()
