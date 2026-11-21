@@ -109,6 +109,19 @@
               "maxLength": 255,
               "pattern": "^[^\\s\\p{Cc}\\p{Cf}\\p{Cs}\\p{Z}]([^\\p{Cc}\\p{Cf}\\p{Cs}]*[^\\s\\p{Cc}\\p{Cf}\\p{Cs}\\p{Z}])?$"
             }
+          },
+          "budgets": {
+            "description": "Amounts allocated to each category of the project's work, in the currency of the price sheet.",
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "inference": {
+                "$ref": "#/$defs/decimal"
+              },
+              "compute": {
+                "$ref": "#/$defs/decimal"
+              }
+            }
           }
         }
       }
@@ -264,7 +277,8 @@
         "platformId",
         "storage",
         "serviceCallers",
-        "operatorCallers"
+        "operatorCallers",
+        "inference"
       ],
       "properties": {
         "platformId": {
@@ -285,6 +299,19 @@
           "items": {
             "type": "string",
             "pattern": "^system:serviceaccount:[a-z0-9-]+:[a-z0-9-]+$"
+          }
+        },
+        "inference": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "sessionReservation"
+          ],
+          "properties": {
+            "sessionReservation": {
+              "description": "Amount of its project's inference budget that each session reserves at its first launch, or what is left of it.",
+              "$ref": "#/$defs/decimal"
+            }
           }
         }
       }

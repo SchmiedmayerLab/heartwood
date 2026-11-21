@@ -37,6 +37,11 @@ projects: []
 #    billingAttributionRef: synthetic-grant-demo
 #    policyRef: synthetic-policy-1
 #    members: []
+#    # Amounts allocated to the project's inference and compute work, in the
+#    # currency of syntheticPrices.
+#    budgets:
+#      inference: "20"
+#      compute: "50"
 
 # Synthetic researcher accounts of the Keycloak realm. subject is the identifier of the
 # account and the subject of its tokens. Each account gets a generated password in the
@@ -55,6 +60,11 @@ control:
   # Service accounts that may rotate the client secret of a project.
   operatorCallers:
     - system:serviceaccount:heartwood-platform:heartwood-operator
+  inference:
+    # Amount of its project's inference budget that each session reserves at its first
+    # launch, or what is left of it. The session keeps the reservation until it is
+    # deleted, and a project without an available amount cannot start a session.
+    sessionReservation: "1"
 
 # Synthetic prices of the control service's estimates, for development and tests.
 # They are not the prices of any provider.

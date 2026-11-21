@@ -28,6 +28,7 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
 from heartwood_platform.common.tokens import AuthenticationError, ResearcherTokens, ServiceTokens
+from heartwood_platform.control.budgets import InsufficientBudgetError, Ledger
 from heartwood_platform.control.launch import (
     LaunchService,
     NoClientError,
@@ -75,6 +76,7 @@ def create_app(
     researchers: ResearcherTokens,
     services: ServiceTokens,
     prices: PriceSheet,
+    ledger: Ledger,
     clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     operators: ServiceTokens | None = None,
 ) -> Starlette:
@@ -98,6 +100,8 @@ def create_app(
                 return _error(404, "unknown project")
             except NoClientError:
                 return _error(409, "the project has no client yet")
+            except InsufficientBudgetError:
+                return _error(409, "the project's inference budget has nothing available")
             except ValidationError:
                 return _error(422, "invalid request")
             except httpx.HTTPError:
@@ -165,7 +169,7 @@ def create_app(
         context = launches.context(researcher.subject, researcher.project)
         return JSONResponse(context.model_dump(mode="json"))
 
-    planning = create_planning_app(launches, researchers, prices, clock)
+    planning = create_planning_app(launches, researchers, prices, ledger, clock)
     launch_path = "/v1/researchers/{researcher}/projects/{project}/launch"
     return Starlette(
         routes=[

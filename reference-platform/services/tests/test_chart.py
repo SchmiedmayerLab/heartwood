@@ -751,3 +751,27 @@ def test_project_members_are_subjects_in_any_provider_form(member: str, accepted
     )
 
     assert (result.returncode == 0) is accepted, result.stderr
+
+
+def test_control_service_configuration_holds_the_budgets() -> None:
+    config = _named(_render("values-kind.yaml"), "ConfigMap", "heartwood-control")
+
+    settings = Settings.model_validate_json(config["data"]["configuration.json"])
+
+    budgets = {project.id: project.budgets for project in settings.projects}
+    assert budgets == {"demo": {"inference": "5", "compute": "50"}, "other": {"inference": "1.5"}}
+    assert settings.inference.session_reservation == "1"
+
+
+@pytest.mark.parametrize(
+    ("value", "path"),
+    [
+        ('projects[0].budgets.inference="-1"', "/projects/0/budgets/inference"),
+        ('projects[0].budgets.storage="1"', "'storage' not allowed"),
+        ("control.inference.sessionReservation=1", "/control/inference/sessionReservation"),
+    ],
+)
+def test_schema_rejects_invalid_budgets(value: str, path: str) -> None:
+    result = subprocess.run([*_TEMPLATE, "--set-json", value], capture_output=True, text=True)
+    assert result.returncode != 0
+    assert path in result.stderr

@@ -9,6 +9,8 @@
 A Heartwood gateway calls them with a researcher's exchanged token. Every request is
 authenticated with the same verifier as the launch context and checked against the
 registry; the project and its launch context come from the token and the registry.
+``get_budgets`` reports the project's budgets and ``estimate_workload`` prices a plan;
+neither reserves nor authorizes anything.
 """
 
 from __future__ import annotations
@@ -16,6 +18,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from datetime import datetime
+from decimal import Decimal
 from typing import Any, Literal
 
 import httpx
@@ -25,14 +28,20 @@ from fastmcp.server.auth import AccessToken, TokenVerifier
 from fastmcp.server.dependencies import get_access_token
 from fastmcp.server.http import StarletteWithLifespan
 from mcp.types import ToolAnnotations
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 from starlette.concurrency import run_in_threadpool
 from starlette.middleware import Middleware
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from heartwood.schemas import PlatformEstimate, WorkloadPrediction
+from heartwood.schemas import (
+    BudgetObservation,
+    PlatformEstimate,
+    PlatformLaunchContext,
+    WorkloadPrediction,
+)
 from heartwood_platform.common.tokens import AuthenticationError, Researcher, ResearcherTokens
+from heartwood_platform.control.budgets import Balance, Ledger
 from heartwood_platform.control.keycloak import project_client
 from heartwood_platform.control.launch import LaunchService, NoSessionError
 from heartwood_platform.control.prices import EstimateRequestError, PriceSheet, estimate
@@ -49,6 +58,44 @@ MAX_ELEMENTS = 500
 _READ_ONLY = ToolAnnotations(
     read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=False
 )
+
+
+# What a budget observation states about its amounts.
+_BUDGET_CONSTRAINTS = (
+    "Reserved amounts are held by running sessions and jobs until they are settled.",
+    "Spent amounts are what settled work incurred, which can exceed its reservation.",
+    "Reading the budgets reserves nothing and admits no work.",
+)
+
+
+class BudgetList(BaseModel):
+    """The budget observations of one project."""
+
+    model_config = ConfigDict(frozen=True)
+
+    budgets: tuple[BudgetObservation, ...]
+
+
+def _amount(value: Decimal) -> str:
+    text = format(value, "f")
+    return text.rstrip("0").rstrip(".") if "." in text else text
+
+
+def _observation(
+    balance: Balance, context: PlatformLaunchContext, prices: PriceSheet, now: datetime
+) -> BudgetObservation:
+    return BudgetObservation(
+        project_context_id=context.project_context_id,
+        budget_id=balance.budget_id,
+        observed_at=now,
+        denomination=prices.denomination,
+        allocated=_amount(balance.allocated),
+        reserved=_amount(balance.reserved),
+        spent=_amount(balance.spent),
+        available=_amount(balance.available),
+        constraints=(f"Allocated to {balance.category} work.", *_BUDGET_CONSTRAINTS),
+        platform_record_ref=f"heartwood-control:budget:{balance.budget_id}:{balance.revision}",
+    )
 
 
 class _ProviderUnavailableError(Exception):
@@ -110,6 +157,7 @@ def create_planning_app(
     launches: LaunchService,
     researchers: ResearcherTokens,
     prices: PriceSheet,
+    ledger: Ledger,
     clock: Callable[[], datetime],
 ) -> StarletteWithLifespan:
     """Build the MCP application that serves the planning tools at ``MCP_PATH``."""
@@ -118,6 +166,37 @@ def create_planning_app(
         auth=_ExchangedTokens(researchers, launches),
         mask_error_details=True,
     )
+
+    def session_context(project_id: str) -> PlatformLaunchContext:
+        """Return the launch context of the token's researcher in the token's project."""
+        token = get_access_token()
+        if token is None:
+            raise ToolError("authentication required")
+        subject, project = token.claims["sub"], token.claims["project"]
+        if project_id != project:
+            raise ToolError("project_id is not the project of the token")
+        try:
+            return launches.context(subject, project)
+        except NotAMemberError:
+            raise ToolError("not a member of the project") from None
+        except NoSessionError:
+            raise ToolError("no session in the project") from None
+
+    @server.tool(annotations=_READ_ONLY)
+    def get_budgets(project_id: str) -> BudgetList:
+        """Return the budgets of the project: allocated, reserved, spent and available.
+
+        Availability is the allocation minus the reservations of running work and the
+        spending of settled work. Reading it reserves nothing.
+        """
+        context = session_context(project_id)
+        now = clock()
+        return BudgetList(
+            budgets=tuple(
+                _observation(balance, context, prices, now)
+                for balance in ledger.balances(context.project_id)
+            )
+        )
 
     @server.tool(annotations=_READ_ONLY)
     def estimate_workload(
@@ -131,18 +210,7 @@ def create_planning_app(
         The estimate reserves nothing and authorizes nothing. Work without a price is
         reported as unknown cost with the reason.
         """
-        token = get_access_token()
-        if token is None:
-            raise ToolError("authentication required")
-        subject, project = token.claims["sub"], token.claims["project"]
-        if project_id != project:
-            raise ToolError("project_id is not the project of the token")
-        try:
-            context = launches.context(subject, project)
-        except NotAMemberError:
-            raise ToolError("not a member of the project") from None
-        except NoSessionError:
-            raise ToolError("no session in the project") from None
+        context = session_context(project_id)
         elements = prediction.get("elements")
         if isinstance(elements, list) and len(elements) > MAX_ELEMENTS:
             raise ToolError(f"a prediction has at most {MAX_ELEMENTS} elements")

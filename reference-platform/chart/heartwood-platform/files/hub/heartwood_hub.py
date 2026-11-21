@@ -187,6 +187,8 @@ def configure(c: Any, settings: dict[str, Any]) -> None:  # noqa: ANN401
         status, launch = await control("PUT", path)
         if status in {403, 404}:
             raise web.HTTPError(403, "You are not a member of this project.")
+        if status == 409:
+            raise web.HTTPError(409, "The project's budget has no amount left for a session.")
         if status != 200 or not isinstance(launch, dict):
             raise web.HTTPError(502, "The platform could not prepare the session.")
         pod = pod_settings(launch, current)

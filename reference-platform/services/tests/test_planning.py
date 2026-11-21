@@ -250,7 +250,7 @@ def served(tmp_path: Path) -> Iterator[tuple[Planning, str]]:
         thread.join(timeout=10)
 
 
-def test_mcp_client_discovers_the_read_only_tool_and_receives_a_platform_estimate(
+def test_mcp_client_discovers_the_read_only_tools_and_receives_a_platform_estimate(
     served: tuple[Planning, str],
 ) -> None:
     service, url = served
@@ -267,10 +267,10 @@ def test_mcp_client_discovers_the_read_only_tool_and_receives_a_platform_estimat
 
     tools, result = asyncio.run(session())
 
-    (tool,) = tools
-    assert tool.name == "estimate_workload"
-    assert tool.annotations is not None
-    assert tool.annotations.read_only_hint is True
+    assert sorted(tool.name for tool in tools) == ["estimate_workload", "get_budgets"]
+    for tool in tools:
+        assert tool.annotations is not None
+        assert tool.annotations.read_only_hint is True
     quote = PlatformEstimate.model_validate_json(json.dumps(result.structured_content))
     assert quote.scope == "elements"
     assert quote.covered_element_ids == ("batch",)
