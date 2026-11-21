@@ -50,6 +50,7 @@ from heartwood.gateway.worker_native import (
     native_worker_plan_factory,
     native_worker_reconciler,
 )
+from heartwood.gateway.worker_volumes import attachable_labels
 from heartwood.schemas import ActionReviewMode, PolicyProfile
 from heartwood.session import CommandKind, EventKind, SessionCommand
 
@@ -996,9 +997,36 @@ def test_native_unsent_creation_is_confirmed_absent(
         assert not service.store.owns_writer
         _assert_absent(attempt_id)
         # The gateway keeps its answer: the name it reported absent cannot be created.
+        # The Docker driver refuses a creation whose volumes do not exist before the gateway
+        # reads the name, and revocation removed them. Volumes under the same names, as
+        # during a creation still in flight, leave the name as the only reason to refuse.
+        # They carry the attempt's labels, so the absence check below also covers them.
+        mounts = unsent["spec"].template.driver_config["docker"]["mounts"]
+        volumes = [str(mount["source"]) for mount in mounts]
+        assert len(volumes) == 2
         monkeypatch.setattr(SandboxClient, "create", create)
-        with pytest.raises(grpc.RpcError) as refused:
-            fixture.control.create(**unsent)
+        try:
+            for volume in volumes:
+                command(
+                    [
+                        "docker",
+                        "volume",
+                        "create",
+                        *(
+                            argument
+                            for label, value in {
+                                **unsent["labels"],
+                                **attachable_labels(unsent["workspace"]),
+                            }.items()
+                            for argument in ("--label", f"{label}={value}")
+                        ),
+                        volume,
+                    ]
+                )
+            with pytest.raises(grpc.RpcError) as refused:
+                fixture.control.create(**unsent)
+        finally:
+            command(["docker", "volume", "rm", "--force", *volumes])
         assert refused.value.code() == grpc.StatusCode.FAILED_PRECONDITION
         assert "confirmed absent" in refused.value.details()
         _assert_absent(attempt_id)
