@@ -40,12 +40,14 @@ ACCESS_TOKEN = "urn:ietf:params:oauth:token-type:access_token"
 
 
 @contextmanager
-def probe(cluster: Cluster, name: str, image: str) -> Iterator[str]:
-    """Run a pod with curl in heartwood-sessions."""
+def probe(
+    cluster: Cluster, name: str, image: str, labels: dict[str, str] | None = None
+) -> Iterator[str]:
+    """Run a pod with curl in heartwood-sessions, with labels when given."""
     pod = {
         "apiVersion": "v1",
         "kind": "Pod",
-        "metadata": {"name": name, "namespace": SESSIONS},
+        "metadata": {"name": name, "namespace": SESSIONS, "labels": labels or {}},
         "spec": {
             "automountServiceAccountToken": False,
             "securityContext": {
@@ -117,7 +119,9 @@ def write_private(cluster: Cluster, pod: str, text: str) -> str:
     raise AssertionError(f"the probe did not receive {expected} bytes")
 
 
-def curl(cluster: Cluster, pod: str, *arguments: str, text_input: str = "") -> str:
+def curl(
+    cluster: Cluster, pod: str, *arguments: str, text_input: str = "", max_time: int = 60
+) -> str:
     """Run curl in the probe pod and return its output.
 
     Arguments that read standard input (``@-``) read ``text_input`` from a file that
@@ -136,7 +140,7 @@ def curl(cluster: Cluster, pod: str, *arguments: str, text_input: str = "") -> s
             "--silent",
             "--show-error",
             "--max-time",
-            "60",
+            str(max_time),
             # Keycloak is verified against the platform CA alone.
             "--cacert",
             "/etc/platform-ca/ca.crt",
@@ -156,6 +160,7 @@ def request(
     url: str,
     token: str | None = None,
     body: dict[str, Any] | None = None,
+    max_time: int = 60,
 ) -> tuple[int, Any]:
     """Send a request, with a bearer token and a JSON body when given."""
     headers = ["Accept: application/json, text/event-stream"]
@@ -171,7 +176,12 @@ def request(
         arguments += ["--data-binary", "@-"]
     try:
         output = curl(
-            cluster, pod, *arguments, url, text_input="" if body is None else json.dumps(body)
+            cluster,
+            pod,
+            *arguments,
+            url,
+            text_input="" if body is None else json.dumps(body),
+            max_time=max_time,
         )
     finally:
         cluster.kubectl("exec", f"--namespace={SESSIONS}", pod, "--", "rm", "-f", path)

@@ -38,6 +38,16 @@ upgrade does not rotate it. Arguments: context, name, key.
 {{- printf "%s/realms/heartwood" (include "heartwood.keycloakUrl" .) -}}
 {{- end }}
 
+{{- /* The LiteLLM master key, which LiteLLM requires to start with sk-. */ -}}
+{{- define "heartwood.litellmMasterKey" -}}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace "litellm" -}}
+{{- if and $existing (hasKey ($existing.data | default dict) "master-key") -}}
+{{- index $existing.data "master-key" -}}
+{{- else -}}
+{{- printf "sk-%s" (randAlphaNum 48) | b64enc -}}
+{{- end -}}
+{{- end }}
+
 {{- define "heartwood.keycloakUrl" -}}
 {{- .Values.keycloak.url | default (printf "https://keycloak.%s.svc.cluster.local:8443" .Release.Namespace) -}}
 {{- end }}

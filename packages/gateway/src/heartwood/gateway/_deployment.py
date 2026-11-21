@@ -301,6 +301,17 @@ def _read_manifest(
         if "identity" not in record:
             raise DeploymentError("deployment-manifest", "the planning service requires [identity]")
         planning, platform_launch = _planning(record["planning"], project)
+    connections = _model_connections(record.get("model_connections"), record.get("model_metadata"))
+    for connection in connections:
+        if connection.ca_file is not None:
+            validate_operator_file(Path(connection.ca_file), project)
+            try:
+                ssl.create_default_context(cafile=connection.ca_file)
+            except (OSError, ValueError):
+                raise DeploymentError(
+                    "deployment-manifest",
+                    f"model connection {connection.connection_id} has an unusable ca_file",
+                ) from None
     return ProjectDeployment(
         project=project,
         policy=policy,
@@ -308,9 +319,7 @@ def _read_manifest(
         worker=worker,
         evidence=evidence,
         requirements=requirements,
-        model_connections=_model_connections(
-            record.get("model_connections"), record.get("model_metadata")
-        ),
+        model_connections=connections,
         mcp_destinations=mcp_destinations,
         planning=planning,
         platform_launch=platform_launch,

@@ -25,6 +25,8 @@ images:
   # Image of the hosted Heartwood gateway, the hosted-gateway-image stage of
   # images/Dockerfile. It has no default: set it to a reference by digest.
   hostedGateway: ""
+  # The LiteLLM proxy, the non-root image of its release.
+  litellm: ghcr.io/berriai/litellm-non_root:v1.110.0@sha256:825dc1814bbdb30f8800ea5f5b8f405a265747c6f3feeb765f28dbcc60049196
 
 # StorageClass of the platform's own volumes. Empty selects the cluster default.
 storageClassName: ""
@@ -167,6 +169,44 @@ syntheticPrices:
           skuPriceId: synthetic-coder-output-list
           quantityPerPricingUnit: "1000000"
 
+# The model route of sessions: the LiteLLM proxy, which holds one virtual key for each
+# session's workers, with a budget and the route's models.
+inference:
+  # The models of the route. It has no default: set at least one at installation.
+  # name is the model name that LiteLLM offers and the runtime profile of
+  # syntheticPrices whose input and output token prices LiteLLM records for it.
+  # maxInputTokens and maxOutputTokens bound one request; the largest cost of one
+  # request is the headroom that each session's key budget leaves to its reservation.
+  # litellmParams are the model's LiteLLM parameters, such as model and api_base, and
+  # apiKeySecret names a Secret key that LiteLLM sends as the model's API key.
+  # environment adds variables from Secrets to the LiteLLM container, for parameters
+  # that read os.environ/NAME, such as the credentials of a hosted model.
+  models: []
+  #  - name: synthetic-coder
+  #    maxInputTokens: 32768
+  #    maxOutputTokens: 4096
+  #    supportsToolCalls: true
+  #    litellmParams:
+  #      model: openai/synthetic-coder
+  #      api_base: https://synthetic-model.heartwood-platform.svc.cluster.local:8443/v1
+  #    apiKeySecret:
+  #      name: synthetic-model
+  #      key: api-key
+  environment: []
+  #  - name: VERTEX_CREDENTIALS
+  #    secretKeyRef:
+  #      name: vertex-credentials
+  #      key: credentials.json
+  # LiteLLM trusts the platform CA alone for its upstreams. With trustPublicRoots it
+  # also trusts the public roots of its image, which hosted models need.
+  trustPublicRoots: false
+  # How long the control service waits for LiteLLM to record the spending of a key's
+  # last requests before it reads the spending to settle or rotate the key.
+  settleWaitSeconds: 25
+  # A deterministic model for tests, served by the platform services image.
+  syntheticModel:
+    enabled: false
+
 postgresql:
   storage: 2Gi
 
@@ -251,14 +291,23 @@ hub:
         run_as_group: "10001"
     cpu: "1"
     memory: 2Gi
-  # The model route of the worker. Until the platform provides one, it names an address
-  # that does not resolve.
+  # The model route of the worker through LiteLLM. model is a name of inference.models;
+  # empty selects the first. profileId is the gateway's model connection and the
+  # worker's model profile, and provider the OpenShell provider that holds the session's
+  # key, which the worker sees as a placeholder in placeholderEnv. binaries are the
+  # programs of the worker image that may send the key. dataHandling declares the
+  # recipient and the retention authority of the route.
   modelRoute:
     profileId: platform-route
-    model: platform/unavailable
-    endpoint: https://model-route.heartwood.invalid/v1/chat/completions
+    model: ""
     provider: platform-route
     placeholderEnv: HEARTWOOD_PLATFORM_MODEL_KEY
+    binaries:
+      - /usr/local/bin/python3.12
+    dataHandling:
+      destination: operator-defined
+      retentionAuthority: service-operator
+      route: The platform's LiteLLM proxy and the model behind it
 
 # Values of the JupyterHub chart. The chart's RBAC is off: the platform chart grants the
 # Hub only what spawning needs, in the sessions namespace. Its user scheduler, image

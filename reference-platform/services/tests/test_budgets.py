@@ -187,11 +187,11 @@ def test_deletion_settles_what_the_session_incurred_and_releases_the_rest(
         )
         assert response.status_code == 204
 
-    assert platform.inference.settled == [bob, alice]
+    assert platform.inference.settlements == [bob, alice]
     assert _balance(platform.ledger) == (5, 0, Decimal("1.4"), Decimal("3.6"))
     # A repeated deletion settles nothing again.
     platform.client.delete(f"/v1/researchers/{_id(_BOB)}/projects/demo/launch", headers=_HUB)
-    assert platform.inference.settled == [bob, alice]
+    assert platform.inference.settlements == [bob, alice]
 
 
 class Overview:
@@ -316,3 +316,53 @@ def test_amounts_of_the_largest_form_stay_exact(tmp_path: Path) -> None:
     for incurred in (Decimal("Infinity"), Decimal("NaN")):
         with pytest.raises(ValueError, match="finite"):
             ledger.settle("session:a", incurred)
+
+
+def test_a_session_key_leaves_one_request_of_headroom_and_needs_more_than_that(
+    platform: Platform,
+) -> None:
+    session = str(platform.launch(_BOB, "demo")["session"])
+    assert platform.inference.budgets[session] == Decimal("0.75")
+    platform.ledger.synchronize([Allocation("demo", "inference", Decimal("1.25"))])
+
+    refused = platform.client.put(
+        f"/v1/researchers/{_id(_ALICE)}/projects/demo/launch", headers=_HUB
+    )
+
+    assert refused.status_code == 409
+    platform.client.delete(f"/v1/researchers/{_id(_BOB)}/projects/demo/launch", headers=_HUB)
+    assert platform.inference.forgotten == [session]
+
+
+def test_an_operator_rotates_the_model_key_of_a_session(platform: Platform) -> None:
+    session = str(platform.launch(_BOB, "demo")["session"])
+    path = f"/v1/researchers/{_id(_BOB)}/projects/demo/model-key"
+    operator = {"Authorization": "Bearer operator-token"}
+
+    assert platform.client.post(path, headers=_HUB).status_code == 401
+    assert (
+        platform.client.post(
+            f"/v1/researchers/{_id(_ALICE)}/projects/demo/model-key", headers=operator
+        ).status_code
+        == 404
+    )
+    response = platform.client.post(path, headers=operator)
+
+    assert response.status_code == 200
+    assert response.json() == {"session": session}
+    assert platform.inference.rotated == [session]
+
+
+def test_a_session_whose_deletion_did_not_finish_is_not_launched_again(
+    platform: Platform,
+) -> None:
+    session = str(platform.launch(_BOB, "demo")["session"])
+    platform.inference.settlements.append(session)
+
+    response = platform.client.put(
+        f"/v1/researchers/{_id(_BOB)}/projects/demo/launch", headers=_HUB
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {"error": "the session is being deleted"}
+    assert _balance(platform.ledger) == (5, 1, 0, 4)

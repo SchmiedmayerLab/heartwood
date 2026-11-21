@@ -114,4 +114,4 @@ def test_the_overview_answers_only_for_the_project_of_the_token(researcher: Rese
     refused = _budgets(researcher, "other", "demo")
     assert refused["isError"] is True
     assert refused["content"][0]["text"] == "project_id is not the project of the token"
-    assert _inference(researcher, "other")["allocated"] == "1.5"
+    assert _inference(researcher, "other")["allocated"] == "0.006"
