@@ -86,7 +86,7 @@ def _curl(cluster: Cluster, *arguments: str, text_input: str = "") -> str:
 
 
 def _token(cluster: Cluster, realm: str, form: dict[str, str]) -> dict[str, Any]:
-    """Request a token over TLS, with the form on standard input."""
+    """Request a token over TLS, with the form in a checked file."""
     output = _curl(
         cluster,
         "--data",
