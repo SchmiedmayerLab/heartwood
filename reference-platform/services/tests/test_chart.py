@@ -665,9 +665,15 @@ def test_the_model_route_needs_the_programs_of_the_worker_image() -> None:
     result = subprocess.run(command, capture_output=True, text=True)
     assert result.returncode != 0
     assert "hub.modelRoute.binaries must name the programs of hub.worker.image" in result.stderr
-    # The kind values name the program of their stand-in worker image.
+    # The kind values name the program of their stand-in worker image, which is refused
+    # with any other worker image.
     command += ["--values", str(_CHART / "values-kind.yaml")]
-    assert subprocess.run(command, capture_output=True, text=True).returncode == 0
+    result = subprocess.run(command, capture_output=True, text=True)
+    assert result.returncode != 0
+    assert "names /agnhost, the program of the stand-in worker image" in result.stderr
+    stand_in = [*_BASE, "--set", _SERVICES, "--set", _GATEWAY, "--set", _HOSTED]
+    stand_in += ["--set-json", _MODELS, *_API_SERVER, "--values", str(_CHART / "values-kind.yaml")]
+    assert subprocess.run(stand_in, capture_output=True, text=True).returncode == 0
 
 
 def test_control_service_configuration_holds_the_synthetic_prices(

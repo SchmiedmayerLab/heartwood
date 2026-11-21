@@ -143,7 +143,9 @@ class FakeOpenShell:
             if command[2] in self.workspaces:
                 return done()
             return done(
-                1, f"Error: status: NotFound, message: \"workspace '{command[2]}' not found\""
+                1,
+                "Error:   \u00d7 code: 'Some requested entity was not found', message: "
+                f"\"workspace '{command[2]}' not found\"",
             )
         if command[:2] == ["workspace", "create"]:
             self.workspaces.add(command[3])
@@ -158,7 +160,11 @@ class FakeOpenShell:
         if command[:2] == ["provider", "get"]:
             if command[2] in self.providers:
                 return done()
-            return done(1, 'Error: status: NotFound, message: "provider not found"')
+            return done(
+                1,
+                "Error:   \u00d7 code: 'Some requested entity was not found', message: "
+                '"provider not found"',
+            )
         if command[:2] in (["provider", "create"], ["provider", "update"]):
             name = command[3] if command[1] == "create" else command[2]
             variable = command[command.index("--credential") + 1]
