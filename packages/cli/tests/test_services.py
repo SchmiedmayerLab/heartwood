@@ -79,10 +79,12 @@ def test_services_add_list_and_disconnect_through_the_gateway(
             )
             == 0
         )
-        listed = capsys.readouterr().out
+        captured = capsys.readouterr()
+        if "synthetic-opaque-token" in captured.out + captured.err:
+            pytest.fail("the service command printed a supplied token")
+        listed = captured.out
         assert "catalog  Synthetic catalog  disabled  destination=allowed" in listed
         assert "credential=unknown-expiry" in listed
-        assert "synthetic-opaque-token" not in listed
         # The command-line gateway has no worker, so sessions it would start get no tools.
         assert "HW-MCP-004" in listed
         with pytest.raises(SystemExit):
@@ -96,6 +98,68 @@ def test_services_add_list_and_disconnect_through_the_gateway(
         assert "No research services configured." in output
         assert "Completed remote work is not undone." in output
         assert gateway.credential_store.resolve("HEARTWOOD_MCP_TOKEN_CATALOG") is None
+    finally:
+        gateway.stop()
+
+
+def test_invalid_service_identifier_does_not_store_or_echo_the_supplied_token(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    gateway = _gateway(tmp_path)
+    try:
+        token = "synthetic-test-input"
+        monkeypatch.setattr("sys.stdin", io.StringIO(token + "\n"))
+        assert (
+            _run(
+                gateway,
+                "add",
+                "Invalid Name",
+                "https://catalog.example.org/mcp",
+                "--label",
+                "Catalog",
+                "--token-stdin",
+            )
+            == 1
+        )
+        output = capsys.readouterr()
+        assert "Research service request is invalid" in output.err
+        assert token not in output.out + output.err
+        assert gateway.credential_store.resolve("HEARTWOOD_MCP_TOKEN_CATALOG") is None
+        assert _run(gateway, "list") == 0
+        assert "No research services configured" in capsys.readouterr().out
+    finally:
+        gateway.stop()
+
+
+@pytest.mark.parametrize(
+    ("fields", "reason"),
+    [
+        ('enabled = "true"', "enabled must be true or false"),
+        ('tools = ["find_records"]', "tools must be tables with name and definition"),
+        ('unexpected = "unused"', "entries contain unsupported fields"),
+        (
+            'tools = [{ name = "find_records", definition = "incomplete" }]',
+            "definition must be JSON",
+        ),
+    ],
+)
+def test_listing_reports_invalid_saved_service_settings_without_changing_the_file(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], fields: str, reason: str
+) -> None:
+    gateway = _gateway(tmp_path)
+    try:
+        path = gateway.project.config_path
+        saved = path.read_text() + (
+            '\n[[mcp_servers]]\nserver_id = "catalog"\nlabel = "Catalog"\n'
+            f'url = "https://catalog.example.org/mcp"\n{fields}\n'
+        )
+        path.write_text(saved)
+
+        assert _run(gateway, "list") == 1
+        output = capsys.readouterr()
+        assert reason in output.err
+        assert not output.out
+        assert path.read_text() == saved
     finally:
         gateway.stop()
 
@@ -233,20 +297,50 @@ def test_services_test_then_select_by_reviewed_digest(
                 gateway.stop()
 
         token = issuer.exchange(audience=JOBS_AUDIENCE, project_id=str(identity))
+        refused_token = "synthetic-refused-token"
+
+        def output(*, error: bool = False) -> str:
+            captured = capsys.readouterr()
+            if any(value in captured.out + captured.err for value in (token, refused_token)):
+                pytest.fail("the service command printed a supplied token")
+            return captured.err if error else captured.out
+
         assert command("add", "jobs", f"{origin}/mcp", "--label", "Jobs") == 0
-        capsys.readouterr()
+        output()
+        assert command("test", "jobs", "--token-stdin", token=refused_token) == 1
+        assert "HW-MCP-005" in output(error=True)
         assert command("test", "jobs", "--token-stdin", token=token) == 0
-        tested = capsys.readouterr().out
+        tested = output()
         (choice,) = [
             line.split("select as ", 1)[1]
             for line in tested.splitlines()
             if "select as create_task=" in line
         ]
-        # Without a token the new process cannot list the tools again.
         assert command("select", "jobs", choice) == 1
-        assert "HW-MCP-005" in capsys.readouterr().err
+        assert "HW-MCP-005" in output(error=True)
         assert command("select", "jobs", choice, "--token-stdin", token=token) == 0
-        selected = capsys.readouterr().out
-        assert "create_task  status=ready" in selected
-        assert token not in tested + selected
-        assert jobs.task_count == 0
+        assert "create_task  status=ready" in output()
+        assert command("select", "jobs", choice, choice) == 1
+        assert "each tool can be selected once" in output(error=True)
+
+    # No command below can reach the server. Each reads the saved configuration afresh.
+    assert command("enable", "jobs") == 0
+    enabled = output()
+    assert "jobs  Jobs  enabled" in enabled
+    assert "create_task  status=ready" in enabled
+    assert command("disable", "jobs") == 0
+    disabled = output()
+    assert "jobs  Jobs  disabled" in disabled
+    assert "create_task  status=ready" in disabled
+    assert "Enabled for new sessions: none" in disabled
+    assert command("enable", "jobs") == 0
+    assert output() == enabled
+    assert command("select", "jobs") == 0
+    output()
+    assert command("list") == 0
+    remaining = output()
+    assert "jobs  Jobs  enabled" in remaining
+    assert f"    {origin}/mcp" in remaining.splitlines()
+    assert "    Enabled for new sessions: none" in remaining.splitlines()
+    assert "create_task" not in remaining
+    assert jobs.task_count == 0
