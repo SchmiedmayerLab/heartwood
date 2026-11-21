@@ -1,0 +1,56 @@
+{{- /*
+This source file is part of the Heartwood open-source project
+
+SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+
+SPDX-License-Identifier: MIT
+*/ -}}
+
+{{- /*
+Keeps staging pod names to the Heartwood gateways. A Heartwood gateway may open exec
+sessions into pods named hw-staging-*, so no other ServiceAccount creates a pod or a
+Sandbox resource under such a name in a session namespace, such as a workload pod of an
+OpenShell workspace with that name.
+*/ -}}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: heartwood-staging-names
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector:
+      matchExpressions:
+        - key: heartwood.platform/session
+          operator: Exists
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["*"]
+        operations: [CREATE]
+        resources: [pods]
+      - apiGroups: [agents.x-k8s.io]
+        apiVersions: ["*"]
+        operations: [CREATE]
+        resources: [sandboxes]
+  matchConditions:
+    - name: service-account
+      expression: request.userInfo.username.startsWith('system:serviceaccount:')
+    # The API server fills in a generated name before validating admission.
+    - name: staging-name
+      expression: has(object.metadata.name) && object.metadata.name.startsWith('hw-staging')
+  validations:
+    - expression: >-
+        request.userInfo.username.startsWith('system:serviceaccount:{{ .Values.sessions.namespace }}:hw-gw-')
+      message: only a Heartwood gateway account creates a pod or Sandbox resource named hw-staging* in a session namespace
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: heartwood-staging-names
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+spec:
+  policyName: heartwood-staging-names
+  validationActions: [Deny]

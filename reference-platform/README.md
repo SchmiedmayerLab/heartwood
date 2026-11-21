@@ -60,7 +60,7 @@ The platform is for synthetic and open data only.
 | JupyterHub | The Hub, its proxy and the idle culler from the pinned Zero to JupyterHub chart 4.4.5, which start one Heartwood gateway for each researcher and project in `heartwood-sessions` |
 | Platform certificate authority | Secret `platform-ca` with the key, ConfigMap `platform-ca` with the certificate, which the control service copies into each session namespace and each gateway Secret, and the Secrets `keycloak-tls` and `heartwood-control-tls` with the serving certificates of Keycloak and the control service |
 | Session roles | Six fixed ClusterRoles for session namespaces, the ServiceAccount and rights of the control service, the ServiceAccount `heartwood-operator`, which identifies platform operators at the control service and has no Kubernetes rights, and the Role `heartwood-hub-spawner` of the Hub in `heartwood-sessions` |
-| Admission policies | `heartwood-control-scope`, `heartwood-staging-shape`, `heartwood-session-services` and `heartwood-hub-pods` |
+| Admission policies | `heartwood-control-scope`, `heartwood-staging-shape`, `heartwood-staging-names`, `heartwood-session-services` and `heartwood-hub-pods` |
 | OpenShell objects | `files/openshell-session.json`, the objects of one session namespace |
 
 Every image in `values.yaml` is pinned by digest or has no default, and `values.schema.json` rejects an image reference without a digest.
@@ -291,6 +291,11 @@ RBAC cannot name namespaces that are created at run time, so ValidatingAdmission
 - A pod takes no environment value from a Secret, a ConfigMap or a field, and names no node, priority class or runtime class.
 - A volume claim is named `hw-attempt-*`, uses the StorageClass `heartwood-attempt` and names no data source, volume or selector.
 - An exec session opens only into pods named `hw-staging-*`. Attach and port-forward requests are denied.
+
+`heartwood-staging-names` applies to the pods and Sandbox resources that a ServiceAccount creates in a namespace that carries the label `heartwood.platform/session`:
+a pod or Sandbox resource whose name begins with `hw-staging`, also when the name is generated, is admitted only from a ServiceAccount `hw-gw-*` in `heartwood-sessions`.
+A Heartwood gateway may open exec sessions into pods named `hw-staging-*`, so no other component, such as the OpenShell gateway or the Agent Sandbox controller for an OpenShell workspace of that name, creates a pod under such a name.
+Requests of users other than ServiceAccounts, such as a cluster administrator, are outside the policy, so controllers must create pods with their own ServiceAccount credentials, as `kube-controller-manager --use-service-account-credentials` does on kind and kubeadm clusters.
 
 `sessions.stagingImages` lists the worker images of the sessions' deployment manifests; during a change of the worker image it lists the current and the next image, and an empty list denies every pod.
 
