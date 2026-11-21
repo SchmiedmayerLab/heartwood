@@ -1280,3 +1280,29 @@ def test_a_hosted_gateway_exchanges_no_token_for_an_unapproved_address(
         False: ("unavailable", []),
         True: ("unavailable", [BUDGETS_AUDIENCE]),
     }
+
+
+def test_a_planning_deployment_rejects_an_unusable_certificate_bundle(tmp_path: Path) -> None:
+    authority = tmp_path / "planning-ca.pem"
+    authority.write_text("incomplete synthetic certificate bundle\n")
+    authority.chmod(0o600)
+    with pytest.raises(ProjectStateError) as refused:
+        _hosted_deployment(tmp_path, "https://control.synthetic.invalid/mcp", authority)
+    assert (
+        str(refused.value) == "HW-DEPLOY-001: the planning certificate authority file is unusable"
+    )
+
+
+def test_a_planning_deployment_requires_a_valid_launch_context(tmp_path: Path) -> None:
+    authority, _ = certificate_authority(tmp_path, "platform")
+    launch = tmp_path / "partial-launch.json"
+    launch.write_text('{"project_id": "incomplete-context"}')
+    launch.chmod(0o600)
+    with pytest.raises(ProjectStateError) as refused:
+        _hosted_deployment(
+            tmp_path,
+            "https://control.synthetic.invalid/mcp",
+            authority,
+            launch_context_file=str(launch),
+        )
+    assert str(refused.value) == "HW-DEPLOY-001: the platform launch context file is unusable"
