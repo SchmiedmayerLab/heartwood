@@ -24,7 +24,7 @@ from pathlib import Path
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
-from heartwood_platform.data.signing import Credentials, presign
+from heartwood_platform.common.signing import Credentials, presign
 
 _EXPIRES = 300
 
