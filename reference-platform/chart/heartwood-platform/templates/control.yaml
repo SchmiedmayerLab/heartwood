@@ -31,6 +31,10 @@ SPDX-License-Identifier: MIT
 {{- if not $route.binaries -}}
 {{- fail "hub.modelRoute.binaries must name the programs of hub.worker.image that may send the model route's key, by the path that their links resolve to, such as the worker_interpreter that deploy/qualify-kubernetes-worker.py images reports" -}}
 {{- end -}}
+{{- /* /agnhost is the program of the agnhost stand-in worker image of values-kind.yaml. */ -}}
+{{- if and (has "/agnhost" $route.binaries) (not (hasPrefix "registry.k8s.io/e2e-test-images/agnhost:" (toString $worker.image))) -}}
+{{- fail "hub.modelRoute.binaries names /agnhost, the program of the stand-in worker image, while hub.worker.image is another image; pass the worker image's interpreter in hub.modelRoute.binaries" -}}
+{{- end -}}
 {{- $hostedWorker := dict "image" (required "hub.worker.image must name the worker image by digest" $worker.image) "policy" $worker.policy "cpu" $worker.cpu "memory" $worker.memory -}}
 {{- $litellm := printf "https://litellm.%s.svc.cluster.local:4000" .Release.Namespace -}}
 {{- $routeModels := list -}}
