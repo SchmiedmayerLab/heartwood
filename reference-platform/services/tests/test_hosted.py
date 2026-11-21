@@ -37,6 +37,7 @@ _OBJECTS = (
 HOSTED: dict[str, Any] = {
     "control_url": "https://heartwood-control.heartwood-platform.svc.cluster.local:8443",
     "data_url": "https://heartwood-data.heartwood-platform.svc.cluster.local:8443",
+    "jobs_url": "https://heartwood-jobs.heartwood-platform.svc.cluster.local:8443",
     "worker": {
         "image": "registry.example.test:5000/heartwood-worker:candidate@sha256:" + "2" * 64,
         "policy": {"version": 1, "process": {"runAsUser": "10001"}},
@@ -241,7 +242,7 @@ def test_the_manifest_declares_the_sessions_project_data_volume() -> None:
     }
 
 
-def test_the_manifest_offers_the_data_catalog_with_an_exchanged_token() -> None:
+def test_the_manifest_offers_the_data_catalog_and_the_job_service_with_exchanged_tokens() -> None:
     manifest = tomllib.loads(_files()["deployment.toml"])
     assert manifest["mcp_destinations"] == [
         {
@@ -253,5 +254,36 @@ def test_the_manifest_offers_the_data_catalog_with_an_exchanged_token() -> None:
             "private_address": True,
             "ca_file": "/etc/heartwood/deployment/platform-ca.crt",
             "token_exchange": {"scope": "svc-data", "audience": "heartwood-data"},
-        }
+        },
+        {
+            "service_id": "heartwood-jobs",
+            "origin": "https://heartwood-jobs.heartwood-platform.svc.cluster.local:8443",
+            "tools": ["create_task", "cancel_task"],
+            "observation_tool": "get_task",
+            "call_timeout_seconds": 60,
+            "private_address": True,
+            "ca_file": "/etc/heartwood/deployment/platform-ca.crt",
+            "operations": {
+                "capabilities_tool": "describe_operations",
+                "proposal_tool": "propose_task",
+                "cancel_tool": "cancel_task",
+            },
+            "token_exchange": {"scope": "svc-jobs", "audience": "heartwood-jobs"},
+        },
     ]
+    without = HostedGatewaySettings.model_validate({**HOSTED, "data_url": None, "jobs_url": None})
+    supervisor, sandbox = sandbox_digests(_OBJECTS.read_text(encoding="utf-8"))
+    files = HostedGateway(
+        without,
+        issuer="https://keycloak.example.test/realms/heartwood",
+        supervisor=supervisor,
+        sandbox=sandbox,
+        models=MODELS,
+    ).files(
+        session="abc123",
+        subject="6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0001",
+        client_id="hw-proj-demo",
+        namespace="hw-s-abc123",
+        launch_context=_LAUNCH,
+    )
+    assert "mcp_destinations" not in tomllib.loads(files["deployment.toml"])

@@ -95,6 +95,8 @@ class HostedGatewaySettings(_Settings):
     control_url: str = Field(pattern=r"^https://[^/\s]+$")
     # The data service's HTTPS origin, whose catalog tools researchers may enable.
     data_url: str | None = Field(default=None, pattern=r"^https://[^/\s]+$")
+    # The job service's HTTPS origin, whose job tools researchers may enable.
+    jobs_url: str | None = Field(default=None, pattern=r"^https://[^/\s]+$")
     worker: HostedWorkerSettings
     model_route: ModelRouteSettings
 
@@ -118,22 +120,54 @@ def _table(name: str, values: dict[str, object]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _catalog_destination(origin: str) -> str:
-    """The data catalog as a research MCP destination, reached with an exchanged token."""
-    destination: dict[str, object] = {
-        "service_id": "heartwood-data",
-        "origin": origin,
-        "tools": ["list_datasets", "list_objects", "resolve_object"],
-        "observation_tool": "get_operation",
-        "max_result_bytes": 32768,
+def _destination(
+    destination: dict[str, object],
+    exchange: dict[str, object],
+    *,
+    operations: dict[str, object] | None = None,
+) -> str:
+    """A research MCP destination of the platform, reached with an exchanged token."""
+    common: dict[str, object] = {
         "private_address": True,
         "ca_file": f"{_DEPLOYMENT}/platform-ca.crt",
     }
-    exchange: dict[str, object] = {"scope": "svc-data", "audience": "heartwood-data"}
-    return (
-        "[[mcp_destinations]]\n"
-        + _table("", destination)
-        + _table("mcp_destinations.token_exchange", exchange)
+    sections = ["[[mcp_destinations]]\n" + _table("", {**destination, **common})]
+    if operations is not None:
+        sections.append(_table("mcp_destinations.operations", operations))
+    sections.append(_table("mcp_destinations.token_exchange", exchange))
+    return "".join(sections)
+
+
+def _catalog_destination(origin: str) -> str:
+    """The data catalog, whose read-only tools answer with a released result."""
+    return _destination(
+        {
+            "service_id": "heartwood-data",
+            "origin": origin,
+            "tools": ["list_datasets", "list_objects", "resolve_object"],
+            "observation_tool": "get_operation",
+            "max_result_bytes": 32768,
+        },
+        {"scope": "svc-data", "audience": "heartwood-data"},
+    )
+
+
+def _jobs_destination(origin: str) -> str:
+    """The job service, an operation service whose submissions and cancellations are reviewed."""
+    return _destination(
+        {
+            "service_id": "heartwood-jobs",
+            "origin": origin,
+            "tools": ["create_task", "cancel_task"],
+            "observation_tool": "get_task",
+            "call_timeout_seconds": 60,
+        },
+        {"scope": "svc-jobs", "audience": "heartwood-jobs"},
+        operations={
+            "capabilities_tool": "describe_operations",
+            "proposal_tool": "propose_task",
+            "cancel_tool": "cancel_task",
+        },
     )
 
 
@@ -329,6 +363,7 @@ class HostedGateway:
                     {"scope": "svc-control", "audience": "heartwood-control"},
                 ),
                 "" if settings.data_url is None else _catalog_destination(settings.data_url),
+                "" if settings.jobs_url is None else _jobs_destination(settings.jobs_url),
             ]
         )
         # The token file and the cluster CA come from the pod's projected ServiceAccount

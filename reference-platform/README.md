@@ -311,6 +311,9 @@ System logs and task output are not passed on, because system logs contain presi
 The service reserves a project's compute budget through the `JobBudgets` interface, for the task's hard limits at submission, and settles the reservation by its holder, `job/<project>/<operation>`, with the task's run time when the task ends.
 The control service offers no job reservations to other services, so the deployed service reserves nothing and says so in the limitations of its capabilities and proposals.
 
+The control service writes the job service into each hosted gateway's deployment manifest as an `[[mcp_destinations]]` entry with the service identifier `heartwood-jobs`, the selectable tools `create_task` and `cancel_task`, `get_task` as observation tool, the operation profile of `describe_operations`, `propose_task` and `cancel_task`, a call time limit of 60 seconds, the platform CA and the token exchange for `svc-jobs`.
+A researcher adds it as a research service at `https://heartwood-jobs.<release namespace>.svc.cluster.local:8443/mcp` and enables its tools; the gateway then shows each submission and cancellation of a worker as a proposal from `propose_task`, submits it after the researcher approves it, observes it with `get_task`, and releases its result to the worker after a further review.
+
 The executor is reached only through the `TesExecutor` interface, with five operations: service information, create, get, list and cancel.
 The deployed implementation calls a TES 1.1 HTTP API over HTTPS with a CA file and a Basic credential, and sends the colon of `:cancel` encoded.
 
