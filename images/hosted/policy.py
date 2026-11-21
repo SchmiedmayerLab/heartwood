@@ -16,15 +16,19 @@ Usage: policy.py DEPLOYMENT_DIRECTORY NATIVE_CONFIG_HOME
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import secrets
+import signal
 import sys
 import tomllib
 from pathlib import Path
 
 import openshell
 from google.protobuf.json_format import ParseDict
+
+# The message types of the pinned SDK, which the worker launcher uses as well.
 from openshell._proto import openshell_pb2, sandbox_pb2
 
 _DIGEST = re.compile(r'^sandbox_policy_sha256 = "[0-9a-f]{64}"$', re.MULTILINE)
@@ -32,6 +36,8 @@ _DIGEST = re.compile(r'^sandbox_policy_sha256 = "[0-9a-f]{64}"$', re.MULTILINE)
 
 def main() -> None:
     """Learn the digest and write it into the manifest."""
+    # A stopped init container still removes its probe.
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
     deployment, native = Path(sys.argv[1]), Path(sys.argv[2])
     manifest = deployment / "deployment.toml"
     text = manifest.read_text(encoding="utf-8")
@@ -47,10 +53,10 @@ def main() -> None:
         ),
         timeout=30,
     )
-    policy = ParseDict(
-        json.loads((deployment / Path(worker["policy_path"]).name).read_text(encoding="utf-8")),
-        sandbox_pb2.SandboxPolicy(),
-    )
+    content = (deployment / Path(worker["policy_path"]).name).read_text(encoding="utf-8")
+    if hashlib.sha256(content.encode()).hexdigest() != worker["policy_file_sha256"]:
+        raise SystemExit("the worker policy is not the one the manifest names")
+    policy = ParseDict(json.loads(content), sandbox_pb2.SandboxPolicy())
     workspace = worker["workspace"]
     # The gateway refuses a name that a deletion found absent, so each probe has its own;
     # a name has at most 19 characters.
@@ -64,7 +70,7 @@ def main() -> None:
             template=openshell_pb2.SandboxTemplate(
                 image=f"{worker['image_repository']}@{worker['image_digest']}",
                 resources={"limits": {"cpu": worker["cpu"], "memory": worker["memory"]}},
-                labels={**labels, "heartwood.role": "worker"},
+                labels={**labels, "heartwood.role": "policy-probe"},
             ),
             policy=policy,
             providers=[worker["provider"]],
@@ -82,20 +88,19 @@ def main() -> None:
         ),
     )
     try:
-        ready = client.wait_ready(name, workspace=workspace, timeout_seconds=240)
+        ready = client.wait_ready(name, workspace=workspace, timeout_seconds=180)
         admission = ready.status.configuration_admission
         if (
             ready.id != created.id
-            or admission is None
             or admission.state != openshell_pb2.CONFIGURATION_ADMISSION_STATE_ACCEPTED
             or re.fullmatch(r"[0-9a-f]{64}", admission.policy_hash) is None
         ):
             raise SystemExit("the session's OpenShell gateway did not admit the worker policy")
         digest = admission.policy_hash
     finally:
-        client.delete(name, workspace=workspace, allow_missing=True, timeout_seconds=90)
+        client.delete(name, workspace=workspace, allow_missing=True, timeout_seconds=60)
         client.wait_deleted(
-            name, workspace=workspace, expected_sandbox_id=created.id, timeout_seconds=90
+            name, workspace=workspace, expected_sandbox_id=created.id, timeout_seconds=60
         )
     updated, count = _DIGEST.subn(f'sandbox_policy_sha256 = "{digest}"', text)
     if count != 1:

@@ -242,6 +242,7 @@ The control service writes the gateway's deployment manifest into the Secret: th
 `hub.worker` sets the worker image and its sandbox policy, and `hub.modelRoute` the model route of the worker, see [Model Route](#model-route).
 The OpenShell gateway admits a worker with the digest of its effective policy, which covers the endpoint of the route's provider and the identity of the provider in the session's OpenShell gateway.
 At each start of the gateway pod, the init container runs `heartwood-hosted-policy`: it creates a sandbox with the worker image, the policy and the provider, writes the digest of its admission into the manifest's `[worker]` table and removes the sandbox, so the gateway admits only workers of that policy.
+The digest is learned from the session's own OpenShell gateway, which is trusted for the session: the check then shows that every worker runs with the effective policy of the probe, and the policy file is checked against the manifest's `policy_file_sha256` first.
 
 The idle culler stops a server after `jupyterhub.cull.timeout` seconds without traffic through the proxy.
 The server's volume claim, the session namespace and the OpenShell gateway stay, and the next start runs the same session; the researcher signs in again, because tokens live in the gateway's memory only.

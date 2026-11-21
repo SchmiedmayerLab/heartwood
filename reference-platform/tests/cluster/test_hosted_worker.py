@@ -264,7 +264,8 @@ def test_the_second_researcher_cannot_start_a_server_of_project_small(
         status, _, page = second.get(f"/hub/spawn/{SECOND}/small")
         assert 'value="small"' not in page
         # The Hub accepts the request and the spawn hook refuses the start.
-        second.hub_api("POST", f"/users/{SECOND}/servers/small")
+        status, answer = second.hub_api("POST", f"/users/{SECOND}/servers/small")
+        assert status == 202, answer
         deadline = time.monotonic() + 120
         started: dict[str, Any] | None = None
         while time.monotonic() < deadline:

@@ -288,7 +288,8 @@ def configure(c: Any, settings: dict[str, Any]) -> None:  # noqa: ANN401
     }
     c.KubeSpawner.storage_pvc_ensure = True
     c.KubeSpawner.storage_access_modes = ["ReadWriteOnce"]
-    c.KubeSpawner.start_timeout = 300
+    # The init container creates and removes a sandbox before the gateway starts.
+    c.KubeSpawner.start_timeout = 600
     c.KubeSpawner.http_timeout = 120
 
 
