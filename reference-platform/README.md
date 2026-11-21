@@ -19,10 +19,11 @@ It is kept apart from the Heartwood application packages under `packages/`.
 |---|---|
 | `chart/heartwood-platform/` | Helm chart of the platform; `values-kind.yaml` and `values-gke.yaml` hold the cluster-specific values |
 | `cluster/` | kind cluster fixture: configuration, creation and deletion scripts, the network policy controls and the chart installation script |
+| `images/funnel/` | Build of the Funnel image: `funnel.json` with the pinned source and its recorded patches, the patches and the `Dockerfile` |
 | `infrastructure/gke/` | OpenTofu configuration of the GKE cluster; see its [README](infrastructure/gke/README.md) |
 | `services/` | Python project `heartwood-reference-platform` with its own `pyproject.toml` and `uv.lock`; package `heartwood_platform` in `src/`, service and chart template tests in `tests/`, and the `Dockerfile` of the platform services image |
 | `tests/cluster/` | Tests that run against a cluster with the chart installed |
-| `tools/` | `check_cloud_boundary.py`, the cloud boundary check, and `render_openshell.py` with its values file |
+| `tools/` | `check_cloud_boundary.py`, the cloud boundary check, `render_openshell.py` with its values file, and `prepare_funnel.py`, which prepares the Funnel build |
 
 ## Separation Rules
 
@@ -517,9 +518,33 @@ uv run python ../tools/render_openshell.py          # writes the file
 uv run python ../tools/render_openshell.py --check  # compares it with a fresh render
 ```
 
+## Funnel Image
+
+The job executor is Funnel, built from the source and the patches that `images/funnel/funnel.json` records.
+The manifest names the release tag, its revision and the archive of that revision.
+GitHub generates revision archives on request and does not keep their bytes stable, so the manifest records `tree_sha256`, the SHA-256 digest of the extracted tree, computed over each path, its kind, its executable bit, the digest of its content and the target of each link.
+`tools/prepare_funnel.py` verifies the source with the same extraction and digest as `deploy/build-worker-candidate.py`: the data filter, bounds on the archive and extracted size, no hard links, and a single root directory whose tree matches the digest.
+It verifies each patch against its SHA-256 digest and applies the patches in order with `git apply`, which refuses a patch whose context does not match, isolated from the caller's git configuration.
+The patched tree must then match `patched_tree_sha256`.
+It writes the patched tree to `OUTPUT/funnel`, where `OUTPUT` is an empty directory and the build context of `images/funnel/Dockerfile`, and with `--image` builds the image.
+With `--test` it first runs the tests of the packages that the patches change.
+The Go modules are verified against the source's `go.sum`, and the build and base images are pinned by digest.
+
+| Patch | Purpose |
+|---|---|
+| `0001-optional-tls-for-server-listeners-and-rpc-client.patch` | TLS on the HTTP and gRPC listeners of the server and in the gRPC client of the workers, verified against a configured CA file; without the settings Funnel behaves as the release |
+| `0002-per-task-worker-credentials.patch` | A credential for each task, derived from a key file of the server and delivered to the task's worker in a Secret that the worker Job mounts; it may read only its own task, claim its execution and write its events |
+
+Each entry of the manifest also names the upstream issue, or the related issue where none exists, and the upstream change that would allow its removal.
+When the pin changes, `prepare_funnel.py --print-tree-digest` prints the digest of the new archive, which is recorded only after it matches a reviewed checkout of the revision.
+
+```bash
+python3 reference-platform/tools/prepare_funnel.py "${TMPDIR:-/tmp}/funnel-context" --image heartwood-funnel:candidate --test
+```
+
 ## Checks
 
-The [Reference Platform workflow](../.github/workflows/reference-platform.yml) runs the cloud boundary check, the offline OpenTofu checks, the platform service checks, the chart template tests and the OpenShell render comparison.
+The [Reference Platform workflow](../.github/workflows/reference-platform.yml) runs the cloud boundary check, the offline OpenTofu checks, the platform service checks, the chart template tests, the OpenShell render comparison, and the Funnel build with the tests of its patched packages.
 To run the same checks locally, with Helm and OpenSSL installed:
 
 ```bash

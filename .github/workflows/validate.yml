@@ -98,7 +98,10 @@ jobs:
           if result.returncode not in (0, 1):
               raise SystemExit(result.stderr or "Could not inspect tracked files")
           # A unified diff represents an empty context line with exactly one space.
-          context = re.compile(r"images/worker/candidate/[a-z-]+\.patch:[0-9]+: ")
+          context = re.compile(
+              r"(images/worker/candidate/[a-z-]+|reference-platform/images/funnel/[0-9a-z-]+)"
+              r"\.patch:[0-9]+: "
+          )
           invalid = [line for line in result.stdout.splitlines() if not context.fullmatch(line)]
           if invalid:
               raise SystemExit("Trailing whitespace found:\n" + "\n".join(invalid))

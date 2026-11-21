@@ -83,3 +83,19 @@ jobs:
       # Pulls the pinned OpenShell chart, verifies its digest and renders it again.
       - name: Compare the committed OpenShell objects with a fresh render
         run: uv run python ../tools/render_openshell.py --check
+
+  funnel:
+    name: Funnel image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          submodules: true
+      # Verifies the source tree and the patch digests, runs the tests of the patched packages and builds the image.
+      - name: Build Funnel with its recorded patches
+        run: >-
+          python3 reference-platform/tools/prepare_funnel.py "${RUNNER_TEMP}/funnel"
+          --image heartwood-funnel:candidate --test

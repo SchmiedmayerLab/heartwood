@@ -1,0 +1,1102 @@
+diff --git a/api/config/config.pb.go b/api/config/config.pb.go
+index 232a072..d9de686 100644
+--- a/api/config/config.pb.go
++++ b/api/config/config.pb.go
+@@ -688,6 +688,15 @@ type RPCClient struct {
+ 	ServerAddress string                 `protobuf:"bytes,2,opt,name=ServerAddress,proto3" json:"ServerAddress,omitempty"`
+ 	Timeout       *TimeoutConfig         `protobuf:"bytes,3,opt,name=Timeout,proto3" json:"Timeout,omitempty"`
+ 	MaxRetries    uint32                 `protobuf:"varint,4,opt,name=MaxRetries,proto3" json:"MaxRetries,omitempty"`
++	// TLS enables TLS for the gRPC connection, verified against the system roots
++	// unless TLSCAFile is set.
++	TLS bool `protobuf:"varint,5,opt,name=TLS,proto3" json:"TLS,omitempty"`
++	// TLSCAFile is a PEM file of CA certificates that the server certificate must
++	// chain to. Setting it enables TLS.
++	TLSCAFile string `protobuf:"bytes,6,opt,name=TLSCAFile,proto3" json:"TLSCAFile,omitempty"`
++	// TLSServerName overrides the name verified in the server certificate.
++	// It defaults to the host of ServerAddress.
++	TLSServerName string `protobuf:"bytes,7,opt,name=TLSServerName,proto3" json:"TLSServerName,omitempty"`
+ 	unknownFields protoimpl.UnknownFields
+ 	sizeCache     protoimpl.SizeCache
+ }
+@@ -750,6 +759,27 @@ func (x *RPCClient) GetMaxRetries() uint32 {
+ 	return 0
+ }
+ 
++func (x *RPCClient) GetTLS() bool {
++	if x != nil {
++		return x.TLS
++	}
++	return false
++}
++
++func (x *RPCClient) GetTLSCAFile() string {
++	if x != nil {
++		return x.TLSCAFile
++	}
++	return ""
++}
++
++func (x *RPCClient) GetTLSServerName() string {
++	if x != nil {
++		return x.TLSServerName
++	}
++	return ""
++}
++
+ // Server describes configuration for the server.
+ type Server struct {
+ 	state            protoimpl.MessageState `protogen:"open.v1"`
+@@ -762,8 +792,12 @@ type Server struct {
+ 	DisableHTTPCache bool                   `protobuf:"varint,7,opt,name=DisableHTTPCache,proto3" json:"DisableHTTPCache,omitempty"`
+ 	TaskAccess       string                 `protobuf:"bytes,8,opt,name=TaskAccess,proto3" json:"TaskAccess,omitempty"`
+ 	MaxResponseBytes uint32                 `protobuf:"varint,9,opt,name=MaxResponseBytes,proto3" json:"MaxResponseBytes,omitempty"`
+-	unknownFields    protoimpl.UnknownFields
+-	sizeCache        protoimpl.SizeCache
++	// TLSCertFile and TLSKeyFile are PEM files with the server certificate chain
++	// and its private key. When both are set, the HTTP and gRPC listeners serve TLS.
++	TLSCertFile   string `protobuf:"bytes,10,opt,name=TLSCertFile,proto3" json:"TLSCertFile,omitempty"`
++	TLSKeyFile    string `protobuf:"bytes,11,opt,name=TLSKeyFile,proto3" json:"TLSKeyFile,omitempty"`
++	unknownFields protoimpl.UnknownFields
++	sizeCache     protoimpl.SizeCache
+ }
+ 
+ func (x *Server) Reset() {
+@@ -859,6 +893,20 @@ func (x *Server) GetMaxResponseBytes() uint32 {
+ 	return 0
+ }
+ 
++func (x *Server) GetTLSCertFile() string {
++	if x != nil {
++		return x.TLSCertFile
++	}
++	return ""
++}
++
++func (x *Server) GetTLSKeyFile() string {
++	if x != nil {
++		return x.TLSKeyFile
++	}
++	return ""
++}
++
+ // Scheduler contains Funnel's basic scheduler configuration.
+ type Scheduler struct {
+ 	state           protoimpl.MessageState `protogen:"open.v1"`
+@@ -3551,7 +3599,7 @@ const file_config_config_proto_rawDesc = "" +
+ 	"\rTimeoutConfig\x127\n" +
+ 	"\bduration\x18\x01 \x01(\v2\x19.google.protobuf.DurationH\x00R\bduration\x12\x1c\n" +
+ 	"\bdisabled\x18\x02 \x01(\bH\x00R\bdisabledB\x10\n" +
+-	"\x0etimeout_option\"\xbb\x01\n" +
++	"\x0etimeout_option\"\x91\x02\n" +
+ 	"\tRPCClient\x127\n" +
+ 	"\n" +
+ 	"Credential\x18\x01 \x01(\v2\x17.config.BasicCredentialR\n" +
+@@ -3560,7 +3608,10 @@ const file_config_config_proto_rawDesc = "" +
+ 	"\aTimeout\x18\x03 \x01(\v2\x15.config.TimeoutConfigR\aTimeout\x12\x1e\n" +
+ 	"\n" +
+ 	"MaxRetries\x18\x04 \x01(\rR\n" +
+-	"MaxRetries\"\xd9\x02\n" +
++	"MaxRetries\x12\x10\n" +
++	"\x03TLS\x18\x05 \x01(\bR\x03TLS\x12\x1c\n" +
++	"\tTLSCAFile\x18\x06 \x01(\tR\tTLSCAFile\x12$\n" +
++	"\rTLSServerName\x18\a \x01(\tR\rTLSServerName\"\x9b\x03\n" +
+ 	"\x06Server\x12 \n" +
+ 	"\vServiceName\x18\x01 \x01(\tR\vServiceName\x12\x1a\n" +
+ 	"\bHostName\x18\x02 \x01(\tR\bHostName\x12\x1a\n" +
+@@ -3572,7 +3623,12 @@ const file_config_config_proto_rawDesc = "" +
+ 	"\n" +
+ 	"TaskAccess\x18\b \x01(\tR\n" +
+ 	"TaskAccess\x12*\n" +
+-	"\x10MaxResponseBytes\x18\t \x01(\rR\x10MaxResponseBytes\"\xb3\x02\n" +
++	"\x10MaxResponseBytes\x18\t \x01(\rR\x10MaxResponseBytes\x12 \n" +
++	"\vTLSCertFile\x18\n" +
++	" \x01(\tR\vTLSCertFile\x12\x1e\n" +
++	"\n" +
++	"TLSKeyFile\x18\v \x01(\tR\n" +
++	"TLSKeyFile\"\xb3\x02\n" +
+ 	"\tScheduler\x12=\n" +
+ 	"\fScheduleRate\x18\x01 \x01(\v2\x19.google.protobuf.DurationR\fScheduleRate\x12$\n" +
+ 	"\rScheduleChunk\x18\x02 \x01(\x05R\rScheduleChunk\x12?\n" +
+diff --git a/api/config/config.proto b/api/config/config.proto
+index 69024d4..1a67d15 100644
+--- a/api/config/config.proto
++++ b/api/config/config.proto
+@@ -97,6 +97,15 @@ message RPCClient {
+   string ServerAddress = 2;
+   TimeoutConfig Timeout = 3;
+   uint32 MaxRetries = 4;
++  // TLS enables TLS for the gRPC connection, verified against the system roots
++  // unless TLSCAFile is set.
++  bool TLS = 5;
++  // TLSCAFile is a PEM file of CA certificates that the server certificate must
++  // chain to. Setting it enables TLS.
++  string TLSCAFile = 6;
++  // TLSServerName overrides the name verified in the server certificate.
++  // It defaults to the host of ServerAddress.
++  string TLSServerName = 7;
+ }
+ 
+ // Server describes configuration for the server.
+@@ -110,6 +119,10 @@ message Server {
+   bool DisableHTTPCache = 7;
+   string TaskAccess = 8;
+   uint32 MaxResponseBytes = 9;
++  // TLSCertFile and TLSKeyFile are PEM files with the server certificate chain
++  // and its private key. When both are set, the HTTP and gRPC listeners serve TLS.
++  string TLSCertFile = 10;
++  string TLSKeyFile = 11;
+ }
+ 
+ // Scheduler contains Funnel's basic scheduler configuration.
+diff --git a/api/plugin/plugin.swagger.json b/api/plugin/plugin.swagger.json
+index 881a8d4..f70c9cb 100644
+--- a/api/plugin/plugin.swagger.json
++++ b/api/plugin/plugin.swagger.json
+@@ -780,6 +780,18 @@
+         "MaxRetries": {
+           "type": "integer",
+           "format": "int64"
++        },
++        "TLS": {
++          "type": "boolean",
++          "description": "TLS enables TLS for the gRPC connection, verified against the system roots\nunless TLSCAFile is set."
++        },
++        "TLSCAFile": {
++          "type": "string",
++          "description": "TLSCAFile is a PEM file of CA certificates that the server certificate must\nchain to. Setting it enables TLS."
++        },
++        "TLSServerName": {
++          "type": "string",
++          "description": "TLSServerName overrides the name verified in the server certificate.\nIt defaults to the host of ServerAddress."
+         }
+       },
+       "description": "RPCClient describes configuration for gRPC clients."
+@@ -938,6 +950,13 @@
+         "MaxResponseBytes": {
+           "type": "integer",
+           "format": "int64"
++        },
++        "TLSCertFile": {
++          "type": "string",
++          "description": "TLSCertFile and TLSKeyFile are PEM files with the server certificate chain\nand its private key. When both are set, the HTTP and gRPC listeners serve TLS."
++        },
++        "TLSKeyFile": {
++          "type": "string"
+         }
+       },
+       "description": "Server describes configuration for the server."
+diff --git a/docs/integrations/remote-server.md b/docs/integrations/remote-server.md
+index f3c1f75..702d94c 100644
+--- a/docs/integrations/remote-server.md
++++ b/docs/integrations/remote-server.md
+@@ -29,9 +29,9 @@ authentication behavior is preserved, including credentials with an empty
+ password. The CLI does not refresh expired tokens; replace the environment
+ value and rerun the command when needed.
+ 
+-The internal gRPC client currently uses plaintext transport. It rejects
+-credentials for remote addresses by default; use a secure tunnel terminating
+-on loopback. This restriction does not add gRPC TLS support.
++The internal gRPC client uses plaintext transport by default. It rejects
++credentials for remote plaintext addresses; configure TLS as described in
++[TLS](../security/tls.md), or use a secure tunnel terminating on loopback.
+ 
+ For a known trusted private deployment that requires remote plaintext
+ credentials, explicitly set `FUNNEL_ALLOW_INSECURE_CREDENTIALS=true`. This
+diff --git a/docs/security/tls.md b/docs/security/tls.md
+new file mode 100644
+index 0000000..a50a4e2
+--- /dev/null
++++ b/docs/security/tls.md
+@@ -0,0 +1,56 @@
++# TLS
++
++Funnel can serve its HTTP API and its gRPC API over TLS, and workers and nodes
++can verify the server when they connect to the gRPC API. TLS is off by default.
++
++## Server
++
++Set a PEM certificate chain and its private key. Both listeners (`HTTPPort` and
++`RPCPort`) then serve TLS only, with TLS 1.2 as the minimum version.
++
++```yaml
++Server:
++  TLSCertFile: /etc/funnel/tls/tls.crt
++  TLSKeyFile: /etc/funnel/tls/tls.key
++```
++
++The files are read when the server starts. Restart the server after replacing
++them. Setting only one of the two is an error.
++
++## Workers and Nodes
++
++The gRPC client used by workers, nodes and RPC event writers connects over TLS
++when `RPCClient.TLS` is true or `RPCClient.TLSCAFile` is set.
++
++```yaml
++RPCClient:
++  ServerAddress: funnel.example.com:9090
++  TLSCAFile: /etc/funnel/tls/ca.crt
++  Credential:
++    User: funnel
++    Password: abc123
++```
++
++- `TLS: true` verifies the server certificate against the system roots.
++- `TLSCAFile` verifies it against the CA certificates in that PEM file instead.
++  It is a path on the machine or container where the worker or node runs, and
++  the file must exist there.
++- `TLSServerName` sets the name to verify when it differs from the host in
++  `ServerAddress`.
++
++Over TLS the client sends its Basic credential to remote addresses without
++`FUNNEL_ALLOW_INSECURE_CREDENTIALS`.
++
++When the server serves TLS, put these `RPCClient` settings in the configuration
++that workers and nodes read. A worker or node without them cannot connect to
++the gRPC API. It fails and does not fall back to plaintext.
++
++## HTTP Clients
++
++Use an `https://` server URL with the CLI and other TES clients. For a private
++CA on Linux, set `SSL_CERT_FILE` to the CA file for the Funnel CLI. This file
++replaces the default CA bundle file. The CLI still reads the system certificate
++directories, such as `/etc/ssl/certs`, unless `SSL_CERT_DIR` is set.
++
++Health probes and metrics scrapes of `/healthz` and `/metrics` must also use
++HTTPS when TLS is on, because the HTTP port no longer serves plaintext.
+diff --git a/internal/cli/server/run.go b/internal/cli/server/run.go
+index 996f922..f5d130e 100644
+--- a/internal/cli/server/run.go
++++ b/internal/cli/server/run.go
+@@ -325,6 +325,8 @@ func NewServer(ctx context.Context, conf *config.Config, log *logger.Logger) (se
+ 			HTTPPort:         conf.Server.HTTPPort,
+ 			BasicAuth:        conf.Server.BasicAuth,
+ 			OidcAuth:         conf.Server.OidcAuth,
++			TLSCertFile:      conf.Server.TLSCertFile,
++			TLSKeyFile:       conf.Server.TLSKeyFile,
+ 			DisableHTTPCache: conf.Server.DisableHTTPCache,
+ 			MaxResponseBytes: appconfig.ResponseBytes(conf.Server),
+ 			TaskAccess:       conf.Server.TaskAccess,
+diff --git a/internal/config/examples/default-config.yaml b/internal/config/examples/default-config.yaml
+index d392c23..17bd0af 100644
+--- a/internal/config/examples/default-config.yaml
++++ b/internal/config/examples/default-config.yaml
+@@ -34,6 +34,11 @@ Server:
+   # Port used for RPC communication.
+   RPCPort: "9090"
+ 
++  # Serve TLS on the HTTP and RPC ports with this PEM certificate chain and key.
++  # Both must be set together. Without them the server listens in plaintext.
++  # TLSCertFile: /etc/funnel/tls/tls.crt
++  # TLSKeyFile: /etc/funnel/tls/tls.key
++
+   # Require basic authentication for the server APIs using a password.
+   # If used, make sure to properly restrict access to the config file
+   # (e.g. chmod 600 funnel.config.yml)
+@@ -89,6 +94,14 @@ RPCClient:
+   #   User: funnel
+   #   Password: abc123
+ 
++  # Connect to the RPC server over TLS. The server certificate is verified
++  # against the system roots, or against the CA certificates in TLSCAFile,
++  # which also enables TLS. TLSServerName overrides the name to verify,
++  # which defaults to the host of ServerAddress.
++  # TLS: true
++  # TLSCAFile: /etc/funnel/tls/ca.crt
++  # TLSServerName: funnel.example.com
++
+   # connection timeout.
+   Timeout:
+     duration: 60s
+diff --git a/internal/rpcclient/rpc.go b/internal/rpcclient/rpc.go
+index 0a4d315..d00303e 100644
+--- a/internal/rpcclient/rpc.go
++++ b/internal/rpcclient/rpc.go
+@@ -2,6 +2,8 @@ package rpcclient
+ 
+ import (
+ 	"context"
++	"crypto/tls"
++	"crypto/x509"
+ 	"encoding/base64"
+ 	"fmt"
+ 	"math"
+@@ -15,6 +17,7 @@ import (
+ 	grpc_retry "github.com/grpc-ecosystem/go-grpc-middleware/v2/interceptors/retry"
+ 	"google.golang.org/grpc"
+ 	"google.golang.org/grpc/codes"
++	"google.golang.org/grpc/credentials"
+ 	"google.golang.org/grpc/credentials/insecure"
+ )
+ 
+@@ -35,18 +38,31 @@ func (c *loginCreds) GetRequestMetadata(context.Context, ...string) (map[string]
+ func Dial(pctx context.Context, conf *config.RPCClient, opts ...grpc.DialOption) (*grpc.ClientConn, error) {
+ 	user, password := conf.GetCredential().GetUser(), conf.GetCredential().GetPassword()
+ 	hasCredentials := user != "" || password != ""
++	transport, err := transportCredentials(conf)
++	if err != nil {
++		return nil, err
++	}
++	useTLS := transport != nil
+ 	allowPlaintext := os.Getenv("FUNNEL_ALLOW_INSECURE_CREDENTIALS") == "true" || loopbackAddress(conf.ServerAddress)
+-	if hasCredentials && !allowPlaintext {
+-		return nil, fmt.Errorf("rpc: refusing credentials over remote plaintext gRPC; use a secure tunnel or explicitly set FUNNEL_ALLOW_INSECURE_CREDENTIALS=true for a trusted private deployment")
++	if hasCredentials && !useTLS && !allowPlaintext {
++		return nil, fmt.Errorf("rpc: refusing credentials over remote plaintext gRPC; configure RPCClient.TLS, use a secure tunnel, or explicitly set FUNNEL_ALLOW_INSECURE_CREDENTIALS=true for a trusted private deployment")
++	}
++	if !useTLS {
++		transport = insecure.NewCredentials()
+ 	}
+ 	ctx, cancel := context.WithTimeout(pctx, conf.Timeout.GetDuration().AsDuration())
+ 	defer cancel()
+ 
+ 	defaultOpts := []grpc.DialOption{
+-		grpc.WithTransportCredentials(insecure.NewCredentials()),
++		grpc.WithTransportCredentials(transport),
+ 	}
+ 	if hasCredentials {
+-		defaultOpts = append(defaultOpts, grpc.WithPerRPCCredentials(&plaintextLoginCreds{loginCreds{User: user, Password: password}}))
++		login := loginCreds{User: user, Password: password}
++		if useTLS {
++			defaultOpts = append(defaultOpts, grpc.WithPerRPCCredentials(&tlsLoginCreds{login}))
++		} else {
++			defaultOpts = append(defaultOpts, grpc.WithPerRPCCredentials(&plaintextLoginCreds{login}))
++		}
+ 	}
+ 	opts = append(opts, defaultOpts...)
+ 	opts = append(
+@@ -121,6 +137,34 @@ type plaintextLoginCreds struct{ loginCreds }
+ 
+ func (*plaintextLoginCreds) RequireTransportSecurity() bool { return false }
+ 
++// tlsLoginCreds makes gRPC refuse to send the credential without transport security.
++type tlsLoginCreds struct{ loginCreds }
++
++func (*tlsLoginCreds) RequireTransportSecurity() bool { return true }
++
++// transportCredentials returns TLS credentials when the client is configured
++// for TLS, and nil for plaintext.
++func transportCredentials(conf *config.RPCClient) (credentials.TransportCredentials, error) {
++	if !conf.GetTLS() && conf.GetTLSCAFile() == "" {
++		if conf.GetTLSServerName() != "" {
++			return nil, fmt.Errorf("rpc: RPCClient.TLSServerName is set but TLS is not enabled")
++		}
++		return nil, nil
++	}
++	tlsConf := &tls.Config{MinVersion: tls.VersionTLS12, ServerName: conf.GetTLSServerName()}
++	if path := conf.GetTLSCAFile(); path != "" {
++		pem, err := os.ReadFile(path)
++		if err != nil {
++			return nil, fmt.Errorf("rpc: reading RPCClient.TLSCAFile: %w", err)
++		}
++		tlsConf.RootCAs = x509.NewCertPool()
++		if !tlsConf.RootCAs.AppendCertsFromPEM(pem) {
++			return nil, fmt.Errorf("rpc: RPCClient.TLSCAFile %q contains no PEM certificate", path)
++		}
++	}
++	return credentials.NewTLS(tlsConf), nil
++}
++
+ func loopbackAddress(address string) bool {
+ 	host, _, err := net.SplitHostPort(address)
+ 	if err != nil {
+diff --git a/internal/rpcclient/tls_test.go b/internal/rpcclient/tls_test.go
+new file mode 100644
+index 0000000..d2ad899
+--- /dev/null
++++ b/internal/rpcclient/tls_test.go
+@@ -0,0 +1,246 @@
++package rpcclient
++
++import (
++	"context"
++	"crypto/ecdsa"
++	"crypto/elliptic"
++	"crypto/rand"
++	"crypto/tls"
++	"crypto/x509"
++	"crypto/x509/pkix"
++	"encoding/pem"
++	"math/big"
++	"net"
++	"os"
++	"path/filepath"
++	"strings"
++	"testing"
++	"time"
++
++	"github.com/calypr/funnel/api/config"
++	"google.golang.org/grpc"
++	"google.golang.org/grpc/codes"
++	"google.golang.org/grpc/credentials"
++	"google.golang.org/grpc/credentials/insecure"
++	healthpb "google.golang.org/grpc/health/grpc_health_v1"
++	"google.golang.org/grpc/metadata"
++	"google.golang.org/grpc/status"
++)
++
++type healthServer struct {
++	healthpb.UnimplementedHealthServer
++	authorization chan string
++}
++
++func (h *healthServer) Check(ctx context.Context, _ *healthpb.HealthCheckRequest) (*healthpb.HealthCheckResponse, error) {
++	md, _ := metadata.FromIncomingContext(ctx)
++	if values := md.Get("authorization"); len(values) > 0 {
++		h.authorization <- values[0]
++	}
++	return &healthpb.HealthCheckResponse{Status: healthpb.HealthCheckResponse_SERVING}, nil
++}
++
++// startTLSServer serves the health service over TLS with a certificate for
++// 127.0.0.1 and "funnel.test", and returns its address, the CA file and the
++// channel that receives each Authorization header.
++func startTLSServer(t *testing.T) (address, caFile string, authorization chan string) {
++	t.Helper()
++	newKey := func() *ecdsa.PrivateKey {
++		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
++		if err != nil {
++			t.Fatal(err)
++		}
++		return key
++	}
++	caKey, leafKey := newKey(), newKey()
++	caTemplate := &x509.Certificate{
++		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "test CA"},
++		NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour),
++		IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign,
++	}
++	caDER, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
++	if err != nil {
++		t.Fatal(err)
++	}
++	ca, err := x509.ParseCertificate(caDER)
++	if err != nil {
++		t.Fatal(err)
++	}
++	leafTemplate := &x509.Certificate{
++		SerialNumber: big.NewInt(2), Subject: pkix.Name{CommonName: "funnel"},
++		NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour),
++		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
++		IPAddresses: []net.IP{net.ParseIP("127.0.0.1")}, DNSNames: []string{"funnel.test"},
++	}
++	leafDER, err := x509.CreateCertificate(rand.Reader, leafTemplate, ca, &leafKey.PublicKey, caKey)
++	if err != nil {
++		t.Fatal(err)
++	}
++	caFile = filepath.Join(t.TempDir(), "ca.crt")
++	if err := os.WriteFile(caFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER}), 0o600); err != nil {
++		t.Fatal(err)
++	}
++
++	address, authorization = startHealthServer(t, grpc.Creds(credentials.NewTLS(&tls.Config{
++		Certificates: []tls.Certificate{{Certificate: [][]byte{leafDER}, PrivateKey: leafKey}},
++		MinVersion:   tls.VersionTLS12,
++	})))
++	return address, caFile, authorization
++}
++
++// startHealthServer serves the health service on 127.0.0.1, in plaintext
++// unless opts set credentials, and returns its address and the channel that
++// receives each Authorization header.
++func startHealthServer(t *testing.T, opts ...grpc.ServerOption) (address string, authorization chan string) {
++	t.Helper()
++	listener, err := net.Listen("tcp", "127.0.0.1:0")
++	if err != nil {
++		t.Fatal(err)
++	}
++	authorization = make(chan string, 8)
++	server := grpc.NewServer(opts...)
++	healthpb.RegisterHealthServer(server, &healthServer{authorization: authorization})
++	go server.Serve(listener) //nolint:errcheck // Stop below ends Serve.
++	t.Cleanup(server.Stop)
++	return listener.Addr().String(), authorization
++}
++
++func check(t *testing.T, conf *config.RPCClient, opts ...grpc.DialOption) error {
++	t.Helper()
++	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
++	defer cancel()
++	conn, err := Dial(ctx, conf, opts...)
++	if err != nil {
++		return err
++	}
++	defer conn.Close() //nolint:errcheck // Best-effort cleanup of the test connection.
++	_, err = healthpb.NewHealthClient(conn).Check(ctx, &healthpb.HealthCheckRequest{})
++	return err
++}
++
++// receive waits briefly for the Authorization header the server received.
++func receive(t *testing.T, authorization chan string) string {
++	t.Helper()
++	select {
++	case got := <-authorization:
++		return got
++	case <-time.After(2 * time.Second):
++		t.Fatal("no request reached the server")
++		return ""
++	}
++}
++
++// drain discards headers left behind by an earlier failed subtest.
++func drain(channels ...chan string) {
++	for _, ch := range channels {
++		for len(ch) > 0 {
++			<-ch
++		}
++	}
++}
++
++func TestDialTLS(t *testing.T) {
++	// Credentials to 127.0.0.1 and localhost are permitted without TLS. The
++	// funnel.test cases use a remote name, where only TLS permits credentials.
++	t.Setenv("FUNNEL_ALLOW_INSECURE_CREDENTIALS", "")
++	address, caFile, authorization := startTLSServer(t)
++	plainAddress, plainAuthorization := startHealthServer(t)
++	_, port, err := net.SplitHostPort(address)
++	if err != nil {
++		t.Fatal(err)
++	}
++	credential := &config.BasicCredential{User: "u", Password: "p"}
++	insecureOption := grpc.WithTransportCredentials(insecure.NewCredentials())
++	// Resolves funnel.test to the TLS listener.
++	remoteDialer := grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
++		return (&net.Dialer{}).DialContext(ctx, "tcp", address)
++	})
++
++	for _, tc := range []struct {
++		name string
++		conf *config.RPCClient
++		opts []grpc.DialOption
++	}{
++		{"verified with the CA", &config.RPCClient{ServerAddress: address, Credential: credential, TLSCAFile: caFile}, nil},
++		{"server name override", &config.RPCClient{ServerAddress: address, Credential: credential, TLSCAFile: caFile, TLSServerName: "funnel.test"}, nil},
++		{"insecure option does not downgrade", &config.RPCClient{ServerAddress: address, Credential: credential, TLSCAFile: caFile}, []grpc.DialOption{insecureOption}},
++		// The server name defaults to funnel.test from the address.
++		{"credentials to a remote address over TLS", &config.RPCClient{ServerAddress: "funnel.test:" + port, Credential: credential, TLSCAFile: caFile}, []grpc.DialOption{remoteDialer}},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			drain(authorization)
++			if err := check(t, tc.conf, tc.opts...); err != nil {
++				t.Fatal(err)
++			}
++			if got := receive(t, authorization); got != "Basic dTpw" {
++				t.Fatalf("Authorization = %q", got)
++			}
++		})
++	}
++	t.Run("credentials to a remote address without TLS", func(t *testing.T) {
++		conf := &config.RPCClient{ServerAddress: "funnel.test:" + port, Credential: credential}
++		err := check(t, conf, remoteDialer)
++		if err == nil || !strings.Contains(err.Error(), "refusing credentials") {
++			t.Fatalf("Dial error = %v; want refusing credentials", err)
++		}
++	})
++	for _, tc := range []struct {
++		name          string
++		conf          *config.RPCClient
++		opts          []grpc.DialOption
++		authorization chan string
++		reason        string
++	}{
++		{"without the CA", &config.RPCClient{ServerAddress: address, Credential: credential, TLS: true}, nil, authorization, "unknown authority"},
++		{"wrong server name", &config.RPCClient{ServerAddress: address, Credential: credential, TLSCAFile: caFile, TLSServerName: "other.test"}, nil, authorization, "certificate is valid for"},
++		// The certificate is valid for 127.0.0.1 and funnel.test only.
++		{"default server name from the host", &config.RPCClient{ServerAddress: "localhost:" + port, Credential: credential, TLSCAFile: caFile}, nil, authorization, "certificate is valid for"},
++		{"plaintext to a TLS server", &config.RPCClient{ServerAddress: "localhost:" + port, Credential: credential}, nil, authorization, "server preface"},
++		{"TLS to a plaintext server", &config.RPCClient{ServerAddress: plainAddress, Credential: credential, TLSCAFile: caFile}, nil, plainAuthorization, "first record does not look like a TLS handshake"},
++		{"insecure option to a plaintext server", &config.RPCClient{ServerAddress: plainAddress, Credential: credential, TLSCAFile: caFile}, []grpc.DialOption{insecureOption}, plainAuthorization, "first record does not look like a TLS handshake"},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			// The override for plaintext credentials does not weaken TLS.
++			for _, allowInsecure := range []string{"", "true"} {
++				t.Setenv("FUNNEL_ALLOW_INSECURE_CREDENTIALS", allowInsecure)
++				drain(authorization, plainAuthorization)
++				err := check(t, tc.conf, tc.opts...)
++				if status.Code(err) != codes.Unavailable || !strings.Contains(err.Error(), tc.reason) {
++					t.Fatalf("FUNNEL_ALLOW_INSECURE_CREDENTIALS=%q: error = %v; want Unavailable with %q", allowInsecure, err, tc.reason)
++				}
++				// The failed handshake is the proof; this also confirms that
++				// no request reached the server.
++				select {
++				case got := <-tc.authorization:
++					t.Fatalf("credential reached the server with FUNNEL_ALLOW_INSECURE_CREDENTIALS=%q: %q", allowInsecure, got)
++				default:
++				}
++			}
++		})
++	}
++}
++
++func TestDialTLSConfigurationErrors(t *testing.T) {
++	empty := filepath.Join(t.TempDir(), "empty.crt")
++	if err := os.WriteFile(empty, []byte("not a certificate"), 0o600); err != nil {
++		t.Fatal(err)
++	}
++	for _, tc := range []struct {
++		name string
++		conf *config.RPCClient
++	}{
++		{"missing CA file", &config.RPCClient{ServerAddress: "remote.invalid:9090", TLSCAFile: filepath.Join(t.TempDir(), "absent.crt")}},
++		{"CA file without certificates", &config.RPCClient{ServerAddress: "remote.invalid:9090", TLSCAFile: empty}},
++		{"server name without TLS", &config.RPCClient{ServerAddress: "remote.invalid:9090", TLSServerName: "funnel.test"}},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			conn, err := Dial(context.Background(), tc.conf)
++			if conn != nil {
++				conn.Close() //nolint:errcheck // Best-effort cleanup of an unexpected connection.
++			}
++			if err == nil {
++				t.Fatal("invalid TLS configuration accepted")
++			}
++		})
++	}
++}
+diff --git a/internal/server/server.go b/internal/server/server.go
+index d690e85..e9905c8 100644
+--- a/internal/server/server.go
++++ b/internal/server/server.go
+@@ -15,7 +15,7 @@ import (
+ 
+ 	"time"
+ 
+-	"google.golang.org/grpc/credentials/insecure"
++	"google.golang.org/grpc/credentials"
+ 	"google.golang.org/grpc/keepalive"
+ 
+ 	"github.com/calypr/funnel/api/config"
+@@ -34,11 +34,14 @@ import (
+ // and also serves the web dashboard.
+ type Server struct {
+ 	// Listen defaults to net.Listen. Embedders can supply already-bound listeners.
+-	Listen           func(network, address string) (net.Listener, error)
+-	RPCAddress       string
+-	HTTPPort         string
+-	BasicAuth        []*config.BasicCredential
+-	OidcAuth         *config.OidcAuth
++	Listen     func(network, address string) (net.Listener, error)
++	RPCAddress string
++	HTTPPort   string
++	BasicAuth  []*config.BasicCredential
++	OidcAuth   *config.OidcAuth
++	// TLSCertFile and TLSKeyFile enable TLS on both listeners when set.
++	TLSCertFile      string
++	TLSKeyFile       string
+ 	TaskAccess       string
+ 	Tasks            tesrpc.TaskServiceServer
+ 	Events           events.EventServiceServer
+@@ -87,7 +90,15 @@ func (s *Server) Serve(pctx context.Context) error {
+ 	if maxResponseBytes < 0 {
+ 		return fmt.Errorf("Server.MaxResponseBytes must be positive")
+ 	}
+-	grpcServer := grpc.NewServer(
++	serverTLS, gatewayCredentials, err := loadTLS(s.TLSCertFile, s.TLSKeyFile)
++	if err != nil {
++		return err
++	}
++	grpcOpts := []grpc.ServerOption{}
++	if serverTLS != nil {
++		grpcOpts = append(grpcOpts, grpc.Creds(credentials.NewTLS(serverTLS)))
++	}
++	grpcServer := grpc.NewServer(append(grpcOpts,
+ 		grpc.MaxSendMsgSize(maxResponseBytes),
+ 		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
+ 			MinTime:             10 * time.Second, // min interval between client pings
+@@ -100,7 +111,7 @@ func (s *Server) Serve(pctx context.Context) error {
+ 			serverauth.AuditInterceptor(s.Log),
+ 			serverauth.EventWriteInterceptor(s.Tasks),
+ 		),
+-	)
++	)...)
+ 
+ 	// Retry service config: transparently retry transient gRPC stream errors
+ 	// (e.g. UNAVAILABLE after idle connection is closed by the server).
+@@ -120,7 +131,7 @@ func (s *Server) Serve(pctx context.Context) error {
+ 	}`
+ 
+ 	dialOpts := []grpc.DialOption{
+-		grpc.WithTransportCredentials(insecure.NewCredentials()),
++		grpc.WithTransportCredentials(gatewayCredentials),
+ 		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(maxResponseBytes)),
+ 		// Keep the internal gateway→gRPC connection alive so idle periods
+ 		// don't cause the server to send GOAWAY and drop the next request.
+@@ -172,8 +183,9 @@ func (s *Server) Serve(pctx context.Context) error {
+ 	}
+ 
+ 	httpServer := &http.Server{
+-		Addr:    httpAddress,
+-		Handler: mux,
++		Addr:      httpAddress,
++		Handler:   mux,
++		TLSConfig: serverTLS,
+ 	}
+ 
+ 	serveErrs := make(chan error, 2)
+@@ -183,12 +195,17 @@ func (s *Server) Serve(pctx context.Context) error {
+ 	}()
+ 
+ 	go func() {
+-		serveErrs <- httpServer.Serve(httpLis)
++		if serverTLS != nil {
++			// The certificate comes from TLSConfig.
++			serveErrs <- httpServer.ServeTLS(httpLis, "", "")
++		} else {
++			serveErrs <- httpServer.Serve(httpLis)
++		}
+ 		cancel()
+ 	}()
+ 
+ 	s.Log.Info("Server listening",
+-		"httpPort", s.HTTPPort, "rpcAddress", s.RPCAddress,
++		"httpPort", s.HTTPPort, "rpcAddress", s.RPCAddress, "tls", serverTLS != nil,
+ 	)
+ 
+ 	<-ctx.Done()
+diff --git a/internal/server/tls.go b/internal/server/tls.go
+new file mode 100644
+index 0000000..6ae6c69
+--- /dev/null
++++ b/internal/server/tls.go
+@@ -0,0 +1,43 @@
++package server
++
++import (
++	"bytes"
++	"crypto/tls"
++	"errors"
++	"fmt"
++
++	"google.golang.org/grpc/credentials"
++	"google.golang.org/grpc/credentials/insecure"
++)
++
++// loadTLS reads the server certificate. It returns the listener configuration
++// and the credentials the HTTP gateway uses to reach the gRPC listener in the
++// same process. Without a certificate both listeners stay plaintext.
++func loadTLS(certFile, keyFile string) (*tls.Config, credentials.TransportCredentials, error) {
++	if certFile == "" && keyFile == "" {
++		return nil, insecure.NewCredentials(), nil
++	}
++	if certFile == "" || keyFile == "" {
++		return nil, nil, errors.New("Server.TLSCertFile and Server.TLSKeyFile must be set together")
++	}
++	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
++	if err != nil {
++		return nil, nil, fmt.Errorf("loading Server.TLSCertFile and Server.TLSKeyFile: %w", err)
++	}
++	serverTLS := &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
++
++	// The gateway dials the listen address, which need not match a name in the
++	// certificate, so it accepts exactly the certificate this process serves.
++	leaf := cert.Certificate[0]
++	gatewayTLS := &tls.Config{
++		MinVersion:         tls.VersionTLS12,
++		InsecureSkipVerify: true, // Verification is done by VerifyConnection below.
++		VerifyConnection: func(state tls.ConnectionState) error {
++			if len(state.PeerCertificates) == 0 || !bytes.Equal(state.PeerCertificates[0].Raw, leaf) {
++				return errors.New("gateway: gRPC listener presented an unexpected certificate")
++			}
++			return nil
++		},
++	}
++	return serverTLS, credentials.NewTLS(gatewayTLS), nil
++}
+diff --git a/internal/server/tls_test.go b/internal/server/tls_test.go
+new file mode 100644
+index 0000000..7ea9ea1
+--- /dev/null
++++ b/internal/server/tls_test.go
+@@ -0,0 +1,278 @@
++package server
++
++import (
++	"context"
++	"crypto/ecdsa"
++	"crypto/elliptic"
++	"crypto/rand"
++	"crypto/tls"
++	"crypto/x509"
++	"crypto/x509/pkix"
++	"encoding/pem"
++	"io"
++	"math/big"
++	"net"
++	"net/http"
++	"os"
++	"path/filepath"
++	"strconv"
++	"strings"
++	"testing"
++	"time"
++
++	"github.com/calypr/funnel/api/config"
++	"github.com/calypr/funnel/api/tes"
++	"github.com/calypr/funnel/internal/server/taskservice"
++	"google.golang.org/grpc"
++	"google.golang.org/grpc/codes"
++	"google.golang.org/grpc/credentials"
++	"google.golang.org/grpc/credentials/insecure"
++	"google.golang.org/grpc/health"
++	healthpb "google.golang.org/grpc/health/grpc_health_v1"
++	"google.golang.org/grpc/status"
++)
++
++// writeTestCertificate writes a CA-signed certificate for 127.0.0.1 and its key
++// into a temporary directory and returns their paths and the CA pool.
++func writeTestCertificate(t *testing.T) (certFile, keyFile string, roots *x509.CertPool) {
++	t.Helper()
++	newKey := func() *ecdsa.PrivateKey {
++		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
++		if err != nil {
++			t.Fatal(err)
++		}
++		return key
++	}
++	caKey, leafKey := newKey(), newKey()
++	caTemplate := &x509.Certificate{
++		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "test CA"},
++		NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour),
++		IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign,
++	}
++	caDER, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
++	if err != nil {
++		t.Fatal(err)
++	}
++	ca, err := x509.ParseCertificate(caDER)
++	if err != nil {
++		t.Fatal(err)
++	}
++	leafTemplate := &x509.Certificate{
++		SerialNumber: big.NewInt(2), Subject: pkix.Name{CommonName: "funnel"},
++		NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour),
++		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
++		IPAddresses: []net.IP{net.ParseIP("127.0.0.1")},
++	}
++	leafDER, err := x509.CreateCertificate(rand.Reader, leafTemplate, ca, &leafKey.PublicKey, caKey)
++	if err != nil {
++		t.Fatal(err)
++	}
++	keyDER, err := x509.MarshalECPrivateKey(leafKey)
++	if err != nil {
++		t.Fatal(err)
++	}
++	dir := t.TempDir()
++	certFile, keyFile = filepath.Join(dir, "tls.crt"), filepath.Join(dir, "tls.key")
++	for path, block := range map[string]*pem.Block{
++		certFile: {Type: "CERTIFICATE", Bytes: leafDER},
++		keyFile:  {Type: "EC PRIVATE KEY", Bytes: keyDER},
++	} {
++		if err := os.WriteFile(path, pem.EncodeToMemory(block), 0o600); err != nil {
++			t.Fatal(err)
++		}
++	}
++	roots = x509.NewCertPool()
++	roots.AddCert(ca)
++	return certFile, keyFile, roots
++}
++
++// serveTLS runs s until the test ends and waits until it answers over HTTPS.
++// It returns a client that trusts roots and the HTTPS base URL.
++func serveTLS(t *testing.T, s *Server, roots *x509.CertPool) (*http.Client, string) {
++	t.Helper()
++	ctx, cancel := context.WithCancel(context.Background())
++	done := make(chan error, 1)
++	client := &http.Client{Timeout: time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}}}
++	go func() { done <- s.Serve(ctx) }()
++	t.Cleanup(func() {
++		client.CloseIdleConnections()
++		cancel()
++		select {
++		case err := <-done:
++			if err != nil {
++				t.Errorf("server stopped: %v", err)
++			}
++		case <-time.After(5 * time.Second):
++			t.Error("server did not stop")
++		}
++	})
++	base := "https://127.0.0.1:" + s.HTTPPort
++	deadline := time.Now().Add(5 * time.Second)
++	for {
++		_, _, err := get(client, base+"/healthz")
++		if err == nil {
++			return client, base
++		}
++		if time.Now().After(deadline) {
++			t.Fatalf("server did not start: %v", err)
++		}
++		time.Sleep(25 * time.Millisecond)
++	}
++}
++
++func get(client *http.Client, url string) (int, string, error) {
++	req, err := http.NewRequest(http.MethodGet, url, nil)
++	if err != nil {
++		return 0, "", err
++	}
++	return do(client, req)
++}
++
++func do(client *http.Client, req *http.Request) (int, string, error) {
++	resp, err := client.Do(req)
++	if err != nil {
++		return 0, "", err
++	}
++	defer resp.Body.Close() //nolint:errcheck // Read-only HTTP response cleanup cannot change the test assertions.
++	body, err := io.ReadAll(resp.Body)
++	return resp.StatusCode, string(body), err
++}
++
++func TestServeTLSOnBothListeners(t *testing.T) {
++	certFile, keyFile, roots := writeTestCertificate(t)
++	rpcAddress := freeTCPAddress(t)
++	httpPort := strconv.Itoa(tcpPort(t))
++	s := newTestServer(rpcAddress, httpPort)
++	s.TLSCertFile, s.TLSKeyFile = certFile, keyFile
++	s.Tasks = &taskservice.Service{Read: &responseViewReader{task: &tes.Task{Id: "task-1", State: tes.Running}}, Log: s.Log}
++	client, base := serveTLS(t, s, roots)
++
++	// The gateway reaches the gRPC listener over TLS.
++	code, body, err := get(client, base+"/v1/tasks/task-1")
++	if err != nil || code != http.StatusOK || !strings.Contains(body, "RUNNING") {
++		t.Fatalf("task over HTTPS: status=%d body=%s err=%v", code, body, err)
++	}
++
++	// A client that does not trust the CA fails the handshake.
++	untrusting := &http.Client{Timeout: time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: x509.NewCertPool(), MinVersion: tls.VersionTLS12}}}
++	defer untrusting.CloseIdleConnections()
++	if _, _, err := get(untrusting, base+"/healthz"); err == nil {
++		t.Fatal("client without the CA completed a request")
++	}
++
++	// Plaintext HTTP is not served.
++	plain := &http.Client{Timeout: time.Second, Transport: &http.Transport{}}
++	defer plain.CloseIdleConnections()
++	code, _, err = get(plain, "http://127.0.0.1:"+httpPort+"/healthz")
++	if err == nil && code == http.StatusOK {
++		t.Fatal("plaintext HTTP request succeeded on the TLS listener")
++	}
++
++	// Plaintext gRPC is not served.
++	conn, err := grpc.NewClient(rpcAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer conn.Close() //nolint:errcheck // Best-effort cleanup of the test connection.
++	callCtx, callCancel := context.WithTimeout(t.Context(), 2*time.Second)
++	defer callCancel()
++	var task tes.Task
++	err = conn.Invoke(callCtx, "/tes.TaskService/GetTask", &tes.GetTaskRequest{Id: "task-1"}, &task)
++	if err == nil {
++		t.Fatal("plaintext gRPC call succeeded on the TLS listener")
++	}
++}
++
++func TestServeTLSWithBasicAuth(t *testing.T) {
++	certFile, keyFile, roots := writeTestCertificate(t)
++	// The production form of the RPC address has no host.
++	rpcPort := strconv.Itoa(tcpPort(t))
++	s := newTestServer(":"+rpcPort, strconv.Itoa(tcpPort(t)))
++	s.TLSCertFile, s.TLSKeyFile = certFile, keyFile
++	s.BasicAuth = []*config.BasicCredential{{User: "alice", Password: "synthetic"}}
++	s.Tasks = &taskservice.Service{Read: &responseViewReader{task: &tes.Task{Id: "task-1", State: tes.Running}}, Log: s.Log}
++	client, base := serveTLS(t, s, roots)
++
++	req, err := http.NewRequest(http.MethodGet, base+"/v1/tasks/task-1", nil)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if code, body, err := do(client, req); err != nil || code != http.StatusUnauthorized {
++		t.Fatalf("task over HTTPS without credentials: status=%d body=%s err=%v", code, body, err)
++	}
++	req.SetBasicAuth("alice", "synthetic")
++	if code, body, err := do(client, req); err != nil || code != http.StatusOK || !strings.Contains(body, "RUNNING") {
++		t.Fatalf("task over HTTPS with credentials: status=%d body=%s err=%v", code, body, err)
++	}
++
++	// A direct gRPC call over TLS still requires credentials.
++	conn, err := grpc.NewClient("127.0.0.1:"+rpcPort, grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12})))
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer conn.Close() //nolint:errcheck // Best-effort cleanup of the test connection.
++	callCtx, callCancel := context.WithTimeout(t.Context(), 2*time.Second)
++	defer callCancel()
++	var task tes.Task
++	err = conn.Invoke(callCtx, "/tes.TaskService/GetTask", &tes.GetTaskRequest{Id: "task-1"}, &task)
++	if status.Code(err) != codes.Unauthenticated {
++		t.Fatalf("gRPC call over TLS without credentials: %v", err)
++	}
++}
++
++func TestGatewayCredentialsPinServedCertificate(t *testing.T) {
++	certFile, keyFile, _ := writeTestCertificate(t)
++	otherCertFile, otherKeyFile, _ := writeTestCertificate(t)
++	_, gatewayCredentials, err := loadTLS(certFile, keyFile)
++	if err != nil {
++		t.Fatal(err)
++	}
++	healthCheck := func(serverCertFile, serverKeyFile string) error {
++		serverTLS, _, err := loadTLS(serverCertFile, serverKeyFile)
++		if err != nil {
++			t.Fatal(err)
++		}
++		listener, err := net.Listen("tcp", "127.0.0.1:0")
++		if err != nil {
++			t.Fatal(err)
++		}
++		server := grpc.NewServer(grpc.Creds(credentials.NewTLS(serverTLS)))
++		healthpb.RegisterHealthServer(server, health.NewServer())
++		go server.Serve(listener) //nolint:errcheck // Stop below ends Serve.
++		defer server.Stop()
++		conn, err := grpc.NewClient(listener.Addr().String(), grpc.WithTransportCredentials(gatewayCredentials))
++		if err != nil {
++			t.Fatal(err)
++		}
++		defer conn.Close() //nolint:errcheck // Best-effort cleanup of the test connection.
++		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
++		defer cancel()
++		_, err = healthpb.NewHealthClient(conn).Check(ctx, &healthpb.HealthCheckRequest{})
++		return err
++	}
++	if err := healthCheck(otherCertFile, otherKeyFile); err == nil || !strings.Contains(err.Error(), "unexpected certificate") {
++		t.Fatalf("gateway credentials with a different certificate: %v", err)
++	}
++	if err := healthCheck(certFile, keyFile); err != nil {
++		t.Fatalf("gateway credentials with the served certificate: %v", err)
++	}
++}
++
++func TestLoadTLSRequiresCertificateAndKey(t *testing.T) {
++	certFile, keyFile, _ := writeTestCertificate(t)
++	for _, tc := range []struct{ name, cert, key string }{
++		{"key only", "", keyFile},
++		{"certificate only", certFile, ""},
++		{"missing file", certFile, filepath.Join(t.TempDir(), "absent.key")},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			if _, _, err := loadTLS(tc.cert, tc.key); err == nil {
++				t.Fatal("incomplete TLS configuration accepted")
++			}
++		})
++	}
++	serverTLS, _, err := loadTLS("", "")
++	if err != nil || serverTLS != nil {
++		t.Fatalf("TLS without configuration = %v, %v; want plaintext", serverTLS, err)
++	}
++}
+diff --git a/website/config.yaml b/website/config.yaml
+index a858cbd..565e3bc 100644
+--- a/website/config.yaml
++++ b/website/config.yaml
+@@ -122,6 +122,10 @@ menu:
+       pageRef: /docs/security/oauth2
+       parent: Security
+       weight: 10
++    - name: TLS
++      pageRef: /docs/security/tls
++      parent: Security
++      weight: 10
+     - name: Security
+       pageRef: /docs/security
+       weight: 10
