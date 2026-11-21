@@ -84,9 +84,15 @@ _SOURCES = (
     "images/worker/candidate/replacement-worker.Dockerfile",
     "reference-platform/cluster/push-image.sh",
 )
+# The exit status of the launch script when the token reached it incomplete.
+_INCOMPLETE = 75
+# A token on standard input can arrive incomplete, so the script refuses one of another
+# length before it sends a request.
 _LAUNCH = """import json,sys,urllib.error,urllib.request
+token=sys.stdin.read().strip()
+if len(token)!=int(sys.argv[3]): sys.exit(75)
 request=urllib.request.Request(sys.argv[2],method=sys.argv[1],
- headers={'Authorization':'Bearer '+sys.stdin.read().strip()})
+ headers={'Authorization':'Bearer '+token})
 try:
  with urllib.request.urlopen(request,timeout=300) as response:
   print(json.dumps({'status':response.status,'body':response.read().decode()}))
@@ -357,24 +363,34 @@ def _launch(cluster: Cluster, method: str) -> dict[str, Any]:
 
 
 def _call(cluster: Cluster, method: str, token: str) -> dict[str, Any]:
-    reply: dict[str, Any] = json.loads(
-        cluster.kubectl(
-            "exec",
-            "--stdin",
-            "--namespace",
-            _SESSIONS,
-            _LAUNCHER,
-            "--",
-            _PYTHON,
-            "-I",
-            "-c",
-            _LAUNCH,
-            method,
-            f"{_CONTROL}/v1/researchers/{_SUBJECT}/projects/{_PROJECT}/launch",
-            stdin=token,
-        )
-    )
-    return reply
+    """Send one launch request; a token that reached the pod incomplete is sent again."""
+    token = token.strip()
+    for attempt in range(1, 6):
+        try:
+            output = cluster.kubectl(
+                "exec",
+                "--stdin",
+                "--namespace",
+                _SESSIONS,
+                _LAUNCHER,
+                "--",
+                _PYTHON,
+                "-I",
+                "-c",
+                _LAUNCH,
+                method,
+                f"{_CONTROL}/v1/researchers/{_SUBJECT}/projects/{_PROJECT}/launch",
+                str(len(token)),
+                stdin=token,
+            )
+        except subprocess.CalledProcessError as error:
+            if error.returncode != _INCOMPLETE:
+                raise
+            sys.stderr.write(f"The launch token reached the pod incomplete (attempt {attempt})\n")
+            continue
+        reply: dict[str, Any] = json.loads(output)
+        return reply
+    raise RuntimeError("The launch token did not reach the pod complete")
 
 
 def _provider_certificate(cluster: Cluster, host: str) -> dict[str, str]:
