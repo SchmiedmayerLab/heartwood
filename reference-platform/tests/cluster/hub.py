@@ -18,11 +18,14 @@ import json
 import re
 import secrets
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import parse_qs, urlencode, urlsplit
+from uuid import uuid4
 
-from identity import PLATFORM, SESSIONS, curl, secret, write_private
+from identity import PLATFORM, SESSIONS, curl, researcher, secret, write_private
 from kube import Cluster
 
 ORIGIN = "https://proxy-public.heartwood-platform.svc.cluster.local"
@@ -245,3 +248,170 @@ def wait_for_gateway(browser: Browser, base: str, timeout: float = 420) -> None:
                 return
         time.sleep(3)
     raise AssertionError(f"the gateway at {base} did not answer")
+
+
+@dataclass
+class Server:
+    """One named server of a researcher, opened through the Hub's proxy."""
+
+    browser: Browser
+    subject: str
+    project: str
+    session: str = ""
+    capability: str = ""
+    conversation: str = ""
+
+    @property
+    def user(self) -> str:
+        return researcher(self.subject)
+
+    @property
+    def base(self) -> str:
+        return f"/user/{self.user}/{self.project}"
+
+    def pod(self) -> dict[str, Any]:
+        (pod,) = gateway_pods(self.browser.cluster, self.session)
+        return pod
+
+    def start(self) -> None:
+        status, body = self.browser.spawn(self.user, self.project)
+        assert status == 302, body[:300]
+        wait_for_gateway(self.browser, self.base)
+        (pod,) = [
+            pod
+            for pod in gateway_pods(self.browser.cluster)
+            if pod["metadata"]["labels"].get("hub.jupyter.org/username") == self.user
+            and pod["metadata"]["labels"].get("hub.jupyter.org/servername") == self.project
+        ]
+        self.session = pod["metadata"]["labels"][SESSION_LABEL]
+        self.capability = self.browser.launch(self.base)
+
+    def stop(self) -> None:
+        self.browser.hub_api("DELETE", f"/users/{self.user}/servers/{self.project}")
+        deadline = time.monotonic() + 180
+        while time.monotonic() < deadline:
+            status, user = self.browser.hub_api("GET", f"/users/{self.user}")
+            stopped = status == 200 and self.project not in user.get("servers", {})
+            if stopped and not gateway_pods(self.browser.cluster, self.session):
+                return
+            time.sleep(3)
+        raise AssertionError("the Hub did not stop the server")
+
+    def remove(self) -> None:
+        """Delete the named server, which deletes its session, and wait until it is gone.
+
+        The Hub stops the server and deletes the session after it answers, so the next
+        start of a server of the same name would otherwise race the deletion. The Hub
+        deletes the server's claim last.
+        """
+        self.browser.hub_api(
+            "DELETE", f"/users/{self.user}/servers/{self.project}", {"remove": True}
+        )
+        deadline = time.monotonic() + 300
+        while time.monotonic() < deadline:
+            status, user = self.browser.hub_api("GET", f"/users/{self.user}")
+            gone = status == 200 and self.project not in user.get("servers", {})
+            if gone and not (self.session and self._session_objects()):
+                return
+            time.sleep(3)
+        raise AssertionError("the Hub did not delete the server")
+
+    def _session_objects(self) -> list[str]:
+        """The gateway pods, Secret and claim of the server's session that still exist."""
+        result = self.browser.cluster.kubectl(
+            "get",
+            f"--namespace={SESSIONS}",
+            "pods",
+            f"--selector={SESSION_LABEL}={self.session}",
+            "--output=name",
+        )
+        assert result.returncode == 0, result.stderr
+        named = self.browser.cluster.kubectl(
+            "get",
+            f"--namespace={SESSIONS}",
+            f"secret/hw-gw-{self.session}",
+            f"persistentvolumeclaim/hw-home-{self.session}",
+            "--output=name",
+            "--ignore-not-found",
+        )
+        assert named.returncode == 0, named.stderr
+        return [*result.stdout.split(), *named.stdout.split()]
+
+    def api(
+        self, method: str, path: str, body: dict[str, Any] | None = None, max_time: int = 60
+    ) -> tuple[int, Any]:
+        return self.browser.api(self.base, method, path, self.capability, body, max_time)
+
+    def connect(self, route: str, model: str) -> dict[str, Any]:
+        """Select a model of the route and create a conversation."""
+        status, catalog = self.api(
+            "POST", "/settings/models/catalog", {"connection_id": route, "refresh": True}
+        )
+        assert status == 200, catalog
+        status, settings = self.api(
+            "POST", "/settings/models/connect", {"connection_id": route, "model_id": model}
+        )
+        assert status == 200, settings
+        self.create_conversation()
+        assert isinstance(catalog, dict)
+        return catalog
+
+    def create_conversation(self) -> None:
+        status, created = self.api("POST", "/sessions", {"title": "Model route"})
+        assert status == 201, created
+        self.conversation = created["session_id"]
+
+    def command(self, kind: str, payload: dict[str, Any]) -> None:
+        body = {
+            "schema_version": "heartwood.session-command.v1",
+            "command_id": f"{self.conversation}-{kind}-{uuid4().hex}",
+            "session_id": self.conversation,
+            "kind": kind,
+            "created_at": datetime.now(UTC).isoformat(),
+            "payload": payload,
+        }
+        # A command can start the session's worker before it answers.
+        status, answer = self.api(
+            "POST", f"/sessions/{self.conversation}/commands", body, max_time=600
+        )
+        assert status == 200, answer
+
+    def snapshot(self) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        """Return the conversation's events and the gateway's projection of them."""
+        status, answer = self.api("GET", f"/sessions/{self.conversation}/events")
+        assert status == 200, answer
+        return answer["events"], answer["projection"]
+
+    def events(self) -> list[dict[str, Any]]:
+        return self.snapshot()[0]
+
+    def wait(self, found: Callable[[list[dict[str, Any]]], Any], timeout: float = 420) -> Any:  # noqa: ANN401
+        """Read the conversation's events until ``found`` returns a value."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            events = self.events()
+            result = found(events)
+            if result:
+                return result
+            time.sleep(3)
+        raise AssertionError(json.dumps(self.events()[-8:], indent=1)[-4000:])
+
+
+def events_of(events: list[dict[str, Any]], kind: str) -> list[dict[str, Any]]:
+    return [event for event in events if event["kind"] == kind]
+
+
+def pending_group(events: list[dict[str, Any]]) -> str | None:
+    """Return the first action set that waits for the researcher's decision."""
+    resolved = {
+        event["payload"].get("group_id") for event in events_of(events, "confirmation.resolved")
+    }
+    for event in events_of(events, "confirmation.requested"):
+        group = event["payload"].get("request", {}).get("group_id")
+        if group and group not in resolved:
+            return str(group)
+    return None
+
+
+def error_codes(events: list[dict[str, Any]]) -> list[str]:
+    return [str(event["payload"].get("code")) for event in events_of(events, "error.recorded")]

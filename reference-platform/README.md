@@ -50,7 +50,7 @@ An exception that no longer matches a finding also fails the check.
 ## Chart
 
 The chart `chart/heartwood-platform` installs the platform into the namespace `heartwood-platform` and creates the namespace `heartwood-sessions`, and with the Funnel executor one namespace `hw-jobs-<project>` for each project.
-The platform is for synthetic and open data only.
+The platform is for synthetic and open data only, as [Permitted Data](#permitted-data) states.
 
 | Component | Content |
 |---|---|
@@ -192,6 +192,12 @@ Reading the budgets reserves nothing and admits no work.
 At a launch the service creates the Keycloak client `hw-proj-<project>` unless it exists: a confidential client with the authorization code flow and standard token exchange, without direct access grants and without a service account, and with the optional scopes `svc-control`, `svc-data` and `svc-jobs`.
 It adds the redirect URI of the researcher's gateway, `<hub.publicOrigin>/user/<researcher>/<project>/oauth_callback`, and serializes the updates of one client, because Keycloak replaces the whole client on an update.
 Its Keycloak role `manage-clients` covers every client of the realm.
+
+### Permitted Data
+
+The reference platform is for synthetic and open data only.
+The chart loads the synthetic datasets in `files/datasets/`, and the cluster tests write further synthetic objects into the project buckets.
+The platform is not set up for controlled, sensitive or identifiable data, and such data must not be loaded into it.
 
 ### Data Service
 
@@ -711,12 +717,12 @@ bash reference-platform/cluster/install-chart.sh heartwood --set "images.platfor
   --set "images.funnel=${funnel}"
 (cd reference-platform/services && uv run pytest -c pyproject.toml ../tests/cluster --cluster-context kind-heartwood \
   --ignore ../tests/cluster/test_hub_spawning.py --ignore ../tests/cluster/test_hosted_recovery.py \
-  --ignore ../tests/cluster/test_hosted_worker.py)
+  --ignore ../tests/cluster/test_hosted_worker.py --ignore ../tests/cluster/test_end_to_end.py)
 bash reference-platform/cluster/delete-cluster.sh heartwood
 ```
 
-The Hub's tests in `test_hub_spawning.py`, `test_hosted_recovery.py` and `test_hosted_worker.py` start Heartwood gateways, which require an OpenShell gateway with the recorded patches, so they run with the images of [Worker Qualification](#worker-qualification).
-`test_hosted_worker.py` also needs the worker image in `hub.worker.image` and its interpreter in `hub.modelRoute.binaries`.
+The Hub's tests in `test_hub_spawning.py`, `test_hosted_recovery.py`, `test_hosted_worker.py` and `test_end_to_end.py` start Heartwood gateways, which require an OpenShell gateway with the recorded patches, so they run with the images of [Worker Qualification](#worker-qualification).
+`test_hosted_worker.py` and `test_end_to_end.py` also need the worker image in `hub.worker.image` and its interpreter in `hub.modelRoute.binaries`.
 
 `create-cluster.sh` installs Calico and the Agent Sandbox controller from pinned manifests whose SHA-256 digests it verifies.
 It also starts a registry on the kind network.
@@ -746,6 +752,13 @@ The budget overview shows the chart's allocations and the reservation of each la
 `test_job_service.py` runs a synthetic batch job and a cancellation through the job service's tools with a researcher's exchanged token, and checks the refusal of another project, a GPU request and a reserved tag.
 It also checks that a task created around the job service is cancelled, that an executor pod has no token, no credential and no network, that a worker credential reaches only its own task, that one project's credential is refused by another project's server, and that sessions do not reach the executor API.
 Requests with a token bound to a worker pod show that the admission policy admits an executor Job of the worker's own task and refuses one of another task, one that mounts another task's claim or a Secret, and one with another ServiceAccount, a token or no user namespace.
+`test_end_to_end.py` runs the platform as two synthetic researchers use it.
+Both sign in to the Hub; the first starts the servers of projects demo and other, the second the server of project demo, and each gateway starts with its session's launch context.
+In the first researcher's demo session, a worker on the OpenShell Kubernetes driver follows a script of the synthetic model through the model route: it lists, resolves and reads the project's dataset through the data catalog and the read-only data volume, where a write fails, runs a batch job and cancels a second job through the job service.
+The researcher approves each call of the worker, the gateway's proposal of its outside operation and the release of its result to the worker.
+The tests check the batch job's result in the project's bucket and that the proposal states that jobs reserve no budget.
+The second researcher is refused the first researcher's servers, the dataset of project other and the first researcher's jobs, and the tokens of a demo session reach neither the dataset nor the jobs of project other.
+The session's audit export verifies with the application's verifier and names the researcher by the keyed actor, never by subject or user name, and deleting the server settles the session's inference reservation.
 
 ### Worker Qualification
 
