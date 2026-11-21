@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import dataclasses
 import json
+import secrets
 from pathlib import Path
 from typing import Any
 
@@ -33,7 +34,7 @@ _OBJECTS = (
 )
 _IMAGE = "registry.example.test/openshell-gateway@sha256:" + "1" * 64
 _CA = "-----BEGIN CERTIFICATE-----\nplatform\n-----END CERTIFICATE-----\n"
-_ACTOR_KEY = "synthetic-actor-key-0123456789abcdef"
+_ACTOR_KEY = secrets.token_urlsafe(32)
 _RBAC = "/apis/rbac.authorization.k8s.io/v1"
 
 
