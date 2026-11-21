@@ -217,8 +217,8 @@ The control service sends a projected service account token with the audience `h
 
 A URL is a presigned S3 request of the data service's versitygw account `heartwood-data`, signed for one object and the method `GET`.
 It stays valid for 300 seconds, which covers starting the copy pod, plus one second for each MiB of the object, up to one hour.
-The account reads the objects of every project bucket through a bucket policy and can neither write nor list.
-Its key lives in the Secret `versitygw-data`; the root account of versitygw in `versitygw-root` is used only by versitygw and the bootstrap Jobs.
+The account reads the objects of every project bucket through the bucket policies of [Bucket Policies](#bucket-policies) and can neither write nor list.
+Its key lives in the Secret `versitygw-data`; the root account of versitygw in `versitygw-root` is used only by versitygw and the hook Jobs that create the buckets and accounts, write the objects and set the bucket policies.
 
 The catalog tools follow Heartwood's operation binding for research MCP servers.
 Each takes `project_id` and `operation_id`, requires an exchanged token for `heartwood-data` of a project member, refuses a `project_id` other than the token's project, and returns a `heartwood.platform-operation-observation.v1` that names the launch context of the researcher's session, which the service reads from the control service.
@@ -346,9 +346,17 @@ The quota bounds the number of Jobs in the namespace and allows GPUs only to a p
 A worker can read the logs of every pod in its namespace, including the executor logs of other tasks of the same project.
 A session namespace that the control service creates may not carry the jobs label.
 The job service holds the Secret `heartwood-jobs-executors` with its password at each project's server, and `heartwood-jobs-store` with its account `hw-jobs-<project>` at the object store.
-The hook Job `heartwood-jobs-store` creates these accounts and sets each project bucket's policy: the account reads the bucket's objects and writes below `results/`.
+The hook Job `heartwood-jobs-store` creates these accounts, and each account reads its project bucket's objects and writes below `results/` through the bucket policies of [Bucket Policies](#bucket-policies).
 The job service runs as one replica with its records on the claim `data-heartwood-jobs-0` and its certificate `heartwood-jobs-tls`; gateways in the sessions namespace reach it on port 8443.
 It reaches Keycloak for the keys of researchers' tokens, the control service with a projected token of the audience `heartwood-control`, the project servers, and the object store.
+
+### Bucket Policies
+
+versitygw keeps one policy for each bucket, and writing a policy replaces the previous one.
+So one hook Job, `heartwood-bucket-policies`, writes the policy of each project bucket with the statements of every account that reaches it, after the hooks that create the accounts.
+In each bucket `hw-project-<project>`, the data service's account reads every object, and the project's job account `hw-jobs-<project>` reads every object and writes below `results/`.
+The ConfigMap `heartwood-bucket-policies` holds these grants, and `heartwood_platform.common.bucket_policies` writes them with the root account over HTTPS.
+No other Job writes a bucket policy.
 
 ### Session Namespaces
 

@@ -7,14 +7,13 @@
 """Load the synthetic catalog into the object store: python -m heartwood_platform.data.seed.
 
 The chart's bootstrap Job runs it with the object store's root account after the project
-buckets exist. It writes each catalog object into its project's bucket and gives the data
-service's account read access to the objects of every project bucket, and nothing else.
+buckets exist. It writes each catalog object into its project's bucket; the data service's
+account reads them through the bucket policies of heartwood_platform.common.bucket_policies.
 """
 
 from __future__ import annotations
 
 import hashlib
-import json
 import ssl
 import sys
 from collections.abc import Callable
@@ -50,24 +49,7 @@ class SeedSettings(BaseModel):
     ca_file: Path
     root_access_key_file: Path
     root_secret_key_file: Path
-    data_access_key_file: Path
-    buckets: tuple[str, ...]
     objects: tuple[SeedObject, ...]
-
-
-def read_policy(bucket: str, account: str) -> dict[str, object]:
-    """The bucket policy that lets one account read every object of a bucket."""
-    return {
-        "Version": "2012-10-17",
-        "Statement": [
-            {
-                "Effect": "Allow",
-                "Principal": {"AWS": [account]},
-                "Action": ["s3:GetObject"],
-                "Resource": [f"arn:aws:s3:::{bucket}/*"],
-            }
-        ],
-    }
 
 
 def seed(
@@ -75,15 +57,14 @@ def seed(
     client: httpx.Client,
     clock: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> None:
-    """Write the objects and the read policies; each step can be repeated."""
+    """Write the objects; the step can be repeated."""
 
     def read(path: Path) -> str:
         return path.read_text(encoding="utf-8").strip()
 
     root = Credentials(read(settings.root_access_key_file), read(settings.root_secret_key_file))
-    account = read(settings.data_access_key_file)
 
-    def put(path: str, content: bytes, query: dict[str, str] | None = None) -> None:
+    def put(path: str, content: bytes) -> None:
         url = presign(
             method="PUT",
             endpoint=settings.endpoint,
@@ -92,7 +73,6 @@ def seed(
             region=settings.region,
             expires=_EXPIRES,
             now=clock(),
-            query=query,
         )
         response = client.put(url, content=content)
         if response.status_code not in {httpx.codes.OK, httpx.codes.NO_CONTENT}:
@@ -104,10 +84,6 @@ def seed(
             raise RuntimeError(f"{item.file.name} differs from its catalog checksum")
         put(f"/{item.bucket}/{item.key}", content)
         print(f"wrote {item.bucket}/{item.key}")
-    for bucket in settings.buckets:
-        policy = json.dumps(read_policy(bucket, account)).encode()
-        put(f"/{bucket}", policy, {"policy": ""})
-        print(f"set the read policy of {bucket}")
 
 
 def main() -> None:

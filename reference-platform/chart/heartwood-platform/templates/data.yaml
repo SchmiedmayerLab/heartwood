@@ -55,9 +55,7 @@ is read from files/datasets/<dataset>/<file>, and its size and checksum are comp
 {{- /* The objects of every dataset, by DRS identifier, and where the bootstrap Job writes them. */ -}}
 {{- define "heartwood.dataSeed" -}}
 {{- $objects := list -}}
-{{- $buckets := list -}}
 {{- range $project := .Values.projects -}}
-{{- $buckets = append $buckets (printf "hw-project-%s" $project.id) -}}
 {{- range $dataset := $project.datasets | default list -}}
 {{- range $file := $dataset.files -}}
 {{- $content := $.Files.Get (printf "files/datasets/%s/%s" $dataset.id $file) -}}
@@ -65,7 +63,7 @@ is read from files/datasets/<dataset>/<file>, and its size and checksum are comp
 {{- end -}}
 {{- end -}}
 {{- end -}}
-{{- dict "endpoint" "https://versitygw:7070" "region" "us-east-1" "ca_file" "/etc/heartwood-data/platform-ca/ca.crt" "root_access_key_file" "/etc/heartwood-data/root/access-key" "root_secret_key_file" "/etc/heartwood-data/root/secret-key" "data_access_key_file" "/etc/heartwood-data/store/access-key" "buckets" $buckets "objects" $objects | toPrettyJson -}}
+{{- dict "endpoint" "https://versitygw:7070" "region" "us-east-1" "ca_file" "/etc/heartwood-data/platform-ca/ca.crt" "root_access_key_file" "/etc/heartwood-data/root/access-key" "root_secret_key_file" "/etc/heartwood-data/root/secret-key" "objects" $objects | toPrettyJson -}}
 {{- end }}
 # The data service's account of the object store, which reads the objects of every
 # project bucket and nothing else.
@@ -494,9 +492,6 @@ spec:
             - name: root
               mountPath: /etc/heartwood-data/root
               readOnly: true
-            - name: store
-              mountPath: /etc/heartwood-data/store
-              readOnly: true
             - name: platform-ca
               mountPath: /etc/heartwood-data/platform-ca
               readOnly: true
@@ -513,13 +508,6 @@ spec:
         - name: root
           secret:
             secretName: versitygw-root
-        # Only the access key: the Job grants the account read access by its key identifier.
-        - name: store
-          secret:
-            secretName: versitygw-data
-            items:
-              - key: access-key
-                path: access-key
         - name: platform-ca
           configMap:
             name: platform-ca

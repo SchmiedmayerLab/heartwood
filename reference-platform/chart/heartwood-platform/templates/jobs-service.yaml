@@ -51,16 +51,6 @@ metadata:
 data:
   configuration.json: |
     {{- toPrettyJson $configuration | nindent 4 }}
-  # The bucket policies that the store bootstrap sets: each project's job account reads
-  # the project's objects and writes below results/.
-  bucket-policies.json: |
-    {{- $policies := dict -}}
-    {{- range .Values.projects }}
-    {{- $bucket := printf "hw-project-%s" .id }}
-    {{- $statement := list (dict "Effect" "Allow" "Principal" (dict "AWS" (list (printf "hw-jobs-%s" .id))) "Action" (list "s3:GetObject") "Resource" (list (printf "arn:aws:s3:::%s/*" $bucket))) (dict "Effect" "Allow" "Principal" (dict "AWS" (list (printf "hw-jobs-%s" .id))) "Action" (list "s3:PutObject") "Resource" (list (printf "arn:aws:s3:::%s/results/*" $bucket))) }}
-    {{- $_ := set $policies $bucket (dict "Version" "2012-10-17" "Statement" $statement) }}
-    {{- end }}
-    {{- toPrettyJson $policies | nindent 4 }}
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -204,7 +194,8 @@ spec:
           requests:
             storage: {{ .Values.jobs.storage }}
 ---
-# Creates each project's job account in the object store and sets the bucket policies.
+# Creates each project's job account in the object store; heartwood-bucket-policies grants
+# the accounts their access.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -228,7 +219,7 @@ spec:
       enableServiceLinks: false
       securityContext:
         {{- include "heartwood.podSecurityContext" 65532 | nindent 8 }}
-      initContainers:
+      containers:
         - name: accounts
           image: {{ .Values.images.versitygw }}
           securityContext:
@@ -266,30 +257,6 @@ spec:
             - name: platform-ca
               mountPath: /etc/platform-ca
               readOnly: true
-      containers:
-        - name: policies
-          image: {{ .Values.images.platformServices }}
-          args: [heartwood_platform.jobs.store_policies, /etc/heartwood-jobs/bucket-policies.json]
-          securityContext:
-            {{- include "heartwood.containerSecurityContext" . | nindent 12 }}
-            readOnlyRootFilesystem: true
-          env:
-            - name: STORE_ENDPOINT
-              value: https://versitygw:7070
-            {{- include "heartwood.versitygwAdmin" . | nindent 12 }}
-          resources:
-            requests:
-              cpu: 10m
-              memory: 64Mi
-            limits:
-              memory: 256Mi
-          volumeMounts:
-            - name: policies
-              mountPath: /etc/heartwood-jobs
-              readOnly: true
-            - name: platform-ca
-              mountPath: /etc/platform-ca
-              readOnly: true
       volumes:
         - name: store
           secret:
@@ -300,10 +267,4 @@ spec:
             items:
               - key: ca.crt
                 path: ca.crt
-        - name: policies
-          configMap:
-            name: heartwood-jobs
-            items:
-              - key: bucket-policies.json
-                path: bucket-policies.json
 {{- end }}

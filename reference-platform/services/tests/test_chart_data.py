@@ -96,7 +96,6 @@ def test_the_catalog_holds_each_dataset_file_with_its_size_and_checksum(
         _named(objects, "ConfigMap", "heartwood-data")["data"]["seed.json"]
     )
     assert {item.file.name for item in seed.objects} == set(stored)
-    assert seed.buckets == ("hw-project-demo", "hw-project-other", "hw-project-small")
 
 
 def test_a_dataset_file_that_is_missing_fails_the_rendering(tmp_path: Path) -> None:
@@ -216,6 +215,7 @@ def test_the_data_service_reviews_tokens_and_holds_only_the_read_account(
         "versitygw-bootstrap",
         "heartwood-data-bootstrap",
         "heartwood-jobs-store",
+        "heartwood-bucket-policies",
     }
 
 

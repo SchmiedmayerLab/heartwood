@@ -192,13 +192,6 @@ def test_the_job_service_configuration_matches_the_executors(
         (user,) = _server_config(objects, project.id)["Server"]["BasicAuth"]
         assert base64.b64decode(passwords[project.id]).decode() == user["Password"]
         assert project.store.bucket == f"hw-project-{project.id}"
-    policies = json.loads(config_map["data"]["bucket-policies.json"])
-    statements = policies["hw-project-demo"]["Statement"]
-    assert [(item["Action"], item["Resource"]) for item in statements] == [
-        (["s3:GetObject"], ["arn:aws:s3:::hw-project-demo/*"]),
-        (["s3:PutObject"], ["arn:aws:s3:::hw-project-demo/results/*"]),
-    ]
-    assert {item["Principal"]["AWS"][0] for item in statements} == {"hw-jobs-demo"}
 
 
 def test_the_job_service_is_reached_by_gateways_and_uses_no_api_token(
