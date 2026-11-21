@@ -29,7 +29,17 @@ from uuid import uuid4
 
 import pytest
 from hub import Browser, gateway_pods, wait_for_gateway
-from identity import CONTROL, FIRST, PLATFORM, SECOND, SESSIONS, probe, request, secret
+from identity import (
+    CONTROL,
+    FIRST,
+    PLATFORM,
+    SECOND,
+    SESSIONS,
+    probe,
+    request,
+    researcher,
+    secret,
+)
 from kube import Cluster
 
 _ROUTE = "platform-route"
@@ -50,10 +60,10 @@ class Server:
 
     @property
     def base(self) -> str:
-        return f"/user/{FIRST}/{self.project}"
+        return f"/user/{researcher(FIRST)}/{self.project}"
 
     def start(self) -> None:
-        status, body = self.browser.spawn(FIRST, self.project)
+        status, body = self.browser.spawn(researcher(FIRST), self.project)
         assert status == 302, body[:300]
         wait_for_gateway(self.browser, self.base)
         (pod,) = [
@@ -65,10 +75,10 @@ class Server:
         self.capability = self.browser.launch(self.base)
 
     def stop(self) -> None:
-        self.browser.hub_api("DELETE", f"/users/{FIRST}/servers/{self.project}")
+        self.browser.hub_api("DELETE", f"/users/{researcher(FIRST)}/servers/{self.project}")
         deadline = time.monotonic() + 180
         while time.monotonic() < deadline:
-            status, user = self.browser.hub_api("GET", f"/users/{FIRST}")
+            status, user = self.browser.hub_api("GET", f"/users/{researcher(FIRST)}")
             stopped = status == 200 and self.project not in user.get("servers", {})
             if stopped and not gateway_pods(self.browser.cluster, self.session):
                 return
@@ -159,7 +169,7 @@ def small(browser: Browser) -> Iterator[Server]:
     try:
         yield server
     finally:
-        browser.hub_api("DELETE", f"/users/{FIRST}/servers/small", {"remove": True})
+        browser.hub_api("DELETE", f"/users/{researcher(FIRST)}/servers/small", {"remove": True})
 
 
 def test_the_gateway_discovers_the_route_models_with_its_discovery_key(small: Server) -> None:
@@ -224,7 +234,7 @@ def test_settlement_records_the_spending_above_the_key_budget(
     small: Server, cluster: Cluster
 ) -> None:
     session = small.session
-    small.browser.hub_api("DELETE", f"/users/{FIRST}/servers/small", {"remove": True})
+    small.browser.hub_api("DELETE", f"/users/{researcher(FIRST)}/servers/small", {"remove": True})
     query = (
         "import sqlite3,sys;c=sqlite3.connect('/var/lib/heartwood-control/control.sqlite3');"
         'print(c.execute("SELECT state, amount, incurred FROM reservation WHERE holder=?",'
@@ -261,15 +271,15 @@ def test_the_second_researcher_cannot_start_a_server_of_project_small(
     with probe(cluster, "hw-worker-second", probe_image) as pod:
         second = Browser(cluster, pod, "researcher-two")
         second.sign_in_to_hub()
-        status, _, page = second.get(f"/hub/spawn/{SECOND}/small")
+        status, _, page = second.get(f"/hub/spawn/{researcher(SECOND)}/small")
         assert 'value="small"' not in page
         # The Hub accepts the request and the spawn hook refuses the start.
-        status, answer = second.hub_api("POST", f"/users/{SECOND}/servers/small")
+        status, answer = second.hub_api("POST", f"/users/{researcher(SECOND)}/servers/small")
         assert status == 202, answer
         deadline = time.monotonic() + 120
         started: dict[str, Any] | None = None
         while time.monotonic() < deadline:
-            status, user = second.hub_api("GET", f"/users/{SECOND}")
+            status, user = second.hub_api("GET", f"/users/{researcher(SECOND)}")
             assert status == 200, user
             started = user["servers"].get("small")
             if started is None or not started["pending"]:
@@ -279,7 +289,7 @@ def test_the_second_researcher_cannot_start_a_server_of_project_small(
         assert not [
             pod
             for pod in gateway_pods(cluster)
-            if pod["metadata"]["labels"].get("hub.jupyter.org/username") == SECOND
+            if pod["metadata"]["labels"].get("hub.jupyter.org/username") == researcher(SECOND)
         ]
 
 
@@ -290,7 +300,7 @@ def demo(browser: Browser) -> Iterator[Server]:
     try:
         yield server
     finally:
-        browser.hub_api("DELETE", f"/users/{FIRST}/servers/demo", {"remove": True})
+        browser.hub_api("DELETE", f"/users/{researcher(FIRST)}/servers/demo", {"remove": True})
 
 
 def _turn(server: Server, prompt: str) -> None:
@@ -320,7 +330,7 @@ def test_a_rotated_key_fails_the_attached_worker_and_reaches_the_next_one(
         cluster,
         demo.browser.pod,
         "POST",
-        f"{CONTROL}/v1/researchers/{FIRST}/projects/demo/model-key",
+        f"{CONTROL}/v1/researchers/{researcher(FIRST)}/projects/demo/model-key",
         token,
     )
     assert status == 200, answer
