@@ -215,6 +215,41 @@ The [sandbox gateway](#sandbox-gateway), with these settings:
 Each sandbox has its own supervisor pod; the shared supervisor topology is not qualified.
 The driver's policy `openshell-sandbox-supervisors` allows supervisor pods all egress, so the namespaces of other services deny ingress by default and admit supervisor pods only where a route is intended.
 
+### Published Images
+
+For each main-branch commit that passes native qualification and the Kubernetes qualification and whose native evidence is attested, the [Native Qualification workflow](https://github.com/SchmiedmayerLab/heartwood/blob/main/.github/workflows/native-qualification.yml) publishes the images of the Kubernetes worker path to the GitHub Container Registry for `linux/amd64`:
+
+| Image | Content | Chart value |
+|---|---|---|
+| `ghcr.io/schmiedmayerlab/heartwood-worker` | The managed worker | `hub.worker.image`, `sessions.stagingImages` |
+| `ghcr.io/schmiedmayerlab/heartwood-runtime` | The Heartwood runtime with `llama-server` | `images.modelRuntime` |
+| `ghcr.io/schmiedmayerlab/heartwood-hosted-gateway` | The hosted Heartwood gateway | `images.hostedGateway` |
+| `ghcr.io/schmiedmayerlab/heartwood-sandbox-gateway` | The [sandbox gateway](#sandbox-gateway) build | `images.openshellGateway` |
+| `ghcr.io/schmiedmayerlab/heartwood-platform-services` | The control, data and job services of the reference platform | `images.platformServices` |
+| `ghcr.io/schmiedmayerlab/heartwood-funnel` | Funnel with its recorded patches | `images.funnel` |
+
+The workflow pushes each image once under the tag `sha-<commit>` and refuses to replace an existing tag.
+Registry tags can be moved by anyone with write access to the package, so a deployment names each image by digest.
+The images are built from the candidate wheels and the gateway build that the run qualified, with the same build steps.
+They are built again for publication, so their digests differ from those of the images the qualification ran.
+Each digest has a GitHub build provenance attestation of that run.
+The run's artifact `published-images-<commit>` records the digests and the worker image's interpreter, and has an attestation of its own.
+
+Verify an image before deploying it:
+
+```bash
+commit=0123456789abcdef0123456789abcdef01234567  # the commit the image claims
+image=ghcr.io/schmiedmayerlab/heartwood-worker
+digest="$(docker buildx imagetools inspect "${image}:sha-${commit}" --format '{{json .Manifest}}' | jq --raw-output .digest)"
+gh attestation verify "oci://${image}@${digest}" --repo SchmiedmayerLab/heartwood \
+  --signer-workflow SchmiedmayerLab/heartwood/.github/workflows/native-qualification.yml \
+  --source-ref refs/heads/main --source-digest "${commit}"
+```
+
+`--signer-workflow`, `--source-ref` and `--source-digest` require that the Native Qualification workflow attested the digest in a run of the main branch at that commit, as for the [qualification evidence](../architecture/testing.md#native-qualification-evidence).
+The attestation establishes where and from which commit the image came; the run's qualification evidence establishes what was tested.
+Deploy the verified reference `${image}@${digest}`, never the tag.
+
 ### Sandbox Gateway
 
 Heartwood provides a sandbox gateway build: the upstream OpenShell gateway at the revision recorded in `images/worker/candidate/gateway.json`, with the patches listed there, both the Docker and the Kubernetes compute drivers, and version `0.1.9+heartwood.3`, a local version that no upstream release uses.
@@ -223,7 +258,8 @@ The patches, their purpose and the upstream change that allows their removal are
 
 #### Obtain and Verify
 
-Build the gateway from the release's commit with the shared build script, as described in [Testing and Evidence](../architecture/testing.md#candidate-builds):
+The image `ghcr.io/schmiedmayerlab/heartwood-sandbox-gateway` is this build, packaged as below and verified as in [Published Images](#published-images).
+To build the gateway yourself, build it from the release's commit with the shared build script, as described in [Testing and Evidence](../architecture/testing.md#candidate-builds):
 
 ```bash
 uv run --no-project --python 3.12.15 deploy/build-worker-candidate.py \

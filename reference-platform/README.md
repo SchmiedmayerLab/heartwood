@@ -23,7 +23,7 @@ It is kept apart from the Heartwood application packages under `packages/`.
 | `infrastructure/gke/` | OpenTofu configuration of the GKE cluster; see its [README](infrastructure/gke/README.md) |
 | `services/` | Python project `heartwood-reference-platform` with its own `pyproject.toml` and `uv.lock`; package `heartwood_platform` in `src/`, service and chart template tests in `tests/`, and the `Dockerfile` of the platform services image |
 | `tests/cluster/` | Tests that run against a cluster with the chart installed |
-| `tools/` | `check_cloud_boundary.py`, the cloud boundary check, `render_openshell.py` with its values file, and `prepare_funnel.py`, which prepares the Funnel build |
+| `tools/` | `check_cloud_boundary.py`, the cloud boundary check, `render_openshell.py` with its values file, `prepare_funnel.py`, which prepares the Funnel build, and `publish_images.py`, which publishes the platform images and pins them in chart values |
 
 ## Separation Rules
 
@@ -650,6 +650,29 @@ cd reference-platform/services
 uv run python ../tools/render_openshell.py          # writes the file
 uv run python ../tools/render_openshell.py --check  # compares it with a fresh render
 ```
+
+### Published Image Values
+
+`tools/publish_images.py values` writes `chart/heartwood-platform/values-published.yaml`, which pins the [published images](../documentation/operate/platform-requirements.md#published-images) of one main-branch commit by digest: `images.platformServices`, `images.openshellGateway`, `images.hostedGateway`, `images.modelRuntime`, `images.funnel`, `hub.worker.image`, `sessions.stagingImages` and the worker's interpreter in `hub.modelRoute.binaries`.
+Pass it after the cluster's values file, for example `--values values-gke.yaml --values values-published.yaml`.
+The file is written and changed only in a reviewed change after a Native Qualification run on the main branch published the images, within the 90 days for which the run keeps its record:
+
+```bash
+commit=0123456789abcdef0123456789abcdef01234567  # the published commit
+run="$(gh run list --repo SchmiedmayerLab/heartwood --workflow native-qualification.yml \
+  --commit "${commit}" --status success --json databaseId --jq '.[0].databaseId')"
+test -n "${run}"
+gh run download "${run}" --repo SchmiedmayerLab/heartwood --name "published-images-${commit}" \
+  --dir "${TMPDIR:-/tmp}/published-images"
+python3 reference-platform/tools/publish_images.py values "${TMPDIR:-/tmp}/published-images/published-images.json"
+```
+
+`publish_images.py values` checks that the record names every image under the commit's tag by digest, runs `gh attestation verify` for the record and for each digest, bound to the Native Qualification workflow, the main branch and the commit, and only then writes the file.
+The change names the commit and the run.
+
+The workflow's `publish-images` job runs `publish_images.py build` and then `publish_images.py push`, and logs in to the registry between the two.
+`build` requires a checkout of the commit without changes to tracked files and builds the images as the qualification does.
+`push` refuses to replace an existing `sha-<commit>` tag, fails when the registry cannot be read, and writes the record `published-images.json` with the digest that each push reported.
 
 ## Funnel Image
 

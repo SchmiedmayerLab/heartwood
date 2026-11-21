@@ -814,7 +814,14 @@ def test_every_main_commit_completes_its_own_qualification() -> None:
     assert workflow["permissions"] == {"contents": "read"}
     # A concurrency group keeps at most one pending run, so a newer commit would replace it.
     assert "concurrency" not in workflow
-    for job in workflow["jobs"].values():
+    for name, job in workflow["jobs"].items():
+        # Only the publication of a commit's images waits for another run of that commit.
+        if name == "publish-images":
+            assert job["concurrency"] == {
+                "group": "publish-images-${{ github.sha }}",
+                "cancel-in-progress": "false",
+            }
+            continue
         assert "concurrency" not in job
     candidate = _workflow("worker-candidate.yml")
     assert "concurrency" not in candidate
@@ -859,6 +866,44 @@ def test_only_a_main_job_without_candidate_code_can_attest() -> None:
     )
     assert attest["uses"] == "actions/attest@v4"
     assert attest["with"] == {"subject-path": "test-results/native-qualification/SHA256SUMS"}
+
+
+def test_images_are_published_after_both_qualifications_and_attested_without_build_code() -> None:
+    jobs = _workflow("native-qualification.yml")["jobs"]
+    publish, attestation = jobs["publish-images"], jobs["image-attestation"]
+    spec = importlib.util.spec_from_file_location(
+        "publish_images", _ROOT / "reference-platform/tools/publish_images.py"
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    tool = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tool)
+
+    assert publish["needs"] == [
+        "native-qualification",
+        "kubernetes-qualification",
+        "evidence-attestation",
+    ]
+    assert publish["if"] == "github.ref == 'refs/heads/main'"
+    # The job that runs build code writes packages and never signs.
+    assert publish["permissions"] == {"contents": "read", "packages": "write"}
+    names = [step["name"] for step in publish["steps"]]
+    steps = {step["name"]: step for step in publish["steps"]}
+    # The build needs no registry credential, so the login follows it.
+    assert names.index("Build the images of the commit") < names.index(
+        "Log in to GitHub Container Registry"
+    )
+    assert '--commit "${GITHUB_SHA}"' in steps["Build the images of the commit"]["run"]
+    push = steps["Push the images under the commit tag"]["run"]
+    assert '--registry "ghcr.io/${GITHUB_REPOSITORY_OWNER,,}"' in push
+    assert attestation["needs"] == "publish-images"
+    assert attestation["if"] == "github.ref == 'refs/heads/main'"
+    assert attestation["permissions"] == {"attestations": "write", "id-token": "write"}
+    assert attestation["strategy"]["matrix"]["subject"] == [*tool.IMAGES, "record"]
+    # The signing job checks out and runs nothing of the repository.
+    (attest,) = attestation["steps"]
+    assert attest["uses"].startswith("actions/attest@")
+    assert set(attest["with"]) == {"subject-name", "subject-digest"}
 
 
 _RELEASE_EVIDENCE = "Verify attested native qualification evidence"
