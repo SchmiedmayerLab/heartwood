@@ -12,7 +12,7 @@ import hashlib
 import json
 import re
 import subprocess
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -104,14 +104,19 @@ class FakeOpenShell:
         self.profiles: dict[str, dict[str, Any]] = {}
         self.providers: dict[str, str] = {}
         self.fail: str | None = None
-        # Requests to the gateway that fail to connect, as a new gateway's can.
+        # Requests to the gateway that fail to connect, as a new or restarted gateway's
+        # can, and the seconds that each of them takes.
         self.unreachable = 0
+        self.unreachable_seconds = 0.0
+        self.advance: Callable[[float], None] = lambda _: None
+        self.timeouts: list[float] = []
 
     def run(
-        self, arguments: Sequence[str], environment: dict[str, str]
+        self, arguments: Sequence[str], environment: dict[str, str], timeout: float
     ) -> subprocess.CompletedProcess[str]:
         command = list(arguments[1:])
         self.calls.append(command)
+        self.timeouts.append(timeout)
         # The key never appears in the arguments.
         assert not any(value.startswith("sk-") for value in arguments)
         home = Path(environment["XDG_CONFIG_HOME"])
@@ -121,6 +126,7 @@ class FakeOpenShell:
 
         if self.unreachable and command[:2] != ["gateway", "add"]:
             self.unreachable -= 1
+            self.advance(self.unreachable_seconds)
             return done(1, "Error: connect error: transport error")
         if self.fail is not None and command[:2] == self.fail.split():
             return done(1, "error: the gateway refused the request")
@@ -134,7 +140,11 @@ class FakeOpenShell:
             "session",
         ]
         if command[:2] == ["workspace", "get"]:
-            return done(0 if command[2] in self.workspaces else 1)
+            if command[2] in self.workspaces:
+                return done()
+            return done(
+                1, f"Error: status: NotFound, message: \"workspace '{command[2]}' not found\""
+            )
         if command[:2] == ["workspace", "create"]:
             self.workspaces.add(command[3])
             return done()
@@ -146,7 +156,9 @@ class FakeOpenShell:
             self.profiles[profile["id"]] = profile
             return done()
         if command[:2] == ["provider", "get"]:
-            return done(0 if command[2] in self.providers else 1)
+            if command[2] in self.providers:
+                return done()
+            return done(1, 'Error: status: NotFound, message: "provider not found"')
         if command[:2] in (["provider", "create"], ["provider", "update"]):
             name = command[3] if command[1] == "create" else command[2]
             variable = command[command.index("--credential") + 1]
@@ -163,6 +175,8 @@ class Route:
         self.proxy = FakeProxy()
         self.openshell = FakeOpenShell()
         self.sleeps: list[float] = []
+        self.now = 0.0
+        self.openshell.advance = self.advance
         client = httpx.Client(
             base_url="https://litellm.test:4000", transport=httpx.MockTransport(self.proxy.handler)
         )
@@ -180,6 +194,7 @@ class Route:
             tmp_path,
             run=self.openshell.run,
             sleep=self.sleep,
+            clock=lambda: self.now,
         )
         self.inference = ManagedInference(
             tmp_path / "control.sqlite3",
@@ -192,8 +207,12 @@ class Route:
             sleep=self.sleep,
         )
 
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
     def sleep(self, seconds: float) -> None:
         self.sleeps.append(seconds)
+        self.now += seconds
         # LiteLLM records the spending of the last requests during the wait.
         self.proxy.flush()
 
@@ -427,13 +446,80 @@ def test_a_new_gateway_that_refuses_connections_at_first_gets_the_provider(
 
     token, _ = route.worker_key()
     assert key_hash(route.openshell.providers["platform-route"]) == token
-    assert route.sleeps == [2.0, 2.0, 2.0]
-    # A gateway that never answers fails the launch.
+    assert route.sleeps == [0.5, 1.0, 2.0]
+
+
+def test_a_gateway_that_never_accepts_connections_fails_within_the_time_bound(
+    route: Route,
+) -> None:
+    # Each refused attempt takes five seconds.
+    route.openshell.unreachable = 1000
+    route.openshell.unreachable_seconds = 5.0
+    for check in (
+        lambda: route.providers.apply(_ROUTE.endpoint, _ROUTE.client, "sk-new", replace=True),
+        lambda: route.providers.exists(_ROUTE.endpoint, _ROUTE.client),
+    ):
+        route.sleeps.clear()
+        route.openshell.timeouts.clear()
+        before, start = route.openshell.unreachable, route.now
+        with pytest.raises(ProviderError, match="could not reach the session's OpenShell gateway"):
+            check()
+        # The pauses grow up to eight seconds, and the attempts end within 60 seconds.
+        assert route.sleeps == [0.5, 1.0, 2.0, 4.0, 8.0, 8.0]
+        assert route.now - start == pytest.approx(58.5)
+        assert before - route.openshell.unreachable == 7
+        # No attempt may run beyond the bound; the first call registers the gateway.
+        assert route.openshell.timeouts[1:] == [60, 54.5, 48.5, 41.5, 32.5, 19.5, 6.5]
+    assert route.openshell.providers == {}
+
+
+def test_an_unreachable_restarted_gateway_keeps_the_running_sessions_key(route: Route) -> None:
+    route.inference.prepare("abc", "demo", Decimal("0.006"), _ROUTE)
+    token, _ = route.worker_key()
+    keys = set(route.proxy.keys)
+
+    # The gateway restarts: it accepts connections after three attempts, and the provider
+    # is still there.
+    route.openshell.unreachable = 3
+    route.inference.prepare("abc", "demo", Decimal("0.006"), _ROUTE)
+    assert route.worker_key()[0] == token
+    assert route.openshell.credentials == ["sk-generated-1"]
+
+    # A gateway that stays unreachable fails the launch and rotates nothing.
     route.openshell.unreachable = 1000
     with pytest.raises(ProviderError, match="could not reach the session's OpenShell gateway"):
-        route.inference.rotate("abc", "demo", _ROUTE)
-    # 30 lookups of the workspace, and nothing after them.
-    assert route.openshell.unreachable == 1000 - 30
+        route.inference.prepare("abc", "demo", Decimal("0.006"), _ROUTE)
+    route.openshell.unreachable = 0
+    assert route.worker_key()[0] == token
+    assert token in route.proxy.keys
+    assert route.openshell.credentials == ["sk-generated-1"]
+    assert key_hash(route.openshell.providers["platform-route"]) == token
+    # Only discovery keys were added.
+    added = [route.proxy.keys[item] for item in set(route.proxy.keys) - keys]
+    assert {key["metadata"]["purpose"] for key in added} <= {"discovery"}
+
+
+def test_a_failed_provider_lookup_rotates_nothing(route: Route) -> None:
+    route.inference.prepare("abc", "demo", Decimal("0.006"), _ROUTE)
+    token, _ = route.worker_key()
+    route.openshell.fail = "provider get"
+
+    with pytest.raises(ProviderError, match="could not look up the provider"):
+        route.inference.prepare("abc", "demo", Decimal("0.006"), _ROUTE)
+
+    assert route.worker_key()[0] == token
+    assert route.openshell.credentials == ["sk-generated-1"]
+
+
+def test_a_tool_that_does_not_finish_is_a_provider_error(route: Route) -> None:
+    def hang(
+        arguments: Sequence[str], _: dict[str, str], timeout: float
+    ) -> subprocess.CompletedProcess[str]:
+        raise subprocess.TimeoutExpired(list(arguments), timeout)
+
+    route.providers._runner = hang
+    with pytest.raises(ProviderError, match="did not finish within 60 seconds"):
+        route.inference.prepare("abc", "demo", Decimal("0.006"), _ROUTE)
 
 
 def test_a_settled_session_gets_no_new_key(route: Route) -> None:

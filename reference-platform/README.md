@@ -357,6 +357,8 @@ The provider's profile allows the key only in `POST` requests to LiteLLM's chat 
 Each launch also gives the session a new discovery key, which may only list the route's models; the previous key stays valid for a gateway started before the launch, and the key before it is deleted.
 The gateway lists models with it through the model connection `hub.modelRoute.profileId` of its manifest, trusting the platform CA alone, and the manifest declares each model's limits and tool support.
 At a later launch the worker key keeps its budget and gets the route's current models, so a model removed from `inference.models` is refused from then on; a session whose OpenShell gateway lost the provider gets a rotated key.
+Only the gateway's answer that the provider is not found counts as a lost provider.
+While the tool cannot connect to the session's OpenShell gateway, as right after the gateway starts or restarts, the control service repeats the request with pauses that grow from half a second to eight seconds, for at most 60 seconds; a gateway it cannot reach in that time, or any other failure of the lookup, fails the launch with HTTP 502 and leaves the session's key unchanged.
 
 LiteLLM refuses a request beyond a key's budget with HTTP 422 and the error type `budget_exceeded`, and a model outside the key's list with HTTP 403 and the error type `key_model_access_denied`.
 
