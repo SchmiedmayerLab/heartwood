@@ -1,0 +1,17 @@
+# This source file is part of the Heartwood open-source project
+#
+# SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+#
+# SPDX-License-Identifier: MIT
+
+# Chart values for the kind cluster that reference-platform/cluster creates.
+
+projects:
+  - id: demo
+  - id: other
+
+sessions:
+  # Stand-in for the worker image, which is not published by digest.
+  stagingImage: registry.k8s.io/e2e-test-images/agnhost:2.53@sha256:99c6b4bb4a1e1df3f0b3752168c89358794d02258ebebc26bf21c29399011a85
+  attemptStorageClass:
+    provisioner: rancher.io/local-path

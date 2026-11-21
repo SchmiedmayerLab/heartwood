@@ -1,0 +1,118 @@
+{{- /*
+This source file is part of the Heartwood open-source project
+
+SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+
+SPDX-License-Identifier: MIT
+*/ -}}
+
+{{- /*
+Confines what a Heartwood gateway creates in its session namespace: staging pods,
+attempt volumes and exec sessions into staging pods.
+*/ -}}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: heartwood-staging-shape
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["*"]
+        operations: [CREATE, UPDATE]
+        resources: [pods, persistentvolumeclaims]
+      - apiGroups: [""]
+        apiVersions: ["*"]
+        operations: [CONNECT]
+        resources: [pods/exec, pods/attach, pods/portforward]
+  matchConditions:
+    - name: session-gateway
+      expression: request.userInfo.username.startsWith('system:serviceaccount:{{ .Values.sessions.namespace }}:hw-gw-')
+  variables:
+    - name: pod
+      expression: request.resource.resource == 'pods' && request.operation != 'CONNECT'
+    - name: claim
+      expression: request.resource.resource == 'persistentvolumeclaims'
+    - name: containers
+      expression: >-
+        !variables.pod ? [] : object.spec.containers
+        + (has(object.spec.initContainers) ? object.spec.initContainers : [])
+        + (has(object.spec.ephemeralContainers) ? object.spec.ephemeralContainers : [])
+  validations:
+    - expression: >-
+        !variables.pod || (has(object.spec.serviceAccountName) && object.spec.serviceAccountName == 'hw-staging'
+        && has(object.spec.automountServiceAccountToken) && object.spec.automountServiceAccountToken == false)
+      message: a staging pod uses the ServiceAccount hw-staging without a mounted token
+    - expression: >-
+        !variables.pod || variables.containers.all(c, c.image == {{ .Values.sessions.stagingImage | squote }})
+      message: a staging pod runs only the staging image
+    - expression: >-
+        !variables.pod || (has(object.spec.securityContext)
+        && has(object.spec.securityContext.runAsNonRoot) && object.spec.securityContext.runAsNonRoot
+        && has(object.spec.securityContext.seccompProfile)
+        && object.spec.securityContext.seccompProfile.type == 'RuntimeDefault'
+        && (!has(object.spec.hostNetwork) || !object.spec.hostNetwork)
+        && (!has(object.spec.hostPID) || !object.spec.hostPID)
+        && (!has(object.spec.hostIPC) || !object.spec.hostIPC)
+        && variables.containers.all(c, has(c.securityContext)
+        && has(c.securityContext.allowPrivilegeEscalation) && !c.securityContext.allowPrivilegeEscalation
+        && has(c.securityContext.readOnlyRootFilesystem) && c.securityContext.readOnlyRootFilesystem
+        && has(c.securityContext.capabilities) && has(c.securityContext.capabilities.drop)
+        && 'ALL' in c.securityContext.capabilities.drop && !has(c.securityContext.capabilities.add)
+        && (!has(c.securityContext.runAsNonRoot) || c.securityContext.runAsNonRoot)
+        && (!has(c.securityContext.seccompProfile) || c.securityContext.seccompProfile.type == 'RuntimeDefault')))
+      message: a staging pod runs as a non-root user with the default seccomp profile, a read-only root file system and no capabilities
+    - expression: >-
+        !variables.pod || variables.containers.all(c, !has(c.envFrom)
+        && (!has(c.env) || c.env.all(e, !has(e.valueFrom))))
+      message: a staging pod takes no environment value from another object or field
+    - expression: >-
+        !variables.pod || (!has(object.spec.nodeName) && !has(object.spec.priorityClassName)
+        && !has(object.spec.runtimeClassName))
+      message: a staging pod names no node, priority class or runtime class
+    - expression: >-
+        !variables.pod || !has(object.spec.volumes) || object.spec.volumes.all(v,
+        has(v.emptyDir) || (has(v.persistentVolumeClaim)
+        && v.persistentVolumeClaim.claimName.startsWith('hw-attempt-')))
+      message: a staging pod mounts only attempt volume claims and emptyDir volumes
+    - expression: >-
+        !variables.claim || (object.metadata.name.startsWith('hw-attempt-')
+        && has(object.spec.storageClassName) && object.spec.storageClassName == 'heartwood-attempt'
+        && !has(object.spec.dataSource) && !has(object.spec.dataSourceRef)
+        && !has(object.spec.volumeName) && !has(object.spec.selector))
+      message: an attempt volume claim is named hw-attempt-*, uses the StorageClass heartwood-attempt and names no data source or volume
+    - expression: >-
+        request.operation != 'CONNECT'
+        || (has(request.subResource) && request.subResource == 'exec'
+        && has(request.name) && request.name.startsWith('hw-staging-'))
+      message: a Heartwood gateway opens exec sessions only into pods named hw-staging-*
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: heartwood-staging-shape
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+spec:
+  policyName: heartwood-staging-shape
+  validationActions: [Deny]
+---
+{{- if .Values.sessions.attemptStorageClass.provisioner }}
+# StorageClass of attempt volumes. The admission policy requires it by name.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: heartwood-attempt
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+provisioner: {{ .Values.sessions.attemptStorageClass.provisioner }}
+{{- with .Values.sessions.attemptStorageClass.parameters }}
+parameters:
+  {{- toYaml . | nindent 2 }}
+{{- end }}
+reclaimPolicy: Delete
+volumeBindingMode: WaitForFirstConsumer
+{{- end }}

@@ -44,6 +44,9 @@ jobs:
     name: Platform service tests
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    env:
+      HELM_VERSION: v4.3.2
+      HELM_SHA256: d1c0278d46beab79582d7e50f5b3dc206944ba8e577cde618513fd07daa53983
     defaults:
       run:
         working-directory: reference-platform/services
@@ -53,6 +56,15 @@ jobs:
         with:
           persist-credentials: false
           submodules: true
+      - name: Install Helm
+        run: |
+          curl --fail --silent --show-error --location --retry 3 --output "${RUNNER_TEMP}/helm.tar.gz" \
+            "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz"
+          printf '%s  %s\n' "${HELM_SHA256}" "${RUNNER_TEMP}/helm.tar.gz" | sha256sum --check
+          mkdir -p "${RUNNER_TEMP}/bin"
+          tar --extract --gzip --file "${RUNNER_TEMP}/helm.tar.gz" --directory "${RUNNER_TEMP}/bin" \
+            --strip-components 1 linux-amd64/helm
+          echo "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
       - name: Install uv
         uses: astral-sh/setup-uv@v9.0.0
         with:
@@ -68,3 +80,6 @@ jobs:
         run: uv run mypy
       - name: Test
         run: uv run pytest
+      # Pulls the pinned OpenShell chart, verifies its digest and renders it again.
+      - name: Compare the committed OpenShell objects with a fresh render
+        run: uv run python ../tools/render_openshell.py --check

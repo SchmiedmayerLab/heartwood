@@ -1,0 +1,17 @@
+{{- /*
+This source file is part of the Heartwood open-source project
+
+SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+
+SPDX-License-Identifier: MIT
+*/ -}}
+
+{{- if ne .Release.Namespace "heartwood-platform" }}
+{{- fail "install the release into the namespace heartwood-platform" }}
+{{- end }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Values.sessions.namespace }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}

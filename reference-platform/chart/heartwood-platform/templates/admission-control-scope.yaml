@@ -1,0 +1,127 @@
+{{- /*
+This source file is part of the Heartwood open-source project
+
+SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+
+SPDX-License-Identifier: MIT
+*/ -}}
+
+{{- /*
+Confines every write of the control service. RBAC cannot name the session namespaces,
+which are created at run time, so this policy does.
+*/ -}}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: heartwood-control-scope
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["*"]
+        apiVersions: ["*"]
+        operations: ["*"]
+        resources: ["*/*"]
+  matchConditions:
+    - name: control-service
+      expression: request.userInfo.username == 'system:serviceaccount:{{ .Release.Namespace }}:heartwood-control'
+  variables:
+    - name: resource
+      expression: request.resource.resource
+    # The API server omits empty request fields.
+    - name: requestNamespace
+      expression: "has(request.namespace) ? request.namespace : ''"
+    - name: requestName
+      expression: "has(request.name) ? request.name : ''"
+    - name: requestSubResource
+      expression: "has(request.subResource) ? request.subResource : ''"
+    - name: sessionNamespace
+      expression: variables.requestNamespace.matches('^hw-s-[a-z0-9]{1,40}$')
+    # DELETE requests carry the object in oldObject.
+    - name: target
+      expression: "request.operation == 'DELETE' ? oldObject : object"
+    - name: subject
+      expression: >-
+        variables.resource == 'rolebindings' && has(variables.target.subjects)
+        && variables.target.subjects.size() == 1 ? variables.target.subjects[0]
+        : {'kind': '', 'name': '', 'namespace': ''}
+    - name: oldSubjects
+      expression: "has(oldObject.subjects) ? oldObject.subjects : []"
+    - name: newSubjects
+      expression: "has(object.subjects) ? object.subjects : []"
+  validations:
+    - expression: >-
+        (variables.requestNamespace == '' && variables.resource in
+        ['namespaces', 'clusterrolebindings', 'tokenreviews', 'selfsubjectaccessreviews', 'selfsubjectrulesreviews'])
+        || (variables.resource == 'namespaces' && variables.requestNamespace == variables.requestName)
+        || variables.sessionNamespace
+        || (variables.requestNamespace == '{{ .Values.sessions.namespace }}' && variables.resource in ['serviceaccounts', 'secrets'])
+      message: the control service writes only in session namespaces and the listed platform objects
+    - expression: >-
+        variables.resource != 'namespaces'
+        || (variables.requestSubResource == '' && request.operation in ['CREATE', 'DELETE']
+        && variables.target.metadata.name.matches('^hw-s-[a-z0-9]{1,40}$'))
+      message: the control service creates and deletes only namespaces named hw-s-<session>
+    - expression: >-
+        variables.resource != 'namespaces' || request.operation != 'CREATE'
+        || (has(object.metadata.labels)
+        && 'pod-security.kubernetes.io/enforce' in object.metadata.labels
+        && object.metadata.labels['pod-security.kubernetes.io/enforce'] == 'restricted'
+        && (!('pod-security.kubernetes.io/enforce-version' in object.metadata.labels)
+        || object.metadata.labels['pod-security.kubernetes.io/enforce-version'] == 'latest')
+        && 'heartwood.platform/session' in object.metadata.labels
+        && 'hw-s-' + object.metadata.labels['heartwood.platform/session'] == object.metadata.name)
+      message: a session namespace carries its session label and the restricted Pod Security label
+    - expression: >-
+        variables.resource != 'rolebindings'
+        || (request.operation in ['CREATE', 'DELETE'] && variables.sessionNamespace
+        && variables.target.roleRef.apiGroup == 'rbac.authorization.k8s.io'
+        && variables.target.roleRef.kind == 'ClusterRole'
+        && variables.subject.kind == 'ServiceAccount'
+        && ((variables.target.roleRef.name in ['heartwood-openshell-sandbox', 'heartwood-openshell-peer']
+        && variables.subject.name == 'openshell' && variables.subject.namespace == variables.requestNamespace)
+        || (variables.target.roleRef.name == 'heartwood-openshell-certgen'
+        && variables.subject.name == 'openshell-certgen' && variables.subject.namespace == variables.requestNamespace)
+        || (variables.target.roleRef.name == 'heartwood-session-gateway'
+        && variables.subject.name.startsWith('hw-gw-')
+        && 'hw-s-' + variables.subject.name.substring(6) == variables.requestNamespace
+        && variables.subject.namespace == '{{ .Values.sessions.namespace }}')
+        || (variables.target.roleRef.name == 'heartwood-session-control'
+        && variables.subject.name == 'heartwood-control'
+        && variables.subject.namespace == '{{ .Release.Namespace }}')))
+      message: a RoleBinding of the control service pairs a fixed ClusterRole with its only allowed subject inside a session namespace
+    - expression: >-
+        variables.resource != 'clusterrolebindings'
+        || (request.operation == 'UPDATE' && variables.requestName == 'heartwood-openshell-node-reader'
+        && object.roleRef == oldObject.roleRef
+        && object.metadata.?labels == oldObject.metadata.?labels
+        && object.metadata.?annotations == oldObject.metadata.?annotations
+        && object.metadata.?ownerReferences == oldObject.metadata.?ownerReferences
+        && object.metadata.?finalizers == oldObject.metadata.?finalizers
+        && (variables.newSubjects.filter(s, !(s in variables.oldSubjects))
+        + variables.oldSubjects.filter(s, !(s in variables.newSubjects))).all(s,
+        s.kind == 'ServiceAccount' && s.name == 'openshell'
+        && has(s.namespace) && s.namespace.matches('^hw-s-[a-z0-9]{1,40}$')))
+      message: the control service adds and removes only the OpenShell ServiceAccounts of session namespaces in heartwood-openshell-node-reader
+    - expression: >-
+        variables.requestNamespace != '{{ .Values.sessions.namespace }}'
+        || variables.requestName.startsWith('hw-gw-')
+        || (request.operation == 'CREATE' && object.metadata.name.startsWith('hw-gw-'))
+      message: the control service writes only objects named hw-gw-<session> in {{ .Values.sessions.namespace }}
+    # The token controller fills a Secret of the service account token type with a token.
+    - expression: >-
+        variables.resource != 'secrets' || request.operation == 'DELETE'
+        || !has(object.type) || object.type == 'Opaque'
+      message: the control service writes only Secrets of the type Opaque
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: heartwood-control-scope
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+spec:
+  policyName: heartwood-control-scope
+  validationActions: [Deny]

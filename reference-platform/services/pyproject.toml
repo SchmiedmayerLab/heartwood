@@ -35,6 +35,8 @@ dev = [
     "ruff>=0.16.1",
     "mypy>=2.3.0",
     "pytest>=9.1.1",
+    "pyyaml>=6.0.3",
+    "types-pyyaml>=6.0.12.20261111",
 ]
 
 [tool.mypy]
@@ -42,9 +44,11 @@ python_version = "3.12"
 strict = true
 warn_unreachable = true
 enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
-files = ["src", "tests", "../tools"]
+files = ["src", "tests", "../tools", "../tests"]
 
 [tool.pytest.ini_options]
 minversion = "8.0"
 addopts = "-ra --strict-markers --strict-config --import-mode=importlib"
 testpaths = ["tests"]
+# Lets the cluster tests under ../tests/cluster import their kubectl helper.
+pythonpath = ["../tests/cluster"]
