@@ -10,12 +10,15 @@ from __future__ import annotations
 
 import base64
 import json
+import warnings
 from typing import Any
 from urllib.parse import urlencode
 
 from kube import Cluster
 
 _KEYCLOAK = "http://keycloak.heartwood-platform.svc.cluster.local:8080"
+# The exit status of the request script when the form reached it incomplete.
+_INCOMPLETE = 75
 
 
 def _secret(cluster: Cluster, name: str, key: str) -> str:
@@ -31,29 +34,41 @@ def _secret(cluster: Cluster, name: str, key: str) -> str:
 
 
 def _token(cluster: Cluster, realm: str, form: dict[str, str]) -> dict[str, Any]:
-    """Request a token from inside the Keycloak pod, with the form on standard input."""
+    """Request a token from inside the Keycloak pod, with the form on standard input.
+
+    Data sent to ``kubectl exec`` on standard input can arrive incomplete, so the script
+    refuses a form of another length, and the request is repeated with a warning.
+    """
+    body = urlencode(form)
     script = (
-        "exec 3<>/dev/tcp/127.0.0.1/8080; body=$(cat); "
+        f'exec 3<>/dev/tcp/127.0.0.1/8080; body=$(cat); [ "${{#body}}" -eq {len(body)} ] '
+        f"|| exit {_INCOMPLETE}; "
         f'printf "POST /realms/{realm}/protocol/openid-connect/token HTTP/1.0\\r\\n'
         "Host: keycloak:8080\\r\\n"
         "Content-Type: application/x-www-form-urlencoded\\r\\n"
         'Content-Length: %s\\r\\n\\r\\n%s" "${#body}" "${body}" >&3; cat <&3'
     )
-    result = cluster.kubectl(
-        "exec",
-        "--stdin",
-        "--namespace=heartwood-platform",
-        "deployment/keycloak",
-        "--",
-        "/bin/bash",
-        "-c",
-        script,
-        text_input=urlencode(form),
-    )
+    for attempt in range(1, 6):
+        result = cluster.kubectl(
+            "exec",
+            "--stdin",
+            "--namespace=heartwood-platform",
+            "deployment/keycloak",
+            "--",
+            "/bin/bash",
+            "-c",
+            script,
+            text_input=body,
+        )
+        if result.returncode != _INCOMPLETE:
+            break
+        warnings.warn(
+            f"form {attempt} reached Keycloak incomplete: {len(body)} bytes sent", stacklevel=2
+        )
     assert result.returncode == 0, result.stderr
-    body = json.loads(result.stdout[result.stdout.index("{") :])
-    assert isinstance(body, dict)
-    return body
+    answer = json.loads(result.stdout[result.stdout.index("{") :])
+    assert isinstance(answer, dict)
+    return answer
 
 
 def test_bootstrap_administrator_is_disabled(cluster: Cluster) -> None:
